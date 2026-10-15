@@ -12,6 +12,7 @@
  */
 import { createHash } from "node:crypto";
 
+import { parseRepoSlug } from "../github/repo-slug.mjs";
 import { severityRank, VALID_SEVERITIES, normalizeSeverity } from "./gate-fanin.mjs";
 import { recordedSkipReason, siteCoverageGaps } from "./fixer-disposition.mjs";
 import { sha256Hex } from "./review-dispatch-plan.mjs";
@@ -20,15 +21,17 @@ import { sha256Hex } from "./review-dispatch-plan.mjs";
 export function deltaCoverageBinding(value, expected) {
   if (!expected && !["coverageProtocol", "handbackBytesDigest", "origin"].some((key) => Object.hasOwn(value ?? {}, key))) return null;
   const { coverageProtocol, siteCoverageDigest, handbackBytesDigest, origin } = value ?? {};
+  const ref = typeof origin?.workOrderRef === "string" && /^fixer:([^/\s#]+\/[^/\s#]+)#[1-9]\d*:(?:[a-f0-9]{40}|[a-f0-9]{64}):f\d+-[a-f0-9]{8}$/.exec(origin.workOrderRef);
   if (coverageProtocol !== "pulled_commit_only_v1"
     || ![siteCoverageDigest, handbackBytesDigest, origin?.workOrderDigest, origin?.executionIdentity, origin?.workOrderRef].every((field) => typeof field === "string")
     || !/^[a-f0-9]{64}$/.test(siteCoverageDigest ?? "")
     || !/^[a-f0-9]{64}$/.test(handbackBytesDigest ?? "") || !/^sha256:[a-f0-9]{64}$/.test(origin?.workOrderDigest ?? "")
     || !/^f\d+-[a-f0-9]{8}$/.test(origin?.executionIdentity ?? "")
-    || !/^fixer:[^/\s#]+\/[^/\s#]+#[1-9]\d*:(?:[a-f0-9]{40}|[a-f0-9]{64}):f\d+-[a-f0-9]{8}$/.test(origin?.workOrderRef ?? "")
+    || !ref
     || !origin.workOrderRef.endsWith(`:${origin.executionIdentity}`) || Object.keys(origin).sort().join() !== "executionIdentity,workOrderDigest,workOrderRef") {
     throw new Error("Delta coverage binding is missing or malformed");
   }
+  parseRepoSlug(ref[1], { errorMessage: "Delta coverage binding is missing or malformed" });
   const binding = { coverageProtocol, siteCoverageDigest, handbackBytesDigest, origin };
   if (expected && sha256Hex(binding) !== sha256Hex(expected)) throw new Error("Delta coverage binding differs from the authenticated current handback");
   return binding;

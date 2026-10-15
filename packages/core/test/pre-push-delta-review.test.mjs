@@ -23,11 +23,31 @@ function coverageBinding() {
 }
 
 test("membership-only accepts a complete string coverage binding", () => {
-  assert.deepEqual(validateDeltaResult({ ...result(), ...coverageBinding() }, { sequence: sequence(), membershipOnly: true }), []);
+  for (const length of [40, 64]) {
+    const bound = { ...result(), ...coverageBinding() };
+    bound.origin.workOrderRef = `fixer:o/r#7:${"a".repeat(length)}:f1-00000000`;
+    assert.deepEqual(validateDeltaResult(bound, { sequence: sequence(), membershipOnly: true }), []);
+  }
 });
 
 test("membership-only accepts a historical digest-only record", () => {
   assert.deepEqual(validateDeltaResult({ ...result(), siteCoverageDigest: "old" }, { sequence: sequence(), membershipOnly: true }), []);
+});
+
+for (const repo of ["./r", "../r", "o/.", "o/..", "o\\x/r", "o/r\\x"]) {
+  test(`membership-only rejects unsafe origin repository ${repo}`, () => {
+    const bound = { ...result(), ...coverageBinding() };
+    bound.origin.workOrderRef = `fixer:${repo}#7:${"a".repeat(40)}:f1-00000000`;
+    assert.match(validateDeltaResult(bound, { sequence: sequence(), membershipOnly: true }).join(), /coverage binding is missing or malformed/);
+  });
+}
+
+test("membership-only rejects malformed origin references and mismatched execution identity", () => {
+  for (const ref of [`fixer:o/r7:${"a".repeat(40)}:f1-00000000`, `fixer:o/r#0:${"a".repeat(40)}:f1-00000000`, `fixer:o/r#7:${"a".repeat(40)}:f2-00000000`]) {
+    const bound = { ...result(), ...coverageBinding() };
+    bound.origin.workOrderRef = ref;
+    assert.match(validateDeltaResult(bound, { sequence: sequence(), membershipOnly: true }).join(), /coverage binding is missing or malformed/);
+  }
 });
 
 for (const field of ["siteCoverageDigest", "handbackBytesDigest", "origin.workOrderDigest", "origin.executionIdentity", "origin.workOrderRef"]) {
@@ -394,7 +414,7 @@ describe("pre-push results never become gate evidence", () => {
   test("the delta module performs no I/O: no gate artifact, comment or thread can be written", () => {
     const source = fs.readFileSync(new URL("../src/loop/pre-push-delta-review.mjs", import.meta.url), "utf8");
     const imports = [...source.matchAll(/^import .* from "([^"]+)";$/gm)].map((m) => m[1]);
-    assert.deepEqual(imports.sort(), ["./fixer-disposition.mjs", "./gate-fanin.mjs", "./review-dispatch-plan.mjs", "node:crypto"]);
+    assert.deepEqual(imports.sort(), ["../github/repo-slug.mjs", "./fixer-disposition.mjs", "./gate-fanin.mjs", "./review-dispatch-plan.mjs", "node:crypto"]);
   });
 });
 
