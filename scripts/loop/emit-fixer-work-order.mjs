@@ -8,7 +8,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,7 @@ import { fingerprintFinding } from "../github/_gate-finding-surface.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { beginFixerEmission } from "../github/_fixer-emission-evidence.mjs";
 
 const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path>) [--delta-result <path>] [--allowed-path <repo-relative path>]... [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
@@ -70,8 +71,8 @@ export function buildFixerDir({ repo, pr, tmpRoot }) {
 
 class Refusal extends Error {}
 
-async function readSource(kind, filePath) {
-  const bytes = await readFile(filePath).catch(() => null);
+async function readSource(kind, filePath, capture) {
+  const bytes = await capture.read(filePath);
   if (bytes === null) throw new Refusal(`required fixer source ${kind} is missing or unreadable: ${filePath}`);
   let parsed;
   try { parsed = JSON.parse(bytes.toString("utf8")); } catch { throw new Refusal(`required fixer source ${kind} is not JSON: ${filePath}`); }
@@ -201,8 +202,12 @@ export async function emitFixerWorkOrder({
   const dir = path.resolve(buildFixerDir({ repo, pr, tmpRoot }));
   const paths = [...new Set((allowedPaths.length > 0 ? allowedPaths : ["."]).map(normalizeAllowedPath))].sort();
   const abs = (p) => path.resolve(cwd, p);
+  const capture = await beginFixerEmission(dir);
+  try {
+  const planPath = path.join(dir, PLAN_FILE);
+  await capture.preserve(planPath, path.resolve(tmpRoot), resolveGateArtifactTmpRoot(cwd));
 
-  const source = actListFile ? await readSource("act-list", abs(actListFile)) : await readSource("threads", abs(threadsFile));
+  const source = actListFile ? await readSource("act-list", abs(actListFile), capture) : await readSource("threads", abs(threadsFile), capture);
   const isActItem = (f) => f?.judgeDisposition === "act" && VALID_SEVERITIES.has(f.severity) && typeof f.summary === "string" && f.summary.trim() !== "";
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
@@ -219,12 +224,13 @@ export async function emitFixerWorkOrder({
   if (deltaResult && !actListFile) throw new Refusal("--delta-result applies only to an --act-list-file source");
   // A thread source reads the record the thread-route delta review wrote for this head (step 7 bounded_out rule), never a flag.
   const threadRecordPath = threadsFile ? gateDeltaRecordPath(tmpRoot, headSha) : null;
-  const delta = deltaResult ? await readSource("delta-result", abs(deltaResult)) : threadRecordPath && existsSync(threadRecordPath) ? await readSource("delta-result", threadRecordPath) : null;
+  const delta = deltaResult ? await readSource("delta-result", abs(deltaResult), capture) : threadRecordPath && existsSync(threadRecordPath) ? await readSource("delta-result", threadRecordPath, capture) : null;
   if (delta && deltaResult) {
     // The delta result must belong to this act list and this head (its pinned review baseline).
     const errors = validateDeltaResult(delta.parsed, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }), membershipOnly: true });
     if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}`);
   }
+  await capture.read(gateDeltaRecordPath(tmpRoot, headSha));
   if (phase === "full") assertDeltaClearsFullPhase({ tmpRoot, headSha, delta: delta?.parsed, threads: threadsFile ? source.parsed.threads : null });
 
   // Mutation authority comes from the PR itself, never from the caller.
@@ -270,25 +276,19 @@ export async function emitFixerWorkOrder({
   const dispatchPrompt = buildDispatchPointer(identityTriple);
   const text = renderWorkOrder(workOrder);
   const promptPath = path.join(dir, "work-orders", `${executionIdentity}.md`);
-  await mkdir(path.dirname(promptPath), { recursive: true });
-  // Immutable per ref: a different payload never replaces an emitted work order.
-  try {
-    await writeFile(promptPath, text, { flag: "wx" });
-  } catch (err) {
-    if (err?.code !== "EEXIST") throw err;
-    if (await readFile(promptPath, "utf8") !== text) throw new Refusal(`work order ${identityTriple.workOrderRef} already exists with different content; emit a new reference instead`);
-  }
+  await capture.write(promptPath, text);
   await writeExecutionIndex(tmpRoot, identityTriple);
   const plan = { ...identityTriple, materializationHash: materializationHash(text), promptPath, dispatchPrompt, workOrder };
-  const planPath = path.join(dir, PLAN_FILE);
   // Atomic: a concurrent pull never reads a half-written plan. One plan per PR names the only current unit.
   const tempPath = `${planPath}.tmp-${executionIdentity}`;
-  await writeFile(tempPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+  await capture.write(tempPath, `${JSON.stringify(plan, null, 2)}\n`);
+  await capture.recheck();
   await rename(tempPath, planPath);
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: written last so a refused emit never grants the push; only a full work order grants the fixer.
   // Always under the canonical gate-artifact root (the location the push-authority check reads), whatever --tmp-root says.
   writeSequenceMarker({ tmpRoot: resolveGateArtifactTmpRoot(cwd), baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName });
   return { ...plan, planPath };
+  } finally { await capture.release(); }
 }
 
 /**
