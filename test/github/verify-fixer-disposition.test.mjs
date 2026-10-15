@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { test } from "bun:test";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { decideDeltaNextStep, startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -903,6 +904,271 @@ const ACT_LIST = [{ fingerprint: ACT_FP, severity: "medium", summary: "s", judge
 const userEntry = { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "gate" })}\n` };
 const gateComment = (id, databaseId, body = `${ACT_MARKER}\n**Problem:** s`, login = "gate") => ({ id, databaseId, body, author: { login, __typename: "User" } });
 const actThread = (id, comments, isResolved = false) => ({ id, isResolved, comments: { nodes: comments } });
+
+async function completionFixture(repoRoot, kind = "resolved") {
+  const baseline = FIX_SHA;
+  const fixing = "d".repeat(40);
+  const second = "fedcba9876543210";
+  const actList = [ACT_FP, ACT_FP, second].map((fingerprint, index) => ({ ...ACT_LIST[0], fingerprint, siteQuery: "query", acceptedForms: [`--${index}`] }));
+  const sequence = startDeltaSequence({ reviewBaselineHead: baseline, actList });
+  const residual = kind !== "resolved";
+  const isResidual = (index) => residual && (kind === "residual" || index === (kind === "repeated-mixed" ? 1 : 2));
+  const items = sequence.actItems.map(({ ref }, index) => ({ ref, status: isResidual(index) ? "cannot_verify" : "resolved", evidence: ["recorded result"] }));
+  const siteCoverage = [ACT_FP, second].map((fingerprint, index) => ({
+    fingerprint, returnedSites: index ? ["--2"] : ["--0", "--1"],
+    sites: (index ? ["--2"] : ["--0", "--1"]).map((site) => ({ site, kind: "input_form", status: isResidual(Number(site.slice(2))) ? "skipped" : "fixed", ...(isResidual(Number(site.slice(2))) ? { reason: "  still unverified at invocation three  " } : { test: "  focused test reference  " }) })),
+  }));
+  const coverageDigest = sha256Hex(siteCoverage).slice(7);
+  const delta = { reviewBaselineHead: baseline, candidateHead: residual ? "e".repeat(40) : HEAD_SHA, actSetId: sequence.actSetId, actionableItems: items, newFindings: [], widenedReads: [], outcome: residual ? "bounded_out" : "locally_clear", siteCoverageDigest: coverageDigest };
+  const decision = { ...delta, candidateHead: HEAD_SHA, invocation: residual ? 3 : 1, nextStep: residual ? "push_to_gate" : "push", items };
+  const threadBindings = kind === "threadless" ? [] : [{ threadId: "PRRT_MERGED", fingerprints: [ACT_FP, second] }, { threadId: "PRRT_SHARED", fingerprints: [ACT_FP] }];
+  const origin = { executionIdentity: "f0-1234abcd", workOrderRef: `fixer:${REPO}#${PR}:${baseline}:f0-1234abcd`, workOrderDigest: `sha256:${"1".repeat(64)}` };
+  const source = { headSha: HEAD_SHA, fixingCommitSha: fixing, siteCoverage, threadBindings, origin };
+  const dispositions = threadBindings.map(({ threadId, fingerprints }) => ({ threadId, fixingCommitSha: fixing, disposition: actList.some((item, index) => fingerprints.includes(item.fingerprint) && isResidual(index)) ? "deferred" : "tackled" }));
+  const fixerPlan = await deliver(repoRoot, dispositions, { actList, delta, decision, handoffText: JSON.stringify({ headSha: HEAD_SHA, dispositions, siteCoverage }) });
+  const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
+  const sourcePath = path.join(path.dirname(fixerPlan), "completion.json");
+  const originPath = path.join(path.dirname(fixerPlan), origin.executionIdentity, "fixer-disposition.json");
+  await mkdir(path.dirname(originPath), { recursive: true });
+  await writeFile(pullReceiptPath(path.join(repoRoot, "tmp"), origin.workOrderRef), JSON.stringify({ ...origin, role: "fixer", subject: { repo: REPO, pr: PR, branch: "issue-1", headSha: baseline, phase: "commit_only", planPath: fixerPlan } }));
+  await writeFile(originPath, JSON.stringify({ headSha: fixing, dispositions: [], siteCoverage }));
+  await writeFile(path.join(repoRoot, "tmp", "gate-delta", `${baseline}.json`), JSON.stringify(decision));
+  const sourceRead = { kind: "completion-input", path: sourcePath, required: true, sha256: "" };
+  plan.workOrder.requiredReads.push(sourceRead);
+  const seal = async () => {
+    const bytes = `${JSON.stringify(source, null, 2)}\n`;
+    await writeFile(sourcePath, bytes);
+    sourceRead.sha256 = createHash("sha256").update(bytes).digest("hex");
+    Object.assign(plan.workOrder.authority, { completionInputDigest: sha256Hex(source).slice(7), completionInputBytesDigest: sourceRead.sha256 });
+    plan.workOrderDigest = workOrderDigest(plan.workOrder);
+    await writeFile(fixerPlan, JSON.stringify(plan));
+    await writeFile(pullReceiptPath(path.join(repoRoot, "tmp"), plan.workOrderRef), JSON.stringify({ role: "fixer", workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity, subject: { repo: REPO, pr: PR, branch: "issue-1", headSha: HEAD_SHA, phase: "full", planPath: fixerPlan } }));
+    await writeFile(plan.workOrder.outputRefs[0], JSON.stringify({ headSha: HEAD_SHA, dispositions, siteCoverage }));
+  };
+  await seal();
+  const nodes = threadBindings.map(({ threadId, fingerprints }, index) => actThread(threadId, [gateComment(`c${index}`, index + 1, fingerprints.map((fp) => `<!-- dev-loops:finding ${fp} severity=medium angle=correctness round=1 -->`).join("\n") + `\nFixed in commit ${fixing}.`)], dispositions[index].disposition === "tackled"));
+  const depsFor = (extra = []) => runtime([compareEntry(baseline, "ahead"), compareEntry(fixing, "ahead"), liveHeadEntry(), threadsCallEntry(nodes), userEntry, ...extra], repoRoot, { live: false });
+  return { fixerPlan, plan, source, sourceRead, sourcePath, originPath, baseline, fixing, nodes, dispositions, seal, depsFor };
+}
+
+test("typed completion CLI rejects construct/check together", () => {
+  const args = ["--repo", REPO, "--pr", String(PR), "--head-sha", HEAD_SHA, "--fixer-plan", "plan", "--construct"];
+  assert.equal(parseVerifyFixerDispositionCliArgs(args).construct, true);
+  assert.throws(() => parseVerifyFixerDispositionCliArgs([...args, "--check"]), /mutually exclusive/);
+});
+
+test("typed completion path guard accepts canonical Windows paths with helper-normalized separators", async () => {
+  const source = await readFile(new URL("../../scripts/github/verify-fixer-disposition.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("    const executionDir =");
+  const end = source.indexOf("    const subject =", start);
+  assert.ok(start >= 0 && end > start);
+  const planPath = "C:\\repo\\tmp\\gate-fixer\\owner-repo\\pr-1975\\fixer-emit-plan.json";
+  const executionIdentity = "f1-0000abcd";
+  // Exercise the production guard with Windows path semantics and the helper's forward-slash contract.
+  await runInNewContext(`(async () => { ${source.slice(start, end)} })()`, {
+    path: path.win32, planPath, plan: { executionIdentity },
+    handoffPath: path.win32.join(path.win32.dirname(planPath), executionIdentity, "fixer-disposition.json"),
+    real: async (file) => file,
+    lstat: async () => ({ isSymbolicLink: () => false }),
+    realpathNearestExisting: (file) => path.win32.normalize(file).replaceAll("\\", "/"),
+  });
+});
+
+for (const existing of ["output", "origin", "source", "late-origin"]) test(`typed completion refuses existing ${existing} without clobbering evidence`, async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const f = await completionFixture(repoRoot);
+    const output = f.plan.workOrder.outputRefs[0];
+    if (existing !== "output") await rm(output);
+    const createLink = () => link(existing === "source" ? f.sourcePath : f.originPath, output);
+    if (existing === "origin" || existing === "source") {
+      await createLink();
+      const now = new Date(Date.now() + 1000);
+      await utimes(output, now, now);
+    }
+    const files = [f.originPath, f.sourcePath, ...(existing === "late-origin" ? [] : [output])];
+    const before = await Promise.all(files.map((file) => readFile(file, "utf8")));
+    const mock = f.depsFor();
+    const deps = { ...mock.deps, runChild: async (...args) => {
+      if (existing === "late-origin" && args[1][0] === "pr") await createLink();
+      return mock.deps.runChild(...args);
+    } };
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.fixerPlan, construct: true }, deps), /EEXIST/);
+    assert.deepEqual(await Promise.all(files.map((file) => readFile(file, "utf8"))), before);
+    if (existing === "late-origin") assert.equal(await readFile(output, "utf8"), before[0]);
+    assert.deepEqual(await checkpointFiles(repoRoot), []);
+    assert.equal(hasPost(mock.calls), false);
+  });
+});
+
+for (const check of [false, true]) for (const defect of ["partial", "coverage", "dispositionCoverage", "fixing", "membership", "bytes", "origin", "delta"]) test(`typed completion normal/check retains optional authentication (${check}, ${defect})`, async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const f = await completionFixture(repoRoot);
+    if (defect === "partial") {
+      delete f.plan.workOrder.authority.completionInputBytesDigest;
+      f.plan.workOrderDigest = workOrderDigest(f.plan.workOrder);
+      await writeFile(f.fixerPlan, JSON.stringify(f.plan));
+      const receiptPath = pullReceiptPath(path.join(repoRoot, "tmp"), f.plan.workOrderRef);
+      const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+      receipt.workOrderDigest = f.plan.workOrderDigest;
+      await writeFile(receiptPath, JSON.stringify(receipt));
+    }
+    if (defect === "membership") { f.source.threadBindings[0].fingerprints.pop(); await f.seal(); }
+    const output = f.plan.workOrder.outputRefs[0];
+    const raw = JSON.parse(await readFile(output, "utf8"));
+    if (defect === "coverage") raw.siteCoverage[0].sites[0].test = "invented test";
+    if (defect === "dispositionCoverage") Object.assign(raw.dispositions[0], {
+      ...structuredClone(raw.siteCoverage[0]),
+      sites: raw.siteCoverage[0].sites.map((site) => ({ ...site, test: "invented test" })),
+    });
+    if (defect === "fixing") raw.dispositions[0].fixingCommitSha = FIX_SHA;
+    await writeFile(output, JSON.stringify(raw));
+    if (defect === "bytes") await writeFile(f.sourcePath, `${await readFile(f.sourcePath, "utf8")} `);
+    if (defect === "origin") await rm(f.originPath);
+    if (defect === "delta") await rm(path.join(repoRoot, "tmp", "gate-delta", `${f.baseline}.json`));
+    const before = [await readFile(output, "utf8"), (await stat(output)).mtimeMs];
+    const mock = f.depsFor();
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.fixerPlan, check }, mock.deps),
+      defect === "dispositionCoverage" ? /disposition-level coverage cannot override authenticated completion input/ : undefined);
+    assert.deepEqual([await readFile(output, "utf8"), (await stat(output)).mtimeMs], before);
+    assert.deepEqual(await checkpointFiles(repoRoot), []);
+    assert.equal(hasPost(mock.calls), false);
+  });
+});
+
+for (const check of [false, true]) test(`typed completion accepts scalar fingerprint hints without coverage overrides (${check})`, async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const f = await completionFixture(repoRoot);
+    const output = f.plan.workOrder.outputRefs[0];
+    const raw = JSON.parse(await readFile(output, "utf8"));
+    raw.dispositions[1].fingerprint = ACT_FP;
+    await writeFile(output, JSON.stringify(raw));
+    const mock = f.depsFor([compareEntry(f.fixing, "ahead")]);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.fixerPlan, check }, mock.deps);
+    assert.equal(result.complete, true);
+    assert.equal(hasPost(mock.calls), false);
+  });
+});
+
+for (const check of [false, true]) test(`legacy ACT retains disposition-level coverage without optional completion authority (${check})`, async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const actList = [{ ...ACT_LIST[0], siteQuery: "query", acceptedForms: ["--flag"] }];
+    const dispositions = [{ threadId: "PRRT_LEGACY", fixingCommitSha: FIX_SHA, disposition: "deferred", fingerprint: ACT_FP,
+      returnedSites: ["--flag"], sites: [{ site: "--flag", kind: "input_form", status: "fixed", test: "legacy form test" }] }];
+    const fixerPlan = await deliver(repoRoot, dispositions, { actList });
+    const mock = runtime([threadsCallEntry([actThread("PRRT_LEGACY", [gateComment("c1", 1)])]), userEntry], repoRoot);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, mock.deps);
+    assert.equal(result.complete, true);
+    assert.equal(hasPost(mock.calls), false);
+  });
+});
+
+for (const kind of ["resolved", "mixed", "repeated-mixed", "residual", "threadless"]) test(`typed completion constructs exact authenticated coverage and shared-root dispositions (${kind})`, async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const f = await completionFixture(repoRoot, kind);
+    await rm(f.plan.workOrder.outputRefs[0]);
+    const options = { repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.fixerPlan, construct: true };
+    const mock = f.depsFor();
+    const constructed = await verifyFixerDisposition(options, mock.deps);
+    assert.equal(constructed.constructed, true);
+    assert.equal(constructed.complete, undefined);
+    assert.equal(constructed.outputRef, f.plan.workOrder.outputRefs[0]);
+    const raw = JSON.parse(await readFile(constructed.outputRef, "utf8"));
+    assert.deepEqual(raw, { headSha: HEAD_SHA, dispositions: f.dispositions, siteCoverage: f.source.siteCoverage });
+    assert.deepEqual(await checkpointFiles(repoRoot), []);
+    assert.equal(hasPost(mock.calls), false);
+    for (const check of [false, true]) {
+      const next = f.depsFor(f.dispositions.some((entry) => entry.disposition === "tackled") ? [compareEntry(f.fixing, "ahead")] : []);
+      const verified = await verifyFixerDisposition({ ...options, construct: false, check }, next.deps);
+      assert.equal(verified.complete, true);
+      assert.deepEqual(verified.actions, []);
+      assert.equal(hasPost(next.calls), false);
+    }
+    const parsedThreads = parseReviewThreads(JSON.parse(threadsPayload(f.nodes)));
+    const resolver = f.depsFor([...f.dispositions.some((entry) => entry.disposition === "tackled") ? [compareEntry(f.fixing, "ahead")] : [], ...f.dispositions.some((entry) => entry.disposition === "tackled") ? [compareEntry(f.fixing, "ahead")] : []]);
+    assert.equal((await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: HEAD_SHA, parsedThreads }, resolver.deps)).complete, true);
+  });
+});
+
+for (const defect of ["partial", "duplicateRead", "optionalRead", "semantic", "bytes", "byteAuthority", "sourceHead", "fixingHead", "originIdentity", "originRef", "originDigest", "originReceipt", "originSubject", "originOutput", "originCoverage", "originPrePull", "deltaCoverage", "decisionCoverage", "baselineContainment", "fixContainment", "duplicateRoot", "duplicateMember", "emptyMembers", "unknownMember", "omittedRoot", "omittedMember", "foreignRoot", "unmarkedRoot", "replyMarker", "residualResolved", "prePull", "currentReceipt", "currentSubject", "currentPath", "outputPath", "outputSymlink", "directorySymlink", "role", "target", "planDigest", "noSource", "noDelta", "sourceAuthority"]) {
+  test(`typed completion refuses ${defect} without output/checkpoint/GitHub writes`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const f = await completionFixture(repoRoot, defect === "residualResolved" ? "mixed" : "resolved");
+      if (defect === "sourceHead") f.source.headSha = FIX_SHA;
+      if (defect === "fixingHead") f.source.fixingCommitSha = "abc1234";
+      if (defect === "originIdentity") f.source.origin.executionIdentity = f.plan.executionIdentity;
+      if (defect === "originRef") f.source.origin.workOrderRef = f.plan.workOrderRef;
+      if (defect === "originDigest") f.source.origin.workOrderDigest = "sha256:wrong";
+      if (defect === "duplicateRoot") f.source.threadBindings.push(f.source.threadBindings[0]);
+      if (defect === "duplicateMember") f.source.threadBindings[0].fingerprints.push(ACT_FP);
+      if (defect === "emptyMembers") f.source.threadBindings[0].fingerprints = [];
+      if (defect === "unknownMember") f.source.threadBindings[0].fingerprints.push("1111111111111111");
+      if (defect === "omittedRoot") f.source.threadBindings.pop();
+      if (defect === "omittedMember") f.source.threadBindings[0].fingerprints.pop();
+      await f.seal();
+      if (defect === "partial") delete f.plan.workOrder.authority.completionInputDigest;
+      if (defect === "duplicateRead") f.plan.workOrder.requiredReads.push(f.sourceRead);
+      if (defect === "optionalRead") f.sourceRead.required = false;
+      if (defect === "semantic") f.plan.workOrder.authority.completionInputDigest = "0".repeat(64);
+      if (defect === "byteAuthority") f.plan.workOrder.authority.completionInputBytesDigest = "0".repeat(64);
+      if (defect === "noSource") { f.plan.workOrder.requiredReads.pop(); delete f.plan.workOrder.authority.completionInputDigest; delete f.plan.workOrder.authority.completionInputBytesDigest; }
+      if (defect === "noDelta") f.plan.workOrder.requiredReads = f.plan.workOrder.requiredReads.filter((read) => read.kind !== "delta-result");
+      if (defect === "sourceAuthority") delete f.plan.workOrder.authority.sourceDigest;
+      if (defect === "role") f.plan.workOrder.role = "judge";
+      if (defect === "target") f.plan.workOrder.target.pr++;
+      if (defect === "outputPath") f.plan.workOrder.outputRefs[0] = path.join(repoRoot, "other.json");
+      f.plan.workOrderDigest = workOrderDigest(f.plan.workOrder);
+      const currentReceiptPath = pullReceiptPath(path.join(repoRoot, "tmp"), f.plan.workOrderRef);
+      const current = JSON.parse(await readFile(currentReceiptPath, "utf8"));
+      current.workOrderDigest = f.plan.workOrderDigest;
+      if (defect === "currentSubject") current.subject.phase = "commit_only";
+      if (defect === "currentPath") current.subject.planPath = path.join(repoRoot, "other-plan.json");
+      await writeFile(currentReceiptPath, JSON.stringify(current));
+      if (defect === "currentReceipt") await rm(currentReceiptPath);
+      if (defect === "planDigest") f.plan.workOrderDigest = "sha256:wrong";
+      await writeFile(f.fixerPlan, JSON.stringify(f.plan));
+      if (defect === "bytes") await writeFile(f.sourcePath, `${await readFile(f.sourcePath, "utf8")} `);
+      const originReceiptPath = pullReceiptPath(path.join(repoRoot, "tmp"), `fixer:${REPO}#${PR}:${f.baseline}:f0-1234abcd`);
+      if (defect === "originReceipt") await rm(originReceiptPath);
+      if (defect === "originSubject") { const receipt = JSON.parse(await readFile(originReceiptPath, "utf8")); receipt.subject.headSha = HEAD_SHA; await writeFile(originReceiptPath, JSON.stringify(receipt)); await utimes(originReceiptPath, 1, 1); }
+      if (defect === "originOutput") await writeFile(f.originPath, JSON.stringify({ headSha: FIX_SHA, dispositions: [], siteCoverage: f.source.siteCoverage }));
+      if (defect === "originCoverage") await writeFile(f.originPath, JSON.stringify({ headSha: f.fixing, dispositions: [], siteCoverage: [] }));
+      if (defect === "originPrePull") await utimes(f.originPath, 1, 1);
+      if (["deltaCoverage", "decisionCoverage"].includes(defect)) {
+        const file = defect === "deltaCoverage" ? f.plan.workOrder.requiredReads.find((read) => read.kind === "delta-result").path : path.join(repoRoot, "tmp", "gate-delta", `${f.baseline}.json`);
+        const value = JSON.parse(await readFile(file, "utf8")); value.siteCoverageDigest = "0".repeat(64);
+        await writeFile(file, JSON.stringify(value));
+        if (defect === "deltaCoverage") {
+          f.plan.workOrder.requiredReads.find((read) => read.kind === "delta-result").sha256 = createHash("sha256").update(JSON.stringify(value)).digest("hex");
+          f.plan.workOrder.authority.deltaResultDigest = sha256Hex(value).slice(7);
+          f.plan.workOrderDigest = workOrderDigest(f.plan.workOrder); current.workOrderDigest = f.plan.workOrderDigest;
+          await writeFile(f.fixerPlan, JSON.stringify(f.plan)); await writeFile(currentReceiptPath, JSON.stringify(current));
+        }
+      }
+      if (defect === "foreignRoot") f.nodes[0].comments.nodes[0].author.login = "foreign";
+      if (defect === "unmarkedRoot") f.nodes[0].comments.nodes[0].body = "no marker";
+      if (defect === "replyMarker") f.nodes[0].comments.nodes.unshift(gateComment("c0", 0, "unmarked root"));
+      if (defect === "residualResolved") f.nodes[0].isResolved = true;
+      const canonical = path.join(path.dirname(f.fixerPlan), f.plan.executionIdentity, "fixer-disposition.json");
+      if (defect === "prePull") await utimes(canonical, 1, 1); else await rm(canonical);
+      if (["outputSymlink", "directorySymlink"].includes(defect)) {
+        const other = path.join(repoRoot, "unrelated");
+        await mkdir(other);
+        await writeFile(path.join(other, "fixer-disposition.json"), "must remain unchanged");
+        if (defect === "directorySymlink") { await rm(path.dirname(canonical), { recursive: true }); await symlink(other, path.dirname(canonical), "dir"); }
+        else await symlink(path.join(other, "fixer-disposition.json"), canonical);
+      }
+      const evidenceBefore = await Promise.all([f.originPath, f.sourcePath].map((file) => readFile(file, "utf8").catch(() => null)));
+      const before = existsSync(canonical) ? await readFile(canonical, "utf8") : null;
+      const entries = [compareEntry(f.baseline, defect === "baselineContainment" ? "diverged" : "ahead"), compareEntry(f.fixing, defect === "fixContainment" ? "diverged" : "ahead"), liveHeadEntry(), threadsCallEntry(f.nodes), userEntry];
+      const mock = runtime(entries, repoRoot, { live: false });
+      await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.fixerPlan, construct: true }, mock.deps));
+      assert.equal(existsSync(canonical) ? await readFile(canonical, "utf8") : null, before);
+      assert.deepEqual(await Promise.all([f.originPath, f.sourcePath].map((file) => readFile(file, "utf8").catch(() => null))), evidenceBefore);
+      assert.deepEqual(await checkpointFiles(repoRoot), []);
+      assert.equal(hasPost(mock.calls), false);
+    });
+  });
+}
 
 for (const mismatched of [false, true]) {
   test(`locally-clear full completion ${mismatched ? "rejects a mismatched" : "accepts a whitespace-padded current"} result candidate`, async () => {
