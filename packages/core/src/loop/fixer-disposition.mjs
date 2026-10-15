@@ -180,7 +180,7 @@ export function recordedSkipReason(siteCoverage, fingerprint, site) {
  * structural gap the evaluator must never silently tolerate: a missing
  * headSha, a non-array dispositions field, a missing
  * threadId/fixingCommitSha/disposition on any entry, an unrecognized
- * disposition value, or a duplicate threadId/fingerprint across entries.
+ * disposition value, or a duplicate threadId across entries.
  *
  * Each entry also carries the optional site coverage fields `sites`, `returnedSites`, `noSitesReason` and
  * `ruleCitations`; the handoff may carry a top-level `siteCoverage[]`.
@@ -201,7 +201,6 @@ export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
   }
   const rawDispositions = raw.dispositions ?? [];
   const seenThreadIds = new Set();
-  const seenFingerprints = new Set();
   const dispositions = rawDispositions.map((entry, index) => {
     if (!entry || typeof entry !== "object") {
       throw new Error(`Fixer disposition handoff entry ${index} must be an object`);
@@ -224,12 +223,6 @@ export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
       throw new Error(`Fixer disposition handoff entry for thread ${threadId} is missing disposition`);
     }
     const fingerprint = isNonEmptyString(entry.fingerprint) ? entry.fingerprint.trim() : null;
-    if (fingerprint !== null) {
-      if (seenFingerprints.has(fingerprint)) {
-        throw new Error(`Fixer disposition handoff has a duplicate fingerprint: ${fingerprint}`);
-      }
-      seenFingerprints.add(fingerprint);
-    }
     const disposition = entry.disposition.trim().toLowerCase();
     if (!Object.values(FIXER_DISPOSITION_KIND).includes(disposition)) {
       throw new Error(`Fixer disposition handoff entry for thread ${threadId} has an unrecognized disposition: ${disposition}`);

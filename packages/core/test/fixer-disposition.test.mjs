@@ -107,17 +107,20 @@ test("normalizeFixerDispositionHandoff throws on duplicate threadId", () => {
   );
 });
 
-test("normalizeFixerDispositionHandoff throws on duplicate fingerprint", () => {
-  assert.throws(
-    () => normalizeFixerDispositionHandoff({
-      headSha: SHA,
-      dispositions: [
-        { threadId: "PRRT_T1", fingerprint: "fp1", fixingCommitSha: SHA, disposition: "tackled" },
-        { threadId: "PRRT_T2", fingerprint: "fp1", fixingCommitSha: SHA, disposition: "tackled" },
-      ],
-    }),
-    /duplicate fingerprint: fp1/,
-  );
+test("distinct roots sharing a fingerprint stay distinct through normalization and evaluation", () => {
+  const handoff = normalizeFixerDispositionHandoff({
+    headSha: SHA,
+    dispositions: [
+      { threadId: "PRRT_T1", fingerprint: "fp1", fixingCommitSha: SHA, disposition: "tackled" },
+      { threadId: "PRRT_T2", fingerprint: "fp1", fixingCommitSha: SHA, disposition: "tackled" },
+    ],
+  });
+  assert.equal(handoff.dispositions.length, 2);
+  const result = evaluateFixerDisposition({ handoff, containment: { [SHA]: true }, liveThreads: [
+    { threadId: "PRRT_T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] },
+    { threadId: "PRRT_T2", isResolved: false, replyBodies: [`Fixed in commit ${SHA}.`] },
+  ] });
+  assert.deepEqual(result.incomplete.map(({ threadId, failedStep }) => [threadId, failedStep]), [["PRRT_T2", "not_resolved"]]);
 });
 
 test("normalizeFixerDispositionHandoff accepts a well-formed handoff", () => {
