@@ -167,7 +167,7 @@ if (inManagedContext) {
     } catch (error) {
       const stderr = String(error?.stderr ?? "").trim();
       // Native loader/launcher diagnostics also exit 1; JSON evidence errors are not startup failures.
-      const startupFailure = /^(?:dev-loops-run: (?:cannot resolve|cannot start)|Error(?: \[ERR_(?:MODULE_NOT_FOUND|UNKNOWN_FILE_EXTENSION|UNSUPPORTED_DIR_IMPORT)\])?: Cannot find (?:module|package)|SyntaxError:)/m.test(stderr);
+      const startupFailure = /^(?:dev-loops-run: (?:cannot resolve|cannot start)|Error(?: \[ERR_(?:MODULE_NOT_FOUND|UNKNOWN_FILE_EXTENSION|UNSUPPORTED_DIR_IMPORT)\])?: Cannot find (?:module|package)|Error: (?:EACCES: permission denied|EPERM: operation not permitted), open |SyntaxError:)/m.test(stderr);
       if (typeof error?.status !== "number" || startupFailure) {
         gateError = `could not run ${gateScript} via ${override || launcher} in consumer ${repoRoot}: ${stderr || error.message}`;
       }

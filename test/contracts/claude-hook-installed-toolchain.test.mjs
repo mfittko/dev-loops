@@ -114,8 +114,9 @@ test("installed hook keeps all helper targets, consumer config, overrides and so
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-for (const kind of ["package", "launcher", "helper", "override", "startup", "syntax", "signal", "spawn", "evidence", "override-evidence", "json-evidence"]) {
-  test(`installed hook distinguishes ${kind} failure from missing gate evidence`, async () => {
+for (const kind of ["package", "launcher", "helper", "override", "startup", "unreadable-import", "syntax", "signal", "spawn", "evidence", "override-evidence", "json-evidence"]) {
+  // Root bypasses the unreadable-file permission fixture.
+  test.skipIf(kind === "unreadable-import" && process.getuid?.() === 0)(`installed hook distinguishes ${kind} failure from missing gate evidence`, async () => {
     const f = await installedFixture();
     try {
       const override = path.join(f.root, "override.mjs");
@@ -124,14 +125,22 @@ for (const kind of ["package", "launcher", "helper", "override", "startup", "syn
       if (kind === "launcher") fs.rmSync(path.join(f.plugin, "bin/dev-loops-run"));
       if (kind === "helper") fs.rmSync(path.join(f.pkg, ready));
       if (kind === "startup") f.write(ready, "import './missing-runtime.mjs';");
+      if (kind === "unreadable-import") {
+        f.write(ready, "import './unreadable-runtime.mjs';");
+        f.write("scripts/loop/unreadable-runtime.mjs", "export {};\n");
+        const unreadable = path.join(f.pkg, "scripts/loop/unreadable-runtime.mjs");
+        fs.chmodSync(unreadable, 0o000);
+        assert.throws(() => fs.readFileSync(unreadable), (error) => ["EACCES", "EPERM"].includes(error.code));
+      }
       if (kind === "syntax") f.write(ready, "export {");
       if (kind === "signal") fs.writeFileSync(override, "process.kill(process.pid, 'SIGTERM');");
       if (kind === "override-evidence") fs.writeFileSync(override, "process.exit(1);");
       if (kind === "spawn") f.write(human, "import fs from 'node:fs'; fs.rmSync(process.cwd(), {recursive:true,force:true}); console.log('false');");
-      if (kind === "json-evidence") f.write(ready, `console.error(JSON.stringify({ok:false,error:"Cannot find module / ERR_MODULE_NOT_FOUND: invalid evidence"}));process.exit(1);`);
+      if (kind === "json-evidence") f.write(ready, `console.error(JSON.stringify({ok:false,error:"Cannot find module / ERR_MODULE_NOT_FOUND / Error: EACCES: permission denied, open '/evidence': invalid evidence"}));process.exit(1);`);
       const reason = f.run(kind === "spawn" ? "merge" : "ready", ["override", "signal", "override-evidence"].includes(kind) ? { DEVLOOPS_PRE_PR_READY_GATE_SCRIPT: override } : {});
       if (kind.endsWith("evidence")) { assert.match(reason, /no visible clean draft_gate/); assert.doesNotMatch(reason, /could not run/); }
       else { assert.match(reason, /could not run/); assert.ok(reason.includes(kind === "spawn" ? merge : ready)); assert.ok(reason.includes(f.consumer)); assert.ok(reason.includes(["override", "signal"].includes(kind) ? override : "dev-loops-run")); }
+      if (kind === "unreadable-import") { assert.match(reason, /^.*Error: (?:EACCES|EPERM):/m); assert.match(reason, /unreadable-runtime\.mjs/); }
     } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
   });
 }
