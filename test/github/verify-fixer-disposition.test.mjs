@@ -1429,21 +1429,31 @@ test("legacy archived local Delta fields remain bound when semantic work-order i
 });
 
 for (const failure of ["plan", "preparePlan", "discovery", "empty", "relative"]) test(`legacy qualification refuses ${failure} failure without completing its native query`, async () => {
-  await withRepoRoot(async (root) => {
+  await withRepoRoot(async (lexicalRoot) => {
+    const root = await realpath(lexicalRoot);
     const f = await legacyFixture(root);
     const originalFullBytes = await readFile(f.archivePath);
     if (failure === "preparePlan") await writeFile(f.fixerPlan, originalFullBytes);
     const source = await readFile(new URL("../../scripts/github/_legacy-fixer-revalidation.mjs", import.meta.url), "utf8");
-    let reads = 0;
+    let injections = 0;
     let queries = 0;
+    const canonicalPlan = await realpath(f.fixerPlan);
     const context = Object.assign({ Buffer, JSON, path, sha256Hex, realpath, lstat,
       readFile: async (file, ...args) => {
         const bytes = await readFile(file, ...args);
-        return file === await realpath(f.fixerPlan) && ++reads === 2 ? Buffer.concat([bytes, Buffer.from("\n")]) : bytes;
+        if (await realpath(file) === canonicalPlan && queries > 0) {
+          injections++;
+          return Buffer.concat([bytes, Buffer.from("\n")]);
+        }
+        return bytes;
       },
       spawnSync: (...args) => {
-        if (args[1].includes("grep")) queries++;
-        return spawnSync(...args);
+        const result = spawnSync(...args);
+        if (args[1].includes("grep")) {
+          assert.equal(result.status, 0, "supersession follows a successful native query");
+          queries++;
+        }
+        return result;
       },
     }, await import("@dev-loops/core/loop/gate-round-retirement"), await import("@dev-loops/core/loop/fixer-disposition"),
     await import("@dev-loops/core/loop/pre-push-delta-review"), await import("../../scripts/loop/_repo-root-resolver.mjs"),
@@ -1453,10 +1463,11 @@ for (const failure of ["plan", "preparePlan", "discovery", "empty", "relative"])
     if (failure === "empty" || failure === "relative") context.listWorktreeEntries = () => failure === "empty" ? [] : [{ path: "relative" }];
     const qualify = runInNewContext(`${source.slice(source.indexOf("const PATTERN")).replaceAll("export async function", "async function")}\n${failure === "preparePlan" ? "prepareLegacyCompletion" : "revalidateLegacyCompletion"}`, context);
     const [act, delta] = await Promise.all(f.plan.workOrder.requiredReads.slice(0, 2).map(async (read) => JSON.parse(await readFile(read.path))));
-    await assert.rejects(qualify({ completion: f.source, plan: f.plan, prospectivePlan: f.plan, originalFullBytes, planPath: f.fixerPlan, priorBytes: await readFile(f.originPath), actList: act, delta,
+    const planPath = failure === "plan" ? path.join(lexicalRoot, path.relative(root, f.fixerPlan)) : f.fixerPlan;
+    await assert.rejects(qualify({ completion: f.source, plan: f.plan, prospectivePlan: f.plan, originalFullBytes, planPath, priorBytes: await readFile(f.originPath), actList: act, delta,
       decision: JSON.parse(await readFile(f.decisionPath)), receiptTmpRoot: path.join(root, "tmp"), repoRoot: root }), ["plan", "preparePlan"].includes(failure) ? /superseded during query/ : failure === "discovery" ? { code: "ETIMEDOUT", message: "worktree listing failed" } : /retirement checkout discovery returned no valid absolute roots/);
     assert.equal(queries, ["plan", "preparePlan"].includes(failure) ? 1 : 0);
-    assert.equal(reads, ["plan", "preparePlan"].includes(failure) ? 2 : 1);
+    assert.equal(injections, ["plan", "preparePlan"].includes(failure) ? 1 : 0);
   });
 });
 
@@ -1666,19 +1677,21 @@ test("typed completion CLI rejects construct/check together", () => {
 
 test("typed completion path guard accepts canonical Windows paths with helper-normalized separators", async () => {
   const source = await readFile(new URL("../../scripts/github/verify-fixer-disposition.mjs", import.meta.url), "utf8");
-  const start = source.indexOf("    const executionDir =");
+  const start = source.indexOf("    const executionDir = path.join(await real(path.dirname(planPath)), plan.executionIdentity);");
   const end = source.indexOf("    const subject =", start);
   assert.ok(start >= 0 && end > start);
   const planPath = "C:\\repo\\tmp\\gate-fixer\\owner-repo\\pr-1975\\fixer-emit-plan.json";
   const executionIdentity = "f1-0000abcd";
+  const normalized = [];
   // Exercise the production guard with Windows path semantics and the helper's forward-slash contract.
   await runInNewContext(`(async () => { ${source.slice(start, end)} })()`, {
     path: path.win32, planPath, plan: { executionIdentity },
     handoffPath: path.win32.join(path.win32.dirname(planPath), executionIdentity, "fixer-disposition.json"),
     real: async (file) => file,
     lstat: async () => ({ isSymbolicLink: () => false }),
-    realpathNearestExisting: (file) => path.win32.normalize(file).replaceAll("\\", "/"),
+    realpathNearestExisting: (file) => { normalized.push(file); return path.win32.normalize(file).replaceAll("\\", "/"); },
   });
+  assert.deepEqual(normalized, [path.win32.join(path.win32.dirname(planPath), executionIdentity), path.win32.join(path.win32.dirname(planPath), executionIdentity, "fixer-disposition.json")]);
 });
 
 for (const existing of ["output", "origin", "source", "late-origin"]) test(`typed completion refuses existing ${existing} without clobbering evidence`, async () => {
