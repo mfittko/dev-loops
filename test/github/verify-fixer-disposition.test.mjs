@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { test } from "bun:test";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { decideDeltaNextStep, startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -956,6 +957,49 @@ test("typed completion CLI rejects construct/check together", () => {
   assert.throws(() => parseVerifyFixerDispositionCliArgs([...args, "--check"]), /mutually exclusive/);
 });
 
+test("typed completion path guard accepts canonical Windows paths with helper-normalized separators", async () => {
+  const source = await readFile(new URL("../../scripts/github/verify-fixer-disposition.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("    const executionDir =");
+  const end = source.indexOf("    const subject =", start);
+  assert.ok(start >= 0 && end > start);
+  const planPath = "C:\\repo\\tmp\\gate-fixer\\owner-repo\\pr-1975\\fixer-emit-plan.json";
+  const executionIdentity = "f1-0000abcd";
+  // Exercise the production guard with Windows path semantics and the helper's forward-slash contract.
+  await runInNewContext(`(async () => { ${source.slice(start, end)} })()`, {
+    path: path.win32, planPath, plan: { executionIdentity },
+    handoffPath: path.win32.join(path.win32.dirname(planPath), executionIdentity, "fixer-disposition.json"),
+    real: async (file) => file,
+    lstat: async () => ({ isSymbolicLink: () => false }),
+    realpathNearestExisting: (file) => path.win32.normalize(file).replaceAll("\\", "/"),
+  });
+});
+
+for (const existing of ["output", "origin", "source", "late-origin"]) test(`typed completion refuses existing ${existing} without clobbering evidence`, async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const f = await completionFixture(repoRoot);
+    const output = f.plan.workOrder.outputRefs[0];
+    if (existing !== "output") await rm(output);
+    const createLink = () => link(existing === "source" ? f.sourcePath : f.originPath, output);
+    if (existing === "origin" || existing === "source") {
+      await createLink();
+      const now = new Date(Date.now() + 1000);
+      await utimes(output, now, now);
+    }
+    const files = [f.originPath, f.sourcePath, ...(existing === "late-origin" ? [] : [output])];
+    const before = await Promise.all(files.map((file) => readFile(file, "utf8")));
+    const mock = f.depsFor();
+    const deps = { ...mock.deps, runChild: async (...args) => {
+      if (existing === "late-origin" && args[1][0] === "pr") await createLink();
+      return mock.deps.runChild(...args);
+    } };
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.fixerPlan, construct: true }, deps), /EEXIST/);
+    assert.deepEqual(await Promise.all(files.map((file) => readFile(file, "utf8"))), before);
+    if (existing === "late-origin") assert.equal(await readFile(output, "utf8"), before[0]);
+    assert.deepEqual(await checkpointFiles(repoRoot), []);
+    assert.equal(hasPost(mock.calls), false);
+  });
+});
+
 for (const check of [false, true]) for (const defect of ["partial", "coverage", "dispositionCoverage", "fixing", "membership", "bytes", "origin", "delta"]) test(`typed completion normal/check retains optional authentication (${check}, ${defect})`, async () => {
   await withRepoRoot(async (repoRoot) => {
     const f = await completionFixture(repoRoot);
@@ -1113,11 +1157,13 @@ for (const defect of ["partial", "duplicateRead", "optionalRead", "semantic", "b
         if (defect === "directorySymlink") { await rm(path.dirname(canonical), { recursive: true }); await symlink(other, path.dirname(canonical), "dir"); }
         else await symlink(path.join(other, "fixer-disposition.json"), canonical);
       }
+      const evidenceBefore = await Promise.all([f.originPath, f.sourcePath].map((file) => readFile(file, "utf8").catch(() => null)));
       const before = existsSync(canonical) ? await readFile(canonical, "utf8") : null;
       const entries = [compareEntry(f.baseline, defect === "baselineContainment" ? "diverged" : "ahead"), compareEntry(f.fixing, defect === "fixContainment" ? "diverged" : "ahead"), liveHeadEntry(), threadsCallEntry(f.nodes), userEntry];
       const mock = runtime(entries, repoRoot, { live: false });
       await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.fixerPlan, construct: true }, mock.deps));
       assert.equal(existsSync(canonical) ? await readFile(canonical, "utf8") : null, before);
+      assert.deepEqual(await Promise.all([f.originPath, f.sourcePath].map((file) => readFile(file, "utf8").catch(() => null))), evidenceBefore);
       assert.deepEqual(await checkpointFiles(repoRoot), []);
       assert.equal(hasPost(mock.calls), false);
     });

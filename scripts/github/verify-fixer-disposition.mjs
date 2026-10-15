@@ -243,8 +243,8 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     }
     const executionDir = path.join(await real(path.dirname(planPath)), plan.executionIdentity);
     const symlinks = await Promise.all([path.dirname(handoffPath), handoffPath].map((file) => lstat(file).then((info) => info.isSymbolicLink(), () => false)));
-    if (symlinks.some(Boolean) || realpathNearestExisting(path.dirname(handoffPath)) !== executionDir
-      || realpathNearestExisting(handoffPath) !== path.join(executionDir, "fixer-disposition.json")) {
+    if (symlinks.some(Boolean) || path.normalize(realpathNearestExisting(path.dirname(handoffPath))) !== executionDir
+      || path.normalize(realpathNearestExisting(handoffPath)) !== path.join(executionDir, "fixer-disposition.json")) {
       throw new Error("completion output or execution directory redirects outside its canonical execution path");
     }
     const subject = receipt.receipt.subject;
@@ -514,7 +514,7 @@ export async function verifyFixerDisposition(
   }
   if (options.construct) {
     await mkdir(path.dirname(handoffPath), { recursive: true });
-    await writeFile(handoffPath, `${JSON.stringify(constructedReport, null, 2)}\n`, "utf8");
+    await writeFile(handoffPath, `${JSON.stringify(constructedReport, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
     return { ok: true, constructed: true, outputRef: handoffPath };
   }
   if (!options.check) {
