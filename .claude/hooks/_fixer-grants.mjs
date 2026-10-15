@@ -12,7 +12,7 @@ import path from "node:path";
 import { findRetirementAfter } from "./_gate-round-retirement.mjs";
 import { parseSanctionedPullLine } from "./_hook-decisions.mjs";
 import { realpathNearestExisting } from "./_worktree-guard.mjs";
-import { EXECUTION_IDENTITY_RE, executionIndexPath, workOrderDigest } from "./_work-order-digest.mjs";
+import { assertFixerReviewBaseline, EXECUTION_IDENTITY_RE, executionIndexPath, workOrderDigest } from "./_work-order-digest.mjs";
 
 /**
  * Env for every git call in this module: an inherited GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR/GIT_INDEX_FILE overrides `-C`, so a pointer at
@@ -108,14 +108,19 @@ const boundTo = (mainRoot, receipt, agentId) => {
 // contains the work order head. A stale unit grants nothing even though its receipt still exists.
 // A malformed retirement record throws, and the caller grants nothing.
 function isStale(mainRoot, checkoutRoots, order, executionIdentity) {
+  const bytesByRead = new Map();
   for (const read of order.requiredReads ?? []) {
     let bytes = null;
     try { bytes = readFileSync(read.path); } catch { /* vanished */ }
+    bytesByRead.set(read, bytes);
     if (bytes === null || sha256(bytes) !== read.sha256) return true;
   }
+  const baseline = assertFixerReviewBaseline(order, bytesByRead);
   if (order.source === "act-list") {
     const emittedAtMs = Number(executionIdentity.slice(1, executionIdentity.indexOf("-")));
-    if (checkoutRoots.some((root) => findRetirementAfter(path.join(root, "tmp"), order.gate, order.headSha, emittedAtMs) !== null)) return true;
+    for (const head of new Set([order.headSha, ...(baseline ? [baseline.reviewBaselineHead] : [])])) {
+      if (checkoutRoots.some((root) => findRetirementAfter(path.join(root, "tmp"), order.gate, head, emittedAtMs) !== null)) return true;
+    }
   }
   try {
     execFileSync("git", ["-C", mainRoot, "merge-base", "--is-ancestor", order.headSha, `refs/heads/${order.mutationAuthority.branch}`], { env: gitEnv(), stdio: "ignore" });

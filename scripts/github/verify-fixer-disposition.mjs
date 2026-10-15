@@ -27,6 +27,7 @@ import {
 import { deltaCoverageBinding, isDeltaResultFresh, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { revalidateLegacyCompletion } from "./_legacy-fixer-revalidation.mjs";
 
@@ -219,6 +220,13 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   if (receipt.reason === "result_predates_pull") {
     throw new Error(`result_predates_pull: the disposition handoff ${handoffPath} was written before the pull at ${receipt.receipt.pulledAt}; a stale or replayed disposition never advances`);
   }
+  const bytesByRead = new Map();
+  if (Object.hasOwn(order.authority ?? {}, "reviewBaselineHead")) {
+    for (const read of order.requiredReads ?? []) {
+      if (["act-list", "delta-result"].includes(read?.kind)) bytesByRead.set(read, await readFile(read.path));
+    }
+  }
+  const baselineAuthority = assertFixerReviewBaseline(order, bytesByRead);
   const completionReads = (order.requiredReads ?? []).filter((read) => read?.kind === "completion-input");
   const optionalCompletion = completionReads.length > 0 || Object.hasOwn(order.authority ?? {}, "completionInputDigest")
     || Object.hasOwn(order.authority ?? {}, "completionInputBytesDigest");
@@ -293,11 +301,11 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   let deltaStatuses = null;
   if (actRead) {
     try {
-      const actBytes = await readFile(actRead.path);
+      const actBytes = bytesByRead.get(actRead) ?? await readFile(actRead.path);
       if (createHash("sha256").update(actBytes).digest("hex") !== String(actRead.sha256 ?? "").replace(/^sha256:/, "")) {
         throw new Error(`the work order's act list ${actRead.path} differs from the sha256 the work order binds; it was rewritten after emission`);
       }
-      actList = JSON.parse(actBytes.toString("utf8"));
+      actList = baselineAuthority ? baselineAuthority.actList : JSON.parse(actBytes.toString("utf8"));
     } catch (error) {
       if (/differs from the sha256/.test(error.message)) throw error;
       throw new Error(`Cannot read the work order's act list ${actRead.path}`);
@@ -309,15 +317,15 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     const deltaRead = (order.requiredReads ?? []).find((read) => read?.kind === "delta-result");
     // Legacy deliveries remain strict without both semantic authorities.
     if (deltaRead && order.authority?.sourceDigest && order.authority?.deltaResultDigest) {
-      const bytes = await readFile(deltaRead.path);
+      const bytes = bytesByRead.get(deltaRead) ?? await readFile(deltaRead.path);
       if (createHash("sha256").update(bytes).digest("hex") !== String(deltaRead.sha256 ?? "").replace(/^sha256:/, "")) {
         throw new Error("the work order's delta result differs from its sha256");
       }
-      const delta = JSON.parse(bytes.toString("utf8"));
+      const delta = baselineAuthority ? baselineAuthority.delta : JSON.parse(bytes.toString("utf8"));
       if (sha256Hex(delta).slice(7) !== order.authority.deltaResultDigest) {
         throw new Error("the work order's delta result differs from authority.deltaResultDigest");
       }
-      const baseline = completion ? delta.reviewBaselineHead : order.headSha;
+      const baseline = baselineAuthority?.reviewBaselineHead ?? (completion ? delta.reviewBaselineHead : order.headSha);
       if (completion && normalizeFullHeadSha(baseline) !== baseline) throw new Error("completion Delta requires its full original reviewed baseline");
       const sequence = startDeltaSequence({ reviewBaselineHead: baseline, actList });
       const errors = validateDeltaResult(delta, { sequence, membershipOnly: true });
