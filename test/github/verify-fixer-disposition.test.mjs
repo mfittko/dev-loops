@@ -1350,6 +1350,23 @@ test("prospective legacy preparation authenticates while original full stays act
   });
 });
 
+test("prospective legacy preparation rejects invalid canonical clearing decision invocations", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await legacyFixture(root), originalFullBytes = await readFile(f.archivePath);
+    await writeFile(f.fixerPlan, originalFullBytes);
+    const [actList, delta] = await Promise.all(f.plan.workOrder.requiredReads.slice(0, 2).map(async (read) => JSON.parse(await readFile(read.path))));
+    const decision = JSON.parse(await readFile(f.decisionPath)), priorBytes = await readFile(f.originPath);
+    for (const invocation of [undefined, "1", 0, 4, 1.5]) {
+      if (invocation === undefined) delete decision.invocation;
+      else decision.invocation = invocation;
+      await writeFile(f.decisionPath, JSON.stringify(decision));
+      await assert.rejects(legacyOwner.prepareLegacyCompletion({ completion: f.source, prospectivePlan: f.plan, planPath: f.fixerPlan,
+        originalFullBytes, priorBytes, actList, delta, decision, receiptTmpRoot: path.join(root, "tmp"), repoRoot: root }), /legacy requires fresh locally clear/);
+      assert.deepEqual(await readFile(f.fixerPlan), originalFullBytes);
+    }
+  });
+});
+
 for (const defect of ["before", "originSubject", "originBytes", "originPrePull", "originSymlink", "archiveBytes", "prospectiveDigest", "partialModern"]) {
   test(`prospective legacy preparation refuses ${defect}`, async () => {
     await withRepoRoot(async (root) => {

@@ -83,6 +83,7 @@ export async function prepareLegacyCompletion({ prospectivePlan: plan, originalF
 async function validateLegacyCompletion({ completion, plan, planPath, priorBytes, actList, delta, decision, receiptTmpRoot, repoRoot }, activeBytes, legacy) {
   if ([delta, decision].some((value) => ["siteCoverageDigest", "coverageProtocol", "handbackBytesDigest", "origin"].some((key) => Object.hasOwn(value, key)))) refuse("partial or current coverage binding cannot downgrade");
   if (delta.outcome !== "locally_clear" || decision.outcome !== "locally_clear" || decision.nextStep !== "push"
+    || !Number.isInteger(decision.invocation) || decision.invocation < 1 || decision.invocation > 3
     || delta.candidateHead !== completion.headSha || delta.actionableItems.some((item) => item.status !== "resolved")) refuse("legacy requires fresh locally clear unchanged candidate and resolved members");
   const sequence = startDeltaSequence({ reviewBaselineHead: delta.reviewBaselineHead, actList });
   const pairs = (items) => items.map(({ ref, status }) => JSON.stringify([ref, status])).sort().join("\n");
