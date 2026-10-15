@@ -13,7 +13,8 @@ import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.m
 import { decideFixerWriteGuard } from "../../.claude/hooks/_hook-decisions.mjs";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
-import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder, locateFixerUnit } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
@@ -1001,7 +1002,7 @@ for (const check of [false, true]) for (const form of ["unchanged", "empty", "al
   });
 }
 
-for (const route of ["THREAD", "ACT"]) test(`historical 44f57175 main producer/pull selects the real feature helper and completes ${route} delivery`, async () => {
+for (const route of ["THREAD", "ACT", "CONSTRUCT"]) test(`historical 44f57175 main producer/pull selects the real feature helper and completes ${route} delivery`, async () => {
   await withFixture(async ({ root, wt, head, files, writeRecord }) => {
     const historical = "44f57175a215711923fb128d74e9357b33ff95e9";
     const checkout = fileURLToPath(new URL("../../", import.meta.url));
@@ -1019,14 +1020,51 @@ for (const route of ["THREAD", "ACT"]) test(`historical 44f57175 main producer/p
     await writeRecord({ items: [{ ref: "PRRT_OLD", status: "resolved" }] });
     const warning = withFp({ severity: "low", angle: "correctness", summary: "residual warning", judgeDisposition: "act", siteQuery: "query", rejectedForms: ["--warning"] });
     const act = [...ACT, warning];
-    if (route === "ACT") {
+    const construct = route === "CONSTRUCT";
+    const isAct = route !== "THREAD";
+    let candidate = head;
+    let completion = null;
+    if (construct) {
+      await writeFile(files.actList, JSON.stringify(act));
+      const prior = await oldEmitter.emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "commit_only", actListFile: files.actList, gate: "draft_gate", cwd: wt, executionIdentity: nextExecution(), fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
+      const pulled = spawnSync("node", [path.join(root, "scripts/github/pull-work-order.mjs"), prior.executionIdentity], { cwd: root, encoding: "utf8", env: gitFreeEnv() });
+      assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
+      assert.equal(pulled.stdout, await readFile(prior.promptPath, "utf8"));
+      git(wt, "commit", "-q", "--allow-empty", "-m", "candidate B");
+      candidate = git(wt, "rev-parse", "HEAD");
+      assert.notEqual(candidate, head);
+      completion = { headSha: candidate, fixingCommitSha: candidate,
+        siteCoverage: [{ fingerprint: ACT_REF, returnedSites: [], sites: [], noSitesReason: "  no remaining matches  " }, { fingerprint: warning.fingerprint, returnedSites: ["--warning"], sites: [{ site: "--warning", kind: "input_form", status: "skipped", reason: "  unverified at invocation three  " }] }],
+        threadBindings: [{ threadId: "PRRT_OLD", fingerprints: [ACT_REF] }, { threadId: "PRRT_WARNING", fingerprints: [warning.fingerprint] }],
+        origin: { workOrderRef: prior.workOrderRef, workOrderDigest: prior.workOrderDigest, executionIdentity: prior.executionIdentity } };
+      await mkdir(path.dirname(prior.workOrder.outputRefs[0]), { recursive: true });
+      await writeFile(prior.workOrder.outputRefs[0], JSON.stringify({ headSha: candidate, dispositions: [], siteCoverage: completion.siteCoverage }));
+    }
+    if (isAct) {
       const actSetId = startDeltaSequence({ reviewBaselineHead: head, actList: act }).actSetId;
       const actionableItems = [{ ref: ACT_REF, status: "resolved", evidence: ["guarded"] }, { ref: warning.fingerprint, status: "cannot_verify", evidence: ["still unverified"] }];
       await writeFile(files.actList, JSON.stringify(act));
-      await writeFile(files.delta, JSON.stringify(deltaResultFor(head, { actSetId, actionableItems })));
-      await writeRecord({ candidateHead: head, actSetId, invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items: actionableItems.map(({ ref, status }) => ({ ref, status })) });
+      const coverageIdentity = completion ? { siteCoverageDigest: sha256Hex(completion.siteCoverage).slice(7) } : {};
+      await writeFile(files.delta, JSON.stringify(deltaResultFor(head, { actSetId, actionableItems, ...coverageIdentity })));
+      await writeRecord({ candidateHead: candidate, actSetId, invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items: actionableItems.map(({ ref, status }) => ({ ref, status })), ...coverageIdentity });
     }
-    const unit = await oldEmitter.emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", ...(route === "THREAD" ? { threadsFile: files.threads } : { actListFile: files.actList, gate: "draft_gate", deltaResult: files.delta }), cwd: wt, executionIdentity: nextExecution(), fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
+    let unit = await oldEmitter.emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", ...(route === "THREAD" ? { threadsFile: files.threads } : { actListFile: files.actList, gate: "draft_gate", deltaResult: files.delta }), cwd: wt, executionIdentity: nextExecution(), fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
+    if (construct) {
+      // Fixture-only future authority, fully materialized before pull; the old producer is unchanged.
+      const featureEmitter = await import(pathToFileURL(path.join(wt, "scripts/loop/emit-fixer-work-order.mjs")).href);
+      const executionIdentity = nextExecution();
+      const inputPath = path.join(path.dirname(unit.planPath), "completion-input.json");
+      const bytes = `${JSON.stringify(completion, null, 2)}\n`;
+      await writeFile(inputPath, bytes);
+      const byteDigest = createHash("sha256").update(bytes).digest("hex");
+      const workOrder = { ...unit.workOrder, headSha: candidate, outputRefs: [path.join(path.dirname(unit.planPath), executionIdentity, "fixer-disposition.json")], requiredReads: [...unit.workOrder.requiredReads, { kind: "completion-input", path: inputPath, sha256: byteDigest, required: true }], authority: { ...unit.workOrder.authority, completionInputDigest: sha256Hex(completion).slice(7), completionInputBytesDigest: byteDigest } };
+      const text = featureEmitter.renderWorkOrder(workOrder);
+      unit = { ...unit, workOrder, executionIdentity, workOrderRef: `fixer:${REPO}#${PR}:${candidate}:${executionIdentity}`, workOrderDigest: workOrderDigest(workOrder), materializationHash: materializationHash(text), promptPath: path.join(path.dirname(unit.planPath), "work-orders", `${executionIdentity}.md`) };
+      unit.dispatchPrompt = buildDispatchPointer(unit);
+      await writeFile(unit.promptPath, text);
+      await writeFile(unit.planPath, JSON.stringify(unit));
+      await writeExecutionIndex(path.join(root, "tmp"), unit);
+    }
     const before = await readFile(unit.planPath, "utf8");
     const coverageDir = path.join(root, "tmp", "node-coverage");
     const pulled = spawnSync("node", [path.join(root, "scripts/github/pull-work-order.mjs"), unit.executionIdentity], { cwd: root, encoding: "utf8", env: { ...gitFreeEnv(), NODE_V8_COVERAGE: coverageDir } });
@@ -1037,29 +1075,38 @@ for (const route of ["THREAD", "ACT"]) test(`historical 44f57175 main producer/p
     const receipt = JSON.parse(await readFile(pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef), "utf8"));
     assert.equal(receipt.subject.planPath, unit.planPath);
     assert.equal(receipt.subject.branch, "issue-1");
+    assert.equal(receipt.subject.headSha, candidate);
     assert.equal(receipt.workOrderDigest, unit.workOrderDigest);
     assert.equal(unit.workOrderDigest, workOrderDigest(unit.workOrder));
     await mkdir(path.dirname(unit.workOrder.outputRefs[0]), { recursive: true });
-    const dispositions = [{ threadId: "PRRT_OLD", fixingCommitSha: head, disposition: "tackled", ...(route === "ACT" ? { fingerprint: ACT_REF, returnedSites: [], noSitesReason: "no remaining matches" } : {}) }];
-    if (route === "ACT") dispositions.push({ threadId: "PRRT_WARNING", fingerprint: warning.fingerprint, fixingCommitSha: head, disposition: "deferred", returnedSites: ["--warning"], sites: [{ site: "--warning", kind: "input_form", status: "skipped", reason: "unverified at invocation three" }] });
-    await writeFile(unit.workOrder.outputRefs[0], JSON.stringify({ headSha: head, dispositions }));
-    const nodes = [{ id: "PRRT_OLD", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${head}.`, author: { login: "bot", __typename: "User" } }] } }];
-    if (route === "ACT") nodes[0].comments.nodes[0].body += `\n<!-- dev-loops:finding ${ACT_REF} severity=high angle=correctness round=1 -->`;
-    const parsedThreads = { threads: [{ id: "PRRT_OLD", isResolved: true }], comments: [{ threadId: "PRRT_OLD", body: `Fixed in commit ${head}.` }] };
-    if (route === "ACT") nodes.push({ id: "PRRT_WARNING", isResolved: false, comments: { nodes: [{ id: "c2", databaseId: 2, body: `<!-- dev-loops:finding ${warning.fingerprint} severity=low angle=correctness round=1 -->`, author: { login: "bot", __typename: "User" } }] } });
-    const entries = () => [{ assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: head }) }, { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) }, ...(route === "ACT" ? [{ assertArgs: ["api", "user"], stdout: '{"login":"bot"}' }] : []), { assertArgs: ["api", `repos/${REPO}/compare/${head}...${head}`], stdout: '{"status":"identical"}' }];
+    const dispositions = [{ threadId: "PRRT_OLD", fixingCommitSha: candidate, disposition: "tackled", ...(isAct ? { fingerprint: ACT_REF, returnedSites: [], noSitesReason: "no remaining matches" } : {}) }];
+    if (isAct) dispositions.push({ threadId: "PRRT_WARNING", fingerprint: warning.fingerprint, fixingCommitSha: candidate, disposition: "deferred", returnedSites: ["--warning"], sites: [{ site: "--warning", kind: "input_form", status: "skipped", reason: "unverified at invocation three" }] });
+    if (!construct) await writeFile(unit.workOrder.outputRefs[0], JSON.stringify({ headSha: candidate, dispositions }));
+    const nodes = [{ id: "PRRT_OLD", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${candidate}.`, author: { login: "bot", __typename: "User" } }] } }];
+    if (isAct) nodes[0].comments.nodes[0].body += `\n<!-- dev-loops:finding ${ACT_REF} severity=high angle=correctness round=1 -->`;
+    const parsedThreads = { threads: [{ id: "PRRT_OLD", isResolved: true }], comments: [{ threadId: "PRRT_OLD", body: `Fixed in commit ${candidate}.` }] };
+    if (isAct) nodes.push({ id: "PRRT_WARNING", isResolved: false, comments: { nodes: [{ id: "c2", databaseId: 2, body: `<!-- dev-loops:finding ${warning.fingerprint} severity=low angle=correctness round=1 -->`, author: { login: "bot", __typename: "User" } }] } });
+    const comparison = (sha) => ({ assertArgs: ["api", `repos/${REPO}/compare/${sha}...${candidate}`], stdout: JSON.stringify({ status: sha === candidate ? "identical" : "ahead" }) });
+    const entries = (constructing = false) => [...construct ? [comparison(head), comparison(candidate)] : [], { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: candidate }) }, { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) }, ...(isAct ? [{ assertArgs: ["api", "user"], stdout: '{"login":"bot"}' }] : []), ...constructing ? [] : [comparison(candidate)]];
     const featureVerifierPath = path.join(wt, "scripts/github/verify-fixer-disposition.mjs");
     assert.equal(await readFile(featureVerifierPath, "utf8"), await readFile(path.join(checkout, "scripts/github/verify-fixer-disposition.mjs"), "utf8"));
     const featureVerifier = await import(pathToFileURL(featureVerifierPath).href);
     const runtime = (mock) => ({ repoRoot: wt, env: runIdFreeEnv(), runChild: mock.runChild });
-    const completed = await featureVerifier.verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath }, runtime(makeGhMock(entries())));
+    const options = { repo: REPO, pr: PR, headSha: candidate, fixerPlan: unit.planPath };
+    if (construct) {
+      const result = await featureVerifier.verifyFixerDisposition({ ...options, construct: true }, runtime(makeGhMock(entries(true))));
+      assert.equal(result.constructed, true);
+      assert.equal(result.complete, undefined);
+      assert.deepEqual(JSON.parse(await readFile(result.outputRef, "utf8")).siteCoverage, completion.siteCoverage);
+    }
+    const completed = await featureVerifier.verifyFixerDisposition(options, runtime(makeGhMock(entries())));
     assert.equal(completed.complete, true);
     assert.deepEqual(completed.actions, []);
-    if (route === "ACT") assert.equal(nodes[1].isResolved, false, "deferred residual receives no Fixed reply or resolution");
+    if (isAct) assert.equal(nodes[1].isResolved, false, "deferred residual receives no Fixed reply or resolution");
     const checkpoint = [await readFile(completed.checkpointPath, "utf8"), (await stat(completed.checkpointPath)).mtimeMs];
     const featureResolver = await import(pathToFileURL(path.join(wt, "scripts/loop/detect-pr-gate-coordination-state.mjs")).href);
-    const mock = makeGhMock([...entries(), { assertArgs: ["api", `repos/${REPO}/compare/${head}...${head}`], stdout: '{"status":"identical"}' }]);
-    const checked = await featureResolver.resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: head, parsedThreads }, runtime(mock));
+    const mock = makeGhMock([...entries(), comparison(candidate)]);
+    const checked = await featureResolver.resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: candidate, parsedThreads }, runtime(mock));
     assert.equal(checked.complete, true);
     assert.equal(mock.calls.some((call) => call.args.includes("POST") || call.args.some((arg) => String(arg).includes("mutation"))), false, "THREAD performs no ACT query, history query or mutation");
     assert.deepEqual([await readFile(completed.checkpointPath, "utf8"), (await stat(completed.checkpointPath)).mtimeMs], checkpoint);

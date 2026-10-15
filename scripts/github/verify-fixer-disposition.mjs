@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -16,7 +16,7 @@ import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "
 import { captureParsedReviewThreads, findDeltaBlockedFixedReply, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
 import { planBatchReplyTargets } from "./reply-resolve-review-threads.mjs";
 import { buildContainmentMap, isCommitContainedByHead } from "./_commit-containment.mjs";
-import { verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
+import { EXECUTION_IDENTITY_RE, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
@@ -27,6 +27,7 @@ import {
 import { isDeltaResultFresh, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 
 const USAGE = `Usage: verify-fixer-disposition.mjs --repo <owner/name> --pr <number> --head-sha <sha> --fixer-plan <path> [--tmp-root <path>]
 Enforce GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: verify every review thread a fixer
@@ -53,6 +54,9 @@ Required:
                         when written at or after that pull, and when its headSha is
                         the observed --head-sha.
 Optional:
+  --construct                 Construct the current ACT full worker's canonical
+                               report from authenticated completion input; no
+                               checkpoint or GitHub mutation. Not --check.
   --check                     Read-only delivery and live-state check; never
                                write a checkpoint or reply/resolve a thread.
   --tmp-root <path>            Root tmp directory for the checkpoint and the pull
@@ -88,6 +92,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
     options: {
       help: { type: "boolean", short: "h" },
       check: { type: "boolean" },
+      construct: { type: "boolean" },
       repo: { type: "string" },
       pr: { type: "string" },
       "head-sha": { type: "string" },
@@ -102,6 +107,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
   const options = {
     help: false,
     check: false,
+    construct: false,
     repo: undefined,
     pr: undefined,
     headSha: undefined,
@@ -119,8 +125,8 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
       options.help = true;
       return options;
     }
-    if (token.name === "check") {
-      options.check = true;
+    if (token.name === "check" || token.name === "construct") {
+      options[token.name] = true;
       continue;
     }
     if (token.name === "repo") {
@@ -153,6 +159,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const missing = ["repo", "pr", "headSha", "fixerPlan"].filter((k) => options[k] === undefined);
+  if (options.check && options.construct) throw parseError("--construct and --check are mutually exclusive");
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
   }
@@ -203,14 +210,51 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     || !(await sameDir(path.dirname(path.dirname(outputRef)), path.dirname(planPath)))) {
     throw new Error(`--fixer-plan "${options.fixerPlan}" outputRef ${order.outputRefs?.[0]} is not the emitted handoff path ${handoffPath}; the plan was edited after emission, re-emit it`);
   }
-  if (receipt.reason === "result_missing") throw new Error(`result_missing: no fixer disposition handoff at the work order's outputRef ${handoffPath}; a receipt alone is never completion`);
+  if (receipt.reason === "result_missing" && !options.construct) throw new Error(`result_missing: no fixer disposition handoff at the work order's outputRef ${handoffPath}; a receipt alone is never completion`);
   // verifyPulledResult compares the handoff mtime to the receipt file mtime: one filesystem clock.
   if (receipt.reason === "result_predates_pull") {
     throw new Error(`result_predates_pull: the disposition handoff ${handoffPath} was written before the pull at ${receipt.receipt.pulledAt}; a stale or replayed disposition never advances`);
   }
-  let raw;
+  const completionReads = (order.requiredReads ?? []).filter((read) => read?.kind === "completion-input");
+  const optionalCompletion = completionReads.length > 0 || Object.hasOwn(order.authority ?? {}, "completionInputDigest")
+    || Object.hasOwn(order.authority ?? {}, "completionInputBytesDigest");
+  let completion = null;
+  if (optionalCompletion) {
+    const read = completionReads[0];
+    if (completionReads.length !== 1 || read.required !== true || typeof read.path !== "string"
+      || !/^[a-f0-9]{64}$/.test(read.sha256 ?? "") || !/^[a-f0-9]{64}$/.test(order.authority?.completionInputDigest ?? "")
+      || !/^[a-f0-9]{64}$/.test(order.authority?.completionInputBytesDigest ?? "")) {
+      throw new Error("completion input requires one required read and both semantic/byte authorities");
+    }
+    const bytes = await readFile(read.path);
+    const byteDigest = createHash("sha256").update(bytes).digest("hex");
+    completion = JSON.parse(bytes.toString("utf8"));
+    if (byteDigest !== read.sha256 || byteDigest !== order.authority.completionInputBytesDigest
+      || sha256Hex(completion).slice(7) !== order.authority.completionInputDigest) {
+      throw new Error("completion input differs from its semantic or exact-byte authority");
+    }
+    if (!completion || completion.headSha !== options.headSha || !normalizeFullHeadSha(completion.headSha)
+      || normalizeFullHeadSha(completion.fixingCommitSha) !== completion.fixingCommitSha
+      || !Array.isArray(completion.siteCoverage) || !Array.isArray(completion.threadBindings)) {
+      throw new Error("completion input requires the actual full candidate/fixing heads, coverage and thread bindings");
+    }
+    const executionDir = path.join(await real(path.dirname(planPath)), plan.executionIdentity);
+    const symlinks = await Promise.all([path.dirname(handoffPath), handoffPath].map((file) => lstat(file).then((info) => info.isSymbolicLink(), () => false)));
+    if (symlinks.some(Boolean) || realpathNearestExisting(path.dirname(handoffPath)) !== executionDir
+      || realpathNearestExisting(handoffPath) !== path.join(executionDir, "fixer-disposition.json")) {
+      throw new Error("completion output or execution directory redirects outside its canonical execution path");
+    }
+    const subject = receipt.receipt.subject;
+    if (!/^f\d+-[a-f0-9]{8}$/.test(plan.executionIdentity) || plan.workOrderRef !== `fixer:${options.repo}#${options.pr}:${order.headSha}:${plan.executionIdentity}`
+      || subject.repo !== options.repo || subject.pr !== options.pr || subject.headSha !== order.headSha
+      || subject.branch !== order.mutationAuthority?.branch || subject.phase !== "full") {
+      throw new Error("completion current pull subject does not match its full fixer authority");
+    }
+  }
+  if (options.construct && !completion) throw new Error("--construct requires authenticated ACT completion input");
+  let raw = options.construct ? { headSha: options.headSha, dispositions: [], siteCoverage: completion.siteCoverage } : null;
   try {
-    raw = JSON.parse(await readFile(handoffPath, "utf8"));
+    if (!options.construct) raw = JSON.parse(await readFile(handoffPath, "utf8"));
   } catch {
     throw new Error(`Fixer disposition handoff ${handoffPath} is not valid JSON`);
   }
@@ -221,7 +265,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     const contained = await isCommitContainedByHead({ repo: options.repo, commitSha: order.headSha, headSha: options.headSha }, runtime);
     if (!contained.contained) throw new Error(`the work order head ${order.headSha} is not contained by the observed head ${options.headSha}: ${contained.reason}`);
   }
-  const handoff = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
+  let handoff = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
   const threadsRead = (order.requiredReads ?? []).find((read) => read?.kind === "threads");
   if (threadsRead) {
     const bytes = await readFile(threadsRead.path);
@@ -269,13 +313,15 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       if (sha256Hex(delta).slice(7) !== order.authority.deltaResultDigest) {
         throw new Error("the work order's delta result differs from authority.deltaResultDigest");
       }
-      const sequence = startDeltaSequence({ reviewBaselineHead: order.headSha, actList });
+      const baseline = completion ? delta.reviewBaselineHead : order.headSha;
+      if (completion && normalizeFullHeadSha(baseline) !== baseline) throw new Error("completion Delta requires its full original reviewed baseline");
+      const sequence = startDeltaSequence({ reviewBaselineHead: baseline, actList });
       const errors = validateDeltaResult(delta, { sequence, membershipOnly: true });
       if (errors.length) throw new Error(`Invalid delta result: ${errors.join("; ")}`);
-      const decision = readGateDeltaRecord(receiptTmpRoot, order.headSha);
+      const decision = readGateDeltaRecord(receiptTmpRoot, baseline);
       const pairs = (items) => (items ?? []).map(({ ref, status }) => JSON.stringify([ref, status])).sort().join("\n");
       if (!decision || !DELTA_CLEARING_NEXT_STEPS.includes(decision.nextStep)
-        || decision.reviewBaselineHead !== order.headSha || decision.actSetId !== sequence.actSetId
+        || decision.reviewBaselineHead !== baseline || decision.actSetId !== sequence.actSetId
         || decision.candidateHead !== options.headSha || !Array.isArray(decision.items)
         || pairs(decision.items) !== pairs(delta.actionableItems)) {
         throw new Error("the delta clearing decision does not match the baseline, act set, item statuses or actual pushed candidate");
@@ -297,6 +343,48 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       if (bounded) {
         for (const [ref, status] of statuses) if (status === "not_resolved" || status === "cannot_verify") residualRefs.add(ref);
       }
+      if (completion) {
+        const digest = sha256Hex(completion.siteCoverage).slice(7);
+        if (delta.siteCoverageDigest !== digest || decision.siteCoverageDigest !== digest) {
+          throw new Error("completion coverage differs from the Delta result or clearing decision identity");
+        }
+        const origin = completion.origin;
+        if (!origin || typeof origin.executionIdentity !== "string" || !EXECUTION_IDENTITY_RE.test(origin.executionIdentity)
+          || !/^f\d+-[a-f0-9]{8}$/.test(origin.executionIdentity) || origin.executionIdentity === plan.executionIdentity
+          || !/^sha256:[a-f0-9]{64}$/.test(origin.workOrderDigest ?? "")
+          || origin.workOrderRef !== `fixer:${options.repo}#${options.pr}:${baseline}:${origin.executionIdentity}`) {
+          throw new Error("completion origin is not a distinct original-baseline fixer execution");
+        }
+        const originPath = path.join(path.dirname(planPath), origin.executionIdentity, "fixer-disposition.json");
+        const prior = await verifyPulledResult({ resultPath: originPath, receiptTmpRoot, role: "fixer",
+          workOrderRef: origin.workOrderRef, workOrderDigest: origin.workOrderDigest, executionIdentity: origin.executionIdentity });
+        if (!prior.ok) throw new Error(`completion origin pull/result failed verification: ${prior.reason}`);
+        const subject = prior.receipt.subject;
+        if (subject?.repo !== options.repo || subject.pr !== options.pr || subject.headSha !== baseline
+          || subject.branch !== order.mutationAuthority?.branch || subject.phase !== "commit_only"
+          || typeof subject.planPath !== "string" || await real(subject.planPath) !== await real(planPath)) {
+          throw new Error("completion origin pull subject does not match the original commit_only authority");
+        }
+        const priorRaw = JSON.parse(await readFile(originPath, "utf8"));
+        normalizeFixerDispositionHandoff(priorRaw, { ruleIds: loadKnownRuleIds() });
+        if (priorRaw.headSha !== completion.fixingCommitSha || sha256Hex(priorRaw.siteCoverage).slice(7) !== digest) {
+          throw new Error("completion fixing commit/coverage differs from the actual prior filled handback");
+        }
+        for (const commitSha of new Set([baseline, completion.fixingCommitSha])) {
+          const contained = await isCommitContainedByHead({ repo: options.repo, commitSha, headSha: options.headSha }, runtime);
+          if (!contained.contained) throw new Error(`completion commit ${commitSha} is not contained by the actual candidate: ${contained.reason}`);
+        }
+        if (options.construct) {
+          raw.dispositions = completion.threadBindings.map(({ threadId, fingerprints }) => ({
+            threadId, fixingCommitSha: completion.fixingCommitSha,
+            disposition: Array.isArray(fingerprints) && fingerprints.every((fp) => deltaStatuses.get(fp) === "resolved") ? "tackled" : "deferred",
+          }));
+          handoff = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
+        } else if (sha256Hex(raw.siteCoverage).slice(7) !== digest
+          || handoff.dispositions.some((entry) => entry.fixingCommitSha !== completion.fixingCommitSha)) {
+          throw new Error("delivered coverage/fixing commits differ from authenticated completion input");
+        }
+      }
     }
     const coverage = [
       ...(handoff.siteCoverage ?? []),
@@ -305,10 +393,14 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     const gaps = siteCoverageGaps(toDeltaActItems(actList), coverage, residualRefs);
     if (gaps.length > 0) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: ${gaps.join("; ")}`);
   }
+  if (completion && (!actList || !deltaStatuses)) throw new Error("completion requires semantic ACT and Delta authorities");
   return {
     handoff,
     actList,
     deltaStatuses,
+    completion,
+    constructedReport: raw,
+    handoffPath,
     delivery: { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity },
   };
 }
@@ -336,9 +428,20 @@ function threadRootComment(parsed, threadId) {
 // cycle: the handoff needs a disposition entry for that thread, never a threadless claim.
 // Gate-authored is the authenticated login on the thread ROOT comment, never marker text alone;
 // every matching thread needs its own entry.
-function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, deltaStatuses) {
+function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, deltaStatuses, completion) {
   const entries = new Map(handoff.dispositions.map((entry) => [entry.threadId, entry]));
   const actFingerprints = new Set(actList.map((item) => item?.fingerprint ?? fingerprintFinding(item)));
+  const bindings = new Map();
+  for (const binding of completion?.threadBindings ?? []) {
+    if (typeof binding?.threadId !== "string" || !binding.threadId || bindings.has(binding.threadId)
+      || !Array.isArray(binding.fingerprints) || !binding.fingerprints.length
+      || new Set(binding.fingerprints).size !== binding.fingerprints.length
+      || binding.fingerprints.some((fp) => !actFingerprints.has(fp))) {
+      throw new Error("completion thread bindings require unique root IDs and complete unique ACT members");
+    }
+    bindings.set(binding.threadId, new Set(binding.fingerprints));
+  }
+  const matchedBindings = new Set();
   for (const entry of handoff.dispositions) {
     if (!deltaStatuses) continue;
     const root = threadRootComment(parsed, entry.threadId);
@@ -358,6 +461,13 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, delta
     collectFingerprints(root.body, fps);
     const members = [...fps].filter((fp) => actFingerprints.has(fp));
     if (!members.length) continue;
+    if (completion) {
+      const pinned = bindings.get(thread.id);
+      if (!pinned || pinned.size !== members.length || members.some((fp) => !pinned.has(fp))) {
+        throw new Error(`completion binding does not match complete live ACT membership for ${thread.id}`);
+      }
+      matchedBindings.add(thread.id);
+    }
     const entry = entries.get(thread.id);
     if (entry?.fingerprint && !members.includes(entry.fingerprint) && deltaStatuses) {
       throw new Error(`delta status and live thread disposition disagree for ${thread.id} (${entry.fingerprint})`);
@@ -372,6 +482,7 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, delta
     }
     if (!entry && (deltaStatuses || !thread.isResolved)) missing.push(thread.id);
   }
+  if (completion && matchedBindings.size !== bindings.size) throw new Error("completion binding includes a foreign, unmarked or missing live root");
   if (missing.length > 0) {
     throw new Error(`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: the handoff has no disposition entry for gate thread(s) ${missing.join(", ")} that carry a judge-act fingerprint; an act item with a matching inline gate thread is never threadless, record its complete root disposition`);
   }
@@ -381,12 +492,13 @@ export async function verifyFixerDisposition(
   options,
   { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot = process.cwd() } = {},
 ) {
+  if (options.construct && options.check) throw new Error("--construct and --check are mutually exclusive");
   if (options.tmpRoot) assertTmpRootOutsideLinkedWorktree(path.resolve(repoRoot, options.tmpRoot), repoRoot);
   const tmpRoot = options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot);
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   const runtime = { env, ghCommand, runChild };
-  const { handoff, actList, deltaStatuses, delivery } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  const { handoff, actList, deltaStatuses, completion, constructedReport, handoffPath, delivery } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
   const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
   const liveHead = live.code === 0 ? (() => { try { return JSON.parse(live.stdout).headRefOid; } catch { return null; } })() : null;
@@ -396,7 +508,12 @@ export async function verifyFixerDisposition(
   // A refused handoff writes no checkpoint: capture and assert before the write.
   const initialSnapshot = await captureParsedReviewThreads({ repo: options.repo, pr: options.pr }, runtime);
   if (Array.isArray(actList)) {
-    assertActItemThreadsDisposed(actList, handoff, initialSnapshot, await resolveAuthenticatedLogin({ env, ghCommand, runChild }), deltaStatuses);
+    assertActItemThreadsDisposed(actList, handoff, initialSnapshot, await resolveAuthenticatedLogin({ env, ghCommand, runChild }), deltaStatuses, completion);
+  }
+  if (options.construct) {
+    await mkdir(path.dirname(handoffPath), { recursive: true });
+    await writeFile(handoffPath, `${JSON.stringify(constructedReport, null, 2)}\n`, "utf8");
+    return { ok: true, constructed: true, outputRef: handoffPath };
   }
   if (!options.check) {
     await mkdir(path.dirname(fullPath), { recursive: true });

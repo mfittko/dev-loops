@@ -1251,6 +1251,36 @@ While any tackled thread is incomplete, `FIXER_DISPOSITION_FORBIDDEN_ACTIONS` al
 
 Adding `--check` runs the same current-protocol plan/digest, role/target/execution, receipt/path, after-pull output, source integrity, current-head/contained-order-head, coverage, authenticated ACT-thread and containment checks, including live reply/resolution and `delta_blocked` evaluation. It writes no report or checkpoint and posts no reply or resolution. A THREAD unit validates its digest-bound source hash and requires dispositions for its own pinned thread IDs only; it adds no ACT query or all-history requirement. An authentic threadless ACT unit with complete required coverage may have an empty dispositions array. The default mutating verification remains the completion path for current-producer full units, with no new producer fields or coverage requirements.
 
+The optional `--construct` operation (ADR 0149) is ACT/full only and mutually exclusive with
+`--check`. It authenticates the current plan/digest, fixer identity/receipt/subject, canonical
+plan/output paths and after-pull timing before constructing that execution's report. Missing
+output is permitted; an existing pre-pull output refuses. No caller-selected output is accepted.
+Any `completion-input` read or either completion authority field activates the same strict
+optional-source checks in construction, normal verification and `--check`; partial authority refuses.
+Require exactly one required read with a lowercase SHA-256 of its exact materialized bytes,
+`authority.completionInputBytesDigest` equal to that hash, and `authority.completionInputDigest`
+equal to `sha256Hex(parsedSource).slice(7)`. These named authority fields remain semantic work-order
+identity. The source is `{ headSha, fixingCommitSha, siteCoverage, threadBindings, origin }`;
+each binding is `{ threadId, fingerprints }`, and origin is the actual preceding commit-only
+`{ workOrderRef, workOrderDigest, executionIdentity }`. Authenticate its distinct fixer pull/result
+with `verifyPulledResult`, original baseline/ref, repo/PR/branch/phase and real canonical plan path.
+Derive its output only from that plan directory and execution; never reload or re-pull the old plan.
+Its actual filled handback must name the fixing commit and exactly the source coverage identity.
+The full order's head B remains separate from the authenticated Delta's original reviewed baseline A:
+use A for the ACT sequence, clearing record and origin ref, and prove both A and the fixing commit
+are contained by live B. Require whole-Delta semantic authority and matching raw coverage identities
+in both Delta result and clearing decision; invocation-three stale-result handling remains unchanged.
+Validate pinned membership inside the existing authenticated live-root loop: every matching root
+and its complete ACT fingerprint intersection occur once, including resolved/shared-fingerprint
+roots; duplicate/empty/unknown members, omissions, foreign/unmarked roots and reply markers refuse.
+Aggregate repeated refs first; construct one tackled entry only for all-resolved roots, otherwise
+deferred/open. Omit the scalar fingerprint hint. After all checks, write raw authenticated coverage
+exactly and the authenticated fixing SHA only to the current canonical report; return `constructed:
+true` and its output location, never checkpoint/reply/resolution or completed-verification evidence.
+Normal verification remains mandatory and checks delivered coverage/fixing SHAs against the same
+source. Absent optional inputs retain legacy behavior. Producer emission stays disabled until
+issue 2765; consumer fixtures are neither producer support nor the later operational worker smoke.
+
 Full ACT completion alone may accept an explicitly recorded `input_form` with `status: "skipped"`
 and a concrete, non-placeholder reason for a `not_resolved` or `cannot_verify` item (ADR 0147). Before
 allowing this, the verifier checks materialized ACT/Delta bytes and semantic
