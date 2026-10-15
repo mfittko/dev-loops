@@ -244,14 +244,16 @@ test("missing subject evidence does not authenticate the ACT source or authorize
 for (const code of ["EACCES", "EIO", "ENOTDIR", "ELOOP"]) test(`actual missing branch keeps ${code} unbound`, async () => {
   await withRepoRoot(async (root) => {
     const f = await boundFixture(root);
+    let injected = 0;
     const source = await readFile(new URL("../../scripts/github/verify-fixer-disposition.mjs", import.meta.url), "utf8");
     const context = Object.assign({ Buffer, JSON, path, readFile, realpath,
-      lstat: async (file) => { if (file === f.plan.workOrder.outputRefs[0]) throw Object.assign(new Error(code), { code }); return lstat(file); },
+      lstat: async (file) => { if (file === f.plan.workOrder.outputRefs[0]) { injected++; throw Object.assign(new Error(code), { code }); } return lstat(file); },
     }, await import("../../scripts/github/_work-order-protocol.mjs"), await import("../../scripts/github/_fixer-emission-evidence.mjs"),
-    await import("../../scripts/github/_gate-artifact-paths.mjs"));
+    await import("../../scripts/github/_gate-artifact-paths.mjs"), await import("../../scripts/lib/head-sha.mjs"));
     const load = runInNewContext(`${source.slice(source.indexOf("async function loadDeliveredHandoff"), source.indexOf("// Builds the { threadId"))}\nloadDeliveredHandoff`, context);
     await assert.rejects(load({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.planPath },
       { repoRoot: root, receiptTmpRoot: path.join(root, "tmp"), runtime: {} }), (error) => !error.code && !error.activeFixer && /result_missing/.test(error.message));
+    assert.equal(injected, 1, "the authenticated missing branch must reach the report lstat failure");
   });
 });
 
