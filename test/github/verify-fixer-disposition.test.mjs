@@ -951,6 +951,35 @@ async function completionFixture(repoRoot, kind = "resolved") {
   return { fixerPlan, plan, source, sourceRead, sourcePath, originPath, baseline, fixing, nodes, dispositions, seal, depsFor };
 }
 
+test("new bound completion matches authenticated origin and exact report bytes in result AND decision", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const f = await completionFixture(repoRoot);
+    const deltaRead = f.plan.workOrder.requiredReads.find((read) => read.kind === "delta-result");
+    const delta = JSON.parse(await readFile(deltaRead.path, "utf8"));
+    const binding = { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: delta.siteCoverageDigest,
+      handbackBytesDigest: sha256Hex(await readFile(f.originPath)).slice(7), origin: f.source.origin };
+    const decisionPath = path.join(repoRoot, "tmp", "gate-delta", `${f.baseline}.json`);
+    const decision = JSON.parse(await readFile(decisionPath, "utf8"));
+    const bind = async (resultBinding, decisionBinding) => {
+      const value = { ...delta, ...resultBinding }, bytes = JSON.stringify(value);
+      await writeFile(deltaRead.path, bytes);
+      deltaRead.sha256 = sha256Hex(Buffer.from(bytes)).slice(7);
+      f.plan.workOrder.authority.deltaResultDigest = sha256Hex(value).slice(7);
+      await writeFile(decisionPath, JSON.stringify({ ...decision, ...decisionBinding }));
+      await f.seal();
+    };
+    const options = { repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.fixerPlan, check: true };
+    await bind(binding, binding);
+    const valid = await verifyFixerDisposition(options, f.depsFor([compareEntry(f.fixing, "ahead")]).deps);
+    assert.deepEqual(valid.incomplete, []);
+    for (const surface of ["result", "decision"]) for (const field of ["origin", "handbackBytesDigest"]) {
+      const bad = { ...binding, [field]: field === "origin" ? { ...binding.origin, workOrderDigest: `sha256:${"2".repeat(64)}` } : "0".repeat(64) };
+      await bind(surface === "result" ? bad : binding, surface === "decision" ? bad : binding);
+      await assert.rejects(verifyFixerDisposition(options, f.depsFor().deps), /coverage binding|completion origin/);
+    }
+  });
+});
+
 test("typed completion CLI rejects construct/check together", () => {
   const args = ["--repo", REPO, "--pr", String(PR), "--head-sha", HEAD_SHA, "--fixer-plan", "plan", "--construct"];
   assert.equal(parseVerifyFixerDispositionCliArgs(args).construct, true);

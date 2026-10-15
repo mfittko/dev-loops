@@ -141,18 +141,23 @@ fixer and owns the push. The sequence is:
    dispatches the printed `dispatchPayload` unchanged (ADR 0106). The fixer
    commits the fix, writes the site coverage record to the work order's outputRef
    (`PRE-PUSH-DELTA-RESIDUE`), and hands back the commit SHA unpushed. The
-   coordinator passes that record to the check with `--site-coverage`. Every fixer emission
+   coordinator passes that record to the check with `--site-coverage` and the emission's
+   canonical `--fixer-plan`. Both flags are mandatory for ACT coordinator input and
+   result recording; omission of either or both refuses. Every fixer emission
    in delta mode uses the PR head (`headRefOid`), never the local candidate
    head, because the emitter pins the GitHub PR head and the local fix commits
    descend from it.
 2. The dev-loop coordinator builds the reviewer input with `check-pre-push-delta.mjs`
-   (plus the flags above). On the act-list route it requires
+   (plus the ACT-only flags above on the act-list route). On that route it requires
    `--findings-log <the reviewed gate round's findings log>`; the thread route takes no
    `--findings-log`. It passes `--pr-head <the full PR head SHA just read from GitHub>` to
    the check and dispatches one fresh delta reviewer for the current worktree head,
    briefing it that it MUST NOT push (`PRE-PUSH-DELTA-PUSH-AUTHORITY`).
 3. The coordinator runs the CLI `--result` check (no `--findings-log`; only the input run
-   reads it) and follows its `nextStep`. On `nextStep: fix_and_rereview`,
+   reads it), and follows its `nextStep`. The ACT route again passes `--fixer-plan`
+   and `--site-coverage`. The THREAD route retains `--threads-file`, `--repo`,
+   `--pr`, `--baseline`, `--result` and `--invocation`, without the ACT-only
+   `--fixer-plan` or `--site-coverage` flags. On `nextStep: fix_and_rereview`,
    it dispatches a fresh fixer again, commit-only, and returns to step 2. It
    emits a new work order with `--delta-result <result>` at the PR head.
    That fixer receives the delta result's `not_resolved` and `cannot_verify` act
@@ -191,8 +196,25 @@ invocation. The dev-loop coordinator owns the invocation count and passes it to
 `dev-loops-run cli/index.mjs loop pre-push-delta --invocation` monotonically, starting at 1 for
 each sequence.
 
+ACT input retains raw `siteCoverage` unchanged, including kind, reason and test fields;
+normalization is only a validation view. Input, `resultShape`, result and decision carry
+identical `coverageProtocol: "pulled_commit_only_v1"`, raw semantic `siteCoverageDigest`,
+exact `handbackBytesDigest` and `origin: {workOrderRef, workOrderDigest, executionIdentity}`.
+The reviewer copies that tuple unchanged. Input and result recording authenticate the
+canonical current plan/output, original pull, renderer/materialization bytes, ACT source,
+branch, baseline and candidate. Result recording recomputes the expected tuple; any
+missing, partial or altered binding refuses before the invocation-three fallback.
+A matching stale result retains ordinary bounded-out behavior. Membership-only callers
+check structure without claiming source authentication; optional completion separately
+checks the genuine origin/report bytes against result and decision. Digest-only old
+records stay legacy and unchanged. The emitted `--handback` check remains write-free
+validation without attestation. THREAD cannot opt into this ACT binding. See ADR 0150 in the
+[decision records](https://github.com/mfittko/dev-loops/tree/main/docs/decisions).
+
 <!-- rule: PRE-PUSH-DELTA-TRIGGER -->
 `PRE-PUSH-DELTA-TRIGGER`: delta mode MUST run after the gate Phase 4 fixer commits a fix for a judge act list, or after a fixer commits a fix for the captured set of unresolved review threads (the thread route), and before that fix is pushed. On the thread route the baseline is the PR head (`headRefOid`) passed to the `commit_only` emission, because the emitter reads the record at `gate-delta/<that head>.json`. A push with no act-list fix and no thread-route fix MUST NOT get a delta review, even when a PR exists. Standalone implementation pushes and the full-mode first push are unaffected. A CI-only fix is out of scope.
+
+The decision field list below is the THREAD/legacy base; ACT decisions additionally carry the binding above.
 
 `check-pre-push-delta.mjs --result` records its decision as local evidence at `<tmp-root>/gate-delta/<reviewBaselineHead>.json` (`reviewBaselineHead`, `candidateHead`, `actSetId`, `invocation`, `outcome`, `nextStep`, `items: [{ ref, status }]`; the last write for a baseline wins). The run without `--result` writes nothing. The emitter and the reply wrappers enforce two refusals from the record. `emit-fixer-work-order.mjs` refuses `--phase full` unless a clearing delta decision exists for the PR head: an act-list source needs `--delta-result`, a record for the PR head with `nextStep: push` or `nextStep: push_to_gate` and the result's `actSetId`, and result item ref/status pairs equal to the record's items, a threads source needs a record for the PR head whose decision is `nextStep: push` or `nextStep: push_to_gate` and whose item refs equal the thread ids in the threads file (a record ref that is no thread, or a thread with no record item, refuses), and a record with any other `nextStep` refuses either source. The coordinator emits `--phase commit_only` first, then runs the delta review. A fixed reply (`reply-resolve-review-thread.mjs`, `reply-resolve-review-threads.mjs`, and the `Fixed in commit` reply of `verify-fixer-disposition.mjs`) is refused for a thread that a record marks `not_resolved` or `cannot_verify`, when the fixing commit is the record's `candidateHead` or lies in `reviewBaselineHead..candidateHead`. A thread matches an item by `threadId` or by the fingerprint of its `dev-loops:finding` marker.
 
@@ -206,7 +228,7 @@ each sequence.
 `PRE-PUSH-DELTA-RESULT`: the reviewer MUST return a `DeltaPrePushReviewResult` bound to the baseline, candidate and act set, with a status and evidence for every claimed act item. The `actSetId` MUST equal the sequence's id, which hashes each act item's ref, angle, severity, file, line and summary (a thread-route item omits the summary, a body excerpt that varies with `--body-max`), plus its remediation scope fields (`authorizedRemediation`, `defectClass`, `siteQuery`, `defectKind`, `acceptedForms`, `rejectedForms`, `statedSurfaces`, `siblingRemediations`) when present. Each act item ref appears once, in the act list and in the result. The status MUST be `resolved`, `not_resolved` or `cannot_verify`; `cannot_verify` stays distinct from `not_resolved`. Every `evidence[]` entry, for act items and new findings, MUST be a non-empty string, and each list MUST be non-empty. `widenedReads[]` is required, and empty when nothing was widened; each entry MUST be an object `{ path, reason }` with non-empty strings, never a bare path string. A result with a missing or unknown status is rejected. The status `resolved` requires two conditions: the reported defect is gone, and the applied remedy introduces no new finding of severity medium or higher. Conformance to `authorizedRemediation` alone is not enough; when the remedy itself causes a defect, the reviewer reports it as a `newFindings[]` entry whose evidence cites the remedy text. A result of `locally_clear` MUST be refused while a `staleSurfaceHits[]` entry has neither a `newFindings[]` entry that names its file (as a whole path token: `docs/README.md` and `.claude/skills/x.md` do not name `README.md` and `skills/x.md`) nor a skipped site (with a non-empty `reason`) in `siteCoverage[]` whose site is its bare file, or its file with a `:line` or `:start-end` suffix that covers the hit's line (a skip recorded for another line of the file does not address it); a truncated list (`staleSurfaceTruncated`) is addressed the same way by an entry that names `stale-surface-hits-truncated`; this holds on the act-list route and on the thread route.
 
 ```text
-DeltaPrePushReviewResult {
+DeltaPrePushReviewResult {  // Complete THREAD shape; genuine legacy results remain readable.
   reviewBaselineHead, candidateHead, actSetId
   actionableItems[] { ref, status: resolved | not_resolved | cannot_verify, evidence[] }
   newFindings[] { severity, summary, evidence[], residueOf?, site?, skipReason? }
@@ -214,6 +236,10 @@ DeltaPrePushReviewResult {
   outcome: locally_clear | needs_fix | bounded_out
 }
 ```
+
+ACT results additionally require top-level `coverageProtocol`, `siteCoverageDigest`,
+`handbackBytesDigest` and `origin`, copied unchanged from `input.resultShape` as defined above.
+The recorded decision and stdout carry that same ACT-only tuple; THREAD cannot claim it.
 
 <!-- rule: PRE-PUSH-DELTA-RESIDUE -->
 `PRE-PUSH-DELTA-RESIDUE`: the reviewer MUST report an unfixed site that the act item's site query returns, or any other unfixed same-class site, as a `newFindings[]` entry with `residueOf` set to the act item ref. Residue never defers and is never resolved with a rationale. It rides the same fix commit. A residue finding without a `skipReason` blocks `locally_clear` at any severity, so the push waits. The `commit_only` fixer hands back the site coverage record (`siteCoverage[]`) that `GATE-EXEC-REMEDIATION-SITE-QUERY` defines, keyed by act-item fingerprint, and the delta input carries it. A residue finding names its `site`, and its `skipReason` MUST equal the reason that the record holds for that `residueOf` site; any other reason is rejected, and a matching reason unblocks only that finding. The record MUST be complete per `GATE-EXEC-REMEDIATION-SITE-QUERY` in [Gate Review Sub-Loop Contract](./gate-review-sub-loop-contract.md); a gap blocks `locally_clear`.

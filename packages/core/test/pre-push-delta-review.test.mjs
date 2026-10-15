@@ -15,6 +15,66 @@ import {
   validateDeltaResult,
 } from "../src/loop/pre-push-delta-review.mjs";
 import { consolidateFanin } from "../src/loop/gate-fanin.mjs";
+import { sha256Hex } from "../src/loop/review-dispatch-plan.mjs";
+
+function coverageBinding() {
+  return { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex([]).slice(7), handbackBytesDigest: "a".repeat(64),
+    origin: { workOrderRef: `fixer:o/r#7:${"a".repeat(40)}:f1-00000000`, workOrderDigest: `sha256:${"b".repeat(64)}`, executionIdentity: "f1-00000000" } };
+}
+
+test("membership-only accepts a complete string coverage binding", () => {
+  for (const length of [40, 64]) {
+    const bound = { ...result(), ...coverageBinding() };
+    bound.origin.workOrderRef = `fixer:o/r#7:${"a".repeat(length)}:f1-00000000`;
+    assert.deepEqual(validateDeltaResult(bound, { sequence: sequence(), membershipOnly: true }), []);
+  }
+});
+
+test("membership-only accepts a historical digest-only record", () => {
+  assert.deepEqual(validateDeltaResult({ ...result(), siteCoverageDigest: "old" }, { sequence: sequence(), membershipOnly: true }), []);
+});
+
+for (const repo of ["./r", "../r", "o/.", "o/..", "o\\x/r", "o/r\\x"]) {
+  test(`membership-only rejects unsafe origin repository ${repo}`, () => {
+    const bound = { ...result(), ...coverageBinding() };
+    bound.origin.workOrderRef = `fixer:${repo}#7:${"a".repeat(40)}:f1-00000000`;
+    assert.match(validateDeltaResult(bound, { sequence: sequence(), membershipOnly: true }).join(), /coverage binding is missing or malformed/);
+  });
+}
+
+test("membership-only rejects malformed origin references and mismatched execution identity", () => {
+  for (const ref of [`fixer:o/r7:${"a".repeat(40)}:f1-00000000`, `fixer:o/r#0:${"a".repeat(40)}:f1-00000000`, `fixer:o/r#7:${"a".repeat(40)}:f2-00000000`]) {
+    const bound = { ...result(), ...coverageBinding() };
+    bound.origin.workOrderRef = ref;
+    assert.match(validateDeltaResult(bound, { sequence: sequence(), membershipOnly: true }).join(), /coverage binding is missing or malformed/);
+  }
+});
+
+for (const field of ["siteCoverageDigest", "handbackBytesDigest", "origin.workOrderDigest", "origin.executionIdentity", "origin.workOrderRef"]) {
+  test(`membership-only rejects singleton-array ${field}`, () => {
+    const bound = { ...result(), ...coverageBinding() };
+    const target = field.startsWith("origin.") ? bound.origin : bound;
+    const key = field.split(".").at(-1);
+    target[key] = [target[key]];
+    assert.match(validateDeltaResult(bound, { sequence: sequence(), membershipOnly: true }).join(), /coverage binding is missing or malformed/);
+  });
+}
+
+test("new coverage binding is structural for membership, raw-bound otherwise and cannot exhaust into authority", () => {
+  const seq = sequence(), siteCoverage = [];
+  const binding = coverageBinding();
+  const bound = { ...result(), ...binding };
+  assert.deepEqual(validateDeltaResult(bound, { sequence: seq, membershipOnly: true }), []);
+  assert.deepEqual(validateDeltaResult({ ...result(), siteCoverageDigest: "old" }, { sequence: seq }), []);
+  for (const defect of ["coverageProtocol", "siteCoverageDigest", "handbackBytesDigest", "origin", "all"]) {
+    const bad = { ...bound };
+    for (const key of defect === "all" ? Object.keys(binding) : [defect]) delete bad[key];
+    assert.throws(() => decideDeltaNextStep({ sequence: seq, result: bad, invocation: 3, currentHead: B, siteCoverage, coverageBinding: binding }), /coverage binding/);
+    if (defect !== "all") assert.match(validateDeltaResult(bad, { sequence: seq, membershipOnly: true }).join(), /coverage binding/);
+  }
+  assert.throws(() => decideDeltaNextStep({ sequence: seq, result: bound, invocation: 3, currentHead: B, siteCoverage: [{}] }), /raw coverage/);
+  assert.equal(decideDeltaNextStep({ sequence: seq, result: bound, invocation: 3, currentHead: C, siteCoverage, coverageBinding: binding }).nextStep, "push_to_gate");
+});
 
 const A = "aaaaaaa1111111";
 const B = "bbbbbbb2222222";
@@ -354,7 +414,7 @@ describe("pre-push results never become gate evidence", () => {
   test("the delta module performs no I/O: no gate artifact, comment or thread can be written", () => {
     const source = fs.readFileSync(new URL("../src/loop/pre-push-delta-review.mjs", import.meta.url), "utf8");
     const imports = [...source.matchAll(/^import .* from "([^"]+)";$/gm)].map((m) => m[1]);
-    assert.deepEqual(imports.sort(), ["./fixer-disposition.mjs", "./gate-fanin.mjs", "node:crypto"]);
+    assert.deepEqual(imports.sort(), ["../github/repo-slug.mjs", "./fixer-disposition.mjs", "./gate-fanin.mjs", "./review-dispatch-plan.mjs", "node:crypto"]);
   });
 });
 

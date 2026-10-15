@@ -12,8 +12,30 @@
  */
 import { createHash } from "node:crypto";
 
+import { parseRepoSlug } from "../github/repo-slug.mjs";
 import { severityRank, VALID_SEVERITIES, normalizeSeverity } from "./gate-fanin.mjs";
 import { recordedSkipReason, siteCoverageGaps } from "./fixer-disposition.mjs";
+import { sha256Hex } from "./review-dispatch-plan.mjs";
+
+/** Select a complete new binding; digest-only historical records remain legacy. */
+export function deltaCoverageBinding(value, expected) {
+  if (!expected && !["coverageProtocol", "handbackBytesDigest", "origin"].some((key) => Object.hasOwn(value ?? {}, key))) return null;
+  const { coverageProtocol, siteCoverageDigest, handbackBytesDigest, origin } = value ?? {};
+  const ref = typeof origin?.workOrderRef === "string" && /^fixer:([^/\s#]+\/[^/\s#]+)#[1-9]\d*:(?:[a-f0-9]{40}|[a-f0-9]{64}):f\d+-[a-f0-9]{8}$/.exec(origin.workOrderRef);
+  if (coverageProtocol !== "pulled_commit_only_v1"
+    || ![siteCoverageDigest, handbackBytesDigest, origin?.workOrderDigest, origin?.executionIdentity, origin?.workOrderRef].every((field) => typeof field === "string")
+    || !/^[a-f0-9]{64}$/.test(siteCoverageDigest ?? "")
+    || !/^[a-f0-9]{64}$/.test(handbackBytesDigest ?? "") || !/^sha256:[a-f0-9]{64}$/.test(origin?.workOrderDigest ?? "")
+    || !/^f\d+-[a-f0-9]{8}$/.test(origin?.executionIdentity ?? "")
+    || !ref
+    || !origin.workOrderRef.endsWith(`:${origin.executionIdentity}`) || Object.keys(origin).sort().join() !== "executionIdentity,workOrderDigest,workOrderRef") {
+    throw new Error("Delta coverage binding is missing or malformed");
+  }
+  parseRepoSlug(ref[1], { errorMessage: "Delta coverage binding is missing or malformed" });
+  const binding = { coverageProtocol, siteCoverageDigest, handbackBytesDigest, origin };
+  if (expected && sha256Hex(binding) !== sha256Hex(expected)) throw new Error("Delta coverage binding differs from the authenticated current handback");
+  return binding;
+}
 
 /** At most this many delta review invocations per sequence. */
 export const DELTA_MAX_INVOCATIONS = 3;
@@ -195,15 +217,18 @@ export function startDeltaSequence({ reviewBaselineHead, actList } = {}) {
  * Build the reviewer input for one invocation. The range is always
  * `reviewBaselineHead..candidateHead` (cumulative), never the last fix only.
  * The reviewer reads the diff from the worktree; the input carries no diff.
- * `siteCoverage` is the fixer's normalized site coverage record from the `commit_only` handback;
+ * `siteCoverage` retains the fixer's raw site coverage record from the `commit_only` handback;
  * the reviewer reads the recorded skip reasons from it.
  * @param {{ sequence: ReturnType<typeof startDeltaSequence>, candidateHead: string, specIdentity?: string|null, siteCoverage?: object[] }} input
  */
-export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, siteCoverage = [], roundAngles = [], staleSurfaceHits = [], staleSurfaceTruncated = false, truncatedNeedles = [] } = {}) {
+export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, siteCoverage = [], coverageBinding, roundAngles = [], staleSurfaceHits = [], staleSurfaceTruncated = false, truncatedNeedles = [] } = {}) {
   if (!sequence || !nonEmpty(sequence.reviewBaselineHead)) throw new Error("buildDeltaInput requires a delta sequence");
   if (!nonEmpty(candidateHead)) throw new Error("buildDeltaInput requires candidateHead");
   const head = candidateHead.trim();
+  const binding = coverageBinding ? deltaCoverageBinding(coverageBinding) : {};
+  if (coverageBinding && binding.siteCoverageDigest !== sha256Hex(siteCoverage).slice(7)) throw new Error("Delta coverage binding differs from raw coverage");
   return {
+    ...binding,
     mode: "delta",
     reviewBaselineHead: sequence.reviewBaselineHead,
     candidateHead: head,
@@ -222,6 +247,7 @@ export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, 
     checklist: [...DELTA_CHECKLIST],
     // The DeltaPrePushReviewResult template the reviewer fills in; validateDeltaResult checks it.
     resultShape: {
+      ...binding,
       reviewBaselineHead: sequence.reviewBaselineHead,
       candidateHead: head,
       actSetId: sequence.actSetId,
@@ -265,9 +291,13 @@ export function deriveDeltaOutcome(result) {
  * @param {{ sequence: ReturnType<typeof startDeltaSequence>, siteCoverage?: object[], membershipOnly?: boolean }} context
  * @returns {string[]}
  */
-export function validateDeltaResult(result, { sequence, siteCoverage = [], membershipOnly = false, staleSurfaceHits = [] } = {}) {
+export function validateDeltaResult(result, { sequence, siteCoverage = [], validationCoverage = siteCoverage, coverageBinding, membershipOnly = false, staleSurfaceHits = [] } = {}) {
   const errors = [];
   if (!result || typeof result !== "object") return ["result must be an object"];
+  try {
+    const binding = deltaCoverageBinding(result, coverageBinding);
+    if (binding && !membershipOnly && binding.siteCoverageDigest !== sha256Hex(siteCoverage).slice(7)) errors.push("Delta coverage binding differs from raw coverage");
+  } catch (error) { errors.push(error.message); }
   if (result.reviewBaselineHead !== sequence?.reviewBaselineHead) {
     errors.push(`reviewBaselineHead ${JSON.stringify(result.reviewBaselineHead)} does not match the pinned baseline ${JSON.stringify(sequence?.reviewBaselineHead)}`);
   }
@@ -301,13 +331,13 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], membe
     if (f?.skipReason != null && (!nonEmpty(f.skipReason) || !nonEmpty(f.residueOf))) errors.push(`newFindings[${i}].skipReason needs residueOf and a non-empty reason`);
     if (!membershipOnly && nonEmpty(f?.skipReason) && expectedRefs.has(f.residueOf)) {
       const actItem = sequence.actItems.find((item) => item.ref === f.residueOf);
-      const recorded = recordedSkipReason(siteCoverage, actItem.fingerprint ?? actItem.ref, nonEmpty(f.site) ? f.site.trim() : "");
+      const recorded = recordedSkipReason(validationCoverage, actItem.fingerprint ?? actItem.ref, nonEmpty(f.site) ? f.site.trim() : "");
       if (recorded !== f.skipReason.trim()) {
         errors.push(`PRE-PUSH-DELTA-RESIDUE: newFindings[${i}].skipReason must equal the reason recorded for site ${JSON.stringify(f.site)} of act item ${f.residueOf}: ${JSON.stringify(recorded)}`);
       }
     }
   }
-  if (!membershipOnly) errors.push(...siteCoverageGaps(sequence?.actItems ?? [], siteCoverage));
+  if (!membershipOnly) errors.push(...siteCoverageGaps(sequence?.actItems ?? [], validationCoverage));
 
   if (!Array.isArray(result.widenedReads)) errors.push("widenedReads[] is required (empty when nothing was widened)");
   else for (const [i, read] of result.widenedReads.entries()) {
@@ -318,7 +348,7 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], membe
   else if (result.outcome === "locally_clear" && deriveDeltaOutcome(result) !== "locally_clear") {
     errors.push("locally_clear requires every act item resolved and no new finding of severity medium or higher");
   } else if (result.outcome === "locally_clear" && !membershipOnly) {
-    const open = unaddressedStaleSurfaceHits(staleSurfaceHits, { newFindings: findings ?? [], siteCoverage });
+    const open = unaddressedStaleSurfaceHits(staleSurfaceHits, { newFindings: findings ?? [], siteCoverage: validationCoverage });
     if (open.length > 0) errors.push(`PRE-PUSH-DELTA-RESULT: locally_clear leaves stale-surface hits unaddressed (a newFindings[] entry naming the file or a skipped siteCoverage[] site is required): ${open.map((h) => h.site).join(", ")}`);
   }
   return errors;
@@ -343,18 +373,21 @@ export function isDeltaResultFresh(result, currentHead) {
  *   ends bounded_out, which authorizes nothing and claims no success.
  * @param {{ sequence: ReturnType<typeof startDeltaSequence>, result: unknown, invocation: number, currentHead: string, siteCoverage?: object[] }} input
  */
-export function decideDeltaNextStep({ sequence, result, invocation, currentHead, siteCoverage, staleSurfaceHits } = {}) {
+export function decideDeltaNextStep({ sequence, result, invocation, currentHead, siteCoverage, validationCoverage, coverageBinding, staleSurfaceHits } = {}) {
   if (!Number.isInteger(invocation) || invocation < 1 || invocation > DELTA_MAX_INVOCATIONS) {
     throw new Error(`invocation must be an integer in 1..${DELTA_MAX_INVOCATIONS}`);
   }
-  const errors = validateDeltaResult(result, { sequence, siteCoverage, staleSurfaceHits });
+  const binding = deltaCoverageBinding(result, coverageBinding);
+  if (binding && binding.siteCoverageDigest !== sha256Hex(siteCoverage ?? []).slice(7)) throw new Error("Delta coverage binding differs from raw coverage");
+  const errors = validateDeltaResult(result, { sequence, siteCoverage, validationCoverage, coverageBinding, staleSurfaceHits });
   const fresh = isDeltaResultFresh(/** @type {any} */ (result), currentHead);
   const clear = errors.length === 0 && fresh && /** @type {any} */ (result).outcome === "locally_clear";
-  if (clear) return { outcome: "locally_clear", nextStep: "push", locallyClear: true, errors, fresh };
+  if (clear) return { ...binding, outcome: "locally_clear", nextStep: "push", locallyClear: true, errors, fresh };
   if (invocation >= DELTA_MAX_INVOCATIONS) {
-    return { outcome: "bounded_out", nextStep: "push_to_gate", locallyClear: false, errors, fresh };
+    return { ...binding, outcome: "bounded_out", nextStep: "push_to_gate", locallyClear: false, errors, fresh };
   }
   return {
+    ...binding,
     outcome: "needs_fix",
     nextStep: fresh ? "fix_and_rereview" : "rereview_current_head",
     locallyClear: false,
