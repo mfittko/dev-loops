@@ -17,6 +17,7 @@ import {
   verifyFixerDisposition,
 } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { selectActThreadBinding } from "../../scripts/github/_fixer-act-thread-bindings.mjs";
 import { pullReceiptPath, verifyPulledResult, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
@@ -904,6 +905,58 @@ const ACT_LIST = [{ fingerprint: ACT_FP, severity: "medium", summary: "s", judge
 const userEntry = { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "gate" })}\n` };
 const gateComment = (id, databaseId, body = `${ACT_MARKER}\n**Problem:** s`, login = "gate") => ({ id, databaseId, body, author: { login, __typename: "User" } });
 const actThread = (id, comments, isResolved = false) => ({ id, isResolved, comments: { nodes: comments } });
+
+test("ACT thread selector preserves the genuine public root and complete synthetic memberships", () => {
+  // Genuine public PR2762 specimen; transformed variants below are synthetic and grant no mutation authority.
+  const root = {
+    id: "PRRC_kwDOScHU787-fIpP", databaseId: "4269574735", threadId: "PRRT_kwDOScHU786sRK_N",
+    author: { login: "mfittko", type: "User", isBot: false }, isActionable: true,
+    body: "<!-- dev-loops:finding 09a9db735031d233 severity=medium angle=correctness round=2 -->\n**medium** · correctness · judge: act\n`scripts/github/_validation-evidence.mjs:78`\n**Problem:** Existing prefix-file contexts with configured validation now fail reviewer admission. The previous write-gate-context producer records scope.validationResultsPath under --prefix-file but omits the validation requiredRead; the previous sentinel accepts that shape.\n**Fix:** Preserve admission of the legacy configured prefix-file shape while keeping the full binding mandatory for not_configured; add a fixture using the old producer-shaped context rather than only the new writer's output.\n<details><summary>Details</summary>\n\n**Problem (continued):** The new sentinel calls this reader, which requires exactly one hash-bound read before checking the record's status, so a valid current-head complete/failed/incomplete legacy artifact is refused as missing binding and blocks semantic participation. Adding the read to the new producer does not preserve compatibility with existing producer-shaped contexts.\n\n**Failing case:** Use a context produced by the old write-gate-context --prefix-file --validation-results path with valid current-head configured evidence, then run the new verify-fresh-review-context: reads.length is zero and admission refuses.\n\n</details>",
+  };
+  const thread = { id: root.threadId, isResolved: false, reviewId: "PRR_kwDOScHU788AAAABSM6fIw", isActionable: true,
+    commentIds: [root.id], commentDatabaseIds: [root.databaseId], actionableCommentIds: [root.id], actionableCommentDatabaseIds: [root.databaseId] };
+  const genuine = "09a9db735031d233";
+  const derived = fingerprintFinding({ severity: "medium", summary: "derived member" });
+  const act = new Set([genuine, ACT_FP, derived]);
+  assert.deepEqual(selectActThreadBinding({ threads: [thread], comments: [root] }, thread.id, "mfittko", act), { root, members: [genuine] });
+
+  // Synthetic merged/repeated/shared/resolved/reordered roots and replies.
+  const merged = { ...root, body: `${root.body}\n${ACT_MARKER}\n${ACT_MARKER}\n${ACT_MARKER.replace(ACT_FP, derived)}` };
+  const shared = { ...root, id: "shared", threadId: "shared" };
+  const parsed = { threads: [thread, { id: "shared", isResolved: true }], comments: [shared,
+    { ...merged, id: "a-reply", databaseId: "4269574736", body: "reply" },
+    { ...merged, id: "invalid", databaseId: "not-numeric", body: "invalid ID" }, merged] };
+  assert.deepEqual(parsed.threads.map(({ id }) => selectActThreadBinding(parsed, id, "mfittko", act).members), [[genuine, ACT_FP, derived], [genuine]]);
+  assert.equal(selectActThreadBinding(parsed, thread.id, "mfittko", act).root, merged);
+  // Direct comment lookup remains valid even when the ID is absent from the thread enumeration.
+  assert.deepEqual(selectActThreadBinding({ ...parsed, threads: [] }, thread.id, "mfittko", act).members, [genuine, ACT_FP, derived]);
+  for (const comments of [
+    [{ ...root, author: { login: "foreign" } }],
+    [{ ...root, body: "unrelated" }],
+    [{ ...root, body: "unmarked root" }, { ...root, databaseId: "4269574736" }],
+  ]) assert.deepEqual(selectActThreadBinding({ comments }, thread.id, "mfittko", act).members, []);
+  const fallback = [{ ...root, databaseId: null }, { ...root, databaseId: "node-id", body: "later" }];
+  assert.equal(selectActThreadBinding({ comments: fallback }, thread.id, "mfittko", act).root, fallback[0]);
+  const numericOrder = [{ ...root, databaseId: "10" }, { ...root, databaseId: "9" }];
+  assert.equal(selectActThreadBinding({ comments: numericOrder }, thread.id, "mfittko", act).root, numericOrder[1]);
+  assert.deepEqual(selectActThreadBinding({ comments: [root] }, "missing", "mfittko", act), { root: undefined, members: [] });
+  assert.deepEqual(selectActThreadBinding({ comments: [root] }, thread.id, "mfittko", new Set()), { root, members: [] });
+});
+
+for (const failure of [null, "query", "login"]) test(`empty ACT membership still authenticates its live snapshot (${failure})`, async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [], { actList: ACT_LIST });
+    const entries = [threadsCallEntry([], failure === "query" ? { exitCode: 1, stderr: "query refused" } : {}),
+      failure === "login" ? { ...userEntry, exitCode: 1, stderr: "login refused" } : userEntry];
+    const { deps, calls } = runtime(entries, repoRoot);
+    const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check: true }, deps);
+    if (failure) await assert.rejects(verify(), failure === "query" ? /query refused/ : /login refused/);
+    else assert.equal((await verify()).complete, true);
+    assert.equal(calls.length, failure === "query" ? 2 : 3);
+    assert.deepEqual(await checkpointFiles(repoRoot), []);
+    assert.equal(hasPost(calls), false);
+  });
+});
 
 async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   const { baseline = FIX_SHA, fixing = "d".repeat(40), candidate = HEAD_SHA } = settings;
