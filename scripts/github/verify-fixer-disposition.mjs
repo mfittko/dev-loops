@@ -10,7 +10,8 @@ import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { collectFingerprints, fingerprintFinding } from "./_gate-finding-surface.mjs";
+import { fingerprintFinding } from "./_gate-finding-surface.mjs";
+import { selectActThreadBinding } from "./_fixer-act-thread-bindings.mjs";
 import { resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { captureParsedReviewThreads, findDeltaBlockedFixedReply, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
@@ -434,15 +435,6 @@ function buildLiveThreads(parsed) {
   }));
 }
 
-// parseReviewThreads id-sorts comments, so the root is the one with the smallest numeric databaseId
-// (the first comment when no databaseId parses).
-function threadRootComment(parsed, threadId) {
-  const numeric = (c) => (/^\d+$/.test(String(c.databaseId ?? "")) ? Number(c.databaseId) : Infinity);
-  return parsed.comments
-    .filter((c) => c.threadId === threadId)
-    .reduce((root, c) => (root === undefined || numeric(c) < numeric(root) ? c : root), undefined);
-}
-
 // A judge-act item whose fingerprint marks an open inline gate thread is resolved by the fix
 // cycle: the handoff needs a disposition entry for that thread, never a threadless claim.
 // Gate-authored is the authenticated login on the thread ROOT comment, never marker text alone;
@@ -463,22 +455,15 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, delta
   const matchedBindings = new Set();
   for (const entry of handoff.dispositions) {
     if (!deltaStatuses) continue;
-    const root = threadRootComment(parsed, entry.threadId);
-    const fps = new Set();
-    collectFingerprints(root?.body ?? "", fps);
-    if (root?.author?.login !== gateLogin || ![...fps].some((fp) => actFingerprints.has(fp))
-      || (entry.fingerprint && (!deltaStatuses.has(entry.fingerprint) || !fps.has(entry.fingerprint)))) {
+    const { members } = selectActThreadBinding(parsed, entry.threadId, gateLogin, actFingerprints);
+    if (!members.length
+      || (entry.fingerprint && (!deltaStatuses.has(entry.fingerprint) || !members.includes(entry.fingerprint)))) {
       throw new Error(`delta status and live thread disposition disagree for ${entry.threadId} (${entry.fingerprint})`);
     }
   }
   const missing = [];
   for (const thread of parsed.threads) {
-    const root = threadRootComment(parsed, thread.id);
-    if (!root || root.author?.login !== gateLogin) continue;
-    // A merged inline comment carries one marker per member: index every one, not just the first.
-    const fps = new Set();
-    collectFingerprints(root.body, fps);
-    const members = [...fps].filter((fp) => actFingerprints.has(fp));
+    const { members } = selectActThreadBinding(parsed, thread.id, gateLogin, actFingerprints);
     if (!members.length) continue;
     if (completion) {
       const pinned = bindings.get(thread.id);
