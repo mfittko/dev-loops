@@ -8,6 +8,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { decideDeltaNextStep, startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
+import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
 
 import { initGitFixture, makeGhMock, runIdFreeEnv } from "../_helpers.mjs";
 import {
@@ -965,10 +966,10 @@ for (const check of [false, true]) for (const defect of [null, "missing", "noncl
       const { deps, calls } = runtime([threadsCallEntry(nodes), userEntry], repoRoot);
       const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps);
       if (defect) {
-        const expected = { missing: /delta clearing decision/, nonclearing: /delta clearing decision/, source: /authority.sourceDigest/, delta: /authority.deltaResultDigest/, bytes: /delta result differs from its sha256/, baseline: /pinned baseline/, membership: /not in the act set/, statuses: /delta clearing decision/, candidate: /actual pushed candidate/, invocation: /invocation-three/, tackled: /delta status and disposition disagree/, resolved: /delta status and disposition disagree/, resolvedForms: /fixed status and a test/, unaccounted: /returned site/, unbound: /delta status and live thread disposition disagree/, residualResolved: /delta status and live thread disposition disagree/, residualResolvedOmitted: /delta status and live thread disposition disagree/, legacy: /fixed status and a test/ };
+        const expected = { missing: /delta clearing decision/, nonclearing: /delta clearing decision/, source: /authority.sourceDigest/, delta: /authority.deltaResultDigest/, bytes: /delta result differs from its sha256/, baseline: /pinned baseline/, membership: /not in the act set/, statuses: /delta clearing decision/, candidate: /actual pushed candidate/, invocation: /invocation-three/, tackled: /delta status and live thread disposition disagree/, resolved: /fixed status and a test/, resolvedForms: /fixed status and a test/, unaccounted: /returned site/, unbound: /delta status and live thread disposition disagree/, residualResolved: /delta status and live thread disposition disagree/, residualResolvedOmitted: /delta status and live thread disposition disagree/, legacy: /fixed status and a test/ };
         const before = await readFile(fixerPlan, "utf8");
         await assert.rejects(verify(), ["residualUnmarked", "residualForeign", "residualMissing"].includes(defect) ? /delta status and live thread disposition disagree/ : expected[defect]);
-        assert.equal(calls.length, defect === "unbound" || resolvedResidual || defect === "residualMissing" ? 3 : 0, "authority fails before GitHub mutation or checkpoint");
+        assert.equal(calls.length, defect === "tackled" || defect === "unbound" || resolvedResidual || defect === "residualMissing" ? 3 : 0, "authority fails before GitHub mutation or checkpoint");
         assert.deepEqual(await checkpointFiles(repoRoot), []);
         assert.equal(await readFile(fixerPlan, "utf8"), before);
       } else {
@@ -985,19 +986,19 @@ for (const check of [false, true]) for (const defect of [null, "missing", "noncl
   });
 }
 
-for (const check of [false, true]) for (const kind of ["threadless-mixed", "threadless-fixed", "live-mixed", "residual", "resolved"]) {
+for (const check of [false, true]) for (const kind of ["threadless-mixed", "threadless-fixed", "live-mixed", "live-deferred", "residual", "resolved"]) {
   test(`repeated fingerprint completion preserves ref statuses (${check}, ${kind})`, async () => {
     await withRepoRoot(async (repoRoot) => {
       const refuses = kind.endsWith("mixed");
       const live = !kind.startsWith("threadless");
       const fixed = kind === "threadless-fixed" || kind === "live-mixed" || kind === "resolved";
       const actList = ["--first", "--second"].map((form) => ({ ...ACT_LIST[0], siteQuery: "query", acceptedForms: [form] }));
-      const statuses = !live ? ["not_resolved", "resolved"] : kind === "live-mixed" ? ["resolved", "cannot_verify"] : kind === "resolved" ? ["resolved", "resolved"] : ["not_resolved", "cannot_verify"];
+      const statuses = !live ? ["not_resolved", "resolved"] : ["live-mixed", "live-deferred"].includes(kind) ? ["resolved", "cannot_verify"] : kind === "resolved" ? ["resolved", "resolved"] : ["not_resolved", "cannot_verify"];
       const items = statuses.map((status, index) => ({ ref: index ? `${ACT_FP}#2` : ACT_FP, status }));
       const delta = { reviewBaselineHead: HEAD_SHA, candidateHead: FIX_SHA, actSetId: startDeltaSequence({ reviewBaselineHead: HEAD_SHA, actList }).actSetId, actionableItems: items.map((item) => ({ ...item, evidence: ["targeted check"] })), newFindings: [], widenedReads: [], outcome: "bounded_out" };
       const decision = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: delta.actSetId, invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items };
       const dispositions = live ? [{ threadId: "PRRT_REPEAT", fixingCommitSha: HEAD_SHA, disposition: fixed ? "tackled" : "deferred" }] : [];
-      const handoffText = JSON.stringify({ headSha: HEAD_SHA, dispositions, siteCoverage: [{ fingerprint: ACT_FP, returnedSites: ["--first", "--second"], sites: ["--first", "--second"].map((site) => ({ site, kind: "input_form", status: fixed ? "fixed" : "skipped", ...(fixed ? { test: "targeted form test" } : { reason: "still fails at invocation three" }) })) }] });
+      const handoffText = JSON.stringify({ headSha: HEAD_SHA, dispositions, siteCoverage: [{ fingerprint: ACT_FP, returnedSites: ["--first", "--second"], sites: ["--first", "--second"].map((site, index) => ({ site, kind: "input_form", status: fixed || (kind === "live-deferred" && index === 0) ? "fixed" : "skipped", ...(fixed || (kind === "live-deferred" && index === 0) ? { test: "targeted form test" } : { reason: "still fails at invocation three" }) })) }] });
       const fixerPlan = await deliver(repoRoot, dispositions, { actList, delta, decision, handoffText });
       const nodes = live ? [actThread("PRRT_REPEAT", [gateComment("c1", 1, `${ACT_MARKER}\n${fixed ? `Fixed in commit ${HEAD_SHA}.` : "still fails"}`)], fixed)] : [];
       const { deps, calls } = runtime([threadsCallEntry(nodes), userEntry, ...(live && fixed ? [compareEntry(HEAD_SHA, "identical")] : [])], repoRoot);
@@ -1025,8 +1026,12 @@ for (const check of [false, true]) for (const [kind, statuses, disposition, memb
   ["residual-first", ["not_resolved", "cannot_verify"], "deferred", 0],
   ["residual-second", ["not_resolved", "cannot_verify"], "deferred", 1],
   ["foreign", ["resolved", "resolved", "resolved"], "tackled", 2],
+  ["unknown-hint", ["resolved", "not_resolved"], "deferred", 2],
   ["mixed-tackled", ["resolved", "not_resolved"], "tackled", 0],
   ["mixed-deferred", ["resolved", "not_resolved"], "deferred", 1],
+  ["mixed-resolved-hint", ["resolved", "not_resolved"], "deferred", 0],
+  ["mixed-no-hint", ["resolved", "cannot_verify"], "deferred", null],
+  ["resolved-deferred", ["resolved", "resolved"], "deferred", 0],
   ["resolved-residual", ["not_resolved", "cannot_verify"], "deferred", 0],
   ["incomplete-coverage", ["resolved", "resolved"], "tackled", 0],
 ]) {
@@ -1037,7 +1042,7 @@ for (const check of [false, true]) for (const [kind, statuses, disposition, memb
       const items = statuses.map((status, index) => ({ ref: fingerprints[index], status }));
       const delta = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: startDeltaSequence({ reviewBaselineHead: HEAD_SHA, actList }).actSetId, actionableItems: items.map((item) => ({ ...item, evidence: ["targeted check"] })), newFindings: [], widenedReads: [], outcome: "bounded_out" };
       const decision = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: delta.actSetId, invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items };
-      const dispositions = [{ threadId: "PRRT_MERGED", fingerprint: fingerprints[member], fixingCommitSha: HEAD_SHA, disposition }];
+      const dispositions = [{ threadId: "PRRT_MERGED", fingerprint: member === null ? undefined : fingerprints[member], fixingCommitSha: HEAD_SHA, disposition }];
       const siteCoverage = actList.map((item, index) => ({ fingerprint: item.fingerprint, returnedSites: item.acceptedForms, sites: item.acceptedForms.map((site) => ({ site, kind: "input_form", status: statuses[index] === "resolved" ? "fixed" : "skipped", ...(statuses[index] === "resolved" ? { test: "targeted member test" } : { reason: "still fails at invocation three" }) })) }));
       if (kind === "incomplete-coverage") siteCoverage[1].sites = [];
       const handoffText = JSON.stringify({ headSha: HEAD_SHA, dispositions, siteCoverage });
@@ -1048,7 +1053,7 @@ for (const check of [false, true]) for (const [kind, statuses, disposition, memb
       const { deps, calls } = runtime([threadsCallEntry(nodes), userEntry, ...(fixed ? [compareEntry(HEAD_SHA, "identical")] : [])], repoRoot);
       const before = await readFile(fixerPlan, "utf8");
       const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps);
-      if (["foreign", "mixed-tackled", "mixed-deferred", "resolved-residual", "incomplete-coverage"].includes(kind)) {
+      if (["foreign", "unknown-hint", "mixed-tackled", "resolved-deferred", "resolved-residual", "incomplete-coverage"].includes(kind)) {
         await assert.rejects(verify(), kind === "incomplete-coverage" ? /returned site/ : /delta status and live thread disposition disagree/);
         assert.equal(calls.length, kind === "incomplete-coverage" ? 0 : 3);
         assert.deepEqual(await checkpointFiles(repoRoot), []);
@@ -1068,6 +1073,46 @@ for (const check of [false, true]) for (const [kind, statuses, disposition, memb
 async function checkpointFiles(repoRoot) {
   const entries = await readdir(path.join(repoRoot, "tmp"), { recursive: true }).catch(() => []);
   return entries.filter((entry) => path.basename(entry).startsWith("fixer-disposition-"));
+}
+
+for (const check of [false, true]) for (const kind of ["resolved", "residual", "omitted-open", "omitted-resolved", "unknown", "missing-status", "unmarked", "foreign", "reply-only"]) {
+  test(`shared fingerprint roots preserve authenticated membership (${check}, ${kind})`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const status = ["resolved", "omitted-resolved"].includes(kind) ? "resolved" : kind === "unknown" ? "unknown" : "cannot_verify";
+      const items = kind === "missing-status" ? [] : [{ ref: ACT_FP, status }];
+      const delta = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: startDeltaSequence({ reviewBaselineHead: HEAD_SHA, actList: ACT_LIST }).actSetId, actionableItems: items.map((item) => ({ ...item, evidence: ["check"] })), newFindings: [], widenedReads: [], outcome: "bounded_out" };
+      const decision = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: delta.actSetId, invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items };
+      const resolved = status === "resolved";
+      const dispositions = ["PRRT_A", "PRRT_B"].map((threadId) => ({ threadId, fingerprint: ACT_FP, fixingCommitSha: HEAD_SHA, disposition: resolved ? "tackled" : "deferred" }));
+      if (kind.startsWith("omitted")) dispositions.pop();
+      const fixerPlan = await deliver(repoRoot, dispositions, { actList: ACT_LIST, delta, decision });
+      const nodes = ["PRRT_A", "PRRT_B"].map((id, index) => actThread(id, [gateComment(`c${index}`, 100 + index, `${ACT_MARKER}\n${resolved ? `Fixed in commit ${HEAD_SHA}.` : "residual"}`)], resolved));
+      if (kind === "unmarked" || kind === "reply-only") nodes[1].comments.nodes[0].body = "no root marker";
+      if (kind === "reply-only") nodes[1].comments.nodes.push(gateComment("c9", 109));
+      if (kind === "foreign") nodes[1].comments.nodes[0].author.login = "someone-else";
+      const entries = [threadsCallEntry(nodes), userEntry, ...(resolved && !kind.startsWith("omitted") ? [compareEntry(HEAD_SHA, "identical")] : [])];
+      const { deps, calls } = runtime(entries, repoRoot);
+      const promise = verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps);
+      if (["resolved", "residual"].includes(kind)) {
+        const result = await promise;
+        assert.equal(result.complete, true);
+        assert.deepEqual(result.actions, []);
+        assert.equal((await checkpointFiles(repoRoot)).length, check ? 0 : 1);
+        if (!check) {
+          const checkpoint = JSON.parse(await readFile(path.resolve(repoRoot, result.checkpointPath), "utf8"));
+          assert.equal(checkpoint.dispositions.length, 2);
+          const { deps } = runtime([...entries, ...(resolved ? [compareEntry(HEAD_SHA, "identical")] : [])], repoRoot);
+          const shared = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: HEAD_SHA, parsedThreads: parseReviewThreads(JSON.parse(threadsPayload(nodes))) }, deps);
+          assert.equal(shared.complete, true);
+        }
+      } else {
+        await assert.rejects(promise, kind.startsWith("omitted") ? /no disposition entry.*PRRT_B/ : ["unknown", "missing-status"].includes(kind) ? /Invalid delta result/ : /delta status and live thread disposition disagree/);
+        assert.deepEqual(await checkpointFiles(repoRoot), []);
+      }
+      assert.equal(hasPost(calls), false);
+      assert.equal(calls.some(({ args }) => args.some((arg) => String(arg).includes("mutation"))), false);
+    });
+  });
 }
 
 test("a full-phase handoff that omits a disposition entry for an open gate thread carrying a judge-act fingerprint fails, names the thread and writes no checkpoint", async () => {

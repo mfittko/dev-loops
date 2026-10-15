@@ -294,13 +294,6 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
         const status = statuses.get(item.ref);
         if (!deltaStatuses.has(fingerprint) || status !== "resolved") deltaStatuses.set(fingerprint, status);
       }
-      for (const entry of handoff.dispositions) {
-        if (!entry.fingerprint) continue;
-        const status = deltaStatuses.get(entry.fingerprint);
-        if (!status || entry.disposition !== (status === "resolved" ? FIXER_DISPOSITION_KIND.TACKLED : FIXER_DISPOSITION_KIND.DEFERRED)) {
-          throw new Error(`delta status and disposition disagree for ${entry.fingerprint}`);
-        }
-      }
       if (bounded) {
         for (const [ref, status] of statuses) if (status === "not_resolved" || status === "cannot_verify") residualRefs.add(ref);
       }
@@ -344,41 +337,42 @@ function threadRootComment(parsed, threadId) {
 // Gate-authored is the authenticated login on the thread ROOT comment, never marker text alone;
 // every matching thread needs its own entry.
 function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, deltaStatuses) {
+  const entries = new Map(handoff.dispositions.map((entry) => [entry.threadId, entry]));
   for (const entry of handoff.dispositions) {
-    const status = deltaStatuses?.get(entry.fingerprint);
-    if (status && status !== "resolved"
-      && parsed.threads.find((thread) => thread.id === entry.threadId)?.isResolved !== false) {
+    if (!deltaStatuses || !entry.fingerprint) continue;
+    const root = threadRootComment(parsed, entry.threadId);
+    const fps = new Set();
+    collectFingerprints(root?.body ?? "", fps);
+    if (!deltaStatuses.has(entry.fingerprint) || root?.author?.login !== gateLogin || !fps.has(entry.fingerprint)) {
       throw new Error(`delta status and live thread disposition disagree for ${entry.threadId} (${entry.fingerprint})`);
     }
   }
-  const dispositioned = new Set(handoff.dispositions.map((entry) => entry.threadId));
-  const openFingerprints = new Map();
+  const actFingerprints = new Set(actList.map((item) => item?.fingerprint ?? fingerprintFinding(item)));
+  const missing = [];
   for (const thread of parsed.threads) {
     const root = threadRootComment(parsed, thread.id);
     if (!root || root.author?.login !== gateLogin) continue;
     // A merged inline comment carries one marker per member: index every one, not just the first.
     const fps = new Set();
     collectFingerprints(root.body, fps);
-    const entry = handoff.dispositions.find((item) => item.threadId === thread.id);
-    if (entry?.fingerprint && !fps.has(entry.fingerprint) && [...fps].some((fp) => deltaStatuses?.has(fp))) {
+    const members = [...fps].filter((fp) => actFingerprints.has(fp));
+    if (!members.length) continue;
+    const entry = entries.get(thread.id);
+    if (entry?.fingerprint && !members.includes(entry.fingerprint) && deltaStatuses) {
       throw new Error(`delta status and live thread disposition disagree for ${thread.id} (${entry.fingerprint})`);
     }
-    for (const fp of fps) {
-      const status = deltaStatuses?.get(fp);
-      if (status && ((status !== "resolved" && thread.isResolved)
-        || (entry && entry.disposition !== (status === "resolved" ? FIXER_DISPOSITION_KIND.TACKLED : FIXER_DISPOSITION_KIND.DEFERRED)))) {
-        throw new Error(`delta status and live thread disposition disagree for ${thread.id} (${fp})`);
+    if (deltaStatuses) {
+      // One root may merge several fingerprints, each already aggregating repeated ACT refs.
+      const residual = members.some((fp) => deltaStatuses.get(fp) !== "resolved");
+      if ((residual && thread.isResolved !== false)
+        || (entry && entry.disposition !== (residual ? FIXER_DISPOSITION_KIND.DEFERRED : FIXER_DISPOSITION_KIND.TACKLED))) {
+        throw new Error(`delta status and live thread disposition disagree for ${thread.id} (${members.join(", ")})`);
       }
-      if (thread.isResolved) continue;
-      if (!openFingerprints.has(fp)) openFingerprints.set(fp, new Set());
-      openFingerprints.get(fp).add(thread.id);
     }
+    if (!entry && (deltaStatuses || !thread.isResolved)) missing.push(thread.id);
   }
-  const missing = actList
-    .flatMap((item) => [item?.fingerprint ?? fingerprintFinding(item)].flatMap((fp) => [...(openFingerprints.get(fp) ?? [])]))
-    .filter((threadId) => !dispositioned.has(threadId));
   if (missing.length > 0) {
-    throw new Error(`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: the handoff has no disposition entry for open gate thread(s) ${[...new Set(missing)].join(", ")} that carry a judge-act fingerprint; an act item with an open inline gate thread is never threadless, record it as tackled and reply-resolve the thread`);
+    throw new Error(`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: the handoff has no disposition entry for gate thread(s) ${missing.join(", ")} that carry a judge-act fingerprint; an act item with a matching inline gate thread is never threadless, record its complete root disposition`);
   }
 }
 
