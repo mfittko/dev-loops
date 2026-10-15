@@ -301,7 +301,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
     }
   }
   const readyResult = await runChildImpl(ghCommand, ["pr", "ready", String(options.pr), "--repo", options.repo], env);
-  if (readyResult.code !== 0) throw new Error(`gh pr ready failed`);
+  if (readyResult.code !== 0) throw new Error(`gh pr ready failed: ${readyResult.stderr?.trim() || `exit code ${readyResult.code}`}`);
   // #1069: couple the In-Progress board move to the ready transition. Best-effort
   // and NON-FATAL — a board failure must NEVER block or fail marking ready.
   let boardSync;
