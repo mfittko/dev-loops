@@ -120,9 +120,9 @@ export function resolveGateArtifactTmpRoot(cwd, { gitCommand = "git" } = {}) {
  * on a detached or bare entry). The first entry is the main checkout, or the
  * bare repo when the main is bare. Throws on a git failure.
  */
-export function listWorktreeEntries(cwd, { gitCommand = "git", timeout } = {}) {
+export function listWorktreeEntries(cwd, { gitCommand = "git", timeout, env = gitEnvNoDirOverrides(), killSignal, maxBuffer } = {}) {
   const listing = execFileSync(gitCommand, ["worktree", "list", "--porcelain"], {
-    cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: gitEnvNoDirOverrides(), timeout,
+    cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env, timeout, killSignal, maxBuffer,
   });
   return listing.split(/\n\s*\n/u).map((block) => {
     const lines = block.split("\n");

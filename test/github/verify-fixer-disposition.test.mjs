@@ -1086,7 +1086,7 @@ test("legacy archived local Delta fields remain bound when semantic work-order i
   });
 });
 
-test("legacy qualification rereads the current canonical plan after its native query", async () => {
+for (const failure of ["plan", "discovery", "empty", "relative"]) test(`legacy qualification refuses ${failure} failure without completing its native query`, async () => {
   await withRepoRoot(async (root) => {
     const f = await legacyFixture(root);
     const source = await readFile(new URL("../../scripts/github/_legacy-fixer-revalidation.mjs", import.meta.url), "utf8");
@@ -1104,12 +1104,48 @@ test("legacy qualification rereads the current canonical plan after its native q
     }, await import("@dev-loops/core/loop/gate-round-retirement"), await import("@dev-loops/core/loop/fixer-disposition"),
     await import("@dev-loops/core/loop/pre-push-delta-review"), await import("../../scripts/loop/_repo-root-resolver.mjs"),
     await import("../../scripts/loop/_gate-delta-record.mjs"), await import("../../scripts/github/_gate-artifact-paths.mjs"), await import("../../scripts/github/_work-order-protocol.mjs"));
+    if (failure === "discovery") context.listWorktreeEntries = () => { throw Object.assign(new Error("worktree listing failed"), { code: "ETIMEDOUT" }); };
+    if (failure === "empty" || failure === "relative") context.listWorktreeEntries = () => failure === "empty" ? [] : [{ path: "relative" }];
     const qualify = runInNewContext(`${source.slice(source.indexOf("const PATTERN")).replace("export async function", "async function")}\nrevalidateLegacyCompletion`, context);
     const [act, delta] = await Promise.all(f.plan.workOrder.requiredReads.slice(0, 2).map(async (read) => JSON.parse(await readFile(read.path))));
     await assert.rejects(qualify({ completion: f.source, plan: f.plan, planPath: f.fixerPlan, priorBytes: await readFile(f.originPath), actList: act, delta,
-      decision: JSON.parse(await readFile(f.decisionPath)), receiptTmpRoot: path.join(root, "tmp"), repoRoot: root }), /superseded during query/);
-    assert.equal(queries, 1);
-    assert.equal(reads, 2);
+      decision: JSON.parse(await readFile(f.decisionPath)), receiptTmpRoot: path.join(root, "tmp"), repoRoot: root }), failure === "plan" ? /superseded during query/ : failure === "discovery" ? { code: "ETIMEDOUT", message: "worktree listing failed" } : /retirement checkout discovery returned no valid absolute roots/);
+    assert.equal(queries, failure === "plan" ? 1 : 0);
+    assert.equal(reads, failure === "plan" ? 2 : 1);
+  });
+});
+
+for (const mode of ["construct", "normal", "check"]) for (const retiredIdentity of [null, "historical", "current", "lookupFailure"]) test(`legacy ${mode} checks linked-worktree retirement for ${retiredIdentity ?? "ordinary absence"}`, async () => {
+  await withRepoRoot(async (root) => {
+    const f = await legacyFixture(root);
+    const linked = path.join(root, "linked");
+    f.git("worktree", "add", "--detach", linked, f.candidate);
+    assert.ok(f.receiptPath.startsWith(path.join(root, "tmp")), "receipts stay in the main checkout");
+    if (retiredIdentity) {
+      const head = retiredIdentity === "historical" ? f.baseline : f.candidate;
+      const retired = path.join(linked, "tmp", "retired-gate-rounds", head, "round1", "retirement.json");
+      if (retiredIdentity === "lookupFailure") {
+        await mkdir(path.dirname(path.dirname(path.dirname(retired))), { recursive: true });
+        await writeFile(path.dirname(path.dirname(retired)), "not a directory");
+      } else {
+        await mkdir(path.dirname(retired), { recursive: true });
+        await writeFile(retired, JSON.stringify({ gate: "draft_gate", retiredAt: new Date().toISOString() }));
+      }
+    }
+    const options = { repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan, construct: mode === "construct", check: mode === "check" };
+    const report = f.plan.workOrder.outputRefs[0];
+    if (mode === "construct") await rm(report);
+    const before = existsSync(report) ? await readFile(report, "utf8") : null;
+    const mock = f.depsFor([compareEntry(f.candidate, "identical", f.candidate)]);
+    if (retiredIdentity) {
+      await assert.rejects(verifyFixerDisposition(options, mock.deps), retiredIdentity === "lookupFailure" ? { code: "ENOTDIR" } : /legacy revalidation: source round was retired/);
+      assert.equal(existsSync(report) ? await readFile(report, "utf8") : null, before);
+      assert.deepEqual(await checkpointFiles(root), []);
+    } else {
+      const result = await verifyFixerDisposition(options, mock.deps);
+      assert.equal(mode === "construct" ? result.constructed : result.complete, true);
+    }
+    assert.equal(hasPost(mock.calls), false);
   });
 });
 

@@ -5,7 +5,7 @@ import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
 import { toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
-import { gitEnvNoDirOverrides } from "../loop/_repo-root-resolver.mjs";
+import { gitEnvNoDirOverrides, listWorktreeEntries } from "../loop/_repo-root-resolver.mjs";
 import { gateDeltaRecordPath } from "../loop/_gate-delta-record.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
 import { verifyPullReceipt, workOrderDigest } from "./_work-order-protocol.mjs";
@@ -18,13 +18,17 @@ const refuse = (message) => { throw new Error(`legacy revalidation: ${message}`)
 const digest = (bytes) => sha256Hex(bytes).slice(7);
 
 function nativeGit(args, cwd) {
-  const env = { ...gitEnvNoDirOverrides(), GIT_NO_REPLACE_OBJECTS: "1" };
-  for (const key of ["GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_SHALLOW_FILE", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"]) delete env[key];
-  Object.assign(env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "grep.column", GIT_CONFIG_VALUE_0: "false" });
-  const result = spawnSync("git", args, { cwd, env, timeout: 10000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+  const result = spawnSync("git", args, { cwd, env: nativeGitEnv(), timeout: 10000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
   if (result.error) throw result.error;
   if (result.signal || result.status !== 0 || result.stderr?.length) refuse(`bounded native Git failed (${result.status}, ${result.signal}): ${result.stderr ?? ""}`);
   return result.stdout;
+}
+
+function nativeGitEnv() {
+  const env = { ...gitEnvNoDirOverrides(), GIT_NO_REPLACE_OBJECTS: "1" };
+  for (const key of ["GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_SHALLOW_FILE", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"]) delete env[key];
+  Object.assign(env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "grep.column", GIT_CONFIG_VALUE_0: "false" });
+  return env;
 }
 
 function queryLegacySites({ repoRoot, candidate, branch, treeOid, queryOutputBytesDigest }) {
@@ -103,8 +107,12 @@ export async function revalidateLegacyCompletion({ completion, plan, planPath, p
       || sha256Hex(JSON.parse(bytes)).slice(7) !== oldOrder.authority?.[authority]
       || oldOrder.authority[authority] !== order.authority[authority] || sha256Hex(JSON.parse(bytes)) !== sha256Hex(current)) refuse(`original/current ${kind} raw or semantic authority mismatch`);
   }
-  if ([[oldOrder.headSha, emitted(original.executionIdentity)], [order.headSha, emitted(plan.executionIdentity)]]
-    .some(([head, time]) => findRetirementAfter(receiptTmpRoot, order.gate, head, time))) refuse("source round was retired");
+  const checkouts = listWorktreeEntries(repoRoot, { env: nativeGitEnv(), timeout: 10000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024 });
+  if (!checkouts.length || checkouts.some((entry) => !path.isAbsolute(entry.path))) refuse("retirement checkout discovery returned no valid absolute roots");
+  for (const tmpRoot of new Set([receiptTmpRoot, ...checkouts.map((entry) => path.join(entry.path, "tmp"))])) {
+    if ([[oldOrder.headSha, emitted(original.executionIdentity)], [order.headSha, emitted(plan.executionIdentity)]]
+      .some(([head, time]) => findRetirementAfter(tmpRoot, order.gate, head, time))) refuse("source round was retired");
+  }
   const decisionBytes = await readFile(gateDeltaRecordPath(receiptTmpRoot, delta.reviewBaselineHead));
   if (digest(decisionBytes) !== legacy.clearingDecisionBytesDigest || sha256Hex(JSON.parse(decisionBytes)) !== sha256Hex(decision)
     || digest(priorBytes) !== legacy.handbackBytesDigest) refuse("clearing decision or original raw handback bytes changed");
