@@ -423,7 +423,7 @@ test("built-in In-Progress board sync runs after gh pr ready and is NON-FATAL (#
 // Drive readyForReview directly with the gh stub (via injected env/ghCommand)
 // plus an injected fake syncBoardStatus so the board tail is observable: the
 // move target (closing issue vs PR) and the NON-FATAL swallow are verified.
-function preReadyGhStub(tempDir, { closingIssueNodes = [] } = {}) {
+function preReadyGhStub(tempDir, { closingIssueNodes = [], readyResult = { stdout: "" } } = {}) {
   return writeGhStub(tempDir, [
     {
       stdout: JSON.stringify({
@@ -457,9 +457,23 @@ function preReadyGhStub(tempDir, { closingIssueNodes = [] } = {}) {
       ]),
     },
     ...gateCloseStubs(),
-    { stdout: "" }, // gh pr ready
+    readyResult,
   ]);
 }
+
+test("final ready failure preserves stderr or an honest exit fallback and never syncs the board", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-stderr-"));
+  try {
+    for (const [stderr, expected] of [["  hook refused this head\n", /hook refused this head/], [" \n", /exit code 2/]]) {
+      const { env } = await preReadyGhStub(tempDir, { readyResult: { exitCode: 2, stdout: "", stderr } });
+      await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, {
+        env, repoRoot: tempDir, runChild: env[GH_RUNNER],
+        syncBoardStatus: async () => assert.fail("must not sync after failed ready"),
+        evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire, evaluateCommentDiscipline: passingCommentDiscipline,
+      }), expected);
+    }
+  } finally { await rm(tempDir, { recursive: true, force: true }); }
+});
 
 test("board tail targets the closing issue (not the PR) when closingIssues present (#1069)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-board-target-"));
