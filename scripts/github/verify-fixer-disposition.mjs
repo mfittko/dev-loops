@@ -289,8 +289,8 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       const statuses = new Map(delta.actionableItems.map(({ ref, status }) => [ref, status]));
       deltaStatuses = new Map();
       // A shared fingerprint permits tackled/live resolution only when every member is resolved.
-      for (const item of sequence.actItems) {
-        const fingerprint = item.fingerprint ?? item.ref;
+      for (const [index, item] of sequence.actItems.entries()) {
+        const fingerprint = actList[index]?.fingerprint ?? fingerprintFinding(actList[index]);
         const status = statuses.get(item.ref);
         if (!deltaStatuses.has(fingerprint) || status !== "resolved") deltaStatuses.set(fingerprint, status);
       }
@@ -338,16 +338,17 @@ function threadRootComment(parsed, threadId) {
 // every matching thread needs its own entry.
 function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, deltaStatuses) {
   const entries = new Map(handoff.dispositions.map((entry) => [entry.threadId, entry]));
+  const actFingerprints = new Set(actList.map((item) => item?.fingerprint ?? fingerprintFinding(item)));
   for (const entry of handoff.dispositions) {
-    if (!deltaStatuses || !entry.fingerprint) continue;
+    if (!deltaStatuses) continue;
     const root = threadRootComment(parsed, entry.threadId);
     const fps = new Set();
     collectFingerprints(root?.body ?? "", fps);
-    if (!deltaStatuses.has(entry.fingerprint) || root?.author?.login !== gateLogin || !fps.has(entry.fingerprint)) {
+    if (root?.author?.login !== gateLogin || ![...fps].some((fp) => actFingerprints.has(fp))
+      || (entry.fingerprint && (!deltaStatuses.has(entry.fingerprint) || !fps.has(entry.fingerprint)))) {
       throw new Error(`delta status and live thread disposition disagree for ${entry.threadId} (${entry.fingerprint})`);
     }
   }
-  const actFingerprints = new Set(actList.map((item) => item?.fingerprint ?? fingerprintFinding(item)));
   const missing = [];
   for (const thread of parsed.threads) {
     const root = threadRootComment(parsed, thread.id);

@@ -1153,6 +1153,59 @@ test("an act item with no fingerprint field is matched by its derived fingerprin
   });
 });
 
+for (const check of [false, true]) for (const kind of ["resolved", "resolved-deferred", "residual-hint", "repeated-mixed"]) {
+  test(`derived fingerprint roots use authenticated Delta statuses (${check}, ${kind})`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const derived = fingerprintFinding({ summary: "s" });
+      const actList = kind === "repeated-mixed"
+        ? ["first", "second"].map((ref) => ({ ref, severity: "medium", summary: "s", judgeDisposition: "act" }))
+        : [{ severity: "medium", summary: "s", judgeDisposition: "act" }];
+      const sequence = startDeltaSequence({ reviewBaselineHead: HEAD_SHA, actList });
+      const items = sequence.actItems.map(({ ref }, index) => ({ ref, status: kind === "residual-hint" || (kind === "repeated-mixed" && index === 1) ? "cannot_verify" : "resolved" }));
+      const delta = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: sequence.actSetId, actionableItems: items.map((item) => ({ ...item, evidence: ["targeted check"] })), newFindings: [], widenedReads: [], outcome: "bounded_out" };
+      const decision = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: sequence.actSetId, invocation: 3, outcome: "bounded_out", nextStep: "push_to_gate", items };
+      const tackled = kind === "resolved";
+      const dispositions = [{ threadId: "PRRT_DERIVED", ...(kind === "residual-hint" ? { fingerprint: derived } : {}), fixingCommitSha: HEAD_SHA, disposition: tackled ? "tackled" : "deferred" }];
+      const fixerPlan = await deliver(repoRoot, dispositions, { actList, delta, decision });
+      const body = `${ACT_MARKER.replace(ACT_FP, derived)}\n${tackled ? `Fixed in commit ${HEAD_SHA}.` : "residual"}`;
+      const { deps, calls } = runtime([threadsCallEntry([actThread("PRRT_DERIVED", [gateComment("c1", 103, body)], tackled)]), userEntry, ...(tackled ? [compareEntry(HEAD_SHA, "identical")] : [])], repoRoot);
+      const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps);
+      if (kind === "resolved-deferred") {
+        await assert.rejects(verify(), /delta status and live thread disposition disagree/);
+        assert.deepEqual(await checkpointFiles(repoRoot), []);
+      } else {
+        const result = await verify();
+        assert.equal(result.complete, true);
+        assert.deepEqual(result.actions, []);
+        assert.equal((await checkpointFiles(repoRoot)).length, check ? 0 : 1);
+      }
+      assert.equal(hasPost(calls), false);
+    });
+  });
+}
+
+for (const check of [false, true]) for (const kind of ["foreign", "unmarked", "unbound"]) {
+  test(`semantic ACT delivery refuses unauthenticated roots without scalar hints (${check}, ${kind})`, async () => {
+    await withRepoRoot(async (repoRoot) => {
+      const items = [{ ref: ACT_FP, status: "resolved" }];
+      const delta = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: startDeltaSequence({ reviewBaselineHead: HEAD_SHA, actList: ACT_LIST }).actSetId, actionableItems: items.map((item) => ({ ...item, evidence: ["check"] })), newFindings: [], widenedReads: [], outcome: "locally_clear" };
+      const decision = { reviewBaselineHead: HEAD_SHA, candidateHead: HEAD_SHA, actSetId: delta.actSetId, invocation: 1, outcome: "locally_clear", nextStep: "push", items };
+      const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_EXTRA", fixingCommitSha: HEAD_SHA, disposition: "tackled" }], { actList: ACT_LIST, delta, decision });
+      const root = gateComment("c1", 101, kind === "unmarked" ? "No marker" : kind === "unbound" ? ACT_MARKER.replace(ACT_FP, "fedcba9876543210") : ACT_MARKER, kind === "foreign" ? "reviewer" : "gate");
+      const { deps, calls } = runtime([
+        threadsCallEntry([actThread("PRRT_EXTRA", [root])]), userEntry, compareEntry(HEAD_SHA, "identical"),
+        { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
+        { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_EXTRA", isResolved: true } } } })}\n` },
+        threadsCallEntry([actThread("PRRT_EXTRA", [root, gateComment("c2", 102, `Fixed in commit ${HEAD_SHA}.`)], true)]),
+      ], repoRoot);
+      await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps), /delta status and live thread disposition disagree/);
+      assert.deepEqual(await checkpointFiles(repoRoot), []);
+      assert.equal(hasPost(calls), false);
+      assert.equal(calls.some(({ args }) => args.some((arg) => String(arg).includes("mutation"))), false);
+    });
+  });
+}
+
 test("an act item matching a non-primary marker of a merged gate thread root still fails naming the thread", async () => {
   const merged = `<!-- dev-loops:finding fedcba9876543210 severity=medium angle=correctness round=1 -->\n${ACT_MARKER}\n**Problem:** s`;
   await withRepoRoot(async (repoRoot) => {
