@@ -12,7 +12,9 @@ import path from "node:path";
 export function findRetirementAfter(tmpRoot, gate, headSha, emittedAtMs) {
   const retiredRoot = path.join(tmpRoot, "retired-gate-rounds", headSha);
   let rounds = [];
-  try { rounds = readdirSync(retiredRoot); } catch { /* none retired */ }
+  try { rounds = readdirSync(retiredRoot); } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
   for (const round of rounds) {
     let text;
     try {

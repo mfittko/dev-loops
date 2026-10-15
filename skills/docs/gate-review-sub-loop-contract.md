@@ -1285,6 +1285,41 @@ Normal verification remains mandatory and checks delivered coverage/fixing SHAs 
 source. Absent optional inputs retain legacy behavior. Producer emission stays disabled until
 issue 2765; consumer fixtures are neither producer support nor the later operational worker smoke.
 
+Explicit historical revalidation (ADR 0151 in the [decision records](https://github.com/mfittko/dev-loops/tree/main/docs/decisions))
+adds only an optional `legacyRevalidation` to that authenticated source:
+`{ origin: "legacy_revalidated", originalFull: { workOrderRef, workOrderDigest,
+executionIdentity, planBytesDigest }, handbackBytesDigest, clearingDecisionBytesDigest,
+treeOid, queryOutputBytesDigest }`. Byte digests are lowercase unprefixed SHA-256;
+the original full work-order digest retains its `sha256:` prefix. The commit-only
+`completion.origin` triple stays unchanged. A present null, malformed or partial object refuses.
+Only genuinely absent coverage hashes and no modern coverage protocol/origin/handback fields
+in BOTH historical result and decision qualify. Current and partial bindings never downgrade.
+
+After common original commit-only receipt/subject/after-pull/raw-handback checks, derive
+the original full archive as `<canonical-plan-dir>/<original-execution>/original-fixer-emit-plan.json`
+and its prompt as `<canonical-plan-dir>/work-orders/<original-execution>.md`. Authenticate
+the older distinct full execution, original canonical receipt subject, archive bytes and semantic
+identity. Its original full report is unnecessary; the archive is never a pull target.
+Exact prompt bytes must match BOTH archive and real receipt materialization hashes and end
+with the complete historical `## Work order` JSON suffix for the archived order, including
+local read paths/hashes/bytes excluded from semantic identity. Never rerender historical prose.
+Exactly one required original ACT and Delta read must reproduce raw hash/bytes and semantic
+authority, and match current authenticated reads. Preserve all original records and receipts.
+
+Only unchanged-candidate `locally_clear`/`push` with every ACT member resolved qualifies.
+Recheck canonical clearing bytes/status/membership, active plan, retirement, branch and tree.
+The sole supported ACT literal is `readValidationEvidence|requireBinding|validationResultsPath|prefix-file`.
+Run native `git --no-pager -c color.ui=never grep -n -E <literal> <full-candidate> --`
+from the repository top level with Git directory overrides scrubbed and object replacement disabled.
+All native identity/tree/query calls use a 10000ms timeout, SIGKILL and 1MiB output bound.
+Require successful complete rows, exact stdout-byte digest, complete raw file/form coverage,
+tests and skip reasons; normalization only checks gaps. Recheck tree and current canonical plan
+after the query. Construct, normal and check each requalify; future-bound input never scans.
+This consumer enables no producer. Current authenticated compound authority asserts pre-overwrite
+capture; hashes/timestamps do not prove chronology. Later producer work must perform/prove that
+ordering and fresh-worker smoke. Receipt authentication covers the existing protocol fields,
+without claiming exact-byte attestation for unrelated receipt fields or real A1 recovery.
+
 Full ACT completion alone may accept an explicitly recorded `input_form` with `status: "skipped"`
 and a concrete, non-placeholder reason for a `not_resolved` or `cannot_verify` item (ADR 0147). Before
 allowing this, the verifier checks materialized ACT/Delta bytes and semantic

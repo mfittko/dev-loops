@@ -12,7 +12,7 @@ import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, exe
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
 import { withTempDir } from "../_helpers.mjs";
-import { main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
+import { findRetirementAfter, main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 import { decideFixerWriteGuard } from "../../packages/core/src/claude/hook-decisions.mjs";
 import { resolveGateArtifactTmpRoot, resolveMainWorktreeRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -143,6 +143,25 @@ test("semantic mutation refuses as semantic_identity_mismatch; a materialization
     const entry = JSON.parse(await readFile(indexPath(root, unit), "utf8"));
     await writeFile(indexPath(root, unit), JSON.stringify({ ...entry, workOrderDigest: invalid.workOrderDigest }), "utf8");
     assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "invalid_work_order");
+  });
+});
+
+test("retirement lookup ignores only absence and propagates unreadable or malformed authority", async () => {
+  await withDir(async (root) => {
+    const lookup = () => findRetirementAfter(root, GATE, HEAD, 0);
+    const retired = path.join(root, "retired-gate-rounds", HEAD);
+    assert.equal(lookup(), null);
+    await mkdir(path.dirname(retired), { recursive: true });
+    await writeFile(retired, "not a directory");
+    assert.throws(lookup, { code: "ENOTDIR" });
+    await rm(retired);
+    const record = path.join(retired, "round-1", "retirement.json");
+    await mkdir(path.dirname(record), { recursive: true });
+    assert.equal(lookup(), null, "a round without a retirement record is absent");
+    await writeFile(record, "{");
+    assert.throws(lookup, SyntaxError);
+    await writeFile(record, JSON.stringify({ gate: GATE, retiredAt: new Date(1).toISOString() }));
+    assert.equal(lookup(), "round-1");
   });
 });
 
@@ -383,7 +402,7 @@ async function seedDelegateCheckout(dir, { name = "dev-loops", stub = true } = {
 // A checkout-less linked worktree of THIS repo, so the real toolchain's same-repo check accepts it as a delegate.
 async function withRealLinkedWorktree(base, name, fn) {
   const linked = path.join(base, name);
-  const git = (args) => execFileSync("git", args, { stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+  const git = (args) => execFileSync("git", args, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
   git(["worktree", "add", "-q", "--detach", "--no-checkout", linked]);
   try {
     return await fn(linked);
@@ -692,7 +711,7 @@ test("self-hosting fixer pull: a successful delegated pull returns the worktree 
   const branch = `issue-2581-dod-test-${uniq}`;
   await withDir(async (base) => {
     const linked = path.join(base, "unit");
-    const git = (args) => execFileSync("git", args, { cwd: mainRoot, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+    const git = (args) => execFileSync("git", args, { cwd: mainRoot, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
     git(["worktree", "add", "-q", "--no-checkout", "-b", branch, linked]);
     try {
       await seedDelegateCheckout(linked);
