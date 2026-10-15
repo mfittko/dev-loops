@@ -43,8 +43,11 @@ export const workOrderDigest = (workOrder) =>
   `sha256:${createHash("sha256").update(JSON.stringify(canonicalizeWorkOrder(workOrder))).digest("hex")}`;
 
 // Content identity preserves every JSON key and absolute string, unlike work-order identity.
-const sortJsonKeys = (value) => Array.isArray(value) ? value.map(sortJsonKeys)
-  : value !== null && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortJsonKeys(value[key])])) : value;
+const sortJsonKeys = (value) => {
+  if (typeof value === "number" && !Number.isFinite(value)) throw new Error("Invalid fixer review baseline: non-finite JSON number");
+  return Array.isArray(value) ? value.map(sortJsonKeys)
+    : value !== null && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortJsonKeys(value[key])])) : value;
+};
 
 /** Authenticate optional full-ACT reviewed-baseline authority from the exact required-read entries. */
 export function assertFixerReviewBaseline(order, bytesByRead) {

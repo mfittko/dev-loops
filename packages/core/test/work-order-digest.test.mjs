@@ -79,3 +79,17 @@ for (const kind of ["act-list", "delta-result"]) for (const defect of ["missing"
   if (defect === "entryIdentity") { f.bytes.set({ ...read }, f.bytes.get(read)); f.bytes.delete(read); }
   assert.throws(() => policy.assertFixerReviewBaseline(f.order, f.bytes), /review baseline/);
 });
+
+for (const kind of ["act-list", "delta-result"]) for (const token of ["1e400", "-1e400", "1e300", "null"]) test(`review baseline authenticates ${kind} nested numeric token ${token}`, () => {
+  const f = fixture();
+  const read = f.order.requiredReads.find((entry) => entry.kind === kind);
+  const value = kind === "act-list" ? f.actList : f.delta;
+  const target = kind === "act-list" ? value[0] : value;
+  target.extra = { nested: [{ number: token.endsWith("400") ? null : JSON.parse(token) }] };
+  f.order.authority[kind === "act-list" ? "sourceDigest" : "deltaResultDigest"] = digest(value);
+  const raw = Buffer.from(JSON.stringify(value).replace('"number":null', `"number":${token}`));
+  Object.assign(read, { bytes: raw.length, sha256: digest(raw) });
+  f.bytes.set(read, raw);
+  if (token.endsWith("400")) assert.throws(() => policy.assertFixerReviewBaseline(f.order, f.bytes), /non-finite/);
+  else assert.deepEqual(policy.assertFixerReviewBaseline(f.order, f.bytes)[kind === "act-list" ? "actList" : "delta"], value);
+});
