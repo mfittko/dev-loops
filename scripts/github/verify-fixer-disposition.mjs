@@ -69,11 +69,14 @@ checkpoint for --head-sha and re-verifies live GitHub state; a thread already
 replied with its commit's evidence is never replied to twice, and a thread
 already resolved live is left alone.
 In --check mode checkpointPath is null and all evidence remains unchanged.
-Output (stdout, JSON):
+Output for normal verification or --check (stdout, JSON):
   { "ok": true, "repo": "owner/name", "pr": 17, "headSha": "...", "checkpointPath": "...",
     "complete": true|false, "incomplete": [{ threadId, expectedCommit, failedStep, deltaStatus?, deltaRecord? }],
     "forbiddenActions": [...], "nextAction": "..."|null, "reason": "..."|null,
     "actions": [{ threadId, ok, step? , error? }] }
+Output for --construct (stdout, JSON):
+  { "ok": true, "constructed": true, "outputRef": "..." }
+  complete and checkpointPath are absent; normal verification remains mandatory.
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "hint"?: "..." }
 ${JQ_OUTPUT_USAGE}
