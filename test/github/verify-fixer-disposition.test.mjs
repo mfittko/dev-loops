@@ -983,7 +983,8 @@ const LEGACY_FORMS = [
 ];
 async function legacyFixture(repoRoot) {
   initGitFixture(repoRoot, { branch: "issue-1" });
-  const git = (...args) => execFileSync("git", ["-C", repoRoot, ...args], { env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined }, encoding: "utf8" });
+  const git = (...args) => execFileSync("git", ["-C", repoRoot, ...args], { env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined,
+    GIT_CONFIG_PARAMETERS: undefined, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "grep.column", GIT_CONFIG_VALUE_0: "false" }, encoding: "utf8" });
   const baseline = git("rev-parse", "HEAD").trim();
   for (const [index, file] of LEGACY_FILES.entries()) {
     await mkdir(path.dirname(path.join(repoRoot, file)), { recursive: true });
@@ -1052,11 +1053,12 @@ async function legacyFixture(repoRoot) {
   return { ...f, candidate, oldPlan, archivePath, promptPath, receiptPath, decisionPath, git, refreshOriginal };
 }
 
-test("explicit legacy completion requalifies old missing-both-hash evidence in construct, normal and check", async () => {
+test("explicit legacy completion requalifies unchanged evidence with inherited grep.column=true in construct, normal and check", async () => {
   await withRepoRoot(async (root) => {
     const f = await legacyFixture(root);
     const preserved = [f.archivePath, f.promptPath, f.receiptPath, f.originPath, f.decisionPath];
     const before = await Promise.all(preserved.map((file) => readFile(file, "utf8")));
+    f.git("config", "grep.column", "true");
     const options = { repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan };
     await rm(f.plan.workOrder.outputRefs[0]);
     assert.equal((await verifyFixerDisposition({ ...options, construct: true }, f.depsFor().deps)).constructed, true);

@@ -20,6 +20,7 @@ const digest = (bytes) => sha256Hex(bytes).slice(7);
 function nativeGit(args, cwd) {
   const env = { ...gitEnvNoDirOverrides(), GIT_NO_REPLACE_OBJECTS: "1" };
   for (const key of ["GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_SHALLOW_FILE", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"]) delete env[key];
+  Object.assign(env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "grep.column", GIT_CONFIG_VALUE_0: "false" });
   const result = spawnSync("git", args, { cwd, env, timeout: 10000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
   if (result.error) throw result.error;
   if (result.signal || result.status !== 0 || result.stderr?.length) refuse(`bounded native Git failed (${result.status}, ${result.signal}): ${result.stderr ?? ""}`);

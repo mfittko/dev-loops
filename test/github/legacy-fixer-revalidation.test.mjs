@@ -39,13 +39,17 @@ test("fixed native legacy boundary uses one literal, top-level cwd and bounded s
   const grep = fixture.calls.find((call) => call.args.includes("grep"));
   assert.deepEqual(grep.args, ["--no-pager", "-c", "color.ui=never", "grep", "-n", "-E", pattern, candidate, "--"]);
   for (const [index, call] of fixture.calls.entries()) {
+    const env = call.options.env;
     assert.equal(call.command, "git");
     assert.equal(call.options.cwd, index ? "/repository" : "/repository/subdirectory");
     assert.equal(call.options.timeout, 10000);
     assert.equal(call.options.killSignal, "SIGKILL");
     assert.equal(call.options.maxBuffer, 1024 * 1024);
-    assert.equal(call.options.env.GIT_NO_REPLACE_OBJECTS, "1");
-    for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"]) assert.equal(call.options.env[key], undefined);
+    assert.equal(env.GIT_NO_REPLACE_OBJECTS, "1");
+    for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS"]) assert.equal(env[key], undefined);
+    assert.equal(env.GIT_CONFIG_COUNT, "1");
+    assert.equal(env.GIT_CONFIG_KEY_0, "grep.column");
+    assert.equal(env.GIT_CONFIG_VALUE_0, "false");
     assert.deepEqual([...call.options.stdio], ["ignore", "pipe", "pipe"]);
     assert.equal(call.options.shell, undefined);
     assert.equal(call.options.encoding, undefined, "hash native bytes before decoding");
