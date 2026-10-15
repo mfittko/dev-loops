@@ -205,7 +205,7 @@ export async function emitFixerWorkOrder({
   const capture = await beginFixerEmission(dir);
   try {
   const planPath = path.join(dir, PLAN_FILE);
-  await capture.preserve(planPath, path.resolve(tmpRoot));
+  await capture.preserve(planPath, path.resolve(tmpRoot), resolveGateArtifactTmpRoot(cwd));
 
   const source = actListFile ? await readSource("act-list", abs(actListFile), capture) : await readSource("threads", abs(threadsFile), capture);
   const isActItem = (f) => f?.judgeDisposition === "act" && VALID_SEVERITIES.has(f.severity) && typeof f.summary === "string" && f.summary.trim() !== "";

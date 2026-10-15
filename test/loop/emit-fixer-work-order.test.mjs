@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "bun:test";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
-import { authenticateOriginalPlan } from "../../scripts/github/_fixer-emission-evidence.mjs";
+import { authenticateOriginalPlan, beginFixerEmission } from "../../scripts/github/_fixer-emission-evidence.mjs";
 import { decideFixerWriteGuard } from "../../.claude/hooks/_hook-decisions.mjs";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
@@ -186,7 +186,30 @@ test("unpulled capture and equal archive reentry preserve bytes without inventin
   });
 });
 
-for (const unsafe of ["unequal", "symlink", "hardlink", "directory", "ancestor", "lock", "active-link", "prompt-link"])
+test("missing evidence tracks existing ancestors without creating directories", async () => {
+  await withFixture(async ({ files, emit }) => {
+    const old = await emit({ phase: "commit_only" });
+    const capture = await beginFixerEmission(path.dirname(old.planPath));
+    try {
+      const parent = path.dirname(files.actList);
+      const missing = path.join(parent, "missing", "receipt.json");
+      assert.equal(await capture.read(missing), null);
+      assert.equal(existsSync(path.dirname(missing)), false);
+      await rename(parent, `${parent}-moved`);
+      await symlink(`${parent}-moved`, parent);
+      await assert.rejects(capture.recheck(), /changed directory identity/);
+    } finally { await capture.release(); }
+  });
+});
+
+test.skipIf(process.platform !== "darwin")("capture accepts the macOS system /var spelling", async () => {
+  await withFixture(async ({ files, emit }) => {
+    assert.ok(files.actList.startsWith("/private/var/"));
+    await emit({ phase: "commit_only", actListFile: files.actList.replace(/^\/private\/var\//, "/var/") });
+  });
+});
+
+for (const unsafe of ["unequal", "symlink", "hardlink", "directory", "ancestor", "lock", "active-link", "prompt-link", "receipt-ancestor", "index-ancestor", "missing-receipt-ancestor"])
   test(`capture refuses ${unsafe} without replacing active plan or marker`, async () => {
     await withFixture(async ({ root, emit }) => {
       const old = await emit({ phase: "commit_only" });
@@ -208,6 +231,13 @@ for (const unsafe of ["unequal", "symlink", "hardlink", "directory", "ancestor",
         await rename(file, `${file}-elsewhere`);
         await symlink(`${file}-elsewhere`, file);
       }
+      if (unsafe.endsWith("-ancestor")) {
+        if (unsafe === "receipt-ancestor") assert.equal(pull(old, root).status, 0);
+        const parent = path.join(root, "tmp", unsafe === "index-ancestor" ? "work-order-executions" : "work-order-receipts");
+        await mkdir(parent, { recursive: true });
+        await rename(parent, `${parent}-elsewhere`);
+        await symlink(`${parent}-elsewhere`, parent);
+      }
       const markerDir = path.join(root, "tmp", "gate-delta");
       const markers = await Promise.all((await readdir(markerDir)).map(async (file) => [file, await readFile(path.join(markerDir, file))]));
       await assert.rejects(emit({ phase: "full" }), /fixer emission|archive|regular|link|lock|different/i);
@@ -217,17 +247,22 @@ for (const unsafe of ["unequal", "symlink", "hardlink", "directory", "ancestor",
     });
   });
 
-for (const changed of ["active", "source", "delta", "decision", "prompt", "report", "receipt", "directory"])
+for (const changed of ["active", "source", "delta", "decision", "prompt", "report", "receipt", "directory", "receipt-directory", "index-directory", "missing-receipt-directory"])
   test(`capture detects ${changed} identity changes across authority await`, async () => {
     await withFixture(async ({ root, head, files, emit, recordPath }) => {
       const old = await emit({ phase: "commit_only" });
-      assert.equal(pull(old, root).status, 0);
+      if (changed !== "missing-receipt-directory") assert.equal(pull(old, root).status, 0);
+      else await mkdir(path.join(root, "tmp", "work-order-receipts"));
       await mkdir(path.dirname(old.workOrder.outputRefs[0]), { recursive: true });
       await writeFile(old.workOrder.outputRefs[0], "report");
       const active = await readFile(old.planPath);
       const file = { active: old.planPath, source: files.actList, delta: files.delta, decision: recordPath, prompt: old.promptPath, report: old.workOrder.outputRefs[0], receipt: pullReceiptPath(path.join(root, "tmp"), old.workOrderRef) }[changed];
       await assert.rejects(emit({ phase: "commit_only", fetchPr: async () => {
-        if (changed === "directory") {
+        if (changed.endsWith("-directory")) {
+          const dir = path.join(root, "tmp", changed === "index-directory" ? "work-order-executions" : "work-order-receipts");
+          await rename(dir, `${dir}-moved`);
+          await symlink(`${dir}-moved`, dir);
+        } else if (changed === "directory") {
           const dir = path.dirname(old.planPath);
           await rename(dir, `${dir}-moved`);
           await mkdir(dir);
@@ -415,6 +450,36 @@ test("push authority: a custom --tmp-root still writes the marker under the cano
     await emit({ deltaResult: undefined, phase: "commit_only", tmpRoot: custom });
     assert.deepEqual(JSON.parse(await readFile(path.join(root, "tmp", "gate-delta", `${head}.sequence`), "utf8")), { baselineHead: head, fullGranted: false, branch: "issue-1" });
     assert.equal(existsSync(path.join(custom, "gate-delta", `${head}.sequence`)), false);
+  });
+});
+
+test("custom-root capture authenticates the canonical receipt and preserves the emission index", async () => {
+  await withFixture(async ({ root, wt, emit }) => {
+    const tmp = path.join(root, "tmp");
+    const custom = path.join(path.dirname(root), "custom-tmp");
+    const old = await emit({ phase: "commit_only", tmpRoot: custom });
+    const pulled = spawnSync("node", [PULL, "--ref", old.workOrderRef, "--digest", old.workOrderDigest, "--execution", old.executionIdentity, "--tmp-root", custom], { cwd: wt, encoding: "utf8", env: gitFreeEnv() });
+    assert.equal(pulled.status, 0, pulled.stderr);
+    const receipt = pullReceiptPath(tmp, old.workOrderRef);
+    const original = await readFile(receipt);
+    const active = await readFile(old.planPath);
+    const index = await readFile(executionIndexPath(custom, old.executionIdentity));
+    await writeFile(receipt, JSON.stringify({ ...JSON.parse(original), role: "reviewer" }));
+    await assert.rejects(emit({ phase: "commit_only", tmpRoot: custom }), /original pull receipt failed: role_mismatch/);
+    assert.deepEqual(await readFile(old.planPath), active);
+    await writeFile(receipt, original);
+    await assert.rejects(emit({ phase: "commit_only", tmpRoot: custom, fetchPr: async () => {
+      await writeFile(receipt, original);
+      return { headRefName: "issue-1", headRefOid: old.workOrder.headSha };
+    } }), /changed source identity/);
+    await assert.rejects(emit({ phase: "commit_only", tmpRoot: custom, fetchPr: async () => {
+      await writeFile(executionIndexPath(custom, old.executionIdentity), index);
+      return { headRefName: "issue-1", headRefOid: old.workOrder.headSha };
+    } }), /changed source identity/);
+    await emit({ phase: "commit_only", tmpRoot: custom });
+    assert.deepEqual(await readFile(path.join(path.dirname(old.planPath), old.executionIdentity, "original-fixer-emit-plan.json")), active);
+    assert.deepEqual(await readFile(receipt), original);
+    assert.deepEqual(await readFile(executionIndexPath(custom, old.executionIdentity)), index);
   });
 });
 
