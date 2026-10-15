@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted — 2026-10-15 ([implementation commit](https://github.com/mfittko/dev-loops/commit/3bd692da0cfd9d12d16ae102a82886bc8e602357)) <!-- secret-scan:allow public implementation commit URL, verified Git object; not a credential -->
 
 ## Context
 
