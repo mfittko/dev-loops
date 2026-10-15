@@ -17,7 +17,7 @@ import { classifyValidationCommand } from "@dev-loops/core/loop/validation-class
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
-import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder, locateFixerUnit } from "../../scripts/loop/emit-fixer-work-order.mjs";
+import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder, locateFixerUnit, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
@@ -950,6 +950,62 @@ test("F4: a conflicting rewrite under the same reference is refused", async () =
   });
 });
 
+async function sealBaselineUnit(unit, root) {
+  unit.executionIdentity = nextExecution();
+  unit.promptPath = path.join(path.dirname(unit.planPath), "work-orders", `${unit.executionIdentity}.md`);
+  unit.workOrder.outputRefs = [path.join(path.dirname(unit.planPath), unit.executionIdentity, "fixer-disposition.json")];
+  for (const read of unit.workOrder.requiredReads.filter((read) => ["act-list", "delta-result"].includes(read.kind))) {
+    Object.assign(read, { required: true, bytes: (await readFile(read.path)).length });
+  }
+  unit.workOrderRef = `fixer:${REPO}#${PR}:${unit.workOrder.headSha}:${unit.executionIdentity}`;
+  unit.workOrderDigest = workOrderDigest(unit.workOrder);
+  const text = renderWorkOrder(unit.workOrder);
+  unit.materializationHash = materializationHash(text);
+  await writeFile(unit.promptPath, text);
+  await writeFile(unit.planPath, JSON.stringify(unit));
+  await writeExecutionIndex(path.join(root, "tmp"), unit);
+}
+
+test("review baseline authenticates the actual producer's complete JSON content identity", async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const act = JSON.parse(JSON.stringify(ACT));
+    act[0].extra = JSON.parse('{"sha256":"/absolute/value","bytes":4,"outputRefs":["/tmp/x","relative"],"__proto__":{"promptPath":"/local"}}');
+    await writeFile(files.actList, JSON.stringify(act));
+    const unit = await emit();
+    assert.equal(unit.workOrder.authority.sourceDigest, sha256Hex(act).slice(7));
+    unit.workOrder.authority.reviewBaselineHead = head;
+    await sealBaselineUnit(unit, root);
+    assert.equal(pull(unit, wt).status, 0);
+    assert.equal(hook(wt, path.join(wt, "src/a.mjs")), "allow");
+  });
+});
+
+for (const scenario of ["mainA", "mainB", "linkedA", "linkedB", "equal", "lostB"]) test(`review baseline pull and receipt grant protect ${scenario}`, async () => {
+  await withFixture(async ({ root, wt, head, emit }) => {
+    const unit = await emit({ allowedPaths: ["src"] });
+    assert.equal(Object.hasOwn(unit.workOrder.authority, "reviewBaselineHead"), false, "ordinary producer stays compatible");
+    if (scenario !== "equal") git(wt, "commit", "-q", "--allow-empty", "-m", "candidate B");
+    const candidate = git(wt, "rev-parse", "HEAD");
+    unit.workOrder.headSha = candidate;
+    unit.workOrder.authority.reviewBaselineHead = head;
+    await sealBaselineUnit(unit, root);
+    assert.equal(pull(unit, wt).status, 0);
+    const target = path.join(wt, "src/a.mjs");
+    assert.equal(hook(wt, target), "allow");
+    if (scenario === "lostB") git(wt, "reset", "--hard", head);
+    else {
+      const retiredHead = scenario.endsWith("B") ? candidate : head;
+      const retirement = path.join(scenario.startsWith("linked") ? wt : root, "tmp/retired-gate-rounds", retiredHead, "r1/retirement.json");
+      await mkdir(path.dirname(retirement), { recursive: true });
+      await writeFile(retirement, JSON.stringify({ gate: "draft_gate", retiredAt: new Date(clock).toISOString() }));
+    }
+    assert.equal(hook(wt, target), "deny", "existing receipt loses its current mutation grant");
+    const result = pull(unit, wt);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, scenario === "lostB" ? /no longer contains/ : /retired/);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // F5 — the write hook binds fixer mutation to a current pull's authority
 // ---------------------------------------------------------------------------
@@ -1244,7 +1300,7 @@ for (const check of [false, true]) for (const form of ["unchanged", "empty", "al
   });
 }
 
-for (const route of ["THREAD", "ACT", "CONSTRUCT", "LEGACY"]) test(`historical 44f57175 main producer/pull selects the real feature helper and completes ${route} delivery`, async () => {
+for (const route of ["THREAD", "ACT", "CONSTRUCT", "LEGACY", "AUTHORITY_PULL", "AUTHORITY_GRANT"]) test(`historical 44f57175 main producer/pull selects the real feature helper and completes ${route} delivery`, async () => {
   await withFixture(async ({ root, wt, head, files, writeRecord, emit }) => {
     const historical = "44f57175a215711923fb128d74e9357b33ff95e9";
     const checkout = fileURLToPath(new URL("../../", import.meta.url));
@@ -1302,6 +1358,22 @@ for (const route of ["THREAD", "ACT", "CONSTRUCT", "LEGACY"]) test(`historical 4
       await writeRecord({ candidateHead: candidate, actSetId, invocation: legacy ? 2 : 3, outcome: legacy ? "locally_clear" : "bounded_out", nextStep: legacy ? "push" : "push_to_gate", items: actionableItems.map(({ ref, status }) => ({ ref, status })), ...coverageIdentity });
     }
     let unit = await oldEmitter.emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", ...(route === "THREAD" ? { threadsFile: files.threads } : { actListFile: files.actList, gate: "draft_gate", deltaResult: files.delta }), cwd: wt, executionIdentity: nextExecution(), fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
+    if (route.startsWith("AUTHORITY")) {
+      unit.workOrder.authority.reviewBaselineHead = head;
+      delete unit.workOrder.authority.sourceDigest;
+      await sealBaselineUnit(unit, root);
+      const currentPull = pull(unit, wt);
+      if (route === "AUTHORITY_PULL") {
+        assert.equal(currentPull.status, 1, "current canonical pull refuses unauthenticated authority");
+        return;
+      }
+      const protocol = await import(pathToFileURL(path.join(root, "scripts/github/_work-order-protocol.mjs")).href);
+      const oldPull = await protocol.pullWorkOrder({ ref: unit.workOrderRef, digest: unit.workOrderDigest, execution: unit.executionIdentity, cwd: wt, tmpRoots: [path.join(root, "tmp")], receiptTmpRoot: path.join(root, "tmp") });
+      assert.equal(oldPull.workOrderText, await readFile(unit.promptPath, "utf8"));
+      assert.equal(JSON.parse(await readFile(oldPull.receiptPath)).workOrderDigest, unit.workOrderDigest);
+      assert.equal(hook(wt, path.join(wt, "src/a.mjs")), "deny", "current grant independently refuses a genuine historical reader receipt");
+      return;
+    }
     let preservedLegacy = [];
     if (legacy) {
       // Pull through the original producer's real protocol before replacing its canonical pointer.

@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
+import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
@@ -375,13 +376,20 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots }) {
   if (newest.workOrderRef !== ref) return { stale: `fixer ref ${ref} was superseded by ${newest.workOrderRef}` };
   const order = plan.workOrder ?? {};
   const changed = [];
+  const bytesByRead = new Map();
   for (const read of order.requiredReads ?? []) {
     const bytes = await readFile(read.path).catch(() => null);
+    bytesByRead.set(read, bytes);
     if (bytes === null || sha256(bytes) !== read.sha256) changed.push(read.kind);
   }
+  let baseline;
+  try { baseline = assertFixerReviewBaseline(order, bytesByRead); }
+  catch (error) { return { stale: error.message }; }
   let retired = null;
   if (order.source === "act-list") {
-    for (const tmpRoot of tmpRoots) retired ??= await findRetirementAfter(tmpRoot, order.gate, headSha, emittedAt(executionIdentity));
+    for (const head of new Set([headSha, ...(baseline ? [baseline.reviewBaselineHead] : [])])) {
+      for (const tmpRoot of tmpRoots) retired ??= await findRetirementAfter(tmpRoot, order.gate, head, emittedAt(executionIdentity));
+    }
   }
   const branch = order.mutationAuthority?.branch;
   let contained = false;

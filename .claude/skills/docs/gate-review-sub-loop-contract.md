@@ -1270,6 +1270,17 @@ each binding is `{ threadId, fingerprints }`, and origin is the actual preceding
 with `verifyPulledResult`, original baseline/ref, repo/PR/branch/phase and real canonical plan path.
 Derive its output only from that plan directory and execution; never reload or re-pull the old plan.
 Its actual filled handback must name the fixing commit and exactly the source coverage identity.
+An own `authority.reviewBaselineHead` is optional, semantic authority for a full ACT fixer only.
+When supplied it must be exactly 40 lowercase hex characters and equal the Delta reviewed head.
+Before canonical pull, mutation grant or completion admission, the shared validator requires
+exactly one required ACT and Delta read, their declared byte lengths and raw lowercase SHA-256,
+and both `sourceDigest` and `deltaResultDigest` over complete parsed JSON with sorted object keys.
+Content identity preserves arrays, every key (including `__proto__`) and absolute strings;
+work-order local-material exclusions do not apply. Null, malformed, partial, duplicate or
+unauthenticated supplied authority refuses. Pull and grant retirement checks retain each distinct
+B/A across their existing roots and emission timestamps; branch containment always checks B.
+An absent field retains legacy admission without new ACT or history reads. The ordinary producer
+still omits it; issue 2786 enables populated emission after this consumer contract lands.
 The full order's head B remains separate from the authenticated Delta's original reviewed baseline A:
 use A for the ACT sequence, clearing record and origin ref, and prove both A and the fixing commit
 are contained by live B. Require whole-Delta semantic authority and matching raw coverage identities

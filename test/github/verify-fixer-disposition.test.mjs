@@ -926,6 +926,11 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   const dispositions = threadBindings.map(({ threadId, fingerprints }) => ({ threadId, fixingCommitSha: fixing, disposition: actList.some((item, index) => fingerprints.includes(item.fingerprint) && isResidual(index)) ? "deferred" : "tackled" }));
   const fixerPlan = await deliver(repoRoot, dispositions, { actList, delta, decision, orderHead: candidate, handoffText: JSON.stringify({ headSha: candidate, dispositions, siteCoverage }) });
   const plan = JSON.parse(await readFile(fixerPlan, "utf8"));
+  if (!settings.legacy) {
+    plan.workOrder.source = "act-list";
+    plan.workOrder.authority.reviewBaselineHead = baseline;
+    for (const read of plan.workOrder.requiredReads) Object.assign(read, { required: true, bytes: (await readFile(read.path)).length });
+  }
   plan.workOrderRef = `fixer:${REPO}#${PR}:${candidate}:${plan.executionIdentity}`;
   const sourcePath = path.join(path.dirname(fixerPlan), "completion.json");
   const originPath = path.join(path.dirname(fixerPlan), origin.executionIdentity, "fixer-disposition.json");
@@ -950,6 +955,24 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   const depsFor = (extra = []) => runtime([compareEntry(baseline, "ahead", candidate), compareEntry(fixing, "ahead", candidate), liveHeadEntry(candidate), threadsCallEntry(nodes), userEntry, ...extra], repoRoot, { live: false });
   return { fixerPlan, plan, source, sourceRead, sourcePath, originPath, baseline, fixing, nodes, dispositions, seal, depsFor };
 }
+
+for (const mode of ["normal", "check", "construct"]) for (const defect of ["sourceDigest", "deltaResultDigest", "optional", "duplicate", "length", "baseline"]) test(`completion ${mode} refuses supplied review baseline ${defect} before optional authority branches`, async () => {
+  await withRepoRoot(async (root) => {
+    const f = await completionFixture(root);
+    const order = f.plan.workOrder;
+    if (["sourceDigest", "deltaResultDigest"].includes(defect)) delete order.authority[defect];
+    if (defect === "optional") order.requiredReads[0].required = false;
+    if (defect === "duplicate") order.requiredReads.push({ ...order.requiredReads[0] });
+    if (defect === "length") order.requiredReads[0].bytes++;
+    if (defect === "baseline") order.authority.reviewBaselineHead = "c".repeat(40);
+    await f.seal();
+    const { deps, calls } = f.depsFor();
+    if (mode === "construct") await rm(order.outputRefs[0]);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.fixerPlan, tmpRoot: "tmp", check: mode === "check", construct: mode === "construct" }, deps), /review baseline/);
+    assert.equal(calls.length, 0);
+    assert.equal(existsSync(path.join(root, "tmp/gate-findings")), false);
+  });
+});
 
 const LEGACY_PATTERN = "readValidationEvidence|requireBinding|validationResultsPath|prefix-file";
 const LEGACY_FILES = [
@@ -997,7 +1020,7 @@ async function legacyFixture(repoRoot) {
     ...LEGACY_FORMS.map((site) => ({ site, kind: "input_form", status: "fixed", reason: "", test: "test/github/validation-evidence.test.mjs: historical input form" })),
     ...LEGACY_FILES.map((site, index) => ({ site, kind: "site", status: index ? "skipped" : "fixed", reason: index ? "shared reader; no direct edit" : "", ...index ? {} : { test: "historical reader regression" } })),
   ] }];
-  const f = await completionFixture(repoRoot, "resolved", { baseline, candidate, fixing: candidate, siteCoverage: coverage,
+  const f = await completionFixture(repoRoot, "resolved", { legacy: true, baseline, candidate, fixing: candidate, siteCoverage: coverage,
     actList: [{ ...ACT_LIST[0], siteQuery: LEGACY_PATTERN, acceptedForms: LEGACY_FORMS.slice(0, 3), rejectedForms: LEGACY_FORMS.slice(3) }],
     threadBindings: [{ threadId: "PRRT_MERGED", fingerprints: [ACT_FP] }] });
   const order = f.plan.workOrder;
@@ -1297,6 +1320,7 @@ test("new bound completion matches authenticated origin and exact report bytes i
       const value = { ...delta, ...resultBinding }, bytes = JSON.stringify(value);
       await writeFile(deltaRead.path, bytes);
       deltaRead.sha256 = sha256Hex(Buffer.from(bytes)).slice(7);
+      deltaRead.bytes = Buffer.byteLength(bytes);
       f.plan.workOrder.authority.deltaResultDigest = sha256Hex(value).slice(7);
       await writeFile(decisionPath, JSON.stringify({ ...decision, ...decisionBinding }));
       await f.seal();
@@ -1501,6 +1525,7 @@ for (const defect of ["partial", "duplicateRead", "optionalRead", "semantic", "b
         await writeFile(file, JSON.stringify(value));
         if (defect === "deltaCoverage") {
           f.plan.workOrder.requiredReads.find((read) => read.kind === "delta-result").sha256 = createHash("sha256").update(JSON.stringify(value)).digest("hex");
+          f.plan.workOrder.requiredReads.find((read) => read.kind === "delta-result").bytes = Buffer.byteLength(JSON.stringify(value));
           f.plan.workOrder.authority.deltaResultDigest = sha256Hex(value).slice(7);
           f.plan.workOrderDigest = workOrderDigest(f.plan.workOrder); current.workOrderDigest = f.plan.workOrderDigest;
           await writeFile(f.fixerPlan, JSON.stringify(f.plan)); await writeFile(currentReceiptPath, JSON.stringify(current));
