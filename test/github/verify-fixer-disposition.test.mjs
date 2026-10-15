@@ -1115,7 +1115,7 @@ for (const mode of ["construct", "normal", "check"]) for (const defect of [
   "absent", "null", "partial", "originTriple", "archiveBytes", "suffix", "promptHash", "receiptMissing", "receiptRole", "receiptExecution", "receiptPath", "receiptBranch", "receiptPhase", "receiptHash",
   "oldRole", "oldSource", "oldBaseline", "oldBranch", "oldTarget", "oldExecution", "oldDuplicateRead", "oldReadRequired", "oldReadBytes", "oldReadHash", "oldAuthority", "currentReadRequired", "currentReadBytes", "currentDuplicateRead",
   "deltaHash", "decisionHash", "deltaProtocol", "decisionProtocol", "deltaOrigin", "decisionHandback", "decisionBytes", "handbackBytes", "rawKind", "rawEmptyReason", "rawTest", "rawNormalized",
-  "missingFile", "extraFile", "duplicateFile", "missingForm", "extraForm", "duplicateForm", "formTest", "skipReason", "override", "fixing", "members", "foreignRoot", "replyOnly", "unsupportedQuery", "shellQuery", "invalidERE", "retired", "branch", "tree", "queryDigest", "candidate", "status", "bounded",
+  "missingFile", "extraFile", "duplicateFile", "missingForm", "extraForm", "duplicateForm", "formTest", "skipReason", "override", "fixing", "members", "foreignRoot", "replyOnly", "unsupportedQuery", "shellQuery", "invalidERE", "retired", "retirementNotDirectory", "branch", "tree", "queryDigest", "candidate", "status", "bounded",
 ].filter((defect) => mode !== "construct" || defect !== "override")) test(`legacy authentication refuses ${defect} before side effects (${mode})`, async () => {
   await withRepoRoot(async (root) => {
     const f = await legacyFixture(root);
@@ -1224,6 +1224,11 @@ for (const mode of ["construct", "normal", "check"]) for (const defect of [
       await mkdir(path.dirname(retired), { recursive: true });
       await writeFile(retired, JSON.stringify({ gate: "draft_gate", retiredAt: new Date().toISOString() }));
     }
+    if (defect === "retirementNotDirectory") {
+      const retired = path.join(root, "tmp", "retired-gate-rounds", f.baseline);
+      await mkdir(path.dirname(retired), { recursive: true });
+      await writeFile(retired, "not a directory");
+    }
     if (defect === "branch") f.git("update-ref", "refs/heads/issue-1", f.baseline);
     if (defect === "tree") legacy.treeOid = "0".repeat(40);
     if (defect === "queryDigest") legacy.queryOutputBytesDigest = "0".repeat(64);
@@ -1232,7 +1237,7 @@ for (const mode of ["construct", "normal", "check"]) for (const defect of [
     const mock = f.depsFor([compareEntry(f.candidate, "identical", f.candidate)]);
     const before = existsSync(f.plan.workOrder.outputRefs[0]) ? await readFile(f.plan.workOrder.outputRefs[0], "utf8") : null;
     await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan, construct: mode === "construct", check: mode === "check" }, mock.deps),
-      ["unsupportedQuery", "shellQuery", "invalidERE"].includes(defect) ? /unsupported legacy query scope or literal/ : undefined);
+      defect === "retirementNotDirectory" ? { code: "ENOTDIR" } : ["unsupportedQuery", "shellQuery", "invalidERE"].includes(defect) ? /unsupported legacy query scope or literal/ : undefined);
     assert.deepEqual(await checkpointFiles(root), []);
     assert.equal(hasPost(mock.calls), false);
     assert.equal(existsSync(f.plan.workOrder.outputRefs[0]) ? await readFile(f.plan.workOrder.outputRefs[0], "utf8") : null, before);
