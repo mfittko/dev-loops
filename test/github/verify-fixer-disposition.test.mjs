@@ -956,7 +956,7 @@ test("typed completion CLI rejects construct/check together", () => {
   assert.throws(() => parseVerifyFixerDispositionCliArgs([...args, "--check"]), /mutually exclusive/);
 });
 
-for (const check of [false, true]) for (const defect of ["partial", "coverage", "fixing", "membership", "bytes", "origin", "delta"]) test(`typed completion normal/check retains optional authentication (${check}, ${defect})`, async () => {
+for (const check of [false, true]) for (const defect of ["partial", "coverage", "dispositionCoverage", "fixing", "membership", "bytes", "origin", "delta"]) test(`typed completion normal/check retains optional authentication (${check}, ${defect})`, async () => {
   await withRepoRoot(async (repoRoot) => {
     const f = await completionFixture(repoRoot);
     if (defect === "partial") {
@@ -972,6 +972,10 @@ for (const check of [false, true]) for (const defect of ["partial", "coverage", 
     const output = f.plan.workOrder.outputRefs[0];
     const raw = JSON.parse(await readFile(output, "utf8"));
     if (defect === "coverage") raw.siteCoverage[0].sites[0].test = "invented test";
+    if (defect === "dispositionCoverage") Object.assign(raw.dispositions[0], {
+      ...structuredClone(raw.siteCoverage[0]),
+      sites: raw.siteCoverage[0].sites.map((site) => ({ ...site, test: "invented test" })),
+    });
     if (defect === "fixing") raw.dispositions[0].fixingCommitSha = FIX_SHA;
     await writeFile(output, JSON.stringify(raw));
     if (defect === "bytes") await writeFile(f.sourcePath, `${await readFile(f.sourcePath, "utf8")} `);
@@ -979,9 +983,37 @@ for (const check of [false, true]) for (const defect of ["partial", "coverage", 
     if (defect === "delta") await rm(path.join(repoRoot, "tmp", "gate-delta", `${f.baseline}.json`));
     const before = [await readFile(output, "utf8"), (await stat(output)).mtimeMs];
     const mock = f.depsFor();
-    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.fixerPlan, check }, mock.deps));
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.fixerPlan, check }, mock.deps),
+      defect === "dispositionCoverage" ? /disposition-level coverage cannot override authenticated completion input/ : undefined);
     assert.deepEqual([await readFile(output, "utf8"), (await stat(output)).mtimeMs], before);
     assert.deepEqual(await checkpointFiles(repoRoot), []);
+    assert.equal(hasPost(mock.calls), false);
+  });
+});
+
+for (const check of [false, true]) test(`typed completion accepts scalar fingerprint hints without coverage overrides (${check})`, async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const f = await completionFixture(repoRoot);
+    const output = f.plan.workOrder.outputRefs[0];
+    const raw = JSON.parse(await readFile(output, "utf8"));
+    raw.dispositions[1].fingerprint = ACT_FP;
+    await writeFile(output, JSON.stringify(raw));
+    const mock = f.depsFor([compareEntry(f.fixing, "ahead")]);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.fixerPlan, check }, mock.deps);
+    assert.equal(result.complete, true);
+    assert.equal(hasPost(mock.calls), false);
+  });
+});
+
+for (const check of [false, true]) test(`legacy ACT retains disposition-level coverage without optional completion authority (${check})`, async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const actList = [{ ...ACT_LIST[0], siteQuery: "query", acceptedForms: ["--flag"] }];
+    const dispositions = [{ threadId: "PRRT_LEGACY", fixingCommitSha: FIX_SHA, disposition: "deferred", fingerprint: ACT_FP,
+      returnedSites: ["--flag"], sites: [{ site: "--flag", kind: "input_form", status: "fixed", test: "legacy form test" }] }];
+    const fixerPlan = await deliver(repoRoot, dispositions, { actList });
+    const mock = runtime([threadsCallEntry([actThread("PRRT_LEGACY", [gateComment("c1", 1)])]), userEntry], repoRoot);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, mock.deps);
+    assert.equal(result.complete, true);
     assert.equal(hasPost(mock.calls), false);
   });
 });

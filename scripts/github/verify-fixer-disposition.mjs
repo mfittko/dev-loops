@@ -389,10 +389,9 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
         }
       }
     }
-    const coverage = [
-      ...(handoff.siteCoverage ?? []),
-      ...handoff.dispositions.filter((entry) => entry.fingerprint && (entry.sites || entry.returnedSites || entry.noSitesReason)),
-    ];
+    const dispositionCoverage = handoff.dispositions.filter((entry) => entry.fingerprint && (entry.sites || entry.returnedSites || entry.noSitesReason));
+    if (completion && dispositionCoverage.length) throw new Error("disposition-level coverage cannot override authenticated completion input");
+    const coverage = [...(handoff.siteCoverage ?? []), ...dispositionCoverage];
     const gaps = siteCoverageGaps(toDeltaActItems(actList), coverage, residualRefs);
     if (gaps.length > 0) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: ${gaps.join("; ")}`);
   }
