@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "bun:test";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { authenticateOriginalPlan } from "../../scripts/github/_fixer-emission-evidence.mjs";
 import { decideFixerWriteGuard } from "../../.claude/hooks/_hook-decisions.mjs";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
@@ -135,6 +136,40 @@ for (const phase of ["commit_only", "full"]) test(`capture preserves genuine ${p
     assert.equal((await locateFixerUnit({ ref: old.workOrderRef, cwd: wt, tmpRoots: [tmp] })).stale.includes("superseded"), true);
     assert.equal(pull(old, root).status, 1, "archived execution cannot be pulled again");
     assert.equal(hook(wt, path.join(wt, "src/a.mjs")), "deny", "superseded original receipt cannot grant a write");
+  });
+});
+
+for (const field of ["receiptTmpRoot", "role"]) test(`capture ignores plan ${field} override and requires the canonical fixer receipt`, async () => {
+  await withFixture(async ({ root, emit }) => {
+    const old = await emit({ phase: "commit_only" });
+    assert.equal(pull(old, root).status, 0);
+    const tmp = path.join(root, "tmp");
+    const receiptPath = pullReceiptPath(tmp, old.workOrderRef);
+    const genuine = await readFile(receiptPath);
+    const receipt = JSON.parse(genuine);
+    const alternate = path.join(root, "alternate-receipts");
+    const plan = { ...JSON.parse(await readFile(old.planPath)), [field]: field === "role" ? "reviewer" : alternate };
+    if (field === "receiptTmpRoot") {
+      const alternatePath = pullReceiptPath(alternate, old.workOrderRef);
+      await mkdir(path.dirname(alternatePath), { recursive: true });
+      await writeFile(alternatePath, genuine);
+      receipt.workOrderDigest = "sha256:" + "0".repeat(64);
+    } else receipt.role = "reviewer";
+    await writeFile(receiptPath, JSON.stringify(receipt));
+    await writeFile(old.planPath, JSON.stringify(plan));
+    const active = await readFile(old.planPath);
+    const markerDir = path.join(tmp, "gate-delta");
+    const markers = await Promise.all((await readdir(markerDir)).map(async (file) => [file, await readFile(path.join(markerDir, file))]));
+    const authenticate = () => authenticateOriginalPlan({ plan, canonical: old.planPath, receiptTmpRoot: tmp, requireReceipt: true });
+    await assert.rejects(authenticate(), /original pull receipt failed: (digest|role)_mismatch/);
+    await assert.rejects(emit({ phase: "commit_only" }), /original pull receipt failed: (digest|role)_mismatch/);
+    assert.deepEqual(await readFile(old.planPath), active);
+    for (const [file, bytes] of markers) assert.deepEqual(await readFile(path.join(markerDir, file)), bytes);
+    await writeFile(receiptPath, genuine);
+    assert.deepEqual(await authenticate(), plan.workOrder);
+    await emit({ phase: "commit_only" });
+    assert.deepEqual(await readFile(path.join(path.dirname(old.planPath), old.executionIdentity, "original-fixer-emit-plan.json")), active);
+    assert.deepEqual(await readFile(receiptPath), genuine);
   });
 });
 

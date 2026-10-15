@@ -23,7 +23,7 @@ export async function authenticateOriginalPlan({ plan, canonical, receiptTmpRoot
   if (!prompt.subarray(-suffix.length).equals(suffix)) refuse("historical complete Work order JSON suffix differs");
   const receiptBytes = await read(pullReceiptPath(receiptTmpRoot, workOrderRef)).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
   if (!receiptBytes && !requireReceipt) return order;
-  const pulled = await verifyPullReceipt({ receiptTmpRoot, role: "fixer", ...plan });
+  const pulled = await verifyPullReceipt({ receiptTmpRoot, role: "fixer", workOrderRef, workOrderDigest: digest, executionIdentity });
   if (!pulled.ok) refuse(`original pull receipt failed: ${pulled.reason}`);
   const subject = pulled.receipt.subject;
   if (subject?.repo !== order.target.repo || subject.pr !== order.target.pr || subject.headSha !== order.headSha
