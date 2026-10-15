@@ -28,6 +28,7 @@ import { deltaCoverageBinding, isDeltaResultFresh, startDeltaSequence, toDeltaAc
 import { DELTA_CLEARING_NEXT_STEPS, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
+import { revalidateLegacyCompletion } from "./_legacy-fixer-revalidation.mjs";
 
 const USAGE = `Usage: verify-fixer-disposition.mjs --repo <owner/name> --pr <number> --head-sha <sha> --fixer-plan <path> [--tmp-root <path>]
 Enforce GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: verify every review thread a fixer
@@ -348,9 +349,6 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       }
       if (completion) {
         const digest = sha256Hex(completion.siteCoverage).slice(7);
-        if (delta.siteCoverageDigest !== digest || decision.siteCoverageDigest !== digest) {
-          throw new Error("completion coverage differs from the Delta result or clearing decision identity");
-        }
         const origin = completion.origin;
         if (!origin || typeof origin.executionIdentity !== "string" || !EXECUTION_IDENTITY_RE.test(origin.executionIdentity)
           || !/^f\d+-[a-f0-9]{8}$/.test(origin.executionIdentity) || origin.executionIdentity === plan.executionIdentity
@@ -373,6 +371,11 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
         normalizeFixerDispositionHandoff(priorRaw, { ruleIds: loadKnownRuleIds() });
         if (priorRaw.headSha !== completion.fixingCommitSha || sha256Hex(priorRaw.siteCoverage).slice(7) !== digest) {
           throw new Error("completion fixing commit/coverage differs from the actual prior filled handback");
+        }
+        if (Object.hasOwn(completion, "legacyRevalidation")) {
+          await revalidateLegacyCompletion({ completion, plan, planPath, priorBytes, actList, delta, decision, receiptTmpRoot, repoRoot });
+        } else if (delta.siteCoverageDigest !== digest || decision.siteCoverageDigest !== digest) {
+          throw new Error("completion coverage differs from the Delta result or clearing decision identity");
         }
         if (deltaCoverageBinding(delta) || deltaCoverageBinding(decision)) {
           const expected = { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: digest, handbackBytesDigest: sha256Hex(priorBytes).slice(7), origin };
