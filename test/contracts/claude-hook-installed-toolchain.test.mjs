@@ -114,7 +114,7 @@ test("installed hook keeps all helper targets, consumer config, overrides and so
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-for (const kind of ["package", "launcher", "helper", "override", "startup", "unreadable-import", "syntax", "signal", "spawn", "evidence", "override-evidence", "json-evidence"]) {
+for (const kind of ["package", "launcher", "helper", "override", "startup", "unknown-extension", "directory-import", "unreadable-import", "syntax", "signal", "spawn", "evidence", "override-evidence", "json-evidence"]) {
   // Root bypasses the unreadable-file permission fixture.
   test.skipIf(kind === "unreadable-import" && process.getuid?.() === 0)(`installed hook distinguishes ${kind} failure from missing gate evidence`, async () => {
     const f = await installedFixture();
@@ -125,6 +125,14 @@ for (const kind of ["package", "launcher", "helper", "override", "startup", "unr
       if (kind === "launcher") fs.rmSync(path.join(f.plugin, "bin/dev-loops-run"));
       if (kind === "helper") fs.rmSync(path.join(f.pkg, ready));
       if (kind === "startup") f.write(ready, "import './missing-runtime.mjs';");
+      if (kind === "unknown-extension") {
+        f.write(ready, "import './runtime.unknown';");
+        f.write("scripts/loop/runtime.unknown", "export {};\n");
+      }
+      if (kind === "directory-import") {
+        f.write(ready, "import './runtime/';");
+        f.write("scripts/loop/runtime/index.mjs", "export {};\n");
+      }
       if (kind === "unreadable-import") {
         f.write(ready, "import './unreadable-runtime.mjs';");
         f.write("scripts/loop/unreadable-runtime.mjs", "export {};\n");
@@ -140,6 +148,8 @@ for (const kind of ["package", "launcher", "helper", "override", "startup", "unr
       const reason = f.run(kind === "spawn" ? "merge" : "ready", ["override", "signal", "override-evidence"].includes(kind) ? { DEVLOOPS_PRE_PR_READY_GATE_SCRIPT: override } : {});
       if (kind.endsWith("evidence")) { assert.match(reason, /no visible clean draft_gate/); assert.doesNotMatch(reason, /could not run/); }
       else { assert.match(reason, /could not run/); assert.ok(reason.includes(kind === "spawn" ? merge : ready)); assert.ok(reason.includes(f.consumer)); assert.ok(reason.includes(["override", "signal"].includes(kind) ? override : "dev-loops-run")); }
+      if (kind === "unknown-extension") assert.match(reason, /TypeError \[ERR_UNKNOWN_FILE_EXTENSION\]: Unknown file extension/);
+      if (kind === "directory-import") assert.match(reason, /Error \[ERR_UNSUPPORTED_DIR_IMPORT\]: Directory import/);
       if (kind === "unreadable-import") { assert.match(reason, /^.*Error: (?:EACCES|EPERM):/m); assert.match(reason, /unreadable-runtime\.mjs/); }
     } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
   });
