@@ -1069,7 +1069,9 @@ for (const route of ["THREAD", "ACT", "CONSTRUCT", "LEGACY"]) test(`historical 4
       const archivePath = path.join(path.dirname(unit.planPath), unit.executionIdentity, "original-fixer-emit-plan.json");
       await mkdir(path.dirname(archivePath), { recursive: true });
       await writeFile(archivePath, await readFile(unit.planPath));
-      const query = execFileSync("git", ["--no-pager", "-c", "color.ui=never", "grep", "-n", "-E", pattern, candidate, "--"], { cwd: wt, env: { ...gitFreeEnv(), GIT_NO_REPLACE_OBJECTS: "1" } });
+      git(wt, "config", "grep.column", "true");
+      const query = execFileSync("git", ["--no-pager", "-c", "color.ui=never", "grep", "-n", "-E", pattern, candidate, "--"], { cwd: wt, env: { ...gitFreeEnv(), GIT_NO_REPLACE_OBJECTS: "1",
+        GIT_CONFIG_PARAMETERS: undefined, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "grep.column", GIT_CONFIG_VALUE_0: "false" } });
       completion.legacyRevalidation = { origin: "legacy_revalidated", originalFull: { workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity, planBytesDigest: sha256Hex(await readFile(archivePath)).slice(7) },
         handbackBytesDigest: sha256Hex(await readFile(path.join(path.dirname(unit.planPath), completion.origin.executionIdentity, "fixer-disposition.json"))).slice(7),
         clearingDecisionBytesDigest: sha256Hex(await readFile(path.join(root, "tmp/gate-delta", `${head}.json`))).slice(7), treeOid: git(wt, "rev-parse", `${candidate}^{tree}`), queryOutputBytesDigest: sha256Hex(query).slice(7) };
