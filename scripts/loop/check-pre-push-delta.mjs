@@ -76,20 +76,34 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
 
 Output (stdout, JSON):
   without --result: { "ok": true, "input": { ..., "resultShape": { ... } } }
-                    input.resultShape is the template the reviewer fills in.
+                    Fill input.resultShape; on ACT copy its binding below unchanged.
 
 Result JSON (--result, DeltaPrePushReviewResult):
+  Base shape (complete THREAD shape; genuine legacy results remain readable):
   { "reviewBaselineHead": "<sha>", "candidateHead": "<sha>", "actSetId": "<input.actSetId>",
     "actionableItems": [{ "ref", "status": "resolved|not_resolved|cannot_verify", "evidence": ["..."] }],
     "newFindings": [{ "severity", "summary", "evidence": ["..."], "residueOf"?, "site"?, "skipReason"? }],
     "widenedReads": [{ "path": "...", "reason": "..." }],   (objects, not strings; [] when none)
     "outcome": "locally_clear|needs_fix|bounded_out" }
 
+  ACT results additionally require this binding from input.resultShape:
+    { "coverageProtocol": "pulled_commit_only_v1",
+      "siteCoverageDigest": "<raw semantic coverage SHA-256>",
+      "handbackBytesDigest": "<exact handback bytes SHA-256>",
+      "origin": { "workOrderRef": "<pulled fixer ref>", "workOrderDigest": "<sha256:...>",
+                  "executionIdentity": "<pulled fixer execution>" } }
+  Keep these four fields at the result's top level, copied unchanged; never reconstruct them.
+  THREAD results use only the base shape and cannot claim this ACT binding.
+
   with --result:    also writes <tmp-root>/gate-delta/<baseline>.json { reviewBaselineHead, candidateHead, actSetId,
-                    invocation, outcome, nextStep, items: [{ ref, status }] }.
+                    invocation, outcome, nextStep, items: [{ ref, status }],
+                    coverageProtocol, siteCoverageDigest, handbackBytesDigest, origin } (last four ACT-only).
                     { "ok": true, "outcome": "locally_clear|needs_fix|bounded_out",
                       "nextStep": "push|fix_and_rereview|rereview_current_head|push_to_gate",
-                      "locallyClear": bool, "fresh": bool, "errors": [...] }
+                      "locallyClear": bool, "fresh": bool, "errors": [...],
+                      "coverageProtocol", "siteCoverageDigest", "handbackBytesDigest", "origin" }
+                    The last four stdout fields are ACT-only and match the result binding above.
+                    THREAD decisions/stdout and genuine legacy records omit the ACT binding.
 
 ${JQ_OUTPUT_USAGE}
 
