@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, realpathSync } from "node:fs";
-import { cp, link, mkdir, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { cp, link, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "bun:test";
@@ -480,6 +480,33 @@ test("custom-root capture authenticates the canonical receipt and preserves the 
     assert.deepEqual(await readFile(path.join(path.dirname(old.planPath), old.executionIdentity, "original-fixer-emit-plan.json")), active);
     assert.deepEqual(await readFile(receipt), original);
     assert.deepEqual(await readFile(executionIndexPath(custom, old.executionIdentity)), index);
+  });
+});
+
+for (const alias of ["tmp", "var"]) test.skipIf(process.platform !== "darwin")(`custom /${alias} emission root preserves genuine pulled evidence on replacement`, async () => {
+  await withFixture(async ({ root, wt, emit }) => {
+    const custom = alias === "tmp" ? await mkdtemp("/tmp/dev-loops-fixer-alias-")
+      : path.join(path.dirname(root), "custom-tmp").replace(/^\/private\/var\//, "/var/");
+    try {
+      assert.ok(custom.startsWith(`/${alias}/`));
+      const old = await emit({ phase: "commit_only", tmpRoot: custom });
+      const pulled = spawnSync("node", [PULL, "--ref", old.workOrderRef, "--digest", old.workOrderDigest, "--execution", old.executionIdentity, "--tmp-root", custom], { cwd: wt, encoding: "utf8", env: gitFreeEnv() });
+      assert.equal(pulled.status, 0, pulled.stderr);
+      const preserved = [old.planPath, old.promptPath, pullReceiptPath(path.join(root, "tmp"), old.workOrderRef), executionIndexPath(custom, old.executionIdentity)];
+      const before = await Promise.all(preserved.map((file) => readFile(file)));
+      assert.equal(JSON.parse(before[2]).subject.planPath, old.planPath);
+      await emit({ phase: "commit_only", tmpRoot: custom });
+      assert.deepEqual(await readFile(path.join(path.dirname(old.planPath), old.executionIdentity, "original-fixer-emit-plan.json")), before[0]);
+      assert.deepEqual(await Promise.all(preserved.slice(1).map((file) => readFile(file))), before.slice(1));
+    } finally { await rm(custom, { recursive: true, force: true }); }
+  });
+});
+
+test("custom emission root refuses a non-system directory alias", async () => {
+  await withFixture(async ({ root, emit }) => {
+    const custom = path.join(path.dirname(root), "custom-tmp");
+    await symlink(path.join(root, "tmp"), custom);
+    await assert.rejects(emit({ phase: "commit_only", tmpRoot: custom }), /unsafe directory alias/);
   });
 });
 

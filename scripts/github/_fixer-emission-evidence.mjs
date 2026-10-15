@@ -8,6 +8,7 @@ const refuse = (reason) => { throw new Error(`fixer emission evidence: ${reason}
 const same = (a, b) => a?.dev === b?.dev && a?.ino === b?.ino;
 const unchanged = (a, b) => same(a, b) && a?.size === b?.size && a?.mtimeMs === b?.mtimeMs && a?.ctimeMs === b?.ctimeMs;
 const optionalStat = (file) => lstat(file).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+const systemPath = (file) => process.platform === "darwin" ? file.replace(/^\/(var|tmp)(?=\/|$)/, "/private/$1") : file;
 
 // Historical prose is authenticated by its actual pull, never by the current renderer.
 export async function authenticateOriginalPlan({ plan, canonical, receiptTmpRoot, emissionTmpRoot = receiptTmpRoot, requireReceipt = false, read = readFile }) {
@@ -28,7 +29,7 @@ export async function authenticateOriginalPlan({ plan, canonical, receiptTmpRoot
   const subject = pulled.receipt.subject;
   if (subject?.repo !== order.target.repo || subject.pr !== order.target.pr || subject.headSha !== order.headSha
     || subject.branch !== order.mutationAuthority?.branch || subject.phase !== order.phase
-    || typeof subject.planPath !== "string" || await realpath(subject.planPath) !== canonical) refuse("original receipt subject is not the original canonical plan");
+    || typeof subject.planPath !== "string" || await realpath(subject.planPath) !== systemPath(canonical)) refuse("original receipt subject is not the original canonical plan");
   if (materializationHash(prompt) !== pulled.receipt.materializationHash) refuse("original historical materialization hash mismatch");
   return order;
 }
@@ -39,7 +40,7 @@ export async function beginFixerEmission(dir) {
   const files = new Map();
   async function directory(target, create = true) {
     // macOS system aliases are stable; mutable evidence ancestry must stay lexical.
-    if (process.platform === "darwin") target = target.replace(/^\/(var|tmp)(?=\/|$)/, "/private/$1");
+    target = systemPath(target);
     if (directories.has(target)) {
       if (!same(directories.get(target), await optionalStat(target))) refuse(`changed directory identity: ${target}`);
       return;
