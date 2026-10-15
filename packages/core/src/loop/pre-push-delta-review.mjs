@@ -20,7 +20,9 @@ import { sha256Hex } from "./review-dispatch-plan.mjs";
 export function deltaCoverageBinding(value, expected) {
   if (!expected && !["coverageProtocol", "handbackBytesDigest", "origin"].some((key) => Object.hasOwn(value ?? {}, key))) return null;
   const { coverageProtocol, siteCoverageDigest, handbackBytesDigest, origin } = value ?? {};
-  if (coverageProtocol !== "pulled_commit_only_v1" || !/^[a-f0-9]{64}$/.test(siteCoverageDigest ?? "")
+  if (coverageProtocol !== "pulled_commit_only_v1"
+    || ![siteCoverageDigest, handbackBytesDigest, origin?.workOrderDigest, origin?.executionIdentity, origin?.workOrderRef].every((field) => typeof field === "string")
+    || !/^[a-f0-9]{64}$/.test(siteCoverageDigest ?? "")
     || !/^[a-f0-9]{64}$/.test(handbackBytesDigest ?? "") || !/^sha256:[a-f0-9]{64}$/.test(origin?.workOrderDigest ?? "")
     || !/^f\d+-[a-f0-9]{8}$/.test(origin?.executionIdentity ?? "")
     || !/^fixer:[^/\s#]+\/[^/\s#]+#[1-9]\d*:(?:[a-f0-9]{40}|[a-f0-9]{64}):f\d+-[a-f0-9]{8}$/.test(origin?.workOrderRef ?? "")

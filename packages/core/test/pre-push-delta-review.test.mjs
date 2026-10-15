@@ -17,10 +17,32 @@ import {
 import { consolidateFanin } from "../src/loop/gate-fanin.mjs";
 import { sha256Hex } from "../src/loop/review-dispatch-plan.mjs";
 
+function coverageBinding() {
+  return { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex([]).slice(7), handbackBytesDigest: "a".repeat(64),
+    origin: { workOrderRef: `fixer:o/r#7:${"a".repeat(40)}:f1-00000000`, workOrderDigest: `sha256:${"b".repeat(64)}`, executionIdentity: "f1-00000000" } };
+}
+
+test("membership-only accepts a complete string coverage binding", () => {
+  assert.deepEqual(validateDeltaResult({ ...result(), ...coverageBinding() }, { sequence: sequence(), membershipOnly: true }), []);
+});
+
+test("membership-only accepts a historical digest-only record", () => {
+  assert.deepEqual(validateDeltaResult({ ...result(), siteCoverageDigest: "old" }, { sequence: sequence(), membershipOnly: true }), []);
+});
+
+for (const field of ["siteCoverageDigest", "handbackBytesDigest", "origin.workOrderDigest", "origin.executionIdentity", "origin.workOrderRef"]) {
+  test(`membership-only rejects singleton-array ${field}`, () => {
+    const bound = { ...result(), ...coverageBinding() };
+    const target = field.startsWith("origin.") ? bound.origin : bound;
+    const key = field.split(".").at(-1);
+    target[key] = [target[key]];
+    assert.match(validateDeltaResult(bound, { sequence: sequence(), membershipOnly: true }).join(), /coverage binding is missing or malformed/);
+  });
+}
+
 test("new coverage binding is structural for membership, raw-bound otherwise and cannot exhaust into authority", () => {
   const seq = sequence(), siteCoverage = [];
-  const binding = { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex(siteCoverage).slice(7), handbackBytesDigest: "a".repeat(64),
-    origin: { workOrderRef: `fixer:o/r#7:${"a".repeat(40)}:f1-00000000`, workOrderDigest: `sha256:${"b".repeat(64)}`, executionIdentity: "f1-00000000" } };
+  const binding = coverageBinding();
   const bound = { ...result(), ...binding };
   assert.deepEqual(validateDeltaResult(bound, { sequence: seq, membershipOnly: true }), []);
   assert.deepEqual(validateDeltaResult({ ...result(), siteCoverageDigest: "old" }, { sequence: seq }), []);

@@ -148,13 +148,16 @@ fixer and owns the push. The sequence is:
    head, because the emitter pins the GitHub PR head and the local fix commits
    descend from it.
 2. The dev-loop coordinator builds the reviewer input with `check-pre-push-delta.mjs`
-   (plus the flags above). On the act-list route it requires
+   (plus the ACT-only flags above on the act-list route). On that route it requires
    `--findings-log <the reviewed gate round's findings log>`; the thread route takes no
    `--findings-log`. It passes `--pr-head <the full PR head SHA just read from GitHub>` to
    the check and dispatches one fresh delta reviewer for the current worktree head,
    briefing it that it MUST NOT push (`PRE-PUSH-DELTA-PUSH-AUTHORITY`).
 3. The coordinator runs the CLI `--result` check (no `--findings-log`; only the input run
-   reads it), again passing `--fixer-plan` and `--site-coverage`, and follows its `nextStep`. On `nextStep: fix_and_rereview`,
+   reads it), and follows its `nextStep`. The ACT route again passes `--fixer-plan`
+   and `--site-coverage`. The THREAD route retains `--threads-file`, `--repo`,
+   `--pr`, `--baseline`, `--result` and `--invocation`, without the ACT-only
+   `--fixer-plan` or `--site-coverage` flags. On `nextStep: fix_and_rereview`,
    it dispatches a fresh fixer again, commit-only, and returns to step 2. It
    emits a new work order with `--delta-result <result>` at the PR head.
    That fixer receives the delta result's `not_resolved` and `cannot_verify` act
