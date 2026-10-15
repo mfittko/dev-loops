@@ -141,7 +141,9 @@ fixer and owns the push. The sequence is:
    dispatches the printed `dispatchPayload` unchanged (ADR 0106). The fixer
    commits the fix, writes the site coverage record to the work order's outputRef
    (`PRE-PUSH-DELTA-RESIDUE`), and hands back the commit SHA unpushed. The
-   coordinator passes that record to the check with `--site-coverage`. Every fixer emission
+   coordinator passes that record to the check with `--site-coverage` and the emission's
+   canonical `--fixer-plan`. Both flags are mandatory for ACT coordinator input and
+   result recording; omission of either or both refuses. Every fixer emission
    in delta mode uses the PR head (`headRefOid`), never the local candidate
    head, because the emitter pins the GitHub PR head and the local fix commits
    descend from it.
@@ -152,7 +154,7 @@ fixer and owns the push. The sequence is:
    the check and dispatches one fresh delta reviewer for the current worktree head,
    briefing it that it MUST NOT push (`PRE-PUSH-DELTA-PUSH-AUTHORITY`).
 3. The coordinator runs the CLI `--result` check (no `--findings-log`; only the input run
-   reads it) and follows its `nextStep`. On `nextStep: fix_and_rereview`,
+   reads it), again passing `--fixer-plan` and `--site-coverage`, and follows its `nextStep`. On `nextStep: fix_and_rereview`,
    it dispatches a fresh fixer again, commit-only, and returns to step 2. It
    emits a new work order with `--delta-result <result>` at the PR head.
    That fixer receives the delta result's `not_resolved` and `cannot_verify` act
@@ -190,6 +192,21 @@ Each delta review, including a re-review of the current head, consumes one
 invocation. The dev-loop coordinator owns the invocation count and passes it to
 `dev-loops-run cli/index.mjs loop pre-push-delta --invocation` monotonically, starting at 1 for
 each sequence.
+
+ACT input retains raw `siteCoverage` unchanged, including kind, reason and test fields;
+normalization is only a validation view. Input, `resultShape`, result and decision carry
+identical `coverageProtocol: "pulled_commit_only_v1"`, raw semantic `siteCoverageDigest`,
+exact `handbackBytesDigest` and `origin: {workOrderRef, workOrderDigest, executionIdentity}`.
+The reviewer copies that tuple unchanged. Input and result recording authenticate the
+canonical current plan/output, original pull, renderer/materialization bytes, ACT source,
+branch, baseline and candidate. Result recording recomputes the expected tuple; any
+missing, partial or altered binding refuses before the invocation-three fallback.
+A matching stale result retains ordinary bounded-out behavior. Membership-only callers
+check structure without claiming source authentication; optional completion separately
+checks the genuine origin/report bytes against result and decision. Digest-only old
+records stay legacy and unchanged. The emitted `--handback` check remains write-free
+validation without attestation. THREAD cannot opt into this ACT binding. See ADR 0150 in the
+[decision records](https://github.com/mfittko/dev-loops/tree/main/docs/decisions).
 
 <!-- rule: PRE-PUSH-DELTA-TRIGGER -->
 `PRE-PUSH-DELTA-TRIGGER`: delta mode MUST run after the gate Phase 4 fixer commits a fix for a judge act list, or after a fixer commits a fix for the captured set of unresolved review threads (the thread route), and before that fix is pushed. On the thread route the baseline is the PR head (`headRefOid`) passed to the `commit_only` emission, because the emitter reads the record at `gate-delta/<that head>.json`. A push with no act-list fix and no thread-route fix MUST NOT get a delta review, even when a PR exists. Standalone implementation pushes and the full-mode first push are unaffected. A CI-only fix is out of scope.

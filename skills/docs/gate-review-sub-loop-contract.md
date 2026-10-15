@@ -997,6 +997,10 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   (ADR 0106, 0107). The act-list fix pass is `commit_only`: the later `full` emission that
   pushes and replies follows [delta mode](pre-pr-review-contract.md#delta-mode).
   A changed act list, delta result, head or phase requires a new emission.
+  ACT Delta input and `--result` recording pass that canonical `--fixer-plan` and its
+  `--site-coverage` output together. The [Delta contract](pre-pr-review-contract.md#delta-mode)
+  authenticates the original pull and raw coverage identity; never substitute a copied
+  snapshot or reconstruct historical binding. This does not enable optional full emission.
   For Codex, call `collaboration.spawn_agent` with that payload unchanged: only the execution-derived `task_name`, canonical pointer `message` and `fork_turns: "none"`. A rebuild is not actor resume; each replacement needs a fresh child. After pulling, the child follows the pinned fixer contract (`agents/fixer.agent.md`, "Codex after-pull setup") for truthful runtime provenance and managed permissions.
 - When a judge verdict is present (Phase 3.5), the fix pass executes **only the `act` list**
   — findings the judge marked `act`. The fixer retains reproduction-based rejection (a finding

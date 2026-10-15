@@ -15,6 +15,24 @@ import {
   validateDeltaResult,
 } from "../src/loop/pre-push-delta-review.mjs";
 import { consolidateFanin } from "../src/loop/gate-fanin.mjs";
+import { sha256Hex } from "../src/loop/review-dispatch-plan.mjs";
+
+test("new coverage binding is structural for membership, raw-bound otherwise and cannot exhaust into authority", () => {
+  const seq = sequence(), siteCoverage = [];
+  const binding = { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex(siteCoverage).slice(7), handbackBytesDigest: "a".repeat(64),
+    origin: { workOrderRef: `fixer:o/r#7:${"a".repeat(40)}:f1-00000000`, workOrderDigest: `sha256:${"b".repeat(64)}`, executionIdentity: "f1-00000000" } };
+  const bound = { ...result(), ...binding };
+  assert.deepEqual(validateDeltaResult(bound, { sequence: seq, membershipOnly: true }), []);
+  assert.deepEqual(validateDeltaResult({ ...result(), siteCoverageDigest: "old" }, { sequence: seq }), []);
+  for (const defect of ["coverageProtocol", "siteCoverageDigest", "handbackBytesDigest", "origin", "all"]) {
+    const bad = { ...bound };
+    for (const key of defect === "all" ? Object.keys(binding) : [defect]) delete bad[key];
+    assert.throws(() => decideDeltaNextStep({ sequence: seq, result: bad, invocation: 3, currentHead: B, siteCoverage, coverageBinding: binding }), /coverage binding/);
+    if (defect !== "all") assert.match(validateDeltaResult(bad, { sequence: seq, membershipOnly: true }).join(), /coverage binding/);
+  }
+  assert.throws(() => decideDeltaNextStep({ sequence: seq, result: bound, invocation: 3, currentHead: B, siteCoverage: [{}] }), /raw coverage/);
+  assert.equal(decideDeltaNextStep({ sequence: seq, result: bound, invocation: 3, currentHead: C, siteCoverage, coverageBinding: binding }).nextStep, "push_to_gate");
+});
 
 const A = "aaaaaaa1111111";
 const B = "bbbbbbb2222222";
@@ -354,7 +372,7 @@ describe("pre-push results never become gate evidence", () => {
   test("the delta module performs no I/O: no gate artifact, comment or thread can be written", () => {
     const source = fs.readFileSync(new URL("../src/loop/pre-push-delta-review.mjs", import.meta.url), "utf8");
     const imports = [...source.matchAll(/^import .* from "([^"]+)";$/gm)].map((m) => m[1]);
-    assert.deepEqual(imports.sort(), ["./fixer-disposition.mjs", "./gate-fanin.mjs", "node:crypto"]);
+    assert.deepEqual(imports.sort(), ["./fixer-disposition.mjs", "./gate-fanin.mjs", "./review-dispatch-plan.mjs", "node:crypto"]);
   });
 });
 

@@ -24,7 +24,7 @@ import {
   normalizeFixerDispositionHandoff,
   siteCoverageGaps,
 } from "@dev-loops/core/loop/fixer-disposition";
-import { isDeltaResultFresh, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
+import { deltaCoverageBinding, isDeltaResultFresh, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
@@ -368,10 +368,16 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
           || typeof subject.planPath !== "string" || await real(subject.planPath) !== await real(planPath)) {
           throw new Error("completion origin pull subject does not match the original commit_only authority");
         }
-        const priorRaw = JSON.parse(await readFile(originPath, "utf8"));
+        const priorBytes = await readFile(originPath);
+        const priorRaw = JSON.parse(priorBytes);
         normalizeFixerDispositionHandoff(priorRaw, { ruleIds: loadKnownRuleIds() });
         if (priorRaw.headSha !== completion.fixingCommitSha || sha256Hex(priorRaw.siteCoverage).slice(7) !== digest) {
           throw new Error("completion fixing commit/coverage differs from the actual prior filled handback");
+        }
+        if (deltaCoverageBinding(delta) || deltaCoverageBinding(decision)) {
+          const expected = { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: digest, handbackBytesDigest: sha256Hex(priorBytes).slice(7), origin };
+          deltaCoverageBinding(delta, expected);
+          deltaCoverageBinding(decision, expected);
         }
         for (const commitSha of new Set([baseline, completion.fixingCommitSha])) {
           const contained = await isCommitContainedByHead({ repo: options.repo, commitSha, headSha: options.headSha }, runtime);
