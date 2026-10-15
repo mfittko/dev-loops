@@ -1249,6 +1249,18 @@ the next review/gate round; `GATE-EXEC-THREAD-DISPOSITION` still governs eventua
 
 `normalizeFixerDispositionHandoff` (`packages/core/src/loop/fixer-disposition.mjs`) rejects missing `threadId`/`fixingCommitSha`/`disposition` and duplicate thread ids; distinct roots may share a fingerprint. `isCommitContainedByHead` (`scripts/github/_commit-containment.mjs`) accepts only `gh compare` `identical`/`ahead`; `behind`/`diverged`, API errors and missing evidence fail closed. A SHA alone, a wrong-branch, superseded or uncontained SHA, or an outdated diff location never authorizes resolution. The pure `evaluateFixerDisposition` reports one `failedStep` per incomplete thread: `missing_from_handoff`, `commit_not_contained`, `reply_missing`, `not_resolved`. `verify-fixer-disposition.mjs` remaps a `reply_missing` or `not_resolved` thread to `delta_blocked` when a delta record blocks its fixed reply. The detector adds `not_verified`: a full-phase fixer handoff for the live head lists a tackled thread and no `fixer-disposition-<headSha>.json` checkpoint exists, because `verify-fixer-disposition.mjs` never completed (a failed run writes no checkpoint). `request-copilot-review.mjs` reads the same input through the shared resolver and refuses with `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` and next action `complete_fixer_disposition` while it is incomplete. A thread that the delta record of the fix marks `not_resolved` or `cannot_verify` gets no `Fixed in commit` reply from the verifier, which reports it incomplete with `failedStep: delta_blocked`, the delta status in `deltaStatus`, and the record path in `deltaRecord`.
 
+The resolver may additionally return `activeFixer: { workOrderRef, workOrderDigest,
+executionIdentity, planPath, subject, outputMissing }` for an authenticated active full execution.
+Binding requires its real original canonical pull subject, historical prompt materialization and
+complete JSON suffix, execution-derived output and unchanged canonical bytes after awaited checks.
+The subject retains the original order head A when the observed candidate is B. Ordinary checked
+incomplete results bind `outputMissing: false`; only a fresh owner `lstat` ENOENT with safe execution
+ancestry produces `FIXER_RESULT_MISSING` and `outputMissing: true`. Other stat failures, redirected
+or dangling symlinks, malformed/stale reports and authentication failures remain unbound.
+Older partial subjects retain ordinary behavior without metadata. This proves subject/missing state
+only: ACT, Delta, current decision, candidate, coverage and retirement guards remain independent.
+Incomplete still blocks detector/Copilot progression and grants no completion or mutation authority.
+
 While any tackled thread is incomplete, `FIXER_DISPOSITION_FORBIDDEN_ACTIONS` also forbids Copilot request/re-request and every gate dispatch, beyond `pr-gate-coordination.mjs`'s `postDraftForbidden`; a zero `unresolvedThreadCount` cannot waive this boundary. An incomplete `fixerDisposition` forces blocked `feedback_resolution` ahead of every lifecycle branch, naming the thread, expected commit, failed step and sole next action `complete_fixer_disposition`. Untackled, deferred, rejected, foreign-authored and newly arrived threads keep their existing judgment path; this boundary never auto-resolves outside the tackled set.
 
 `scripts/github/verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <fixer-emit-plan.json>` reads the handoff from the work order's outputRef and refuses without a matching fixer pull receipt, when the handoff predates the pull, or when the handoff head is not the observed head. It also fails, naming the thread id, when a work order's judge-act item carries the fingerprint of an open inline gate thread and the handoff has no disposition entry for that thread (an act item with an open inline gate thread is never threadless; only a thread whose root comment is authored by the gate login counts, every such thread needs its own entry, and a refused handoff writes no checkpoint). It records `tmp/gate-findings/<repo-slug>/pr-<N>/fixer-disposition-<headSha>.json`, captures live state, checks containment, and only after containment passes posts the evidenced reply and resolves (resolving without reposting when a matching reply exists). Live checks precede writes, so restart, rate limit, timeout and reply-success/resolve-failure re-entry cannot duplicate replies.
@@ -1330,6 +1342,17 @@ with the complete historical `## Work order` JSON suffix for the archived order,
 local read paths/hashes/bytes excluded from semantic identity. Never rerender historical prose.
 Exactly one required original ACT and Delta read must reproduce raw hash/bytes and semantic
 authority, and match current authenticated reads. Preserve all original records and receipts.
+
+`prepareLegacyCompletion({ completion, prospectivePlan, planPath, originalFullBytes, priorBytes,
+actList, delta, decision, receiptTmpRoot, repoRoot })` derives the established explicit legacy object
+while the captured original full bytes remain canonical before and after the same fixed bounded
+native query. Its archive must equal those captured bytes, and its genuine original commit-only
+receipt, subject, after-pull raw report, fixing head and coverage are authenticated directly.
+No original commit-only plan archive is required. The prospective plan stays in memory; preparation
+never publishes, restores or repairs evidence. Ordinary `revalidateLegacyCompletion` still requires
+its own plan to be current canonical and compares the recorded query/tree facts. Neither seam
+qualifies a worker or implements delivery-only emission; a future producer must enforce every
+source and current-state guard independently before replacement.
 
 Fixer emission preserves the prior raw canonical `fixer-emit-plan.json` before replacement
 as `<canonical-plan-dir>/<old-execution>/original-fixer-emit-plan.json` (ADR 0152).

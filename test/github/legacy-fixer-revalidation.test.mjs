@@ -34,7 +34,10 @@ function queryFixture({ bytes = output, failure = {}, drift = null } = {}) {
 
 test("fixed native legacy boundary uses one literal, top-level cwd and bounded scrubbed identity/tree/query calls", () => {
   const fixture = queryFixture();
-  assert.deepEqual([...fixture.run()], ["src/example.mjs"]);
+  const observed = fixture.run();
+  assert.deepEqual([...observed.files], ["src/example.mjs"]);
+  assert.equal(observed.treeOid, treeOid);
+  assert.equal(observed.queryOutputBytesDigest, digest(output));
   assert.equal(fixture.calls.length, 6);
   const grep = fixture.calls.find((call) => call.args.includes("grep"));
   assert.deepEqual(grep.args, ["--no-pager", "-c", "color.ui=never", "grep", "-n", "-E", pattern, candidate, "--"]);

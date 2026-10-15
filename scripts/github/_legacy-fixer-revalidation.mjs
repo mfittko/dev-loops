@@ -1,14 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { readFile, realpath } from "node:fs/promises";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
-import { toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
+import { startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { gitEnvNoDirOverrides, listWorktreeEntries } from "../loop/_repo-root-resolver.mjs";
 import { gateDeltaRecordPath } from "../loop/_gate-delta-record.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
 import { authenticateOriginalPlan } from "./_fixer-emission-evidence.mjs";
+import { verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
 
 const PATTERN = "readValidationEvidence|requireBinding|validationResultsPath|prefix-file";
 const HEX = /^[a-f0-9]{64}$/;
@@ -31,18 +32,20 @@ function nativeGitEnv() {
   return env;
 }
 
-function queryLegacySites({ repoRoot, candidate, branch, treeOid, queryOutputBytesDigest }) {
+function queryLegacySites({ repoRoot, candidate, branch }) {
   const cwd = nativeGit(["rev-parse", "--show-toplevel"], repoRoot).toString().trim();
   if (!path.isAbsolute(cwd)) refuse("Git returned no absolute repository root");
+  let treeOid;
   const current = () => {
     const head = nativeGit(["rev-parse", "--verify", `refs/heads/${branch}`], cwd).toString().trim();
     const tree = nativeGit(["rev-parse", "--verify", `${candidate}^{tree}`], cwd).toString().trim();
-    if (head !== candidate || tree !== treeOid) refuse("authority branch or candidate tree changed");
+    if (!/^([a-f0-9]{40}|[a-f0-9]{64})$/.test(tree) || head !== candidate || (treeOid && tree !== treeOid)) refuse("authority branch or candidate tree changed");
+    treeOid = tree;
   };
   current();
   const bytes = nativeGit(["--no-pager", "-c", "color.ui=never", "grep", "-n", "-E", PATTERN, candidate, "--"], cwd);
   const text = bytes.toString("utf8");
-  if (!bytes.length || !text.endsWith("\n") || !Buffer.from(text).equals(bytes) || digest(bytes) !== queryOutputBytesDigest) refuse("incomplete or changed query output bytes");
+  if (!bytes.length || !text.endsWith("\n") || !Buffer.from(text).equals(bytes)) refuse("incomplete or changed query output bytes");
   const files = new Set();
   for (const row of text.slice(0, -1).split("\n")) {
     const match = /^([a-f0-9]+):([^:\r\n\0]+):([1-9]\d*):[^\r\n]*$/.exec(row);
@@ -52,23 +55,53 @@ function queryLegacySites({ repoRoot, candidate, branch, treeOid, queryOutputByt
     files.add(file);
   }
   current();
-  return files;
+  return { files, treeOid, queryOutputBytesDigest: digest(bytes) };
 }
 
 export async function revalidateLegacyCompletion({ completion, plan, planPath, priorBytes, actList, delta, decision, receiptTmpRoot, repoRoot }) {
+  const activeBytes = await readFile(planPath);
+  if (sha256Hex(JSON.parse(activeBytes)) !== sha256Hex(plan)) refuse("current canonical plan was superseded");
   const legacy = completion.legacyRevalidation;
   if (!keys(legacy, "origin,originalFull,handbackBytesDigest,clearingDecisionBytesDigest,treeOid,queryOutputBytesDigest")
     || legacy.origin !== "legacy_revalidated" || !keys(legacy.originalFull, "workOrderRef,workOrderDigest,executionIdentity,planBytesDigest")
     || ![legacy.handbackBytesDigest, legacy.clearingDecisionBytesDigest, legacy.queryOutputBytesDigest, legacy.originalFull.planBytesDigest].every((value) => typeof value === "string" && HEX.test(value))
     || !/^([a-f0-9]{40}|[a-f0-9]{64})$/.test(legacy.treeOid ?? "")) refuse("malformed explicit legacy authority");
+  const observed = await validateLegacyCompletion({ completion, plan, planPath, priorBytes, actList, delta, decision, receiptTmpRoot, repoRoot }, activeBytes, legacy);
+  if (observed.treeOid !== legacy.treeOid || observed.queryOutputBytesDigest !== legacy.queryOutputBytesDigest) refuse("authority branch or candidate tree changed, or changed query output bytes");
+}
+
+export async function prepareLegacyCompletion({ prospectivePlan: plan, originalFullBytes, ...args }) {
+  if (!(await readFile(args.planPath)).equals(originalFullBytes)) refuse("original canonical plan was superseded");
+  const old = JSON.parse(originalFullBytes);
+  const legacy = { origin: "legacy_revalidated", originalFull: { workOrderRef: old.workOrderRef, workOrderDigest: old.workOrderDigest,
+    executionIdentity: old.executionIdentity, planBytesDigest: digest(originalFullBytes) }, handbackBytesDigest: digest(args.priorBytes),
+    clearingDecisionBytesDigest: digest(await readFile(gateDeltaRecordPath(args.receiptTmpRoot, args.delta.reviewBaselineHead))) };
+  const observed = await validateLegacyCompletion({ ...args, plan }, originalFullBytes, legacy);
+  return { ...legacy, ...observed };
+}
+
+async function validateLegacyCompletion({ completion, plan, planPath, priorBytes, actList, delta, decision, receiptTmpRoot, repoRoot }, activeBytes, legacy) {
   if ([delta, decision].some((value) => ["siteCoverageDigest", "coverageProtocol", "handbackBytesDigest", "origin"].some((key) => Object.hasOwn(value, key)))) refuse("partial or current coverage binding cannot downgrade");
   if (delta.outcome !== "locally_clear" || decision.outcome !== "locally_clear" || decision.nextStep !== "push"
     || delta.candidateHead !== completion.headSha || delta.actionableItems.some((item) => item.status !== "resolved")) refuse("legacy requires fresh locally clear unchanged candidate and resolved members");
+  const sequence = startDeltaSequence({ reviewBaselineHead: delta.reviewBaselineHead, actList });
+  const pairs = (items) => items.map(({ ref, status }) => JSON.stringify([ref, status])).sort().join("\n");
+  if (!/^([a-f0-9]{40}|[a-f0-9]{64})$/.test(delta.reviewBaselineHead ?? "") || validateDeltaResult(delta, { sequence, membershipOnly: true }).length
+    || decision.reviewBaselineHead !== delta.reviewBaselineHead || decision.actSetId !== sequence.actSetId
+    || decision.candidateHead !== completion.headSha || !Array.isArray(decision.items)
+    || pairs(decision.items) !== pairs(delta.actionableItems)) refuse("clearing decision baseline, act set, candidate or statuses changed");
   const order = plan.workOrder;
+  if (order?.role !== "fixer" || order.phase !== "full" || order.headSha !== completion.headSha
+    || !/^([a-f0-9]{40}|[a-f0-9]{64})$/.test(order.headSha ?? "") || typeof order.mutationAuthority?.branch !== "string" || !order.mutationAuthority.branch.trim()
+    || workOrderDigest(order) !== plan.workOrderDigest
+    || plan.workOrderRef !== `fixer:${order.target?.repo}#${order.target?.pr}:${order.headSha}:${plan.executionIdentity}`) refuse("prospective full identity or digest mismatch");
   const canonical = path.join(await realpath(receiptTmpRoot), "gate-fixer", repoSlugFor(order.target.repo), `pr-${order.target.pr}`, "fixer-emit-plan.json");
   if (await realpath(planPath) !== canonical) refuse("current plan is not the canonical main plan");
-  const currentBytes = await readFile(canonical);
-  if (sha256Hex(JSON.parse(currentBytes)) !== sha256Hex(plan)) refuse("current canonical plan was superseded");
+  const output = order.outputRefs?.[0];
+  if (order.outputRefs?.length !== 1 || typeof output !== "string"
+    || path.relative(path.dirname(path.dirname(output)), output) !== path.join(plan.executionIdentity, "fixer-disposition.json")
+    || await realpath(path.dirname(path.dirname(output))) !== path.dirname(canonical)) refuse("prospective output is not execution-derived");
+  if (!(await readFile(canonical)).equals(activeBytes)) refuse("current canonical plan was superseded");
   const original = legacy.originalFull;
   if (!keys(completion.origin, "workOrderRef,workOrderDigest,executionIdentity")) refuse("original commit-only identity must retain its exact triple");
   const emitted = (identity) => Number(/^f(\d+)-[a-f0-9]{8}$/.exec(identity)?.[1]);
@@ -79,6 +112,7 @@ export async function revalidateLegacyCompletion({ completion, plan, planPath, p
   const directory = path.dirname(canonical);
   const archive = await readFile(path.join(directory, original.executionIdentity, "original-fixer-emit-plan.json"));
   if (digest(archive) !== original.planBytesDigest) refuse("original full archive bytes changed");
+  if (sha256Hex(JSON.parse(activeBytes)) !== sha256Hex(plan) && !archive.equals(activeBytes)) refuse("original full archive differs from captured active bytes");
   const old = JSON.parse(archive);
   const oldOrder = old.workOrder;
   if (["workOrderRef", "workOrderDigest", "executionIdentity"].some((key) => old[key] !== original[key])
@@ -87,6 +121,23 @@ export async function revalidateLegacyCompletion({ completion, plan, planPath, p
     || oldOrder.target?.repo !== order.target.repo || oldOrder.target?.pr !== order.target.pr
     || oldOrder.headSha !== delta.reviewBaselineHead || oldOrder.mutationAuthority?.branch !== order.mutationAuthority?.branch) refuse("original full archive identity or authority mismatch");
   await authenticateOriginalPlan({ plan: old, canonical, receiptTmpRoot: await realpath(receiptTmpRoot), requireReceipt: true });
+  const origin = completion.origin;
+  const originDir = path.join(directory, origin.executionIdentity);
+  const originPath = path.join(originDir, "fixer-disposition.json");
+  if (!/^f\d+-[a-f0-9]{8}$/.test(origin.executionIdentity) || origin.executionIdentity === plan.executionIdentity
+    || origin.workOrderRef !== `fixer:${order.target.repo}#${order.target.pr}:${delta.reviewBaselineHead}:${origin.executionIdentity}`
+    || !/^sha256:[a-f0-9]{64}$/.test(origin.workOrderDigest ?? "")
+    || !(await lstat(originDir)).isDirectory() || await realpath(originDir) !== originDir
+    || !(await lstat(originPath)).isFile()) refuse("original commit-only output is not execution-derived");
+  const prior = await verifyPulledResult({ resultPath: originPath, receiptTmpRoot, role: "fixer", ...origin });
+  const subject = prior.receipt?.subject;
+  if (!prior.ok || subject?.repo !== order.target.repo || subject.pr !== order.target.pr || subject.headSha !== delta.reviewBaselineHead
+    || subject.branch !== order.mutationAuthority.branch || subject.phase !== "commit_only"
+    || typeof subject.planPath !== "string" || await realpath(subject.planPath) !== canonical) refuse("original commit-only pull/result authority mismatch");
+  const priorRaw = JSON.parse(priorBytes);
+  normalizeFixerDispositionHandoff(priorRaw);
+  if (!(await readFile(originPath)).equals(priorBytes) || !/^([a-f0-9]{40}|[a-f0-9]{64})$/.test(completion.fixingCommitSha ?? "")
+    || priorRaw.headSha !== completion.fixingCommitSha || sha256Hex(priorRaw.siteCoverage) !== sha256Hex(completion.siteCoverage)) refuse("original raw fixing head/coverage changed");
   for (const [kind, authority, current] of [["act-list", "sourceDigest", actList], ["delta-result", "deltaResultDigest", delta]]) {
     const originals = oldOrder.requiredReads?.filter((read) => read.kind === kind) ?? [];
     const currents = order.requiredReads?.filter((read) => read.kind === kind) ?? [];
@@ -110,7 +161,7 @@ export async function revalidateLegacyCompletion({ completion, plan, planPath, p
   const raw = completion.siteCoverage;
   const item = actList[0];
   const forms = [...(item.acceptedForms ?? []), ...(item.rejectedForms ?? [])];
-  const files = queryLegacySites({ repoRoot, candidate: completion.headSha, branch: order.mutationAuthority.branch, ...legacy });
+  const { files, ...observed } = queryLegacySites({ repoRoot, candidate: completion.headSha, branch: order.mutationAuthority.branch });
   const expected = new Set([...files, ...forms]);
   if (raw.length !== 1 || raw[0].fingerprint !== item.fingerprint || new Set(forms).size !== forms.length
     || !Array.isArray(raw[0].returnedSites) || raw[0].returnedSites.length !== files.size || new Set(raw[0].returnedSites).size !== files.size
@@ -118,5 +169,6 @@ export async function revalidateLegacyCompletion({ completion, plan, planPath, p
     || raw[0].sites.some((site) => !expected.has(site.site) || site.kind !== (forms.includes(site.site) ? "input_form" : "site"))) refuse("raw query file/form coverage is incomplete, extra or duplicated");
   const normalized = normalizeFixerDispositionHandoff(JSON.parse(priorBytes));
   if (siteCoverageGaps(toDeltaActItems(actList), normalized.siteCoverage).length) refuse("legacy prescribed form coverage has gaps");
-  if (!(await readFile(canonical)).equals(currentBytes)) refuse("current canonical plan was superseded during query");
+  if (!(await readFile(canonical)).equals(activeBytes)) refuse("current canonical plan was superseded during query");
+  return observed;
 }

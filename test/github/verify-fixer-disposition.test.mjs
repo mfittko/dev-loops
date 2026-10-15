@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { link, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +24,7 @@ import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { gitEnvNoDirOverrides } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
+import * as legacyOwner from "../../scripts/github/_legacy-fixer-revalidation.mjs";
 
 const REPO = "owner/repo";
 const PR = 1975;
@@ -122,6 +123,137 @@ async function deliver(repoRoot, dispositions, {
   }
   return planPath;
 }
+
+async function boundFixture(root, writeHandoff = false, setup = {}) {
+  const planPath = await deliver(root, TACKLED, { writeHandoff, ...setup });
+  const plan = JSON.parse(await readFile(planPath));
+  const prompt = `Historical prose.\n## Work order\n\n\`\`\`json\n${JSON.stringify(plan.workOrder, null, 2)}\n\`\`\`\n`;
+  plan.materializationHash = sha256Hex(prompt);
+  await mkdir(path.join(path.dirname(planPath), "work-orders"), { recursive: true });
+  await writeFile(path.join(path.dirname(planPath), "work-orders", `${plan.executionIdentity}.md`), prompt);
+  await writeFile(planPath, JSON.stringify(plan));
+  const receiptPath = pullReceiptPath(path.join(root, "tmp"), plan.workOrderRef);
+  const subject = { repo: REPO, pr: PR, headSha: HEAD_SHA, branch: "issue-1", phase: "full", planPath };
+  await writeFile(receiptPath, JSON.stringify({ ...plan, role: "fixer", subject }));
+  if (writeHandoff) await utimes(receiptPath, 1, 1);
+  return { plan, planPath, receiptPath, subject };
+}
+
+test("bound active full missing output is typed subject evidence and resolver stays incomplete", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await boundFixture(root);
+    const expected = { workOrderRef: f.plan.workOrderRef, workOrderDigest: f.plan.workOrderDigest,
+      executionIdentity: f.plan.executionIdentity, planPath: f.planPath, subject: f.subject, outputMissing: true };
+    const { deps } = runtime([], root);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.planPath, check: true }, deps),
+      (error) => error.code === "FIXER_RESULT_MISSING" && assert.deepEqual(error.activeFixer, expected) === undefined);
+    const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: HEAD_SHA }, deps);
+    assert.equal(result.complete, false);
+    assert.deepEqual(result.activeFixer, expected);
+  });
+});
+
+for (const defect of ["partialSubject", "subjectHead", "receipt", "prompt", "digest", "ref", "role", "target", "output", "directory", "danglingReport", "redirectedDirectory", "danglingDirectory", "notDirectory", "malformed", "prePull"]) {
+  test(`active full binding withholds metadata for ${defect}`, async () => {
+    await withRepoRoot(async (root) => {
+      const f = await boundFixture(root);
+      const output = f.plan.workOrder.outputRefs[0], dir = path.dirname(output);
+      const receipt = JSON.parse(await readFile(f.receiptPath));
+      if (defect === "partialSubject") receipt.subject = { planPath: f.planPath };
+      if (defect === "subjectHead") receipt.subject.headSha = FIX_SHA;
+      if (defect === "receipt") receipt.workOrderDigest = `sha256:${"0".repeat(64)}`;
+      await writeFile(f.receiptPath, JSON.stringify(receipt));
+      if (defect === "prompt") await writeFile(path.join(path.dirname(f.planPath), "work-orders", `${f.plan.executionIdentity}.md`), "changed");
+      if (defect === "digest") f.plan.workOrderDigest = `sha256:${"0".repeat(64)}`;
+      if (defect === "ref") f.plan.workOrderRef += ":copied";
+      if (defect === "role") f.plan.workOrder.role = "review";
+      if (defect === "target") f.plan.workOrder.target.pr++;
+      if (defect === "output") f.plan.workOrder.outputRefs[0] = path.join(root, "copied.json");
+      await writeFile(f.planPath, JSON.stringify(f.plan));
+      if (defect === "directory") await mkdir(output);
+      if (defect === "danglingReport") await symlink(path.join(root, "absent"), output);
+      if (["redirectedDirectory", "danglingDirectory", "notDirectory"].includes(defect)) {
+        await rm(dir, { recursive: true });
+        const target = path.join(root, "redirected");
+        if (defect === "redirectedDirectory") await mkdir(target);
+        if (defect === "notDirectory") await writeFile(dir, "file");
+        else await symlink(target, dir);
+      }
+      if (["malformed", "prePull"].includes(defect)) {
+        await writeFile(output, defect === "malformed" ? "{" : JSON.stringify({ headSha: HEAD_SHA, dispositions: TACKLED }));
+        if (defect === "prePull") await utimes(output, 1, 1);
+      }
+      const { deps } = runtime([], root);
+      await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.planPath, check: true }, deps),
+        (error) => error.code !== "FIXER_RESULT_MISSING" && error.activeFixer === undefined);
+      assert.equal((await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: HEAD_SHA }, deps)).activeFixer, undefined);
+    });
+  });
+}
+
+test("checked incomplete binds false only after live checks and canonical byte recheck", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await boundFixture(root, true);
+    for (const supersede of [false, true]) {
+      const { deps } = runtime([threadsCallEntry([]), compareEntry(FIX_SHA, "diverged")], root);
+      const run = deps.runChild;
+      deps.runChild = async (...args) => {
+        const result = await run(...args);
+        if (supersede && args[1].some((arg) => String(arg).includes("/compare/"))) await writeFile(f.planPath, `${JSON.stringify(f.plan)}\n`);
+        return result;
+      };
+      const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: HEAD_SHA }, deps);
+      assert.equal(result.complete, false);
+      assert.equal(result.incomplete[0].failedStep, "commit_not_contained");
+      assert.deepEqual(result.activeFixer, supersede ? undefined : { workOrderRef: f.plan.workOrderRef, workOrderDigest: f.plan.workOrderDigest,
+        executionIdentity: f.plan.executionIdentity, planPath: f.planPath, subject: f.subject, outputMissing: false });
+    }
+  });
+});
+
+test("missing binding preserves original A subject at observed B and refuses resolver supersession", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await boundFixture(root);
+    for (const supersede of [false, true]) {
+      const { deps } = runtime([compareEntry(HEAD_SHA, "ahead", FIX_SHA)], root, { live: false });
+      const run = deps.runChild;
+      deps.runChild = async (...args) => {
+        const result = await run(...args);
+        if (supersede) await writeFile(f.planPath, `${JSON.stringify(f.plan)}\n`);
+        return result;
+      };
+      const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: FIX_SHA }, deps);
+      assert.equal(result.complete, false);
+      assert.equal(result.activeFixer?.subject.headSha, supersede ? undefined : HEAD_SHA);
+      assert.equal(result.activeFixer?.outputMissing, supersede ? undefined : true);
+    }
+  });
+});
+
+test("missing subject evidence does not authenticate the ACT source or authorize completion", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await boundFixture(root, false, { actList: [{ fingerprint: "fp1" }] });
+    await writeFile(f.plan.workOrder.requiredReads[0].path, "[]");
+    const options = { repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.planPath, check: true };
+    await assert.rejects(verifyFixerDisposition(options, runtime([], root).deps), { code: "FIXER_RESULT_MISSING" });
+    await writeFile(f.plan.workOrder.outputRefs[0], JSON.stringify({ headSha: HEAD_SHA, dispositions: TACKLED }));
+    await assert.rejects(verifyFixerDisposition(options, runtime([], root).deps), /act list.*sha256/);
+  });
+});
+
+for (const code of ["EACCES", "EIO", "ENOTDIR", "ELOOP"]) test(`actual missing branch keeps ${code} unbound`, async () => {
+  await withRepoRoot(async (root) => {
+    const f = await boundFixture(root);
+    const source = await readFile(new URL("../../scripts/github/verify-fixer-disposition.mjs", import.meta.url), "utf8");
+    const context = Object.assign({ Buffer, JSON, path, readFile, realpath,
+      lstat: async (file) => { if (file === f.plan.workOrder.outputRefs[0]) throw Object.assign(new Error(code), { code }); return lstat(file); },
+    }, await import("../../scripts/github/_work-order-protocol.mjs"), await import("../../scripts/github/_fixer-emission-evidence.mjs"),
+    await import("../../scripts/github/_gate-artifact-paths.mjs"));
+    const load = runInNewContext(`${source.slice(source.indexOf("async function loadDeliveredHandoff"), source.indexOf("// Builds the { threadId"))}\nloadDeliveredHandoff`, context);
+    await assert.rejects(load({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.planPath },
+      { repoRoot: root, receiptTmpRoot: path.join(root, "tmp"), runtime: {} }), (error) => !error.code && !error.activeFixer && /result_missing/.test(error.message));
+  });
+});
 
 // ---------------------------------------------------------------------------
 // arg parsing
@@ -1200,6 +1332,50 @@ async function legacyFixture(repoRoot) {
   return { ...f, candidate, oldPlan, archivePath, promptPath, receiptPath, decisionPath, git, refreshOriginal };
 }
 
+test("prospective legacy preparation authenticates while original full stays active and consumer refuses inactive preview", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await legacyFixture(root);
+    const originalFullBytes = await readFile(f.archivePath);
+    await writeFile(f.fixerPlan, originalFullBytes);
+    const files = [f.fixerPlan, f.archivePath, f.promptPath, f.receiptPath, f.originPath, f.decisionPath,
+      ...f.oldPlan.workOrder.requiredReads.map((read) => read.path)];
+    const before = await Promise.all(files.map((file) => readFile(file)));
+    const [actList, delta] = await Promise.all(f.plan.workOrder.requiredReads.slice(0, 2).map(async (read) => JSON.parse(await readFile(read.path))));
+    const args = { completion: f.source, prospectivePlan: f.plan, planPath: f.fixerPlan, originalFullBytes,
+      priorBytes: await readFile(f.originPath), actList, delta, decision: JSON.parse(await readFile(f.decisionPath)), receiptTmpRoot: path.join(root, "tmp"), repoRoot: root };
+    assert.equal(typeof legacyOwner.prepareLegacyCompletion, "function");
+    assert.deepEqual(await legacyOwner.prepareLegacyCompletion(args), f.source.legacyRevalidation);
+    await assert.rejects(legacyOwner.revalidateLegacyCompletion({ ...args, plan: f.plan }), /superseded/);
+    assert.deepEqual(await Promise.all(files.map((file) => readFile(file))), before);
+  });
+});
+
+for (const defect of ["before", "originSubject", "originBytes", "originPrePull", "originSymlink", "archiveBytes", "prospectiveDigest", "partialModern"]) {
+  test(`prospective legacy preparation refuses ${defect}`, async () => {
+    await withRepoRoot(async (root) => {
+      const f = await legacyFixture(root), originalFullBytes = await readFile(f.archivePath);
+      await writeFile(f.fixerPlan, defect === "before" ? Buffer.concat([originalFullBytes, Buffer.from("\n")]) : originalFullBytes);
+      const [actList, delta] = await Promise.all(f.plan.workOrder.requiredReads.slice(0, 2).map(async (read) => JSON.parse(await readFile(read.path))));
+      const priorBytes = await readFile(f.originPath);
+      if (defect === "originSubject") {
+        const file = pullReceiptPath(path.join(root, "tmp"), f.source.origin.workOrderRef), receipt = JSON.parse(await readFile(file));
+        receipt.subject.phase = "full";
+        await writeFile(file, JSON.stringify(receipt));
+        await utimes(file, 1, 1);
+      }
+      if (defect === "originBytes") await writeFile(f.originPath, `${priorBytes}\n`);
+      if (defect === "originPrePull") await utimes(f.originPath, 0, 0);
+      if (defect === "originSymlink") { await rm(f.originPath); await symlink(f.sourcePath, f.originPath); }
+      if (defect === "archiveBytes") await writeFile(f.archivePath, Buffer.concat([originalFullBytes, Buffer.from("\n")]));
+      if (defect === "prospectiveDigest") f.plan.workOrderDigest = `sha256:${"0".repeat(64)}`;
+      if (defect === "partialModern") delta.siteCoverageDigest = "0".repeat(64);
+      await assert.rejects(legacyOwner.prepareLegacyCompletion({ completion: f.source, prospectivePlan: f.plan, planPath: f.fixerPlan,
+        originalFullBytes, priorBytes, actList, delta, decision: JSON.parse(await readFile(f.decisionPath)), receiptTmpRoot: path.join(root, "tmp"), repoRoot: root }));
+      assert.deepEqual(await readFile(f.fixerPlan), defect === "before" ? Buffer.concat([originalFullBytes, Buffer.from("\n")]) : originalFullBytes);
+    });
+  });
+}
+
 test("explicit legacy completion requalifies unchanged evidence with inherited grep.column=true in construct, normal and check", async () => {
   await withRepoRoot(async (root) => {
     const f = await legacyFixture(root);
@@ -1233,13 +1409,15 @@ test("legacy archived local Delta fields remain bound when semantic work-order i
   });
 });
 
-for (const failure of ["plan", "discovery", "empty", "relative"]) test(`legacy qualification refuses ${failure} failure without completing its native query`, async () => {
+for (const failure of ["plan", "preparePlan", "discovery", "empty", "relative"]) test(`legacy qualification refuses ${failure} failure without completing its native query`, async () => {
   await withRepoRoot(async (root) => {
     const f = await legacyFixture(root);
+    const originalFullBytes = await readFile(f.archivePath);
+    if (failure === "preparePlan") await writeFile(f.fixerPlan, originalFullBytes);
     const source = await readFile(new URL("../../scripts/github/_legacy-fixer-revalidation.mjs", import.meta.url), "utf8");
     let reads = 0;
     let queries = 0;
-    const context = Object.assign({ Buffer, JSON, path, sha256Hex, realpath,
+    const context = Object.assign({ Buffer, JSON, path, sha256Hex, realpath, lstat,
       readFile: async (file, ...args) => {
         const bytes = await readFile(file, ...args);
         return file === await realpath(f.fixerPlan) && ++reads === 2 ? Buffer.concat([bytes, Buffer.from("\n")]) : bytes;
@@ -1254,12 +1432,12 @@ for (const failure of ["plan", "discovery", "empty", "relative"]) test(`legacy q
     await import("../../scripts/github/_fixer-emission-evidence.mjs"));
     if (failure === "discovery") context.listWorktreeEntries = () => { throw Object.assign(new Error("worktree listing failed"), { code: "ETIMEDOUT" }); };
     if (failure === "empty" || failure === "relative") context.listWorktreeEntries = () => failure === "empty" ? [] : [{ path: "relative" }];
-    const qualify = runInNewContext(`${source.slice(source.indexOf("const PATTERN")).replace("export async function", "async function")}\nrevalidateLegacyCompletion`, context);
+    const qualify = runInNewContext(`${source.slice(source.indexOf("const PATTERN")).replaceAll("export async function", "async function")}\n${failure === "preparePlan" ? "prepareLegacyCompletion" : "revalidateLegacyCompletion"}`, context);
     const [act, delta] = await Promise.all(f.plan.workOrder.requiredReads.slice(0, 2).map(async (read) => JSON.parse(await readFile(read.path))));
-    await assert.rejects(qualify({ completion: f.source, plan: f.plan, planPath: f.fixerPlan, priorBytes: await readFile(f.originPath), actList: act, delta,
-      decision: JSON.parse(await readFile(f.decisionPath)), receiptTmpRoot: path.join(root, "tmp"), repoRoot: root }), failure === "plan" ? /superseded during query/ : failure === "discovery" ? { code: "ETIMEDOUT", message: "worktree listing failed" } : /retirement checkout discovery returned no valid absolute roots/);
-    assert.equal(queries, failure === "plan" ? 1 : 0);
-    assert.equal(reads, failure === "plan" ? 2 : 1);
+    await assert.rejects(qualify({ completion: f.source, plan: f.plan, prospectivePlan: f.plan, originalFullBytes, planPath: f.fixerPlan, priorBytes: await readFile(f.originPath), actList: act, delta,
+      decision: JSON.parse(await readFile(f.decisionPath)), receiptTmpRoot: path.join(root, "tmp"), repoRoot: root }), ["plan", "preparePlan"].includes(failure) ? /superseded during query/ : failure === "discovery" ? { code: "ETIMEDOUT", message: "worktree listing failed" } : /retirement checkout discovery returned no valid absolute roots/);
+    assert.equal(queries, ["plan", "preparePlan"].includes(failure) ? 1 : 0);
+    assert.equal(reads, ["plan", "preparePlan"].includes(failure) ? 2 : 1);
   });
 });
 
