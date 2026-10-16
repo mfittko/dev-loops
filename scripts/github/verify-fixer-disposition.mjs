@@ -232,7 +232,8 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
         || receipt.receipt.materializationHash !== plan.materializationHash) return;
       await authenticateOriginalPlan({ plan, canonical, receiptTmpRoot: await realpath(receiptTmpRoot), requireReceipt: true });
       const executionDir = path.join(path.dirname(canonical), plan.executionIdentity);
-      if (!(await lstat(executionDir)).isDirectory() || await realpath(executionDir) !== executionDir) return;
+      const directory = await lstat(executionDir).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+      if (directory ? !directory.isDirectory() || await realpath(executionDir) !== executionDir : !outputMissing) return;
       const info = await lstat(handoffPath).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
       if (outputMissing ? info !== null : !info?.isFile() || info.isSymbolicLink()) return;
       if (!(await readFile(planPath)).equals(planBytes)) return;

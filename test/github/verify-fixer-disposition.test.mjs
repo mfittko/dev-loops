@@ -153,6 +153,37 @@ test("bound active full missing output is typed subject evidence and resolver st
   });
 });
 
+test("emitted and pulled THREAD full binds missing output without an execution directory", async () => {
+  await withRepoRoot(async (root) => {
+    root = await realpath(root);
+    initGitFixture(root, { branch: "issue-1" });
+    const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+    const tmpRoot = path.join(root, "tmp"), threadsFile = path.join(tmpRoot, "threads.json");
+    const recordPath = path.join(tmpRoot, "gate-delta", `${head}.json`);
+    await mkdir(path.dirname(recordPath), { recursive: true });
+    await writeFile(threadsFile, JSON.stringify({ ok: true, repo: REPO, pr: PR, threads: [{ threadId: "PRRT_T1", isResolved: false }] }));
+    await writeFile(recordPath, JSON.stringify({ reviewBaselineHead: head, candidateHead: head, actSetId: "0".repeat(16),
+      invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "PRRT_T1", status: "resolved" }] }));
+    const plan = await emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", threadsFile, cwd: root,
+      fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
+    const pulled = await pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity,
+      cwd: root, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
+    assert.equal(pulled.workOrderText, await readFile(plan.promptPath, "utf8"));
+    const executionDir = path.dirname(plan.workOrder.outputRefs[0]);
+    assert.equal(existsSync(executionDir), false);
+    const { deps, calls } = runtime([], root, { live: false });
+    const expected = { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity,
+      planPath: plan.planPath, subject: pulled.receipt.subject, outputMissing: true };
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: plan.planPath, check: true }, deps),
+      (error) => error.code === "FIXER_RESULT_MISSING" && assert.deepEqual(error.activeFixer, expected) === undefined);
+    const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: head }, deps);
+    assert.equal(result.complete, false);
+    assert.deepEqual(result.activeFixer, expected);
+    assert.equal(existsSync(executionDir), false);
+    assert.deepEqual(calls, []);
+  });
+});
+
 for (const defect of ["partialSubject", "subjectHead", "receipt", "prompt", "digest", "ref", "role", "target", "output", "directory", "danglingReport", "redirectedDirectory", "danglingDirectory", "notDirectory", "malformed", "prePull"]) {
   test(`active full binding withholds metadata for ${defect}`, async () => {
     await withRepoRoot(async (root) => {
@@ -241,19 +272,20 @@ test("missing subject evidence does not authenticate the ACT source or authorize
   });
 });
 
-for (const code of ["EACCES", "EIO", "ENOTDIR", "ELOOP"]) test(`actual missing branch keeps ${code} unbound`, async () => {
+for (const code of ["EACCES", "EIO", "ENOTDIR", "ELOOP"]) for (const target of ["report", "directory"]) test(`actual missing branch keeps ${target} ${code} unbound`, async () => {
   await withRepoRoot(async (root) => {
     const f = await boundFixture(root);
     let injected = 0;
     const source = await readFile(new URL("../../scripts/github/verify-fixer-disposition.mjs", import.meta.url), "utf8");
+    const failingPath = target === "report" ? f.plan.workOrder.outputRefs[0] : await realpath(path.dirname(f.plan.workOrder.outputRefs[0]));
     const context = Object.assign({ Buffer, JSON, path, readFile, realpath,
-      lstat: async (file) => { if (file === f.plan.workOrder.outputRefs[0]) { injected++; throw Object.assign(new Error(code), { code }); } return lstat(file); },
+      lstat: async (file) => { if (file === failingPath) { injected++; throw Object.assign(new Error(code), { code }); } return lstat(file); },
     }, await import("../../scripts/github/_work-order-protocol.mjs"), await import("../../scripts/github/_fixer-emission-evidence.mjs"),
     await import("../../scripts/github/_gate-artifact-paths.mjs"), await import("../../scripts/lib/head-sha.mjs"));
     const load = runInNewContext(`${source.slice(source.indexOf("async function loadDeliveredHandoff"), source.indexOf("// Builds the { threadId"))}\nloadDeliveredHandoff`, context);
     await assert.rejects(load({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.planPath },
       { repoRoot: root, receiptTmpRoot: path.join(root, "tmp"), runtime: {} }), (error) => !error.code && !error.activeFixer && /result_missing/.test(error.message));
-    assert.equal(injected, 1, "the authenticated missing branch must reach the report lstat failure");
+    assert.equal(injected, 1, "the authenticated missing branch must reach the lstat failure");
   });
 });
 
