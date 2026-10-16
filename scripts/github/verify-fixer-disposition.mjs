@@ -200,6 +200,23 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   if (order?.role !== "fixer" || order.phase !== "full" || order.target?.repo !== options.repo || order.target?.pr !== options.pr) {
     throw new Error(`--fixer-plan "${options.fixerPlan}" is not a full-phase fixer work order for ${options.repo}#${options.pr}`);
   }
+  const complete = order.operation === "complete";
+  if (complete) {
+    const reads = Array.isArray(order.requiredReads) ? order.requiredReads : [];
+    const ofKind = (kind) => reads.filter((read) => read?.kind === kind);
+    const required = (kind) => ofKind(kind).length === 1 && ofKind(kind)[0].required === true;
+    const digest = (key) => /^[a-f0-9]{64}$/.test(order.authority?.[key] ?? "");
+    if (!Array.isArray(order.mutationAuthority?.allowedPaths) || order.mutationAuthority.allowedPaths.length
+      || typeof order.mutationAuthority.branch !== "string" || !order.mutationAuthority.branch.trim()
+      || !Array.isArray(order.outputRefs) || order.outputRefs.length !== 1
+      || typeof order.executionRules?.contract !== "string" || typeof order.executionRules.validation !== "string") throw new Error("complete requires empty source selectors, branch, single output and execution rules");
+    if (!["act-list", "threads"].includes(order.source) || !required(order.source)
+      || ofKind(order.source === "act-list" ? "threads" : "act-list").length || !digest("sourceDigest")) throw new Error("complete requires exactly one authenticated ACT or THREAD source");
+    if (order.source === "act-list") {
+      if (!required("delta-result") || !digest("deltaResultDigest") || !required("completion-input")
+        || !digest("completionInputDigest") || !digest("completionInputBytesDigest")) throw new Error("complete ACT requires required Delta/completion input and semantic/byte authorities");
+    } else if (ofKind("completion-input").length || ["completionInputDigest", "completionInputBytesDigest", "reviewBaselineHead"].some((key) => Object.hasOwn(order.authority ?? {}, key))) throw new Error("complete THREAD refuses ACT/completion-input authority");
+  }
   // outputRefs is local material outside the digest, so an edited plan field is never trusted: the
   // handoff path is derived from the plan location and execution, exactly as the emitter builds it.
   const handoffPath = path.join(path.dirname(planPath), plan.executionIdentity, "fixer-disposition.json");
@@ -259,7 +276,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   }
   const baselineAuthority = assertFixerReviewBaseline(order, bytesByRead);
   const completionReads = (order.requiredReads ?? []).filter((read) => read?.kind === "completion-input");
-  const optionalCompletion = completionReads.length > 0 || Object.hasOwn(order.authority ?? {}, "completionInputDigest")
+  const optionalCompletion = complete && order.source === "act-list" || completionReads.length > 0 || Object.hasOwn(order.authority ?? {}, "completionInputDigest")
     || Object.hasOwn(order.authority ?? {}, "completionInputBytesDigest");
   let completion = null;
   if (optionalCompletion) {
@@ -325,6 +342,11 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     const disposed = new Set(handoff.dispositions.map((entry) => entry.threadId));
     const missing = source.threads.filter((thread) => !disposed.has(thread.threadId));
     if (missing.length) throw new Error(`the handoff has no disposition entry for source thread(s) ${missing.map((thread) => thread.threadId).join(", ")}`);
+    if (complete) {
+      const pinned = new Set(source.threads.map((thread) => thread.threadId));
+      const extra = [...disposed].filter((id) => !pinned.has(id));
+      if (extra.length) throw new Error(`complete handoff includes non-source thread(s) ${extra.join(", ")}`);
+    }
   }
   // GATE-EXEC-REMEDIATION-SITE-QUERY: an act-list work order's items with a siteQuery need a coverage record.
   const actRead = (order.requiredReads ?? []).find((read) => read?.kind === "act-list");

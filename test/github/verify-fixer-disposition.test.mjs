@@ -18,8 +18,8 @@ import {
 } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { selectActThreadBinding } from "../../scripts/github/_fixer-act-thread-bindings.mjs";
-import { pullReceiptPath, pullWorkOrder, verifyPulledResult, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
-import { emitFixerWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
+import { materializationHash, pullReceiptPath, pullWorkOrder, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { emitFixerWorkOrder, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { gitEnvNoDirOverrides } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
@@ -1173,6 +1173,20 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   const nodes = threadBindings.map(({ threadId, fingerprints }, index) => actThread(threadId, [gateComment(`c${index}`, index + 1,
     fingerprints.map((fp) => `<!-- dev-loops:finding ${fp} severity=medium angle=correctness round=1 -->`).join("\n") + `\nFixed in commit ${fixing}.`)], dispositions[index].disposition === "tackled"));
   const plan = await emit("full", { deltaResult: deltaPath, runChild: makeGhMock([threadsCallEntry(nodes), userEntry]).runChild });
+  if (settings.complete) {
+    plan.executionIdentity = `f${Date.now()}-2800abcd`;
+    plan.workOrderRef = `fixer:${REPO}#${PR}:${candidate}:${plan.executionIdentity}`;
+    plan.workOrder.outputRefs = [path.join(path.dirname(plan.planPath), plan.executionIdentity, "fixer-disposition.json")];
+    plan.promptPath = path.join(path.dirname(plan.planPath), "work-orders", `${plan.executionIdentity}.md`);
+    plan.workOrder.operation = "complete";
+    plan.workOrder.mutationAuthority.allowedPaths = [];
+    plan.workOrderDigest = workOrderDigest(plan.workOrder);
+    const text = renderWorkOrder(plan.workOrder);
+    plan.materializationHash = materializationHash(text);
+    await writeFile(plan.promptPath, text);
+    await writeFile(plan.planPath, JSON.stringify(plan));
+    await writeExecutionIndex(tmpRoot, plan);
+  }
   await pull(plan);
   const fixerPlan = plan.planPath, sourceRead = plan.workOrder.requiredReads.find((read) => read.kind === "completion-input"), sourcePath = sourceRead.path;
   const source = JSON.parse(await readFile(sourcePath));
@@ -1193,6 +1207,49 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   };
   return { fixerPlan, plan, source, sourceRead, sourcePath, originPath, baseline, fixing, candidate, nodes, dispositions, seal, depsFor };
 }
+
+for (const kind of ["resolved", "threadless", "mixed"]) test(`explicit complete ACT constructs then verifies without clobber (${kind})`, async () => {
+  await withRepoRoot(async (root) => {
+    const f = await completionFixture(root, kind, { complete: true });
+    const output = f.plan.workOrder.outputRefs[0], before = await readFile(output);
+    for (const check of [false, true]) {
+      const extra = f.dispositions.some((entry) => entry.disposition === "tackled") ? [compareEntry(f.fixing, "ahead", f.candidate)] : [];
+      assert.equal((await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan, check }, f.depsFor(extra).deps)).complete, true);
+      assert.deepEqual(await readFile(output), before);
+    }
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan, construct: true }, f.depsFor().deps), /EEXIST/);
+    assert.deepEqual(await readFile(output), before);
+  });
+});
+
+for (const defect of ["missing", "partial", "paths", "duplicate", "opposite", "raw", "semantic"]) test(`explicit complete delivery independently refuses ${defect}`, async () => {
+  await withRepoRoot(async (root) => {
+    const f = await completionFixture(root, "resolved", { complete: true });
+    // Deliberate negative resealing exercises verifier authority independently of pull admission.
+    const order = f.plan.workOrder;
+    if (defect === "missing") {
+      order.requiredReads = order.requiredReads.filter((read) => read.kind !== "completion-input");
+      delete order.authority.completionInputDigest;
+      delete order.authority.completionInputBytesDigest;
+    }
+    if (defect === "partial") delete order.authority.completionInputBytesDigest;
+    if (defect === "paths") order.mutationAuthority.allowedPaths = ["."];
+    if (defect === "duplicate") order.requiredReads.push({ ...order.requiredReads[0] });
+    if (defect === "opposite") order.requiredReads.push({ ...order.requiredReads[0], kind: "threads" });
+    if (defect === "raw") order.authority.completionInputBytesDigest = "0".repeat(64);
+    if (defect === "semantic") order.authority.completionInputDigest = "0".repeat(64);
+    f.plan.workOrderDigest = workOrderDigest(order);
+    await writeFile(f.fixerPlan, JSON.stringify(f.plan));
+    const receiptPath = pullReceiptPath(path.join(root, "tmp"), f.plan.workOrderRef);
+    const receipt = JSON.parse(await readFile(receiptPath));
+    await writeFile(receiptPath, JSON.stringify({ ...receipt, workOrderDigest: f.plan.workOrderDigest }));
+    await writeFile(order.outputRefs[0], JSON.stringify({ headSha: f.candidate, dispositions: f.dispositions, siteCoverage: f.source.siteCoverage }));
+    const mock = f.depsFor([compareEntry(f.fixing, "ahead", f.candidate)]);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan }, mock.deps));
+    assert.deepEqual(await checkpointFiles(root), []);
+    assert.equal(hasPost(mock.calls), false);
+  });
+});
 
 // Explicit historical consumer fixtures retain their pre-producer identity format.
 async function legacyCompletionFixture(repoRoot, kind = "resolved", settings = {}) {
