@@ -973,6 +973,7 @@ test("commandContainsDetachedWaitTool ignores inert heredoc and quoted text but 
   // a here-string payload to a shell executes
   assert.equal(commandContainsDetachedWaitTool("bash <<< 'node scripts/loop/probe-copilot-review.mjs --pr 5 &'"), true);
   assert.equal(commandContainsDetachedWaitTool("cat <<< 'plain text'"), false);
+  assert.equal(commandContainsDetachedWaitTool("bash<<<'node scripts/loop/probe-copilot-review.mjs --pr 5 &'"), true);
 });
 
 test("commandContainsCodeVerificationEntrypoint detects known verify/test/build entrypoints and does not over-match compact orchestration commands (#2082)", () => {

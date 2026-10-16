@@ -20,6 +20,7 @@ export const DENIED_INLINE_INTERPRETER_FORMS = [
   "python3 -c 'x'",
   "bash <<< 'x; node -e y'",
   "sh <<< 'x; node -e y'",
+  "bash<<<'x; node -e y'",
   "python3 -I -c 'x'",
   "python3 -I - <<'E'",
   "python3 - <<'EOF'",
