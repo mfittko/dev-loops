@@ -826,10 +826,12 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
   // The canonical active plan can veto a checkpoint; success still needs the existing boundary below.
   const planPath = path.join(tmpRoot, "gate-fixer", repoSlugFor(repo), `pr-${pr}`, "fixer-emit-plan.json");
+  let planBytes;
   try {
     let plan;
     try {
-      plan = JSON.parse(await readFile(planPath, "utf8"));
+      planBytes = await readFile(planPath);
+      plan = JSON.parse(planBytes);
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
     }
@@ -850,12 +852,18 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
         }
         if (applicable) {
           const checked = await verifyFixerDisposition({ repo, pr, headSha: currentHeadSha, fixerPlan: planPath, check: true }, { ...runtime, repoRoot });
-          if (!checked.complete) return { complete: false, incomplete: checked.incomplete };
+          if (!checked.complete) {
+            const unchanged = (await readFile(planPath)).equals(planBytes);
+            return { complete: false, incomplete: checked.incomplete,
+              ...(unchanged && checked.activeFixer ? { activeFixer: checked.activeFixer } : {}) };
+          }
         }
       }
     }
   } catch (error) {
-    return { complete: false, incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unverified_active_fixer: ${error instanceof Error ? error.message : String(error)}` }] };
+    const unchanged = planBytes && await readFile(planPath).then((bytes) => bytes.equals(planBytes), () => false);
+    return { complete: false, incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unverified_active_fixer: ${error instanceof Error ? error.message : String(error)}` }],
+      ...(unchanged && error?.code === "FIXER_RESULT_MISSING" && error.activeFixer ? { activeFixer: error.activeFixer } : {}) };
   }
   const logPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot });
   // Main-anchored copy first, then a legacy checkpoint an in-flight PR wrote

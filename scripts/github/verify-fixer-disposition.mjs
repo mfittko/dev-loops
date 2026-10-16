@@ -31,6 +31,8 @@ import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { revalidateLegacyCompletion } from "./_legacy-fixer-revalidation.mjs";
+import { authenticateOriginalPlan } from "./_fixer-emission-evidence.mjs";
+import { repoSlugFor } from "./_gate-artifact-paths.mjs";
 
 const USAGE = `Usage: verify-fixer-disposition.mjs --repo <owner/name> --pr <number> --head-sha <sha> --fixer-plan <path> [--tmp-root <path>]
 Enforce GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: verify every review thread a fixer
@@ -183,8 +185,10 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
 async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime }) {
   const planPath = path.resolve(repoRoot, options.fixerPlan);
   let plan;
+  let planBytes;
   try {
-    plan = JSON.parse(await readFile(planPath, "utf8"));
+    planBytes = await readFile(planPath);
+    plan = JSON.parse(planBytes);
   } catch (error) {
     throw new Error(`Cannot read --fixer-plan "${options.fixerPlan}": ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -216,7 +220,33 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     || !(await sameDir(path.dirname(path.dirname(outputRef)), path.dirname(planPath)))) {
     throw new Error(`--fixer-plan "${options.fixerPlan}" outputRef ${order.outputRefs?.[0]} is not the emitted handoff path ${handoffPath}; the plan was edited after emission, re-emit it`);
   }
-  if (receipt.reason === "result_missing" && !options.construct) throw new Error(`result_missing: no fixer disposition handoff at the work order's outputRef ${handoffPath}; a receipt alone is never completion`);
+  // Optional subject evidence never strengthens ordinary legacy delivery admission.
+  const bindActiveFixer = async (outputMissing) => {
+    try {
+      const canonical = path.join(await realpath(receiptTmpRoot), "gate-fixer", repoSlugFor(options.repo), `pr-${options.pr}`, "fixer-emit-plan.json");
+      if (await realpath(planPath) !== canonical) return;
+      const subject = receipt.receipt.subject;
+      if (normalizeFullHeadSha(order.headSha) !== order.headSha || typeof order.mutationAuthority?.branch !== "string" || !order.mutationAuthority.branch.trim()) return;
+      if (subject.repo !== options.repo || subject.pr !== options.pr || subject.headSha !== order.headSha
+        || subject.branch !== order.mutationAuthority?.branch || subject.phase !== "full"
+        || receipt.receipt.materializationHash !== plan.materializationHash) return;
+      await authenticateOriginalPlan({ plan, canonical, receiptTmpRoot: await realpath(receiptTmpRoot), requireReceipt: true });
+      const executionDir = path.join(path.dirname(canonical), plan.executionIdentity);
+      const directory = await lstat(executionDir).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+      if (directory ? !directory.isDirectory() || await realpath(executionDir) !== executionDir : !outputMissing) return;
+      const info = await lstat(handoffPath).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+      if (outputMissing ? info !== null : !info?.isFile() || info.isSymbolicLink()) return;
+      if (!(await readFile(planPath)).equals(planBytes)) return;
+      return { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity,
+        planPath, subject: receipt.receipt.subject, outputMissing };
+    } catch { return; }
+  };
+  if (receipt.reason === "result_missing" && !options.construct) {
+    const error = new Error(`result_missing: no fixer disposition handoff at the work order's outputRef ${handoffPath}; a receipt alone is never completion`);
+    const activeFixer = await bindActiveFixer(true);
+    if (activeFixer) Object.assign(error, { code: "FIXER_RESULT_MISSING", activeFixer });
+    throw error;
+  }
   // verifyPulledResult compares the handoff mtime to the receipt file mtime: one filesystem clock.
   if (receipt.reason === "result_predates_pull") {
     throw new Error(`result_predates_pull: the disposition handoff ${handoffPath} was written before the pull at ${receipt.receipt.pulledAt}; a stale or replayed disposition never advances`);
@@ -421,6 +451,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     completion,
     constructedReport: raw,
     handoffPath,
+    bindActiveFixer,
     delivery: { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity },
   };
 }
@@ -502,7 +533,7 @@ export async function verifyFixerDisposition(
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   const runtime = { env, ghCommand, runChild };
-  const { handoff, actList, deltaStatuses, completion, constructedReport, handoffPath, delivery } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  const { handoff, actList, deltaStatuses, completion, constructedReport, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
   const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
   const liveHead = live.code === 0 ? (() => { try { return JSON.parse(live.stdout).headRefOid; } catch { return null; } })() : null;
@@ -615,6 +646,7 @@ export async function verifyFixerDisposition(
   const incomplete = evaluation.incomplete.map((entry) => (deltaBlocked.has(entry.threadId)
     ? { ...entry, failedStep: FIXER_DISPOSITION_FAILED_STEP.DELTA_BLOCKED, deltaStatus: deltaBlocked.get(entry.threadId).status, deltaRecord: deltaBlocked.get(entry.threadId).recordPath }
     : entry));
+  const activeFixer = evaluation.ok ? undefined : await bindActiveFixer(false);
   return {
     ok: true,
     repo: options.repo,
@@ -622,6 +654,7 @@ export async function verifyFixerDisposition(
     headSha: options.headSha,
     checkpointPath: options.check ? null : logPath,
     complete: evaluation.ok,
+    ...(activeFixer ? { activeFixer } : {}),
     incomplete,
     forbiddenActions: evaluation.forbiddenActions,
     nextAction: evaluation.nextAction,
