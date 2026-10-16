@@ -957,13 +957,22 @@ test("commandContainsDetachedWaitTool ignores inert heredoc and quoted text but 
   const body = "cat > tmp/f <<'EOF'\nnode scripts/loop/detect-copilot-loop-state.mjs --pr 5 &\nEOF";
   assert.equal(commandContainsDetachedWaitTool(body), false);
   assert.equal(commandContainsDetachedWaitTool('echo "detect-copilot-loop-state.mjs & more"'), false);
-  assert.equal(commandContainsDetachedWaitTool("sed -n 's/`x`/while sleep gh/p' f"), false);
+  const singleQuotedBacktick = "sed -n 's/`gh pr view 5`/while sleep 5/p' f";
+  assert.equal(commandContainsDetachedWaitTool(singleQuotedBacktick), false);
+  assert.equal(commandIsSleepPollLoop(singleQuotedBacktick), false);
   assert.equal(commandContainsDetachedWaitTool("cat > tmp/f <<'EOF'\nsleep 5; python3 -c x\nEOF"), false);
   assert.equal(commandContainsDetachedWaitTool("node scripts/loop/probe-copilot-review.mjs --pr 5 --timeout-ms 1000 &"), true);
   assert.equal(commandContainsDetachedWaitTool('node "scripts/loop/probe-copilot-review.mjs" &'), true);
   assert.equal(commandContainsDetachedWaitTool("bash <<'EOF'\nnode scripts/loop/probe-copilot-review.mjs --pr 5 &\nEOF"), true);
   assert.equal(commandContainsDetachedWaitTool("while true; do gh pr view 5; sleep 5; done"), true);
   assert.equal(commandContainsDetachedWaitTool('while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done'), true);
+  // a stray apostrophe in a `#` comment must not pair across lines and blank a real wait
+  assert.equal(commandContainsDetachedWaitTool("# don't\nnode scripts/loop/probe-copilot-review.mjs --pr 5 &\n# it's"), true);
+  assert.equal(commandIsSleepPollLoop('# don\'t\nwhile [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done # it\'s'), true);
+  assert.equal(commandContainsDetachedWaitTool('# don\'t\nwhile [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done # it\'s'), true);
+  // a here-string payload to a shell executes
+  assert.equal(commandContainsDetachedWaitTool("bash <<< 'node scripts/loop/probe-copilot-review.mjs --pr 5 &'"), true);
+  assert.equal(commandContainsDetachedWaitTool("cat <<< 'plain text'"), false);
 });
 
 test("commandContainsCodeVerificationEntrypoint detects known verify/test/build entrypoints and does not over-match compact orchestration commands (#2082)", () => {

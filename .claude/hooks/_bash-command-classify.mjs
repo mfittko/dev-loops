@@ -976,7 +976,7 @@ export function stripQuotedLiterals(command, blank = " ") {
       return match;
     }
     const before = full.slice(0, offset);
-    if (/(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(before)) {
+    if (/(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval|<<<)\s*$/.test(before)) {
       return match; // executable -c/eval payload — leave the real shell syntax intact
     }
     return blank;
@@ -994,7 +994,7 @@ export function stripQuotedLiterals(command, blank = " ") {
  * @param {string} command @returns {boolean}
  */
 export function commandIsSleepPollLoop(command) {
-  const whole = stripQuotedLiterals(command.trim());
+  const whole = stripQuoteSafe(command.trim());
   return (
     /(?:while|until|for)\b/i.test(whole) &&
     /\bsleep\b/.test(whole) &&
@@ -1017,7 +1017,7 @@ export function commandIsSleepPollLoop(command) {
  * @param {string} command @returns {boolean}
  */
 export function commandIsFileMarkerPollLoop(command) {
-  const whole = stripQuotedLiterals(command.trim());
+  const whole = stripQuoteSafe(command.trim());
   return (
     /(?:while|until|for)\b/i.test(whole) &&
     /\bsleep\b/.test(whole) &&
@@ -1121,7 +1121,7 @@ export function commandContainsDetachedWaitTool(rawCommand) {
 
   // (3) OPTION-C: bare-`&` background AND a wait/probe family reference. The `&` is checked outside
   // quoted data; the family match stays on the unstripped text so a quoted script path still counts.
-  if (!commandHasBareBackgroundOperator(stripQuotedLiterals(whole))) {
+  if (!commandHasBareBackgroundOperator(stripQuoteSafe(whole))) {
     return false;
   }
   return WAIT_PROBE_FAMILY_RE.test(whole);
@@ -1286,6 +1286,12 @@ function neutralizeQuoteNoise(text) {
     }
   }
   return state === "n" ? out : null;
+}
+
+/** `stripQuotedLiterals` after `neutralizeQuoteNoise`; unstripped text when a quote is unterminated (fail closed). */
+function stripQuoteSafe(text) {
+  const quoteSafe = neutralizeQuoteNoise(text);
+  return quoteSafe === null ? text : stripQuotedLiterals(quoteSafe);
 }
 
 /** Command heads whose arguments can carry inline code, a stdin script, or an in-place edit. */

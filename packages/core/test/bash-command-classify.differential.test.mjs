@@ -27,6 +27,8 @@ const WAIT_FORMS = [
   "while [ ! -f tmp/done ]; do sleep 2; done",
   "nohup sleep 5 &",
   "dev-loops loop wait-for-review --pr 5 &",
+  "node scripts/loop/probe-copilot-review.mjs --pr 5 &",
+  'while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done',
 ];
 const SEPARATORS = ["", "echo a; ", "echo a && ", "echo a || ", "echo a | ", "echo a & ", "echo a\n", "true\n\n"];
 const SUFFIXES = ["", " && echo done", " ; echo done", "\necho done", " # c"];
