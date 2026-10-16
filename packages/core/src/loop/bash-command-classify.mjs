@@ -975,7 +975,7 @@ export function stripQuotedLiterals(command, blank = " ") {
       return match;
     }
     const before = full.slice(0, offset);
-    if (/(?:(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)|<<<)\s*$/.test(before)) {
+    if (/(?:(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)|<<<)\s*[^\s;&|<>()]*$/.test(before)) {
       return match; // executable -c/eval payload — leave the real shell syntax intact
     }
     return blank;
