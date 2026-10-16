@@ -1101,6 +1101,133 @@ async function sealBaselineUnit(unit, root) {
   await writeExecutionIndex(path.join(root, "tmp"), unit);
 }
 
+for (const source of ["act-list", "threads"]) test(`complete ${source} pulls delivery-only prose and an empty source grant`, async () => {
+  await withFixture(async ({ root, wt, emit, files, prepareFull }) => {
+    const unit = source === "act-list" ? await (await prepareFull()).full()
+      : await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    unit.workOrder.operation = "complete";
+    unit.workOrder.mutationAuthority.allowedPaths = [];
+    await sealBaselineUnit(unit, root);
+    const result = pull(unit, wt);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const active = result.stdout.split("## Required reads")[0];
+    assert.match(active, /delivery-only/i);
+    assert.match(active, /git worktree list --porcelain/);
+    assert.match(active, /shasum -a 256/);
+    assert.match(active, /explicit cwd/);
+    assert.match(active, /immutable.*evidence/i);
+    assert.doesNotMatch(active, /Run staging|Validation:|Regenerate:|Apply and commit|Push only/);
+    assert.equal(active.includes(unit.workOrder.executionRules.mutation), false);
+    assert.match(active, /--check/);
+    if (source === "act-list") {
+      assert.match(active, /does not exist.*--construct/s);
+      assert.match(active, /already exists.*never.*reconstruct/s);
+    } else {
+      assert.doesNotMatch(active, /--construct/);
+      assert.match(active, /exactly.*thread IDs/s);
+    }
+    assert.ok(result.stdout.endsWith(`${JSON.stringify(unit.workOrder, null, 2)}\n\x60\x60\x60\n`));
+    assert.equal(hook(wt, unit.workOrder.outputRefs[0]), "allow");
+    assert.equal(hook(wt, path.join(wt, "src/a.mjs")), "deny");
+    assert.ok(Buffer.byteLength(buildDispatchPointer(unit)) <= DISPATCH_POINTER_MAX_BYTES);
+  });
+});
+
+for (const defect of ["phase", "paths", "ordinaryEmpty", "source", "duplicate", "opposite", "optional", "missingCompletion", "partialCompletion", "semantic", "raw", "json", "sourceDigest", "deltaDigest", "threadMix"]) {
+  test(`complete pull refuses ${defect} before granting source authority`, async () => {
+    await withFixture(async ({ root, wt, files, emit, prepareFull }) => {
+      const unit = defect === "threadMix"
+        ? await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined })
+        : await (await prepareFull()).full();
+      const order = unit.workOrder;
+      order.operation = "complete";
+      order.mutationAuthority.allowedPaths = [];
+      const completion = order.requiredReads.find((read) => read.kind === "completion-input");
+      if (defect === "phase") order.phase = "commit_only";
+      if (defect === "paths") order.mutationAuthority.allowedPaths = ["src"];
+      if (defect === "ordinaryEmpty") order.operation = "fix";
+      if (defect === "source") order.source = "threads";
+      if (defect === "duplicate") order.requiredReads.push({ ...order.requiredReads[0] });
+      if (defect === "opposite") order.requiredReads.push({ ...order.requiredReads[0], kind: "threads" });
+      if (defect === "optional") completion.required = false;
+      if (defect === "missingCompletion") {
+        order.requiredReads = order.requiredReads.filter((read) => read !== completion);
+        delete order.authority.completionInputDigest;
+        delete order.authority.completionInputBytesDigest;
+      }
+      if (defect === "partialCompletion") delete order.authority.completionInputBytesDigest;
+      if (defect === "semantic") order.authority.completionInputDigest = "0".repeat(64);
+      if (defect === "raw") order.authority.completionInputBytesDigest = "0".repeat(64);
+      if (defect === "json") {
+        await writeFile(completion.path, "{");
+        Object.assign(completion, { sha256: sha256Hex(Buffer.from("{")).slice(7), bytes: 1 });
+        order.authority.completionInputBytesDigest = completion.sha256;
+      }
+      if (defect === "sourceDigest") order.authority.sourceDigest = "0".repeat(64);
+      if (defect === "deltaDigest") delete order.authority.deltaResultDigest;
+      if (defect === "threadMix") order.authority.completionInputDigest = "0".repeat(64);
+      await sealBaselineUnit(unit, root);
+      assert.equal(pull(unit, wt).status, 1, defect);
+      assert.equal(hook(wt, path.join(wt, "src/a.mjs")), "deny");
+    });
+  });
+}
+
+for (const form of ["exact", "missing", "extra", "foreign", "mixed"]) test(`complete THREAD delivery is source-bound (${form})`, async () => {
+  await withFixture(async ({ root, wt, head, emit, files, writeRecord }) => {
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
+    await writeRecord({ items: [{ ref: "PRRT_T1", status: "resolved" }] });
+    const unit = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    unit.workOrder.operation = "complete";
+    unit.workOrder.mutationAuthority.allowedPaths = [];
+    await sealBaselineUnit(unit, root);
+    assert.equal(pull(unit, wt).status, 0);
+    if (form === "mixed") {
+      // Negative verifier-only resealing; positive delivery uses the genuine pull unchanged.
+      unit.workOrder.authority.completionInputDigest = "0".repeat(64);
+      unit.workOrderDigest = workOrderDigest(unit.workOrder);
+      await writeFile(unit.planPath, JSON.stringify(unit));
+      const receiptPath = pullReceiptPath(path.join(root, "tmp"), unit.workOrderRef);
+      const receipt = JSON.parse(await readFile(receiptPath));
+      await writeFile(receiptPath, JSON.stringify({ ...receipt, workOrderDigest: unit.workOrderDigest }));
+    }
+    const ids = form === "missing" ? [] : form === "foreign" ? ["PRRT_FOREIGN"] : form === "extra" ? ["PRRT_T1", "PRRT_EXTRA"] : ["PRRT_T1"];
+    await mkdir(path.dirname(unit.workOrder.outputRefs[0]), { recursive: true });
+    await writeFile(unit.workOrder.outputRefs[0], JSON.stringify({ headSha: head, dispositions: ids.map((threadId) => ({ threadId, fixingCommitSha: head, disposition: "tackled" })) }));
+    const nodes = ["PRRT_T1", "PRRT_UNRELATED"].map((id, index) => ({ id, isResolved: id === "PRRT_T1", comments: { nodes: [{ id: `c${index}`, databaseId: index + 1, body: id === "PRRT_T1" ? `Fixed in commit ${head}.` : "unrelated", author: { login: "bot", __typename: "User" } }] } }));
+    const mock = () => makeGhMock([
+      { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: head }) },
+      { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) },
+      { assertArgs: ["api", `repos/${REPO}/compare/${head}...${head}`], stdout: '{"status":"identical"}' },
+    ]);
+    const options = { repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath };
+    if (form === "exact") {
+      for (const check of [false, true]) assert.equal((await verifyFixerDisposition({ ...options, check }, { repoRoot: wt, env: gitFreeEnv(), runChild: mock().runChild })).complete, true);
+    } else {
+      const runtime = mock();
+      await assert.rejects(verifyFixerDisposition(options, { repoRoot: wt, env: gitFreeEnv(), runChild: runtime.runChild }), form === "extra" ? /non-source thread/ : form === "mixed" ? /THREAD refuses/ : /no disposition entry/);
+      assert.deepEqual(runtime.calls, [], "reject before live queries, checkpoints or mutations");
+      assert.equal(existsSync(path.join(root, "tmp/gate-findings/o-r", `pr-${PR}`, `fixer-disposition-${head}.json`)), false);
+    }
+  });
+});
+
+test("ordinary rendering matches the independent approved base renderer byte for byte", async () => {
+  const checkout = fileURLToPath(new URL("../../", import.meta.url));
+  const source = execFileSync("git", ["-C", checkout, "show", "c1ce5892ecda03e0516d87b88c7d1d83bc379eae:scripts/loop/emit-fixer-work-order.mjs"], { encoding: "utf8", env: gitFreeEnv() });
+  const start = source.indexOf("export function renderWorkOrder(");
+  const end = source.indexOf("\n// The commit_only phase", start);
+  const { runInNewContext } = await import("node:vm");
+  const baseline = runInNewContext(`(${source.slice(start, end).replace("export function", "function")})`, { path, PLAN_FILE: "fixer-emit-plan.json", renderRequiredReadLine: (await import("../../scripts/github/write-gate-context.mjs")).renderRequiredReadLine });
+  await withFixture(async ({ emit, prepareFull }) => {
+    for (const unit of [await emit(), await (await prepareFull()).full()]) {
+      assert.equal(renderWorkOrder(unit.workOrder), baseline(unit.workOrder));
+      delete unit.workOrder.operation;
+      assert.equal(renderWorkOrder(unit.workOrder), baseline(unit.workOrder));
+    }
+  });
+});
+
 test("review baseline authenticates the actual producer's complete JSON content identity", async () => {
   await withFixture(async ({ wt, files, prepareFull }) => {
     const act = JSON.parse(JSON.stringify(ACT));
@@ -1592,8 +1719,9 @@ for (const route of ["THREAD", "ACT", "HISTORICAL_CONSTRUCT", "LEGACY", "AUTHORI
   });
 });
 
-for (const oldAuthority of [false, true]) test(`${oldAuthority ? "OLD authority" : "Historical main"} executes both ordinary populated commands from the absolute new emitting root`, async () => {
+for (const route of ["Historical main", "OLD authority", "complete"]) test(`${route} executes populated commands from the absolute new emitting root`, async () => {
   await withFixture(async ({ root, wt, head, files, prepareFull }) => {
+    const oldAuthority = route === "OLD authority";
     const checkout = fileURLToPath(new URL("../../", import.meta.url));
     const emitting = oldAuthority ? path.join(path.dirname(root), "new emitting 'root") : wt;
     if (oldAuthority) await mkdir(emitting);
@@ -1623,6 +1751,11 @@ for (const oldAuthority of [false, true]) test(`${oldAuthority ? "OLD authority"
     const emitter = (over = {}) => producer.emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, actListFile: files.actList, gate: "draft_gate", cwd: wt,
       fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }), executionIdentity: nextExecution(), deltaResult: files.delta, ...over });
     const f = await prepareFull({ emitter }), unit = await f.full();
+    if (route === "complete") {
+      unit.workOrder.operation = "complete";
+      unit.workOrder.mutationAuthority.allowedPaths = [];
+      await sealBaselineUnit(unit, root);
+    }
     const coverage = path.join(root, "tmp/loaded-new-emitter");
     const env = { ...gitFreeEnv(), NODE_V8_COVERAGE: coverage };
     const pullScript = path.join(oldAuthority ? emitting : root, "scripts/github/pull-work-order.mjs");
@@ -1634,7 +1767,7 @@ for (const oldAuthority of [false, true]) test(`${oldAuthority ? "OLD authority"
     await writeFile(path.join(bin, "gh"), `#!/bin/sh\ncase "$1 $2" in\n'pr view') printf '%s\\n' '${JSON.stringify({ headRefOid: f.candidate })}';;\n'api graphql') printf '%s\\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}';;\n'api user') printf '%s\\n' '{"login":"bot"}';;\napi*) printf '%s\\n' '{"status":"ahead"}';;\n*) exit 1;;\nesac\n`);
     chmodSync(path.join(bin, "gh"), 0o755);
     const commands = [...pulled.stdout.split("## Required reads")[0].matchAll(/`(node [^`]+)`/g)].map((match) => match[1]).filter((command) => command.includes("scripts/github/verify-fixer-disposition.mjs"));
-    assert.equal(commands.length, 2);
+    assert.equal(commands.length, route === "complete" ? 3 : 2);
     for (const command of commands) {
       assert.ok(command.startsWith("node '"));
       const out = spawnSync("sh", ["-c", command], { cwd: wt, encoding: "utf8", env: { ...env, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });

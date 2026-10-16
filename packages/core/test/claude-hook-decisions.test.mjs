@@ -1444,6 +1444,15 @@ test("decideFixerWriteGuard allows the outputRef and in-authority paths of a cur
   assert.equal(fixer(`${FX_WT}/README.md`, { grants: [{ ...FX_GRANT, allowedPaths: ["."] }] }).decision, "allow");
 });
 
+test("decideFixerWriteGuard with empty selectors permits only the exact output in a checkout", () => {
+  const grants = [{ ...FX_GRANT, allowedPaths: [] }];
+  assert.equal(fixer(FX_OUTPUT, { grants }).decision, "allow");
+  for (const target of [`${FX_WT}/src/a.mjs`, `${FX_MAIN}/tmp/src/act.json`,
+    `${FX_MAIN}/tmp/work-order-receipts/x.json`, `${FX_OUTPUT}.other`]) {
+    assert.equal(fixer(target, { grants }).decision, "deny", target);
+  }
+});
+
 test("decideFixerWriteGuard denies every in-checkout write without a current pull", () => {
   const d = fixer(`${FX_WT}/src/x.mjs`, { grants: [] });
   assert.equal(d.decision, "deny");

@@ -1267,6 +1267,24 @@ While any tackled thread is incomplete, `FIXER_DISPOSITION_FORBIDDEN_ACTIONS` al
 
 Adding `--check` runs the same current-protocol plan/digest, role/target/execution, receipt/path, after-pull output, source integrity, current-head/contained-order-head, coverage, authenticated ACT-thread and containment checks, including live reply/resolution and `delta_blocked` evaluation. It writes no report or checkpoint and posts no reply or resolution. A THREAD unit validates its digest-bound source hash and requires dispositions for its own pinned thread IDs only; it adds no ACT query or all-history requirement. An authentic threadless ACT unit with complete required coverage may have an empty dispositions array. The default mutating verification remains the completion path after populated construction; legacy deliveries retain their existing coverage requirements.
 
+Explicit `operation: complete` is a delivery-only consumer mode: require `phase: full`, an
+actual empty `mutationAuthority.allowedPaths`, a single output and exactly one required
+ACT or THREAD source with raw-byte and semantic authentication. ACT additionally requires
+unique required Delta/completion-input reads and both completion authorities; missing all
+optional markers cannot fall back to ordinary delivery. THREAD rejects ACT/completion-input
+mixing and every extra delivered ID before checkpoint or reply/resolution mutation, while
+retaining required pinned IDs and ignoring unrelated live threads. There is no THREAD constructor.
+The emitted task precedes generic guidance and immutable JSON identity evidence: preserve the
+branch/worktree/source-hash bootstrap, authorize only the exact own output and evidenced
+delivery/reply/resolution verification, and perform no source edit/test, stage, commit, push,
+new Delta or counter reset. ACT constructs only absent output; genuine existing output uses
+normal/check without clobbering. Existing empty-selector Write/Edit guards allow the exact
+output only. Codex managed permissions and supported Claude/Pi hooks retain their actual
+limits; this is not universal Bash enforcement. Ordinary emission remains `operation: fix`
+with unchanged marker behavior and ordinary renderer bytes. Main-checkout consumers must
+ship this support before a later producer enables delivery-only reentry; these fixtures do
+not establish producer eligibility, new publication, runtime worker qualification or recovery.
+
 The optional `--construct` operation (ADR 0149) is ACT/full only and mutually exclusive with
 `--check`. It authenticates the current plan/digest, fixer identity/receipt/subject, canonical
 plan/output paths and after-pull timing before constructing that execution's report. Missing

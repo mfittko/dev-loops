@@ -128,6 +128,35 @@ export function buildSiteCoverageSkeleton(actList) {
 
 export function renderWorkOrder(workOrder) {
   const [dispositionPath] = workOrder.outputRefs;
+  if (workOrder.operation === "complete") {
+    const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+    const root = path.dirname(path.dirname(workOrder.executionRules.contract));
+    const verifier = `node ${quote(path.join(root, "scripts/github/verify-fixer-disposition.mjs"))} --repo ${quote(workOrder.target.repo)} --pr ${workOrder.target.pr} --head-sha ${workOrder.headSha} --fixer-plan ${quote(path.join(path.dirname(path.dirname(dispositionPath)), PLAN_FILE))}`;
+    const task = workOrder.source === "act-list"
+      ? `If the outputRef does not exist, run \`${verifier} --construct\`, then \`${verifier}\` and \`${verifier} --check\`. If the outputRef already exists, run the normal command and --check; never delete, overwrite or reconstruct it. Construction alone is not delivery. Preserve authenticated fixing commits and exact raw coverage.`
+      : `Write your own after-pull report \`{ headSha, dispositions: [...] }\` at the outputRef for exactly the thread IDs in the pinned threads read, with their evidenced fixing commits and dispositions. Run \`${verifier}\`, then \`${verifier} --check\`. Preserve an existing genuine report and use normal/check on reentry. Do not read ACT/history or take on unrelated live threads.`;
+    return `# Fixer delivery-only work order (ADR 0106)
+
+Operation: complete. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.
+These complete-task instructions take precedence over generic workflow guidance and the immutable JSON evidence below. Its generic mutation/validation/regeneration fields preserve identity only; they are not tasks for this operation.
+Delivery-only authority permits the exact outputRef ${JSON.stringify(dispositionPath)} and evidenced delivery/reply/resolution verification. No source edits, staging, commits, pushes, source validation, new Delta or counter resets are authorized. Source selectors are empty.
+After pull, run \`git worktree list --porcelain\`. Match branch literally to \`refs/heads/\` plus ${JSON.stringify(workOrder.mutationAuthority.branch)}; require exactly one checked-out worktree and an absolute root or stop. Use that root as explicit cwd on every later tool call/subprocess. Never create or switch worktrees or invent a root.
+The emitting toolchain root is ${JSON.stringify(root)}, derived only by removing agents/fixer.agent.md from executionRules.contract. Resolve contracts[].path against that root, never a searched fallback or mutation worktree. Use normal file-read tools or cat; first qualify digest availability with \`command -v shasum\` and stop if unavailable. Verify every exact contract/source hash with \`shasum -a 256\`, then read all required contracts and sources IN FULL. Read truncated output in bounded ranges until complete; missing, unreadable or mismatched material stops this actor. No inline Python/Node bootstrap; follow OPS-NO-INLINE-INTERPRETER.
+A permission or classifier denial stops this actor immediately: no subsequent read, verification or alternate-command attempt; report the exact denial. Codex uses actual managed permissions, requesting normal resource approval up front for authorized commands needing protected shared Git metadata or sockets. Claude Write/Edit and loaded Pi hooks guard their supported tool surfaces; none provides universal Bash enforcement or broader authority.
+${task}
+The output is immutable evidence: never clobber it or replay an earlier execution's report. A receipt alone is not completion.
+
+## Required reads
+
+${workOrder.requiredReads.map((read) => renderRequiredReadLine(read, "/")).join("\n")}
+
+## Work order
+
+\`\`\`json
+${JSON.stringify(workOrder, null, 2)}
+\`\`\`
+`;
+  }
   // headRefName is PR-supplied: JSON-quote it (and paths) so a backtick cannot close a span and inject prose.
   const { branch, allowedPaths } = workOrder.mutationAuthority;
   const completion = workOrder.phase === "full" && workOrder.requiredReads.some((read) => read.kind === "completion-input");
@@ -422,6 +451,24 @@ export function assertFixerDispatchPayload({ harness, payload, plan, cwd = proce
 
 const emittedAt = (executionIdentity) => Number(/^f(\d+)-/.exec(executionIdentity ?? "")?.[1]) || 0;
 
+function completeAdmissionError(order) {
+  const reads = Array.isArray(order.requiredReads) ? order.requiredReads : [];
+  const ofKind = (kind) => reads.filter((read) => read?.kind === kind);
+  const required = (kind) => ofKind(kind).length === 1 && ofKind(kind)[0].required === true;
+  const digest = (key) => /^[a-f0-9]{64}$/.test(order.authority?.[key] ?? "");
+  if (order.phase !== "full" || !Array.isArray(order.mutationAuthority?.allowedPaths) || order.mutationAuthority.allowedPaths.length) return "complete requires full phase and empty source selectors";
+  if (typeof order.mutationAuthority.branch !== "string" || !order.mutationAuthority.branch.trim()
+    || !Array.isArray(order.outputRefs) || order.outputRefs.length !== 1 || typeof order.outputRefs[0] !== "string"
+    || typeof order.executionRules?.contract !== "string" || typeof order.executionRules.validation !== "string") return "complete requires branch, single output and execution rules";
+  if (!["act-list", "threads"].includes(order.source) || !required(order.source)
+    || ofKind(order.source === "act-list" ? "threads" : "act-list").length || !digest("sourceDigest")) return "complete requires exactly one authenticated ACT or THREAD source";
+  if (order.source === "act-list") {
+    if (!required("delta-result") || !digest("deltaResultDigest") || !required("completion-input")
+      || !digest("completionInputDigest") || !digest("completionInputBytesDigest")) return "complete ACT requires required Delta/completion input and semantic/byte authorities";
+  } else if (ofKind("completion-input").length || ["completionInputDigest", "completionInputBytesDigest", "reviewBaselineHead"].some((key) => Object.hasOwn(order.authority ?? {}, key))) return "complete THREAD refuses ACT/completion-input authority";
+  return null;
+}
+
 // Fixer adapter. The PR's one plan names the current unit; an older ref is superseded.
 // A changed or vanished required read, a retired gate round (act-list source), or an
 // authority branch that no longer contains the head makes the unit stale.
@@ -455,12 +502,26 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots }) {
   const { plan, planPath } = own;
   if (newest.workOrderRef !== ref) return { stale: `fixer ref ${ref} was superseded by ${newest.workOrderRef}` };
   const order = plan.workOrder ?? {};
+  if (order.operation === "complete") {
+    const error = completeAdmissionError(order);
+    if (error) return { stale: error };
+  }
   const changed = [];
   const bytesByRead = new Map();
   for (const read of order.requiredReads ?? []) {
     const bytes = await readFile(read.path).catch(() => null);
     bytesByRead.set(read, bytes);
     if (bytes === null || sha256(bytes) !== read.sha256) changed.push(read.kind);
+  }
+  if (order.operation === "complete") {
+    try {
+      for (const [kind, authority] of [[order.source, "sourceDigest"], ...(order.source === "act-list" ? [["delta-result", "deltaResultDigest"], ["completion-input", "completionInputDigest"]] : [])]) {
+        const read = order.requiredReads.find((entry) => entry.kind === kind), bytes = bytesByRead.get(read);
+        if (!bytes || sha256(bytes) !== read.sha256 || bytes.length !== read.bytes
+          || jsonContentDigest(JSON.parse(bytes)) !== order.authority[authority]
+          || kind === "completion-input" && sha256(bytes) !== order.authority.completionInputBytesDigest) return { stale: `complete ${kind} differs from its semantic or exact-byte authority` };
+      }
+    } catch { return { stale: "complete source is unreadable or invalid JSON" }; }
   }
   let baseline;
   try { baseline = assertFixerReviewBaseline(order, bytesByRead); }
@@ -495,6 +556,7 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots }) {
 registerWorkOrderRole("fixer", {
   locate: locateFixerUnit,
   validate: (order) => {
+    if (order.operation === "complete") return completeAdmissionError(order);
     const kinds = new Set((Array.isArray(order.requiredReads) ? order.requiredReads : []).map((read) => read?.kind));
     return !kinds.has("act-list") && !kinds.has("threads") ? "fixer work order has no act-list or threads required read"
       : typeof order.mutationAuthority?.branch !== "string" ? "fixer work order names no mutation authority branch"

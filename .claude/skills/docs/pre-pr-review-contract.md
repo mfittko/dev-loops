@@ -278,6 +278,16 @@ report is retried through normal/check, never removed and reconstructed. Legacy 
 pre-push Delta policy and compact dispatch payloads retain their existing behavior. Isolated
 mixed-root tests establish command routing, not actual worker qualification or recovery.
 
+Explicit full `operation: complete` consumes already-reviewed delivery with empty source
+selectors, exactly one authenticated ACT/THREAD source and only its own output authority.
+Follow `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`: ACT completion input is mandatory, even when
+all optional markers are absent; THREAD reports exactly its pinned IDs without ACT/history
+or a constructor. Preserve bootstrap/hash checks and immutable output; perform no source
+validation, stage, commit, push, new Delta or counter reset. Complete task prose overrides
+generic guidance and quoted JSON task fields without rewriting that evidence. Consumer
+support does not enable emission or qualify a fresh worker: ordinary producers still emit
+`fix`, and producer eligibility/publication and runtime proof remain later work.
+
 The explicit `legacyRevalidation.origin: "legacy_revalidated"` consumer exception in
 `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` replaces only unavailable historical coverage hashes
 after authenticating the original full archive/prompt/receipt and exact raw prior handback.
