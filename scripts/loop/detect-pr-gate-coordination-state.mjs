@@ -27,7 +27,9 @@ import {
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
-import { buildContainmentMap } from "../github/_commit-containment.mjs";
+import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
+import { workOrderDigest } from "../github/_work-order-protocol.mjs";
+import { verifyFixerDisposition } from "../github/verify-fixer-disposition.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "../github/_gate-finding-surface.mjs";
 import { resolveAuthenticatedLogin } from "../github/post-gate-findings.mjs";
@@ -822,6 +824,47 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   // Same main-anchored default verify-fixer-disposition.mjs writes under.
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
+  // The canonical active plan can veto a checkpoint; success still needs the existing boundary below.
+  const planPath = path.join(tmpRoot, "gate-fixer", repoSlugFor(repo), `pr-${pr}`, "fixer-emit-plan.json");
+  let planBytes;
+  try {
+    let plan;
+    try {
+      planBytes = await readFile(planPath);
+      plan = JSON.parse(planBytes);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    if (plan !== undefined) {
+      if (!plan?.workOrder || workOrderDigest(plan.workOrder) !== plan.workOrderDigest) throw new Error("active fixer plan does not match its workOrderDigest; re-emit it");
+      const order = plan.workOrder;
+      const foreign = (typeof order.target?.repo === "string" && order.target.repo !== repo)
+        || (Number.isInteger(order.target?.pr) && order.target.pr !== pr);
+      if (!foreign && order.phase !== "commit_only") {
+        if (order.role !== "fixer" || order.phase !== "full" || order.target?.repo !== repo || order.target?.pr !== pr || !order.headSha) {
+          throw new Error("active fixer plan is not a full-phase fixer work order for this PR");
+        }
+        let applicable = order.headSha === currentHeadSha;
+        if (!applicable) {
+          const relation = await isCommitContainedByHead({ repo, commitSha: order.headSha, headSha: currentHeadSha }, runtime);
+          if (relation.retryable) throw new Error(`cannot determine active fixer head containment: ${relation.reason}`);
+          applicable = relation.contained;
+        }
+        if (applicable) {
+          const checked = await verifyFixerDisposition({ repo, pr, headSha: currentHeadSha, fixerPlan: planPath, check: true }, { ...runtime, repoRoot });
+          if (!checked.complete) {
+            const unchanged = (await readFile(planPath)).equals(planBytes);
+            return { complete: false, incomplete: checked.incomplete,
+              ...(unchanged && checked.activeFixer ? { activeFixer: checked.activeFixer } : {}) };
+          }
+        }
+      }
+    }
+  } catch (error) {
+    const unchanged = planBytes && await readFile(planPath).then((bytes) => bytes.equals(planBytes), () => false);
+    return { complete: false, incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unverified_active_fixer: ${error instanceof Error ? error.message : String(error)}` }],
+      ...(unchanged && error?.code === "FIXER_RESULT_MISSING" && error.activeFixer ? { activeFixer: error.activeFixer } : {}) };
+  }
   const logPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot });
   // Main-anchored copy first, then a legacy checkpoint an in-flight PR wrote
   // under a checkout's own tmp/ (the old cwd-relative default), so the

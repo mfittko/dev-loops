@@ -29,6 +29,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { JUDGE_AGENT_TYPE, decideBashGate, FIXER_AGENT_TYPE, isFixerPullAttempt, normalizeAgentType, parseSanctionedPullLine } from "./_hook-decisions.mjs";
 import { listCheckouts, parseFixerPullCommand, recordFixerAgentBinding } from "./_fixer-grants.mjs";
@@ -132,18 +133,21 @@ if (
 let gatePassed = false;
 let gateError = null;
 let humanMergeOnly = false;
+const launcher = fileURLToPath(new URL("../bin/dev-loops-run", import.meta.url));
+function runHelper(script, args = [], override = null, options = {}) {
+  return execFileSync(process.execPath, [...(override ? [override] : [launcher, script]), ...args], {
+    cwd: repoRoot, encoding: "utf8", ...options,
+  });
+}
 if (inManagedContext) {
   // When both verbs appear (compound command), apply the stricter merge gate.
   const pr = isMerge ? extractPrNumberFromGhPrMergeAnywhere(command) : extractPrNumberFromGhPrReadyAnywhere(command);
   // STOP-HUMAN-MERGE-001 (#1622): resolve the repo's effective `autonomy.humanMergeOnly` via the
-  // repo-root script (the hook bundle is self-contained and cannot import @dev-loops/core); fail
+  // resolved toolchain (the hook bundle cannot import @dev-loops/core); fail
   // open (false) when the script is unavailable so the loop-level merge safety remains authoritative.
   if (isMerge && repoRoot) {
     try {
-      humanMergeOnly = execFileSync("node", [path.join(repoRoot, "scripts/loop/resolve-human-merge-only.mjs")], {
-        cwd: repoRoot,
-        encoding: "utf8",
-      }).trim() === "true";
+      humanMergeOnly = runHelper("scripts/loop/resolve-human-merge-only.mjs").trim() === "true";
     } catch {
       humanMergeOnly = false;
     }
@@ -155,21 +159,17 @@ if (inManagedContext) {
     // Each gate script is overridable for deterministic testing (stub instead of the
     // network-touching real guard). `gh pr ready` → draft-gate only; `gh pr merge` → the full
     // pre-merge evidence check (draft_gate + pre_approval_gate).
-    const gateScript = isMerge
-      ? process.env.DEVLOOPS_PRE_MERGE_GATE_SCRIPT ||
-        path.join(repoRoot, "scripts/github/detect-checkpoint-evidence.mjs")
-      : process.env.DEVLOOPS_PRE_PR_READY_GATE_SCRIPT || path.join(repoRoot, "scripts/loop/pre-pr-ready-gate.mjs");
+    const gateScript = isMerge ? "scripts/github/detect-checkpoint-evidence.mjs" : "scripts/loop/pre-pr-ready-gate.mjs";
+    const override = isMerge ? process.env.DEVLOOPS_PRE_MERGE_GATE_SCRIPT : process.env.DEVLOOPS_PRE_PR_READY_GATE_SCRIPT;
     try {
-      execFileSync("node", [gateScript, "--repo", repoSlug, "--pr", String(pr)], {
-        cwd: repoRoot,
-        stdio: ["ignore", "ignore", "pipe"],
-      });
+      runHelper(gateScript, ["--repo", repoSlug, "--pr", String(pr)], override, { stdio: ["ignore", "ignore", "pipe"] });
       gatePassed = true;
     } catch (error) {
-      // Exit 1 from the guard = gate evidence missing/insufficient (gatePassed stays false).
-      // A missing/unspawnable guard (no numeric status) = could-not-run → gateError.
-      if (typeof error?.status !== "number") {
-        gateError = "could not run the gate guard script";
+      const stderr = String(error?.stderr ?? "").trim();
+      // Native loader/launcher diagnostics also exit 1; JSON evidence errors are not startup failures.
+      const startupFailure = /^(?:dev-loops-run: (?:cannot resolve|cannot start)|Error(?: \[ERR_MODULE_NOT_FOUND\])?: Cannot find (?:module|package)|TypeError \[ERR_UNKNOWN_FILE_EXTENSION\]: Unknown file extension|Error \[ERR_UNSUPPORTED_DIR_IMPORT\]: Directory import|Error: (?:EACCES: permission denied|EPERM: operation not permitted), open |SyntaxError:)/m.test(stderr);
+      if (typeof error?.status !== "number" || startupFailure) {
+        gateError = `could not run ${gateScript} via ${override || launcher} in consumer ${repoRoot}: ${stderr || error.message}`;
       }
     }
   }

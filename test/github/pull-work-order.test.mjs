@@ -2,16 +2,17 @@
 // verified work order + pull receipt under the MAIN checkout's tmp root.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { test } from "bun:test";
 import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
 import { withTempDir } from "../_helpers.mjs";
-import { main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
+import { findRetirementAfter, main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 import { decideFixerWriteGuard } from "../../packages/core/src/claude/hook-decisions.mjs";
 import { resolveGateArtifactTmpRoot, resolveMainWorktreeRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -142,6 +143,25 @@ test("semantic mutation refuses as semantic_identity_mismatch; a materialization
     const entry = JSON.parse(await readFile(indexPath(root, unit), "utf8"));
     await writeFile(indexPath(root, unit), JSON.stringify({ ...entry, workOrderDigest: invalid.workOrderDigest }), "utf8");
     assert.equal(refusal(pullShort(unit.executionIdentity, root)).refusal, "invalid_work_order");
+  });
+});
+
+test("retirement lookup ignores only absence and propagates unreadable or malformed authority", async () => {
+  await withDir(async (root) => {
+    const lookup = () => findRetirementAfter(root, GATE, HEAD, 0);
+    const retired = path.join(root, "retired-gate-rounds", HEAD);
+    assert.equal(lookup(), null);
+    await mkdir(path.dirname(retired), { recursive: true });
+    await writeFile(retired, "not a directory");
+    assert.throws(lookup, { code: "ENOTDIR" });
+    await rm(retired);
+    const record = path.join(retired, "round-1", "retirement.json");
+    await mkdir(path.dirname(record), { recursive: true });
+    assert.equal(lookup(), null, "a round without a retirement record is absent");
+    await writeFile(record, "{");
+    assert.throws(lookup, SyntaxError);
+    await writeFile(record, JSON.stringify({ gate: GATE, retiredAt: new Date(1).toISOString() }));
+    assert.equal(lookup(), "round-1");
   });
 });
 
@@ -382,7 +402,7 @@ async function seedDelegateCheckout(dir, { name = "dev-loops", stub = true } = {
 // A checkout-less linked worktree of THIS repo, so the real toolchain's same-repo check accepts it as a delegate.
 async function withRealLinkedWorktree(base, name, fn) {
   const linked = path.join(base, name);
-  const git = (args) => execFileSync("git", args, { stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+  const git = (args) => execFileSync("git", args, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
   git(["worktree", "add", "-q", "--detach", "--no-checkout", linked]);
   try {
     return await fn(linked);
@@ -390,6 +410,53 @@ async function withRealLinkedWorktree(base, name, fn) {
     git(["worktree", "remove", "--force", linked]);
   }
 }
+
+test("historical judge pull delegates to the index-owning new renderer and its pinned contracts", async () => {
+  const checkout = process.cwd();
+  const historical = "09ef0fb40dd890804ab4221ddb793521943a7c55";
+  const files = ["scripts", "packages", "lib", "cli", "package.json", "skills", "agents"];
+  await withDir(async (base) => withRealLinkedWorktree(base, "old", async (old) => withRealLinkedWorktree(base, "new", async (current) => {
+    const archive = execFileSync("git", ["archive", historical, ...files], { maxBuffer: 32 * 1024 * 1024 });
+    const unpack = spawnSync("tar", ["-xf", "-", "-C", old], { input: archive, encoding: "utf8" });
+    assert.equal(unpack.status, 0, unpack.stderr);
+    for (const file of files) await cp(path.join(checkout, file), path.join(current, file), { recursive: true });
+    for (const root of [old, current]) await symlink(path.join(checkout, "node_modules"), path.join(root, "node_modules"), "dir");
+    const emit = async (root) => {
+      const sources = await seedJudgeSources(root, { headSha: HEAD, pr: 800000 + parseInt(randomBytes(3).toString("hex"), 16) });
+      const result = spawnSync("node", [path.join(root, "scripts/loop/emit-judge-work-order.mjs"), "--repo", sources.repo, "--pr", String(sources.pr), "--gate", sources.gate, "--head-sha", HEAD,
+        "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, encoding: "utf8" });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      return JSON.parse(await readFile(JSON.parse(result.stdout).planPath, "utf8"));
+    };
+    const receipts = [];
+    try {
+      const previous = await emit(old);
+      receipts.push(previous);
+      const oldPull = spawnSync("node", [path.join(old, "scripts/github/pull-work-order.mjs"), previous.executionIdentity], { cwd: old, encoding: "utf8" });
+      assert.equal(oldPull.status, 0, oldPull.stdout + oldPull.stderr);
+      assert.equal(oldPull.stdout.includes("## Codex after-pull setup"), false, "real historical renderer is served");
+      const plan = await emit(current);
+      receipts.push(plan);
+      assert.equal(plan.workOrder.executionRules.contract, path.join(current, "agents/judge.agent.md"));
+      for (const contract of plan.workOrder.contracts) {
+        assert.equal(contract.digest, createHash("sha256").update(await readFile(path.join(current, contract.path))).digest("hex"));
+      }
+      const coverage = path.join(base, "coverage");
+      const pulled = spawnSync("node", [path.join(old, "scripts/github/pull-work-order.mjs"), plan.executionIdentity], { cwd: old, encoding: "utf8", env: { ...process.env, NODE_V8_COVERAGE: coverage } });
+      assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
+      assert.equal(pulled.stdout, await readFile(plan.promptPath, "utf8"));
+      assert.ok(pulled.stdout.includes("## Codex after-pull setup"));
+      const loaded = (await Promise.all((await readdir(coverage)).map(async (file) => JSON.parse(await readFile(path.join(coverage, file), "utf8")).result.map((entry) => entry.url)))).flat();
+      for (const file of [path.join(old, "scripts/github/pull-work-order.mjs"), path.join(current, "scripts/github/pull-work-order.mjs"), path.join(current, "scripts/loop/emit-judge-work-order.mjs")]) assert.ok(loaded.includes(pathToFileURL(file).href), file);
+      assert.equal((await verifyPullReceipt({ receiptTmpRoot: path.join(resolveMainWorktreeRoot(checkout), "tmp"), role: "judge", ...plan })).ok, true);
+      await writeFile(plan.promptPath, `${pulled.stdout}\nForged setup\n`);
+      const tampered = spawnSync("node", [path.join(old, "scripts/github/pull-work-order.mjs"), plan.executionIdentity], { cwd: old, encoding: "utf8" });
+      assert.equal(refusal(tampered).refusal, "local_materialization_integrity_failure");
+    } finally {
+      for (const plan of receipts) await rm(pullReceiptPath(path.join(resolveMainWorktreeRoot(checkout), "tmp"), plan.workOrderRef), { force: true });
+    }
+  })));
+});
 
 test("self-hosting pull: from the main cwd, the pull runs the linked worktree's pull script that holds the index entry", async () => {
   await withDir(async (base) => {
@@ -644,7 +711,7 @@ test("self-hosting fixer pull: a successful delegated pull returns the worktree 
   const branch = `issue-2581-dod-test-${uniq}`;
   await withDir(async (base) => {
     const linked = path.join(base, "unit");
-    const git = (args) => execFileSync("git", args, { cwd: mainRoot, stdio: "ignore", env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+    const git = (args) => execFileSync("git", args, { cwd: mainRoot, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
     git(["worktree", "add", "-q", "--no-checkout", "-b", branch, linked]);
     try {
       await seedDelegateCheckout(linked);

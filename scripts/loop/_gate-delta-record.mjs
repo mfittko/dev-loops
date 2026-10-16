@@ -8,6 +8,7 @@
  */
 import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { deltaCoverageBinding } from "@dev-loops/core/loop/pre-push-delta-review";
 
 /** The next steps that authorize the committed candidate to be pushed. */
 export const DELTA_CLEARING_NEXT_STEPS = Object.freeze(["push", "push_to_gate"]);
@@ -47,6 +48,7 @@ export function listGateDeltaRecords(tmpRoot) {
 export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocation, decision, result }) {
   const items = Array.isArray(result?.actionableItems) ? result.actionableItems.map((item) => ({ ref: item?.ref, status: item?.status })) : [];
   const record = {
+    ...deltaCoverageBinding(decision),
     reviewBaselineHead: sequence.reviewBaselineHead,
     candidateHead,
     actSetId: sequence.actSetId,

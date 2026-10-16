@@ -141,13 +141,23 @@ fixer and owns the push. The sequence is:
    dispatches the printed `dispatchPayload` unchanged (ADR 0106). The fixer
    commits the fix, writes the site coverage record to the work order's outputRef
    (`PRE-PUSH-DELTA-RESIDUE`), and hands back the commit SHA unpushed. The
-   coordinator passes that record to the check with `--site-coverage`. Every fixer emission
+   coordinator passes that record to the check with `--site-coverage` and the emission's
+   canonical `--fixer-plan`. Both flags are mandatory for ACT coordinator input and
+   result recording; omission of either or both refuses. Every fixer emission
    in delta mode uses the PR head (`headRefOid`), never the local candidate
    head, because the emitter pins the GitHub PR head and the local fix commits
    descend from it.
-2. The dev-loop coordinator dispatches one fresh delta reviewer for the current
-   worktree head.
-3. The coordinator follows the CLI `nextStep`. On `nextStep: fix_and_rereview`,
+2. The dev-loop coordinator builds the reviewer input with `check-pre-push-delta.mjs`
+   (plus the ACT-only flags above on the act-list route). On that route it requires
+   `--findings-log <the reviewed gate round's findings log>`; the thread route takes no
+   `--findings-log`. It passes `--pr-head <the full PR head SHA just read from GitHub>` to
+   the check and dispatches one fresh delta reviewer for the current worktree head,
+   briefing it that it MUST NOT push (`PRE-PUSH-DELTA-PUSH-AUTHORITY`).
+3. The coordinator runs the CLI `--result` check (no `--findings-log`; only the input run
+   reads it), and follows its `nextStep`. The ACT route again passes `--fixer-plan`
+   and `--site-coverage`. The THREAD route retains `--threads-file`, `--repo`,
+   `--pr`, `--baseline`, `--result` and `--invocation`, without the ACT-only
+   `--fixer-plan` or `--site-coverage` flags. On `nextStep: fix_and_rereview`,
    it dispatches a fresh fixer again, commit-only, and returns to step 2. It
    emits a new work order with `--delta-result <result>` at the PR head.
    That fixer receives the delta result's `not_resolved` and `cannot_verify` act
@@ -186,8 +196,25 @@ invocation. The dev-loop coordinator owns the invocation count and passes it to
 `dev-loops-run cli/index.mjs loop pre-push-delta --invocation` monotonically, starting at 1 for
 each sequence.
 
+ACT input retains raw `siteCoverage` unchanged, including kind, reason and test fields;
+normalization is only a validation view. Input, `resultShape`, result and decision carry
+identical `coverageProtocol: "pulled_commit_only_v1"`, raw semantic `siteCoverageDigest`,
+exact `handbackBytesDigest` and `origin: {workOrderRef, workOrderDigest, executionIdentity}`.
+The reviewer copies that tuple unchanged. Input and result recording authenticate the
+canonical current plan/output, original pull, renderer/materialization bytes, ACT source,
+branch, baseline and candidate. Result recording recomputes the expected tuple; any
+missing, partial or altered binding refuses before the invocation-three fallback.
+A matching stale result retains ordinary bounded-out behavior. Membership-only callers
+check structure without claiming source authentication; optional completion separately
+checks the genuine origin/report bytes against result and decision. Digest-only old
+records stay legacy and unchanged. The emitted `--handback` check remains write-free
+validation without attestation. THREAD cannot opt into this ACT binding. See ADR 0150 in the
+[decision records](https://github.com/mfittko/dev-loops/tree/main/docs/decisions).
+
 <!-- rule: PRE-PUSH-DELTA-TRIGGER -->
 `PRE-PUSH-DELTA-TRIGGER`: delta mode MUST run after the gate Phase 4 fixer commits a fix for a judge act list, or after a fixer commits a fix for the captured set of unresolved review threads (the thread route), and before that fix is pushed. On the thread route the baseline is the PR head (`headRefOid`) passed to the `commit_only` emission, because the emitter reads the record at `gate-delta/<that head>.json`. A push with no act-list fix and no thread-route fix MUST NOT get a delta review, even when a PR exists. Standalone implementation pushes and the full-mode first push are unaffected. A CI-only fix is out of scope.
+
+The decision field list below is the THREAD/legacy base; ACT decisions additionally carry the binding above.
 
 `check-pre-push-delta.mjs --result` records its decision as local evidence at `<tmp-root>/gate-delta/<reviewBaselineHead>.json` (`reviewBaselineHead`, `candidateHead`, `actSetId`, `invocation`, `outcome`, `nextStep`, `items: [{ ref, status }]`; the last write for a baseline wins). The run without `--result` writes nothing. The emitter and the reply wrappers enforce two refusals from the record. `emit-fixer-work-order.mjs` refuses `--phase full` unless a clearing delta decision exists for the PR head: an act-list source needs `--delta-result`, a record for the PR head with `nextStep: push` or `nextStep: push_to_gate` and the result's `actSetId`, and result item ref/status pairs equal to the record's items, a threads source needs a record for the PR head whose decision is `nextStep: push` or `nextStep: push_to_gate` and whose item refs equal the thread ids in the threads file (a record ref that is no thread, or a thread with no record item, refuses), and a record with any other `nextStep` refuses either source. The coordinator emits `--phase commit_only` first, then runs the delta review. A fixed reply (`reply-resolve-review-thread.mjs`, `reply-resolve-review-threads.mjs`, and the `Fixed in commit` reply of `verify-fixer-disposition.mjs`) is refused for a thread that a record marks `not_resolved` or `cannot_verify`, when the fixing commit is the record's `candidateHead` or lies in `reviewBaselineHead..candidateHead`. A thread matches an item by `threadId` or by the fingerprint of its `dev-loops:finding` marker.
 
@@ -195,13 +222,13 @@ each sequence.
 `PRE-PUSH-DELTA-PINNED-BASELINE`: every delta sequence MUST bind `reviewBaselineHead..candidateHead`, where `reviewBaselineHead` is the head the gate round reviewed and stays pinned for the whole sequence. A second local fix `C` after candidate `B` MUST be reviewed as `A..C`, never only `B..C`, with the same act-set identity. `reviewBaselineHead` MUST be an ancestor of `candidateHead`; otherwise the delta check fails closed. A new gate round starts a new sequence.
 
 <!-- rule: PRE-PUSH-DELTA-INPUT -->
-`PRE-PUSH-DELTA-INPUT`: the reviewer input MUST carry `reviewBaselineHead` and `candidateHead`, the act-item refs with their judge dispositions from the gate findings ledger, the current spec identity, the act items' angle names as surface hints, each act item's `authorizedRemediation` text and site query (`defectClass`, `siteQuery`, and the input-form or stated-surface lists when present, plus `siblingRemediations[]`: each sibling's fingerprint, differing remediation text and `siteQuery`), the fixer's site coverage record (`siteCoverage[]`, below), and the adversarial-enumeration checklist. The reviewer checks the edit against the authorized remedy text and runs the site query at the candidate head, and also runs each sibling `siteQuery` there and reports its unfixed sites as residue of the kept act item. The reviewer reads the cumulative diff from the worktree; the coordinator MUST NOT inline diff bytes. The input MUST NOT carry sibling reviewer verdicts or "clean" claims. The reviewer MAY widen to surrounding code, spec or prior finding evidence when a concrete dependency requires it, and it MUST record each widened read in `widenedReads[]`.
+`PRE-PUSH-DELTA-INPUT`: the reviewer input MUST carry `reviewBaselineHead` and `candidateHead`, the act-item refs with their judge dispositions from the gate findings ledger, the current spec identity, the surface hints (the union of the act items' angle names and the angle names of the reviewed gate round, `provenance.perAngle` in the findings log; the thread route carries the act items' angles only; the CLI refuses an act-list input run without `--findings-log` (only the fixer's emitted `handbackCheck` passes `--handback`, which needs `--site-coverage` and no `--result`; the coordinator never passes it), `--findings-log` with `--threads-file`, a log without a non-empty `provenance.perAngle` (an `inline_single_agent` log without provenance contributes the angles of its `findings[]` instead), and a log whose `headSha` differs from the baseline), `staleSurfaceHits[]` (below), each act item's `authorizedRemediation` text and site query (`defectClass`, `siteQuery`, and the input-form or stated-surface lists when present, plus `siblingRemediations[]`: each sibling's fingerprint, differing remediation text and `siteQuery`), the fixer's site coverage record (`siteCoverage[]`, below), and the adversarial-enumeration checklist. The reviewer checks the edit against the authorized remedy text and runs the site query at the candidate head, and also runs each sibling `siteQuery` there and reports its unfixed sites as residue of the kept act item. The reviewer reads the cumulative diff from the worktree and MUST review every hunk of `reviewBaselineHead..candidateHead` for new defects under the surface hints, including the docs, contracts and tests that restate the changed behavior; each defect becomes a `newFindings[]` entry. `staleSurfaceHits[]` (optional on an older input) lists every tracked-file hit at the candidate head of a sentence removed from a Markdown or test hunk, or of an identifier removed or renamed in a code hunk, of that range; each entry is `{ kind, needle, file, line, site }`. Test and docs hits come first when a cap applies; the input carries `staleSurfaceTruncated: true` when a cap dropped hits or a needle is too common (an identifier found in many files) to list, and then also lists the dropped identifiers as `truncatedNeedles[]` (`{ kind, needle, fileCount }`) for the reviewer to check by name. The check reads git strictly: a missing commit object, a failed `git diff` or `git grep`, or non-empty `git grep` output whose rows parse to no hit fails the check; the diff and grep formats are pinned against operator git config. The coordinator MUST NOT inline diff bytes. The input MUST NOT carry sibling reviewer verdicts or "clean" claims. The reviewer MAY widen to surrounding code, spec or prior finding evidence when a concrete dependency requires it, and it MUST record each widened read in `widenedReads[]`. ADR 0141 amends the ADR 0094 surface hints and `locally_clear` condition and adds the stale-surface check (`docs/decisions/0141-delta-review-changed-line-lens-and-stale-surface-check.md`).
 
 <!-- rule: PRE-PUSH-DELTA-RESULT -->
-`PRE-PUSH-DELTA-RESULT`: the reviewer MUST return a `DeltaPrePushReviewResult` bound to the baseline, candidate and act set, with a status and evidence for every claimed act item. The `actSetId` MUST equal the sequence's id, which hashes each act item's ref, angle, severity, file, line and summary (a thread-route item omits the summary, a body excerpt that varies with `--body-max`), plus its remediation scope fields (`authorizedRemediation`, `defectClass`, `siteQuery`, `defectKind`, `acceptedForms`, `rejectedForms`, `statedSurfaces`, `siblingRemediations`) when present. Each act item ref appears once, in the act list and in the result. The status MUST be `resolved`, `not_resolved` or `cannot_verify`; `cannot_verify` stays distinct from `not_resolved`. Every `evidence[]` entry, for act items and new findings, MUST be a non-empty string, and each list MUST be non-empty. `widenedReads[]` is required, and empty when nothing was widened; each entry MUST be an object `{ path, reason }` with non-empty strings, never a bare path string. A result with a missing or unknown status is rejected.
+`PRE-PUSH-DELTA-RESULT`: the reviewer MUST return a `DeltaPrePushReviewResult` bound to the baseline, candidate and act set, with a status and evidence for every claimed act item. The `actSetId` MUST equal the sequence's id, which hashes each act item's ref, angle, severity, file, line and summary (a thread-route item omits the summary, a body excerpt that varies with `--body-max`), plus its remediation scope fields (`authorizedRemediation`, `defectClass`, `siteQuery`, `defectKind`, `acceptedForms`, `rejectedForms`, `statedSurfaces`, `siblingRemediations`) when present. Each act item ref appears once, in the act list and in the result. The status MUST be `resolved`, `not_resolved` or `cannot_verify`; `cannot_verify` stays distinct from `not_resolved`. Every `evidence[]` entry, for act items and new findings, MUST be a non-empty string, and each list MUST be non-empty. `widenedReads[]` is required, and empty when nothing was widened; each entry MUST be an object `{ path, reason }` with non-empty strings, never a bare path string. A result with a missing or unknown status is rejected. The status `resolved` requires two conditions: the reported defect is gone, and the applied remedy introduces no new finding of severity medium or higher. Conformance to `authorizedRemediation` alone is not enough; when the remedy itself causes a defect, the reviewer reports it as a `newFindings[]` entry whose evidence cites the remedy text. A result of `locally_clear` MUST be refused while a `staleSurfaceHits[]` entry has neither a `newFindings[]` entry that names its file (as a whole path token: `docs/README.md` and `.claude/skills/x.md` do not name `README.md` and `skills/x.md`) nor a skipped site (with a non-empty `reason`) in `siteCoverage[]` whose site is its bare file, or its file with a `:line` or `:start-end` suffix that covers the hit's line (a skip recorded for another line of the file does not address it); a truncated list (`staleSurfaceTruncated`) is addressed the same way by an entry that names `stale-surface-hits-truncated`; this holds on the act-list route and on the thread route.
 
 ```text
-DeltaPrePushReviewResult {
+DeltaPrePushReviewResult {  // Complete THREAD shape; genuine legacy results remain readable.
   reviewBaselineHead, candidateHead, actSetId
   actionableItems[] { ref, status: resolved | not_resolved | cannot_verify, evidence[] }
   newFindings[] { severity, summary, evidence[], residueOf?, site?, skipReason? }
@@ -210,11 +237,71 @@ DeltaPrePushReviewResult {
 }
 ```
 
+ACT results additionally require top-level `coverageProtocol`, `siteCoverageDigest`,
+`handbackBytesDigest` and `origin`, copied unchanged from `input.resultShape` as defined above.
+The recorded decision and stdout carry that same ACT-only tuple; THREAD cannot claim it.
+
 <!-- rule: PRE-PUSH-DELTA-RESIDUE -->
 `PRE-PUSH-DELTA-RESIDUE`: the reviewer MUST report an unfixed site that the act item's site query returns, or any other unfixed same-class site, as a `newFindings[]` entry with `residueOf` set to the act item ref. Residue never defers and is never resolved with a rationale. It rides the same fix commit. A residue finding without a `skipReason` blocks `locally_clear` at any severity, so the push waits. The `commit_only` fixer hands back the site coverage record (`siteCoverage[]`) that `GATE-EXEC-REMEDIATION-SITE-QUERY` defines, keyed by act-item fingerprint, and the delta input carries it. A residue finding names its `site`, and its `skipReason` MUST equal the reason that the record holds for that `residueOf` site; any other reason is rejected, and a matching reason unblocks only that finding. The record MUST be complete per `GATE-EXEC-REMEDIATION-SITE-QUERY` in [Gate Review Sub-Loop Contract](./gate-review-sub-loop-contract.md); a gap blocks `locally_clear`.
 
 <!-- rule: PRE-PUSH-DELTA-EXIT-BOUND -->
-`PRE-PUSH-DELTA-EXIT-BOUND`: `locally_clear` MUST require every claimed act item `resolved`, none `cannot_verify`, no new non-residue finding of severity medium or higher, and no residue finding (`PRE-PUSH-DELTA-RESIDUE`) that lacks a `skipReason` equal to the recorded reason for its site. Medium or higher means `high`, `question` or `medium`. A sequence MUST NOT exceed three delta review invocations, one fresh reviewer each, with no fan-out. When the third review is not locally clear, the outcome is `bounded_out` with the residual evidence: no fourth review runs, the committed candidate is pushed into the normal gate path, and no success is claimed. At the third review the bound takes precedence over `PRE-PUSH-DELTA-FRESHNESS`: a stale result also ends `bounded_out`, and the current worktree head is pushed into the normal gate path, because `bounded_out` authorizes nothing and claims no success.
+`PRE-PUSH-DELTA-EXIT-BOUND`: `locally_clear` MUST require every claimed act item `resolved`, none `cannot_verify`, no new non-residue finding of severity medium or higher, and no residue finding (`PRE-PUSH-DELTA-RESIDUE`) that lacks a `skipReason` equal to the recorded reason for its site, and no unaddressed `staleSurfaceHits[]` entry (`PRE-PUSH-DELTA-RESULT`). Medium or higher means `high`, `question` or `medium`. A sequence MUST NOT exceed three delta review invocations, one fresh reviewer each, with no fan-out. When the third review is not locally clear, the outcome is `bounded_out` with the residual evidence: no fourth review runs, the committed candidate is pushed into the normal gate path, and no success is claimed. At the third review the bound takes precedence over `PRE-PUSH-DELTA-FRESHNESS`: a stale result also ends `bounded_out`, and the current worktree head is pushed into the normal gate path; `bounded_out` claims no remediation success or clean gate.
+
+Pre-push Delta validation and ordinary commit-only coverage remain strict. After the push, full
+completion may retain explicitly skipped residual input forms only under the authenticated
+decision/status checks in `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` in the
+[Gate Review Sub-Loop Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition).
+The clearing decision must name the actual pushed candidate even when the third result is
+stale. Each ACT member still requires its own strict or explicitly residual coverage. Aggregate
+repeated refs and every matching fingerprint on the authenticated root before choosing its single
+disposition: all resolved means tackled; any residual means deferred/open without a Fixed reply.
+A scalar fingerprint cannot narrow root membership, and distinct roots sharing a fingerprint each
+need an entry. This completion exception supplies no lifecycle gate evidence.
+
+For optional authenticated typed completion (ADR 0149), the full worker may use
+`verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <plan> --construct`
+before normal verification. Follow the complete source,
+prior commit-only provenance, raw coverage identity and live-root checks in
+`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`; retain original Delta baseline A independently of full
+authority/live candidate B. Construction writes only its own report and does not finish delivery.
+Normal verification and `--check` authenticate that same source. Ordinary ACT/full emission now
+requires the immediate genuine commit-only plan/pull/raw report and both complete modern result
+and clearing-decision bindings. It preserves raw coverage and fixing F, checks clean committed
+candidate B on the authority branch, and retains reviewed A as `authority.reviewBaselineHead`.
+CLI/live PR head, Delta and push marker remain A; full order/ref/receipt name B. Locally-clear
+results must be fresh B; invocation-three bounded-out results may remain at F while the decision
+names B. Missing, partial or historical digest-only evidence refuses before replacement/grant.
+Original A retirement is checked using its original execution timestamp before publication and
+after awaited capture. Both emitted verifier commands use the absolute emitting script while
+cwd remains the authority worktree. The constructor writes exclusively; an authentic existing
+report is retried through normal/check, never removed and reconstructed. Legacy deliveries,
+pre-push Delta policy and compact dispatch payloads retain their existing behavior. Isolated
+mixed-root tests establish command routing, not actual worker qualification or recovery.
+
+Explicit full `operation: complete` consumes already-reviewed delivery with empty source
+selectors, exactly one authenticated ACT/THREAD source and only its own output authority.
+Follow `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`: ACT completion input is mandatory, even when
+all optional markers are absent; THREAD reports exactly its pinned IDs without ACT/history
+or a constructor. Preserve bootstrap/hash checks and immutable output; perform no source
+validation, stage, commit, push, new Delta or counter reset. Complete task prose overrides
+generic guidance and quoted JSON task fields without rewriting that evidence. Consumer
+support does not enable emission or qualify a fresh worker: ordinary producers still emit
+`fix`, and producer eligibility/publication and runtime proof remain later work.
+
+The explicit `legacyRevalidation.origin: "legacy_revalidated"` consumer exception in
+`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` replaces only unavailable historical coverage hashes
+after authenticating the original full archive/prompt/receipt and exact raw prior handback.
+Both historical hashes and all modern binding fields must be absent. Partial/current bindings
+refuse; the commit-only origin triple remains unchanged. Require the exact historical full
+Work order JSON suffix, original/current ACT/Delta bytes and semantic identity, canonical clearing
+bytes and fresh unchanged locally-clear candidate. Rerun the single supported literal through
+bounded native Git and compare exact stdout bytes and all raw file/form coverage on every mode.
+Original evidence stays unchanged. Current sealed authority asserts capture order; later producer
+work must perform/prove pre-overwrite capture and optional-worker smoke. See ADR 0151 in the
+[decision records](https://github.com/mfittko/dev-loops/tree/main/docs/decisions). This enables no producer or A1 recovery.
+
+<!-- rule: PRE-PUSH-DELTA-PUSH-AUTHORITY -->
+`PRE-PUSH-DELTA-PUSH-AUTHORITY`: during a gate fix sequence only the full-phase fixer pushes the fix commit. `emit-fixer-work-order.mjs --phase commit_only` starts the sequence and writes the marker `<main worktree>/tmp/gate-delta/<reviewBaselineHead>.sequence`, whatever `--tmp-root` says; `--phase full` flips it to `fullGranted`. The marker records the PR head branch. A marker is active for a tested commit that is its baseline or descends from it, or for any push to the marker's branch (so a force-push of a rewritten, non-descendant sha is covered), until the remote-tracking ref of that branch advances past the baseline; a push of the fix branch ends it. An unreadable or malformed marker names no branch, so it reads as active and not granted and no remote ref ends it; deleting the marker ends it. A `git merge-base` failure other than "not an ancestor" refuses the push under that marker unless the marker is `fullGranted` (a granted marker is skipped, so a pruned baseline object cannot block later pushes), so the refusal names the marker file. The check tests the pushed shas and their remote refs (the checkout HEAD only when stdin has no ref lines). The refusal reason names the marker file. To recover an abandoned sequence, delete the marker file; `emit-fixer-work-order.mjs --phase full` works only for a sequence with a clearing delta record (see step 4 of the delta sequence). A `commit_only` round that ends without a fix commit clears its own marker when `check-pre-push-delta.mjs` reports that HEAD equals the baseline. The generated git `pre-push` hook enforces the rule and runs `scripts/loop/check-fix-push-authority.mjs` with the pushed refs from git's stdin and refuses a push of any tested sha under an active, not granted marker, on Pi and Claude Code alike wherever the hook is installed; `DEVLOOPS_ALLOW_MAIN` does not bypass it. No push is refused in a checkout without the dev-loops hook (`core.hooksPath` set, or a foreign `pre-push` hook the guard does not own); with `core.hooksPath` set the install refuses, and with a foreign `pre-push` hook the install skips that slot; in both cases `ensure-worktree` warns that gate fix push authority is not enforced. The script path comes from the dev-loops side that installs the hook (`ensure-worktree`), and a hook whose baked path is missing falls back to the pushing checkout's `scripts/loop/check-fix-push-authority.mjs` and, when neither file exists, refuses a push only under a `*.sequence` marker that is not `fullGranted` and whose branch ref has not advanced past the baseline (or that names no branch), under the main worktree's `tmp/gate-delta` (fail closed). That fallback blocks no push once every marker is granted or its branch ref has advanced, and while such a marker is open it refuses every push from the repository. The delta reviewer and the `commit_only` fixer MUST NOT push. `check-pre-push-delta.mjs --pr-head <full sha>` fails closed when the PR head read from GitHub differs from `--baseline`, which detects a PR head that moved during the sequence. `emit-fixer-work-order.mjs` refuses a PR head that is not `--head-sha`.
 
 <!-- rule: PRE-PUSH-DELTA-FRESHNESS -->
 `PRE-PUSH-DELTA-FRESHNESS`: before each invocation the fix MUST be committed and `candidateHead` read from the worktree. A result whose `candidateHead` differs from the current worktree head MUST NOT authorize the push; a head change outside the loop needs a new review against the current candidate.

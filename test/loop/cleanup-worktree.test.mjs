@@ -16,11 +16,16 @@ import {
 // With `emptySubcommand`, that subcommand prints nothing and exits 0 and every
 // other call runs real git.
 // With `sleepOn`, a call whose args start with that string sleeps 5 s instead
-// (exec, so a timeout kill reaches the sleep) and every other call runs real git.
-function writeGitStub(dir, { exitCode = 0, logFile, failSubcommand, emptySubcommand, sleepOn } = {}) {
+// (exec, so a timeout kill reaches the sleep); list/status use cached clean responses.
+function writeGitStub(dir, { exitCode = 0, logFile, failSubcommand, emptySubcommand, sleepOn, worktreeListPath } = {}) {
   const gitPath = path.join(dir, "git");
   const tail = sleepOn !== undefined
-    ? [`case "$*" in ${JSON.stringify(sleepOn)}*) exec sleep 5;; esac`, 'exec git "$@"']
+    ? [
+      `case "$*" in ${JSON.stringify(sleepOn)}*) exec sleep 5;; esac`,
+      `if [ "$1 $2" = "worktree list" ]; then exec cat ${JSON.stringify(worktreeListPath)}; fi`,
+      'if [ "$1" = "status" ]; then exit 0; fi',
+      'exit 1',
+    ]
     : emptySubcommand !== undefined
     ? [`if [ "$1" = ${JSON.stringify(emptySubcommand)} ]; then exit 0; fi`, 'exec git "$@"']
     : failSubcommand === undefined
@@ -384,8 +389,8 @@ test("cleanup --branch: a failed git status skips the removal (fail safe)", () =
   }
 });
 
-// A 1500 ms budget leaves the real git calls before the hung one ample time on a
-// loaded machine, and each reason names the call that timed out.
+// Cache non-hung stages before timing so real git latency cannot consume the
+// shared 1500 ms budget; each reason must name the deliberately hung stage.
 for (const [sleepOn, reason] of [
   ["status", /^skipped: git status of .* timed out/],
   ["worktree remove", /^git worktree remove .* timed out .*worktree state unknown/],
@@ -395,12 +400,16 @@ for (const [sleepOn, reason] of [
     const { base, main, paths } = makeRepo([{ dir: "issue-7", branch: "issue-7" }]);
     try {
       const logFile = path.join(base, "git.log");
-      const gitPath = writeGitStub(base, { logFile, sleepOn });
+      const worktreeListPath = path.join(base, "worktrees.txt");
+      writeFileSync(worktreeListPath, git(main, ["worktree", "list", "--porcelain"]));
+      const gitPath = writeGitStub(base, { logFile, sleepOn, worktreeListPath });
       const started = Date.now();
       const res = cleanupWorktree({ repoRoot: main, branch: "issue-7" }, { gitCommand: gitPath, timeoutMs: 1500 });
       assert.ok(Date.now() - started < 4500, "the budget bounded the hung call");
       assert.deepEqual({ ok: res.ok, removed: res.removed }, { ok: true, removed: null });
       assert.match(res.reason, reason);
+      const calls = ["worktree list --porcelain", "status --porcelain --untracked-files=normal --ignore-submodules=none", `worktree remove ${paths["issue-7"]}`];
+      assert.deepEqual(readFileSync(logFile, "utf8").trim().split("\n"), calls.slice(0, calls.findIndex(call => call.startsWith(sleepOn)) + 1));
       assert.ok(existsSync(paths["issue-7"]));
       if (sleepOn === "worktree remove") {
         assert.doesNotMatch(readFileSync(logFile, "utf8"), /worktree prune/, "no prune after a killed remove");

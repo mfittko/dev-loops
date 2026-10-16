@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,8 @@ import { captureStream, makeGhMock, runNode as runNodeHelper, writeGhStub as wri
 import { checkForCopilotComments, parseRequestCliArgs, performCopilotReviewRequest, runCli } from "../../scripts/github/request-copilot-review.mjs";
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
+import { pullReceiptPath, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 
 const scriptPath = path.resolve("scripts/github/request-copilot-review.mjs");
 
@@ -2788,16 +2791,37 @@ describe("converged-once mode suppresses a post-convergence request as suppresse
 // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY (PR 2647 replay): a verify that failed on missing arguments wrote no
 // checkpoint, then the request ran. A delivered tackled handoff with no checkpoint for the live head blocks it.
 const FIXER_HEAD = "abc9988776";
-async function withFixerHandoff(fn, { checkpoint = false } = {}) {
+async function withFixerHandoff(fn, { checkpoint = false, active } = {}) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-fixer-"));
   try {
     const { initGitFixture } = await import("../_helpers.mjs");
     initGitFixture(repoRoot);
     const fixerDir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", "pr-17");
     await mkdir(path.join(fixerDir, "f1-0000abcd"), { recursive: true });
-    await writeFile(path.join(fixerDir, "fixer-emit-plan.json"), JSON.stringify({ executionIdentity: "f1-0000abcd", workOrder: { phase: "full" } }));
     const handoff = { headSha: FIXER_HEAD, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543", disposition: "tackled" }] };
     await writeFile(path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json"), JSON.stringify(handoff));
+    if (active) {
+      const head = "a".repeat(40);
+      const output = path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json");
+      const source = path.join(fixerDir, "source.json");
+      const act = active === "omitted ACT";
+      const bytes = JSON.stringify(act ? [{ fingerprint: "0123456789abcdef", summary: "fix", judgeDisposition: "act" }] : { threads: [{ threadId: "PRRT_T1" }] });
+      await writeFile(source, bytes);
+      const workOrder = { role: "fixer", phase: "full", target: { repo: "owner/repo", pr: 17 }, headSha: head, outputRefs: [output], requiredReads: [{ kind: act ? "act-list" : "threads", path: source, sha256: createHash("sha256").update(bytes).digest("hex") }] };
+      workOrder.authority = { sourceDigest: sha256Hex(JSON.parse(bytes)).slice(7) };
+      const planPath = path.join(fixerDir, "fixer-emit-plan.json");
+      const plan = { workOrder, workOrderDigest: workOrderDigest(workOrder), workOrderRef: `fixer:owner/repo#17:${head}:f1-0000abcd`, executionIdentity: "f1-0000abcd" };
+      await writeFile(planPath, JSON.stringify(plan));
+      const receipt = pullReceiptPath(path.join(repoRoot, "tmp"), plan.workOrderRef);
+      await mkdir(path.dirname(receipt), { recursive: true });
+      await writeFile(receipt, JSON.stringify({ ...plan, role: "fixer", pulledAt: new Date().toISOString(), subject: { planPath } }));
+      if (active === "missing") await rm(output);
+      else await writeFile(output, active === "malformed" ? "{" : JSON.stringify({ headSha: active === "stale" ? "b".repeat(40) : head, dispositions: [] }));
+      const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
+      const logPath = buildLogPath({ repo: "owner/repo", pr: 17, gate: "fixer-disposition", headSha: head, tmpRoot: path.join(repoRoot, "tmp") });
+      await mkdir(path.dirname(logPath), { recursive: true });
+      await writeFile(logPath, JSON.stringify({ headSha: head, dispositions: [] }));
+    }
     if (checkpoint) {
       const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
       const logPath = path.join(repoRoot, buildLogPath({ repo: "owner/repo", pr: 17, gate: "fixer-disposition", headSha: FIXER_HEAD, tmpRoot: "tmp" }));
@@ -2812,6 +2836,24 @@ async function withFixerHandoff(fn, { checkpoint = false } = {}) {
 }
 const FIXER_PR_VIEW = { assertArgs: PR_VIEW_ARGS, stdout: `${JSON.stringify({ headRefOid: FIXER_HEAD, isDraft: false, reviews: [] })}\n` };
 const FIXER_REQUESTED = { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' };
+
+for (const [active, failure] of [["missing", /result_missing/], ["empty", /PRRT_T1/], ["malformed", /not valid JSON/], ["stale", /not the observed head/], ["omitted ACT", /PRRT_ACT/]]) {
+  test(`Copilot requests nothing for active full ${active} output despite an empty checkpoint`, async () => {
+    await withFixerHandoff(async (repoRoot) => {
+      const headRefOid = "a".repeat(40);
+      const extra = active === "omitted ACT" ? [
+        { assertArgs: ["pr", "view", "17", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid }) },
+        { assertArgs: GRAPHQL_ARGS, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_ACT", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "<!-- dev-loops:finding 0123456789abcdef -->", author: { login: "gate", __typename: "User" } }] } }] } } } } }) },
+        { assertArgs: ["api", "user"], stdout: '{"login":"gate"}' },
+      ] : [];
+      const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [FIXER_REQUESTED, { assertArgs: PR_VIEW_ARGS, stdout: JSON.stringify({ headRefOid, isDraft: false, reviews: [] }) }, ...extra], { repoRoot });
+      assert.equal(result.status, "blocked_by_fixer_disposition");
+      assert.equal(result.nextAction, "complete_fixer_disposition");
+      assert.match(result.detail, failure);
+      assert.equal(calls.some(isCopilotRequestCall), false);
+    }, { active });
+  });
+}
 
 test("request-copilot-review refuses while a delivered tackled fixer handoff has no checkpoint for the live head, and requests nothing", async () => {
   await withFixerHandoff(async (repoRoot) => {

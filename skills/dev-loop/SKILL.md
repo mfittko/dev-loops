@@ -123,7 +123,7 @@ Use the fallback poster only when the full helper cannot be reached:
 1. Detect the missing helper: try `node scripts/github/upsert-checkpoint-verdict.mjs --help` from the consumer repo. If the script is absent or imports fail, switch to the fallback path.
 2. Invoke the fallback from the installed dev-loop skill directory: `node <resolved-skill-scripts>/post-gate-verdict-fallback.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path>) --next-action <text> [--gate <draft_gate|pre_approval_gate>]`.
 3. Treat every successful fallback-posted gate comment as a one-shot create with no idempotent same-head update: if the agent reruns the gate on the same head, a duplicate comment will be created. Detect duplicates manually and update manually if needed.
-4. Treat every fallback-posted gate comment as a degraded audit-trail artifact: the visible body uses the same parser-stable shape as the full helper (gate name, head SHA, verdict, blocking severities when applicable, findings summary, next action), but the helper skips stale-head detection, gate-coordination validation, blocking-severity count enforcement, and the internal-only PR short-circuit.
+4. Treat every fallback-posted gate comment as a degraded audit-trail artifact: the visible body uses the same parser-stable shape as the full helper (gate name, head SHA, verdict, findings summary, next action), but the helper skips stale-head detection, gate-coordination validation, blocking-severity count enforcement, and the internal-only PR short-circuit.
 5. If the fallback helper exits non-zero, stop the gate and report the posting failure: do not mark the PR ready for review and do not proceed to merge readiness until the comment is posted.
 
 When `@dev-loops/core` is available again, switch back to the full helper. The fallback poster is a degraded path, not a permanent replacement.
@@ -255,7 +255,7 @@ After the fixer commits the act-list fix and before it pushes, the dev-loop coor
 delta-mode pre-push review (`PRE-PUSH-DELTA-TRIGGER` in the
 [Pre-push review contract](../docs/pre-pr-review-contract.md#delta-mode)), which owns the
 baseline, input, result, three-review bound and freshness rules. `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta`
-builds the reviewer input and checks each result against the current worktree head.
+builds the reviewer input and checks each result against the current worktree head. Pass `--pr-head <the full PR head SHA just read from GitHub>`, and brief the delta reviewer that it MUST NOT push (`PRE-PUSH-DELTA-PUSH-AUTHORITY`). On the act-list route, pass the required `--findings-log <the reviewed round's findings log>` to the input run only (never pass `--handback`; only the fixer's emitted `handbackCheck` does); the thread route and the `--result` run take none.
 
 Before gate dispatch, read `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md) and Phase 3 of [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) for the full refusal conditions.
 

@@ -10,6 +10,7 @@ import { realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
 import { loadDevLoopConfigStrict } from "@dev-loops/core/config";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { computeSpecDigest, specCriterionIds, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
@@ -59,6 +60,13 @@ function parseSource({ read, bytes }) {
 export function renderWorkOrder(workOrder) {
   const [verdictPath, specVerdictPath] = workOrder.outputRefs;
   return `# Judge work order (ADR 0106)
+
+## Codex after-pull setup
+
+Codex only: before ANY contract/input read, use bounded direct cat/sed/rg for reads and qualify the digest tool with \`command -v shasum\`; stop if unavailable. Use direct \`shasum -a 256\` to authenticate every pinned contract/source. Derive the emitting toolchain root by removing \`agents/judge.agent.md\` from the absolute \`executionRules.contract\` below; resolve relative \`contracts[].path\` only against that root, never cwd or a searched fallback. Read those authenticated contracts in full before judging. These instructions precede their first read; do not wait for a setup message.
+This permits only pinned reads and concrete dependency widening already authorized below. Codex has no native Claude/Pi role or hook grant. No inline Python or Node, generated scripts, tests/builds, source writes, external posting or permission/settings changes. A permission/classifier denial stops this actor immediately: report it without another command or alternate attempt. Missing/unreadable or hash-mismatched inputs stop without verdicts. Recover truncated reads in bounded ranges; never judge from partial input. Write only the two existing verdict outputRefs and run only the existing pull/checker besides these reads/hashes. Pi and Claude retain native read tools and their existing shell restrictions.
+
+## Judgment
 
 Adjudicate every finding in the \`findings\` read per agents/judge.agent.md, against the COMPLETE spec in the \`spec\` read.
 Read every \`required\` entry below IN FULL before any judgment. If one is missing, unreadable, or its sha256 differs, stop and report which read failed; never write a verdict.
@@ -128,7 +136,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read)],
     // Per-round paths: a superseded round's late verdict never lands where this round's is read.
     outputRefs: [path.join(dir, roundId, "judge-verdict.json"), path.join(dir, roundId, "spec-authority-verdict.json")],
-    executionRules: { widening: JUDGE_WIDENING_RULE, contract: "agents/judge.agent.md" },
+    executionRules: { widening: JUDGE_WIDENING_RULE, contract: fileURLToPath(new URL("agents/judge.agent.md", PACKAGE_ROOT)) },
   };
   const identityTriple = {
     workOrderRef: `judge:${repo}#${pr}:${gate}:${headSha}:${roundId}`,

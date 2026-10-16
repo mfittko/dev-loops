@@ -7,10 +7,34 @@ import {
   FIXER_DISPOSITION_FAILED_STEP,
   FIXER_DISPOSITION_FORBIDDEN_ACTIONS,
   normalizeFixerDispositionHandoff,
+  siteCoverageGaps,
 } from "../src/loop/fixer-disposition.mjs";
 import { PR_CHECKPOINT_ACTION } from "../src/loop/pr-gate-coordination.mjs";
 
 const SHA = "abc1234def5670000000000000000000000000000";
+
+test("input forms stay strict except explicitly accounted authenticated residuals", () => {
+  const items = [{ fingerprint: "fp", siteQuery: "query", acceptedForms: ["--flag"] }];
+  const coverage = [{ fingerprint: "fp", returnedSites: ["--flag"], sites: [{ site: "--flag", kind: "input_form", status: "skipped", reason: "still fails at the bound" }] }];
+  assert.match(siteCoverageGaps(items, coverage)[0], /fixed status and a test/);
+  assert.deepEqual(siteCoverageGaps(items, coverage, new Set(["fp"])), []);
+  coverage[0].sites[0].reason = "";
+  assert.match(siteCoverageGaps(items, coverage, new Set(["fp"]))[0], /fixed status and a test/);
+  coverage[0].sites[0].reason = "FILL: reason";
+  assert.match(siteCoverageGaps(items, coverage, new Set(["fp"]))[0], /fixed status and a test/);
+  coverage[0].sites = [];
+  assert.match(siteCoverageGaps(items, coverage, new Set(["fp"]))[0], /no input_form/);
+});
+
+test("residual permission uses each Delta ref while repeated fingerprints share coverage", () => {
+  const items = ["--first", "--second"].map((form, index) => ({ fingerprint: "fp", ref: index ? "fp#2" : "fp", siteQuery: "query", acceptedForms: [form] }));
+  const coverage = [{ fingerprint: "fp", returnedSites: ["--first", "--second"], sites: ["--first", "--second"].map((site) => ({ site, kind: "input_form", status: "skipped", reason: "still fails at the bound" })) }];
+  assert.deepEqual(siteCoverageGaps(items, coverage, new Set(["fp"])), ['act item fp input_form site "--second" needs a fixed status and a test']);
+  assert.deepEqual(siteCoverageGaps(items, coverage, new Set(["fp#2"])), ['act item fp input_form site "--first" needs a fixed status and a test']);
+  assert.deepEqual(siteCoverageGaps(items, coverage, new Set(["fp", "fp#2"])), []);
+  coverage[0].sites = coverage[0].sites.map((site) => ({ ...site, status: "fixed", test: "targeted form test" }));
+  assert.deepEqual(siteCoverageGaps(items, coverage), []);
+});
 
 // ---------------------------------------------------------------------------
 // normalizeFixerDispositionHandoff — AC row 1 (schema validation)
@@ -83,17 +107,20 @@ test("normalizeFixerDispositionHandoff throws on duplicate threadId", () => {
   );
 });
 
-test("normalizeFixerDispositionHandoff throws on duplicate fingerprint", () => {
-  assert.throws(
-    () => normalizeFixerDispositionHandoff({
-      headSha: SHA,
-      dispositions: [
-        { threadId: "PRRT_T1", fingerprint: "fp1", fixingCommitSha: SHA, disposition: "tackled" },
-        { threadId: "PRRT_T2", fingerprint: "fp1", fixingCommitSha: SHA, disposition: "tackled" },
-      ],
-    }),
-    /duplicate fingerprint: fp1/,
-  );
+test("distinct roots sharing a fingerprint stay distinct through normalization and evaluation", () => {
+  const handoff = normalizeFixerDispositionHandoff({
+    headSha: SHA,
+    dispositions: [
+      { threadId: "PRRT_T1", fingerprint: "fp1", fixingCommitSha: SHA, disposition: "tackled" },
+      { threadId: "PRRT_T2", fingerprint: "fp1", fixingCommitSha: SHA, disposition: "tackled" },
+    ],
+  });
+  assert.equal(handoff.dispositions.length, 2);
+  const result = evaluateFixerDisposition({ handoff, containment: { [SHA]: true }, liveThreads: [
+    { threadId: "PRRT_T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] },
+    { threadId: "PRRT_T2", isResolved: false, replyBodies: [`Fixed in commit ${SHA}.`] },
+  ] });
+  assert.deepEqual(result.incomplete.map(({ threadId, failedStep }) => [threadId, failedStep]), [["PRRT_T2", "not_resolved"]]);
 });
 
 test("normalizeFixerDispositionHandoff accepts a well-formed handoff", () => {

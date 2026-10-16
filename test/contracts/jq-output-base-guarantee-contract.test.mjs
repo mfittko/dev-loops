@@ -115,6 +115,10 @@ const EXCLUDED = new Map([
     "Derived-artifact checker (npm run schema:check): runs the generator with --check, which reads schemas/dev-loop-config.schema.json and compares it to the rendered content, exiting non-zero when stale; stdout is a one-line human status, never a JSON tool-result to filter with --jq — same class as claude/generate-claude-assets.mjs.",
   ],
   [
+    "loop/check-fix-push-authority.mjs",
+    "Git pre-push hook helper: its contract is the exit code (1 refuses the push) with a one-line stderr reason; stdout carries nothing, and JSON.stringify appears only inside a thrown error message, so --jq/--silent have no payload to apply to.",
+  ],
+  [
     "pages/render-article.mjs",
     "Derived-artifact generator (npm run articles:render): emits HTML files; JSON.stringify appears only inside thrown error messages, and stdout is a one-line human status — nothing for a caller to filter with --jq.",
   ],

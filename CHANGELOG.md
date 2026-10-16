@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.6-pre.2
+
+### Added
+
+- `pr create` refuses with `pre_pr_review_missing` unless `loop pre-pr-review` recorded the branch head; `--lightweight` and `docs/phases/**/*.md`-only branches are exempt (#2618)
+- A pre-push check refuses a gate fix push until the full work order is emitted; no hook means no check, and `ensure-worktree` warns (#2748)
+
+### Changed
+
+- The pre-push delta review widens surface hints to the gate round angles, lists stale-surface hits, and refuses `locally_clear` for unaddressed hits (#2740)
+- `loop pre-push-delta` refuses an act-list input run without `--findings-log`; the fixer's `handbackCheck` now passes `--handback` instead (#2740)
+
+### Fixed
+
+- `merge-pr` refuses a merge whose added decision record number already exists on the base branch tip (#2484)
+- Reject-close judge-rejected medium and low gate threads; the act-thread guard reads every marker and the emitter refuses a non-canonical fingerprint (#2485)
+- Gate fan-in treats an empty `verifiedItems` array on a non-checklist angle as absent instead of refusing the round (#2568)
+- pr create checks the comment-discipline preflight on the --head ref; an unresolvable head names git fetch origin (head_unresolvable with --lightweight, else pre_pr_review_missing) (#2619)
+- The gate verdict body shows act and blocking findings, folds the rest by judge disposition into one Details block (#2722)
+- Inline gate finding comments keep one short Problem and Fix, with only the remainder under Details (#2722)
+- A rerun of the gate verdict upsert with an inline reason holding an HTML comment delimiter reports noop, and the hidden lines also neutralize `--!>` (#2722)
+- A locatable gate finding at or above the inline floor keeps its inline thread whatever its judge disposition; every other non-visible finding, locatable or not, folds by disposition (#2722)
+- The fallback gate verdict poster renders the Blocking severities line inside a hidden HTML comment (#2722)
+- The gate tools post no deferral comment when the deferral target is the PR itself (#2745)
+- A folded finding is recorded by its verdict Details marker (#2745)
+- A stamped thread is recorded by its thread marker (`issue=<pr>`) plus the resolving reply (#2745)
+- A no-stamp thread (a non-fileable low) is recorded by its resolving reply plus the ledger entry (#2745)
+- A linked spec issue target is unchanged; see ADR 0142 (#2745)
+
 ## 1.0.6-pre.1
 
 ### Added

@@ -37,6 +37,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { parse as parseYaml } from "yaml";
 import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
@@ -496,6 +497,9 @@ function resolveHooksInstallTarget(gitCommand, root) {
   return { gitDir, hooksPathOverride };
 }
 
+// The push-authority check ships with this package (scripts/), so this side resolves its own path (PRE-PUSH-DELTA-PUSH-AUTHORITY).
+const AUTHORITY_CLI_PATH = fileURLToPath(new URL("./check-fix-push-authority.mjs", import.meta.url));
+
 function installGuard(gitCommand, root, explicitBase) {
   try {
     const { gitDir, hooksPathOverride } = resolveHooksInstallTarget(gitCommand, root);
@@ -505,13 +509,14 @@ function installGuard(gitCommand, root, explicitBase) {
       defaultBranches: repoDefault,
       explicitBaseBranches: explicitBranch,
       hooksPathOverride,
+      authorityCliPath: AUTHORITY_CLI_PATH,
     });
     if (!result.ok) {
       // A structured refusal (core.hooksPath set, unsafe branch name, bad
       // gitDir) is otherwise silent: emitResult strips `guard` entirely under
       // --jq/--silent, the documented invocation style, so this stderr line is
       // the only signal an operator gets that nothing was installed.
-      process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${result.reason}\n`);
+      process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${result.reason} (gate fix push authority is not enforced either)\n`);
     } else if (result.reason) {
       // ok:true degraded states that carry a reason (a dropped unsafe explicit
       // base, an inert or all-foreign install) surface the same way. A
@@ -519,10 +524,13 @@ function installGuard(gitCommand, root, explicitBase) {
       // guard.skipped.
       process.stderr.write(`[ensure-worktree] WARN default-branch guard degraded: ${result.reason}\n`);
     }
+    if (result.ok && result.skipped?.some((s) => s.hook === "pre-push")) {
+      process.stderr.write("[ensure-worktree] WARN foreign pre-push hook left untouched: gate fix push authority is not enforced\n");
+    }
     return result;
   } catch (err) {
     const detail = (err?.stderr ?? err?.message ?? "").toString().trim();
-    process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${detail}\n`);
+    process.stderr.write(`[ensure-worktree] WARN default-branch guard not installed: ${detail} (gate fix push authority is not enforced either)\n`);
     // Same shape as installDefaultBranchGuard's own refuse(): one skipped
     // entry per guarded hook, not an empty list that reads as "nothing is
     // unguarded" when in fact neither hook could be installed.

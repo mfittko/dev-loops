@@ -140,9 +140,10 @@ function normalizeSiteCoverageRecords(raw, ruleIds) {
  * item (`acceptedForms` / `rejectedForms`) needs one fixed `input_form` site with a test per listed form.
  * @param {Array<object>} actItems delta act items (each with `fingerprint` or `ref`)
  * @param {Array<object>|undefined} siteCoverage normalized `siteCoverage` of a handoff
+ * @param {Set<string>} [residualRefs] full-completion item refs authenticated by a bounded-out Delta decision
  * @returns {string[]}
  */
-export function siteCoverageGaps(actItems, siteCoverage) {
+export function siteCoverageGaps(actItems, siteCoverage, residualRefs = new Set()) {
   const byFingerprint = new Map((siteCoverage ?? []).map((record) => [record.fingerprint, record]));
   const gaps = [];
   for (const item of actItems) {
@@ -161,6 +162,7 @@ export function siteCoverageGaps(actItems, siteCoverage) {
     for (const form of [...(item.acceptedForms ?? []), ...(item.rejectedForms ?? [])]) {
       const site = disposed.get(form);
       if (site?.kind !== "input_form") gaps.push(`act item ${key} records no input_form site for form ${JSON.stringify(form)}`);
+      else if (residualRefs.has(item.ref ?? item.fingerprint) && site.status === SITE_STATUS.SKIPPED && isNonEmptyString(site.reason) && !site.reason.trim().startsWith("FILL:")) continue;
       else if (site.status !== SITE_STATUS.FIXED || !isNonEmptyString(site.test)) gaps.push(`act item ${key} input_form site ${JSON.stringify(form)} needs a fixed status and a test`);
     }
   }
@@ -178,7 +180,7 @@ export function recordedSkipReason(siteCoverage, fingerprint, site) {
  * structural gap the evaluator must never silently tolerate: a missing
  * headSha, a non-array dispositions field, a missing
  * threadId/fixingCommitSha/disposition on any entry, an unrecognized
- * disposition value, or a duplicate threadId/fingerprint across entries.
+ * disposition value, or a duplicate threadId across entries.
  *
  * Each entry also carries the optional site coverage fields `sites`, `returnedSites`, `noSitesReason` and
  * `ruleCitations`; the handoff may carry a top-level `siteCoverage[]`.
@@ -199,7 +201,6 @@ export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
   }
   const rawDispositions = raw.dispositions ?? [];
   const seenThreadIds = new Set();
-  const seenFingerprints = new Set();
   const dispositions = rawDispositions.map((entry, index) => {
     if (!entry || typeof entry !== "object") {
       throw new Error(`Fixer disposition handoff entry ${index} must be an object`);
@@ -222,12 +223,6 @@ export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
       throw new Error(`Fixer disposition handoff entry for thread ${threadId} is missing disposition`);
     }
     const fingerprint = isNonEmptyString(entry.fingerprint) ? entry.fingerprint.trim() : null;
-    if (fingerprint !== null) {
-      if (seenFingerprints.has(fingerprint)) {
-        throw new Error(`Fixer disposition handoff has a duplicate fingerprint: ${fingerprint}`);
-      }
-      seenFingerprints.add(fingerprint);
-    }
     const disposition = entry.disposition.trim().toLowerCase();
     if (!Object.values(FIXER_DISPOSITION_KIND).includes(disposition)) {
       throw new Error(`Fixer disposition handoff entry for thread ${threadId} has an unrecognized disposition: ${disposition}`);

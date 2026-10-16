@@ -230,8 +230,8 @@ test("every PR-creating route loads Copilot Loop Operations or the local SKILL",
 const DELTA_RULES = [
   ["PRE-PUSH-DELTA-TRIGGER", /MUST NOT/, ["act list", "before that fix is pushed", "no act-list fix", "thread route", "unresolved review threads", "passed to the `commit_only` emission"]],
   ["PRE-PUSH-DELTA-PINNED-BASELINE", /MUST/, ["reviewBaselineHead..candidateHead", "A..C", "B..C", "new gate round"]],
-  ["PRE-PUSH-DELTA-INPUT", /MUST NOT/, ["judge dispositions", "spec identity", "surface hints", "checklist", "diff bytes", "sibling reviewer verdicts", "widenedReads[]"]],
-  ["PRE-PUSH-DELTA-RESULT", /MUST/, ["resolved", "not_resolved", "cannot_verify", "widenedReads[]", "{ path, reason }", "missing or unknown status"]],
+  ["PRE-PUSH-DELTA-INPUT", /MUST NOT/, ["judge dispositions", "spec identity", "surface hints", "checklist", "diff bytes", "sibling reviewer verdicts", "widenedReads[]", "MUST review every hunk", "provenance.perAngle", "staleSurfaceHits[]", "an act-list input run without `--findings-log`"]],
+  ["PRE-PUSH-DELTA-RESULT", /MUST/, ["resolved", "not_resolved", "cannot_verify", "widenedReads[]", "{ path, reason }", "missing or unknown status", "the reported defect is gone", "introduces no new finding of severity medium or higher", "staleSurfaceHits[]", "stale-surface-hits-truncated"]],
   ["PRE-PUSH-DELTA-EXIT-BOUND", /MUST NOT/, ["locally_clear", "medium or higher", "three", "bounded_out", "no fourth review", "normal gate path"]],
   ["PRE-PUSH-DELTA-FRESHNESS", /MUST NOT/, ["candidateHead", "current worktree head", "authorize the push"]],
   ["PRE-PUSH-DELTA-NOT-GATE-EVIDENCE", /MUST NOT/, ["gate verdict", "ledger", "thread", "fan-out", "authorize merge"]],
@@ -278,7 +278,7 @@ test("delta mode states the decision record, the full-phase refusal and the fixe
 test("the Copilot follow-up skill emits commit_only, runs the thread-route delta review, then emits full", () => {
   const skill = readRepo("skills/copilot-pr-followup/SKILL.md");
   const line = skill.split("\n").find((l) => l.includes("--phase commit_only --threads-file")) ?? "";
-  for (const text of ["check-pre-push-delta.mjs --threads-file", "--baseline <headRefOid> --spec-identity <id>", "--baseline <headRefOid> --result <path> --invocation <1-3>", "`--result` run", "`PRE-PUSH-DELTA-TRIGGER`", "`--phase full`"]) {
+  for (const text of ["check-pre-push-delta.mjs --threads-file", "--baseline <headRefOid> --pr-head <PR head just read from GitHub> --spec-identity <id>", "--baseline <headRefOid> --pr-head <PR head just read from GitHub> --result <path> --invocation <1-3>", "`--result` run", "`PRE-PUSH-DELTA-TRIGGER`", "`--phase full`"]) {
     assert.ok(line.includes(text), `follow-up skill must state: ${text}`);
   }
   assert.doesNotMatch(skill, /--phase full --threads-file/);

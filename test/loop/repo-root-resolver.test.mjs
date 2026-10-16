@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, rm, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, realpath, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { test } from "bun:test";
 
 import { TOOLCHAIN_ROOT, isDevLoopsCheckout, resolveRepoRoot, resolveLedgerCheckouts, toolchainRootMismatch } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -103,6 +104,25 @@ test("resolveLedgerCheckouts returns [dir] when git is unavailable (exec failure
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("strict worktree listing preserves caller native bounds and scrubbed environment", async () => {
+  const source = await readFile(new URL("../../scripts/loop/_repo-root-resolver.mjs", import.meta.url), "utf8");
+  const env = { GIT_NO_REPLACE_OBJECTS: "1" };
+  const options = { env, timeout: 10000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024 };
+  let calls = 0;
+  const list = runInNewContext(`${source.slice(source.indexOf("export function listWorktreeEntries"), source.indexOf("/**\n * Refuse a gate findings")).replace("export function", "function")}\nlistWorktreeEntries`, {
+    gitEnvNoDirOverrides: () => { throw new Error("must use supplied environment"); },
+    execFileSync: (command, args, actual) => {
+      calls++;
+      assert.equal(command, "git");
+      assert.deepEqual([...args], ["worktree", "list", "--porcelain"]);
+      for (const [key, value] of Object.entries(options)) assert.equal(actual[key], value);
+      return "worktree /main\nHEAD abc\nbranch refs/heads/main\n\n";
+    },
+  });
+  assert.equal(list("/main", options)[0].path, "/main");
+  assert.equal(calls, 1);
 });
 
 // ADR 0117: the toolchain guard. A --repo-root that names another dev-loops source checkout refuses.
