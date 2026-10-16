@@ -2,72 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## 1.0.6-pre.2
-
-### Added
-
-- `pr create` refuses with `pre_pr_review_missing` unless `loop pre-pr-review` recorded the branch head; `--lightweight` and `docs/phases/**/*.md`-only branches are exempt (#2618)
-- A pre-push check refuses a gate fix push until the full work order is emitted; no hook means no check, and `ensure-worktree` warns (#2748)
-
-### Changed
-
-- The pre-push delta review widens surface hints to the gate round angles, lists stale-surface hits, and refuses `locally_clear` for unaddressed hits (#2740)
-- `loop pre-push-delta` refuses an act-list input run without `--findings-log`; the fixer's `handbackCheck` now passes `--handback` instead (#2740)
-
-### Fixed
-
-- `merge-pr` refuses a merge whose added decision record number already exists on the base branch tip (#2484)
-- Reject-close judge-rejected medium and low gate threads; the act-thread guard reads every marker and the emitter refuses a non-canonical fingerprint (#2485)
-- Gate fan-in treats an empty `verifiedItems` array on a non-checklist angle as absent instead of refusing the round (#2568)
-- pr create checks the comment-discipline preflight on the --head ref; an unresolvable head names git fetch origin (head_unresolvable with --lightweight, else pre_pr_review_missing) (#2619)
-- The gate verdict body shows act and blocking findings, folds the rest by judge disposition into one Details block (#2722)
-- Inline gate finding comments keep one short Problem and Fix, with only the remainder under Details (#2722)
-- A rerun of the gate verdict upsert with an inline reason holding an HTML comment delimiter reports noop, and the hidden lines also neutralize `--!>` (#2722)
-- A locatable gate finding at or above the inline floor keeps its inline thread whatever its judge disposition; every other non-visible finding, locatable or not, folds by disposition (#2722)
-- The fallback gate verdict poster renders the Blocking severities line inside a hidden HTML comment (#2722)
-- The gate tools post no deferral comment when the deferral target is the PR itself (#2745)
-- A folded finding is recorded by its verdict Details marker (#2745)
-- A stamped thread is recorded by its thread marker (`issue=<pr>`) plus the resolving reply (#2745)
-- A no-stamp thread (a non-fileable low) is recorded by its resolving reply plus the ledger entry (#2745)
-- A linked spec issue target is unchanged; see ADR 0142 (#2745)
-
-## 1.0.6-pre.1
-
-### Added
-
-- `pr create` and `loop gate-coordination` report the ADR tripwire and size budget for draft PRs; gate coordination stops before the ready flip on a block (#2512)
-- Gate validation reads a `.devloops` `validation` key: `ci-only` (consumer default) or `local` mode, an optional full-validation command and a path-to-command map (#2517)
-- Targeted worker checks read the checkout's `validation.paths`. The gate trusts only the default-branch `validation` block and refuses a checkout block that differs (#2517)
-- `dev-loops gate wait-for-units` joins a gate round's reviewer and judge units in one read-only foreground call (#2579)
-- `.devloops` `extraToolsGuidance` renders per-tool usage guidance into the Claude role prompt when the MCP server is detected (#2622)
-
-### Changed
-
-- A missing retrospective checkpoint no longer stops loop startup. Startup reports `pendingRetrospectives` and `merge-pr` refuses while an earlier merge has none recorded (#2488)
-- Gate act items carry a defect class and site query, the fixer covers every site, and a surface flagged in 3 gate rounds escalates to a human (#2556)
-- The `commit_only` fixer work order now carries a `siteCoverage` skeleton for the fixer to fill in (#2575)
-- The fixer emitter refuses `--phase full` without a clearing pre-push delta decision, and fixed replies are refused for threads the delta review left unresolved (#2575)
-- The `--phase full` work order carries the `commit_only` `siteCoverage` skeleton, and a stale invocation-3 delta result clears it when its item ref/status pairs match the head delta record (#2575)
-- `check-pre-push-delta.mjs --threads-file` reviews a thread-driven fix, and each run writes a `gate-delta/<baseline>.json` decision record that the emitter and the reply paths read (#2575)
-- `request-copilot-review.mjs` reports the status `blocked_by_fixer_disposition`, with the failedSteps `not_verified` and `delta_blocked`, when the fixer disposition boundary blocks a request (#2575)
-- `merge-pr` enforces the ADR tripwire at the PR head and re-issues a stale standing waiver. The waiver writer accepts a clean `pre_approval_gate` verdict (#2682)
-- Removed code reachable only from tests: the review-lineage builder, the coordinator phase-blocked emitter and the slides story review validator (#2719)
-
-### Fixed
-
-- Angle carry-forward strips carried angles from grouped dispatch units, so a delta-cleared fix re-dispatches only uncarried angles (#2511)
-- A fixer pull for a self-hosting unit delegates to the worktree on the work order's authority branch (#2581)
-- Gate finding comments no longer name the local ledger; a cut field keeps capped text and puts full text in a collapsed details block, and code-like content uses a fenced block (#2629)
-- Changelog notability follows the PR title instead of intermediate commit subjects (#2667)
-- Gate review angles all re-run when a dev-loop config source changes, even if it reverts to base or is renamed or copied to a non-config path (#2685)
-- Comment writers refuse a body line opening with `approve merge` or `adr-tripwire:allow`, so agents cannot write operator-owned approvals or waivers (#2695)
-- Dev-loop preflight and Copilot follow-up route clean terminal handoffs through fresh gate coordination while preserving blocked stops and lifecycle gates (#2707)
-- Gate-round retirement archives matching dispatch-prompt records so fresh same-head reviews do not inherit retired bindings (#2709)
-- A `valid_compliant` judge decision with `remedyKind: "evidence_only"` needs no `defectClass` or `siteQuery`; `check-judge-decision.mjs` validates it (#2716)
-- Judge decision check accepts an empty decisions array (zero findings) instead of failing (#2731)
-- License and ownership files (LICENSE-*, NOTICE, CODEOWNERS, .gitignore) classify as docs or config instead of unknown (#2732)
-
-## 1.0.6-pre.0
+## 1.0.6
 
 ### Added
 
@@ -80,6 +15,14 @@ All notable changes to this project will be documented in this file.
 - `.devloops` `extraTools` adds MCP tools to Claude developer, fixer and refiner agents via `dev-loops loop claude-launch` and the headless entry (#2598)
 - `dev-loops loop audit-session` reports tool calls per session and an MCP usage table by role, with denied calls and working-directory class (#2601)
 - HTML and CSS files classify as code, images and fonts as a new asset kind, and a `.devloops` `classify` key maps a repository's own files (#2616)
+- `pr create` and `loop gate-coordination` report the ADR tripwire and size budget for draft PRs; gate coordination stops before the ready flip on a block (#2512)
+- Gate validation reads a `.devloops` `validation` key: `ci-only` (consumer default) or `local` mode, an optional full-validation command and a path-to-command map (#2517)
+- Targeted worker checks read the checkout's `validation.paths`. The gate trusts only the default-branch `validation` block and refuses a checkout block that differs (#2517)
+- `dev-loops gate wait-for-units` joins a gate round's reviewer and judge units in one read-only foreground call (#2579)
+- `.devloops` `extraToolsGuidance` renders per-tool usage guidance into the Claude role prompt when the MCP server is detected (#2622)
+- `pr create` refuses with `pre_pr_review_missing` unless `loop pre-pr-review` recorded the branch head; `--lightweight` and `docs/phases/**/*.md`-only branches are exempt (#2618)
+- A pre-push check refuses a gate fix push until the full work order is emitted; no hook means no check, and `ensure-worktree` warns (#2748)
+- The canonical fixer emitter supports exact fresh Codex collaboration payloads and pinned after-pull setup (#2770)
 
 ### Changed
 
@@ -113,6 +56,19 @@ All notable changes to this project will be documented in this file.
 - Manual refresh and read-only behavior are unchanged, and snapshot contracts are unchanged. Textual layer details and Snapshot JSON remain if rendering fails. State Atlas keeps Mermaid (#2627)
 - Inspect graph state details report snapshot-list membership independently of next-state eligibility, without changing Next emphasis (#2627)
 - The conductor routing statechart is now the runtime routing policy source, shipped in `@dev-loops/core`; routing results are unchanged (#2668)
+- A missing retrospective checkpoint no longer stops loop startup. Startup reports `pendingRetrospectives` and `merge-pr` refuses while an earlier merge has none recorded (#2488)
+- Gate act items carry a defect class and site query, the fixer covers every site, and a surface flagged in 3 gate rounds escalates to a human (#2556)
+- The `commit_only` fixer work order now carries a `siteCoverage` skeleton for the fixer to fill in (#2575)
+- The fixer emitter refuses `--phase full` without a clearing pre-push delta decision, and fixed replies are refused for threads the delta review left unresolved (#2575)
+- The `--phase full` work order carries the `commit_only` `siteCoverage` skeleton, and a stale invocation-3 delta result clears it when its item ref/status pairs match the head delta record (#2575)
+- `check-pre-push-delta.mjs --threads-file` reviews a thread-driven fix, and each run writes a `gate-delta/<baseline>.json` decision record that the emitter and the reply paths read (#2575)
+- `request-copilot-review.mjs` reports the status `blocked_by_fixer_disposition`, with the failedSteps `not_verified` and `delta_blocked`, when the fixer disposition boundary blocks a request (#2575)
+- `merge-pr` enforces the ADR tripwire at the PR head and re-issues a stale standing waiver. The waiver writer accepts a clean `pre_approval_gate` verdict (#2682)
+- Removed code reachable only from tests: the review-lineage builder, the coordinator phase-blocked emitter and the slides story review validator (#2719)
+- The pre-push delta review widens surface hints to the gate round angles, lists stale-surface hits, and refuses `locally_clear` for unaddressed hits (#2740)
+- `loop pre-push-delta` refuses an act-list input run without `--findings-log`; the fixer's `handbackCheck` now passes `--handback` instead (#2740)
+- Emit authenticated populated full fixer orders with immutable original coverage, distinct reviewed/candidate authority and pinned emitting verifier commands (#2786)
+- Share authenticated ACT thread selection while preserving complete merged, shared and resolved root membership in fixer verification (#2795)
 
 ### Fixed
 
@@ -129,6 +85,45 @@ All notable changes to this project will be documented in this file.
 - Removed the `@dev-loops/core/cli/retry-wrapper` export and its module (#2655)
 - `inspect-run` reports `lifecyclePhase: "unknown"` for a PR without dev-loop evidence instead of a phase guessed from the Copilot state map. (#2660)
 - The reviewer layer reports `re_review_needed` when the latest submitted review targets a stale commit and no fresh review is requested. (#2660)
+- Angle carry-forward strips carried angles from grouped dispatch units, so a delta-cleared fix re-dispatches only uncarried angles (#2511)
+- A fixer pull for a self-hosting unit delegates to the worktree on the work order's authority branch (#2581)
+- Gate finding comments no longer name the local ledger; a cut field keeps capped text and puts full text in a collapsed details block, and code-like content uses a fenced block (#2629)
+- Changelog notability follows the PR title instead of intermediate commit subjects (#2667)
+- Gate review angles all re-run when a dev-loop config source changes, even if it reverts to base or is renamed or copied to a non-config path (#2685)
+- Comment writers refuse a body line opening with `approve merge` or `adr-tripwire:allow`, so agents cannot write operator-owned approvals or waivers (#2695)
+- Dev-loop preflight and Copilot follow-up route clean terminal handoffs through fresh gate coordination while preserving blocked stops and lifecycle gates (#2707)
+- Gate-round retirement archives matching dispatch-prompt records so fresh same-head reviews do not inherit retired bindings (#2709)
+- A `valid_compliant` judge decision with `remedyKind: "evidence_only"` needs no `defectClass` or `siteQuery`; `check-judge-decision.mjs` validates it (#2716)
+- Judge decision check accepts an empty decisions array (zero findings) instead of failing (#2731)
+- License and ownership files (LICENSE-*, NOTICE, CODEOWNERS, .gitignore) classify as docs or config instead of unknown (#2732)
+- `merge-pr` refuses a merge whose added decision record number already exists on the base branch tip (#2484)
+- Reject-close judge-rejected medium and low gate threads; the act-thread guard reads every marker and the emitter refuses a non-canonical fingerprint (#2485)
+- Gate fan-in treats an empty `verifiedItems` array on a non-checklist angle as absent instead of refusing the round (#2568)
+- pr create checks the comment-discipline preflight on the --head ref; an unresolvable head names git fetch origin (head_unresolvable with --lightweight, else pre_pr_review_missing) (#2619)
+- The gate verdict body shows act and blocking findings, folds the rest by judge disposition into one Details block (#2722)
+- Inline gate finding comments keep one short Problem and Fix, with only the remainder under Details (#2722)
+- A rerun of the gate verdict upsert with an inline reason holding an HTML comment delimiter reports noop, and the hidden lines also neutralize `--!>` (#2722)
+- A locatable gate finding at or above the inline floor keeps its inline thread whatever its judge disposition; every other non-visible finding, locatable or not, folds by disposition (#2722)
+- The fallback gate verdict poster renders the Blocking severities line inside a hidden HTML comment (#2722)
+- The gate tools post no deferral comment when the deferral target is the PR itself (#2745)
+- A folded finding is recorded by its verdict Details marker (#2745)
+- A stamped thread is recorded by its thread marker (`issue=<pr>`) plus the resolving reply (#2745)
+- A no-stamp thread (a non-fileable low) is recorded by its resolving reply plus the ledger entry (#2745)
+- A linked spec issue target is unchanged; see ADR 0142 (#2745)
+- Resolve Claude gate helpers from the plugin toolchain in consumer repositories and retain ready-command failure diagnostics (#2772)
+- Full fixer completion accepts authenticated bounded-out skipped residual forms while resolved forms stay strict and residual threads stay open without a Fixed reply (#2773)
+- Construct full fixer reports from authenticated coverage and prior worker provenance before normal live verification (#2774)
+- Codex judges receive read and hash instructions with their pulled work order before inspecting pinned inputs (#2776)
+- Codex fixers request managed permissions before protected operations and check staging, secret scanning and commit results separately (#2778)
+- Fixer completion keeps distinct roots sharing a fingerprint and defers merged roots until every authenticated ACT member is resolved (#2781)
+- Bind new ACT Delta reviews to genuine pulled commit-only raw coverage and exact report provenance before recording a decision (#2784)
+- Authenticate explicit legacy ACT completion with legacy_revalidated origin from original evidence and bounded native query coverage (#2785)
+- Keep capture-order proof and real worker recovery for legacy completion as later producer work (#2785)
+- Preserve prior fixer delivery bytes under an owned lock without granting archive authority (#2790)
+- Authenticate optional fixer reviewed-baseline authority at pull, grant and completion; protect both reviewed and candidate heads from retirement (#2793)
+- Bind incomplete fixer subjects and genuine missing reports; prepare authenticated legacy evidence while the original plan stays active (#2798)
+- Admit authenticated delivery-only fixer work orders with empty source selectors and bounded ACT/THREAD delivery while preserving ordinary rendering; producer enablement remains separate (#2800)
+- Gate coordination and Copilot requests block on missing or incomplete active full fixer output; `verify-fixer-disposition --check` validates evidence without writes or GitHub actions (#2767)
 
 ## 1.0.5
 
