@@ -245,7 +245,7 @@ body.board-full{overflow:hidden}
   <div class="panel">
     <h2>Where the loops are</h2>
     <ul>
-      <li><b>Before the first push.</b> Refine adds the size forecast (planned: issue 2756) and graph context (planned: issue 2588), and the developer self-check compares the diff with the AC, ADRs and non-goals. Defects caught here cost a local edit.</li>
+      <li><b>Before the first push.</b> Refine adds the size forecast (planned: issue 2756) and work-order context (planned: issue 2588), and reads the code graph, and the developer self-check compares the diff with the AC, ADRs and non-goals. Defects caught here cost a local edit.</li>
       <li><b>Pre-PR review.</b> A reviewer reads the change before the first push. Findings go back to the developer while the work is still local.</li>
       <li><b>The gate round.</b> Review lenses fan out over one head, fan-in checks that every lens reported, and the judge decides per finding: act, defer or reject. Only the act list reaches the fixer.</li>
       <li><b>Fix and re-gate.</b> Every fix is a new head. Evidence for the old head is stale, so the round runs again. A fix window bounds how often.</li>
@@ -291,7 +291,7 @@ body.board-full{overflow:hidden}
   </div>
   <div class="panel">
     <h2>Known gaps</h2>
-    <p>Each stage below catches defects only in part. A row names the issue that owns the rest, or says no home.</p>
+    <p>Each row below is a stage that is planned or catches defects only in part, with the issue that owns it or no home.</p>
     <ul>
       <li><b>Size forecast at refine:</b> <span class="plan">planned</span> <a href="https://github.com/mfittko/dev-loops/issues/2756">#2756</a>.</li>
       <li><b>Stale-surface sweep in the pre-PR review:</b> <span class="plan">planned</span> <a href="https://github.com/mfittko/dev-loops/issues/2807">#2807</a>.</li>

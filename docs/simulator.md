@@ -14,7 +14,7 @@ These are teaching models, not a port or live execution of dev-loops. The origin
 
 The publication retains each artifact's teaching prose, graph/model tables, transitions, scenarios and defaults. Approved changes include complete HTML wrappers, published links, Overview-first navigation, Simulator-only navigation alignment/spacing, accessibility repairs and model extraction. The Detailed runtime still uses its original shared scratch initializer, nested caller/return protocol and Back/Reset semantics. Changing a starting condition retains the original reset-to-Custom behavior.
 
-Issue #2806 is an approved change that adds the refine and self-check early-detection stages, defect-kind routing, two panels and five scenarios to both models.
+Issue #2806 is an approved change that adds the refine and self-check nodes to the Overview, a size forecast node to the Detailed model, and defect-kind routing, two panels and five scenarios to both models.
 
 The native models live in `docs/articles/assets/simulator-model.mjs` and `docs/articles/assets/simulator-overview-model.mjs`. Both export `createModel()` but preserve distinct schemas: Detailed exposes nested graphs and `H(s, w, f, ret)` handlers; Overview exposes its lifecycle record and `advance(state, world, previous)` transition. Model instances own fresh graph/record/fact data. The pages import their models while retaining DOM rendering, controls, undo history and keyboard handling. The publisher emits both modules under `assets/`; the npm allowlist includes both for installed Node consumers. Model-only changes require their owning original page's automatic desktop/mobile suite.
 

@@ -89,7 +89,7 @@ export function createModel() {
     closed:{tag:"Fail closed", txt:"A config that does not load cannot decide a gate. Startup stops instead of running every gate on silent defaults.", slide:"Slide 13: advancement requires evidence"},
     order:{tag:"One state, one next action", txt:"The outer loop reads the record and refuses to start new work while the previous unit is unfinished. The retro checkpoint is part of finishing.", slide:"Slides 20 and 22: routing rules and the outer loop"},
     grill:{tag:"Make the goal testable", txt:"Questions until the goal, scope and evidence are clear. Agents may propose answers; a person decides intent and tradeoffs.", slide:"Slide 7: the grilling sub-loop"},
-    refine:{tag:"Size and context before code", txt:"Refine carries the code-graph context in the work order (planned: issue 2588) and adds a size forecast (planned: issue 2756). A missing fact found here costs one edit. Found at the draft gate, it costs a full gate round.", slide:"Slide 7: the grilling sub-loop"},
+    refine:{tag:"Size and context before code", txt:"Refine reads the code graph and carries work-order context (planned: issue 2588) and adds a size forecast (planned: issue 2756). A missing fact found here costs one edit. Found at the draft gate, it costs a full gate round.", slide:"Slide 7: the grilling sub-loop"},
     selfcheck:{tag:"Check your own work first", txt:"The developer compares the diff with the AC, the ADRs and the non-goals.", slide:"Slide 14: try again needs a reason"},
     gap:{tag:"A gap: caught late", txt:"The defect passed every early stage and the draft gate found it. The early stage that should have caught it is a known gap.", slide:"Slide 14: try again needs a reason"},
     card:{tag:"A job card for the worker", txt:"The developer gets the target, the required reads, one bounded next action and the stop rules. It works in its own worktree.", slide:"Slide 21: give the worker a job card"},
@@ -165,8 +165,8 @@ export function createModel() {
       S.lens = L.card; S.pending = ["selfcheck"]; S.trace.push(`implement: commit ${HEADS[S.h]} in the worktree`);
     }
     else if (node === "refine"){
-      take(S, "refine-impl"); out(S, "refine", world.defect === "oversize" && world.early ? "over band · split" : "forecast ~210 wLOC", "info"); S.title = "refine"; S.note = "The refiner reads the code graph, writes the work order context (graph context planned: issue 2588) and records a size forecast (planned: issue 2756). A unit over the size band is split here, before any code exists.";
-      S.lens = L.refine; S.pending = ["implement"]; S.trace.push("refine: work order context recorded; size forecast (planned: 2756) and graph context (planned: 2588)"); catchAt(S, world, "refine");
+      take(S, "refine-impl"); out(S, "refine", world.defect === "oversize" && world.early ? "over band · split" : "forecast ~210 wLOC", "info"); S.title = "refine"; S.note = "The refiner reads the code graph, writes the work order context (planned: issue 2588) and records a size forecast (planned: issue 2756). A unit over the size band is split here, before any code exists.";
+      S.lens = L.refine; S.pending = ["implement"]; S.trace.push("refine: work order context recorded; size forecast (planned: 2756) and work-order context (planned: 2588)"); catchAt(S, world, "refine");
     }
     else if (node === "selfcheck"){
       take(S, "self-prepr"); S.title = "self-check"; S.note = "The developer checks the diff against the AC, the ADRs and the non-goals, before asking for a review.";

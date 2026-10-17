@@ -134,7 +134,7 @@ test('Overview adds refine and self-check nodes and keeps the existing trace lin
   assert.deepEqual(fresh.trace.slice(0, 4), [
     'startup: no AC / DoD matrix → grill first',
     'grill: AC / DoD matrix and non-goals recorded',
-    'refine: work order context recorded; size forecast (planned: 2756) and graph context (planned: 2588)',
+    'refine: work order context recorded; size forecast (planned: 2756) and work-order context (planned: 2588)',
     'implement: commit A in the worktree',
   ]);
 });
