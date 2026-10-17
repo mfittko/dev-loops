@@ -332,3 +332,17 @@ test('Overview catch-node chips read caught when catchAt records the catch there
   assert.equal(chip(run({}), 'selfcheck'), 'checked');
   assert.equal(chip(run({}), 'prepr'), 'clean');
 });
+
+test('Overview requires a repair after the late catch, not the earlier validation repair', () => {
+  const state = run({ defect: 'missing context', early: false, validation: 'fails once' });
+  assert.equal(state.st.fix_rounds, 2);
+});
+
+test('Detailed hides the early toggle for issue-less entries whose defect needs refine or grill', () => {
+  const d = detailedModel();
+  for (const defect of ['spec gap', 'oversize', 'missing context']) {
+    assert.equal(d.relevant({ entry: '--lightweight', body: 'refined', defect }, 'early'), false, defect);
+    assert.equal(d.relevant({ entry: '--issue', body: 'refined', defect }, 'early'), true, defect);
+  }
+  assert.equal(d.relevant({ entry: '--lightweight', body: 'refined', defect: 'correctness' }, 'early'), true);
+});

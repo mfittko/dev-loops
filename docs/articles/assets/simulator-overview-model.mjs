@@ -203,8 +203,8 @@ export function createModel() {
       S.read = ["gate","fix_rounds","spec"];
       S.title = "judge"; S.note = "The judge reads the consolidated findings against the issue's AC, DoD and non-goals.";
       const draft = s.gate === "draft_gate";
-      if (draft && world.defect !== "none" && s.caught === "—"){ f.late = 1; s.caught = "draft_gate · gap"; wrote(S, "judge", ["caught"]); S.trace.push(`judge: the ${world.defect} reached the draft gate, a late catch`); }
-      const needs = draft ? s.fix_rounds < Math.max(NEEDED[world.findings], f.late ? 1 : 0) : world.copilot === "comments" && !f.copilot;
+      if (draft && world.defect !== "none" && s.caught === "—"){ f.late = 1; f.lateAt = s.fix_rounds; s.caught = "draft_gate · gap"; wrote(S, "judge", ["caught"]); S.trace.push(`judge: the ${world.defect} reached the draft gate, a late catch`); }
+      const needs = draft ? s.fix_rounds < Math.max(NEEDED[world.findings], f.late ? f.lateAt + 1 : 0) : world.copilot === "comments" && !f.copilot;
       if (needs && s.fix_rounds >= WINDOW){ take(S, "judge-park"); s.act_list = "3 act · window spent"; out(S, "judge","window spent","no"); S.reason = `the fix window of ${WINDOW} rounds is spent`; S.lens = L.budget; S.pending = ["park"]; S.trace.push(`judge: still 3 act findings after ${WINDOW} fix rounds → park`); }
       else if (needs){ take(S, "judge-fix"); s.act_list = draft ? "2 act · 1 defer" : "2 act (Copilot)"; out(S, "judge", draft ? "2 act" : "2 act (Copilot)", "no"); S.lens = f.late ? L.gap : L.judge; S.pending = ["fix"]; S.trace.push(`judge: ${s.act_list} → fixer`); }
       else {

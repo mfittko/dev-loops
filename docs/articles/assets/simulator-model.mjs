@@ -1023,7 +1023,7 @@ export function createModel() {
       case "maxCopilot": case "copilot": case "humanMergeOnly": case "configError": case "auth": return lifecycle && !(e === "--spike" && w.spikeDisp === "discard");
       case "force": return lifecycle && w.copilot === "5 rounds, threads open";
       case "defect": return lifecycle && !(e === "--pr" && w.prState !== "draft");
-      case "early": return lifecycle && w.defect !== "none" && !(e === "--pr" || e === "--plan-file" || e === "--spike");
+      case "early": return lifecycle && w.defect !== "none" && !(e === "--pr" || e === "--plan-file" || e === "--spike") && (issueEntry(w) || !["spec gap", "oversize", "missing context"].includes(w.defect));
       case "stall": return lifecycle && !pr && e !== "--plan-file" && e !== "--spike";
       case "loc": case "contract": case "ci": case "reviewer": case "validation": case "findings": case "judge": return lifecycle && !(e === "--pr" && w.prState !== "draft");
       case "fixDelta": case "deltaFix": return lifecycle && w.findings === "one high, judge act";
