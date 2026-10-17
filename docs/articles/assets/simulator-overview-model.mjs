@@ -166,7 +166,7 @@ export function createModel() {
     }
     else if (node === "refine"){
       take(S, "refine-impl"); out(S, "refine", world.defect === "oversize" && world.early ? "over band · split" : "forecast ~210 wLOC", "info"); S.title = "refine"; S.note = "The refiner reads the code graph, writes the work order context (planned: issue 2588) and records a size forecast (planned: issue 2756). A unit over the size band is split here, before any code exists.";
-      S.lens = L.refine; S.pending = ["implement"]; S.trace.push("refine: work order context recorded; size forecast (planned: 2756) and work-order context (planned: 2588)"); catchAt(S, world, "refine");
+      S.lens = L.refine; S.pending = ["implement"]; S.trace.push("refine: code graph read; work-order context (planned: 2588) and size forecast (planned: 2756)"); catchAt(S, world, "refine");
     }
     else if (node === "selfcheck"){
       take(S, "self-prepr"); S.title = "self-check"; S.note = "The developer checks the diff against the AC, the ADRs and the non-goals, before asking for a review.";
