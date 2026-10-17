@@ -518,7 +518,8 @@ export function createModel() {
   function roundFindings(s, w, f){
     const g = s.gate, rd = f.g[g].round;
     if (w.validation !== "allPassed") return ["gate-evidence"];
-    if (g === "draft_gate" && w.defect !== "none" && !s.caught && rd === 1) return ["high"];
+    if (g === "draft_gate" && rd === 1 && f.late === undefined) f.late = w.defect !== "none" && !s.caught; // latched once: G12 sets caught mid-round
+    if (g === "draft_gate" && f.late && rd === 1) return ["high"];
     if (g !== "draft_gate") return [];
     if (w.findings === "one high, judge act") return rd === 1 ? ["high"] : [];
     if (w.findings === "one medium, not fixed") return ["medium"];
@@ -727,7 +728,7 @@ export function createModel() {
     },
     synthesize(s,w,f){ const c = catchAt(s, w, "grill"); return {next:"re_grill", title:"synthesize", note:"A replace-section edit writes ## AC / DoD matrix and ## Non-goals. The results comment is posted. The raw Q&A stays in tmp/issues/issue-101/grill/. The body limit is 65,536 chars.", pill:["written","yes"], set:{grillState:"synthesize", refinementFinding:"null", provenanceRecorded:"yes (results comment)", ...(c ? c.set : {})}, tr:"grill: synthesize sections + results comment" + (c ? c.tr : "")}; },
     forecast(s,w,f){
-      const over = w.defect === "oversize", c = catchAt(s, w, "refine");
+      const over = w.defect === "oversize" && w.early, c = catchAt(s, w, "refine");
       return {next:{up:"clean",via:"grill_clean"}, title:"size forecast", note: over ? "The forecast of 640 wLOC is over the 400 band. Refine splits the unit before any code exists, and the first slice continues." : "The forecast of 210 wLOC is inside the 400 band. The unit stays one PR.", pill:[over ? "over band" : "210 wLOC", over ? "no" : "yes"], set:c ? c.set : undefined, tr:"grill: size forecast " + (over ? "640 wLOC, over the band" : "210 wLOC, inside the band") + (c ? c.tr : "")};
     },
     re_grill(s,w,f){ return {next:"forecast", title:"re_grill", note:"The grill runs on the new body and finds nothing new: a fixed point.", pill:["fixed point","yes"], set:{grillState:"grill_clean", unresolvedGapCount:0}, tr:"grill: fixed point → grill_clean"}; },
@@ -1021,8 +1022,8 @@ export function createModel() {
       case "lightMode": return lifecycle;
       case "maxCopilot": case "copilot": case "humanMergeOnly": case "configError": case "auth": return lifecycle && !(e === "--spike" && w.spikeDisp === "discard");
       case "force": return lifecycle && w.copilot === "5 rounds, threads open";
-      case "defect": return lifecycle;
-      case "early": return lifecycle && w.defect !== "none";
+      case "defect": return lifecycle && !(e === "--pr" && w.prState !== "draft");
+      case "early": return lifecycle && w.defect !== "none" && !(e === "--pr" && w.prState !== "draft");
       case "stall": return lifecycle && !pr && e !== "--plan-file" && e !== "--spike";
       case "loc": case "contract": case "ci": case "reviewer": case "validation": case "findings": case "judge": return lifecycle && !(e === "--pr" && w.prState !== "draft");
       case "fixDelta": case "deltaFix": return lifecycle && w.findings === "one high, judge act";

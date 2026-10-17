@@ -255,6 +255,7 @@ test('Both views flag the same late defects and derive the planned badge from th
     [{ defect: 'missing context', early: false, judge: 'spec_cannot_decide' }, 'draft_gate · gap', 2588],
     [{ defect: 'docs drift', early: true }, 'pre-PR review', 2807],
     [{ defect: 'oversize', early: true }, 'refine', 2756],
+    [{ defect: 'oversize', early: false }, 'draft_gate · gap', 2756],
     [{ defect: 'spec gap', matrix: false, early: true }, 'grill', undefined],
     [{ defect: 'correctness', early: true }, 'self-check', undefined],
   ];
@@ -268,6 +269,16 @@ test('Both views flag the same late defects and derive the planned badge from th
     assert.equal(detailed.plannedFor(d.S.st.caught, w.defect), planned, JSON.stringify(w));
     assert.equal(overview.plannedFor(o.st.caught, w.defect), planned, JSON.stringify(w));
   }
+  // Early stages off: the detailed forecast reports no split.
+  const off = runDetailed({ defect: 'oversize', early: false });
+  assert.equal(off.S.trace.some((t) => t.includes('640 wLOC, over the band')), false);
+});
+
+test('Detailed scenario 30 keeps the late-catch high through the whole round', () => {
+  const { S } = runDetailed(detailedModel().SC.find((x) => x.id === 30).w);
+  assert.equal(S.trace.some((t) => t.includes('findings_present, 0 thread(s)')), false);
+  assert.equal(S.f.late, true);
+  assert.equal(S.st.unresolvedGateThreadCount, 0); // closed after the round-1 fix
 });
 
 // The catch row must render on Custom runs, where #about is hidden, so it cannot live inside #about.
