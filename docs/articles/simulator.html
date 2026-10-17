@@ -55,6 +55,7 @@ code{font-family:var(--mono);font-size:.88em;background:var(--accent-soft);paddi
 @media (max-width:760px){.about{grid-template-columns:1fr}}
 .about[hidden]{display:none}
 .about p{margin:0;font-size:14px;color:var(--ink2);max-width:70ch;display:flex;flex-direction:column;gap:2px}
+.plan{font:600 10.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border:1px dashed var(--guard);border-radius:4px;color:var(--guard)}
 .about .tag{font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
 
 .grid{display:grid;grid-template-columns:minmax(0,1fr) 370px;gap:18px;align-items:start}
@@ -245,7 +246,7 @@ body.board-full{overflow:hidden}
   <p class="lbl">Scenarios</p>
   <div class="sgroups" id="chips"></div>
   <div class="msg"><span class="who" id="msgwho">Scenario</span><span id="msgtxt"></span></div>
-  <div class="about" id="about"><p><span class="tag">What this is</span><span id="abouttxt"></span></p><p><span class="tag">What to watch for</span><span id="showstxt"></span></p></div>
+  <div class="about" id="about"><p><span class="tag">What this is</span><span id="abouttxt"></span></p><p><span class="tag">What to watch for</span><span id="showstxt"></span></p><p id="catchp" hidden><span class="tag">Caught at</span><span><span id="catchtxt"></span> <span class="plan" id="planb" hidden>planned</span> <a id="plana" hidden></a></span></p></div>
 </section>
 
 <div class="grid">
@@ -331,6 +332,39 @@ body.board-full{overflow:hidden}
       <li><b>The operator</b> can grant a standing authorization to merge on a clean full gate set.</li>
     </ul>
   </div>
+  <div class="panel">
+    <h2>Where defects are caught</h2>
+    <p>Measured on 2026-10-17: the draft_gate findings of the last 40 merged PRs (2693 to 2803). The sample holds 123 findings across 18 PRs. The counts are lower bounds.</p>
+    <p><b>What the findings were</b></p>
+    <ul>
+      <li>Correctness: 30%</li>
+      <li>Docs and contract drift: 24%</li>
+      <li>Test gap: 13%</li>
+      <li>Missing context: 10%</li>
+      <li>Architecture or contract violation: 9%</li>
+      <li>PR-body or evidence format: 8%</li>
+      <li>Spec or AC gap: 6%</li>
+    </ul>
+    <p><b>About 63% were catchable earlier, at</b></p>
+    <ul>
+      <li>Pre-PR review with a stale-surface sweep: 33%</li>
+      <li>Work-order and refiner context: 11%</li>
+      <li>Developer self-check against the AC, ADRs and non-goals: 11%</li>
+      <li>Deterministic PR-body lint at <code>pr create</code>: 8%</li>
+    </ul>
+    <p>Step through the five early-detection scenarios to see each catching stage and the one gap.</p>
+  </div>
+  <div class="panel">
+    <h2>Known gaps</h2>
+    <p>Each stage below catches defects only in part. A row names the issue that owns the rest, or says no home.</p>
+    <ul>
+      <li><b>Size forecast at refine:</b> <span class="plan">planned</span> <a href="https://github.com/mfittko/dev-loops/issues/2756">#2756</a>.</li>
+      <li><b>Stale-surface sweep in the pre-PR review:</b> <span class="plan">planned</span> <a href="https://github.com/mfittko/dev-loops/issues/2807">#2807</a>.</li>
+      <li><b>PR-body format lint at <code>pr create</code>:</b> <a href="https://github.com/mfittko/dev-loops/issues/2084">#2084</a>.</li>
+      <li><b>Developer self-check against the AC, ADRs and non-goals:</b> no home.</li>
+      <li><b>Work-order and refiner context:</b> <span class="plan">planned</span> <a href="https://github.com/mfittko/dev-loops/issues/2588">#2588</a>.</li>
+    </ul>
+  </div>
 </div>
 
 <footer>A teaching model built from a sourced state model of the dev-loops repo at commit c00aa769f (2026-10-02). It is not a port of the code. Issue #101, PR #42 and the head letters A, B, C are illustrative. A step or edge marked inferred is a conclusion drawn from reading the code, not a stated rule. Source: <a href="https://github.com/mfittko/dev-loops">github.com/mfittko/dev-loops</a>. Deck: <a href="https://mfittko.github.io/dev-loops/finding-the-flow.html">Finding the flow</a>. State atlas: <a href="state-atlas.html">the diagrams generated from the code tables</a>.</footer>
@@ -340,7 +374,7 @@ body.board-full{overflow:hidden}
 import { createModel } from "./assets/simulator-model.mjs";
 (function(){
   "use strict";
-  const { I, GR, ORDER, F, SC, H, GROUPS, ROLE, ROLE_INF, RK, RORDER, RDESC, JUMP, defaults, fresh, relevant } = createModel();
+  const { I, GR, ORDER, F, SC, PLANNED, H, GROUPS, ROLE, ROLE_INF, RK, RORDER, RDESC, JUMP, defaults, fresh, relevant } = createModel();
   const $ = id => document.getElementById(id);
   const clone = o => JSON.parse(JSON.stringify(o));
   const esc = v => String(v).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -442,6 +476,8 @@ import { createModel } from "./assets/simulator-model.mjs";
     $("msgwho").textContent = sc ? "Scenario " + sc.id : "Custom";
     $("msgtxt").textContent = sc ? sc.name : "Set the starting conditions below the step controls.";
     $("about").hidden = !sc; if (sc){ $("abouttxt").textContent = sc.about; $("showstxt").textContent = sc.shows; }
+    $("catchp").hidden = !(sc && sc.stage);
+    if (sc && sc.stage){ const n = PLANNED[sc.planned]; $("catchtxt").textContent = sc.stage; $("planb").hidden = $("plana").hidden = !n; if (n){ $("plana").textContent = "#" + n; $("plana").href = "https://github.com/mfittko/dev-loops/issues/" + n; } }
   }
 
   function renderBoard(){

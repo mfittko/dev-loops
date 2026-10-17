@@ -165,17 +165,18 @@ export function createModel() {
       ["synthesize","synthesize","R5 write the sections",260,282,{a:"agent",src:"GRILL-SUBLOOP-FULL-REWRITE, GRILL-SUBLOOP-NO-EMBED-SYNTHESIS, GRILL-SUBLOOP-RATIONALE-COMMENT",L:["goal","The agent replaces the AC / DoD matrix and Non-goals sections and posts the results comment. The raw Q&A stays in tmp/."]}],
       ["re_grill","re_grill","R6 fixed point?",260,366,{a:"agent,code",src:"GRILL-SUBLOOP-ITERATE-TO-CLEAN",L:["retry","The grill runs again on the new body. It stops at a fixed point, with no numeric cap in code."]}],
       ["blocked","blocked","blocked_needs_user_decision",10,156,{k:"ret exit",w:180}],
+      ["forecast","size forecast","R7 band check",540,198,{a:"agent",src:"issue body Size forecast section; skills/loop-grill/SKILL.md",L:["goal","Refine records the size forecast. A unit over the band is split here, before any code exists. Planned: issue 2756."]}],
       ["grill_clean","grill_clean","back to the lifecycle",540,114,{k:"ret"}],
       ["needs_human_handoff","handoff","needs_human_handoff",540,282,{k:"ret exit"}],
     ],
     edges:[
       ["load_target","detect_gaps","loaded"],["load_target","blocked","load failure",{c:1,h:1,ox:-4,oy:-8}],
       ["detect_gaps","detect_gaps","provenance_missing",{l:1,side:"l"}],
-      ["detect_gaps","await_answers","open gaps",{c:1}],["detect_gaps","grill_clean","0 gaps + provenance",{c:1,lx:520,ly:104,anc:"middle"}],
+      ["detect_gaps","await_answers","open gaps",{c:1}],["detect_gaps","forecast","0 gaps + provenance",{c:1,lx:520,ly:180,anc:"middle"}],
       ["detect_gaps","needs_human_handoff","uncitable gap",{c:1,h:1,ox:-8,oy:-18}],
       ["await_answers","synthesize","answers"],["await_answers","needs_human_handoff","no citation",{c:1,h:1,ox:4,oy:4}],
       ["synthesize","re_grill",""],["synthesize","blocked","write failure",{c:1,h:1,ox:2,oy:30}],
-      ["re_grill","grill_clean","fixed point",{c:1,d:"M450 380 C 500 380, 505 200, 540 152",lx:510,ly:250,anc:"start"}],
+      ["re_grill","forecast","fixed point",{c:1,d:"M450 380 C 500 380, 505 270, 540 236",lx:468,ly:350,anc:"end"}],["forecast","grill_clean",""],
       ["re_grill","detect_gaps","new gap",{c:1,l:1,side:"l",bulge:48,lx:206,ly:344,anc:"end"}],
       ["re_grill","needs_human_handoff","unresolved",{c:1,h:1,ox:16,oy:8}],
     ]},
@@ -407,6 +408,8 @@ export function createModel() {
     edges:[["RL1","RL2",""],["RL2","RL3","stable"],["RL2","RL4","prerelease",{c:1,side:"r",bulge:44}],["RL3","RL4","approve release v<version>"],["RL4","RL5",""],["RL5","RL6",""]]},
   };
   const ORDER = ["life","startup","rules","queue","grill","epic","impl","spike","plan","light","gate","ready","cop","merge","retro","review","ui","release"];
+  // Stages planned rather than shipped, with the issue that owns each.
+  const PLANNED = {refine:2756, prepr:2807, brief:2588};
   // ---------- starting conditions ----------
   const F = [
     {g:"Entry", k:"entry", lbl:"entry flag", type:"sel", opts:["--issue","--pr","--pr --review","--pr --ui-review","--plan-file","--spike","--lightweight","--lightweight --issue"]},
@@ -443,6 +446,8 @@ export function createModel() {
     {g:"Merge and runtime", k:"auth", lbl:"merge authorization", type:"sel", opts:["fresh approval on the head","approval on an older head","standing authorization","none"]},
     {g:"Merge and runtime", k:"harness", lbl:"harness", type:"sel", opts:["claude","pi"]},
     {g:"Merge and runtime", k:"stall", lbl:"the developer goes silent for over 5 min", type:"bool", d:false},
+    {g:"Early detection", k:"defect", lbl:"a defect is hiding in the unit", type:"sel", opts:["none","spec gap","oversize","missing context","docs drift","non-goal breach","correctness"]},
+    {g:"Early detection", k:"early", lbl:"the early stages catch it", type:"bool", d:true},
   ];
   function defaults(world){ F.forEach(f => world[f.k] = f.type === "bool" ? f.d : f.opts[0]); }
   const SC = [
@@ -470,6 +475,11 @@ export function createModel() {
     {id:23, g:"Other routes", name:"UI review, missing recipe", about:"--pr --ui-review on a repo without uiReview.run in .devloops.", shows:"Provision stops at run-recipe-missing, a must-fix stop. Nothing boots.", w:{entry:"--pr --ui-review", uiRecipe:"missing"}},
     {id:24, g:"Other routes", name:"Spike graduates", about:"A spike file with its Recommendation filled, exited with graduate.", shows:"The spike writes a plan file. The plan enters local-planning at refine, a person reviews it, and promote opens a draft PR.", w:{entry:"--spike"}},
     {id:21, g:"Runtime", name:"Agent stall and recovery", about:"The developer child goes silent for more than 5 minutes during implementation.", shows:"The stall detector returns stalled. Recovery verifies, bails the child and starts a fresh-context child. The run continues.", w:{stall:true}},
+    {id:26, g:"Early detection", name:"Spec gap caught at grill", about:"The issue body is a checklist, and its spec has a gap.", shows:"The grill writes the missing AC into the matrix. The record shows the catch at the grill, before any code exists.", stage:"grill", w:{body:"checklist only", defect:"spec gap"}},
+    {id:27, g:"Early detection", name:"Oversize, split at planning", about:"The size forecast is over the band for one PR.", shows:"Refine splits the unit before any code exists. The first slice continues and the record shows the catch at refine.", stage:"refine · size forecast", planned:"refine", w:{defect:"oversize"}},
+    {id:28, g:"Early detection", name:"Docs drift, caught pre-PR", about:"The change leaves a doc stale.", shows:"The pre-PR review sweep finds it before the first push. A local edit fixes it; no gate round runs.", stage:"pre-PR review · stale-surface sweep", planned:"prepr", w:{defect:"docs drift"}},
+    {id:29, g:"Early detection", name:"Non-goal breach, self-check", about:"The diff touches something the issue lists as a non-goal.", shows:"The developer self-check compares the diff with the AC, ADRs and non-goals and catches it before asking for a review.", stage:"developer self-check (L4)", w:{defect:"non-goal breach"}},
+    {id:30, g:"Early detection", name:"Context gap reaches the gate", about:"The work order lacks a fact the developer needed. Every early stage misses it.", shows:"The draft gate finds it and the record flags the late catch as a gap. The fix costs a new head and another round.", stage:"draft_gate (a gap)", planned:"brief", w:{defect:"missing context", early:false}},
     {id:25, g:"Runtime", name:"Harness wait difference", about:"A ready PR started with --pr on Pi, waiting for Copilot.", shows:"On Pi the child exits on a pending wait and the main agent re-dispatches it. Switch harness to claude: the child waits inline.", w:{entry:"--pr", prState:"ready, no Copilot review yet", harness:"pi"}},
   ];
   // ---------- world helpers ----------
@@ -481,6 +491,14 @@ export function createModel() {
   const lightUnder = w => w.lightMode === "on, diff within limits";
   const capOf = w => w.maxCopilot === "0" ? 0 : lightUnder(w) ? 1 : 5;
   const HEADS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  // A defect kind is caught at its earliest stage. The grill only runs on an unrefined body, so refine-kind defects send the run through it.
+  const EARLY = w => ({"spec gap": refinedBody(w) ? "refine" : "grill", oversize:"refine", "missing context":"refine", "docs drift":"prepr", correctness:"selfcheck", "non-goal breach":"selfcheck"})[w.defect];
+  const STAGE = {grill:"grill", refine:"refine", selfcheck:"self-check", prepr:"pre-PR review"};
+  const lateDefect = w => w.defect !== "none" && !w.early;
+  function catchAt(s, w, node){
+    if (w.defect === "none" || !w.early || s.caught || EARLY(w) !== node) return null;
+    return {set:{caught:STAGE[node]}, tr:` caught the ${w.defect}, ${w.defect === "oversize" ? "split at planning" : "fixed before the first push"}`};
+  }
   function cmd(w){
     const t = {"--issue":"--issue 101","--pr":"--pr 42","--pr --review":"--pr 42 --review","--pr --ui-review":"--pr 42 --ui-review","--plan-file":"--plan-file docs/phases/phase-x.md","--spike":"--spike <path>","--lightweight":"--lightweight","--lightweight --issue":"--lightweight --issue 101"}[w.entry];
     return "dev-loops loop startup " + t;
@@ -498,6 +516,7 @@ export function createModel() {
   function roundFindings(s, w, f){
     const g = s.gate, rd = f.g[g].round;
     if (w.validation !== "allPassed") return ["gate-evidence"];
+    if (g === "draft_gate" && lateDefect(w) && rd === 1) return ["high"];
     if (g !== "draft_gate") return [];
     if (w.findings === "one high, judge act") return rd === 1 ? ["high"] : [];
     if (w.findings === "one medium, not fixed") return ["medium"];
@@ -535,7 +554,7 @@ export function createModel() {
         else if (st === "copilot_pr_followup"){ nx = w.prState === "draft" ? "draft_gate" : "copilot"; why = w.prState === "draft" ? "copilot_pr_followup on a draft PR: draftStart sets reviewGate draft_gate" : "copilot_pr_followup on a ready PR"; }
         else if (w.entry === "--plan-file"){ nx = "plan_file"; why = "local_implementation on a plan file"; }
         else if (w.entry === "--spike"){ nx = "spike"; why = "local_implementation on a spike file"; }
-        else if (issueEntry(w) && (!refinedBody(w) || w.grill)){ nx = "refine"; why = refinedBody(w) ? "the operator runs the grill first" : "the issue is not refined"; }
+        else if (issueEntry(w) && (!refinedBody(w) || w.grill || w.defect === "spec gap" || w.defect === "oversize" || w.defect === "missing context")){ nx = "refine"; why = !refinedBody(w) ? "the issue is not refined" : w.grill ? "the operator runs the grill first" : "refine checks the issue for a hidden " + w.defect; }
         else { nx = "implement"; why = st + ": build"; }
       }
       return {next:nx, title:"dispatch the strategy", note:`The dev-loop agent acts on the startup result: ${why}.`, pill:[s.bundleKind === "needs_reconcile" ? "reconcile" : s.selectedStrategy, s.bundleKind === "needs_reconcile" ? "no" : "info"], read:rd, tr:`route: ${why} → ${nx}`, inf: nx === "draft_gate", L: nx === "draft_gate" ? ["router","draftStart {reviewGate: draft_gate} is attached to a draft PR started with --pr. The lifecycle edge to draft_gate is drawn from that field."] : undefined};
@@ -693,10 +712,10 @@ export function createModel() {
   grill:{
     load_target(s,w,f){ return {next:"detect_gaps", title:"load_target", note:"view-issue.mjs reads the body and comments of #101.", pill:["loaded","yes"], set:{grillState:"load_target"}, tr:"grill: load_target"}; },
     detect_gaps(s,w,f){
-      if (w.body === "refined + results comment") return {next:{up:"clean",via:"grill_clean"}, title:"detect_gaps: zero gaps", note:"The body passes and the results comment is recorded. This is the zero-iteration path: grill_clean with no rewrite and no new comment.", pill:["0 gaps","yes"], set:{grillState:"grill_clean", provenanceRecorded:"yes (results comment)", unresolvedGapCount:0}, tr:"grill: 0 gaps + provenance → grill_clean", src:"scripts/loop/detect-refinement-grill-state.mjs; interpretRefinementGrillState"};
+      if (w.body === "refined + results comment") return {next:"forecast", title:"detect_gaps: zero gaps", note:"The body passes and the results comment is recorded. This is the zero-iteration path: grill_clean with no rewrite and no new comment.", pill:["0 gaps","yes"], set:{grillState:"grill_clean", provenanceRecorded:"yes (results comment)", unresolvedGapCount:0}, tr:"grill: 0 gaps + provenance → grill_clean", src:"scripts/loop/detect-refinement-grill-state.mjs; interpretRefinementGrillState"};
       if (w.body === "refined, no results comment"){
         if (!f.gprov){ f.gprov = 1; return {next:"detect_gaps", title:"detect_gaps: provenance_missing", note:"Zero gaps, but no results comment, plan surface or bypass line. The state stays detect_gaps with reason provenance_missing.", pill:["provenance_missing","no"], set:{grillState:"detect_gaps", provenanceRecorded:"no", unresolvedGapCount:0}, tr:"grill: 0 gaps, no provenance → stay (provenance_missing)", L:["evidence","A hand-written matrix is not proof that a grill happened. Advancement needs the recorded results comment (ADR 0084)."], src:"ADR 0084; interpretRefinementGrillState"}; }
-        return {next:{up:"clean",via:"grill_clean"}, title:"detect_gaps: provenance recorded", note:"The grill posts the results comment. Now the zero-gap body has provenance, and the state is grill_clean.", pill:["provenance","yes"], set:{grillState:"grill_clean", provenanceRecorded:"yes (results comment)"}, tr:"grill: results comment recorded → grill_clean"};
+        return {next:"forecast", title:"detect_gaps: provenance recorded", note:"The grill posts the results comment. Now the zero-gap body has provenance, and the state is grill_clean.", pill:["provenance","yes"], set:{grillState:"grill_clean", provenanceRecorded:"yes (results comment)"}, tr:"grill: results comment recorded → grill_clean"};
       }
       return {next:"await_answers", title:"detect_gaps: open gaps", note:"spec-lint runs offline and each finding is a gap. The body is " + (w.body === "empty" ? "empty" : "a checklist without a matrix") + ", so there are open gaps.", pill:["open gaps","no"], set:{grillState:"detect_gaps"}, read:["refinementFinding"], tr:"grill: open gaps → await_answers"};
     },
@@ -704,8 +723,12 @@ export function createModel() {
       if (w.auto && !w.citable) return {next:{up:"handoff",via:"needs_human_handoff"}, title:"await_answers: no citation", note:"--auto answers from codebase, docs and CONTEXT.md, in that order. One answer would be inferred only, with no citation. It stays unresolved.", pill:["unresolved","no"], set:{grillState:"needs_human_handoff", unresolvedGapCount:1}, tr:"grill: inferred-only answer → needs_human_handoff", L:["pause","--auto never fabricates. A headless run parks at needs_human_handoff with the recorded reason."]};
       return {next:"synthesize", title:"await_answers", note: w.auto ? "--auto self-answers each gap with a citation." : "The operator answers the questions.", pill:["answers ready","yes"], set:{grillState:"await_answers"}, tr:"grill: answers ready"};
     },
-    synthesize(s,w,f){ return {next:"re_grill", title:"synthesize", note:"A replace-section edit writes ## AC / DoD matrix and ## Non-goals. The results comment is posted. The raw Q&A stays in tmp/issues/issue-101/grill/. The body limit is 65,536 chars.", pill:["written","yes"], set:{grillState:"synthesize", refinementFinding:"null", provenanceRecorded:"yes (results comment)"}, tr:"grill: synthesize sections + results comment"}; },
-    re_grill(s,w,f){ return {next:{up:"clean",via:"grill_clean"}, title:"re_grill", note:"The grill runs on the new body and finds nothing new: a fixed point.", pill:["fixed point","yes"], set:{grillState:"grill_clean", unresolvedGapCount:0}, tr:"grill: fixed point → grill_clean"}; },
+    synthesize(s,w,f){ const c = catchAt(s, w, "grill"); return {next:"re_grill", title:"synthesize", note:"A replace-section edit writes ## AC / DoD matrix and ## Non-goals. The results comment is posted. The raw Q&A stays in tmp/issues/issue-101/grill/. The body limit is 65,536 chars.", pill:["written","yes"], set:{grillState:"synthesize", refinementFinding:"null", provenanceRecorded:"yes (results comment)", ...(c ? c.set : {})}, tr:"grill: synthesize sections + results comment" + (c ? c.tr : "")}; },
+    forecast(s,w,f){
+      const over = w.defect === "oversize", c = catchAt(s, w, "refine");
+      return {next:{up:"clean",via:"grill_clean"}, title:"size forecast", note: over ? "The forecast of 640 wLOC is over the 400 band. Refine splits the unit before any code exists, and the first slice continues." : "The forecast of 210 wLOC is inside the 400 band. The unit stays one PR.", pill:[over ? "over band" : "210 wLOC", over ? "no" : "yes"], set:c ? c.set : undefined, tr:"grill: size forecast " + (over ? "640 wLOC, over the band" : "210 wLOC, inside the band") + (c ? c.tr : "")};
+    },
+    re_grill(s,w,f){ return {next:"forecast", title:"re_grill", note:"The grill runs on the new body and finds nothing new: a fixed point.", pill:["fixed point","yes"], set:{grillState:"grill_clean", unresolvedGapCount:0}, tr:"grill: fixed point → grill_clean"}; },
   },
 
   impl:{
@@ -718,10 +741,10 @@ export function createModel() {
       f.h = 0;
       return {next:"L4", title:"L3 implement", note:"Tests first, then code. The narrowest targeted check passes; an empty check never counts as a pass. The commit-msg guard checks the conventional subject" + (w.harness === "claude" ? " and the Co-Authored-By trailer under CLAUDECODE=1." : "."), pill:["commit A","info"], set:{headSha:"A (local)", dirty:"no", roleBudgets:"coordinator_phase 40 turns / 50 tools / 20k out"}, tr:"L3: test-first change, commit A", src:"LOCAL-TEST-FIRST-COVERAGE; VALIDATE-TARGETED-FIRST; commit-msg-guard.mjs"};
     },
-    L4(s,w,f){ return {next:"L5", title:"L4 self-check", note:"One self-review, no fan-out. It is not gate evidence.", pill:["done","yes"], tr:"L4: self-check"}; },
+    L4(s,w,f){ const c = catchAt(s, w, "selfcheck"); return {next:"L5", title:"L4 self-check", note:"One self-review of the diff against the AC, the ADRs and the non-goals. No fan-out; it is not gate evidence.", pill:[c ? "caught" : "done","yes"], set:c ? c.set : undefined, tr:"L4: self-check" + (c ? c.tr : "")}; },
     L5(s,w,f){ return {next:"L6", title:"L5 docs and retro", note:"A fresh-context subagent writes summary.md, retrospective.md, the manifest and IMPLEMENTATION_STATE.md.", pill:["written","yes"], tr:"L5: phase docs and retro"}; },
     L6(s,w,f){ return {next:"L7", title:"L6 exit gate", note:"git status --porcelain is clean under tmp/worktrees/. SubagentStop is allowed.", pill:["clean","yes"], read:["dirty"], tr:"L6: worktree clean"}; },
-    L7(s,w,f){ return {next:"L8", title:"L7 pre-PR review", note:"One fresh reviewer (role pre-push-reviewer) reads the change. It is clean in round 1 of at most 2. The branch is pushed once.", pill:["clean","yes"], set:{headSha:"A"}, tr:"L7: pre-PR review clean, push A"}; },
+    L7(s,w,f){ const c = catchAt(s, w, "prepr"); return {next:"L8", title:"L7 pre-PR review", note:"One fresh reviewer (role pre-push-reviewer) reads the change and sweeps the surfaces it leaves stale. The sweep is planned (issue 2807). It is clean in round 1 of at most 2. The branch is pushed once.", pill:["clean","yes"], set:{headSha:"A", ...(c ? c.set : {})}, tr:"L7: pre-PR review clean, push A" + (c ? c.tr : "")}; },
     L8(s,w,f){ return {next:{up:"pr",via:"ret_pr"}, title:"L8 finalize", note: lightweight(w) ? "The spec is the PR body. The next step creates the draft PR." : "Tracker-backed: the next step is a draft PR and draft_gate. A direct local merge is not allowed.", pill:["draft PR","info"], tr:"L8: finalize → draft PR"}; },
   },
 
@@ -816,13 +839,14 @@ export function createModel() {
       const fs = roundFindings(s,w,f), rd = f.g[s.gate].round;
       if (w.judge === "spec_cannot_decide"){ f.gr.scd = 1; return {next:"G13", title:"judge", note:"The judge cannot pick between two readings of the spec. The spec-authority verdict is spec_cannot_decide.", pill:["spec_cannot_decide","no"], set:{scopeDrift:"within_scope"}, tr:"judge: spec_cannot_decide"}; }
       let act = [], note;
-      if (fs.includes("high")){ act = ["high"]; note = "The high finding is in scope: act."; }
+      const late = s.gate === "draft_gate" && lateDefect(w) && rd === 1;
+      if (fs.includes("high")){ act = ["high"]; note = late ? "The " + w.defect + " reached the draft gate, a late catch. The early stage that should have caught it is a known gap. Act." : "The high finding is in scope: act."; }
       else if (fs.includes("medium")){ if (rd <= 3){ act = ["medium"]; note = `Round ${rd} is inside mediumFixWindow 3, so the medium finding stays in the loop: act.`; } else note = `Round ${rd} is past mediumFixWindow 3. The medium finding is deferred, not acted on.`; }
       else if (fs.includes("gate-evidence")){ act = ["gate-evidence"]; note = "The gate-evidence finding is in scope: act."; }
       else if (fs.length) note = "Two nits: one defer with a follow-up draft, one reject with a reason.";
       else note = "Nothing to judge. The act list is empty.";
       const medInf = fs.includes("medium");
-      return {next:"G13", title:"judge", note:note + " Scope drift: within_scope.", pill:[act.length ? act.length + " act" : "0 act", act.length ? "no" : "yes"], set:{actList: act.length ? act.map(x => "1 " + x).join(", ") : "empty", scopeDrift:"within_scope"}, read:["findings"], tr:"judge: " + (act.length ? act.length + " act" : "0 act"), inf: medInf || fs.includes("gate-evidence"), L: medInf ? ["budget","The fix window bounds how long a medium finding may hold the loop. How the judge treats it at the window edge is inferred from isDeferredAtRound."] : undefined};
+      return {next:"G13", title:"judge", note:note + " Scope drift: within_scope.", pill:[act.length ? act.length + " act" : "0 act", act.length ? "no" : "yes"], set:{actList: act.length ? act.map(x => "1 " + x).join(", ") : "empty", scopeDrift:"within_scope", ...(late ? {caught:"draft_gate · gap"} : {})}, read:["findings"], tr:"judge: " + (act.length ? act.length + " act" : "0 act") + (late ? ", the " + w.defect + " reached the draft gate, a late catch" : ""), inf: medInf || fs.includes("gate-evidence"), L: medInf ? ["budget","The fix window bounds how long a medium finding may hold the loop. How the judge treats it at the window edge is inferred from isDeferredAtRound."] : undefined};
     },
     G13(s,w,f){ return {next:"G14", title:"durable ledger", note:"write-gate-findings-log.mjs writes tmp/gate-findings/<slug>/pr-42/" + s.gate + "-" + s.headSha + ".json. It checks mandatory angle coverage and that verdict and ledger agree.", pill:["ledger","yes"], tr:"ledger: written for " + s.headSha}; },
     G14(s,w,f){
@@ -994,6 +1018,8 @@ export function createModel() {
       case "lightMode": return lifecycle;
       case "maxCopilot": case "copilot": case "humanMergeOnly": case "configError": case "auth": return lifecycle && !(e === "--spike" && w.spikeDisp === "discard");
       case "force": return lifecycle && w.copilot === "5 rounds, threads open";
+      case "defect": return lifecycle && issueEntry(w);
+      case "early": return lifecycle && issueEntry(w) && w.defect !== "none";
       case "stall": return lifecycle && !pr && e !== "--plan-file" && e !== "--spike";
       case "loc": case "contract": case "ci": case "reviewer": case "validation": case "findings": case "judge": return lifecycle && !(e === "--pr" && w.prState !== "draft");
       case "fixDelta": case "deltaFix": return lifecycle && w.findings === "one high, judge act";
@@ -1003,6 +1029,7 @@ export function createModel() {
   const GROUPS = [
     ["Target",["targetKind","artifactMode","canonicalSpecSource","planFileIntakeState","spikeIntakeState"]],
     ["Routing",["intent","ownership","selectedStrategy","routeKind","bundleKind"]],
+    ["Early",["caught"]],
     ["Issue",["refinementFinding","grillState","provenanceRecorded","unresolvedGapCount","boardColumn"]],
     ["Branch",["worktreeIsolation","dirty","headSha","prevHeadSha","baseIsAncestor"]],
     ["PR",["prNumber","isDraft","titleMarkers","closingRef"]],
@@ -1015,11 +1042,11 @@ export function createModel() {
     ["Runtime",["harness","stallVerdict","roleBudgets","configErrors"]],
     ["Queue",["queueEntryStatus","retryCount"]],
   ];
-  const ROLE = {"request":["operator","orchestrator"],"startup":["coordinator","script"],"route":["script"],"reconcile":["script"],"refine":["refiner","operator"],"epic":["refiner","script"],"implement":["developer"],"spike":["developer"],"plan_file":["operator","refiner","script"],"pr_create":["coordinator","script"],"draft_gate":["gate-coordinator","reviewer","judge","fixer"],"pre_approval_gate":["gate-coordinator","reviewer","judge","fixer"],"ready":["coordinator","script"],"copilot":["Copilot","fixer","coordinator"],"final_approval":["operator"],"merge":["orchestrator","script"],"post_merge":["script"],"retro":["retro agent","orchestrator"],"review_route":["coordinator","reviewer"],"ui_review":["coordinator","script"],"stop":["operator"],"E1":["script"],"E2":["script"],"E3":["script"],"E4":["script"],"E5":["script"],"E6":["script"],"E7":["script"],"E8":["script"],"E9":["coordinator"],"E10":["script"],"Q1":["orchestrator","script"],"Q2":["orchestrator","script"],"queued":["orchestrator","script"],"running":["orchestrator","script"],"waiting_review":["orchestrator","script"],"gates_passing":["orchestrator","script"],"merging":["orchestrator","script"],"load_target":["refiner","script"],"detect_gaps":["refiner","script"],"await_answers":["operator","refiner"],"synthesize":["refiner"],"re_grill":["refiner","script"],"G1":["gate-coordinator","script"],"G2":["gate-coordinator","script"],"G4":["gate-coordinator","script"],"G5":["gate-coordinator","script"],"G7":["gate-coordinator","script"],"G8":["gate-coordinator","script"],"G9":["gate-coordinator","script"],"G10":["reviewer","gate-coordinator"],"G11":["gate-coordinator","script"],"G12":["judge"],"G13":["gate-coordinator","script"],"G14":["gate-coordinator","script"],"G16":["coordinator","script"],"G17":["fixer","coordinator"],"G18":["reviewer","fixer"],"G19":["fixer","script"],"G20":["coordinator","script"],"c1":["coordinator","script"],"c5":["coordinator","script"],"c7":["coordinator","script"],"size_pass":["coordinator","script"],"c8":["script","operator"],"adr_pass":["coordinator","script"],"c9":["coordinator","script"],"c12":["coordinator","script"],"pr_ready":["coordinator","script"],"P5":["coordinator","script"],"waiting":["script","Copilot"],"unresolved":["fixer","Copilot"],"fixed":["fixer","script"],"rerequest":["coordinator","script"],"suppressed":["script"],"requested":["script","Copilot"],"fallback":["script"],"waiting_for_ci":["script","CI"],"M3":["orchestrator","script"],"p1":["operator","script"],"p5":["orchestrator","script"],"M5":["orchestrator","script"],"M6":["orchestrator","script"],"RT1":["orchestrator","script"],"RT2":["retro agent"],"RT3":["orchestrator","script"],"RT4":["orchestrator","script"],"RT5":["script"],"NONE":["script"],"COMPLETE":["script"],"V1":["coordinator","script"],"V2":["reviewer"],"V3":["coordinator","script"],"V4":["coordinator","script"],"V5":["operator","script"],"U1":["coordinator","script"],"U2":["coordinator","script"],"U3":["coordinator","script"],"U4":["coordinator","script"],"U5":["coordinator","script"],"S1":["coordinator","script"],"in_prog":["script"],"S2":["developer"],"ready_exit":["script"],"S3":["coordinator","script"],"LP1":["script"],"LP2":["script"],"LP3":["refiner"],"LP4":["operator"],"LP5":["script"],"L0":["script"],"L1":["developer"],"L2":["developer"],"L3":["developer"],"L4":["developer"],"L5":["docs","retro agent"],"L6":["script"],"L7":["reviewer"],"L8":["developer"],"lw_entry":["script"],"lw_elig":["script"],"lw_body":["script"],"lw_close":["script"],"lw_board":["script"],"T0":["refiner"],"T2":["refiner"],"T4":["refiner","script"],"RL1":["orchestrator","operator"],"RL3":["operator"],"RL5":["CI"]};
+  const ROLE = {"request":["operator","orchestrator"],"startup":["coordinator","script"],"route":["script"],"reconcile":["script"],"refine":["refiner","operator"],"epic":["refiner","script"],"forecast":["refiner"],"implement":["developer"],"spike":["developer"],"plan_file":["operator","refiner","script"],"pr_create":["coordinator","script"],"draft_gate":["gate-coordinator","reviewer","judge","fixer"],"pre_approval_gate":["gate-coordinator","reviewer","judge","fixer"],"ready":["coordinator","script"],"copilot":["Copilot","fixer","coordinator"],"final_approval":["operator"],"merge":["orchestrator","script"],"post_merge":["script"],"retro":["retro agent","orchestrator"],"review_route":["coordinator","reviewer"],"ui_review":["coordinator","script"],"stop":["operator"],"E1":["script"],"E2":["script"],"E3":["script"],"E4":["script"],"E5":["script"],"E6":["script"],"E7":["script"],"E8":["script"],"E9":["coordinator"],"E10":["script"],"Q1":["orchestrator","script"],"Q2":["orchestrator","script"],"queued":["orchestrator","script"],"running":["orchestrator","script"],"waiting_review":["orchestrator","script"],"gates_passing":["orchestrator","script"],"merging":["orchestrator","script"],"load_target":["refiner","script"],"detect_gaps":["refiner","script"],"await_answers":["operator","refiner"],"synthesize":["refiner"],"re_grill":["refiner","script"],"G1":["gate-coordinator","script"],"G2":["gate-coordinator","script"],"G4":["gate-coordinator","script"],"G5":["gate-coordinator","script"],"G7":["gate-coordinator","script"],"G8":["gate-coordinator","script"],"G9":["gate-coordinator","script"],"G10":["reviewer","gate-coordinator"],"G11":["gate-coordinator","script"],"G12":["judge"],"G13":["gate-coordinator","script"],"G14":["gate-coordinator","script"],"G16":["coordinator","script"],"G17":["fixer","coordinator"],"G18":["reviewer","fixer"],"G19":["fixer","script"],"G20":["coordinator","script"],"c1":["coordinator","script"],"c5":["coordinator","script"],"c7":["coordinator","script"],"size_pass":["coordinator","script"],"c8":["script","operator"],"adr_pass":["coordinator","script"],"c9":["coordinator","script"],"c12":["coordinator","script"],"pr_ready":["coordinator","script"],"P5":["coordinator","script"],"waiting":["script","Copilot"],"unresolved":["fixer","Copilot"],"fixed":["fixer","script"],"rerequest":["coordinator","script"],"suppressed":["script"],"requested":["script","Copilot"],"fallback":["script"],"waiting_for_ci":["script","CI"],"M3":["orchestrator","script"],"p1":["operator","script"],"p5":["orchestrator","script"],"M5":["orchestrator","script"],"M6":["orchestrator","script"],"RT1":["orchestrator","script"],"RT2":["retro agent"],"RT3":["orchestrator","script"],"RT4":["orchestrator","script"],"RT5":["script"],"NONE":["script"],"COMPLETE":["script"],"V1":["coordinator","script"],"V2":["reviewer"],"V3":["coordinator","script"],"V4":["coordinator","script"],"V5":["operator","script"],"U1":["coordinator","script"],"U2":["coordinator","script"],"U3":["coordinator","script"],"U4":["coordinator","script"],"U5":["coordinator","script"],"S1":["coordinator","script"],"in_prog":["script"],"S2":["developer"],"ready_exit":["script"],"S3":["coordinator","script"],"LP1":["script"],"LP2":["script"],"LP3":["refiner"],"LP4":["operator"],"LP5":["script"],"L0":["script"],"L1":["developer"],"L2":["developer"],"L3":["developer"],"L4":["developer"],"L5":["docs","retro agent"],"L6":["script"],"L7":["reviewer"],"L8":["developer"],"lw_entry":["script"],"lw_elig":["script"],"lw_body":["script"],"lw_close":["script"],"lw_board":["script"],"T0":["refiner"],"T2":["refiner"],"T4":["refiner","script"],"RL1":["orchestrator","operator"],"RL3":["operator"],"RL5":["CI"]};
   const ROLE_INF = new Set(["spike","S2","G1","G16","G20","copilot","U1","U2","U3","U4","U5","RL1","T0","T2","T4","retro"]);
   const RK = {"operator":"human","orchestrator":"lead","coordinator":"lead","gate-coordinator":"lead","refiner":"llm","developer":"llm","reviewer":"llm","judge":"llm","fixer":"llm","docs":"llm","retro agent":"llm","script":"code","Copilot":"ext","CI":"ext"};
   const RORDER = ["operator","orchestrator","coordinator","gate-coordinator","refiner","developer","reviewer","judge","fixer","docs","retro agent","script","Copilot","CI"];
   const RDESC = {"operator":"the person who owns the work: intent, AC, waivers, merge","orchestrator":"main session: dispatches coordinators, merges, runs retros","coordinator":"dev-loop coordinator: drives one unit through its steps","gate-coordinator":"runs one gate round for one head","refiner":"grills and refines specs","developer":"writes the change and its tests","reviewer":"pre-PR, lens and delta reviews","judge":"act, defer or reject per finding","fixer":"works the act list, replies on threads","docs":"keeps docs in line with the change","retro agent":"fresh-context review of the run","script":"deterministic code decides","Copilot":"external PR reviewer","CI":"GitHub Actions checks"};
   const JUMP = {3:"refine",4:"refine",5:"refine",9:"draft_gate",10:"draft_gate",11:"draft_gate",12:"draft_gate",13:"draft_gate",14:"draft_gate",15:"draft_gate",16:"ready",17:"ready",18:"copilot",19:"copilot",20:"merge",21:"implement",24:"spike"};
-  return { I, GR, ORDER, F, SC, H, GROUPS, ROLE, ROLE_INF, RK, RORDER, RDESC, JUMP, defaults, fresh, relevant };
+  return { I, GR, ORDER, F, SC, PLANNED, H, GROUPS, ROLE, ROLE_INF, RK, RORDER, RDESC, JUMP, defaults, fresh, relevant };
 }

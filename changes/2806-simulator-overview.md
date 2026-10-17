@@ -1,3 +1,3 @@
 ### Added
 
-- Simulator Overview shows the refine and self-check stages, defect-kind routing and where draft_gate findings are caught (#2806)
+- Simulators show early-detection stages, defect routing, five catching-stage scenarios and where draft_gate findings are caught (#2806)

@@ -49,6 +49,7 @@ code{font-family:var(--mono);font-size:.88em;background:var(--accent-soft);paddi
 @media (max-width:760px){.about{grid-template-columns:1fr}}
 .about[hidden]{display:none}
 .about p{margin:0;font-size:14px;color:var(--ink2);max-width:70ch;display:flex;flex-direction:column;gap:2px}
+.plan{font:600 10.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border:1px dashed var(--guard);border-radius:4px;color:var(--guard)}
 .about .tag{font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
 
 .grid{display:grid;grid-template-columns:minmax(0,1fr) 370px;gap:18px;align-items:start}
@@ -192,7 +193,7 @@ body.board-full{overflow:hidden}
   <p class="lbl">Scenario</p>
   <div class="chips" id="chips"></div>
   <div class="msg"><span class="who" id="msgwho">Issue</span><span id="msgtxt"></span></div>
-  <div class="about" id="about"><p><span class="tag">What this is</span><span id="abouttxt"></span></p><p><span class="tag">What to watch for</span><span id="showstxt"></span></p></div>
+  <div class="about" id="about"><p><span class="tag">What this is</span><span id="abouttxt"></span></p><p><span class="tag">What to watch for</span><span id="showstxt"></span></p><p id="catchp" hidden><span class="tag">Caught at</span><span><span id="catchtxt"></span> <span class="plan" id="planb" hidden>planned</span> <a id="plana" hidden></a></span></p></div>
 </section>
 
 <div class="grid">
@@ -285,16 +286,17 @@ body.board-full{overflow:hidden}
       <li>Developer self-check against the AC, ADRs and non-goals: 11%</li>
       <li>Deterministic PR-body lint at <code>pr create</code>: 8%</li>
     </ul>
-    <p>Step through <i>Caught early</i> and <i>Context gap</i> to see both outcomes.</p>
+    <p>Step through the five early-detection scenarios to see each catching stage and the one gap.</p>
   </div>
   <div class="panel">
     <h2>Known gaps</h2>
     <p>Each stage below catches defects only in part. A row names the issue that owns the rest, or says no home.</p>
     <ul>
-      <li><b>Stale-surface sweep in the pre-PR review:</b> <a href="https://github.com/mfittko/dev-loops/issues/2807">#2807</a>.</li>
+      <li><b>Size forecast at refine:</b> <span class="plan">planned</span> <a href="https://github.com/mfittko/dev-loops/issues/2756">#2756</a>.</li>
+      <li><b>Stale-surface sweep in the pre-PR review:</b> <span class="plan">planned</span> <a href="https://github.com/mfittko/dev-loops/issues/2807">#2807</a>.</li>
       <li><b>PR-body format lint at <code>pr create</code>:</b> <a href="https://github.com/mfittko/dev-loops/issues/2084">#2084</a>.</li>
       <li><b>Developer self-check against the AC, ADRs and non-goals:</b> no home.</li>
-      <li><b>Work-order and refiner context:</b> no home.</li>
+      <li><b>Work-order and refiner context:</b> <span class="plan">planned</span> <a href="https://github.com/mfittko/dev-loops/issues/2588">#2588</a>.</li>
     </ul>
   </div>
 </div>
@@ -306,7 +308,7 @@ body.board-full{overflow:hidden}
 import { createModel } from "./assets/simulator-overview-model.mjs";
 (function(){
   "use strict";
-  const { F, SCEN, W, H, P, SUB, NAME, EXIT, GATE, CT, E, defaults, fresh, freshState, advance, relevant } = createModel();
+  const { F, SCEN, PLANNED, W, H, P, SUB, NAME, EXIT, GATE, CT, E, defaults, fresh, freshState, advance, relevant } = createModel();
   const world = {};
   let scen = "happy";
   function applyScenario(id){ scen = id; defaults(world); Object.assign(world, SCEN.find(s=>s.id===id).w); reset(); }
@@ -340,6 +342,8 @@ import { createModel } from "./assets/simulator-overview-model.mjs";
     $("msgwho").textContent = sc ? "Issue" : "Custom conditions";
     $("msgtxt").textContent = sc ? sc.issue : "Set the starting conditions below the step controls.";
     $("about").hidden = !sc; if (sc){ $("abouttxt").textContent = sc.about; $("showstxt").textContent = sc.shows; }
+    $("catchp").hidden = !(sc && sc.stage);
+    if (sc && sc.stage){ const n = PLANNED[sc.planned]; $("catchtxt").textContent = sc.stage; $("planb").hidden = $("plana").hidden = !n; if (n){ $("plana").textContent = "#" + n; $("plana").href = "https://github.com/mfittko/dev-loops/issues/" + n; } }
 
     const on = new Set(S.active), ran = new Set(S.ran), taken = new Set(S.taken);
     let o = "";

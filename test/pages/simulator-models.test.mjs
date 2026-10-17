@@ -116,6 +116,7 @@ function run(overrides) {
 }
 
 const NEW_STEPS = /^(refine|self-check):/;
+const NEW_IDS = ['early', 'context', 'specgap', 'oversize', 'nongoal'];
 
 test('Overview adds refine and self-check nodes and keeps the existing trace lines', () => {
   const model = overviewModel();
@@ -160,7 +161,7 @@ test('Overview keeps every pre-existing scenario trace unchanged apart from the 
   // Pins: sha256 prefix of the JSON trace, generated from the pre-refine origin/main model.
   const pins = { happy: '5fe8701364ab', fix: 'dd26627eb05f', nits: '6a3a020d8580', lens: 'd374869a7312', unknown: '2996b5bde0cd', budget: 'c809e5634b84', spec: '0ef31498d4a7', stale: '09ee9d4a50b0', retro: 'aa65cd9707b9', adr: '4a5e1dc422f6', race: 'c91a072d26df', human: '860991a192c1', fresh: 'dd03a5c08f67' };
   const model = overviewModel();
-  const ids = model.SCEN.map((sc) => sc.id).filter((id) => id !== 'early' && id !== 'context');
+  const ids = model.SCEN.map((sc) => sc.id).filter((id) => !NEW_IDS.includes(id));
   assert.deepEqual(ids.sort(), Object.keys(pins).sort());
   for (const sc of model.SCEN.filter((x) => x.id in pins)) {
     const state = model.fresh();
@@ -169,4 +170,77 @@ test('Overview keeps every pre-existing scenario trace unchanged apart from the 
     const trace = JSON.stringify(state.trace.filter((t) => !/^(refine|self-check):/.test(t)));
     assert.equal(createHash('sha256').update(trace).digest('hex').slice(0, 12), pins[sc.id], sc.id);
   }
+});
+
+// Early-detection scenarios: [overview id, detailed id, catching stage, planned issue].
+const EARLY = [
+  ['specgap', 26, 'grill', undefined],
+  ['oversize', 27, 'refine', 2756],
+  ['early', 28, 'pre-PR review', 2807],
+  ['nongoal', 29, 'self-check', undefined],
+  ['context', 30, 'draft_gate · gap', 2588],
+];
+const DEFECT = { specgap: 'spec gap', oversize: 'oversize', early: 'docs drift', nongoal: 'non-goal breach', context: 'missing context' };
+
+function runDetailed(overrides) {
+  const model = detailedModel();
+  const world = conditions(model, overrides);
+  const S = model.fresh();
+  for (let i = 0; i < 2000 && !S.done; i++) {
+    const { g, n } = S.pos, ret = S.ret;
+    S.ret = undefined;
+    const r = model.H[g][n](S.st, world, S.f, ret);
+    if (r.set) Object.assign(S.st, r.set);
+    const who = model.ROLE[n] || [];
+    if (r.tr) S.trace.push((who[0] ? who[0] + ' · ' : '') + r.tr);
+    const nx = r.next;
+    if (nx === 'END') S.done = true;
+    else if (typeof nx === 'string') S.pos = { g, n: nx };
+    else if (nx.sub) { S.stack.push({ g, n }); S.pos = { g: nx.sub, n: nx.at }; }
+    else { S.ret = nx.up; S.pos = S.stack.pop(); }
+  }
+  return { model, S };
+}
+
+for (const [oid, did, stage, planned] of EARLY) {
+  test(`Overview scenario ${oid} is caught at ${stage}`, () => {
+    const model = overviewModel();
+    const sc = model.SCEN.find((x) => x.id === oid);
+    assert.equal(sc.w.defect, DEFECT[oid]);
+    assert.equal(run(sc.w).st.caught, stage);
+    assert.equal(model.PLANNED[sc.planned], planned);
+    assert.ok(sc.stage);
+  });
+  test(`Detailed scenario ${did} is caught at ${stage}`, () => {
+    const sc = detailedModel().SC.find((x) => x.id === did);
+    assert.equal(sc.w.defect, DEFECT[oid]);
+    const { model, S } = runDetailed(sc.w);
+    assert.equal(S.done, true);
+    assert.equal(S.st.caught, stage);
+    assert.equal(model.PLANNED[sc.planned], planned);
+    assert.ok(sc.stage);
+    assert.equal(S.trace.some((t) => t.includes('late catch')), stage.endsWith('gap'));
+  });
+}
+
+test('Early-detection stages are planned only where the owning issue says so', () => {
+  assert.deepEqual(detailedModel().PLANNED, { refine: 2756, prepr: 2807, brief: 2588 });
+  assert.deepEqual(overviewModel().PLANNED, detailedModel().PLANNED);
+});
+
+test('Detailed keeps every pre-existing scenario trace unchanged apart from the size forecast line', () => {
+  // Pins: sha256 prefix of the JSON trace, generated from the pre-change origin/main model.
+  const pins = { 1: '674ca564b386', 2: '93dbc2d53f13', 3: '853de056f57a', 4: '9169117f498b', 5: '94c69820f7db', 6: 'cbfdafff4aab', 7: '22f964654d32', 8: '3a1177584ba8', 9: '8d4201bd7143', 10: 'a89ceca773a7', 11: '149c21de98c2', 12: '33da119900bb', 13: '19433ed5056f', 14: '97be236a59db', 15: '245a1e004828', 16: 'e2be03e972ca', 17: 'c92f8c23c32b', 18: 'ebbbaeaf9b78', 19: 'c8f15e4522c9', 20: 'c94cb5f006f7', 21: '656870e76ed2', 22: '2f085102417c', 23: 'a14852845460', 24: 'c406640e0863', 25: '1d49f1682c56' };
+  for (const sc of detailedModel().SC.filter((x) => x.id in pins)) {
+    const { S } = runDetailed(sc.w);
+    const trace = JSON.stringify(S.trace.filter((t) => !t.includes('size forecast')));
+    assert.equal(createHash('sha256').update(trace).digest('hex').slice(0, 12), pins[sc.id], String(sc.id));
+  }
+  assert.equal(detailedModel().SC.filter((x) => !(x.id in pins)).length, 5);
+});
+
+test('Detailed routes a spec gap on a refined body through refine and an early defect never reaches the gate', () => {
+  const { S } = runDetailed({ defect: 'spec gap' });
+  assert.equal(S.st.caught, 'refine');
+  assert.equal(S.trace.some((t) => t.includes('late catch')), false);
 });

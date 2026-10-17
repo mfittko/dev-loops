@@ -1,11 +1,13 @@
 // Native Overview teaching model; its lifecycle record is not the Detailed schema.
 export function createModel() {
+  // Stages planned rather than shipped, with the issue that owns each.
+  const PLANNED = {refine:2756, prepr:2807, brief:2588};
   // ---------- starting conditions ----------
   const F = [
     {k:"config", lbl:".devloops config", type:"sel", opts:["loads","unknown key (stale CLI)"]},
     {k:"retro", lbl:"previous merge has its retro checkpoint", type:"bool", d:true},
     {k:"matrix", lbl:"issue has an AC / DoD matrix", type:"bool", d:true},
-    {k:"defect", lbl:"a defect is hiding in the unit", type:"sel", opts:["none","spec gap","missing context","docs drift","correctness"]},
+    {k:"defect", lbl:"a defect is hiding in the unit", type:"sel", opts:["none","spec gap","oversize","missing context","docs drift","non-goal breach","correctness"]},
     {k:"early", lbl:"the early stages catch it", type:"bool", d:true},
     {k:"prepr", lbl:"pre-PR review", type:"sel", opts:["clean","finds issues"]},
     {k:"lens", lbl:"review lenses", type:"sel", opts:["all report","one never reports"]},
@@ -30,8 +32,11 @@ export function createModel() {
     {id:"adr", name:"New ADR", issue:"#110 Launcher resolves CLI forms", about:"The PR adds a new architecture decision record.", shows:"The ADR tripwire fires at the ready boundary. Only the operator may waive it, so the PR parks.", w:{tripwire:"new ADR"}},
     {id:"race", name:"Push before merge", issue:"#111 Fail closed on config errors", about:"Everything is clean, then a new commit lands just before the merge.", shows:"The merge wrapper compares the head it checked with the head it merges. They differ, so it refuses and the new head is gated again.", w:{headmove:true}},
     {id:"human", name:"Human merge only", issue:"#112 Release v1.0.6", about:"The repo requires a person to approve every merge.", shows:"The gates are clean, but evidence is not authority. The PR waits for the operator.", w:{auth:"human approval required"}},
-    {id:"early", name:"Caught early", issue:"#114 Rename a flag in the CLI", about:"The change leaves a doc stale. The pre-PR review sweep finds it.", shows:"The record shows where the defect was caught. Finding it before the first push costs a local edit, not a gate round.", w:{defect:"docs drift"}},
-    {id:"context", name:"Context gap", issue:"#115 Add a worker brief field", about:"The work order lacks a fact the developer needed. Every early stage misses it.", shows:"The draft gate finds it and the record flags the late catch as a gap. The fix costs a new head and another round.", w:{defect:"missing context", early:false}},
+    {id:"early", name:"Caught early", issue:"#114 Rename a flag in the CLI", about:"The change leaves a doc stale. The pre-PR review sweep finds it.", shows:"The record shows where the defect was caught. Finding it before the first push costs a local edit, not a gate round.", stage:"pre-PR review · stale-surface sweep", planned:"prepr", w:{defect:"docs drift"}},
+    {id:"specgap", name:"Spec gap caught at grill", issue:"#116 Add an export flag", about:"The issue has no AC / DoD matrix, and its spec has a gap.", shows:"The grill writes the missing criterion into the matrix. The record shows the catch at the grill, before any code exists.", stage:"grill", w:{matrix:false, defect:"spec gap"}},
+    {id:"oversize", name:"Oversize, split at planning", issue:"#117 Rework the gate join", about:"The size forecast is over the band for one PR.", shows:"Refine splits the unit before any code exists. The first slice continues and the record shows the catch at refine.", stage:"refine · size forecast", planned:"refine", w:{defect:"oversize"}},
+    {id:"nongoal", name:"Non-goal breach, self-check", issue:"#118 Tighten the retro lint", about:"The diff touches something the issue lists as a non-goal.", shows:"The developer self-check compares the diff with the AC, ADRs and non-goals and catches it before asking for a review.", stage:"developer self-check", w:{defect:"non-goal breach"}},
+    {id:"context", name:"Context gap", issue:"#115 Add a worker brief field", about:"The work order lacks a fact the developer needed. Every early stage misses it.", shows:"The draft gate finds it and the record flags the late catch as a gap. The fix costs a new head and another round.", stage:"draft_gate (a gap)", planned:"brief", w:{defect:"missing context", early:false}},
     {id:"fresh", name:"New idea", issue:"#113 A quick idea from the operator", about:"A new issue with no acceptance criteria yet, and a first draft with problems.", shows:"The grill turns the idea into an AC / DoD matrix first. The pre-PR review sends the draft back before anything is pushed.", w:{matrix:false, prepr:"finds issues"}},
   ];
   const W = 128, H = 46;
@@ -117,12 +122,12 @@ export function createModel() {
   function wrote(S, n, keys){ keys.forEach(k => S.by[k] = n); }
   function newHead(S){ S.h++; return HEADS[S.h] || "Z"; }
   // A defect kind is caught at its earliest stage; a spec gap needs the grill only when the matrix is missing.
-  const EARLY = w => ({"spec gap": w.matrix ? "refine" : "grill", "missing context":"refine", correctness:"selfcheck", "docs drift":"prepr"})[w.defect];
+  const EARLY = w => ({"spec gap": w.matrix ? "refine" : "grill", oversize:"refine", "missing context":"refine", correctness:"selfcheck", "non-goal breach":"selfcheck", "docs drift":"prepr"})[w.defect];
   const STAGE = {grill:"grill", refine:"refine", selfcheck:"self-check", prepr:"pre-PR review"};
   function catchAt(S, world, node){
     const s = S.st;
     if (world.defect === "none" || !world.early || s.caught !== "—" || EARLY(world) !== node) return;
-    s.caught = STAGE[node]; wrote(S, node, ["caught"]); S.trace.push(`${STAGE[node]}: caught the ${world.defect}, fixed before the first push`);
+    s.caught = STAGE[node]; wrote(S, node, ["caught"]); S.trace.push(`${STAGE[node]}: caught the ${world.defect}, ${world.defect === "oversize" ? "split at planning" : "fixed before the first push"}`);
   }
   function advance(S, world, previous){
     const s = S.st, f = S.f, node = S.pending[0]; S.active = [node]; S.reply = null; mark(S, node);
@@ -156,7 +161,7 @@ export function createModel() {
       S.lens = L.card; S.pending = ["selfcheck"]; S.trace.push(`implement: commit ${HEADS[S.h]} in the worktree`);
     }
     else if (node === "refine"){
-      take(S, "refine-impl"); out(S, "refine","forecast ~210 wLOC","info"); S.title = "refine"; S.note = "The refiner reads the code graph, writes the work order context and records a size forecast. A unit over the size band is split here, before any code exists.";
+      take(S, "refine-impl"); out(S, "refine", world.defect === "oversize" && world.early ? "over band · split" : "forecast ~210 wLOC", "info"); S.title = "refine"; S.note = "The refiner reads the code graph, writes the work order context and records a size forecast. A unit over the size band is split here, before any code exists.";
       S.lens = L.refine; S.pending = ["implement"]; S.trace.push("refine: size forecast and graph context recorded in the work order"); catchAt(S, world, "refine");
     }
     else if (node === "selfcheck"){
@@ -276,5 +281,5 @@ export function createModel() {
       S.reply = previous.reply;
     }
   }
-  return { F, SCEN, W, H, P, SUB, NAME, EXIT, GATE, CT, E, defaults, fresh, freshState, advance, relevant };
+  return { F, SCEN, PLANNED, W, H, P, SUB, NAME, EXIT, GATE, CT, E, defaults, fresh, freshState, advance, relevant };
 }
