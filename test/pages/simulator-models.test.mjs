@@ -320,3 +320,15 @@ test('relevant() hides defect and early where they have no effect', () => {
   assert.equal(o.relevant({ config: 'loads', retro: true, defect: 'none' }, 'early'), false);
   assert.equal(o.relevant({ config: 'loads', retro: false, defect: 'docs drift' }, 'early'), false);
 });
+
+test('Overview catch-node chips read caught when catchAt records the catch there', () => {
+  const chip = (state, node) => state.out[node].t;
+  const selfcheck = run({ defect: "correctness" });
+  assert.equal(selfcheck.st.caught, 'self-check');
+  assert.equal(chip(selfcheck, 'selfcheck'), 'caught');
+  const prepr = run({ defect: "docs drift" });
+  assert.equal(prepr.st.caught, 'pre-PR review');
+  assert.equal(chip(prepr, 'prepr'), 'caught');
+  assert.equal(chip(run({}), 'selfcheck'), 'checked');
+  assert.equal(chip(run({}), 'prepr'), 'clean');
+});

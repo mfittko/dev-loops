@@ -168,13 +168,13 @@ export function createModel() {
       S.lens = L.refine; S.pending = ["implement"]; S.trace.push("refine: size forecast and graph context recorded in the work order"); catchAt(S, world, "refine");
     }
     else if (node === "selfcheck"){
-      take(S, "self-prepr"); out(S, "selfcheck","checked","yes"); S.title = "self-check"; S.note = "The developer checks the diff against the AC, the ADRs and the non-goals, before asking for a review.";
-      S.lens = L.selfcheck; S.pending = ["prepr"]; S.trace.push("self-check: diff against AC, ADRs and non-goals"); catchAt(S, world, "selfcheck");
+      take(S, "self-prepr"); S.title = "self-check"; S.note = "The developer checks the diff against the AC, the ADRs and the non-goals, before asking for a review.";
+      S.lens = L.selfcheck; S.pending = ["prepr"]; S.trace.push("self-check: diff against AC, ADRs and non-goals"); catchAt(S, world, "selfcheck"); out(S, "selfcheck", s.caught === "self-check" ? "caught" : "checked", "yes");
     }
     else if (node === "prepr"){
       catchAt(S, world, "prepr");
       if (world.prepr === "finds issues" && !f.prepr){ f.prepr = 1; take(S, "prepr-impl"); out(S, "prepr","2 findings","no"); S.pending = ["implement"]; S.trace.push("pre-PR review: 2 findings → back to the developer"); }
-      else { take(S, "prepr-pr"); out(S, "prepr","clean","yes"); S.pending = ["pr"]; S.trace.push("pre-PR review: clean"); }
+      else { take(S, "prepr-pr"); out(S, "prepr", s.caught === "pre-PR review" ? "caught" : "clean", "yes"); S.pending = ["pr"]; S.trace.push("pre-PR review: clean"); }
       S.title = "pre-PR review"; S.note = "A fresh reviewer reads the diff before the first push. This step is a must."; S.lens = L.prepr;
     }
     else if (node === "pr"){
