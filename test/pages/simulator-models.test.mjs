@@ -257,7 +257,7 @@ test('Both views flag the same late defects and derive the planned badge from th
     [{ defect: 'oversize', early: true }, 'refine', 2756],
     [{ defect: 'oversize', early: false }, 'draft_gate · gap', 2756],
     [{ defect: 'spec gap', matrix: false, early: true }, 'grill', undefined],
-    [{ defect: 'spec gap', matrix: true, early: true }, 'refine', 2588],
+    [{ defect: 'spec gap', matrix: true, early: true }, 'refine', undefined],
     [{ defect: 'correctness', early: true }, 'self-check', undefined],
   ];
   for (const [w, caught, planned] of cases) {
