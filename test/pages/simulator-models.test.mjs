@@ -362,3 +362,18 @@ test('A second pre-PR pass after a catch still reports clean', () => {
   const o = run({ defect: 'docs drift', early: true, prepr: 'finds issues' }).trace;
   assert.equal(o.includes('pre-PR review: clean'), true);
 });
+
+// The L7 note must agree with the caught pill and trace at the catching stage.
+test('Detailed L7 note says the review catches the docs drift, and stays clean otherwise', () => {
+  const model = detailedModel();
+  const l7 = (w) => {
+    return model.H.impl.L7(model.fresh().st, conditions(model, w), {});
+  };
+  const caught = l7({ defect: 'docs drift', early: true });
+  assert.equal(caught.pill[0], 'caught');
+  assert.ok(caught.note.includes('It catches the docs drift'));
+  assert.equal(caught.note.includes('clean in round 1'), false);
+  const clean = l7({});
+  assert.equal(clean.pill[0], 'clean');
+  assert.ok(clean.note.includes('It is clean in round 1 of at most 2.'));
+});
