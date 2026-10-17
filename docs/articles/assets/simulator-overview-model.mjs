@@ -36,7 +36,7 @@ export function createModel() {
   ];
   const W = 128, H = 46;
   const P = { startup:[300,50], reconcile:[560,50], grill:[40,140], refine:[40,230], implement:[300,140], selfcheck:[560,140], prepr:[300,230], pr:[300,320], review:[300,410], join:[300,500], judge:[300,590], fix:[40,500], ready:[560,410], park:[560,500], merge:[560,590], retro:[560,680] };
-  const SUB = { startup:"resolve state", reconcile:"needs_reconcile", grill:"AC / DoD matrix", refine:"size forecast · graph", selfcheck:"AC · ADRs · non-goals", implement:"developer · worktree", prepr:"before first push", pr:"push · draft PR", review:"lenses + validation", join:"fan-in · guards", judge:"act / defer / reject", fix:"fixer · new head", ready:"tripwire · Copilot", park:"operator decides", merge:"merge-pr.mjs", retro:"checkpoint" };
+  const SUB = { startup:"resolve state", reconcile:"needs_reconcile", grill:"AC / DoD matrix", refine:"forecast · graph", selfcheck:"diff vs AC · ADRs", implement:"developer · worktree", prepr:"before first push", pr:"push · draft PR", review:"lenses + validation", join:"fan-in · guards", judge:"act / defer / reject", fix:"fixer · new head", ready:"tripwire · Copilot", park:"operator decides", merge:"merge-pr.mjs", retro:"checkpoint" };
   const NAME = { selfcheck:"self-check", prepr:"pre-PR review", pr:"draft PR", review:"gate round", join:"fan-in", fix:"fixer", ready:"ready" };
   const EXIT = new Set(["reconcile","park"]);
   const GATE = new Set(["join"]);
