@@ -482,7 +482,7 @@ export function createModel() {
     {id:27, g:"Early detection", name:"Oversize, split at planning", about:"The size forecast is over the band for one PR.", shows:"Refine splits the unit before any code exists. The first slice continues and the record shows the catch at refine.", stage:"refine · size forecast", planned:"refine", w:{defect:"oversize"}},
     {id:28, g:"Early detection", name:"Docs drift, caught pre-PR", about:"The change leaves a doc stale.", shows:"The pre-PR review sweep finds it before the first push. A local edit fixes it; no gate round runs.", stage:"pre-PR review · stale-surface sweep", planned:"prepr", w:{defect:"docs drift"}},
     {id:29, g:"Early detection", name:"Non-goal breach, self-check", about:"The diff touches something the issue lists as a non-goal.", shows:"The developer self-check compares the diff with the AC, ADRs and non-goals and catches it before asking for a review.", stage:"developer self-check (L4)", w:{defect:"non-goal breach"}},
-    {id:30, g:"Early detection", name:"Context gap reaches the gate", about:"The work order lacks a fact the developer needed. Every early stage misses it.", shows:"The draft gate finds it and the record flags the late catch as a gap. The fix costs a new head and another round.", stage:"draft_gate (a gap)", planned:"brief", w:{defect:"missing context", early:false}},
+    {id:30, g:"Early detection", name:"Context gap reaches the gate", about:"The work order lacks a fact the developer needed. Every early stage misses it.", shows:"The draft gate finds it and the record flags the late catch as a gap. The fix costs a new head and another round.", stage:"draft_gate · gap", planned:"brief", w:{defect:"missing context", early:false}},
     {id:25, g:"Runtime", name:"Harness wait difference", about:"A ready PR started with --pr on Pi, waiting for Copilot.", shows:"On Pi the child exits on a pending wait and the main agent re-dispatches it. Switch harness to claude: the child waits inline.", w:{entry:"--pr", prState:"ready, no Copilot review yet", harness:"pi"}},
   ];
   // ---------- world helpers ----------
@@ -497,7 +497,6 @@ export function createModel() {
   // A defect kind is caught at its earliest stage. The grill only runs on an unrefined body, so refine-kind defects send the run through it.
   const EARLY = w => ({"spec gap": refinedBody(w) ? "refine" : "grill", oversize:"refine", "missing context":"refine", "docs drift":"prepr", correctness:"selfcheck", "non-goal breach":"selfcheck"})[w.defect];
   const STAGE = {grill:"grill", refine:"refine", selfcheck:"self-check", prepr:"pre-PR review"};
-  const lateDefect = w => w.defect !== "none" && !w.early;
   function catchAt(s, w, node){
     if (w.defect === "none" || !w.early || s.caught || EARLY(w) !== node) return null;
     return {set:{caught:STAGE[node]}, tr:` caught the ${w.defect}, ${w.defect === "oversize" ? "split at planning" : "fixed before the first push"}`};
@@ -519,7 +518,7 @@ export function createModel() {
   function roundFindings(s, w, f){
     const g = s.gate, rd = f.g[g].round;
     if (w.validation !== "allPassed") return ["gate-evidence"];
-    if (g === "draft_gate" && lateDefect(w) && rd === 1) return ["high"];
+    if (g === "draft_gate" && w.defect !== "none" && !s.caught && rd === 1) return ["high"];
     if (g !== "draft_gate") return [];
     if (w.findings === "one high, judge act") return rd === 1 ? ["high"] : [];
     if (w.findings === "one medium, not fixed") return ["medium"];
@@ -841,7 +840,7 @@ export function createModel() {
     G12(s,w,f){
       const fs = roundFindings(s,w,f), rd = f.g[s.gate].round;
       // Same rule as the Overview judge: a defect still uncaught at the draft gate is flagged on every path.
-      const late = s.gate === "draft_gate" && lateDefect(w) && !s.caught;
+      const late = s.gate === "draft_gate" && w.defect !== "none" && !s.caught;
       if (w.judge === "spec_cannot_decide"){ f.gr.scd = 1; return {next:"G13", title:"judge", note:"The judge cannot pick between two readings of the spec. The spec-authority verdict is spec_cannot_decide.", pill:["spec_cannot_decide","no"], set:{scopeDrift:"within_scope", ...(late ? {caught:"draft_gate · gap"} : {})}, tr:"judge: spec_cannot_decide" + (late ? ", the " + w.defect + " reached the draft gate, a late catch" : "")}; }
       let act = [], note;
       if (fs.includes("high")){ act = ["high"]; note = late ? "The " + w.defect + " reached the draft gate, a late catch. The early stage that should have caught it is a known gap. Act." : "The high finding is in scope: act."; }

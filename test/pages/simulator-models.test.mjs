@@ -267,3 +267,25 @@ test('Both views flag the same late defects and derive the planned badge from th
     assert.equal(overview.plannedFor(o.st.caught, w.defect), planned, JSON.stringify(w));
   }
 });
+
+// The catch row must render on Custom runs, where #about is hidden, so it cannot live inside #about.
+test('Both articles keep the caught-at row outside the hidden-on-Custom about block', async () => {
+  const { readFile } = await import('node:fs/promises');
+  for (const file of ['simulator.html', 'simulator-overview.html']) {
+    const html = await readFile(new URL(`../../docs/articles/${file}`, import.meta.url), 'utf8');
+    const about = html.match(/<div class="about" id="about">.*?<\/div>/s)[0];
+    assert.equal(about.includes('catchp'), false, file);
+    assert.ok(html.includes('id="catchp"'), file);
+    assert.ok(html.includes('$("about").hidden = !sc;'), file);
+  }
+});
+
+// With early:true on an entry that skips the early stages, the defect still reaches the draft gate uncaught; Detailed flags it as the Overview judge does (the Overview has no entry input and always runs the early stages).
+test('Both views flag a defect that reaches the draft gate on entries that skip the early stages', () => {
+  for (const entry of ['--pr', '--plan-file', '--spike']) {
+    const w = { entry, defect: 'docs drift', early: true };
+    const d = runDetailed(w);
+    assert.equal(d.S.st.caught, 'draft_gate · gap', entry);
+    assert.ok(d.S.trace.some((t) => t.includes('late catch')), entry);
+  }
+});

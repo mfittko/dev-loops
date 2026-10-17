@@ -53,10 +53,10 @@ code{font-family:var(--mono);font-size:.88em;background:var(--accent-soft);paddi
 .msg .who{font-family:var(--mono);font-size:12px;color:var(--mute)}
 .about{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;border-top:1px solid var(--line);padding-top:10px}
 @media (max-width:760px){.about{grid-template-columns:1fr}}
-.about[hidden]{display:none}
-.about p{margin:0;font-size:14px;color:var(--ink2);max-width:70ch;display:flex;flex-direction:column;gap:2px}
+.about[hidden],#catchp[hidden]{display:none}
+.about p,#catchp{margin:0;font-size:14px;color:var(--ink2);max-width:70ch;display:flex;flex-direction:column;gap:2px}
 .plan{font:600 10.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border:1px dashed var(--guard);border-radius:4px;color:var(--guard)}
-.about .tag{font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
+.about .tag,#catchp .tag{font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
 
 .grid{display:grid;grid-template-columns:minmax(0,1fr) 370px;gap:18px;align-items:start}
 @media (max-width:980px){.grid{grid-template-columns:minmax(0,1fr)}}
@@ -246,7 +246,8 @@ body.board-full{overflow:hidden}
   <p class="lbl">Scenarios</p>
   <div class="sgroups" id="chips"></div>
   <div class="msg"><span class="who" id="msgwho">Scenario</span><span id="msgtxt"></span></div>
-  <div class="about" id="about"><p><span class="tag">What this is</span><span id="abouttxt"></span></p><p><span class="tag">What to watch for</span><span id="showstxt"></span></p><p id="catchp" hidden><span class="tag">Caught at</span><span><span id="catchtxt"></span> <span class="plan" id="planb" hidden>planned</span> <a id="plana" hidden></a></span></p></div>
+  <div class="about" id="about"><p><span class="tag">What this is</span><span id="abouttxt"></span></p><p><span class="tag">What to watch for</span><span id="showstxt"></span></p></div>
+  <p id="catchp" hidden><span class="tag">Caught at</span><span><span id="catchtxt"></span> <span class="plan" id="planb" hidden>planned</span> <a id="plana" hidden></a></span></p>
 </section>
 
 <div class="grid">
