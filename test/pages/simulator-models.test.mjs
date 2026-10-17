@@ -308,7 +308,14 @@ test('relevant() hides defect and early where they have no effect', () => {
   assert.equal(d.relevant({ entry: '--pr', prState: 'ready, no Copilot review yet', defect: 'docs drift' }, 'defect'), false);
   assert.equal(d.relevant({ entry: '--pr', prState: 'ready, no Copilot review yet', defect: 'docs drift' }, 'early'), false);
   assert.equal(d.relevant({ entry: '--pr', prState: 'draft', defect: 'docs drift' }, 'defect'), true);
-  assert.equal(d.relevant({ entry: '--pr', prState: 'draft', defect: 'docs drift' }, 'early'), true);
+  assert.equal(d.relevant({ entry: '--pr', prState: 'draft', defect: 'docs drift' }, 'early'), false);
+  for (const entry of ['--plan-file', '--spike', '--pr --review', '--pr --ui-review']) {
+    assert.equal(d.relevant({ entry, defect: 'docs drift' }, 'early'), false, entry);
+  }
+  for (const entry of ['--issue', '--lightweight --issue', '--lightweight']) {
+    assert.equal(d.relevant({ entry, defect: 'docs drift' }, 'early'), true, entry);
+    assert.equal(d.relevant({ entry, defect: 'none' }, 'early'), false, entry);
+  }
   const o = overviewModel();
   assert.equal(o.relevant({ config: 'loads', retro: true, defect: 'none' }, 'early'), false);
   assert.equal(o.relevant({ config: 'loads', retro: false, defect: 'docs drift' }, 'early'), false);
