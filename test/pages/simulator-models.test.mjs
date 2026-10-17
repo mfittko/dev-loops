@@ -105,3 +105,52 @@ test('Fresh runs do not share gate facts or the previous Overview record', () =>
   assert.equal(reset.st.head, '—');
   assert.deepEqual(reset.trace, []);
 });
+
+function run(overrides) {
+  const model = overviewModel();
+  const world = conditions(model, overrides);
+  const state = model.fresh();
+  for (let i = 0; i < 200 && !state.done; i++) advance(model, state, world);
+  return state;
+}
+
+const NEW_STEPS = /^(refine|self-check):/;
+
+test('Overview adds refine and self-check nodes and keeps the existing trace lines', () => {
+  const model = overviewModel();
+  assert.ok(model.P.refine && model.P.selfcheck);
+  const happy = run({});
+  assert.equal(happy.trace.filter((t) => NEW_STEPS.test(t)).length, 2);
+  assert.deepEqual(happy.trace.filter((t) => !NEW_STEPS.test(t)).slice(0, 4), [
+    'startup: refined issue, retro recorded → implement',
+    'implement: commit A in the worktree',
+    'pre-PR review: clean',
+    'pr: push A, create draft PR #42',
+  ]);
+  const fresh = run({ matrix: false, prepr: 'finds issues' });
+  assert.deepEqual(fresh.trace.slice(0, 4), [
+    'startup: no AC / DoD matrix → grill first',
+    'grill: AC / DoD matrix and non-goals recorded',
+    'refine: size forecast and graph context recorded in the work order',
+    'implement: commit A in the worktree',
+  ]);
+});
+
+test('Overview routes each defect kind to its earliest catching stage', () => {
+  const stage = { 'missing context': 'refine', correctness: 'self-check', 'docs drift': 'pre-PR review' };
+  for (const [defect, caught] of Object.entries(stage)) {
+    const state = run({ defect });
+    assert.equal(state.st.caught, caught);
+    assert.equal(state.st.fix_rounds, 0);
+  }
+  assert.equal(run({ defect: 'spec gap', matrix: false }).st.caught, 'grill');
+  assert.equal(run({ defect: 'spec gap' }).st.caught, 'refine');
+});
+
+test('Overview flags a missing-context defect that reaches the draft gate as a gap', () => {
+  const state = run({ defect: 'missing context', early: false });
+  assert.equal(state.st.caught, 'draft_gate · gap');
+  assert.ok(state.trace.some((t) => t.includes('reached the draft gate, a late catch')));
+  assert.equal(state.st.fix_rounds, 1);
+  assert.equal(run({}).st.caught, '—');
+});

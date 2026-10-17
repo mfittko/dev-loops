@@ -5,6 +5,8 @@ export function createModel() {
     {k:"config", lbl:".devloops config", type:"sel", opts:["loads","unknown key (stale CLI)"]},
     {k:"retro", lbl:"previous merge has its retro checkpoint", type:"bool", d:true},
     {k:"matrix", lbl:"issue has an AC / DoD matrix", type:"bool", d:true},
+    {k:"defect", lbl:"a defect is hiding in the unit", type:"sel", opts:["none","spec gap","missing context","docs drift","correctness"]},
+    {k:"early", lbl:"the early stages catch it", type:"bool", d:true},
     {k:"prepr", lbl:"pre-PR review", type:"sel", opts:["clean","finds issues"]},
     {k:"lens", lbl:"review lenses", type:"sel", opts:["all report","one never reports"]},
     {k:"validation", lbl:"full validation", type:"sel", opts:["passes","fails once","incomplete (unknown)"]},
@@ -28,22 +30,26 @@ export function createModel() {
     {id:"adr", name:"New ADR", issue:"#110 Launcher resolves CLI forms", about:"The PR adds a new architecture decision record.", shows:"The ADR tripwire fires at the ready boundary. Only the operator may waive it, so the PR parks.", w:{tripwire:"new ADR"}},
     {id:"race", name:"Push before merge", issue:"#111 Fail closed on config errors", about:"Everything is clean, then a new commit lands just before the merge.", shows:"The merge wrapper compares the head it checked with the head it merges. They differ, so it refuses and the new head is gated again.", w:{headmove:true}},
     {id:"human", name:"Human merge only", issue:"#112 Release v1.0.6", about:"The repo requires a person to approve every merge.", shows:"The gates are clean, but evidence is not authority. The PR waits for the operator.", w:{auth:"human approval required"}},
+    {id:"early", name:"Caught early", issue:"#114 Rename a flag in the CLI", about:"The change leaves a doc stale. The pre-PR review sweep finds it.", shows:"The record shows where the defect was caught. Finding it before the first push costs a local edit, not a gate round.", w:{defect:"docs drift"}},
+    {id:"context", name:"Context gap", issue:"#115 Add a worker brief field", about:"The work order lacks a fact the developer needed. Every early stage misses it.", shows:"The draft gate finds it and the record flags the late catch as a gap. The fix costs a new head and another round.", w:{defect:"missing context", early:false}},
     {id:"fresh", name:"New idea", issue:"#113 A quick idea from the operator", about:"A new issue with no acceptance criteria yet, and a first draft with problems.", shows:"The grill turns the idea into an AC / DoD matrix first. The pre-PR review sends the draft back before anything is pushed.", w:{matrix:false, prepr:"finds issues"}},
   ];
   const W = 128, H = 46;
-  const P = { startup:[300,50], reconcile:[560,50], grill:[40,140], implement:[300,140], prepr:[300,230], pr:[300,320], review:[300,410], join:[300,500], judge:[300,590], fix:[40,500], ready:[560,410], park:[560,500], merge:[560,590], retro:[560,680] };
-  const SUB = { startup:"resolve state", reconcile:"needs_reconcile", grill:"AC / DoD matrix", implement:"developer · worktree", prepr:"before first push", pr:"push · draft PR", review:"lenses + validation", join:"fan-in · guards", judge:"act / defer / reject", fix:"fixer · new head", ready:"tripwire · Copilot", park:"operator decides", merge:"merge-pr.mjs", retro:"checkpoint" };
-  const NAME = { prepr:"pre-PR review", pr:"draft PR", review:"gate round", join:"fan-in", fix:"fixer", ready:"ready" };
+  const P = { startup:[300,50], reconcile:[560,50], grill:[40,140], refine:[40,230], implement:[300,140], selfcheck:[560,140], prepr:[300,230], pr:[300,320], review:[300,410], join:[300,500], judge:[300,590], fix:[40,500], ready:[560,410], park:[560,500], merge:[560,590], retro:[560,680] };
+  const SUB = { startup:"resolve state", reconcile:"needs_reconcile", grill:"AC / DoD matrix", refine:"size forecast · graph", selfcheck:"AC · ADRs · non-goals", implement:"developer · worktree", prepr:"before first push", pr:"push · draft PR", review:"lenses + validation", join:"fan-in · guards", judge:"act / defer / reject", fix:"fixer · new head", ready:"tripwire · Copilot", park:"operator decides", merge:"merge-pr.mjs", retro:"checkpoint" };
+  const NAME = { selfcheck:"self-check", prepr:"pre-PR review", pr:"draft PR", review:"gate round", join:"fan-in", fix:"fixer", ready:"ready" };
   const EXIT = new Set(["reconcile","park"]);
   const GATE = new Set(["join"]);
-  const CT = { startup:[["coordinator","lead"],["script","code"]], reconcile:[["script","code"]], grill:[["refiner","llm"],["operator","human"]], implement:[["developer","llm"]], prepr:[["reviewer","llm"]], pr:[["coordinator","lead"],["script","code"]], review:[["gate-coordinator","lead"],["reviewer","llm"]], join:[["gate-coordinator","lead"],["script","code"]], judge:[["judge","llm"]], fix:[["fixer","llm"]], ready:[["coordinator","lead"],["script","code"]], park:[["operator","human"]], merge:[["orchestrator","lead"],["script","code"]], retro:[["retro agent","llm"]] };
+  const CT = { startup:[["coordinator","lead"],["script","code"]], reconcile:[["script","code"]], grill:[["refiner","llm"],["operator","human"]], implement:[["developer","llm"]],  refine:[["refiner","llm"]], selfcheck:[["developer","llm"]], prepr:[["reviewer","llm"]], pr:[["coordinator","lead"],["script","code"]], review:[["gate-coordinator","lead"],["reviewer","llm"]], join:[["gate-coordinator","lead"],["script","code"]], judge:[["judge","llm"]], fix:[["fixer","llm"]], ready:[["coordinator","lead"],["script","code"]], park:[["operator","human"]], merge:[["orchestrator","lead"],["script","code"]], retro:[["retro agent","llm"]] };
   const E = [
     {id:"s-start", d:"M364 31 L364 50"},
     {id:"st-rec", cond:1, d:"M428 73 L560 73", l:["fails closed",494,65,"middle"]},
     {id:"st-grill", cond:1, d:"M300 80 C 230 92, 104 104, 104 140", l:["no matrix",150,100]},
-    {id:"st-impl", cond:1, d:"M364 96 L364 140", l:["ready to build",372,124]},
-    {id:"grill-impl", d:"M168 163 L300 163"},
-    {id:"impl-prepr", d:"M364 186 L364 230"},
+    {id:"st-impl", cond:1, d:"M300 66 C 150 66, 8 130, 8 253 L40 253", l:["ready to build",14,118]},
+    {id:"grill-refine", d:"M104 186 L104 230"},
+    {id:"refine-impl", d:"M168 253 C 232 253, 244 190, 300 176"},
+    {id:"impl-self", d:"M428 163 L560 163"},
+    {id:"self-prepr", d:"M624 186 C 624 240, 520 262, 428 262"},
     {id:"prepr-impl", cond:1, loop:1, d:"M428 246 C 480 238, 480 176, 432 168", l:["findings",484,210]},
     {id:"prepr-pr", cond:1, d:"M364 276 L364 320", l:["clean",372,304]},
     {id:"pr-review", d:"M364 366 L364 410"},
@@ -66,7 +72,7 @@ export function createModel() {
     {id:"rec-end", d:"M688 73 C 752 73, 752 768, 378 768"},
   ];
   const HEADS = "ABCDEFGHIJ";
-  function freshState(){ return { config:"—", retro:"—", spec:"v1", matrix:"—", head:"—", pr:"none", gate:"—", round:0, lenses:"—", validation:"—", act_list:"—", fix_rounds:0, verdict_head:"—", tripwire:"—", authorization:"—", status:"—" }; }
+  function freshState(){ return { config:"—", retro:"—", spec:"v1", matrix:"—", caught:"—", head:"—", pr:"none", gate:"—", round:0, lenses:"—", validation:"—", act_list:"—", fix_rounds:0, verdict_head:"—", tripwire:"—", authorization:"—", status:"—" }; }
   const NEEDED = {"none":0,"nits only":0,"act, 1 round":1,"act, 2 rounds":2,"act, 4 rounds":4};
   const WINDOW = 3;
 
@@ -74,6 +80,9 @@ export function createModel() {
     closed:{tag:"Fail closed", txt:"A config that does not load cannot decide a gate. Startup stops instead of running every gate on silent defaults.", slide:"Slide 13: advancement requires evidence"},
     order:{tag:"One state, one next action", txt:"The outer loop reads the record and refuses to start new work while the previous unit is unfinished. The retro checkpoint is part of finishing.", slide:"Slides 20 and 22: routing rules and the outer loop"},
     grill:{tag:"Make the goal testable", txt:"Questions until the goal, scope and evidence are clear. Agents may propose answers; a person decides intent and tradeoffs.", slide:"Slide 7: the grilling sub-loop"},
+    refine:{tag:"Size and context before code", txt:"Refine adds the size forecast and the code-graph context to the work order. A missing fact costs one edit here, and a missing fact found at the draft gate costs a full round.", slide:"Slide 7: the grilling sub-loop"},
+    selfcheck:{tag:"Check your own work first", txt:"The developer compares the diff with the AC, the ADRs and the non-goals, then sweeps the docs and tests the change leaves stale.", slide:"Slide 14: try again needs a reason"},
+    gap:{tag:"A gap: caught late", txt:"The defect passed every early stage and the draft gate found it. The gate did its job, and the early stage that should have caught it is a known gap.", slide:"Slide 14: try again needs a reason"},
     card:{tag:"A job card for the worker", txt:"The developer gets the target, the required reads, one bounded next action and the stop rules. It works in its own worktree.", slide:"Slide 21: give the worker a job card"},
     prepr:{tag:"Review before the first push", txt:"Findings at this point cost a local edit. After the push they cost a full gate round.", slide:"Slide 14: try again needs a reason"},
     record:{tag:"The PR is the shared record", txt:"From here on, the head SHA, CI, verdicts and threads live on the pull request, where any session can read them.", slide:"Slide 18: apply it to AI development"},
@@ -94,6 +103,7 @@ export function createModel() {
     if (k === "config") return true;
     if (world.config !== "loads") return false;
     if (k === "retro") return true;
+    if (k === "early") return world.defect !== "none";
     if (!world.retro) return false;
     if (k === "headmove" || k === "auth" || k === "copilot") return world.tripwire !== "new ADR" && world.findings !== "act, 4 rounds";
     if (k === "tripwire" || k === "acchange") return world.findings !== "act, 4 rounds";
@@ -106,6 +116,14 @@ export function createModel() {
   function out(S, n, t, tone){ S.out[n] = {t, tone}; }
   function wrote(S, n, keys){ keys.forEach(k => S.by[k] = n); }
   function newHead(S){ S.h++; return HEADS[S.h] || "Z"; }
+  // A defect kind is caught at its earliest stage; a spec gap needs the grill only when the matrix is missing.
+  const EARLY = w => ({"spec gap": w.matrix ? "refine" : "grill", "missing context":"refine", correctness:"selfcheck", "docs drift":"prepr"})[w.defect];
+  const STAGE = {grill:"grill", refine:"refine", selfcheck:"self-check", prepr:"pre-PR review"};
+  function catchAt(S, world, node){
+    const s = S.st;
+    if (world.defect === "none" || !world.early || s.caught !== "—" || EARLY(world) !== node) return;
+    s.caught = STAGE[node]; wrote(S, node, ["caught"]); S.trace.push(`${STAGE[node]}: caught the ${world.defect} before the first push`);
+  }
   function advance(S, world, previous){
     const s = S.st, f = S.f, node = S.pending[0]; S.active = [node]; S.reply = null; mark(S, node);
     if (node === "startup"){
@@ -118,7 +136,7 @@ export function createModel() {
       if (world.config !== "loads"){ take(S, "st-rec"); S.pending = ["reconcile"]; S.reason = "the .devloops config did not load"; out(S, "startup","config error","no"); S.lens = L.closed; S.trace.push("startup: config load error (unknown key) → needs_reconcile"); }
       else if (!world.retro){ take(S, "st-rec"); S.pending = ["reconcile"]; S.reason = "the previous merge has no retro checkpoint"; out(S, "startup","no retro","no"); S.lens = L.order; S.trace.push("startup: previous merge has no retro checkpoint → needs_reconcile"); }
       else if (!world.matrix){ take(S, "st-grill"); S.pending = ["grill"]; out(S, "startup","→ grill","info"); S.lens = L.order; S.trace.push("startup: no AC / DoD matrix → grill first"); }
-      else { take(S, "st-impl"); S.pending = ["implement"]; out(S, "startup","→ implement","info"); S.lens = L.order; S.trace.push("startup: refined issue, retro recorded → implement"); }
+      else { take(S, "st-impl"); S.pending = ["refine"]; out(S, "startup","→ implement","info"); S.lens = L.order; S.trace.push("startup: refined issue, retro recorded → implement"); }
     }
     else if (node === "reconcile"){
       s.status = "needs_reconcile"; wrote(S, "reconcile", ["status"]); take(S, "rec-end");
@@ -128,16 +146,25 @@ export function createModel() {
       S.trace.push("reconcile: stop and report the reason");
     }
     else if (node === "grill"){
-      take(S, "grill-impl"); s.matrix = "present"; wrote(S, "grill", ["matrix"]); out(S, "grill","matrix recorded","yes");
+      take(S, "grill-refine"); s.matrix = "present"; wrote(S, "grill", ["matrix"]); catchAt(S, world, "grill"); out(S, "grill","matrix recorded","yes");
       S.title = "grill"; S.note = "The grill writes the acceptance criteria, completion evidence and non-goals into the issue body. Next Up refuses an issue without them.";
-      S.lens = L.grill; S.pending = ["implement"]; S.trace.push("grill: AC / DoD matrix and non-goals recorded");
+      S.lens = L.grill; S.pending = ["refine"]; S.trace.push("grill: AC / DoD matrix and non-goals recorded");
     }
     else if (node === "implement"){
-      take(S, "impl-prepr"); s.head = newHead(S) + " (local)"; wrote(S, "implement", ["head"]); out(S, "implement","head " + HEADS[S.h],"info");
+      take(S, "impl-self"); s.head = newHead(S) + " (local)"; wrote(S, "implement", ["head"]); out(S, "implement","head " + HEADS[S.h],"info");
       S.title = "implement"; S.note = f.prepr ? "The developer addresses the pre-PR findings. Still nothing is pushed." : "The developer writes the change and its tests in a worktree under tmp/worktrees/. Targeted checks run locally.";
-      S.lens = L.card; S.pending = ["prepr"]; S.trace.push(`implement: commit ${HEADS[S.h]} in the worktree`);
+      S.lens = L.card; S.pending = ["selfcheck"]; S.trace.push(`implement: commit ${HEADS[S.h]} in the worktree`);
+    }
+    else if (node === "refine"){
+      take(S, "refine-impl"); out(S, "refine","forecast ~210 wLOC","info"); S.title = "refine"; S.note = "The refiner reads the code graph, writes the work order context and records a size forecast. A unit over the size band is split here, before any code exists.";
+      S.lens = L.refine; S.pending = ["implement"]; S.trace.push("refine: size forecast and graph context recorded in the work order"); catchAt(S, world, "refine");
+    }
+    else if (node === "selfcheck"){
+      take(S, "self-prepr"); out(S, "selfcheck","checked","yes"); S.title = "self-check"; S.note = "The developer checks the diff against the AC, the ADRs and the non-goals, and sweeps the surfaces the change leaves stale, before asking for a review.";
+      S.lens = L.selfcheck; S.pending = ["prepr"]; S.trace.push("self-check: diff against AC, ADRs and non-goals"); catchAt(S, world, "selfcheck");
     }
     else if (node === "prepr"){
+      catchAt(S, world, "prepr");
       if (world.prepr === "finds issues" && !f.prepr){ f.prepr = 1; take(S, "prepr-impl"); out(S, "prepr","2 findings","no"); S.pending = ["implement"]; S.trace.push("pre-PR review: 2 findings → back to the developer"); }
       else { take(S, "prepr-pr"); out(S, "prepr","clean","yes"); S.pending = ["pr"]; S.trace.push("pre-PR review: clean"); }
       S.title = "pre-PR review"; S.note = "A fresh reviewer reads the diff before the first push. This step is a must."; S.lens = L.prepr;
@@ -168,9 +195,10 @@ export function createModel() {
       S.read = ["gate","fix_rounds","spec"];
       S.title = "judge"; S.note = "The judge reads the consolidated findings against the issue's AC, DoD and non-goals.";
       const draft = s.gate === "draft_gate";
-      const needs = draft ? s.fix_rounds < NEEDED[world.findings] : world.copilot === "comments" && !f.copilot;
+      if (draft && world.defect !== "none" && s.caught === "—"){ f.late = 1; s.caught = "draft_gate · gap"; wrote(S, "judge", ["caught"]); S.trace.push(`judge: the ${world.defect} reached the draft gate, a late catch`); }
+      const needs = draft ? s.fix_rounds < Math.max(NEEDED[world.findings], f.late ? 1 : 0) : world.copilot === "comments" && !f.copilot;
       if (needs && s.fix_rounds >= WINDOW){ take(S, "judge-park"); s.act_list = "3 act · window spent"; out(S, "judge","window spent","no"); S.reason = `the fix window of ${WINDOW} rounds is spent`; S.lens = L.budget; S.pending = ["park"]; S.trace.push(`judge: still 3 act findings after ${WINDOW} fix rounds → park`); }
-      else if (needs){ take(S, "judge-fix"); s.act_list = draft ? "2 act · 1 defer" : "2 act (Copilot)"; out(S, "judge", draft ? "2 act" : "2 act (Copilot)", "no"); S.lens = L.judge; S.pending = ["fix"]; S.trace.push(`judge: ${s.act_list} → fixer`); }
+      else if (needs){ take(S, "judge-fix"); s.act_list = draft ? "2 act · 1 defer" : "2 act (Copilot)"; out(S, "judge", draft ? "2 act" : "2 act (Copilot)", "no"); S.lens = f.late ? L.gap : L.judge; S.pending = ["fix"]; S.trace.push(`judge: ${s.act_list} → fixer`); }
       else {
         s.act_list = world.findings === "nits only" && draft ? "0 act · 2 defer · 1 reject" : "0 act"; s.verdict_head = s.head + " · spec " + s.spec;
         wrote(S, "judge", ["verdict_head"]); out(S, "judge","clean","yes"); S.lens = L.judge;
