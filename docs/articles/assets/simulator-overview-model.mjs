@@ -40,12 +40,12 @@ export function createModel() {
   const NAME = { selfcheck:"self-check", prepr:"pre-PR review", pr:"draft PR", review:"gate round", join:"fan-in", fix:"fixer", ready:"ready" };
   const EXIT = new Set(["reconcile","park"]);
   const GATE = new Set(["join"]);
-  const CT = { startup:[["coordinator","lead"],["script","code"]], reconcile:[["script","code"]], grill:[["refiner","llm"],["operator","human"]], implement:[["developer","llm"]],  refine:[["refiner","llm"]], selfcheck:[["developer","llm"]], prepr:[["reviewer","llm"]], pr:[["coordinator","lead"],["script","code"]], review:[["gate-coordinator","lead"],["reviewer","llm"]], join:[["gate-coordinator","lead"],["script","code"]], judge:[["judge","llm"]], fix:[["fixer","llm"]], ready:[["coordinator","lead"],["script","code"]], park:[["operator","human"]], merge:[["orchestrator","lead"],["script","code"]], retro:[["retro agent","llm"]] };
+  const CT = { startup:[["coordinator","lead"],["script","code"]], reconcile:[["script","code"]], grill:[["refiner","llm"],["operator","human"]], implement:[["developer","llm"]], refine:[["refiner","llm"]], selfcheck:[["developer","llm"]], prepr:[["reviewer","llm"]], pr:[["coordinator","lead"],["script","code"]], review:[["gate-coordinator","lead"],["reviewer","llm"]], join:[["gate-coordinator","lead"],["script","code"]], judge:[["judge","llm"]], fix:[["fixer","llm"]], ready:[["coordinator","lead"],["script","code"]], park:[["operator","human"]], merge:[["orchestrator","lead"],["script","code"]], retro:[["retro agent","llm"]] };
   const E = [
     {id:"s-start", d:"M364 31 L364 50"},
     {id:"st-rec", cond:1, d:"M428 73 L560 73", l:["fails closed",494,65,"middle"]},
     {id:"st-grill", cond:1, d:"M300 80 C 230 92, 104 104, 104 140", l:["no matrix",150,100]},
-    {id:"st-impl", cond:1, d:"M300 66 C 150 66, 8 130, 8 253 L40 253", l:["ready to build",14,118]},
+    {id:"st-impl", cond:1, d:"M300 62 L20 62 L20 253 L40 253", l:["ready to build",24,56]},
     {id:"grill-refine", d:"M104 186 L104 230"},
     {id:"refine-impl", d:"M168 253 C 232 253, 244 190, 300 176"},
     {id:"impl-self", d:"M428 163 L560 163"},
@@ -122,7 +122,7 @@ export function createModel() {
   function catchAt(S, world, node){
     const s = S.st;
     if (world.defect === "none" || !world.early || s.caught !== "—" || EARLY(world) !== node) return;
-    s.caught = STAGE[node]; wrote(S, node, ["caught"]); S.trace.push(`${STAGE[node]}: caught the ${world.defect} before the first push`);
+    s.caught = STAGE[node]; wrote(S, node, ["caught"]); S.trace.push(`${STAGE[node]}: caught the ${world.defect}, fixed before the first push`);
   }
   function advance(S, world, previous){
     const s = S.st, f = S.f, node = S.pending[0]; S.active = [node]; S.reply = null; mark(S, node);
@@ -136,7 +136,7 @@ export function createModel() {
       if (world.config !== "loads"){ take(S, "st-rec"); S.pending = ["reconcile"]; S.reason = "the .devloops config did not load"; out(S, "startup","config error","no"); S.lens = L.closed; S.trace.push("startup: config load error (unknown key) → needs_reconcile"); }
       else if (!world.retro){ take(S, "st-rec"); S.pending = ["reconcile"]; S.reason = "the previous merge has no retro checkpoint"; out(S, "startup","no retro","no"); S.lens = L.order; S.trace.push("startup: previous merge has no retro checkpoint → needs_reconcile"); }
       else if (!world.matrix){ take(S, "st-grill"); S.pending = ["grill"]; out(S, "startup","→ grill","info"); S.lens = L.order; S.trace.push("startup: no AC / DoD matrix → grill first"); }
-      else { take(S, "st-impl"); S.pending = ["refine"]; out(S, "startup","→ implement","info"); S.lens = L.order; S.trace.push("startup: refined issue, retro recorded → implement"); }
+      else { take(S, "st-impl"); S.pending = ["refine"]; out(S, "startup","→ refine","info"); S.lens = L.order; S.trace.push("startup: refined issue, retro recorded → implement"); }
     }
     else if (node === "reconcile"){
       s.status = "needs_reconcile"; wrote(S, "reconcile", ["status"]); take(S, "rec-end");

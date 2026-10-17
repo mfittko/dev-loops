@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { test } from 'bun:test';
 import { createModel as detailedModel } from '../../docs/articles/assets/simulator-model.mjs';
@@ -153,4 +154,19 @@ test('Overview flags a missing-context defect that reaches the draft gate as a g
   assert.ok(state.trace.some((t) => t.includes('reached the draft gate, a late catch')));
   assert.equal(state.st.fix_rounds, 1);
   assert.equal(run({}).st.caught, '—');
+});
+
+test('Overview keeps every pre-existing scenario trace unchanged apart from the new refine and self-check lines', () => {
+  // Pins: sha256 prefix of the JSON trace, generated from the pre-refine origin/main model.
+  const pins = { happy: '5fe8701364ab', fix: 'dd26627eb05f', nits: '6a3a020d8580', lens: 'd374869a7312', unknown: '2996b5bde0cd', budget: 'c809e5634b84', spec: '0ef31498d4a7', stale: '09ee9d4a50b0', retro: 'aa65cd9707b9', adr: '4a5e1dc422f6', race: 'c91a072d26df', human: '860991a192c1', fresh: 'dd03a5c08f67' };
+  const model = overviewModel();
+  const ids = model.SCEN.map((sc) => sc.id).filter((id) => id !== 'early' && id !== 'context');
+  assert.deepEqual(ids.sort(), Object.keys(pins).sort());
+  for (const sc of model.SCEN.filter((x) => x.id in pins)) {
+    const state = model.fresh();
+    const world = conditions(model, sc.w);
+    for (let i = 0; i < 300 && !state.done; i++) advance(model, state, world);
+    const trace = JSON.stringify(state.trace.filter((t) => !/^(refine|self-check):/.test(t)));
+    assert.equal(createHash('sha256').update(trace).digest('hex').slice(0, 12), pins[sc.id], sc.id);
+  }
 });
