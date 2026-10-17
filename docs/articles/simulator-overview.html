@@ -47,9 +47,10 @@ code{font-family:var(--mono);font-size:.88em;background:var(--accent-soft);paddi
 .msg .who{font-family:var(--mono);font-size:12px;color:var(--mute)}
 .about{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;border-top:1px solid var(--line);padding-top:10px}
 @media (max-width:760px){.about{grid-template-columns:1fr}}
-.about[hidden]{display:none}
-.about p{margin:0;font-size:14px;color:var(--ink2);max-width:70ch;display:flex;flex-direction:column;gap:2px}
-.about .tag{font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
+.about[hidden],#catchp[hidden]{display:none}
+.about p,#catchp{margin:0;font-size:14px;color:var(--ink2);max-width:70ch;display:flex;flex-direction:column;gap:2px}
+.plan{font:600 10.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border:1px dashed var(--guard);border-radius:4px;color:var(--guard)}
+.about .tag,#catchp .tag{font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute)}
 
 .grid{display:grid;grid-template-columns:minmax(0,1fr) 370px;gap:18px;align-items:start}
 @media (max-width:980px){.grid{grid-template-columns:1fr}}
@@ -193,11 +194,12 @@ body.board-full{overflow:hidden}
   <div class="chips" id="chips"></div>
   <div class="msg"><span class="who" id="msgwho">Issue</span><span id="msgtxt"></span></div>
   <div class="about" id="about"><p><span class="tag">What this is</span><span id="abouttxt"></span></p><p><span class="tag">What to watch for</span><span id="showstxt"></span></p></div>
+  <p id="catchp" hidden><span class="tag">Caught at</span><span><span id="catchtxt"></span> <span class="plan" id="planb" hidden>planned</span> <a id="plana" hidden></a></span></p>
 </section>
 
 <div class="grid">
   <div class="panel board" role="region" aria-label="Workflow graph — use arrow keys to scroll" tabindex="0"><div class="fullbar"><p class="fstep" id="fstep"></p><span class="fnav"><button class="btn" type="button" id="fback">Back</button><button class="btn primary" type="button" id="fnext">Next step</button></span><button class="btn" type="button" id="fulltoggle" aria-pressed="false" title="Show the graph in the full window (F)">Full window</button></div>
-    <svg viewBox="0 0 760 790" role="img" aria-label="The dev-loops lifecycle: startup, grill, implement, pre-PR review, draft PR, then a gate round of review lenses, fan-in and judge, with a fixer loop; ready for review, pre-approval gate, guarded merge and retro. Exits: needs_reconcile and park for the operator.">
+    <svg viewBox="0 0 760 790" role="img" aria-label="The dev-loops lifecycle: startup, grill, refine, implement, self-check, pre-PR review, draft PR, then a gate round of review lenses, fan-in and judge, with a fixer loop; ready for review, pre-approval gate, guarded merge and retro. Exits: needs_reconcile and park for the operator.">
       <defs>
         <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
         <marker id="arrOn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
@@ -243,6 +245,7 @@ body.board-full{overflow:hidden}
   <div class="panel">
     <h2>Where the loops are</h2>
     <ul>
+      <li><b>Before the first push.</b> Refine reads the code graph and adds the size forecast (planned: issue 2756) and work-order context (planned: issue 2588). The developer self-check compares the diff with the AC, ADRs and non-goals. Defects caught here cost a local edit.</li>
       <li><b>Pre-PR review.</b> A reviewer reads the change before the first push. Findings go back to the developer while the work is still local.</li>
       <li><b>The gate round.</b> Review lenses fan out over one head, fan-in checks that every lens reported, and the judge decides per finding: act, defer or reject. Only the act list reaches the fixer.</li>
       <li><b>Fix and re-gate.</b> Every fix is a new head. Evidence for the old head is stale, so the round runs again. A fix window bounds how often.</li>
@@ -264,6 +267,39 @@ body.board-full{overflow:hidden}
       <li><b>The operator</b> can grant a standing authorization to merge on a clean full gate.</li>
     </ul>
   </div>
+  <div class="panel">
+    <h2>Where defects are caught</h2>
+    <p>Measured on 2026-10-17: the draft_gate findings of the last 40 merged PRs (2693 to 2803). The sample holds 123 findings across 18 PRs. The counts are lower bounds.</p>
+    <p><b>What the findings were</b></p>
+    <ul>
+      <li>Correctness: 30%</li>
+      <li>Docs and contract drift: 24%</li>
+      <li>Test gap: 13%</li>
+      <li>Missing context: 10%</li>
+      <li>Architecture or contract violation: 9%</li>
+      <li>PR-body or evidence format: 8%</li>
+      <li>Spec or AC gap: 6%</li>
+    </ul>
+    <p><b>About 63% were catchable earlier, at</b></p>
+    <ul>
+      <li>Pre-PR review with a stale-surface sweep: 33%</li>
+      <li>Work-order and refiner context: 11%</li>
+      <li>Developer self-check against the AC, ADRs and non-goals: 11%</li>
+      <li>Deterministic PR-body lint at <code>pr create</code>: 8%</li>
+    </ul>
+    <p>Step through the five early-detection scenarios to see each catching stage and the one gap.</p>
+  </div>
+  <div class="panel">
+    <h2>Known gaps</h2>
+    <p>Each row below is a stage that is planned or catches defects only in part, with the issue that owns it or no home.</p>
+    <ul>
+      <li><b>Size forecast at refine:</b> <span class="plan">planned</span> <a href="https://github.com/mfittko/dev-loops/issues/2756">#2756</a>.</li>
+      <li><b>Stale-surface sweep in the pre-PR review:</b> <span class="plan">planned</span> <a href="https://github.com/mfittko/dev-loops/issues/2807">#2807</a>.</li>
+      <li><b>PR-body format lint at <code>pr create</code>:</b> <a href="https://github.com/mfittko/dev-loops/issues/2084">#2084</a>.</li>
+      <li><b>Developer self-check against the AC, ADRs and non-goals:</b> no home.</li>
+      <li><b>Work-order and refiner context:</b> <span class="plan">planned</span> <a href="https://github.com/mfittko/dev-loops/issues/2588">#2588</a>.</li>
+    </ul>
+  </div>
 </div>
 
 <footer>A simplified teaching model of the dev-loops lifecycle, not a port of its code. The real routing has more states, CI waits and harness differences. Round counts, the fix window of 3 and the PR number are illustrative. Source: <a href="https://github.com/mfittko/dev-loops">github.com/mfittko/dev-loops</a>. Deck: <a href="https://mfittko.github.io/dev-loops/finding-the-flow.html">Finding the flow</a>.</footer>
@@ -273,7 +309,7 @@ body.board-full{overflow:hidden}
 import { createModel } from "./assets/simulator-overview-model.mjs";
 (function(){
   "use strict";
-  const { F, SCEN, W, H, P, SUB, NAME, EXIT, GATE, CT, E, defaults, fresh, freshState, advance, relevant } = createModel();
+  const { F, SCEN, PLANNED, plannedFor, W, H, P, SUB, NAME, EXIT, GATE, CT, E, defaults, fresh, freshState, advance, relevant } = createModel();
   const world = {};
   let scen = "happy";
   function applyScenario(id){ scen = id; defaults(world); Object.assign(world, SCEN.find(s=>s.id===id).w); reset(); }
@@ -307,6 +343,9 @@ import { createModel } from "./assets/simulator-overview-model.mjs";
     $("msgwho").textContent = sc ? "Issue" : "Custom conditions";
     $("msgtxt").textContent = sc ? sc.issue : "Set the starting conditions below the step controls.";
     $("about").hidden = !sc; if (sc){ $("abouttxt").textContent = sc.about; $("showstxt").textContent = sc.shows; }
+    const got = S.st.caught && S.st.caught !== "—" ? S.st.caught : "", shown = sc && sc.stage ? sc.stage : got;
+    $("catchp").hidden = !shown;
+    if (shown){ const n = sc && sc.stage ? PLANNED[sc.planned] : plannedFor(got, world.defect); $("catchtxt").textContent = shown; $("planb").hidden = $("plana").hidden = !n; if (n){ $("plana").textContent = "#" + n; $("plana").href = "https://github.com/mfittko/dev-loops/issues/" + n; } }
 
     const on = new Set(S.active), ran = new Set(S.ran), taken = new Set(S.taken);
     let o = "";

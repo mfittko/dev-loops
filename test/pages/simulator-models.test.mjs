@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { test } from 'bun:test';
 import { createModel as detailedModel } from '../../docs/articles/assets/simulator-model.mjs';
@@ -104,4 +105,275 @@ test('Fresh runs do not share gate facts or the previous Overview record', () =>
   assert.deepEqual(reset.pending, ['startup']);
   assert.equal(reset.st.head, '—');
   assert.deepEqual(reset.trace, []);
+});
+
+function run(overrides) {
+  const model = overviewModel();
+  const world = conditions(model, overrides);
+  const state = model.fresh();
+  for (let i = 0; i < 200 && !state.done; i++) advance(model, state, world);
+  assert.equal(state.done, true);
+  return state;
+}
+
+const NEW_STEPS = /^(refine|self-check):/;
+const NEW_IDS = ['early', 'context', 'specgap', 'oversize', 'nongoal'];
+
+test('Overview adds refine and self-check nodes and keeps the existing trace lines', () => {
+  const model = overviewModel();
+  assert.ok(model.P.refine && model.P.selfcheck);
+  const happy = run({});
+  assert.equal(happy.trace.filter((t) => NEW_STEPS.test(t)).length, 2);
+  assert.deepEqual(happy.trace.filter((t) => !NEW_STEPS.test(t)).slice(0, 4), [
+    'startup: refined issue, retro recorded → implement',
+    'implement: commit A in the worktree',
+    'pre-PR review: clean',
+    'pr: push A, create draft PR #42',
+  ]);
+  const fresh = run({ matrix: false, prepr: 'finds issues' });
+  assert.deepEqual(fresh.trace.slice(0, 4), [
+    'startup: no AC / DoD matrix → grill first',
+    'grill: AC / DoD matrix and non-goals recorded',
+    'refine: code graph read; work-order context (planned: 2588) and size forecast (planned: 2756)',
+    'implement: commit A in the worktree',
+  ]);
+});
+
+test('Overview routes each defect kind to its earliest catching stage', () => {
+  const stage = { 'missing context': 'refine', correctness: 'self-check', 'docs drift': 'pre-PR review' };
+  for (const [defect, caught] of Object.entries(stage)) {
+    const state = run({ defect });
+    assert.equal(state.st.caught, caught);
+    assert.equal(state.st.fix_rounds, 0);
+  }
+  assert.equal(run({ defect: 'spec gap', matrix: false }).st.caught, 'grill');
+  assert.equal(run({ defect: 'spec gap' }).st.caught, 'refine');
+});
+
+test('Overview flags a missing-context defect that reaches the draft gate as a gap', () => {
+  const state = run({ defect: 'missing context', early: false });
+  assert.equal(state.st.caught, 'draft_gate · gap');
+  assert.ok(state.trace.some((t) => t.includes('reached the draft gate, a late catch')));
+  assert.equal(state.st.fix_rounds, 1);
+  assert.equal(run({}).st.caught, '—');
+});
+
+test('Overview keeps every pre-existing scenario trace unchanged apart from the new refine and self-check lines', () => {
+  // Pins: sha256 prefix of the JSON trace, generated from the pre-refine origin/main model.
+  const pins = { happy: '5fe8701364ab', fix: 'dd26627eb05f', nits: '6a3a020d8580', lens: 'd374869a7312', unknown: '2996b5bde0cd', budget: 'c809e5634b84', spec: '0ef31498d4a7', stale: '09ee9d4a50b0', retro: 'aa65cd9707b9', adr: '4a5e1dc422f6', race: 'c91a072d26df', human: '860991a192c1', fresh: 'dd03a5c08f67' };
+  const model = overviewModel();
+  const ids = model.SCEN.map((sc) => sc.id).filter((id) => !NEW_IDS.includes(id));
+  assert.deepEqual(ids.sort(), Object.keys(pins).sort());
+  for (const sc of model.SCEN.filter((x) => x.id in pins)) {
+    const state = model.fresh();
+    const world = conditions(model, sc.w);
+    for (let i = 0; i < 300 && !state.done; i++) advance(model, state, world);
+    const trace = JSON.stringify(state.trace.filter((t) => !/^(refine|self-check):/.test(t)));
+    assert.equal(createHash('sha256').update(trace).digest('hex').slice(0, 12), pins[sc.id], sc.id);
+  }
+});
+
+// Early-detection scenarios: [overview id, detailed id, catching stage, planned issue].
+const EARLY = [
+  ['specgap', 26, 'grill', undefined],
+  ['oversize', 27, 'refine', 2756],
+  ['early', 28, 'pre-PR review', 2807],
+  ['nongoal', 29, 'self-check', undefined],
+  ['context', 30, 'draft_gate · gap', 2588],
+];
+const DEFECT = { specgap: 'spec gap', oversize: 'oversize', early: 'docs drift', nongoal: 'non-goal breach', context: 'missing context' };
+
+function runDetailed(overrides) {
+  const model = detailedModel();
+  const world = conditions(model, overrides);
+  const S = model.fresh();
+  for (let i = 0; i < 2000 && !S.done; i++) {
+    const { g, n } = S.pos, ret = S.ret;
+    S.ret = undefined;
+    const r = model.H[g][n](S.st, world, S.f, ret);
+    if (r.set) Object.assign(S.st, r.set);
+    const who = model.ROLE[n] || [];
+    if (r.tr) S.trace.push((who[0] ? who[0] + ' · ' : '') + r.tr);
+    const nx = r.next;
+    if (nx === 'END') S.done = true;
+    else if (typeof nx === 'string') S.pos = { g, n: nx };
+    else if (nx.sub) { S.stack.push({ g, n }); S.pos = { g: nx.sub, n: nx.at }; }
+    else { S.ret = nx.up; S.pos = S.stack.pop(); }
+  }
+  assert.equal(S.done, true);
+  return { model, S };
+}
+
+for (const [oid, did, stage, planned] of EARLY) {
+  test(`Overview scenario ${oid} is caught at ${stage}`, () => {
+    const model = overviewModel();
+    const sc = model.SCEN.find((x) => x.id === oid);
+    assert.equal(sc.w.defect, DEFECT[oid]);
+    assert.equal(run(sc.w).st.caught, stage);
+    assert.equal(model.PLANNED[sc.planned], planned);
+    assert.ok(sc.stage);
+  });
+  test(`Detailed scenario ${did} is caught at ${stage}`, () => {
+    const sc = detailedModel().SC.find((x) => x.id === did);
+    assert.equal(sc.w.defect, DEFECT[oid]);
+    const { model, S } = runDetailed(sc.w);
+    assert.equal(S.done, true);
+    assert.equal(S.st.caught, stage);
+    assert.equal(model.PLANNED[sc.planned], planned);
+    assert.ok(sc.stage);
+    assert.equal(S.trace.some((t) => t.includes('late catch')), stage.endsWith('gap'));
+  });
+}
+
+test('Both models share the same PLANNED stage-to-issue map', () => {
+  assert.deepEqual(detailedModel().PLANNED, { refine: 2756, prepr: 2807, brief: 2588 });
+  assert.deepEqual(overviewModel().PLANNED, detailedModel().PLANNED);
+});
+
+test('Detailed keeps every pre-existing scenario trace unchanged apart from the size forecast line', () => {
+  // Pins: sha256 prefix of the JSON trace, generated from the pre-change origin/main model.
+  const pins = { 1: '674ca564b386', 2: '93dbc2d53f13', 3: '853de056f57a', 4: '9169117f498b', 5: '94c69820f7db', 6: 'cbfdafff4aab', 7: '22f964654d32', 8: '3a1177584ba8', 9: '8d4201bd7143', 10: 'a89ceca773a7', 11: '149c21de98c2', 12: '33da119900bb', 13: '19433ed5056f', 14: '97be236a59db', 15: '245a1e004828', 16: 'e2be03e972ca', 17: 'c92f8c23c32b', 18: 'ebbbaeaf9b78', 19: 'c8f15e4522c9', 20: 'c94cb5f006f7', 21: '656870e76ed2', 22: '2f085102417c', 23: 'a14852845460', 24: 'c406640e0863', 25: '1d49f1682c56' };
+  for (const sc of detailedModel().SC.filter((x) => x.id in pins)) {
+    const { S } = runDetailed(sc.w);
+    const trace = JSON.stringify(S.trace.filter((t) => !t.includes('size forecast')));
+    assert.equal(createHash('sha256').update(trace).digest('hex').slice(0, 12), pins[sc.id], String(sc.id));
+  }
+  assert.equal(detailedModel().SC.filter((x) => !(x.id in pins)).length, 5);
+});
+
+test('Detailed routes a spec gap on a refined body through refine and an early defect never reaches the gate', () => {
+  const { S } = runDetailed({ defect: 'spec gap' });
+  assert.equal(S.st.caught, 'refine');
+  assert.equal(S.trace.some((t) => t.includes('late catch')), false);
+});
+
+// Both views flag an uncaught defect at the draft gate on every path, and derive the planned badge from the recorded catch.
+test('Both views flag the same late defects and derive the planned badge from the catch', () => {
+  const cases = [
+    [{ defect: 'missing context', early: true }, 'refine', 2588],
+    [{ defect: 'missing context', early: false }, 'draft_gate · gap', 2588],
+    [{ defect: 'missing context', early: false, judge: 'spec_cannot_decide' }, 'draft_gate · gap', 2588],
+    [{ defect: 'docs drift', early: true }, 'pre-PR review', 2807],
+    [{ defect: 'oversize', early: true }, 'refine', 2756],
+    [{ defect: 'oversize', early: false }, 'draft_gate · gap', 2756],
+    [{ defect: 'spec gap', matrix: false, early: true }, 'grill', undefined],
+    [{ defect: 'spec gap', matrix: true, early: true }, 'refine', undefined],
+    [{ defect: 'correctness', early: true }, 'self-check', undefined],
+  ];
+  for (const [w, caught, planned] of cases) {
+    const detailed = detailedModel();
+    const d = runDetailed(w.matrix === false ? { defect: w.defect, body: 'checklist only' } : w);
+    const overview = overviewModel();
+    const o = run(w);
+    assert.equal(d.S.st.caught, caught, JSON.stringify(w));
+    assert.equal(o.st.caught, caught, JSON.stringify(w));
+    assert.equal(detailed.plannedFor(d.S.st.caught, w.defect), planned, JSON.stringify(w));
+    assert.equal(overview.plannedFor(o.st.caught, w.defect), planned, JSON.stringify(w));
+  }
+  // Early stages off: the detailed forecast reports no split.
+  const off = runDetailed({ defect: 'oversize', early: false });
+  assert.equal(off.S.trace.some((t) => t.includes('640 wLOC, over the band')), false);
+});
+
+test('Detailed scenario 30 keeps the late-catch high through the whole round', () => {
+  const { S } = runDetailed(detailedModel().SC.find((x) => x.id === 30).w);
+  assert.equal(S.trace.some((t) => t.includes('findings_present, 0 thread(s)')), false);
+  assert.equal(S.f.late, true);
+  assert.equal(S.st.unresolvedGateThreadCount, 0); // closed after the round-1 fix
+});
+
+// The catch row must render on Custom runs, where #about is hidden, so it cannot live inside #about.
+test('Both articles keep the caught-at row outside the hidden-on-Custom about block', async () => {
+  const { readFile } = await import('node:fs/promises');
+  for (const file of ['simulator.html', 'simulator-overview.html']) {
+    const html = await readFile(new URL(`../../docs/articles/${file}`, import.meta.url), 'utf8');
+    const about = html.match(/<div class="about" id="about">.*?<\/div>/s)[0];
+    assert.equal(about.includes('catchp'), false, file);
+    assert.ok(html.includes('id="catchp"'), file);
+    assert.ok(html.includes('$("about").hidden = !sc;'), file);
+  }
+});
+
+// With early:true on an entry that skips the early stages, the defect still reaches the draft gate uncaught; Detailed flags it as the Overview judge does (the Overview has no entry input and always runs the early stages).
+test('Detailed flags a defect that reaches the draft gate on entries that skip the early stages', () => {
+  for (const entry of ['--pr', '--plan-file', '--spike']) {
+    const w = { entry, defect: 'docs drift', early: true };
+    const d = runDetailed(w);
+    assert.equal(d.S.st.caught, 'draft_gate · gap', entry);
+    assert.ok(d.S.trace.some((t) => t.includes('late catch')), entry);
+  }
+});
+
+test('relevant() hides defect and early where they have no effect', () => {
+  const d = detailedModel();
+  assert.equal(d.relevant({ entry: '--pr', prState: 'ready, no Copilot review yet', defect: 'docs drift' }, 'defect'), false);
+  assert.equal(d.relevant({ entry: '--pr', prState: 'ready, no Copilot review yet', defect: 'docs drift' }, 'early'), false);
+  assert.equal(d.relevant({ entry: '--pr', prState: 'draft', defect: 'docs drift' }, 'defect'), true);
+  assert.equal(d.relevant({ entry: '--pr', prState: 'draft', defect: 'docs drift' }, 'early'), false);
+  for (const entry of ['--plan-file', '--spike', '--pr --review', '--pr --ui-review']) {
+    assert.equal(d.relevant({ entry, defect: 'docs drift' }, 'early'), false, entry);
+  }
+  for (const entry of ['--issue', '--lightweight --issue', '--lightweight']) {
+    assert.equal(d.relevant({ entry, defect: 'docs drift' }, 'early'), true, entry);
+    assert.equal(d.relevant({ entry, defect: 'none' }, 'early'), false, entry);
+  }
+  const o = overviewModel();
+  assert.equal(o.relevant({ config: 'loads', retro: true, defect: 'none' }, 'early'), false);
+  assert.equal(o.relevant({ config: 'loads', retro: false, defect: 'docs drift' }, 'early'), false);
+});
+
+test('Overview catch-node chips read caught when catchAt records the catch there', () => {
+  const chip = (state, node) => state.out[node].t;
+  const selfcheck = run({ defect: "correctness" });
+  assert.equal(selfcheck.st.caught, 'self-check');
+  assert.equal(chip(selfcheck, 'selfcheck'), 'caught');
+  const prepr = run({ defect: "docs drift" });
+  assert.equal(prepr.st.caught, 'pre-PR review');
+  assert.equal(chip(prepr, 'prepr'), 'caught');
+  assert.equal(chip(run({}), 'selfcheck'), 'checked');
+  assert.equal(chip(run({}), 'prepr'), 'clean');
+});
+
+test('Overview requires a repair after the late catch, not the earlier validation repair', () => {
+  const state = run({ defect: 'missing context', early: false, validation: 'fails once' });
+  assert.equal(state.st.fix_rounds, 2);
+});
+
+test('Detailed hides the early toggle for issue-less entries whose defect needs refine or grill', () => {
+  const d = detailedModel();
+  for (const defect of ['spec gap', 'oversize', 'missing context']) {
+    assert.equal(d.relevant({ entry: '--lightweight', body: 'refined', defect }, 'early'), false, defect);
+    assert.equal(d.relevant({ entry: '--issue', body: 'refined', defect }, 'early'), true, defect);
+  }
+  assert.equal(d.relevant({ entry: '--lightweight', body: 'refined', defect: 'correctness' }, 'early'), true);
+});
+
+test('A pre-PR catch never reports the review as clean in the same trace', () => {
+  const w = { defect: 'docs drift', early: true };
+  const o = run(w).trace;
+  assert.ok(o.some((t) => t.startsWith('pre-PR review: caught the docs drift')));
+  assert.equal(o.includes('pre-PR review: clean'), false);
+  const d = runDetailed(w).S.trace;
+  assert.ok(d.some((t) => t.includes('L7: pre-PR review: caught the docs drift')));
+  assert.equal(d.some((t) => t.includes('pre-PR review clean')), false);
+});
+
+test('A second pre-PR pass after a catch still reports clean', () => {
+  const o = run({ defect: 'docs drift', early: true, prepr: 'finds issues' }).trace;
+  assert.equal(o.includes('pre-PR review: clean'), true);
+});
+
+// The L7 note must agree with the caught pill and trace at the catching stage.
+test('Detailed L7 note says the review catches the docs drift, and stays clean otherwise', () => {
+  const model = detailedModel();
+  const l7 = (w) => {
+    return model.H.impl.L7(model.fresh().st, conditions(model, w), {});
+  };
+  const caught = l7({ defect: 'docs drift', early: true });
+  assert.equal(caught.pill[0], 'caught');
+  assert.ok(caught.note.includes('It catches the docs drift'));
+  assert.equal(caught.note.includes('clean in round 1'), false);
+  const clean = l7({});
+  assert.equal(clean.pill[0], 'clean');
+  assert.ok(clean.note.includes('It is clean in round 1 of at most 2.'));
 });
