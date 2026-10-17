@@ -2,6 +2,9 @@
 export function createModel() {
   // Stages planned rather than shipped, with the issue that owns each.
   const PLANNED = {refine:2756, prepr:2807, brief:2588};
+  // The planned issue behind a recorded catch. A catch at a shipped stage (grill, self-check) or none has no badge.
+  const OWNER = {"spec gap":"refine", oversize:"refine", "missing context":"brief", "docs drift":"prepr"};
+  const plannedFor = (caught, defect) => caught && !["—","grill","self-check"].includes(caught) ? PLANNED[OWNER[defect]] : undefined;
   // ---------- starting conditions ----------
   const F = [
     {k:"config", lbl:".devloops config", type:"sel", opts:["loads","unknown key (stale CLI)"]},
@@ -281,5 +284,5 @@ export function createModel() {
       S.reply = previous.reply;
     }
   }
-  return { F, SCEN, PLANNED, W, H, P, SUB, NAME, EXIT, GATE, CT, E, defaults, fresh, freshState, advance, relevant };
+  return { F, SCEN, PLANNED, plannedFor, W, H, P, SUB, NAME, EXIT, GATE, CT, E, defaults, fresh, freshState, advance, relevant };
 }

@@ -410,6 +410,9 @@ export function createModel() {
   const ORDER = ["life","startup","rules","queue","grill","epic","impl","spike","plan","light","gate","ready","cop","merge","retro","review","ui","release"];
   // Stages planned rather than shipped, with the issue that owns each.
   const PLANNED = {refine:2756, prepr:2807, brief:2588};
+  // The planned issue behind a recorded catch. A catch at a shipped stage (grill, self-check) or none has no badge.
+  const OWNER = {"spec gap":"refine", oversize:"refine", "missing context":"brief", "docs drift":"prepr"};
+  const plannedFor = (caught, defect) => caught && !["—","grill","self-check"].includes(caught) ? PLANNED[OWNER[defect]] : undefined;
   // ---------- starting conditions ----------
   const F = [
     {g:"Entry", k:"entry", lbl:"entry flag", type:"sel", opts:["--issue","--pr","--pr --review","--pr --ui-review","--plan-file","--spike","--lightweight","--lightweight --issue"]},
@@ -837,9 +840,10 @@ export function createModel() {
     },
     G12(s,w,f){
       const fs = roundFindings(s,w,f), rd = f.g[s.gate].round;
-      if (w.judge === "spec_cannot_decide"){ f.gr.scd = 1; return {next:"G13", title:"judge", note:"The judge cannot pick between two readings of the spec. The spec-authority verdict is spec_cannot_decide.", pill:["spec_cannot_decide","no"], set:{scopeDrift:"within_scope"}, tr:"judge: spec_cannot_decide"}; }
+      // Same rule as the Overview judge: a defect still uncaught at the draft gate is flagged on every path.
+      const late = s.gate === "draft_gate" && lateDefect(w) && !s.caught;
+      if (w.judge === "spec_cannot_decide"){ f.gr.scd = 1; return {next:"G13", title:"judge", note:"The judge cannot pick between two readings of the spec. The spec-authority verdict is spec_cannot_decide.", pill:["spec_cannot_decide","no"], set:{scopeDrift:"within_scope", ...(late ? {caught:"draft_gate · gap"} : {})}, tr:"judge: spec_cannot_decide" + (late ? ", the " + w.defect + " reached the draft gate, a late catch" : "")}; }
       let act = [], note;
-      const late = s.gate === "draft_gate" && lateDefect(w) && rd === 1;
       if (fs.includes("high")){ act = ["high"]; note = late ? "The " + w.defect + " reached the draft gate, a late catch. The early stage that should have caught it is a known gap. Act." : "The high finding is in scope: act."; }
       else if (fs.includes("medium")){ if (rd <= 3){ act = ["medium"]; note = `Round ${rd} is inside mediumFixWindow 3, so the medium finding stays in the loop: act.`; } else note = `Round ${rd} is past mediumFixWindow 3. The medium finding is deferred, not acted on.`; }
       else if (fs.includes("gate-evidence")){ act = ["gate-evidence"]; note = "The gate-evidence finding is in scope: act."; }
@@ -1048,5 +1052,5 @@ export function createModel() {
   const RORDER = ["operator","orchestrator","coordinator","gate-coordinator","refiner","developer","reviewer","judge","fixer","docs","retro agent","script","Copilot","CI"];
   const RDESC = {"operator":"the person who owns the work: intent, AC, waivers, merge","orchestrator":"main session: dispatches coordinators, merges, runs retros","coordinator":"dev-loop coordinator: drives one unit through its steps","gate-coordinator":"runs one gate round for one head","refiner":"grills and refines specs","developer":"writes the change and its tests","reviewer":"pre-PR, lens and delta reviews","judge":"act, defer or reject per finding","fixer":"works the act list, replies on threads","docs":"keeps docs in line with the change","retro agent":"fresh-context review of the run","script":"deterministic code decides","Copilot":"external PR reviewer","CI":"GitHub Actions checks"};
   const JUMP = {3:"refine",4:"refine",5:"refine",9:"draft_gate",10:"draft_gate",11:"draft_gate",12:"draft_gate",13:"draft_gate",14:"draft_gate",15:"draft_gate",16:"ready",17:"ready",18:"copilot",19:"copilot",20:"merge",21:"implement",24:"spike"};
-  return { I, GR, ORDER, F, SC, PLANNED, H, GROUPS, ROLE, ROLE_INF, RK, RORDER, RDESC, JUMP, defaults, fresh, relevant };
+  return { I, GR, ORDER, F, SC, PLANNED, plannedFor, H, GROUPS, ROLE, ROLE_INF, RK, RORDER, RDESC, JUMP, defaults, fresh, relevant };
 }

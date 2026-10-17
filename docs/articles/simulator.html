@@ -374,7 +374,7 @@ body.board-full{overflow:hidden}
 import { createModel } from "./assets/simulator-model.mjs";
 (function(){
   "use strict";
-  const { I, GR, ORDER, F, SC, PLANNED, H, GROUPS, ROLE, ROLE_INF, RK, RORDER, RDESC, JUMP, defaults, fresh, relevant } = createModel();
+  const { I, GR, ORDER, F, SC, PLANNED, plannedFor, H, GROUPS, ROLE, ROLE_INF, RK, RORDER, RDESC, JUMP, defaults, fresh, relevant } = createModel();
   const $ = id => document.getElementById(id);
   const clone = o => JSON.parse(JSON.stringify(o));
   const esc = v => String(v).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -476,8 +476,9 @@ import { createModel } from "./assets/simulator-model.mjs";
     $("msgwho").textContent = sc ? "Scenario " + sc.id : "Custom";
     $("msgtxt").textContent = sc ? sc.name : "Set the starting conditions below the step controls.";
     $("about").hidden = !sc; if (sc){ $("abouttxt").textContent = sc.about; $("showstxt").textContent = sc.shows; }
-    $("catchp").hidden = !(sc && sc.stage);
-    if (sc && sc.stage){ const n = PLANNED[sc.planned]; $("catchtxt").textContent = sc.stage; $("planb").hidden = $("plana").hidden = !n; if (n){ $("plana").textContent = "#" + n; $("plana").href = "https://github.com/mfittko/dev-loops/issues/" + n; } }
+    const got = S.st.caught && S.st.caught !== "—" ? S.st.caught : "", shown = sc && sc.stage ? sc.stage : got;
+    $("catchp").hidden = !shown;
+    if (shown){ const n = sc && sc.stage ? PLANNED[sc.planned] : plannedFor(got, world.defect); $("catchtxt").textContent = shown; $("planb").hidden = $("plana").hidden = !n; if (n){ $("plana").textContent = "#" + n; $("plana").href = "https://github.com/mfittko/dev-loops/issues/" + n; } }
   }
 
   function renderBoard(){

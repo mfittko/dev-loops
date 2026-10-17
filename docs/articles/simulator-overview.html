@@ -308,7 +308,7 @@ body.board-full{overflow:hidden}
 import { createModel } from "./assets/simulator-overview-model.mjs";
 (function(){
   "use strict";
-  const { F, SCEN, PLANNED, W, H, P, SUB, NAME, EXIT, GATE, CT, E, defaults, fresh, freshState, advance, relevant } = createModel();
+  const { F, SCEN, PLANNED, plannedFor, W, H, P, SUB, NAME, EXIT, GATE, CT, E, defaults, fresh, freshState, advance, relevant } = createModel();
   const world = {};
   let scen = "happy";
   function applyScenario(id){ scen = id; defaults(world); Object.assign(world, SCEN.find(s=>s.id===id).w); reset(); }
@@ -342,8 +342,9 @@ import { createModel } from "./assets/simulator-overview-model.mjs";
     $("msgwho").textContent = sc ? "Issue" : "Custom conditions";
     $("msgtxt").textContent = sc ? sc.issue : "Set the starting conditions below the step controls.";
     $("about").hidden = !sc; if (sc){ $("abouttxt").textContent = sc.about; $("showstxt").textContent = sc.shows; }
-    $("catchp").hidden = !(sc && sc.stage);
-    if (sc && sc.stage){ const n = PLANNED[sc.planned]; $("catchtxt").textContent = sc.stage; $("planb").hidden = $("plana").hidden = !n; if (n){ $("plana").textContent = "#" + n; $("plana").href = "https://github.com/mfittko/dev-loops/issues/" + n; } }
+    const got = S.st.caught && S.st.caught !== "—" ? S.st.caught : "", shown = sc && sc.stage ? sc.stage : got;
+    $("catchp").hidden = !shown;
+    if (shown){ const n = sc && sc.stage ? PLANNED[sc.planned] : plannedFor(got, world.defect); $("catchtxt").textContent = shown; $("planb").hidden = $("plana").hidden = !n; if (n){ $("plana").textContent = "#" + n; $("plana").href = "https://github.com/mfittko/dev-loops/issues/" + n; } }
 
     const on = new Set(S.active), ran = new Set(S.ran), taken = new Set(S.taken);
     let o = "";

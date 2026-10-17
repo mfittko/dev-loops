@@ -244,3 +244,26 @@ test('Detailed routes a spec gap on a refined body through refine and an early d
   assert.equal(S.st.caught, 'refine');
   assert.equal(S.trace.some((t) => t.includes('late catch')), false);
 });
+
+// Both views flag an uncaught defect at the draft gate on every path, and derive the planned badge from the recorded catch.
+test('Both views flag the same late defects and derive the planned badge from the catch', () => {
+  const cases = [
+    [{ defect: 'missing context', early: true }, 'refine', 2588],
+    [{ defect: 'missing context', early: false }, 'draft_gate · gap', 2588],
+    [{ defect: 'missing context', early: false, judge: 'spec_cannot_decide' }, 'draft_gate · gap', 2588],
+    [{ defect: 'docs drift', early: true }, 'pre-PR review', 2807],
+    [{ defect: 'oversize', early: true }, 'refine', 2756],
+    [{ defect: 'spec gap', matrix: false, early: true }, 'grill', undefined],
+    [{ defect: 'correctness', early: true }, 'self-check', undefined],
+  ];
+  for (const [w, caught, planned] of cases) {
+    const detailed = detailedModel();
+    const d = runDetailed(w.matrix === false ? { defect: w.defect, body: 'checklist only' } : w);
+    const overview = overviewModel();
+    const o = run(w);
+    assert.equal(d.S.st.caught, caught, JSON.stringify(w));
+    assert.equal(o.st.caught, caught, JSON.stringify(w));
+    assert.equal(detailed.plannedFor(d.S.st.caught, w.defect), planned, JSON.stringify(w));
+    assert.equal(overview.plannedFor(o.st.caught, w.defect), planned, JSON.stringify(w));
+  }
+});
