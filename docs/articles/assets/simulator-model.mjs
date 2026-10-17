@@ -165,7 +165,7 @@ export function createModel() {
       ["synthesize","synthesize","R5 write the sections",260,282,{a:"agent",src:"GRILL-SUBLOOP-FULL-REWRITE, GRILL-SUBLOOP-NO-EMBED-SYNTHESIS, GRILL-SUBLOOP-RATIONALE-COMMENT",L:["goal","The agent replaces the AC / DoD matrix and Non-goals sections and posts the results comment. The raw Q&A stays in tmp/."]}],
       ["re_grill","re_grill","R6 fixed point?",260,366,{a:"agent,code",src:"GRILL-SUBLOOP-ITERATE-TO-CLEAN",L:["retry","The grill runs again on the new body. It stops at a fixed point, with no numeric cap in code."]}],
       ["blocked","blocked","blocked_needs_user_decision",10,156,{k:"ret exit",w:180}],
-      ["forecast","size forecast","R7 band check",540,198,{a:"agent",src:"issue body Size forecast section; skills/loop-grill/SKILL.md",L:["goal","Refine records the size forecast. A unit over the band is split here, before any code exists. Planned: issue 2756."]}],
+      ["forecast","size forecast","R7 band check",540,198,{a:"agent",src:"planned: issue #2756 (size forecast)",L:["goal","Refine records the size forecast. A unit over the band is split here, before any code exists. Planned: issue 2756."]}],
       ["grill_clean","grill_clean","back to the lifecycle",540,114,{k:"ret"}],
       ["needs_human_handoff","handoff","needs_human_handoff",540,282,{k:"ret exit"}],
     ],
