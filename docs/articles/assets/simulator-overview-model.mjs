@@ -3,7 +3,7 @@ export function createModel() {
   // Planned stages and the issue that owns each.
   const PLANNED = {refine:2756, prepr:2807, brief:2588};
   // The planned issue behind a recorded catch. A catch at a shipped stage (grill, self-check) or none has no badge.
-  const OWNER = {"spec gap":"refine", oversize:"refine", "missing context":"brief", "docs drift":"prepr"};
+  const OWNER = {"spec gap":"brief", oversize:"refine", "missing context":"brief", "docs drift":"prepr"};
   const plannedFor = (caught, defect) => caught && !["—","grill","self-check"].includes(caught) ? PLANNED[OWNER[defect]] : undefined;
   // ---------- starting conditions ----------
   const F = [
@@ -88,7 +88,7 @@ export function createModel() {
     closed:{tag:"Fail closed", txt:"A config that does not load cannot decide a gate. Startup stops instead of running every gate on silent defaults.", slide:"Slide 13: advancement requires evidence"},
     order:{tag:"One state, one next action", txt:"The outer loop reads the record and refuses to start new work while the previous unit is unfinished. The retro checkpoint is part of finishing.", slide:"Slides 20 and 22: routing rules and the outer loop"},
     grill:{tag:"Make the goal testable", txt:"Questions until the goal, scope and evidence are clear. Agents may propose answers; a person decides intent and tradeoffs.", slide:"Slide 7: the grilling sub-loop"},
-    refine:{tag:"Size and context before code", txt:"Refine adds the size forecast and the code-graph context to the work order. A missing fact found here costs one edit. Found at the draft gate, it costs a full gate round.", slide:"Slide 7: the grilling sub-loop"},
+    refine:{tag:"Size and context before code", txt:"Refine carries the code-graph context in the work order (planned: issue 2588) and adds a size forecast (planned: issue 2756). A missing fact found here costs one edit. Found at the draft gate, it costs a full gate round.", slide:"Slide 7: the grilling sub-loop"},
     selfcheck:{tag:"Check your own work first", txt:"The developer compares the diff with the AC, the ADRs and the non-goals.", slide:"Slide 14: try again needs a reason"},
     gap:{tag:"A gap: caught late", txt:"The defect passed every early stage and the draft gate found it. The early stage that should have caught it is a known gap.", slide:"Slide 14: try again needs a reason"},
     card:{tag:"A job card for the worker", txt:"The developer gets the target, the required reads, one bounded next action and the stop rules. It works in its own worktree.", slide:"Slide 21: give the worker a job card"},
@@ -164,8 +164,8 @@ export function createModel() {
       S.lens = L.card; S.pending = ["selfcheck"]; S.trace.push(`implement: commit ${HEADS[S.h]} in the worktree`);
     }
     else if (node === "refine"){
-      take(S, "refine-impl"); out(S, "refine", world.defect === "oversize" && world.early ? "over band · split" : "forecast ~210 wLOC", "info"); S.title = "refine"; S.note = "The refiner reads the code graph, writes the work order context and records a size forecast. A unit over the size band is split here, before any code exists.";
-      S.lens = L.refine; S.pending = ["implement"]; S.trace.push("refine: size forecast and graph context recorded in the work order"); catchAt(S, world, "refine");
+      take(S, "refine-impl"); out(S, "refine", world.defect === "oversize" && world.early ? "over band · split" : "forecast ~210 wLOC", "info"); S.title = "refine"; S.note = "The refiner reads the code graph, writes the work order context (graph context planned: issue 2588) and records a size forecast (planned: issue 2756). A unit over the size band is split here, before any code exists.";
+      S.lens = L.refine; S.pending = ["implement"]; S.trace.push("refine: work order context recorded; size forecast (planned: 2756) and graph context (planned: 2588)"); catchAt(S, world, "refine");
     }
     else if (node === "selfcheck"){
       take(S, "self-prepr"); S.title = "self-check"; S.note = "The developer checks the diff against the AC, the ADRs and the non-goals, before asking for a review.";
@@ -174,7 +174,7 @@ export function createModel() {
     else if (node === "prepr"){
       catchAt(S, world, "prepr");
       if (world.prepr === "finds issues" && !f.prepr){ f.prepr = 1; take(S, "prepr-impl"); out(S, "prepr","2 findings","no"); S.pending = ["implement"]; S.trace.push("pre-PR review: 2 findings → back to the developer"); }
-      else { take(S, "prepr-pr"); out(S, "prepr", s.caught === "pre-PR review" ? "caught" : "clean", "yes"); S.pending = ["pr"]; S.trace.push("pre-PR review: clean"); }
+      else { take(S, "prepr-pr"); out(S, "prepr", s.caught === "pre-PR review" ? "caught" : "clean", "yes"); S.pending = ["pr"]; if (s.caught !== "pre-PR review") S.trace.push("pre-PR review: clean"); }
       S.title = "pre-PR review"; S.note = "A fresh reviewer reads the diff before the first push. This step is a must."; S.lens = L.prepr;
     }
     else if (node === "pr"){

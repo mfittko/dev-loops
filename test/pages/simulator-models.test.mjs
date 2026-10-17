@@ -134,7 +134,7 @@ test('Overview adds refine and self-check nodes and keeps the existing trace lin
   assert.deepEqual(fresh.trace.slice(0, 4), [
     'startup: no AC / DoD matrix → grill first',
     'grill: AC / DoD matrix and non-goals recorded',
-    'refine: size forecast and graph context recorded in the work order',
+    'refine: work order context recorded; size forecast (planned: 2756) and graph context (planned: 2588)',
     'implement: commit A in the worktree',
   ]);
 });
@@ -257,6 +257,7 @@ test('Both views flag the same late defects and derive the planned badge from th
     [{ defect: 'oversize', early: true }, 'refine', 2756],
     [{ defect: 'oversize', early: false }, 'draft_gate · gap', 2756],
     [{ defect: 'spec gap', matrix: false, early: true }, 'grill', undefined],
+    [{ defect: 'spec gap', matrix: true, early: true }, 'refine', 2588],
     [{ defect: 'correctness', early: true }, 'self-check', undefined],
   ];
   for (const [w, caught, planned] of cases) {
@@ -345,4 +346,14 @@ test('Detailed hides the early toggle for issue-less entries whose defect needs 
     assert.equal(d.relevant({ entry: '--issue', body: 'refined', defect }, 'early'), true, defect);
   }
   assert.equal(d.relevant({ entry: '--lightweight', body: 'refined', defect: 'correctness' }, 'early'), true);
+});
+
+test('A pre-PR catch never reports the review as clean in the same trace', () => {
+  const w = { defect: 'docs drift', early: true };
+  const o = run(w).trace;
+  assert.ok(o.some((t) => t.startsWith('pre-PR review: caught the docs drift')));
+  assert.equal(o.includes('pre-PR review: clean'), false);
+  const d = runDetailed(w).S.trace;
+  assert.ok(d.some((t) => t.includes('L7: pre-PR review: caught the docs drift')));
+  assert.equal(d.some((t) => t.includes('pre-PR review clean')), false);
 });
