@@ -302,3 +302,14 @@ test('Detailed flags a defect that reaches the draft gate on entries that skip t
     assert.ok(d.S.trace.some((t) => t.includes('late catch')), entry);
   }
 });
+
+test('relevant() hides defect and early where they have no effect', () => {
+  const d = detailedModel();
+  assert.equal(d.relevant({ entry: '--pr', prState: 'ready, no Copilot review yet', defect: 'docs drift' }, 'defect'), false);
+  assert.equal(d.relevant({ entry: '--pr', prState: 'ready, no Copilot review yet', defect: 'docs drift' }, 'early'), false);
+  assert.equal(d.relevant({ entry: '--pr', prState: 'draft', defect: 'docs drift' }, 'defect'), true);
+  assert.equal(d.relevant({ entry: '--pr', prState: 'draft', defect: 'docs drift' }, 'early'), true);
+  const o = overviewModel();
+  assert.equal(o.relevant({ config: 'loads', retro: true, defect: 'none' }, 'early'), false);
+  assert.equal(o.relevant({ config: 'loads', retro: false, defect: 'docs drift' }, 'early'), false);
+});

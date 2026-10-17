@@ -89,8 +89,8 @@ export function createModel() {
     order:{tag:"One state, one next action", txt:"The outer loop reads the record and refuses to start new work while the previous unit is unfinished. The retro checkpoint is part of finishing.", slide:"Slides 20 and 22: routing rules and the outer loop"},
     grill:{tag:"Make the goal testable", txt:"Questions until the goal, scope and evidence are clear. Agents may propose answers; a person decides intent and tradeoffs.", slide:"Slide 7: the grilling sub-loop"},
     refine:{tag:"Size and context before code", txt:"Refine adds the size forecast and the code-graph context to the work order. A missing fact found here costs one edit. Found at the draft gate, it costs a full gate round.", slide:"Slide 7: the grilling sub-loop"},
-    selfcheck:{tag:"Check your own work first", txt:"The developer compares the diff with the AC, the ADRs and the non-goals, then sweeps the docs and tests the change leaves stale.", slide:"Slide 14: try again needs a reason"},
-    gap:{tag:"A gap: caught late", txt:"The defect passed every early stage and the draft gate found it. The gate did its job, and the early stage that should have caught it is a known gap.", slide:"Slide 14: try again needs a reason"},
+    selfcheck:{tag:"Check your own work first", txt:"The developer compares the diff with the AC, the ADRs and the non-goals.", slide:"Slide 14: try again needs a reason"},
+    gap:{tag:"A gap: caught late", txt:"The defect passed every early stage and the draft gate found it. The early stage that should have caught it is a known gap.", slide:"Slide 14: try again needs a reason"},
     card:{tag:"A job card for the worker", txt:"The developer gets the target, the required reads, one bounded next action and the stop rules. It works in its own worktree.", slide:"Slide 21: give the worker a job card"},
     prepr:{tag:"Review before the first push", txt:"Findings at this point cost a local edit. After the push they cost a full gate round.", slide:"Slide 14: try again needs a reason"},
     record:{tag:"The PR is the shared record", txt:"From here on, the head SHA, CI, verdicts and threads live on the pull request, where any session can read them.", slide:"Slide 18: apply it to AI development"},
@@ -168,7 +168,7 @@ export function createModel() {
       S.lens = L.refine; S.pending = ["implement"]; S.trace.push("refine: size forecast and graph context recorded in the work order"); catchAt(S, world, "refine");
     }
     else if (node === "selfcheck"){
-      take(S, "self-prepr"); out(S, "selfcheck","checked","yes"); S.title = "self-check"; S.note = "The developer checks the diff against the AC, the ADRs and the non-goals, and sweeps the surfaces the change leaves stale, before asking for a review.";
+      take(S, "self-prepr"); out(S, "selfcheck","checked","yes"); S.title = "self-check"; S.note = "The developer checks the diff against the AC, the ADRs and the non-goals, before asking for a review.";
       S.lens = L.selfcheck; S.pending = ["prepr"]; S.trace.push("self-check: diff against AC, ADRs and non-goals"); catchAt(S, world, "selfcheck");
     }
     else if (node === "prepr"){
