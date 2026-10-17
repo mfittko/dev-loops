@@ -357,3 +357,8 @@ test('A pre-PR catch never reports the review as clean in the same trace', () =>
   assert.ok(d.some((t) => t.includes('L7: pre-PR review: caught the docs drift')));
   assert.equal(d.some((t) => t.includes('pre-PR review clean')), false);
 });
+
+test('A second pre-PR pass after a catch still reports clean', () => {
+  const o = run({ defect: 'docs drift', early: true, prepr: 'finds issues' }).trace;
+  assert.equal(o.includes('pre-PR review: clean'), true);
+});

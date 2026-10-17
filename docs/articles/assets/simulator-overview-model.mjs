@@ -173,9 +173,9 @@ export function createModel() {
       S.lens = L.selfcheck; S.pending = ["prepr"]; S.trace.push("self-check: diff against AC, ADRs and non-goals"); catchAt(S, world, "selfcheck"); out(S, "selfcheck", s.caught === "self-check" ? "caught" : "checked", "yes");
     }
     else if (node === "prepr"){
-      catchAt(S, world, "prepr");
+      const was = s.caught; catchAt(S, world, "prepr"); const caughtNow = s.caught !== was;
       if (world.prepr === "finds issues" && !f.prepr){ f.prepr = 1; take(S, "prepr-impl"); out(S, "prepr","2 findings","no"); S.pending = ["implement"]; S.trace.push("pre-PR review: 2 findings → back to the developer"); }
-      else { take(S, "prepr-pr"); out(S, "prepr", s.caught === "pre-PR review" ? "caught" : "clean", "yes"); S.pending = ["pr"]; if (s.caught !== "pre-PR review") S.trace.push("pre-PR review: clean"); }
+      else { take(S, "prepr-pr"); out(S, "prepr", s.caught === "pre-PR review" ? "caught" : "clean", "yes"); S.pending = ["pr"]; if (!caughtNow) S.trace.push("pre-PR review: clean"); }
       S.title = "pre-PR review"; S.note = "A fresh reviewer reads the diff before the first push. This step is a must."; S.lens = L.prepr;
     }
     else if (node === "pr"){
