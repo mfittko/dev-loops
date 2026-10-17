@@ -112,6 +112,7 @@ function run(overrides) {
   const world = conditions(model, overrides);
   const state = model.fresh();
   for (let i = 0; i < 200 && !state.done; i++) advance(model, state, world);
+  assert.equal(state.done, true);
   return state;
 }
 
@@ -199,6 +200,7 @@ function runDetailed(overrides) {
     else if (nx.sub) { S.stack.push({ g, n }); S.pos = { g: nx.sub, n: nx.at }; }
     else { S.ret = nx.up; S.pos = S.stack.pop(); }
   }
+  assert.equal(S.done, true);
   return { model, S };
 }
 
@@ -223,7 +225,7 @@ for (const [oid, did, stage, planned] of EARLY) {
   });
 }
 
-test('Early-detection stages are planned only where the owning issue says so', () => {
+test('Both models share the same PLANNED stage-to-issue map', () => {
   assert.deepEqual(detailedModel().PLANNED, { refine: 2756, prepr: 2807, brief: 2588 });
   assert.deepEqual(overviewModel().PLANNED, detailedModel().PLANNED);
 });
@@ -281,7 +283,7 @@ test('Both articles keep the caught-at row outside the hidden-on-Custom about bl
 });
 
 // With early:true on an entry that skips the early stages, the defect still reaches the draft gate uncaught; Detailed flags it as the Overview judge does (the Overview has no entry input and always runs the early stages).
-test('Both views flag a defect that reaches the draft gate on entries that skip the early stages', () => {
+test('Detailed flags a defect that reaches the draft gate on entries that skip the early stages', () => {
   for (const entry of ['--pr', '--plan-file', '--spike']) {
     const w = { entry, defect: 'docs drift', early: true };
     const d = runDetailed(w);
