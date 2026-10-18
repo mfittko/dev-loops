@@ -382,6 +382,9 @@ const GateConfig = z.strictObject({
   inlineSeverityFloor: z.enum(["medium", "low", "nit"]).optional().describe(
     "Lowest defect severity still posted as an inline resolvable review thread. Valid values: \"medium\" (default), \"low\", \"nit\" — the floor can never be raised above \"medium\". A locatable finding at or above the floor keeps its inline thread on a create. In the verdict body, a judge-act finding and a blocking-severity finding are always visible; a finding with no judge disposition is visible when it is at or above the floor; every other finding folds into the single collapsed Details block, grouped by disposition (GATE-COMMENT-INLINE-SEVERITY-FLOOR). A \"question\" always posts inline regardless of this floor (it must keep its resolvable thread to block gate-close until answered). Lower it (e.g. \"low\" or \"nit\") to make lower-severity unjudged findings visible and to restore their inline threads."
   ),
+  // No schema-level `.default()` (same layering reason as mediumFixWindow);
+  // resolveGateConfig applies the built-in fallback (4).
+  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for this gate: after this many completed rounds a new judge act item blocks with round_cap_reached instead of starting another automatic round. Default 4. 0 disables the cap."),
   // Ordered, first-match-wins diff-class angle tiers (see resolveGateTier).
   // Absent/empty = tiers never apply.
   tiers: z.array(GateTier).min(1).describe("Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class.").optional(),
@@ -2121,6 +2124,18 @@ function resolveBlockingSeverities(config, gate) {
   return [...new Set(rawBlocking.map((s) => normalizeSeverity(s)))];
 }
 
+/** Default 4; 0 disables the cap; any other non-integer or negative value refuses. */
+function resolveMaxReviewRounds(raw, gate) {
+  if (raw === undefined) return 4;
+  if (!Number.isInteger(raw) || raw < 0) {
+    throw new Error(
+      `Config validation failed: gates.${gate}.maxReviewRounds must be a non-negative integer, got ${formatConfigValue(raw)}. ` +
+      `Fix the config before gate operations can proceed.`
+    );
+  }
+  return raw;
+}
+
 /**
  * Resolve one gate configuration object from the merged config.
  *
@@ -2134,7 +2149,7 @@ function resolveBlockingSeverities(config, gate) {
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
- * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, inlineSeverityFloor: string, tiers: Array<{name: string, match: object, angles: string[]}>, angleCategoryBindings: Record<string, {categories: string[], kinds: string[]}> }}
+ * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, inlineSeverityFloor: string, maxReviewRounds: number, tiers: Array<{name: string, match: object, angles: string[]}>, angleCategoryBindings: Record<string, {categories: string[], kinds: string[]}> }}
  * @throws {Error} when ANY gate's (not only the requested one's) PRESENT
  *   `blockCleanOnFindingSeverities` is schema-invalid (non-array, empty, or an
  *   out-of-vocabulary entry). Validated EAGERLY across all three gates on every
@@ -2172,6 +2187,7 @@ export function resolveGateConfig(config, gate) {
     // still honored so an unmigrated config keeps its window.
     mediumFixWindow: gateConfig?.mediumFixWindow ?? gateConfig?.worthFixingNowFixWindow ?? 3,
     inlineSeverityFloor: gateConfig?.inlineSeverityFloor ?? "medium",
+    maxReviewRounds: resolveMaxReviewRounds(gateConfig?.maxReviewRounds, gate),
     tiers: gateConfig?.tiers ?? [],
     // Per-angle category/file-kind bindings for enabled entries that declare
     // them, so dynamic resolution can select a consumer angle by diff instead

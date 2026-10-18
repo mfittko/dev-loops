@@ -2732,9 +2732,21 @@ describe("role resolution", () => {
         blockCleanOnFindingSeverities: ["high"],
         mediumFixWindow: 3,
         inlineSeverityFloor: "medium",
+        maxReviewRounds: 4,
         tiers: [],
         angleCategoryBindings: {},
       });
+    });
+
+    test("resolveGateConfig maxReviewRounds: default 4, override, 0 kill switch, invalid refuses", () => {
+      const rounds = (v) => resolveGateConfig({ version: 1, gates: { draft: v === undefined ? {} : { maxReviewRounds: v } } }, "draft").maxReviewRounds;
+      assert.equal(rounds(undefined), 4);
+      assert.equal(rounds(6), 6);
+      assert.equal(rounds(0), 0);
+      for (const bad of [-1, 1.5, "4", null]) {
+        assert.throws(() => rounds(bad), /maxReviewRounds must be a non-negative integer/, String(bad));
+      }
+      assert.equal(resolveGateConfig({ version: 1 }, "preApproval").maxReviewRounds, 4);
     });
 
     test("resolveGateConfig returns configured gate booleans and cloned angles", () => {
@@ -2755,6 +2767,7 @@ describe("role resolution", () => {
         blockCleanOnFindingSeverities: ["high"],
         mediumFixWindow: 3,
         inlineSeverityFloor: "medium",
+        maxReviewRounds: 4,
         tiers: [],
         angleCategoryBindings: {},
       });

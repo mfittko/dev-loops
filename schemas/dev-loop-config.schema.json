@@ -360,6 +360,11 @@
                 "nit"
               ]
             },
+            "maxReviewRounds": {
+              "description": "Round cap for this gate: after this many completed rounds a new judge act item blocks with round_cap_reached instead of starting another automatic round. Default 4. 0 disables the cap.",
+              "type": "integer",
+              "minimum": 0
+            },
             "tiers": {
               "minItems": 1,
               "type": "array",
@@ -595,6 +600,11 @@
                 "nit"
               ]
             },
+            "maxReviewRounds": {
+              "description": "Round cap for this gate: after this many completed rounds a new judge act item blocks with round_cap_reached instead of starting another automatic round. Default 4. 0 disables the cap.",
+              "type": "integer",
+              "minimum": 0
+            },
             "tiers": {
               "minItems": 1,
               "type": "array",
@@ -829,6 +839,11 @@
                 "low",
                 "nit"
               ]
+            },
+            "maxReviewRounds": {
+              "description": "Round cap for this gate: after this many completed rounds a new judge act item blocks with round_cap_reached instead of starting another automatic round. Default 4. 0 disables the cap.",
+              "type": "integer",
+              "minimum": 0
             },
             "tiers": {
               "minItems": 1,
