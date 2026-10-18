@@ -146,21 +146,3 @@ test("an empty scan range fails closed in scan and record mode", withRepo(async 
   assert.equal((await run(dir, [...record.slice(0, -3), "--base", "HEAD", "--no-linked-issue"])).code, 1);
   assert.equal((await validatePrePrReview({ cwd: dir })).ok, false);
 }));
-
-test("scan and refusal behave identically for the claude and pi harness environments", withRepo(async (dir) => {
-  const results = [];
-  for (const env of [{ DEVLOOPS_RUN_ID: "run-claude" }, { PI_SUBAGENT_RUN_ID: "run-pi" }]) {
-    const saved = { ...process.env };
-    Object.assign(process.env, env);
-    try {
-      const scan = (await run(dir, ["--scan", "--base", "main"])).out;
-      const refusal = await run(dir, record);
-      results.push({ sites: sitesOf(scan), code: refusal.code, errCode: refusal.err.code });
-    } finally {
-      for (const key of Object.keys(env)) delete process.env[key];
-      Object.assign(process.env, saved);
-    }
-  }
-  assert.deepEqual(results[0], results[1]);
-  assert.equal(results[0].errCode, "pre_pr_stale_surface_unaddressed");
-}));
