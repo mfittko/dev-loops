@@ -169,6 +169,13 @@ export function rootWorkspaceDependencyNames(lock) {
   return new Set([root.dependencies, root.devDependencies, root.optionalDependencies].flatMap((d) => Object.keys(d ?? {})));
 }
 
+/** Whether a lockfile package entry is installable on this host, given its optional `os`/`cpu` gates. */
+export function isInstallableOnHost(pkg) {
+  if (pkg.os && !pkg.os.includes(process.platform)) return false;
+  if (pkg.cpu && !pkg.cpu.includes(process.arch)) return false;
+  return true;
+}
+
 /**
  * Escape untrusted interpolated values for GitHub-Actions log output the way
  * the toolkit does: percent-encode `%`, then escape carriage returns and

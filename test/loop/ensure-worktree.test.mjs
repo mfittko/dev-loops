@@ -1497,6 +1497,20 @@ test("ensure: reuse treats node_modules as owned only when every bun.lock root d
     const owned = await reuse();
     assert.equal(owned.deps, undefined);
     assert.equal(calls, before);
+    // A host-gated optional (os never matches) that is not installed must not make a complete install look incomplete.
+    writeFileSync(path.join(first.path, "bun.lock"), '{"lockfileVersion":1,"workspaces":{"":{"dependencies":{"pkg":"1.0.0"},"optionalDependencies":{"gated":"1.0.0"}}},"packages":{"gated":["gated@1.0.0","",{"os":"nonexistent-os"}]}}');
+    rmSync(nm, { recursive: true, force: true });
+    fillInstall(nm, ["pkg"]);
+    const beforeGated = calls;
+    assert.equal((await reuse()).deps, undefined);
+    assert.equal(calls, beforeGated);
+    // An empty root dependency set is never owned, even for a .bun-only node_modules.
+    writeFileSync(path.join(first.path, "bun.lock"), '{"lockfileVersion":1,"workspaces":{"":{"name":"root"}}}');
+    rmSync(nm, { recursive: true, force: true });
+    mkdirSync(path.join(nm, ".bun"), { recursive: true });
+    const beforeEmpty = calls;
+    assert.equal((await reuse()).deps.ran, true);
+    assert.equal(calls, beforeEmpty + 1);
     // A missing bun.lock means not owned (ensureDeps then no-ops).
     rmSync(path.join(first.path, "bun.lock"));
     assert.equal((await reuse()).deps.reason, "no bun.lock");

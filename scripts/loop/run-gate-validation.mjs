@@ -25,7 +25,7 @@ import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeHeadSha as n
 import { assertWorktreeAtHead, buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { viewPr } from "../github/view-pr.mjs";
-import { parseBunLock, rootWorkspaceDependencyNames } from "../release/assert-core-dependency-version.mjs";
+import { isInstallableOnHost, parseBunLock, rootWorkspaceDependencyNames } from "../release/assert-core-dependency-version.mjs";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
 import { verificationCommandSegments } from "@dev-loops/core/loop/bash-command-classify";
 
@@ -360,18 +360,6 @@ export async function buildValidationArtifact(
     depState: await resolveDepState(repoRoot),
     suites: suiteResults,
   };
-}
-
-/**
- * Whether a lockfile package entry is installable on the current host, given
- * its optional `os`/`cpu` platform gates.
- * @param {{os?: string[], cpu?: string[]}} pkg
- * @returns {boolean}
- */
-function isInstallableOnHost(pkg) {
-  if (pkg.os && !pkg.os.includes(process.platform)) return false;
-  if (pkg.cpu && !pkg.cpu.includes(process.arch)) return false;
-  return true;
 }
 
 async function readBunStoreManifest(repoRoot, packageName, version) {

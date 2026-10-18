@@ -47,7 +47,7 @@ import { parse as parseYaml } from "yaml";
 import { resolveWorktreePath } from "@dev-loops/core/loop/handoff-envelope";
 import { normalizeToBareBranch, resolveBaseBranch } from "@dev-loops/core/config";
 import { provisionWorktree } from "./provision-worktree.mjs";
-import { parseBunLock, rootWorkspaceDependencyNames } from "../release/assert-core-dependency-version.mjs";
+import { isInstallableOnHost, parseBunLock, rootWorkspaceDependencyNames } from "../release/assert-core-dependency-version.mjs";
 import { GUARDED_HOOKS, installDefaultBranchGuard } from "@dev-loops/core/loop/default-branch-guard";
 import { installCommitMsgGuard } from "@dev-loops/core/loop/commit-msg-guard";
 import { canonicalize } from "./_worktree-path.mjs";
@@ -654,7 +654,9 @@ function ownsCompleteInstall(worktreePath) {
     const nm = path.join(worktreePath, "node_modules");
     if (!lstatSync(nm).isDirectory()) return false;
     const lock = parseBunLock(readFileSync(path.join(worktreePath, "bun.lock"), "utf8"));
-    return [...rootWorkspaceDependencyNames(lock)].every((name) => existsSync(path.join(nm, name, "package.json")));
+    // An empty root dependency set is never owned; os/cpu-gated optionals not installable here are skipped.
+    const names = [...rootWorkspaceDependencyNames(lock)].filter((name) => isInstallableOnHost(lock.packages?.[name]?.[2] ?? {}));
+    return names.length > 0 && names.every((name) => existsSync(path.join(nm, name, "package.json")));
   } catch {
     return false;
   }
