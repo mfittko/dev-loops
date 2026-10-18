@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, test } from "bun:test";
 
 import { runCli } from "../../cli/index.mjs";
-import { indexDecisionRecords, lintSpec, main } from "../../scripts/loop/spec-lint.mjs";
+import { indexDecisionRecords, lintSizeForecast, lintSpec, main } from "../../scripts/loop/spec-lint.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const tempDirs = [];
@@ -279,6 +279,11 @@ test("size forecast: a malformed forecast bullet next to a valid one is a size_f
     "1. forecast: slice=2 wloc=1800 files=b.mjs",
     "1) forecast: slice=2 wloc=1800 files=b.mjs",
     "* FORECAST: slice=2 wloc=1800 files=b.mjs",
+    "- forecast slice=2 wloc=1800 files=b.mjs",
+    "- forecast : slice=2 wloc=1800 files=b.mjs",
+    "- Forecast slice=2 wloc=1800 files=b.mjs",
+    "- slice=2 wloc=1800 files=b.mjs",
+    "1. forecast slice=2 wloc=1800 files=b.mjs",
   ]) {
     const { findings } = await run(valid, line);
     assert.deepEqual(sizeKinds(findings), ["size_forecast_malformed:size-forecast"], line);
@@ -289,6 +294,11 @@ test("size forecast: a malformed forecast bullet next to a valid one is a size_f
   assert.deepEqual(sizeKinds((await run(valid)).findings), []);
   // A malformed bullet with no valid line still reports the missing forecast too.
   assert.deepEqual(sizeKinds((await run("- forecast: slice=2 wloc=1800 files=a.mjs, b.mjs")).findings), ["size_forecast_missing:size-forecast", "size_forecast_malformed:size-forecast"]);
+});
+
+test("size forecast: a null waiverLoc never reports size_forecast_split_required", () => {
+  assert.deepEqual(lintSizeForecast("## Size forecast\n\n- forecast: slice=1 wloc=10 files=a.mjs", { waiverLoc: null }), []);
+  assert.deepEqual(lintSizeForecast("## Size forecast\n\n- forecast: slice=1 wloc=1800 files=a.mjs", { waiverLoc: 1500 }).map((f) => f.kind), ["size_forecast_split_required"]);
 });
 
 test("size forecast: the split bound moves with a .devloops waiverLoc override", async () => {

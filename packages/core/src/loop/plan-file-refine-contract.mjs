@@ -199,7 +199,7 @@ function renderGrillFindings(classified) {
  * @param {string} params.payload.acceptanceCriteria  Acceptance criteria section body
  * @param {string} params.payload.definitionOfDone  Definition of done section body
  * @param {string} params.payload.coverageMatrix  AC/DoD/Non-goal coverage matrix (markdown table)
- * @param {object} params.payload.sizeEstimate  per-phase size estimate (see `validatePhaseSizeEstimate`); an over-`sizeSoftLoc` estimate must carry a non-empty `oversizeJustification` or the refine fails closed, prompting a seam search
+ * @param {object} params.payload.sizeEstimate  per-phase size estimate (see `validatePhaseSizeEstimate`); an over-`sizeSoftLoc` estimate must carry a non-empty `oversizeJustification` or the refine fails closed, prompting a seam search; `sourceFiles` is required when `logicLoc` > 0 and `mergeAssessment` is required under `sizeMinLoc`
  * @param {object[]} [params.payload.grillDispositions]  docs-grill dispositions the caller pre-classified via #948's `classifyDocsGrillFinding`; each entry is `{ kind, summary, disposition }` and a null/invalid `disposition` fails the grill closed
  * @param {number} [params.sizeWaiverLoc]  default-tier waiverLoc (resolved config); an estimate at or above it fails `size_estimate_split_required`
  * @param {number} [params.sizeMinLoc]  `gates.size.planningBand.minLoc` (resolved config); an estimate under it is a merge candidate, 0 disables
@@ -210,7 +210,7 @@ function renderGrillFindings(classified) {
  *   planFileIntakeState?: string,
  *   refinedMarkdown?: string,
  *   grillDispositions?: object[],
- *   sizeEstimate?: { logicLoc: number, tier: string, softLoc: number, overBudget: boolean, oversizeNote: string|null },
+ *   sizeEstimate?: { logicLoc: number, tier: string, softLoc: number, overBudget: boolean, oversizeNote: string|null, mergeCandidate: boolean },
  *   stop?: { kind: string },
  * }}
  */
