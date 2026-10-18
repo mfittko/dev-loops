@@ -531,6 +531,14 @@ test("buildValidationArtifact: Bun lock rejects a symlinked node_modules and a r
     const storeOnly = await buildValidationArtifact(input, { repoRoot });
     assert.equal(storeOnly.depState.status, "stale");
     assert.match(storeOnly.depState.detail, /1 missing \[a\]/);
+
+    await rm(path.join(repoRoot, "node_modules", ".bun", "a@1.0.0"), { recursive: true, force: true });
+    const hoisted = path.join(repoRoot, "node_modules", ".bun", "node_modules", "a");
+    await mkdir(hoisted, { recursive: true });
+    await writeFile(path.join(hoisted, "package.json"), JSON.stringify({ name: "a", version: "1.0.0" }), "utf8");
+    const hoistedOnly = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(hoistedOnly.depState.status, "stale");
+    assert.match(hoistedOnly.depState.detail, /1 missing \[a\]/);
   } finally {
     await rm(outerRoot, { recursive: true, force: true });
   }

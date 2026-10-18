@@ -470,9 +470,10 @@ async function resolveDepState(repoRoot) {
         ? path.join(parentKey, "node_modules", packageName, "package.json")
         : path.join(packageName, "package.json");
       // Bun's isolated linker keeps transitive packages under node_modules/.bun/node_modules and per-version dirs.
+      const isRootDep = lockKey === packageName && rootDeps.has(packageName);
       const installedRaw = await readFile(path.join(repoRoot, "node_modules", relativeManifestPath), "utf8")
-        .catch(() => readFile(path.join(repoRoot, "node_modules", ".bun", "node_modules", relativeManifestPath), "utf8"))
-        .catch(() => (lockKey === packageName && rootDeps.has(packageName) ? null : readBunStoreManifest(repoRoot, packageName, expectedVersion)))
+        .catch(() => (isRootDep ? null : readFile(path.join(repoRoot, "node_modules", ".bun", "node_modules", relativeManifestPath), "utf8")))
+        .catch(() => (isRootDep ? null : readBunStoreManifest(repoRoot, packageName, expectedVersion)))
         .catch(() => null);
       if (installedRaw === null) {
         missing.push(lockKey);
