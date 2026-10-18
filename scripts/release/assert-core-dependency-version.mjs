@@ -163,6 +163,12 @@ export function parseBunLock(raw) {
   return JSON.parse(String(raw).replace(/"(?:\\.|[^"\\])*"|,\s*([}\]])/gu, (match, close) => close ?? match));
 }
 
+/** Names of the root workspace's dependencies, devDependencies and optionalDependencies in a parsed bun.lock. */
+export function rootWorkspaceDependencyNames(lock) {
+  const root = lock?.workspaces?.[""] ?? {};
+  return new Set([root.dependencies, root.devDependencies, root.optionalDependencies].flatMap((d) => Object.keys(d ?? {})));
+}
+
 /**
  * Escape untrusted interpolated values for GitHub-Actions log output the way
  * the toolkit does: percent-encode `%`, then escape carriage returns and

@@ -1375,11 +1375,27 @@ test("requireClaudeSession: the value survives a refresh and follows a default-b
 // Create-path dependency install (#2535, WORKTREE-DEPS-ISOLATED)
 // ---------------------------------------------------------------------------
 
-function commitBunLock(repo) {
-  writeFileSync(path.join(repo.root, "bun.lock"), "{}");
+// Root workspace depends on `pkg` (dependencies), `dev` (devDependencies) and `opt` (optionalDependencies).
+const BUN_LOCK = `{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": { "name": "root", "dependencies": { "pkg": "1.0.0", }, "devDependencies": { "dev": "1.0.0", }, "optionalDependencies": { "opt": "1.0.0", }, },
+  },
+}
+`;
+
+function commitBunLock(repo, lock = BUN_LOCK) {
+  writeFileSync(path.join(repo.root, "bun.lock"), lock);
   repo.git("add", "-A");
   repo.git("commit", "-q", "-m", "lock");
   repo.git("fetch", "-q", "origin");
+}
+
+function fillInstall(nm, names = ["pkg", "dev", "opt"]) {
+  for (const name of names) {
+    mkdirSync(path.join(nm, name), { recursive: true });
+    writeFileSync(path.join(nm, name, "package.json"), "{}");
+  }
 }
 
 test("ensure: create runs the dep install inside the new worktree before provision and reports deps", async () => {
@@ -1439,7 +1455,7 @@ test("ensure: reuse installs only without own node_modules", async () => {
     assert.equal(reused.reused, true);
     assert.equal(reused.deps.ran, true);
     assert.equal(calls, 2);
-    mkdirSync(path.join(first.path, "node_modules", "pkg"), { recursive: true });
+    fillInstall(path.join(first.path, "node_modules"));
     const again = await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps });
     assert.equal(again.deps, undefined);
     assert.equal(calls, 2);
@@ -1448,7 +1464,7 @@ test("ensure: reuse installs only without own node_modules", async () => {
   }
 });
 
-test("ensure: reuse treats node_modules as owned only with an entry beyond the @dev-loops self-link (every shape)", async () => {
+test("ensure: reuse treats node_modules as owned only when every bun.lock root dependency is installed (every shape)", async () => {
   const repo = makeRepo();
   try {
     mkdirSync(path.join(repo.root, "packages", "core"), { recursive: true });
@@ -1464,6 +1480,9 @@ test("ensure: reuse treats node_modules as owned only with an entry beyond the @
       () => rmSync(nm, { recursive: true, force: true }), // absent
       () => { rmSync(nm, { recursive: true, force: true }); mkdirSync(path.join(nm, "@dev-loops", "core"), { recursive: true }); }, // self-link only
       () => { rmSync(nm, { recursive: true, force: true }); mkdirSync(nm); }, // empty directory
+      () => { rmSync(nm, { recursive: true, force: true }); mkdirSync(path.join(nm, ".bun"), { recursive: true }); mkdirSync(path.join(nm, ".bin")); }, // partial install
+      () => { rmSync(nm, { recursive: true, force: true }); fillInstall(nm, ["pkg", "dev"]); }, // missing one root dependency
+      () => { rmSync(nm, { recursive: true, force: true }); symlinkSync(path.join(repo.root, "missing-target"), nm); }, // dangling symlink
     ]) {
       setup();
       const before = calls;
@@ -1471,12 +1490,21 @@ test("ensure: reuse treats node_modules as owned only with an entry beyond the @
       assert.equal(res.deps.ran, true);
       assert.equal(calls, before + 1);
     }
-    // Accepted form: a real package entry means owned, so no install and no deps field.
-    mkdirSync(path.join(nm, "pkg"), { recursive: true });
+    // Accepted form: a complete install means owned, so no install and no deps field.
+    rmSync(nm, { recursive: true, force: true });
+    fillInstall(nm);
     const before = calls;
     const owned = await reuse();
     assert.equal(owned.deps, undefined);
     assert.equal(calls, before);
+    // A missing bun.lock means not owned (ensureDeps then no-ops).
+    rmSync(path.join(first.path, "bun.lock"));
+    assert.equal((await reuse()).deps.reason, "no bun.lock");
+    // An unparseable bun.lock means not owned.
+    writeFileSync(path.join(first.path, "bun.lock"), "not json");
+    const afterBad = calls;
+    assert.equal((await reuse()).deps.ran, true);
+    assert.equal(calls, afterBad + 1);
   } finally {
     repo.cleanup();
   }

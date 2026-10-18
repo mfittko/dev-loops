@@ -25,7 +25,7 @@ import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeHeadSha as n
 import { assertWorktreeAtHead, buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { viewPr } from "../github/view-pr.mjs";
-import { parseBunLock } from "../release/assert-core-dependency-version.mjs";
+import { parseBunLock, rootWorkspaceDependencyNames } from "../release/assert-core-dependency-version.mjs";
 import { classifyValidationCommand } from "@dev-loops/core/loop/validation-classify";
 import { verificationCommandSegments } from "@dev-loops/core/loop/bash-command-classify";
 
@@ -374,6 +374,18 @@ function isInstallableOnHost(pkg) {
   return true;
 }
 
+async function readBunStoreManifest(repoRoot, packageName, version) {
+  const storeRoot = path.join(repoRoot, "node_modules", ".bun");
+  const exact = `${packageName.replace("/", "+")}@${version}`;
+  // Bun appends "+<peer-hash>" to the store dir when the package has peers; sorted for a deterministic pick.
+  const dirs = (await readdir(storeRoot)).filter((d) => d === exact || d.startsWith(`${exact}+`)).sort();
+  for (const dir of dirs) {
+    const raw = await readFile(path.join(storeRoot, dir, "node_modules", packageName, "package.json"), "utf8").catch(() => null);
+    if (raw !== null) return raw;
+  }
+  throw new Error("bun store entry not found");
+}
+
 /**
  * Compare the authoritative dependency lock against the installed tree.
  * Bun lock entries are checked against installed package manifests;
@@ -394,24 +406,12 @@ function isInstallableOnHost(pkg) {
  * tree.
  *
  * The bun.lock path reports the repoRoot's OWN install only: a linked worktree
- * must not borrow the main checkout's (possibly stale) `node_modules`. The
+ * must not borrow the main checkout's (possibly stale) `node_modules`.
  * The package-lock path likewise reads only repoRoot's own `node_modules/.package-lock.json`.
  *
  * @param {string} repoRoot - Absolute path to the repo (main checkout or worktree).
  * @returns {Promise<{status: string, detail: string}>}
  */
-async function readBunStoreManifest(repoRoot, packageName, version) {
-  const storeRoot = path.join(repoRoot, "node_modules", ".bun");
-  const exact = `${packageName.replace("/", "+")}@${version}`;
-  // Bun appends "+<peer-hash>" to the store dir when the package has peers; sorted for a deterministic pick.
-  const dirs = (await readdir(storeRoot)).filter((d) => d === exact || d.startsWith(`${exact}+`)).sort();
-  for (const dir of dirs) {
-    const raw = await readFile(path.join(storeRoot, dir, "node_modules", packageName, "package.json"), "utf8").catch(() => null);
-    if (raw !== null) return raw;
-  }
-  throw new Error("bun store entry not found");
-}
-
 async function resolveDepState(repoRoot) {
   const bunLockPath = path.join(repoRoot, "bun.lock");
   const bunLockRaw = await readFile(bunLockPath, "utf8").catch(() => null);
@@ -429,8 +429,7 @@ async function resolveDepState(repoRoot) {
     }
     // Root dependencies must be linked at node_modules/<name>; a store-only copy is not importable.
     // ponytail: transitive store reachability is not checked.
-    const rootWorkspace = lock.workspaces?.[""] ?? {};
-    const rootDeps = new Set([rootWorkspace.dependencies, rootWorkspace.devDependencies, rootWorkspace.optionalDependencies].flatMap((d) => Object.keys(d ?? {})));
+    const rootDeps = rootWorkspaceDependencyNames(lock);
     const missing = [];
     const mismatched = [];
     let checked = 0;

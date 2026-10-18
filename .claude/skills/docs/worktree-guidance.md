@@ -64,7 +64,7 @@ fetchDegraded?, provision: { actions, summary }, deps?, guard }`. `base` appears
 create; `provision` is the full `provisionWorktree()` result; `fetchDegraded: true`
 means at least one candidate remote's fetch failed, so branch resolution used the
 refs already present. Provisioning is fail-soft; a `git worktree add` failure is
-a hard error. On create, and on reuse without an own install (a `node_modules` holding at most the `@dev-loops` self-link), it first runs `bun install --frozen-lockfile` inside the worktree when a `bun.lock` exists and reports `deps: { ok, ran, reason?, exitCode? }`; a failed install never fails the worktree (`WORKTREE-DEPS-ISOLATED`).
+a hard error. On create, and on reuse without an own install (a `node_modules` that is not a real directory holding every root-workspace dependency of `bun.lock`), it first runs `bun install --frozen-lockfile` inside the worktree when a `bun.lock` exists and reports `deps: { ok, ran, reason?, exitCode? }`; a failed install never fails the worktree (`WORKTREE-DEPS-ISOLATED`).
 
 `guard` is the default-branch guard's install result for the primary checkout
 (`{ ok, installed, refreshed, skipped, defaultBranches?, droppedExplicitBranches?, reason? }`),
