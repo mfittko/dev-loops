@@ -826,6 +826,65 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
   // The canonical active plan can veto a checkpoint; success still needs the existing boundary below.
   const planPath = path.join(tmpRoot, "gate-fixer", repoSlugFor(repo), `pr-${pr}`, "fixer-emit-plan.json");
+  const logPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot });
+  // Evaluate one raw checkpoint against LIVE thread state and containment at the live head.
+  const evaluateCheckpoint = async (raw) => {
+    let handoff;
+    try {
+      handoff = normalizeFixerDispositionHandoff(JSON.parse(raw));
+    } catch (error) {
+      // A recorded-but-malformed checkpoint must fail closed rather than silently no-op. No real
+      // threadId is known, so the "unknown" sentinel keeps downstream reason formatting legible.
+      return {
+        complete: false,
+        incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unreadable_checkpoint: ${error instanceof Error ? error.message : String(error)}` }],
+      };
+    }
+    const tackledShas = [...new Set(
+      handoff.dispositions
+        .filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED)
+        .map((entry) => entry.fixingCommitSha),
+    )];
+    const containment = await buildContainmentMap(tackledShas, { repo, headSha: currentHeadSha }, runtime);
+    // A caller that has not read the threads yet passes a loader, so a PR with no checkpoint costs no read.
+    const threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
+    const liveThreads = threads.threads.map((thread) => ({
+      threadId: thread.id,
+      isResolved: thread.isResolved,
+      replyBodies: threads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body),
+    }));
+    const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment });
+    return { complete: evaluation.ok, incomplete: evaluation.incomplete };
+  };
+  // A verified disposition carries to a descendant head: a fixer-disposition-<X>.json checkpoint X is
+  // evaluated at the live head H when X is strictly contained by H (compare "ahead"); the tackled-commit
+  // containment and live resolution are re-checked at H. Never a gate verdict; behind, diverged, or
+  // unreadable ancestors are skipped (null) and an incomplete ancestor checkpoint refuses.
+  const carryAncestorCheckpoint = async () => {
+    let names;
+    try {
+      names = await readdir(path.dirname(path.resolve(repoRoot, logPath)));
+    } catch {
+      return null;
+    }
+    let result = null;
+    for (const name of names) {
+      const ancestor = /^fixer-disposition-([0-9a-f]{40})\.json$/.exec(name)?.[1];
+      if (!ancestor || ancestor === currentHeadSha.toLowerCase()) continue;
+      const relation = await isCommitContainedByHead({ repo, commitSha: ancestor, headSha: currentHeadSha }, runtime);
+      if (!relation.contained) continue;
+      let raw;
+      try {
+        raw = await readFile(path.join(path.dirname(path.resolve(repoRoot, logPath)), name), "utf8");
+      } catch {
+        continue;
+      }
+      const evaluated = await evaluateCheckpoint(raw);
+      if (evaluated.complete) return evaluated;
+      result = evaluated;
+    }
+    return result;
+  };
   let planBytes;
   try {
     let plan;
@@ -853,6 +912,8 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
         if (applicable) {
           const checked = await verifyFixerDisposition({ repo, pr, headSha: currentHeadSha, fixerPlan: planPath, check: true }, { ...runtime, repoRoot });
           if (!checked.complete) {
+            const carried = checked.activeFixer ? null : await carryAncestorCheckpoint();
+            if (carried?.complete) return carried;
             const unchanged = (await readFile(planPath)).equals(planBytes);
             return { complete: false, incomplete: checked.incomplete,
               ...(unchanged && checked.activeFixer ? { activeFixer: checked.activeFixer } : {}) };
@@ -861,11 +922,14 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
       }
     }
   } catch (error) {
+    if (!error?.activeFixer) {
+      const carried = await carryAncestorCheckpoint();
+      if (carried?.complete) return carried;
+    }
     const unchanged = planBytes && await readFile(planPath).then((bytes) => bytes.equals(planBytes), () => false);
     return { complete: false, incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unverified_active_fixer: ${error instanceof Error ? error.message : String(error)}` }],
       ...(unchanged && error?.code === "FIXER_RESULT_MISSING" && error.activeFixer ? { activeFixer: error.activeFixer } : {}) };
   }
-  const logPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot });
   // Main-anchored copy first, then a legacy checkpoint an in-flight PR wrote
   // under a checkout's own tmp/ (the old cwd-relative default), so the
   // boundary never fails open at upgrade time. Writes stay main-anchored.
@@ -893,38 +957,8 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
       };
     }
   }
-  if (raw === null) return resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot });
-  let handoff;
-  try {
-    handoff = normalizeFixerDispositionHandoff(JSON.parse(raw));
-  } catch (error) {
-    // A recorded-but-malformed checkpoint must fail closed rather than
-    // silently no-op — the fixer explicitly claimed tackled work here. No
-    // real threadId is known for a checkpoint-level parse/schema failure, so
-    // a sentinel ("unknown") is used instead of null: downstream reason
-    // formatting renders `thread ${entry.threadId}` verbatim, and a raw null
-    // there reads as the illegible "thread null" (matches the "expected
-    // commit unknown" sentinel already used for the same reason string).
-    return {
-      complete: false,
-      incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unreadable_checkpoint: ${error instanceof Error ? error.message : String(error)}` }],
-    };
-  }
-  const tackledShas = [...new Set(
-    handoff.dispositions
-      .filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED)
-      .map((entry) => entry.fixingCommitSha),
-  )];
-  const containment = await buildContainmentMap(tackledShas, { repo, headSha: currentHeadSha }, runtime);
-  // A caller that has not read the threads yet passes a loader, so a PR with no checkpoint costs no read.
-  const threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
-  const liveThreads = threads.threads.map((thread) => ({
-    threadId: thread.id,
-    isResolved: thread.isResolved,
-    replyBodies: threads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body),
-  }));
-  const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment });
-  return { complete: evaluation.ok, incomplete: evaluation.incomplete };
+  if (raw === null) return (await carryAncestorCheckpoint()) ?? resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot });
+  return evaluateCheckpoint(raw);
 }
 
 export async function loadPrGateCoordinationContext(options, runtime = {}) {

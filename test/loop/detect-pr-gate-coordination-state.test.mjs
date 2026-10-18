@@ -4038,3 +4038,49 @@ for (const [name, handoffHead] of [["an abbreviated", "abc9988"], ["an upper-cas
     });
   });
 }
+
+// A verified fixer-disposition checkpoint for an ancestor head carries to a descendant live head (#2787).
+describe("resolveFixerDispositionInput ancestor checkpoint carry", () => {
+  const REPO = "owner/repo";
+  const PR = 3002;
+  const ANCESTOR = "b".repeat(40);
+  const HEAD = "7".repeat(40);
+  const FIX = "a".repeat(40);
+  async function run({ compare, resolved = true, reply = true }) {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fixer-carry-"));
+    try {
+      initGitFixture(tempDir);
+      const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
+      const { resolveFixerDispositionInput } = await import("../../scripts/loop/detect-pr-gate-coordination-state.mjs");
+      const file = path.join(tempDir, buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: ANCESTOR, tmpRoot: "tmp" }));
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ headSha: ANCESTOR, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: FIX, disposition: "tackled", validation: "ok" }] }), "utf8");
+      const runChild = async (_cmd, args) => {
+        const status = compare(args[1].split("/compare/")[1]);
+        return { code: 0, stdout: JSON.stringify({ status }), stderr: "" };
+      };
+      const parsedThreads = { threads: [{ id: "PRRT_T1", isResolved: resolved }], comments: reply ? [{ threadId: "PRRT_T1", body: `fixed in ${FIX}` }] : [] };
+      return await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: HEAD, parsedThreads }, { runChild, repoRoot: tempDir });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  }
+  const ahead = () => "ahead";
+
+  it("accepts a complete ancestor checkpoint at a descendant head", async () => {
+    const result = await run({ compare: ahead });
+    assert.equal(result.complete, true, JSON.stringify(result));
+  });
+  it("refuses when the head diverged from the checkpoint head", async () => {
+    const result = await run({ compare: (range) => (range.startsWith(ANCESTOR) ? "diverged" : "ahead") });
+    assert.notEqual(result?.complete, true);
+  });
+  it("refuses when a tackled thread is no longer resolved", async () => {
+    const result = await run({ compare: ahead, resolved: false });
+    assert.equal(result.complete, false);
+  });
+  it("refuses an incomplete ancestor checkpoint", async () => {
+    const result = await run({ compare: ahead, reply: false });
+    assert.equal(result.complete, false);
+  });
+});
