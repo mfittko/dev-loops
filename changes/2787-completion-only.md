@@ -4,6 +4,7 @@
 - The completion text lists numbered push, confirm-remote-head and `--construct` steps, in that order (#2787)
 - The fixer-disposition detector carries a complete `fixer-disposition-<X>.json` checkpoint to a live head that strictly contains `X` (#2787)
 - A PR whose head moved after verification now advances past `complete_fixer_disposition` without a gate verdict (#2787)
-- The carry binds to the active ACT or THREAD plan's own after-pull handoff head X, and X must contain the plan head (#2787)
+- The carry requires the checkpoint at X to record as tackled every thread the plan's own after-pull handoff tackles, plus every pinned THREAD thread (#2787)
+- The contract documents `staleFixer` and `FIXER_RESULT_STALE` beside `activeFixer` (#2787)
 - The carry re-checks every tackled thread live and never overrides an unverified live-head handoff (#2787)
 - THREAD full-order verifier-step render bytes intentionally change (#2787)

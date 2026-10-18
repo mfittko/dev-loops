@@ -862,7 +862,8 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
   // head X that contains the plan head, and X must be strictly contained by the live head H (compare
   // "ahead"). The fixer-disposition-<X>.json checkpoint is then re-evaluated at H: tackled-commit
   // containment and live resolution are re-checked. Never a gate verdict; behind, diverged, stale, or
-  // unreadable evidence refuses. A THREAD plan's tackled threads must also cover every thread it pins.
+  // unreadable evidence refuses. The checkpoint must record as tackled every thread the plan's own handoff tackles (ACT and THREAD),
+  // and a THREAD plan's tackled threads must also cover every thread it pins.
   let boundPlan = null;
   const pinnedPlanThreads = async (order) => {
     if (order.source !== "threads") return null;
@@ -884,14 +885,16 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
         workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity,
       });
       if (!pulled.ok) return null;
-      const x = String(JSON.parse(await readFile(handoffPath, "utf8"))?.headSha ?? "").trim().toLowerCase();
+      const handoff = JSON.parse(await readFile(handoffPath, "utf8"));
+      const x = String(handoff?.headSha ?? "").trim().toLowerCase();
       if (!/^[0-9a-f]{40}$/.test(x) || x === currentHeadSha.toLowerCase()) return null;
       const raw = await readFile(path.resolve(repoRoot, path.dirname(logPath), `fixer-disposition-${x}.json`), "utf8");
-      if (cover) {
-        const tackled = new Set(normalizeFixerDispositionHandoff(JSON.parse(raw)).dispositions
-          .filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.threadId));
-        if (![...cover].every((id) => tackled.has(id))) return null;
-      }
+      // The checkpoint must record as tackled every thread the plan's own handoff tackles (ACT and THREAD),
+      // so an earlier plan's checkpoint at the same head X never clears this plan's unverified delivery.
+      const tackledIds = (value) => new Set(normalizeFixerDispositionHandoff(value).dispositions
+        .filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.threadId));
+      const tackled = tackledIds(JSON.parse(raw));
+      if (![...tackledIds(handoff), ...(cover ?? [])].every((id) => tackled.has(id))) return null;
       if (!(await isCommitContainedByHead({ repo, commitSha: order.headSha, headSha: x }, runtime)).contained) return null;
       if (!(await isCommitContainedByHead({ repo, commitSha: x, headSha: currentHeadSha }, runtime)).contained) return null;
       const evaluated = await evaluateCheckpoint(raw);

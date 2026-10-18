@@ -1233,6 +1233,20 @@ test("ordinary rendering matches the independent approved base renderer byte for
       assert.equal(renderWorkOrder(unit.workOrder), baseline(unit.workOrder));
     }
   });
+  await withFixture(async ({ emit, files }) => {
+    const thread = (await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined })).workOrder;
+    const q = (value) => `'${value}'`;
+    const threadText = renderWorkOrder(thread), threadBase = baseline(thread);
+    const stepAt = threadText.indexOf(" After the handoff is written and the push is done");
+    const stepEnd = threadText.indexOf("\n", stepAt);
+    assert.ok(stepAt > 0);
+    assert.equal(threadText.slice(0, stepAt) + threadText.slice(stepEnd), threadBase, "the THREAD full render is the base render plus the verifier step only");
+    const tv = `node ${q(path.join(path.dirname(path.dirname(thread.executionRules.contract)), "scripts/github/verify-fixer-disposition.mjs"))} --repo ${q(REPO)} --pr ${PR} --head-sha <pushed-head-sha> --fixer-plan ${q(path.join(path.dirname(path.dirname(thread.outputRefs[0])), "fixer-emit-plan.json"))}`;
+    assert.equal(threadText.slice(stepAt, stepEnd), ` After the handoff is written and the push is done, replace \`<pushed-head-sha>\` with the full 40-character output of \`git rev-parse HEAD\` (the live PR head; the verifier refuses any other head), run \`${tv}\`, then \`${tv} --check\`.`);
+    delete thread.operation;
+    const withoutStep = (text) => { const at = text.indexOf(" After the handoff is written and the push is done"); return text.slice(0, at) + text.slice(text.indexOf("\n", at)); };
+    assert.equal(withoutStep(renderWorkOrder(thread)), baseline(thread), "the operation-deleted re-render is the base render plus the verifier step only");
+  });
 });
 
 test("review baseline authenticates the actual producer's complete JSON content identity", async () => {
@@ -2035,6 +2049,14 @@ for (const stale of [false, true]) test(`completion-only re-enters a ${stale ? "
   });
 });
 
+// The archive (absence included) and the execution-index directory a refused re-entry must leave unchanged.
+async function refusalState(fixture, old) {
+  const archive = await readFile(path.join(path.dirname(old.planPath), old.executionIdentity, "original-fixer-emit-plan.json")).catch(() => null);
+  const dir = path.dirname(executionIndexPath(path.join(fixture.root, "tmp"), old.executionIdentity));
+  const index = await Promise.all((await readdir(dir).catch(() => [])).sort().map(async (file) => [file, await readFile(path.join(dir, file))]));
+  return { archive, index };
+}
+
 for (const defect of ["currentHandoff", "dirty", "movedHead", "source", "noReceipt", "superseded", "tmpRoot", "sourceInput"]) test(`completion-only refuses ${defect} without replacing the active plan`, async () => {
   await withFixture(async (fixture) => {
     const { f, old, reenter } = await stuckFull(fixture);
@@ -2048,8 +2070,10 @@ for (const defect of ["currentHandoff", "dirty", "movedHead", "source", "noRecei
     if (defect === "tmpRoot") over = { tmpRoot: path.join(fixture.root, "elsewhere") };
     if (defect === "sourceInput") over = { actListFile: fixture.files.actList, gate: "draft_gate" };
     const active = await readFile(old.planPath);
+    const state = await refusalState(fixture, old);
     await assert.rejects(reenter(over), { currentHandoff: /not missing or stale/, dirty: /clean committed authority/, movedHead: /PR head or branch differ/, source: /required read act-list changed/, noReceipt: /receipt/, superseded: /superseded plan/, tmpRoot: /canonical plan path/, sourceInput: /no source/ }[defect]);
     if (defect !== "superseded") assert.deepEqual(await readFile(old.planPath), active);
+    assert.deepEqual(await refusalState(fixture, old), state, "a refusal leaves the archive and the execution index unchanged");
     assert.ok(f.candidate);
   });
 });
@@ -2112,7 +2136,9 @@ for (const defect of ["fakePlan", "foreignReceipt", "branchDrift", "threadBytes"
     if (defect === "missingPlan") await rm(old.planPath);
     if (defect === "allowedPath") over = { allowedPaths: ["src/a.mjs"] };
     const plan = existsSync(old.planPath) ? await readFile(old.planPath) : null;
-    await assert.rejects(reenter(over));
+    const state = await refusalState(fixture, old);
+    await assert.rejects(reenter(over), { fakePlan: /original identity or semantic digest mismatch/, foreignReceipt: /role_mismatch/, branchDrift: /PR head or branch differ/, threadBytes: /required read threads changed/, missingPlan: /none exists/, allowedPath: /no source, gate, delta-result or allowed-path input/ }[defect]);
     if (plan) assert.deepEqual(await readFile(old.planPath), plan, "refusal leaves the active plan untouched");
+    assert.deepEqual(await refusalState(fixture, old), state, "a refusal leaves the archive and the execution index unchanged");
   });
 });

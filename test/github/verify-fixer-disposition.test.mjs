@@ -242,6 +242,66 @@ test("checked incomplete binds false only after live checks and canonical byte r
   });
 });
 
+const T1_OPEN = { id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } };
+const FIXED_REPLY = { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } };
+const T1_DONE = { ...T1_OPEN, isResolved: true, comments: { nodes: [...T1_OPEN.comments.nodes, FIXED_REPLY] } };
+
+// A handoff that predates the pull: the receipt is newer than the handoff mtime.
+async function staleFixture(root) {
+  const f = await boundFixture(root, true);
+  await utimes(f.receiptPath, 1000, 1000);
+  await utimes(f.plan.workOrder.outputRefs[0], 1, 1);
+  return f;
+}
+
+test("a bound result_predates_pull handoff throws FIXER_RESULT_STALE with staleFixer and outputMissing false", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await staleFixture(root);
+    const expected = { workOrderRef: f.plan.workOrderRef, workOrderDigest: f.plan.workOrderDigest,
+      executionIdentity: f.plan.executionIdentity, planPath: f.planPath, subject: f.subject, outputMissing: false };
+    const { deps } = runtime([], root);
+    for (const check of [false, true]) {
+      await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.planPath, check }, deps),
+        (error) => error.code === "FIXER_RESULT_STALE" && /result_predates_pull/.test(error.message) && error.activeFixer === undefined
+          && assert.deepEqual(error.staleFixer, expected) === undefined);
+    }
+  });
+});
+
+test("an unbound result_predates_pull handoff throws without staleFixer", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await staleFixture(root);
+    const receipt = JSON.parse(await readFile(f.receiptPath));
+    receipt.subject.headSha = FIX_SHA;
+    await writeFile(f.receiptPath, JSON.stringify(receipt));
+    await utimes(f.receiptPath, 1000, 1000);
+    const { deps } = runtime([], root);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.planPath, check: true }, deps),
+      (error) => /result_predates_pull/.test(error.message) && error.code !== "FIXER_RESULT_STALE" && error.staleFixer === undefined);
+  });
+});
+
+test("a fresh own after-pull handoff passes normal then --check, and a second normal run posts no duplicate reply", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await boundFixture(root, true);
+    const options = { repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan: f.planPath };
+    const first = runtime([
+      threadsCallEntry([T1_OPEN]), compareEntry(FIX_SHA, "ahead"),
+      { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
+      threadsCallEntry([T1_DONE]),
+    ], root);
+    assert.equal((await verifyFixerDisposition(options, first.deps)).complete, true);
+    assert.equal(first.calls.filter((call) => call.args.some((arg) => String(arg).includes("/replies"))).length, 1);
+    for (const check of [true, false]) {
+      const next = runtime([threadsCallEntry([T1_DONE]), compareEntry(FIX_SHA, "ahead"), threadsCallEntry([T1_DONE])], root);
+      const result = await verifyFixerDisposition({ ...options, check }, next.deps);
+      assert.equal(result.complete, true);
+      assert.ok(next.calls.every((call) => !call.args.some((arg) => /\/replies|-X|resolveReviewThread/.test(String(arg)))), "no reply or resolve mutation on re-entry");
+    }
+  });
+});
+
 test("missing binding preserves original A subject at observed B and refuses resolver supersession", async () => {
   await withRepoRoot(async (root) => {
     const f = await boundFixture(root);

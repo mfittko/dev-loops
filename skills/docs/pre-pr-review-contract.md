@@ -287,8 +287,9 @@ all optional markers are absent; THREAD reports exactly its pinned IDs without A
 or a constructor. Preserve bootstrap/hash checks and immutable output; perform no source
 validation, stage, commit, push, new Delta or counter reset. Complete task prose overrides
 generic guidance and quoted JSON task fields without rewriting that evidence. Consumer
-support does not enable emission or qualify a fresh worker: ordinary producers still emit
-`fix`, and producer eligibility/publication and runtime proof remain later work.
+support does not qualify a fresh worker: `emit-fixer-work-order.mjs --completion-only` is the
+delivery-only producer, ordinary producers still emit `fix`, and publication and runtime proof
+remain later work.
 
 The explicit `legacyRevalidation.origin: "legacy_revalidated"` consumer exception in
 `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` replaces only unavailable historical coverage hashes

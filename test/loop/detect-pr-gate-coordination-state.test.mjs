@@ -4049,7 +4049,7 @@ describe("resolveFixerDispositionInput ancestor checkpoint carry", () => {
   const PLAN_HEAD = "d".repeat(40);
   const HEAD = "7".repeat(40);
   const FIX = "a".repeat(40);
-  async function run({ source = "threads", compare = () => "ahead", plan = ["PRRT_T1"], checkpointThreads = ["PRRT_T1"], handoffHead = ANCESTOR, stale = false, receipt = true, open = [], noReply = [], tamper } = {}) {
+  async function run({ source = "threads", compare = () => "ahead", plan = ["PRRT_T1"], checkpointThreads = ["PRRT_T1"], handoffHead = ANCESTOR, handoffThreads = ["PRRT_T1"], stale = false, receipt = true, open = [], noReply = [], tamper } = {}) {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fixer-carry-"));
     try {
       initGitFixture(tempDir);
@@ -4076,10 +4076,10 @@ describe("resolveFixerDispositionInput ancestor checkpoint carry", () => {
         await mkdir(path.join(tempDir, "tmp", "work-order-receipts"), { recursive: true });
         await writeFile(pullReceiptPath(path.join(tempDir, "tmp"), workOrderRef), JSON.stringify({ role: "fixer", workOrderRef, workOrderDigest: digest, executionIdentity: "f1-0000abcd" }));
       }
-      await writeFile(handoff, JSON.stringify({ headSha: handoffHead, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: FIX, disposition: "tackled" }] }));
+      await writeFile(handoff, JSON.stringify({ headSha: handoffHead, dispositions: handoffThreads.map((threadId) => ({ threadId, fixingCommitSha: FIX, disposition: "tackled" })) }));
       if (stale) await utimes(handoff, new Date(Date.now() - 60000), new Date(Date.now() - 60000));
       const runChild = async (_cmd, args) => ({ code: 0, stdout: JSON.stringify({ status: compare(args[1].split("/compare/")[1]) }), stderr: "" });
-      const ids = [...new Set([...checkpointThreads, ...(plan ?? []), ...open])];
+      const ids = [...new Set([...checkpointThreads, ...handoffThreads, ...(plan ?? []), ...open])];
       const parsedThreads = { threads: ids.map((id) => ({ id, isResolved: !open.includes(id) })), comments: ids.filter((id) => !noReply.includes(id)).map((threadId) => ({ threadId, body: `fixed in ${FIX}` })) };
       return await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: HEAD, parsedThreads }, { runChild, repoRoot: tempDir });
     } finally {
@@ -4094,10 +4094,10 @@ describe("resolveFixerDispositionInput ancestor checkpoint carry", () => {
         assert.equal((await run({ source })).complete, true);
       });
       it("refuses when the head diverged from the checkpoint head", async () => {
-        refused(await run({ source, compare: (range) => (range.startsWith(ANCESTOR) ? "diverged" : "ahead") }));
+        refused(await run({ source, compare: (range) => (range === `${ANCESTOR}...${HEAD}` ? "diverged" : "ahead") }));
       });
       it("refuses when the handoff head does not contain the plan head", async () => {
-        refused(await run({ source, compare: (range) => (range.startsWith(PLAN_HEAD) ? "diverged" : "ahead") }));
+        refused(await run({ source, compare: (range) => (range === `${PLAN_HEAD}...${ANCESTOR}` ? "diverged" : "ahead") }));
       });
       it("refuses when a tackled thread is no longer resolved", async () => {
         refused(await run({ source, open: ["PRRT_T1"] }));
@@ -4107,6 +4107,9 @@ describe("resolveFixerDispositionInput ancestor checkpoint carry", () => {
       });
       it("refuses when the handoff head names no checkpoint", async () => {
         refused(await run({ source, handoffHead: OTHER }));
+      });
+      it("refuses when the plan's own handoff tackles a thread the checkpoint at X does not record", async () => {
+        refused(await run({ source, handoffThreads: ["PRRT_T1", "PRRT_T2"] }));
       });
       it("refuses a handoff that predates its pull", async () => {
         refused(await run({ source, stale: true }));
