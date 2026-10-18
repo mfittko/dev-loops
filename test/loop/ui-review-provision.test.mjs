@@ -6,8 +6,7 @@ import path from "node:path";
 
 import { provisionAndBoot } from "@dev-loops/core/loop/ui-review-provision";
 import { loadDevLoopConfig, resolveUiReviewRunRecipe, DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN } from "@dev-loops/core/config";
-import { parseUiReviewProvisionCliArgs, inspectMigrations, assertNotPrimary, ensureWorktreeNoInstall } from "../../scripts/loop/ui-review-provision.mjs";
-import { ensureOwnNodeModules } from "../../scripts/loop/ensure-worktree.mjs";
+import { parseUiReviewProvisionCliArgs, ensureOwnNodeModules, inspectMigrations, assertNotPrimary, ensureWorktreeNoInstall } from "../../scripts/loop/ui-review-provision.mjs";
 import { parseMainWorktreePath } from "@dev-loops/core/loop/worktree-guard";
 import { execFileSync } from "node:child_process";
 

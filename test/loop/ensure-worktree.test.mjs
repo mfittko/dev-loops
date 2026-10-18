@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterAll as after, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, symlinkSync, lstatSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -1391,13 +1391,6 @@ function commitBunLock(repo, lock = BUN_LOCK) {
   repo.git("fetch", "-q", "origin");
 }
 
-function fillInstall(nm, names = ["pkg", "dev", "opt"]) {
-  for (const name of names) {
-    mkdirSync(path.join(nm, name), { recursive: true });
-    writeFileSync(path.join(nm, name, "package.json"), "{}");
-  }
-}
-
 test("ensure: create runs the dep install inside the new worktree before provision and reports deps", async () => {
   const repo = makeRepo();
   try {
@@ -1444,108 +1437,15 @@ test("ensure: no bun.lock skips the install", async () => {
   }
 });
 
-test("ensure: reuse installs only without own node_modules", async () => {
+test("ensure: reuse does not install and reports no deps", async () => {
   const repo = makeRepo();
   try {
     commitBunLock(repo);
-    let calls = 0;
-    const installDeps = () => { calls += 1; return { ok: true }; };
-    const first = await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps });
-    const reused = await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps });
+    await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps: () => ({ ok: true }) });
+    const reused = await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps: () => assert.fail("must not install on reuse") });
     assert.equal(reused.reused, true);
-    assert.equal(reused.deps.ran, true);
-    assert.equal(calls, 2);
-    fillInstall(path.join(first.path, "node_modules"));
-    const again = await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps });
-    assert.equal(again.deps, undefined);
-    assert.equal(calls, 2);
+    assert.equal(reused.deps, undefined);
   } finally {
     repo.cleanup();
   }
 });
-
-test("ensure: reuse treats node_modules as owned only when every bun.lock root dependency is installed (every shape)", async () => {
-  const repo = makeRepo();
-  try {
-    mkdirSync(path.join(repo.root, "packages", "core"), { recursive: true });
-    writeFileSync(path.join(repo.root, "packages", "core", "package.json"), "{}");
-    commitBunLock(repo);
-    const first = await ensureWorktree({ repoRoot: repo.root, issue: 27 }, { installDeps: () => ({ ok: true }) });
-    const nm = path.join(first.path, "node_modules");
-    let calls = 0;
-    const installDeps = () => { calls += 1; return { ok: true }; };
-    const reuse = () => ensureWorktree({ repoRoot: repo.root, issue: 27 }, { installDeps });
-    // Rejected forms: each must install and report deps.
-    for (const setup of [
-      () => rmSync(nm, { recursive: true, force: true }), // absent
-      () => { rmSync(nm, { recursive: true, force: true }); mkdirSync(path.join(nm, "@dev-loops", "core"), { recursive: true }); }, // self-link only
-      () => { rmSync(nm, { recursive: true, force: true }); mkdirSync(nm); }, // empty directory
-      () => { rmSync(nm, { recursive: true, force: true }); mkdirSync(path.join(nm, ".bun"), { recursive: true }); mkdirSync(path.join(nm, ".bin")); }, // partial install
-      () => { rmSync(nm, { recursive: true, force: true }); fillInstall(nm, ["pkg", "dev"]); }, // missing one root dependency
-      () => { rmSync(nm, { recursive: true, force: true }); symlinkSync(path.join(repo.root, "missing-target"), nm); }, // dangling symlink
-    ]) {
-      setup();
-      const before = calls;
-      const res = await reuse();
-      assert.equal(res.deps.ran, true);
-      assert.equal(calls, before + 1);
-    }
-    // Accepted form: a complete install means owned, so no install and no deps field.
-    rmSync(nm, { recursive: true, force: true });
-    fillInstall(nm);
-    const before = calls;
-    const owned = await reuse();
-    assert.equal(owned.deps, undefined);
-    assert.equal(calls, before);
-    // A host-gated optional (os never matches) that is not installed must not make a complete install look incomplete.
-    writeFileSync(path.join(first.path, "bun.lock"), '{"lockfileVersion":1,"workspaces":{"":{"dependencies":{"pkg":"1.0.0"},"optionalDependencies":{"gated":"1.0.0"}}},"packages":{"gated":["gated@1.0.0","",{"os":"nonexistent-os"}]}}');
-    rmSync(nm, { recursive: true, force: true });
-    fillInstall(nm, ["pkg"]);
-    const beforeGated = calls;
-    assert.equal((await reuse()).deps, undefined);
-    assert.equal(calls, beforeGated);
-    // An empty root dependency set is never owned, even for a .bun-only node_modules.
-    writeFileSync(path.join(first.path, "bun.lock"), '{"lockfileVersion":1,"workspaces":{"":{"name":"root"}}}');
-    rmSync(nm, { recursive: true, force: true });
-    mkdirSync(path.join(nm, ".bun"), { recursive: true });
-    const beforeEmpty = calls;
-    assert.equal((await reuse()).deps.ran, true);
-    assert.equal(calls, beforeEmpty + 1);
-    // A missing bun.lock means not owned (ensureDeps then no-ops).
-    rmSync(path.join(first.path, "bun.lock"));
-    assert.equal((await reuse()).deps.reason, "no bun.lock");
-    // An unparseable bun.lock means not owned.
-    writeFileSync(path.join(first.path, "bun.lock"), "not json");
-    const afterBad = calls;
-    assert.equal((await reuse()).deps.ran, true);
-    assert.equal(calls, afterBad + 1);
-  } finally {
-    repo.cleanup();
-  }
-});
-
-for (const [label, make] of [
-  ["a symlink to the primary's node_modules", (nm, primaryNm) => symlinkSync(primaryNm, nm)],
-  ["a dangling symlink", (nm) => symlinkSync(path.join(path.dirname(nm), "missing-target"), nm)],
-]) {
-  test(`ensure: reuse with node_modules as ${label} installs into a real directory`, async () => {
-    const repo = makeRepo();
-    try {
-      commitBunLock(repo);
-      const first = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, { installDeps: () => ({ ok: true }) });
-      const primaryNm = path.join(repo.root, "node_modules");
-      mkdirSync(path.join(primaryNm, "pkg"), { recursive: true });
-      const nm = path.join(first.path, "node_modules");
-      make(nm, primaryNm);
-      let seen;
-      const reused = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, {
-        installDeps: (cwd) => { seen = lstatSync(path.join(cwd, "node_modules")); return { ok: true }; },
-      });
-      assert.equal(reused.deps.ran, true);
-      assert.equal(seen.isDirectory() && !seen.isSymbolicLink(), true);
-      assert.equal(existsSync(path.join(primaryNm, "pkg")), true);
-    } finally {
-      repo.cleanup();
-    }
-  });
-}

@@ -1,3 +1,3 @@
 ### Fixed
 
-- ensure-worktree runs `bun install --frozen-lockfile` on create and on reuse unless node_modules holds every bun.lock root dependency; gate depState reads that install (#2535)
+- ensure-worktree runs `bun install --frozen-lockfile` in a newly created worktree; gate depState reads the worktree's own install (#2535)
