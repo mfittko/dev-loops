@@ -2,7 +2,8 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, parseJsonText, parseReviewThreads } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
-import { parsePositiveInteger, parseNonNegativeInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
@@ -16,13 +17,15 @@ import { waitWithHeartbeat } from "./_watch-heartbeat.mjs";
 const REMOVED_FLAGS = new Set([
   "--poll-interval-ms",
 ]);
-const USAGE = `Usage: probe-copilot-review.mjs --repo <owner/name> --pr <number> [--timeout-ms <n>]
+const USAGE = `Usage: probe-copilot-review.mjs --repo <owner/name> --pr <number> [--timeout <seconds>]
 Poll for fresh Copilot review activity on a GitHub pull request.
 Required:
   --repo <owner/name>           Repository slug (e.g. owner/repo)
   --pr <number>                 Pull request number
 Options:
-  --timeout-ms <n>              Total watch budget in ms (default ${COPILOT_REVIEW_WAIT_TIMEOUT_MS}, i.e. ${COPILOT_REVIEW_WAIT_TIMEOUT_MS / 60_000} min;
+  --timeout-ms <n>              Deprecated alias for --timeout (milliseconds); warns on stderr.
+                                Passing both flags fails closed.
+  --timeout <seconds>           Total watch budget in seconds (default ${COPILOT_REVIEW_WAIT_TIMEOUT_MS / 1000}, i.e. ${COPILOT_REVIEW_WAIT_TIMEOUT_MS / 60_000} min;
                                 0 = single immediate check, no wait — returns "idle" if
                                 no fresh activity). For a quick non-watch thread/state
                                 read without entering the watch loop, pass 0 here or use
@@ -37,14 +40,14 @@ ${JQ_OUTPUT_USAGE}
 Activity statuses:
   changed    Fresh Copilot review activity found (check newComments/newReviews/newIssueComments)
   timeout    Watch period elapsed with no fresh Copilot activity
-  idle       Zero-timeout (--timeout-ms 0) single check found no change
+  idle       Zero-timeout (--timeout 0) single check found no change
 Diagnostic output (stderr):
-  Progress/heartbeat (during watch, --timeout-ms > 0):
+  Progress/heartbeat (during watch, --timeout > 0):
     { "ok": true, "type": "watch_heartbeat", "elapsedMs": N, "totalBudgetMs": N, "poll": N, "maxPolls": N }
-  Heartbeat contract: watch-shaped runs (--timeout-ms > 0) emit watch_heartbeat lines to
+  Heartbeat contract: watch-shaped runs (--timeout > 0) emit watch_heartbeat lines to
     stderr roughly every 45s as a liveness signal. Agents MUST NOT suppress stderr
     (e.g. 2>/dev/null) on watch-shaped invocations — suppressing heartbeats makes a
-    legitimate watch look like a stall. Use --timeout-ms 0 for a non-watch single check.
+    legitimate watch look like a stall. Use --timeout 0 for a non-watch single check.
   Argument/usage errors:
     { "ok": false, "error": "...", "usage": "..." }
   gh/runtime failures:
@@ -99,7 +102,7 @@ const COPILOT_ACTIVITY_QUERY = [
 const parseError = buildParseError(USAGE);
 function rejectRemovedFlag(token) {
   throw parseError(
-    `${token} has been removed. Poll interval and timeout are centralized policy constants. Omit the flag.`,
+    `${token} has been removed. The poll interval is a centralized policy constant. Omit the flag.`,
   );
 }
 export function parseWatchCliArgs(argv) {
@@ -109,6 +112,7 @@ export function parseWatchCliArgs(argv) {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
       pr: { type: "string" },
+      timeout: { type: "string" },
       "timeout-ms": { type: "string" },
       concise: { type: "boolean" },
       summary: { type: "boolean" },
@@ -128,6 +132,7 @@ export function parseWatchCliArgs(argv) {
     jq: undefined,
     silent: false,
   };
+  const rawTimeout = {};
   for (const token of tokens) {
     if (token.kind === "positional") {
       throw parseError(`Unknown argument: ${token.value}`);
@@ -150,8 +155,8 @@ export function parseWatchCliArgs(argv) {
       options.pr = parsePositiveInteger(requireTokenValue(token, parseError), "--pr", parseError);
       continue;
     }
-    if (token.name === "timeout-ms") {
-      options.timeoutMs = parseNonNegativeInteger(requireTokenValue(token, parseError), "--timeout-ms", parseError);
+    if (token.name === "timeout" || token.name === "timeout-ms") {
+      rawTimeout[token.name === "timeout" ? "timeout" : "timeoutMs"] = requireTokenValue(token, parseError);
       continue;
     }
     if (token.name === "concise" || token.name === "summary") {
@@ -160,6 +165,11 @@ export function parseWatchCliArgs(argv) {
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
+  }
+  try {
+    options.timeoutMs = resolveTimeoutMs(rawTimeout) ?? options.timeoutMs;
+  } catch (error) {
+    throw parseError(error instanceof Error ? error.message : String(error));
   }
   if (options.repo === undefined || options.pr === undefined) {
     throw parseError("Watching Copilot review requires both --repo <owner/name> and --pr <number>");

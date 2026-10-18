@@ -34,6 +34,7 @@ import {
   commandContainsRawPrBodyEdit,
   commandContainsRawPrBodyApiWrite,
   commandContainsDetachedWaitTool,
+  commandContainsTimeoutWrappedSanctionedTool,
   commandContainsInlineInterpreter,
   commandContainsCodeVerificationEntrypoint,
 } from "../loop/bash-command-classify.mjs";
@@ -254,17 +255,29 @@ export function decideBashGate({
   // (`gh pr create --repo other/x && node …/probe-copilot-review.mjs … &`) cannot short-circuit
   // past it via the create/ready ALLOW paths. The sanctioned wait is always a bounded FOREGROUND
   // inline probe (`probe-copilot-review.mjs` / `wait-pr-checks.mjs` with an explicit
-  // --timeout/--timeout-ms; `gh run watch`; the watch-cycle CLIs).
+  // --timeout <seconds>; `gh run watch`; the watch-cycle CLIs).
   if (inManagedRepo && commandContainsDetachedWaitTool(command)) {
     return {
       decision: "deny",
       reason:
         "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through a bounded FOREGROUND probe (scripts/github/" +
-        "probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit --timeout/" +
-        "--timeout-ms; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops-run cli/index.mjs loop watch-cycle; " +
+        "probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit " +
+        "--timeout <seconds>; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops-run cli/index.mjs loop watch-cycle; " +
         "gh run watch) — nohup/disown/tmux/screen detach, while-sleep-poll loops, and bare-`&` " +
         "backgrounding of a probe/wait script are barred for the coordinator and every subagent (a " +
         "backgrounded wait orphans under Claude Code, which has no async wake to join it).",
+    };
+  }
+
+  // `timeout N <sanctioned command>` hides the `dev-loops-run` head from operator allow rules
+  // (issue 2755). Sanctioned wait tools bound themselves with `--timeout <seconds>`.
+  if (inManagedRepo && commandContainsTimeoutWrappedSanctionedTool(command)) {
+    return {
+      decision: "deny",
+      reason:
+        "Do not wrap sanctioned dev-loops commands in `timeout N`: the wrapper hides the " +
+        "`dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound " +
+        "themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
     };
   }
 

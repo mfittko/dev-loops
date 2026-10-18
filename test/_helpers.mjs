@@ -597,3 +597,12 @@ export async function runNodeWithPrePrRecord(scriptPath, args = [], options = {}
     if (fixture) await rm(fixture, { recursive: true, force: true });
   }
 }
+
+/** Run `fn` while capturing process.stderr writes; returns the captured text. */
+export function captureStderr(fn) {
+  const original = process.stderr.write;
+  let out = "";
+  process.stderr.write = (chunk) => { out += String(chunk); return true; };
+  try { fn(); } finally { process.stderr.write = original; }
+  return out;
+}

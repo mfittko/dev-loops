@@ -126,6 +126,10 @@ function normalizeSegmentHead(segment) {
   }
   // (c) reduce a path-prefixed head to its basename so `.../gh` → `gh`
   s = s.replace(/^(\S*\/)([^/\s]+)/, "$2");
+  // (d) strip `timeout [options] <duration>` (e.g. `timeout -k 5 60 gh ...`), then re-normalize
+  const DURATION = String.raw`(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?`;
+  const TIMEOUT_PREFIX = new RegExp(String.raw`^g?timeout\s+(?:-{1,2}[\w-]+(?:=\S+|\s+(?:${DURATION}|[A-Z]+))?\s+)*${DURATION}\s+(?=\S)`, "i");
+  if (TIMEOUT_PREFIX.test(s)) return normalizeSegmentHead(s.replace(TIMEOUT_PREFIX, ""));
   // (b) strip a leading wrapper binary, then re-normalize the remainder
   const head = s.split(/\s+/, 1)[0];
   if (WRAPPER_BINARIES.has(head)) {

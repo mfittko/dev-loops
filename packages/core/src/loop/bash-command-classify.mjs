@@ -1119,6 +1119,33 @@ export function commandContainsDetachedWaitTool(command) {
   return WAIT_PROBE_FAMILY_RE.test(whole);
 }
 
+/**
+ * A `timeout [options] <duration>` shell wrapper in front of a sanctioned dev-loops command
+ * (`dev-loops`, `dev-loops-run`, or a dev-loops `scripts/<family>/…` entrypoint). The wrapped head no longer starts
+ * with `dev-loops-run`, so operator allow rules such as `Bash(dev-loops-run scripts/github/*)` stop
+ * matching. Sanctioned wait tools bound themselves with `--timeout <seconds>` instead (issue 2755).
+ * @param {string} command @returns {boolean}
+ */
+const TIMEOUT_DURATION = "(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?[smhd]?";
+const TIMEOUT_WRAPPER_RE = new RegExp(
+  `^${ENV_ASSIGNMENT_RUN}(?:(?:env|command|sudo|nice)\\s+(?:(?:-\\S+|[A-Za-z_]\\w*=\\S*)\\s+)*)*` +
+    `(?:\\S*/)?g?timeout\\s+(?:-{1,2}[\\w-]+(?:=\\S+|\\s+(?:${TIMEOUT_DURATION}|[A-Za-z]+))?\\s+)*${TIMEOUT_DURATION}\\s+` +
+    "(?:(?:node|bun)\\s+(?:-\\S+\\s+)*)?['\"]?(\\S+)",
+);
+const SANCTIONED_HEAD_RE = /^(?:\S*\/)?dev-loops(?:-run)?['"]?$/;
+// The wrapped head is checked on one captured token, not in the big regex, so `\S*` stretches cannot backtrack.
+// Only the dev-loops script families count; a consumer's own script does not.
+const SANCTIONED_SCRIPT_RE = /(?:^|[/'"])scripts\/(?:github|loop|lib|docs|claude|projects)\/\S*\.mjs/;
+function isSanctionedHead(token) {
+  return SANCTIONED_HEAD_RE.test(token) || token.includes("cli/index.mjs") || SANCTIONED_SCRIPT_RE.test(token);
+}
+export function commandContainsTimeoutWrappedSanctionedTool(command) {
+  return shellSegments(command).some((segment) => {
+    const head = TIMEOUT_WRAPPER_RE.exec(segment)?.[1];
+    return head !== undefined && isSanctionedHead(head);
+  });
+}
+
 /** Build a `node`/`python`/`python3` command-head matcher (env/wrapper/path prefix tolerated). */
 function interpreterRegex(bin) {
   return new RegExp(`^${SHELL_EXEC_PREFIX}${bin}(?:\\s|$)`, "i");

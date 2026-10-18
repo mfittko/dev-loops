@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  commandContainsTimeoutWrappedSanctionedTool,
   TARGET_REPO_SLUG,
   deriveInManagedRepo,
   explicitRepoProvenForeign,
@@ -1350,4 +1351,53 @@ test("raw PR body denies see through quoted flag tokens", () => {
   assert.equal(commandContainsRawPrBodyEdit('gh pr edit 5 "-F" body.md'), true);
   assert.equal(commandContainsRawPrBodyApiWrite('gh api -X PATCH repos/o/n/pulls/5 -f "body"=x'), true);
   assert.equal(commandContainsRawPrBodyEdit("gh pr edit 5 --title 'a title'"), false);
+});
+
+test("commandContainsTimeoutWrappedSanctionedTool flags timeout in front of sanctioned dev-loops commands only", () => {
+  for (const cmd of [
+    "timeout 300 dev-loops-run scripts/github/merge-pr.mjs --repo o/r --pr 5",
+    "timeout -k 5 60 dev-loops loop startup",
+    "timeout 90s node scripts/github/wait-pr-checks.mjs --repo o/r --pr 5",
+    "timeout --signal=KILL -k 5 60 dev-loops-run scripts/github/merge-pr.mjs",
+    "gtimeout 1.5 dev-loops-run scripts/loop/wait-for-gate-units.mjs",
+    "FOO=1 timeout 10 dev-loops-run scripts/github/probe-ci-status.mjs",
+    "cd x && timeout 30 dev-loops-run scripts/github/merge-pr.mjs",
+    "timeout 60 node packages/cli/index.mjs loop startup",
+    "timeout 60 bun /w/cli/index.mjs loop startup",
+    "/usr/bin/timeout 60 dev-loops-run x",
+    "env timeout 60 dev-loops-run x",
+    "timeout 60 node scripts/projects/remove-queue-item.mjs --repo o/r",
+    "command timeout 60 dev-loops-run x",
+    "sudo timeout 60 dev-loops-run x",
+    "nice timeout 60 dev-loops-run x",
+    "timeout .5 dev-loops-run x",
+    "timeout 1e3 dev-loops-run x",
+    "timeout 60 'dev-loops-run' x",
+    'timeout 60 "dev-loops-run" x',
+    "timeout 60 dev-loops-run",
+    "timeout 60 node scripts/github/probe-ci-status.mjs --pr 1",
+    "timeout 60 dev-loops gate probe-copilot --pr 1",
+    "timeout 60 node --no-warnings scripts/github/merge-pr.mjs",
+    "timeout -s kill 60 dev-loops-run x",
+  ]) {
+    assert.equal(commandContainsTimeoutWrappedSanctionedTool(cmd), true, cmd);
+  }
+  for (const cmd of [
+    "dev-loops-run scripts/github/merge-pr.mjs --repo o/r --pr 5",
+    "timeout 90 bun test foo.test.mjs",
+    "echo timeout 300 dev-loops-run x",
+    "timeout 60 node scripts/build.mjs",
+    "timeout 30 node scripts/seed-db.mjs",
+    "timeout 30 node ./scripts/build.mjs",
+  ]) {
+    assert.equal(commandContainsTimeoutWrappedSanctionedTool(cmd), false, cmd);
+  }
+});
+
+test("commandContainsTimeoutWrappedSanctionedTool stays linear on long path-like heads (no regex blowup)", () => {
+  const started = Date.now();
+  assert.equal(commandContainsTimeoutWrappedSanctionedTool(`timeout 5 ${"scripts/".repeat(5000)}!`), false);
+  assert.equal(commandContainsTimeoutWrappedSanctionedTool(`timeout 5 ${"a/".repeat(5000)}!`), false);
+  assert.equal(commandContainsTimeoutWrappedSanctionedTool(`timeout 5 ${"scripts/github/".repeat(5000)}x.mjs`), true);
+  assert.ok(Date.now() - started < 1000, "classification must not backtrack catastrophically");
 });

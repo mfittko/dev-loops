@@ -3,6 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
+import { captureStderr } from "../_helpers.mjs";
 import { runNode as runNodeHelper } from "../_helpers.mjs";
 
 import { parseCiWatchCliArgs, watchCiStatus, watchCommitCiStatus } from "../../scripts/github/probe-ci-status.mjs";
@@ -1192,4 +1193,17 @@ test("watch-ci single check (timeout-ms 0) on an all-queued run reports pending,
       assert.equal(result.attempts, 1);
     },
   );
+});
+
+test("probe-ci-status parses --timeout in seconds; --timeout-ms is a deprecated alias; both fail closed", () => {
+  const base = ["--repo", "o/r", "--pr", "1"];
+  assert.equal(parseCiWatchCliArgs([...base, "--timeout", "0"]).timeoutMs, 0);
+  assert.equal(parseCiWatchCliArgs([...base, "--timeout", "0.1"]).timeoutMs, 100);
+  assert.equal(parseCiWatchCliArgs([...base, "--timeout", "60"]).timeoutMs, 60_000);
+  assert.throws(() => parseCiWatchCliArgs([...base, "--timeout", "1", "--timeout-ms", "1000"]), /mutually exclusive/);
+});
+
+test("probe-ci-status warns on stderr for deprecated --timeout-ms", () => {
+  const err = captureStderr(() => parseCiWatchCliArgs(["--repo", "o/r", "--pr", "1", "--timeout-ms", "1500"]));
+  assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
 });

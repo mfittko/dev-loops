@@ -336,20 +336,24 @@ Required:
 - `--pr <number>`
 
 Optional:
-- `--poll-interval-ms <positive-integer>` (default `60000`, i.e. 1 minute)
-- `--timeout-ms <non-negative-integer>` (default `1800000`, i.e. 30 minutes)
+- `--timeout <seconds>` (non-negative number, fractions allowed; default `1800`, i.e. 30 minutes)
+- `--timeout-ms <n>` is a deprecated alias: it warns on stderr and converts to seconds. Passing both flags fails closed.
 
 Contract:
 - captures a baseline snapshot, then performs a bounded number of follow-up polls
 - returns `changed` for any fresh Copilot-authored review-thread comments, PR review summaries, or PR issue comments that were not present in the baseline snapshot
 - ignores fresh non-Copilot review activity across those same surfaces
-- `--timeout-ms 0` performs a single immediate recheck and returns `idle` if unchanged
+- `--timeout 0` performs a single immediate recheck and returns `idle` if unchanged
 
 Success output shape:
 - `{ "ok": true, "status": "changed"|"timeout"|"idle", "repo": "owner/name", "pr": 17, "attempts": 1, "newComments": [...], "newReviews": [...], "newIssueComments": [...] }`
 
 Failure behavior:
 - malformed arguments and `gh` failures emit `{ "ok": false, "error": "..." }` on stderr and exit non-zero
+
+### `scripts/loop/watch-initial-copilot-pr.mjs`
+
+Takes `--timeout <seconds>` with a persistent-wait floor: a non-zero value must be at least `3600` (`0` = a single immediate check). A shorter value fails closed.
 
 ### `scripts/loop/detect-initial-copilot-pr-state.mjs`
 

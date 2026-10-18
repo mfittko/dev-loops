@@ -2,8 +2,9 @@
  * Centralized policy constants — single source of truth for
  * timeout budgets, poll intervals, and related policy values.
  *
- * These replace the now-removed CLI policy flags (--timeout-ms,
- * --poll-interval-ms, --probe-only, --force, --force-rerequest-review).
+ * These replace the now-removed CLI policy flags (--poll-interval-ms,
+ * --probe-only, --force, --force-rerequest-review). The wait scripts still
+ * take `--timeout <seconds>` (`--timeout-ms` is a deprecated alias).
  */
 export const DEFAULT_POLL_INTERVAL_MS = 60_000;
 
