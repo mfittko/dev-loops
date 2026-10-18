@@ -27,6 +27,13 @@ export function clearSequenceMarker(tmpRoot, baselineHead) {
 /** The recovery pointer the refusal reason carries. `--phase full` works only after a clearing delta record, so deleting the marker is the general recovery. */
 export const recoveryHint = (markerPath) => markerPath ? ` To recover an abandoned sequence, delete the marker ${markerPath} (emit-fixer-work-order.mjs --phase full grants the push only after a clearing delta record).` : "";
 
+/** Approximates git check-ref-format for a branch name; an invalid name reads as no branch (fail closed). */
+const isValidBranchName = (b) =>
+  typeof b === "string" && b !== "" && b !== "@" &&
+  !/[\x00-\x20\x7f~^:?*[\\]/.test(b) &&
+  !b.includes("..") && !b.includes("@{") && !b.includes("//") &&
+  !/^[/.-]|[/.]$|\.lock(\/|$)|(^|\/)\./.test(b);
+
 /** The marker for a baseline head, or null when none exists (ENOENT only). A malformed or unreadable marker reads as active, not granted (fail closed). */
 export function readSequenceMarker(tmpRoot, baselineHead) {
   let text;
@@ -37,7 +44,7 @@ export function readSequenceMarker(tmpRoot, baselineHead) {
   }
   try {
     const marker = JSON.parse(text);
-    if (marker?.baselineHead === baselineHead) return { baselineHead, fullGranted: marker.fullGranted === true, branch: typeof marker.branch === "string" && marker.branch !== "" && marker.branch === marker.branch.trim() ? marker.branch : undefined };
+    if (marker?.baselineHead === baselineHead) return { baselineHead, fullGranted: marker.fullGranted === true, branch: isValidBranchName(marker.branch) ? marker.branch : undefined };
   } catch {
     // Falls through to the fail-closed reading.
   }
