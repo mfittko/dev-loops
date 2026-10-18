@@ -44,7 +44,7 @@ const lines = (s) => s.split("\n").filter(Boolean);
 const nulLines = (s) => s.split("\0").filter(Boolean);
 // Pin the diff shape (context, algorithm, hunk joining, prefixes) so patch ids do not depend on ambient gitconfig.
 const GIT_ISOLATION = ["-c", "color.ui=false", "-c", "core.pager=cat", "-c", "core.autocrlf=false", "-c", "core.quotePath=false", "-c", "diff.interHunkContext=0", "-c", "diff.orderFile=/dev/null", "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false"];
-const DIFF_FLAGS = ["--no-ext-diff", "--no-color", "--no-relative", "--no-renames", "-U3", "--diff-algorithm=myers", "--no-indent-heuristic"];
+const DIFF_FLAGS = ["--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--src-prefix=a/", "--dst-prefix=b/", "--no-color", "--no-relative", "--no-renames", "-U3", "--diff-algorithm=myers", "--no-indent-heuristic"];
 
 export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRoot, runGit = runGitCommand, patchId = (d) => stablePatchId(d, repoRoot) }) {
   try {
@@ -58,9 +58,9 @@ export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRo
     const prDiffPaths = nulLines(await git(runGit, repoRoot, [...GIT_ISOLATION, "diff", ...DIFF_FLAGS, "--name-only", "-z", mbB, headSha]));
     const baseDeltaPaths = nulLines(await git(runGit, repoRoot, [...GIT_ISOLATION, "diff", ...DIFF_FLAGS, "--name-only", "-z", mbA, mbB]));
     // A merge commit's combined diff (--cc) is non-empty only when the merge hand-resolved something.
-    // Check every merge commit in prevHead..headSha.
+    // Check every merge commit on the PR branch line (--first-parent) in prevHead..headSha; merges that arrived from the base side are not the PR's own.
     let conflictResolutionHunks = false;
-    for (const merge of lines(await git(runGit, repoRoot, ["rev-list", "--merges", `${prevHead}..${headSha}`]))) {
+    for (const merge of lines(await git(runGit, repoRoot, ["rev-list", "--merges", "--first-parent", `${prevHead}..${headSha}`]))) {
       if ((await git(runGit, repoRoot, ["diff-tree", "--cc", "--no-ext-diff", "--no-color", "--format=", merge])).trim() !== "") conflictResolutionHunks = true;
     }
     return classifyBaseMergeCarry({

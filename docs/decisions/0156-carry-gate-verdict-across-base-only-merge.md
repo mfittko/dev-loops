@@ -17,7 +17,7 @@ A head advance A to B that integrated the base keeps the verdict posted at A whe
 - The stable patch id of the PR diff against the merge base is identical at A and B.
 - The PR diff paths and the base delta paths do not intersect.
 - The base delta touches no gate tooling or config (the set `isGateToolingPath` defines: `.devloops` config, gate contracts, scripts, agents and agent mirrors, CLI, schemas, harness extension and command prompts, core source, CI workflows, dependency manifests and lockfiles).
-- The merge carries no conflict-resolution hunks.
+- No merge on the PR branch line (first-parent) carries conflict-resolution hunks.
 
 Other outcomes: `partial_carry` (patch identical, paths overlap) defers to angle carry-forward. `full_regate` applies when the patch changed, gate tooling changed, or the merge resolved conflicts. `fallback_full` applies when any input cannot be computed. A durable evidence record keyed by the new head stores the source head, the new head, both patch ids, the PR diff paths, the base delta paths, the conflict-resolution flag, the path intersection, the gate tooling paths, the decision and the reason. The patch id is whitespace-sensitive (`git patch-id --verbatim`). `validateBaseMergeCarryEvidence` checks the record shape, recomputes the decision and every derived field, and can bind the record to the expected heads, so an internally inconsistent record fails closed. It never re-derives patch ids or paths from git, so a consumer re-runs `computeBaseMergeCarry` for the bound heads and compares before trusting the recorded facts. CI must still be green at B.
 

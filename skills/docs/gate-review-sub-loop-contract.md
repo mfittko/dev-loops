@@ -151,7 +151,7 @@ accept the evidence (issue 2752 slice 2). Until then every new head still runs t
 round. A carried verdict also needs CI green at the new head. The carry needs an identical
 whitespace-sensitive patch id of the PR diff (`git patch-id --verbatim`), an empty intersection of the PR diff paths and the base delta
 paths, a base delta that touches no gate tooling or config, and no conflict-resolution hunks
-in any merge commit between the two heads. `partial_carry` defers to
+in any merge commit on the PR branch line (first-parent) between the two heads. `partial_carry` defers to
 `GATE-EXEC-ANGLE-CARRY-FORWARD`. `full_regate` and `fallback_full` (any detection failure,
 including a previous head that is not an ancestor of the new head) require the full round. The
 evidence record (source head, new head, both patch ids, the PR diff paths, the base delta

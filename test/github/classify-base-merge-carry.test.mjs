@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -111,9 +111,38 @@ test("git: indentation-only PR change forces full re-gate", async () => {
 test("git: non-ancestor prev head falls back to full", async () => {
   const s = setup();
   const head = s.head();
-  s.git("checkout", "-q", "main");
+  s.git("checkout", "-q", "main"); s.put("docs/other.md", "changed\n"); s.git("add", "-A"); s.git("commit", "-qm", "main after branch point");
   const ev = await computeBaseMergeCarry({ prevHead: s.head(), headSha: head, baseRef: "main", repoRoot: s.dir });
   assert.equal(ev.decision, "fallback_full");
+  assert.match(ev.reason, /not an ancestor/);
+});
+
+test("git: lossy textconv cannot hide a PR content change", async () => {
+  const s = setup();
+  s.put(".gitattributes", "*.dat diff=lossy\n"); s.put("f.dat", "abcXXX\n"); s.git("add", "-A"); s.git("commit", "-qm", "dat");
+  s.git("config", "diff.lossy.textconv", "head -c 3");
+  const prev = s.head();
+  s.put("f.dat", "abcYYY\n"); s.git("add", "-A"); s.git("commit", "-qm", "change dat");
+  const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
+  assert.equal(ev.decision, "full_regate");
+});
+
+test("git: base-side conflict-resolved merge still carries", async () => {
+  const s = setup();
+  s.git("checkout", "-q", "main"); s.put("o.txt", LINES); s.git("add", "-A"); s.git("commit", "-qm", "add o");
+  s.git("checkout", "-qb", "other");
+  s.put("o.txt", `OTHER\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "other edits o");
+  s.git("checkout", "-q", "main"); s.put("o.txt", `MAIN\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "main edits o");
+  s.git("checkout", "-q", "other");
+  try { s.git("merge", "--no-edit", "main"); } catch { /* conflict expected */ }
+  s.put("o.txt", `OTHER\nMAIN\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "resolve");
+  s.git("checkout", "-q", "main"); s.git("merge", "-q", "--no-ff", "--no-edit", "other");
+  s.git("checkout", "-q", "pr");
+  const prev = s.head();
+  s.git("merge", "-q", "--no-edit", "main");
+  const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
+  assert.equal(ev.conflictResolutionHunks, false);
+  assert.equal(ev.decision, "carry_verdict");
 });
 
 test("gate tooling covers agent mirrors and lockfiles", () => {
@@ -153,6 +182,21 @@ test("git: hand-resolved conflict merge forces full re-gate", async () => {
   assert.equal(ev.decision, "full_regate");
 });
 
+test("git: clean base merge after a resolved conflict merge still forces full re-gate", async () => {
+  const s = setup();
+  s.put("base.txt", `PR\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits line0");
+  const prev = s.head();
+  s.git("checkout", "-q", "main"); s.put("base.txt", `MAIN\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "main edits line0");
+  s.git("checkout", "-q", "pr");
+  try { s.git("merge", "--no-edit", "main"); } catch { /* conflict expected */ }
+  s.put("base.txt", `PR\nMAIN\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "resolve");
+  s.git("checkout", "-q", "main"); s.put("docs/other.md", "changed\n"); s.git("add", "-A"); s.git("commit", "-qm", "clean main move");
+  s.git("checkout", "-q", "pr"); s.git("merge", "-q", "--no-edit", "main");
+  const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
+  assert.equal(ev.conflictResolutionHunks, true);
+  assert.equal(ev.decision, "full_regate");
+});
+
 test("main: writes the keyed evidence artifact and refuses a short prev-head", async () => {
   const s = setup();
   const prev = s.head();
@@ -172,6 +216,10 @@ test("main: writes the keyed evidence artifact and refuses a short prev-head", a
   const out = JSON.parse(written.join(""));
   assert.equal(out.decision, "carry_verdict");
   assert.equal(out.path, path.resolve(s.dir, buildBaseMergeCarryPath({ repo: "o/r", pr: "1", gate: "draft_gate", headSha: head, tmpRoot })));
+  const durable = JSON.parse(readFileSync(out.path, "utf8"));
+  assert.equal(durable.decision, out.decision);
+  assert.equal(durable.sourceHead, prev);
+  assert.equal(durable.newHead, head);
   const errs = [];
   const realErr = process.stderr.write.bind(process.stderr);
   process.stderr.write = (c) => { errs.push(String(c)); return true; };
