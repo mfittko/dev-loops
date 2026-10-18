@@ -6,7 +6,7 @@ Accepted — 2026-10-18 ([issue 2817](https://github.com/mfittko/dev-loops/issue
 
 ## Context
 
-Amends [0146](./0146-read-only-active-fixer-obligation-check.md): it decided that an incomplete or unverified full fixer disposition blocks gate coordination and Copilot requests with next action `complete_fixer_disposition`. Record 0146 stays unedited. <!-- secret-scan:allow ADR file link, not a credential -->
+Amends [0146](./0146-read-only-active-fixer-obligation-check.md) and [0068](./0068-fixer-disposition-fail-closed-boundary.md): they decided that an incomplete or unverified full fixer disposition blocks gate coordination and Copilot requests with next action `complete_fixer_disposition`. Records 0146 and 0068 stay unedited. <!-- secret-scan:allow ADR file link, not a credential -->
 
 The block has no sanctioned exit. A disposition binds to one exact head, one exact plan and one post-pull handoff. Normal workflow events break that binding and nothing reopens it: a CI-fix commit after construct or verify, a fixer that skipped `--construct` and hand-wrote its handoff, and a re-emission that superseded the active plan. In one day of the v1.0.7 drain, five PRs deadlocked or nearly deadlocked. The recovery producer, issue 2787, is cut from v1.0.6.
 

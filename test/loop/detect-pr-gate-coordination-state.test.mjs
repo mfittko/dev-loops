@@ -3678,6 +3678,7 @@ for (const [location, step] of [["main", "reply_missing"], ["linked", "reply_mis
     if (location === "both") {
       assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
       assert.doesNotMatch(result.reason ?? "", new RegExp(step));
+      assert.equal(result.fixerDispositionWarning, undefined);
       return;
     }
     assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);

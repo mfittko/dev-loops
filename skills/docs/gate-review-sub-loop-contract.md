@@ -1241,11 +1241,12 @@ Distinctness differs by what closed the thread. A FIX-closing reply (the standar
 
 <!-- rule: GATE-EXEC-FIXER-DISPOSITION-BOUNDARY -->
 `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` (advisory; ADR 0155): After every fixer push, each review thread marked
-`disposition: "tackled"` in its handoff MUST, in order, have a recorded `threadId` and
+`disposition: "tackled"` in its handoff should, in order, have a recorded `threadId` and
 fixing commit SHA, verified containment by the observed PR head, a reply evidencing that
 commit, resolution, and a live re-read confirming resolution. A finding fingerprint may
-accompany the required thread id; it does not replace it. This per-fixer boundary precedes
-the next review/gate round; `GATE-EXEC-THREAD-DISPOSITION` still governs eventual closure.
+accompany the required thread id; it does not replace it. The fixer should complete these steps
+before the next review/gate round, and an incomplete disposition only warns;
+`GATE-EXEC-THREAD-DISPOSITION` still governs eventual closure.
 
 Advisory boundary (ADR 0155, amends ADR 0146): an incomplete or unverified disposition warns and never blocks. `resolveFixerDispositionInput` returns `incomplete`, a `warning`, `nextAction: null` and empty `forbiddenActions`. Gate coordination and `request-copilot-review.mjs` proceed with their normal next action and report `fixerDispositionWarning` (incomplete thread ids and failed steps). `verify-fixer-disposition.mjs` is an optional tool. `merge-pr` still requires zero unresolved review threads and clean gates at the merge head.
 

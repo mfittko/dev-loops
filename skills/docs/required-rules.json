@@ -367,7 +367,7 @@
     {
       "id": "GATE-EXEC-FIXER-DISPOSITION-BOUNDARY",
       "enforcement": "runtime",
-      "enforcementNote": "packages/core/src/loop/fixer-disposition.mjs's pure evaluateFixerDisposition + pr-gate-coordination.mjs's fixerDisposition input are advisory (ADR 0155): an incomplete claimed-tackled thread yields a warning (fixerDispositionWarning) with no blocked result and no forbiddenActions; scripts/github/verify-fixer-disposition.mjs is an optional verification CLI"
+      "enforcementNote": "resolveFixerDispositionInput in scripts/loop/detect-pr-gate-coordination-state.mjs is the advisory seam (ADR 0155): an incomplete claimed-tackled thread yields a warning (fixerDispositionWarning) with nextAction null and no forbiddenActions; evaluateFixerDisposition (packages/core/src/loop/fixer-disposition.mjs) and the optional scripts/github/verify-fixer-disposition.mjs keep their own nextAction output"
     },
     {
       "id": "GATE-EXEC-GATE-COORDINATOR",

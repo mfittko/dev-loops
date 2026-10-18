@@ -133,8 +133,11 @@ Output (stdout, JSON):
     "allowedNextActions": ["resolve_merge_conflicts"],
     "forbiddenActions": ["run_pre_approval_gate", "declare_merge_ready"],
     "nextAction": "resolve_merge_conflicts",
-    "reason": "..."
+    "reason": "...",
+    "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] }
   }
+  (fixerDispositionWarning is present only when the fixer disposition is
+  incomplete; it is advisory and blocks nothing, ADR 0155)
   (refinementArtifact.planDocPath is present only when specSource is
   "plan_file"; the key is omitted entirely for "linked_issue" and "pr_body")
 Error output (stderr, JSON):
@@ -773,7 +776,7 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
 // to enforce here (a PR with no fixer-disposition ledger entry behaves exactly as before this
 // boundary existed) — returns null so the evaluator input omits the field.
 // A fixer handoff delivered for the live head that lists a tackled thread, with no checkpoint, means
-// verify-fixer-disposition never completed (a failed run writes none): fail closed as not_verified.
+// verify-fixer-disposition never completed (a failed run writes none): report it incomplete as not_verified.
 // Scans every execution's handoff, not the latest plan: a later emission overwrites the plan but not the handoff.
 // Only absence (ENOENT) means "no handoff"; any other read or parse failure fails closed like unreadable_checkpoint.
 async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot }) {
@@ -1419,14 +1422,14 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   }
   // Expose effective round count in output for testability
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;
-  // Recorded dispositions: the carried convergence (source review and head)
-  // and the body-feedback disposition record, each null when none applies.
-  // copilotBodyDispositionRequired names the review a disposition record must
-  // name while a body-feedback flag blocks; null otherwise.
   // ADR 0155: an incomplete fixer disposition is a visible warning, never a block.
   if (context.fixerDisposition?.warning) {
     result.fixerDispositionWarning = { warning: context.fixerDisposition.warning, incomplete: context.fixerDisposition.incomplete };
   }
+  // Recorded dispositions: the carried convergence (source review and head)
+  // and the body-feedback disposition record, each null when none applies.
+  // copilotBodyDispositionRequired names the review a disposition record must
+  // name while a body-feedback flag blocks; null otherwise.
   result.carriedConvergence = context.carriedConvergence ?? null;
   result.copilotBodyDisposition = context.copilotBodyDisposition ?? null;
   result.copilotBodyDispositionRequired = context.copilotBodyDispositionRequired ?? null;

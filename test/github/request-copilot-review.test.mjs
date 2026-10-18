@@ -2899,7 +2899,7 @@ test("request-copilot-review proceeds once the fixer-disposition checkpoint for 
       { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       FIXER_PR_VIEW,
     ], { repoRoot });
-    assert.notEqual(result.status, "blocked_by_fixer_disposition");
+    assert.equal(result.fixerDispositionWarning, undefined);
     assert.equal(calls.some(isCopilotRequestCall), true);
   }, { checkpoint: true });
 });

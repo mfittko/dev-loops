@@ -76,7 +76,8 @@ Output (stdout, JSON):
     "sameHeadCleanConverged"?: true, "violationCommentIds"?: [N], "completedRounds"?: N, "maxRounds"?: N,
     "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] } }
 Request statuses:
-  (any status)                  An incomplete fixer disposition never blocks a request; it adds fixerDispositionWarning
+  (any status but suppressed_draft and blocked_by_copilot_comment, which return before the
+   disposition read) An incomplete fixer disposition never blocks a request; it adds fixerDispositionWarning
                                 (GATE-EXEC-FIXER-DISPOSITION-BOUNDARY is advisory, ADR 0155)
   requested                     Copilot review was successfully requested
   already-requested             Copilot review was already observably in progress; no new request needed
