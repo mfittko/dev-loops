@@ -778,7 +778,7 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
 // A fixer handoff delivered for the live head that lists a tackled thread, with no checkpoint, means
 // verify-fixer-disposition never completed (a failed run writes none): report it incomplete as not_verified.
 // Scans every execution's handoff, not the latest plan: a later emission overwrites the plan but not the handoff.
-// Only absence (ENOENT) means "no handoff"; any other read or parse failure fails closed like unreadable_checkpoint.
+// Only absence (ENOENT) means "no handoff"; any other read or parse failure is reported incomplete like unreadable_checkpoint.
 async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot }) {
   const prDir = path.join(tmpRoot, "gate-fixer", repoSlugFor(repo), `pr-${pr}`);
   const unreadable = (error) => ({
@@ -900,7 +900,7 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
       // A genuine absence (no checkpoint was ever written) is the only case
       // that behaves exactly as before — a PR with no checkpoint is unaffected
       // by this boundary. Any OTHER read error (EACCES, EIO, transient FS
-      // error) must fail closed instead of silently looking like "no
+      // error) must be reported incomplete instead of silently looking like "no
       // checkpoint": route it through the same shape used below for a
       // recorded-but-malformed checkpoint.
       if (error?.code === "ENOENT") continue;
@@ -915,7 +915,7 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
   try {
     handoff = normalizeFixerDispositionHandoff(JSON.parse(raw));
   } catch (error) {
-    // A recorded-but-malformed checkpoint must fail closed rather than
+    // A recorded-but-malformed checkpoint must be reported incomplete rather than
     // silently no-op — the fixer explicitly claimed tackled work here. No
     // real threadId is known for a checkpoint-level parse/schema failure, so
     // a sentinel ("unknown") is used instead of null: downstream reason
