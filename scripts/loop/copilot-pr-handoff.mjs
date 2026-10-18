@@ -53,6 +53,7 @@ Output (stdout, JSON):
   { "ok": true, "action": "watch"|"fix"|"stop", "state": "...",
     "allowedTransitions": [...], "nextAction": "...", "snapshot": {...},
     "reviewRequestStatus"?: "...", "watchStatus"?: "...",
+    "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] },
     "suppressedPostConvergence"?: true, "suppressedPostConvergenceDocsOnly"?: true,
     "carriedConvergence"?: { "source", "sourceReviewId", "sourceHeadSha", "reason", "bodyDisposition" },
     "carryUnverified"?: "carry facts unavailable",
@@ -797,6 +798,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
   }
 
   let reviewRequestStatus;
+  let fixerDispositionWarning;
   const shouldRequestReview = !internalOnlySkipCopilot && options.watchStatus === undefined
     && (interpretation.state === STATE.PR_READY_NO_FEEDBACK
     || interpretation.state === STATE.READY_TO_REREQUEST_REVIEW
@@ -824,6 +826,8 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
       { env, ghCommand, runChild, repoRoot: resolvedRepoRoot },
     );
     reviewRequestStatus = requestResult.status;
+    // ADR 0155: advisory only; carry it into the output, never route on it.
+    fixerDispositionWarning = requestResult.fixerDispositionWarning;
     snapshot = applyConfirmedReviewRequest(snapshot, reviewRequestStatus);
     interpretation = interpretLoopState(snapshot, refinementConfig);
     // The re-interpretation re-hits the round cap (rounds still >= max) and would
@@ -902,6 +906,9 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
   }
   if (effectiveReviewRequestStatus !== undefined) {
     result.reviewRequestStatus = effectiveReviewRequestStatus;
+  }
+  if (fixerDispositionWarning !== undefined) {
+    result.fixerDispositionWarning = fixerDispositionWarning;
   }
   if (options.watchStatus !== undefined) {
     result.watchStatus = options.watchStatus;

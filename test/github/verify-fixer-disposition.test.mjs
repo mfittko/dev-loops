@@ -890,6 +890,20 @@ for (const checkpoint of [false, true]) test(`successful active check preserves 
   });
 });
 
+test("a failing lazy thread loader makes a checkpoint disposition incomplete instead of throwing", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const checkpoint = buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    await mkdir(path.dirname(checkpoint), { recursive: true });
+    await writeFile(checkpoint, JSON.stringify({ headSha: HEAD_SHA, dispositions: [] }));
+    const { deps } = runtime([], repoRoot);
+    const parsedThreads = async () => { throw new Error("HTTP 502"); };
+    const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: HEAD_SHA, parsedThreads }, deps);
+    assert.equal(result.complete, false);
+    assert.match(result.incomplete[0].failedStep, /unverified_threads: HTTP 502/);
+    assert.equal(result.nextAction, null);
+  });
+});
+
 for (const hasCheckpoint of [false, true]) for (const [name, setup, expected] of [
   ["missing output", { writeHandoff: false }, /result_missing/],
   ["empty THREAD output", { threads: { threads: [{ threadId: "PRRT_SOURCE" }] } }, /PRRT_SOURCE/],
