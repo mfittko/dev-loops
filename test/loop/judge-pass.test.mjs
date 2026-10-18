@@ -320,6 +320,30 @@ test("judgePassCli resolves a relative findings-file against repo-root (#1658)",
   assert.equal(JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings[0].judgeDisposition, "act");
 });
 
+test("judgePassCli keeps a resurfaces mark only for a closed prior round's act fingerprint", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-resurfaces-"));
+  const prior = finding({ summary: "earlier act", judgeDisposition: "act" });
+  await writeFile(
+    path.join(tmpDir, "ledger.json"),
+    JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ summary: "same again" }), finding({ summary: "claims too much" })] }),
+  );
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(verdict({
+      dispositions: [
+        { index: 0, disposition: "act", rationale: "in scope", resurfaces: fingerprintFinding(prior) },
+        { index: 1, disposition: "act", rationale: "in scope", resurfaces: "0123456789abcdef" },
+      ],
+    })),
+  );
+  await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "1658", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", ledgerOut: "./enriched.json" },
+    { repoRoot: tmpDir, readPriorLogs: async () => [{ findings: [prior] }] },
+  );
+  const written = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings;
+  assert.deepEqual(written.map((f) => f.resurfaces), [fingerprintFinding(prior), undefined]);
+});
+
 test("judgePassCli --out is deduped to one remediation per acted cluster; --ledger-out keeps every acted finding (#2156)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-dedup-"));
   await writeFile(

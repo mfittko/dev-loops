@@ -1828,9 +1828,13 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
  * truncated write, an aborted round, a hand-edited ledger) is dropped. A
  * missing directory (first round) yields `[]`.
  *
- * @returns {Promise<object[]>}
+ * `keepUnreadable` is the round-count mode: an in-range ledger that cannot be
+ * read or parsed to an object still counts as a round, yielding `null` in its
+ * slot, so a damaged ledger can never lower the count.
+ *
+ * @returns {Promise<Array<object|null>>}
  */
-export async function readClosedPriorRoundLogs(options, { repoRoot }) {
+export async function readClosedPriorRoundLogs(options, { repoRoot, keepUnreadable = false }) {
   let ledgerDir;
   try {
     const sampleLogPath = buildLogPath({
@@ -1855,9 +1859,13 @@ export async function readClosedPriorRoundLogs(options, { repoRoot }) {
     try {
       log = JSON.parse(await readFile(path.join(ledgerDir, name), "utf8"));
     } catch {
+      if (keepUnreadable) rounds.push({ sha, loggedAt: "", log: null });
       continue;
     }
-    if (!log || typeof log !== "object") continue;
+    if (!log || typeof log !== "object") {
+      if (keepUnreadable) rounds.push({ sha, loggedAt: "", log: null });
+      continue;
+    }
     const recordedHead = typeof log.headSha === "string" ? log.headSha.trim().toLowerCase() : null;
     const recordedRepo = typeof log.repo === "string" ? log.repo.trim().toLowerCase() : null;
     const recordedGate = typeof log.gate === "string" ? log.gate.trim().toLowerCase() : null;

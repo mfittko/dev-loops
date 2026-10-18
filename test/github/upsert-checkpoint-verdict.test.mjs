@@ -23,6 +23,7 @@ import {
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { buildFanoutEnforcement, buildPreMergeGateCheck, deriveEvidenceState, detectCheckpointEvidence, EVIDENCE_STATE, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
+import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
@@ -11981,4 +11982,89 @@ test("upsert-checkpoint-verdict --findings-ledger: a judged --findings-json defe
     assert.match(body, /disposition=deferred issue=500 -->/);
     assert.doesNotMatch(body, /disposition=deferred issue=17 -->/);
   }, { prefix: "dev-loops-upsert-findings-json-followup-" });
+});
+
+// Round cap (gates.draft.maxReviewRounds, default 4): three closed prior
+// draft_gate ledgers make the round being posted the fourth, i.e. past the cap.
+async function withCapRound({ findings, overallVerdict = "findings_present", priorRounds = 3, cap }, fn) {
+  const repoRoot = await stageConfigRepoRoot(false);
+  try {
+    if (cap !== undefined) {
+      const devloops = await readFile(path.join(repoRoot, ".devloops"), "utf8");
+      await writeFile(path.join(repoRoot, ".devloops"), devloops.replace("\n  draft:\n", `\n  draft:\n    maxReviewRounds: ${cap}\n`), "utf8");
+    }
+    const priorDir = path.join(resolveGateArtifactTmpRoot(repoRoot), "gate-findings", "owner-repo", "pr-17");
+    await mkdir(priorDir, { recursive: true });
+    for (const c of "abcdefg".slice(0, priorRounds)) {
+      const priorSha = c.repeat(40);
+      await writeFile(path.join(priorDir, `draft_gate-${priorSha}.json`), JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: priorSha, verdict: "findings_present", loggedAt: `2026-01-01T00:00:0${c.charCodeAt(0) - 96}Z`, findings: [] }), "utf8");
+    }
+    const ledgerPath = await writeVerdictLedger(repoRoot, { overallVerdict, findings });
+    const { runChild, calls } = makeAcRunChild({ isDraft: true });
+    const post = (overrides = {}) => upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: GATE_FULL_HEAD,
+      findingsSummary: "round summary", nextAction: "mark ready for review", findingsLedger: ledgerPath,
+      executionMode: "inline_single_agent", inlineReason: "round cap test",
+      findingsSeverityCounts: { high: 0, medium: 0, low: 0 },
+      ...overrides,
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
+    const postedBody = () => JSON.parse(calls.find((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST")).stdinText).body;
+    await fn({ post, postedBody });
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+}
+
+const capFinding = (severity, judgeDisposition, extra = {}) => ({ severity, angle: "correctness", summary: `${severity} ${judgeDisposition} item`, judgeDisposition, ...extra });
+
+test("round cap: a new act item of any severity past the cap posts blocked with round_cap_reached and refuses findings_present", async () => {
+  for (const severity of ["high", "medium", "low", "nit"]) {
+    await withCapRound({ findings: [capFinding(severity, "act")] }, async ({ post, postedBody }) => {
+      await assert.rejects(() => post({ verdict: "findings_present" }), /contradicts the consolidated ledger's overallVerdict/);
+      const result = await post();
+      assert.equal(result.action, "created");
+      const body = postedBody();
+      assert.match(body, /\*\*Verdict:\*\* blocked/);
+      assert.match(body, new RegExp(`round_cap_reached: \`\\[${severity}\\] ${severity} act item\``));
+    });
+  }
+});
+
+test("round cap: past the cap low defer and nit reject post clean and stay visible as cap-closed items", async () => {
+  const findings = [
+    capFinding("low", "defer", { capClosed: { judgeDisposition: "defer", severity: "low", round: 4, cap: 4 } }),
+    capFinding("nit", "reject", { capClosed: { judgeDisposition: "reject", severity: "nit", round: 4, cap: 4 } }),
+  ];
+  await withCapRound({ findings, overallVerdict: "clean" }, async ({ post, postedBody }) => {
+    await post();
+    const body = postedBody();
+    assert.match(body, /\*\*Verdict:\*\* clean/);
+    assert.match(body, /\*\*Cap-closed items \(2\)\*\*/);
+    assert.match(body, /- low defer \(round 4 of cap 4\): `low defer item`/);
+    assert.match(body, /- nit reject \(round 4 of cap 4\): `nit reject item`/);
+  });
+});
+
+test("round cap: past the cap a judge-rejected medium and a judge-deferred high block as severity_disagreement", async () => {
+  for (const finding of [capFinding("medium", "reject"), capFinding("high", "defer")]) {
+    await withCapRound({ findings: [finding], overallVerdict: "clean" }, async ({ post, postedBody }) => {
+      await post();
+      const body = postedBody();
+      assert.match(body, /\*\*Verdict:\*\* blocked/);
+      assert.match(body, new RegExp(`severity_disagreement: \`\\[${finding.severity}\\] ${finding.summary}\``));
+    });
+  }
+});
+
+test("round cap: below the cap and with maxReviewRounds 0 the verdict is unchanged", async () => {
+  await withCapRound({ findings: [capFinding("low", "act")], priorRounds: 1 }, async ({ post, postedBody }) => {
+    await post();
+    assert.match(postedBody(), /\*\*Verdict:\*\* findings_present/);
+  });
+  await withCapRound({ findings: [capFinding("high", "act")], cap: 0 }, async ({ post, postedBody }) => {
+    await post();
+    const body = postedBody();
+    assert.match(body, /\*\*Verdict:\*\* findings_present/);
+    assert.doesNotMatch(body, /round_cap_reached/);
+  });
 });

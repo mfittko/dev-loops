@@ -58,6 +58,7 @@ import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerd
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import { buildValidationResultsPath } from "./write-gate-context.mjs";
+import { evaluateRoundCap, readRoundCapState } from "./_gate-round-cap.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -1540,7 +1541,7 @@ function renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, 
 // `nonLocatableFindings` also drives an invisible fingerprint+disposition
 // marker per finding, load-bearing for GATE-EXEC-FINDING-THREADS's
 // cross-round suppression/deferral tracking.
-export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, pr }) {
+export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, capClosed, pr }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1573,6 +1574,9 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
   lines.push("<!--", ...hiddenLines.map(hideCommentDelimiters), "-->");
   if (Array.isArray(gateBlockers) && gateBlockers.length > 0) {
     lines.push("", renderGateBlockerItemsList(gateBlockers));
+  }
+  if (Array.isArray(capClosed) && capClosed.length > 0) {
+    lines.push("", renderCapClosedItemsList(capClosed));
   }
   // When structured per-angle fan-in data is supplied (--findings-json), the
   // `**Findings summary:**` digest is computed from it; otherwise the digest
@@ -2266,6 +2270,15 @@ function renderGateBlockerItemsList(blockers) {
   ].join("\n");
 }
 
+// Every judge defer or reject closed by the round cap stays visible with its record.
+function renderCapClosedItemsList(capClosed) {
+  return [
+    `**Cap-closed items (${capClosed.length})**`,
+    "",
+    ...capClosed.map(({ summary, capClosed: c }) => `- ${c.severity} ${c.judgeDisposition} (round ${c.round} of cap ${c.cap}): \`${sanitizeCodeSpan(neutralizeBareIssuePrIds(summary))}\``),
+  ].join("\n");
+}
+
 // GATE-COMMENT-DRAFT-REQUIREMENTS / GATE-COMMENT-PREAPPROVAL-REQUIREMENTS
 // (skills/docs/gate-review-comment-contract.md): a non-clean verdict must not
 // carry an advancing next action. The mandated next action for a round that
@@ -2819,7 +2832,12 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const ledgerVerdict = composeReviewVerdict(preloadedFindingsLedger.overallVerdict, [...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]);
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
-    const gateBlockers = collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact);
+    // Round cap: past the cap an open act item or a severity disagreement blocks (draft_gate only).
+    const capState = await readRoundCapState({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.tmpRoot }, config, repoRoot);
+    const gateBlockers = [
+      ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),
+      ...evaluateRoundCap(preloadedFindingsLedger.findings, capState).blockers,
+    ];
     const composedVerdict = composeCheckpointVerdict({ reviewVerdict: ledgerVerdict, blockers: gateBlockers });
     if (options.verdict === undefined) {
       // Derive: the caller need not pass --verdict at all when the ledger
@@ -3264,6 +3282,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     structuredFindings,
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
+    capClosed: (preloadedFindingsLedger?.findings ?? []).filter((f) => f.capClosed),
     ...(checkpointComposition ? { reviewVerdict: checkpointComposition.reviewVerdict, gateBlockers: checkpointComposition.blockers } : {}),
     ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable, locatableFindings: findingSurface.locatable, foldedFindings: findingSurface.folded } : {}),
   });

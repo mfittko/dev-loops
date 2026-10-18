@@ -31,6 +31,7 @@ import {
 import { findEscalations, recurrenceFiles } from "@dev-loops/core/loop/gate-recurrence";
 import { commentDeferredFindings, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
 import { readClosedPriorRoundLogs } from "../github/write-gate-context.mjs";
+import { keepKnownResurfaces, priorActFingerprints } from "../github/_gate-round-cap.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
@@ -1027,6 +1028,13 @@ export async function judgePassCli(
     ...record,
     clusterFingerprints: siblingFingerprints.get(finding) ?? [],
   }));
+
+  // A `resurfaces` mark survives only when it names an act fingerprint of a closed prior round.
+  const priorLogs = await readPriorLogs(
+    { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: resolveGateArtifactTmpRoot(resolvedRoot) },
+    { repoRoot: resolvedRoot },
+  );
+  keepKnownResurfaces(result.enriched, priorActFingerprints(priorLogs));
 
   const written = new Set();
   if (options.ledgerOut) {

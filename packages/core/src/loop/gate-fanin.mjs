@@ -1253,6 +1253,10 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
     // never stale judgeCriterion/followUpDraft from a prior round.
     delete target.judgeCriterion;
     delete target.followUpDraft;
+    delete target.resurfaces;
+    if (d.disposition === "act" && typeof d.resurfaces === "string" && d.resurfaces.trim().length > 0) {
+      target.resurfaces = d.resurfaces.trim();
+    }
     target.judgeDisposition = d.disposition;
     target.judgeRationale = d.rationale;
     if (typeof d.criterion === "string" && d.criterion.trim().length > 0) {

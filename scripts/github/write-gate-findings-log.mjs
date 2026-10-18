@@ -20,6 +20,7 @@ import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/sp
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { buildGateContextPath, buildLogPath } from "./_gate-artifact-paths.mjs";
+import { keepKnownResurfaces, readRoundCapState, stampCapClosed } from "./_gate-round-cap.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>] [--context-tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -233,6 +234,8 @@ function validateFindingsArray(parsed, flagLabel) {
     if (typeof f.judgeCriterion === "string" && f.judgeCriterion.trim().length > 0) {
       entry.judgeCriterion = f.judgeCriterion.trim();
     }
+    // Unvalidated here; writeGateFindingsLog keeps it only for a known closed-prior act fingerprint.
+    if (typeof f.resurfaces === "string" && f.resurfaces.trim().length > 0) entry.resurfaces = f.resurfaces.trim();
     // GATE-EXEC-DEFERRAL-RECORD: a judge-pass-enriched finding may carry a stable `fingerprint`
     // ([0-9a-f]{16}, matching the finding-marker regex) and a `defer` finding
     // additionally carries `followUpIssueNumber` (the deferral comment
@@ -795,6 +798,11 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // so this outer typeof check is redundant defense-in-depth, not
   // load-bearing — it ensures a bare-array input never persists a
   // null/undefined/out-of-domain verdict un-normalized.
+  // Round cap: keep a `resurfaces` mark only when it names a closed prior
+  // round's act fingerprint, and record `capClosed` on a past-cap defer or reject.
+  const { config: capConfig } = await loadDevLoopConfigStrict({ repoRoot });
+  const capState = await readRoundCapState(options, capConfig, repoRoot);
+  findings = stampCapClosed(keepKnownResurfaces(findings, capState.priorActFingerprints), capState);
   const callerVerdict = typeof options.verdict === "string" ? normalizeVerdict(options.verdict) : null;
   if (!callerVerdict) {
     throw parseError("--verdict must be clean, findings_present, or blocked");

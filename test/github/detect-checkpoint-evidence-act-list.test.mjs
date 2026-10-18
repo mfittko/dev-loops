@@ -224,3 +224,24 @@ test("a finding that is not an object or lacks a non-empty string summary, canon
     }
   }
 });
+
+test("the merge-ready result lists every capClosed item of the draft_gate ledger", async () => {
+  const base = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-cap-closed-")));
+  try {
+    initGitFixture(base);
+    const capClosed = { judgeDisposition: "defer", severity: "low", round: 4, cap: 4 };
+    const draftLedger = path.join(base, buildLogPath({ repo: "owner/repo", pr: "42", gate: "draft_gate", headSha: HEAD, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(draftLedger), { recursive: true });
+    await writeFile(draftLedger, JSON.stringify({ findings: [{ ...REJECTED_ITEM, judgeDisposition: "defer", capClosed }, ACT_ITEM] }), "utf8");
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: "42", currentHeadSha: HEAD,
+      draftGateMarker: { visible: true, headSha: HEAD, executionMode: "fanout_fanin" }, preApprovalGateMarker: NO_DRAFT_MARKER, config: CONFIG_NO_FANOUT, cwd: base,
+    });
+    const expected = [{ severity: "low", summary: "reword the heading", ...capClosed }];
+    assert.deepEqual(enforcement.capClosed, expected);
+    assert.deepEqual(buildPreMergeGateCheck(cleanEvidenceFor(HEAD), 0, null, enforcement).capClosed, expected);
+    assert.equal(buildPreMergeGateCheck(cleanEvidenceFor(HEAD), 0, null, actListEnforcement({})).capClosed, undefined);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});

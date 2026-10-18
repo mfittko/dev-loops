@@ -580,6 +580,8 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
     failures,
     // Additive: only present when non-empty, preserving the existing {ok, failures} shape.
     ...(warnings.length > 0 ? { warnings } : {}),
+    // Round-cap closures stay visible to the merger: judge defer or reject closed past the cap.
+    ...(fanoutEnforcement?.capClosed?.length > 0 ? { capClosed: fanoutEnforcement.capClosed } : {}),
   };
 }
 /** Canonical evidenceState values (single source of truth for the gate-evidence status mapping). */
@@ -747,6 +749,21 @@ async function readActListInAny(checkouts, ledgerPath, markerExecutionMode) {
   }
   return exists ? { ledgerPath, unreadable, open, unjudged } : null;
 }
+/**
+ * Every round-cap `capClosed` finding of a ledger, from the first checkout that
+ * holds a readable copy. Visibility only: a missing or unreadable copy yields none.
+ */
+async function readCapClosedInAny(checkouts, ledgerPath) {
+  for (const root of checkouts) {
+    try {
+      const parsed = JSON.parse(await readFile(path.resolve(root, ledgerPath), "utf8"));
+      return (Array.isArray(parsed?.findings) ? parsed.findings : []).filter((f) => f?.capClosed).map((f) => ({ severity: f.severity, summary: f.summary, ...f.capClosed }));
+    } catch {
+      continue;
+    }
+  }
+  return [];
+}
 // A committed `.devloops` is a small hand-authored config file; 8 MiB is
 // already many times larger than any legitimate one, so bounding `git show`
 // here only guards against a runaway/corrupt blob, never a real config.
@@ -883,7 +900,10 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   const actList = preApprovalGateMarker?.visible && paHead === currentHeadSha
     ? await readActListInAny(checkouts, buildLogPath({ repo, pr, gate: "pre_approval_gate", headSha: paHead, tmpRoot: "tmp" }), preApprovalGateMarker.executionMode)
     : null;
-  const withActList = (enforcement) => (actList ? { ...enforcement, actList } : enforcement);
+  const capClosed = draftGateMarker?.visible
+    ? await readCapClosedInAny(checkouts, buildLogPath({ repo, pr, gate: "draft_gate", headSha: draftGateMarker.headSha ?? currentHeadSha, tmpRoot: "tmp" }))
+    : [];
+  const withActList = (enforcement) => ({ ...enforcement, ...(actList ? { actList } : {}), ...(capClosed.length > 0 ? { capClosed } : {}) });
   if (config == null || !resolveRequireFanoutEvidence(config)) {
     // Disabled/unavailable return keeps its shape (no requireProvenance key):
     // buildPreMergeGateCheck only reads `gates` inside the `required` block.

@@ -1433,7 +1433,10 @@ async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, re
   // fail-closed obligation to preserve.
   try {
     const { filenames } = await listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });
-    return filenames.length;
+    // Only `<gate>-<full-sha>.json` is a findings log; a sidecar such as
+    // `<gate>-<sha>.act-list.json` must never count as a round.
+    const logName = new RegExp(`^${gate}-(?:[0-9a-f]{40}|[0-9a-f]{64})\\.json$`, "i");
+    return filenames.filter((name) => logName.test(name)).length;
   } catch {
     return 0;
   }
