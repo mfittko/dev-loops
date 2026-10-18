@@ -1135,7 +1135,7 @@ const TIMEOUT_WRAPPER_RE = new RegExp(
 );
 const SANCTIONED_HEAD_RE = /^(?:\S*\/)?dev-loops(?:-run)?['"]?$/;
 // The wrapped head is checked on one captured token, not in the big regex, so `\S*` stretches cannot backtrack.
-// Only the dev-loops script families count; a consumer's own `scripts/build.mjs` does not.
+// Only the dev-loops script families count; a consumer's own script does not.
 const SANCTIONED_SCRIPT_RE = /(?:^|[/'"])scripts\/(?:github|loop|lib|docs|claude)\/\S*\.mjs/;
 function isSanctionedHead(token) {
   return SANCTIONED_HEAD_RE.test(token) || token.includes("cli/index.mjs") || SANCTIONED_SCRIPT_RE.test(token);
