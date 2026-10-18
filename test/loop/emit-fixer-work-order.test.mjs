@@ -18,7 +18,7 @@ import { classifyValidationCommand } from "@dev-loops/core/loop/validation-class
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
-import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder, locateFixerUnit, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
+import { assertFixerDispatchPayload, buildFixerDispatchPayload, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
@@ -571,6 +571,13 @@ test("verdict_not_posted: an act-list order refuses without a posted verdict for
     // A verdict for the other gate does not satisfy this gate.
     await refuse({ gate: "pre_approval_gate", fetchVerdictMarkers: verdictPostedAt(head, ["draft_gate"]) });
     await refuse({ fetchVerdictMarkers: async () => { throw new Error("gh down"); } });
+    // A review whose body names only the gate and head (no verdict, summary or next action) is visible but incomplete.
+    const partial = [{ ...verdictReviews(head, ["draft_gate"])[0], body: `Gate review: draft_gate\nReviewed head SHA: ${head}` }];
+    await refuse({ fetchVerdictMarkers: async ({ headSha }) => summarizeGateReviewCommentMarkers(partial, { headSha }) });
+    // The default fetcher reads submitted reviews only: a complete issue-comment marker with no review refuses.
+    const complete = verdictReviews(head, ["draft_gate"])[0];
+    const runChild = async (_gh, args) => ({ code: 0, stderr: "", stdout: JSON.stringify(args.join(" ").includes("/issues/") ? [[{ ...complete, surface: "issue_comment" }]] : [[]]) });
+    await refuse({ fetchVerdictMarkers: ({ headSha }) => defaultFetchVerdictMarkers({ repo: REPO, pr: PR, headSha, runtime: { env: {}, ghCommand: "gh", runChild } }) });
     assert.equal((await emit({ deltaResult: undefined, phase: "commit_only" })).workOrder.gate, "draft_gate");
     await writeFile(files.threads, JSON.stringify(THREADS));
     const neverCalled = async () => { throw new Error("threads source must not read verdicts"); };

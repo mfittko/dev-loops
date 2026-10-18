@@ -30,7 +30,7 @@ import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } f
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../github/_fixer-emission-evidence.mjs";
 import { captureParsedReviewThreads } from "../github/_review-thread-mutations.mjs";
-import { listIssueComments, resolveAuthenticatedLogin, runGhJson } from "../github/post-gate-findings.mjs";
+import { resolveAuthenticatedLogin, runGhJson } from "../github/post-gate-findings.mjs";
 import { normalizePrReviewsPayload, prReviewsApiArgs } from "../github/_gate-finding-surface.mjs";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { selectActThreadBinding } from "../github/_fixer-act-thread-bindings.mjs";
@@ -102,10 +102,10 @@ async function defaultFetchPr({ repo, pr }) {
   return JSON.parse(out);
 }
 
-// The posted verdict markers at `headSha`, keyed by gate (the head filter is summarizeGateReviewCommentMarkers's own).
-async function defaultFetchVerdictMarkers({ repo, pr, headSha, runtime }) {
+// The posted verdict markers at `headSha`, keyed by gate: submitted reviews only (GATE-EXEC-POST-BEFORE-FIX); the head filter is summarizeGateReviewCommentMarkers's own.
+export async function defaultFetchVerdictMarkers({ repo, pr, headSha, runtime }) {
   const reviews = normalizePrReviewsPayload(await runGhJson(prReviewsApiArgs(repo, pr), runtime));
-  return summarizeGateReviewCommentMarkers([...await listIssueComments({ repo, pr }, runtime), ...reviews], { headSha });
+  return summarizeGateReviewCommentMarkers(reviews, { headSha });
 }
 
 const SKELETON_STATUS = "fixed|skipped";
@@ -304,7 +304,7 @@ export async function emitFixerWorkOrder({
     try { markers = await fetchVerdictMarkers({ repo, pr, headSha, gate, runtime: { env, ghCommand, runChild } }); } catch (error) {
       throw new Refusal(`verdict_not_posted: could not read the PR's posted verdicts (${error?.message ?? error}); post the ${gate} verdict review at ${headSha} before fixing: ${upsert}`);
     }
-    if (!markers?.[gate]?.visible) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${headSha}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`);
+    if (!(markers?.[gate]?.visible && markers[gate].contractComplete === true)) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${headSha}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`);
   }
 
   let completion, completionRead, candidateHead = headSha, recheckCandidate = () => {}, rejectOriginalRetirement = () => {};
