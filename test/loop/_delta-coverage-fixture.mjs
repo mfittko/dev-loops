@@ -30,7 +30,7 @@ export async function boundArgs(argv, seam = {}) {
     return { args, seam };
   }
   const unit = await emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: baseline, phase: "commit_only", actListFile: actList, gate: "draft_gate", cwd,
-    fetchPr: async () => ({ headRefName: git(cwd, "branch", "--show-current"), headRefOid: baseline }), executionIdentity: `f${Date.now()}-${(++next).toString(16).padStart(8, "0")}` });
+    fetchPr: async () => ({ headRefName: git(cwd, "branch", "--show-current"), headRefOid: baseline }), fetchVerdictMarkers: async () => ({ draft_gate: { visible: true } }), executionIdentity: `f${Date.now()}-${(++next).toString(16).padStart(8, "0")}` });
   const tmpRoot = resolveGateArtifactTmpRoot(cwd);
   const pulled = await pullWorkOrder({ ref: unit.workOrderRef, digest: unit.workOrderDigest, execution: unit.executionIdentity, cwd, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
   const output = unit.workOrder.outputRefs[0];

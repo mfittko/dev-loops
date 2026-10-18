@@ -726,7 +726,7 @@ findings under the verdict fields, posted by `upsert-checkpoint-verdict.mjs --fi
 threaded onto the posted verdict record by default — issue 2008 / ADR 0061 AC1) in one call, so
 the findings and the verdict land together and no separate post step can be
 skipped or reordered. The disposition ledger is written before that post
-(`GATE-EXEC-DISPOSITION-LEDGER`) and regardless of it.
+(`GATE-EXEC-DISPOSITION-LEDGER`) and regardless of it. `emit-fixer-work-order` enforces this order: it refuses an act-list work order with `verdict_not_posted` until the verdict review for that gate and head is posted on the PR.
 
 `post-gate-findings.mjs` renders the same findings a SECOND time, as a consolidated marker-tagged PR issue comment grouped by severity. It is governed by `gates.postFindingsComments` (resolved via `resolveGatePostFindingsComments(config)`, default false / opt-in) and no-ops with a `skipped` result unless a repo explicitly turns it on; nothing in the gate flow requires it, and a repo that opts in accepts duplicated finding text on a second surface. The comment is bounded by GitHub's per-comment character limit: a large round drops individual findings, least-urgent first (across every less-urgent severity before touching a more-urgent one), never posts an over-limit body, names what was omitted in the posted comment and points at the disposition ledger; a round that cannot fit even with every finding dropped, nor with only its single most-urgent finding kept, fails the post closed rather than reporting success. The ledger (always complete, never bounded) is the one surface that guarantees every finding of a large round.
 
