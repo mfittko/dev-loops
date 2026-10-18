@@ -26,6 +26,11 @@ Provenance shape:
 <!-- rule: RETRO-ENFORCEMENT-CONFIG-GATED -->
 Whether the checkpoint is evaluated MUST be controlled by `.devloops` at repo root `workflow.requireRetrospective`; shipped defaults remain permissive and this repo opts in. With the flag unset or `false`, startup reports no `pendingRetrospectives`, `merge-pr` does not evaluate `retrospective_checkpoint`, and neither site reads the checkpoint file or runs the ancestry lookup.
 
+## Size waiver count
+
+<!-- rule: RETRO-SIZE-WAIVER-COUNT -->
+`RETRO-SIZE-WAIVER-COUNT`: each retrospective MUST count the milestone's size waivers and size-class `approve merge` markers and record the count in the `size waivers and size merge approvals this milestone` line of the retrospective template. The target is at most 1 per milestone after v1.0.7. The v1.0.6 baseline is 10: 1 size waiver (PR 2630) and 9 size-class approvals (PRs 2623, 2630, 2634, 2638, 2643, 2669, 2684, 2704, 2719).
+
 ## Relationship to formal dev mode
 
 Formal local dev mode and the required post-run behavioral retrospective are related but distinct:

@@ -8,6 +8,7 @@
 
 - context: fresh (independent dispatch, no inherited session context)
 - seeded record: {{record-source}}
+- size waivers and size merge approvals this milestone: {{count}} (target at most 1 per milestone after v1.0.7; v1.0.6 baseline 10 = 1 waiver + 9 size-class approvals; RETRO-SIZE-WAIVER-COUNT)
 
 ## What worked well
 

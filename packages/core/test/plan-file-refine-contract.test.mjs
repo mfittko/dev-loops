@@ -32,7 +32,7 @@ const PAYLOAD = {
   acceptanceCriteria: "- The thing works.",
   definitionOfDone: "- Tests pass; CHANGELOG updated.",
   coverageMatrix: "| Item | Type | Status | Evidence | Notes |\n|---|---|---|---|---|\n| The thing works | AC | Met | test | |",
-  sizeEstimate: { logicLoc: 90, tier: "default" },
+  sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc: 90, tier: "default" },
   grillDispositions: [
     { kind: "drift", summary: "claim X contradicts contract Y", disposition: "record_finding" },
     { kind: "cosmetic", summary: "typo in heading", disposition: "ignore_cosmetic" },
@@ -160,7 +160,7 @@ describe("refinePlanFileInPlace", () => {
   });
 
   test("fail closed: an over-softLoc size estimate with no oversizeJustification (prompts a seam search)", () => {
-    const payload = { ...PAYLOAD, sizeEstimate: { logicLoc: 900, tier: "default" } };
+    const payload = { ...PAYLOAD, sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc: 900, tier: "default" } };
     const result = refinePlanFileInPlace({ ...newPlanFacts(BASE_PLAN), payload, sizeSoftLoc: 400 });
     assert.equal(result.ok, false);
     assert.equal(result.reason, "size_estimate_oversize_not_justified");
@@ -170,7 +170,7 @@ describe("refinePlanFileInPlace", () => {
   test("a cohesive over-softLoc size estimate with oversizeJustification proceeds and records the note", () => {
     const payload = {
       ...PAYLOAD,
-      sizeEstimate: { logicLoc: 900, tier: "default", oversizeJustification: "one cohesive migration; no clean seam to split on" },
+      sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc: 900, tier: "default", oversizeJustification: "one cohesive migration; no clean seam to split on" },
     };
     const result = refinePlanFileInPlace({ ...newPlanFacts(BASE_PLAN), payload, sizeSoftLoc: 400 });
     assert.equal(result.ok, true);
@@ -223,7 +223,7 @@ describe("refinePlanFileInPlace", () => {
       ...newPlanFacts(BASE_PLAN),
       payload: {
         ...PAYLOAD,
-        sizeEstimate: { logicLoc: 900, tier: "default", oversizeJustification: "ok\n## Sneaky inner heading\nmore" },
+        sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc: 900, tier: "default", oversizeJustification: "ok\n## Sneaky inner heading\nmore" },
       },
       sizeSoftLoc: 400,
     });
@@ -235,32 +235,32 @@ describe("refinePlanFileInPlace", () => {
 
 describe("validatePhaseSizeEstimate (pure)", () => {
   test("under-threshold estimate needs no justification", () => {
-    const result = validatePhaseSizeEstimate({ logicLoc: 100, tier: "default" }, 400);
+    const result = validatePhaseSizeEstimate({ sourceFiles: ["src/a.mjs"], logicLoc: 100, tier: "default" }, 400);
     assert.equal(result.ok, true);
     assert.equal(result.overBudget, false);
     assert.equal(result.oversizeNote, null);
   });
 
   test("tier defaults to \"default\" when omitted", () => {
-    const result = validatePhaseSizeEstimate({ logicLoc: 100 }, 400);
+    const result = validatePhaseSizeEstimate({ sourceFiles: ["src/a.mjs"], logicLoc: 100 }, 400);
     assert.equal(result.ok, true);
     assert.equal(result.tier, "default");
   });
 
   test("over-threshold estimate without justification fails closed", () => {
-    const result = validatePhaseSizeEstimate({ logicLoc: 500, tier: "default" }, 400);
+    const result = validatePhaseSizeEstimate({ sourceFiles: ["src/a.mjs"], logicLoc: 500, tier: "default" }, 400);
     assert.equal(result.ok, false);
     assert.equal(result.reason, "size_estimate_oversize_not_justified");
   });
 
   test("over-threshold estimate with a blank justification still fails closed", () => {
-    const result = validatePhaseSizeEstimate({ logicLoc: 500, oversizeJustification: "   " }, 400);
+    const result = validatePhaseSizeEstimate({ sourceFiles: ["src/a.mjs"], logicLoc: 500, oversizeJustification: "   " }, 400);
     assert.equal(result.ok, false);
     assert.equal(result.reason, "size_estimate_oversize_not_justified");
   });
 
   test("over-threshold estimate with a justification passes and carries the note", () => {
-    const result = validatePhaseSizeEstimate({ logicLoc: 500, oversizeJustification: "cohesive, no seam" }, 400);
+    const result = validatePhaseSizeEstimate({ sourceFiles: ["src/a.mjs"], logicLoc: 500, oversizeJustification: "cohesive, no seam" }, 400);
     assert.equal(result.ok, true);
     assert.equal(result.overBudget, true);
     assert.equal(result.oversizeNote, "cohesive, no seam");
@@ -274,20 +274,75 @@ describe("validatePhaseSizeEstimate (pure)", () => {
   });
 
   test("non-integer or negative logicLoc fails closed", () => {
-    assert.equal(validatePhaseSizeEstimate({ logicLoc: 1.5 }).reason, "invalid_size_estimate_loc");
-    assert.equal(validatePhaseSizeEstimate({ logicLoc: -1 }).reason, "invalid_size_estimate_loc");
-    assert.equal(validatePhaseSizeEstimate({ logicLoc: "100" }).reason, "invalid_size_estimate_loc");
+    assert.equal(validatePhaseSizeEstimate({ sourceFiles: ["src/a.mjs"], logicLoc: 1.5 }).reason, "invalid_size_estimate_loc");
+    assert.equal(validatePhaseSizeEstimate({ sourceFiles: ["src/a.mjs"], logicLoc: -1 }).reason, "invalid_size_estimate_loc");
+    assert.equal(validatePhaseSizeEstimate({ sourceFiles: ["src/a.mjs"], logicLoc: "100" }).reason, "invalid_size_estimate_loc");
   });
 
   test("an unrecognized tier fails closed", () => {
-    const result = validatePhaseSizeEstimate({ logicLoc: 100, tier: "t2" }, 400);
+    const result = validatePhaseSizeEstimate({ sourceFiles: ["src/a.mjs"], logicLoc: 100, tier: "t2" }, 400);
     assert.equal(result.ok, false);
     assert.equal(result.reason, "invalid_size_estimate_tier");
   });
 
   test("falls back to the default softLoc when no threshold is passed", () => {
     // 400 is check-size-budget.mjs's own DEFAULT_TIER_DEFAULTS.softLoc — same vocabulary/threshold.
-    assert.equal(validatePhaseSizeEstimate({ logicLoc: 400 }).overBudget, false);
-    assert.equal(validatePhaseSizeEstimate({ logicLoc: 401 }, undefined).ok, false);
+    assert.equal(validatePhaseSizeEstimate({ sourceFiles: ["src/a.mjs"], logicLoc: 400 }).overBudget, false);
+    assert.equal(validatePhaseSizeEstimate({ sourceFiles: ["src/a.mjs"], logicLoc: 401 }, undefined).ok, false);
+  });
+});
+
+describe("validatePhaseSizeEstimate PLAN-SIZE-BAND bounds", () => {
+  const files = ["src/a.mjs"];
+  const bandsFor = (soft, waiver, min) => [soft, { waiverLoc: waiver, minLoc: min }];
+
+  // The same fixtures at two sets of bounds: the verdicts move with the bounds, so no threshold is baked in.
+  for (const [soft, waiver] of [[400, 1500], [100, 200]]) {
+    test(`at and above waiverLoc ${waiver} the split is mandatory despite a justification`, () => {
+      for (const logicLoc of [waiver, waiver + 1]) {
+        const result = validatePhaseSizeEstimate({ sourceFiles: files, logicLoc, oversizeJustification: "cohesive" }, ...bandsFor(soft, waiver, 0));
+        assert.deepEqual([result.ok, result.reason], [false, "size_estimate_split_required"]);
+      }
+    });
+
+    test(`above softLoc ${soft} and under waiverLoc ${waiver} needs the split assessment`, () => {
+      const base = { sourceFiles: files, logicLoc: soft + 1 };
+      assert.equal(validatePhaseSizeEstimate(base, ...bandsFor(soft, waiver, 0)).reason, "size_estimate_oversize_not_justified");
+      assert.equal(validatePhaseSizeEstimate({ ...base, oversizeJustification: "seam: x; stays whole" }, ...bandsFor(soft, waiver, 0)).ok, true);
+    });
+  }
+
+  test("a null waiverLoc turns the mandatory split off", () => {
+    assert.equal(validatePhaseSizeEstimate({ sourceFiles: files, logicLoc: 5000, oversizeJustification: "cohesive" }, 400, { waiverLoc: null }).ok, true);
+  });
+
+  test("empty sourceFiles with logicLoc above 0 fails closed; 0 LOC needs none", () => {
+    for (const sourceFiles of [undefined, [], ["  "]]) {
+      assert.equal(validatePhaseSizeEstimate({ logicLoc: 50, sourceFiles }, 400).reason, "size_estimate_source_files_missing");
+    }
+    assert.equal(validatePhaseSizeEstimate({ logicLoc: 0 }, 400).ok, true);
+  });
+
+  test("a merge candidate without a recorded merge assessment fails closed; minLoc 0 disables the rule", () => {
+    for (const mergeAssessment of [undefined, "", "   "]) {
+      const result = validatePhaseSizeEstimate({ sourceFiles: files, logicLoc: 100, mergeAssessment }, 400, { minLoc: 150 });
+      assert.deepEqual([result.ok, result.reason], [false, "size_estimate_merge_not_assessed"]);
+    }
+    assert.equal(validatePhaseSizeEstimate({ sourceFiles: files, logicLoc: 100 }, 400, { minLoc: 0 }).ok, true);
+    assert.equal(validatePhaseSizeEstimate({ sourceFiles: files, logicLoc: 100, mergeAssessment: "none shares a file" }, 400, { minLoc: 150 }).ok, true);
+  });
+
+  test("a slice under minLoc is a merge candidate and minLoc 0 turns the rule off", () => {
+    const estimate = { sourceFiles: files, logicLoc: 100, mergeAssessment: "no sibling shares a file" };
+    const under = validatePhaseSizeEstimate(estimate, 400, { minLoc: 150 });
+    assert.equal(under.mergeCandidate, true);
+    assert.match(under.body, /Merge candidate: under minLoc 150; merge assessment: no sibling shares a file/u);
+    assert.equal(validatePhaseSizeEstimate(estimate, 400, { minLoc: 100 }).mergeCandidate, false);
+    assert.equal(validatePhaseSizeEstimate(estimate, 400, { minLoc: 0 }).mergeCandidate, false);
+    assert.equal(validatePhaseSizeEstimate(estimate, 400, { minLoc: 0 }).body.includes("Merge candidate"), false);
+  });
+
+  test("the body lists the source files", () => {
+    assert.match(validatePhaseSizeEstimate({ sourceFiles: ["a.mjs", "b.mjs"], logicLoc: 10 }, 400).body, /Source files: a\.mjs, b\.mjs/u);
   });
 });

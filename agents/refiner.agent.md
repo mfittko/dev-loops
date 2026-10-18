@@ -38,6 +38,7 @@ For the active phase, require and produce:
 - use exact wording from the source issue(s); when the governing input is a phase doc or other spec instead of an issue, use that source wording exactly for every explicit item in the matrix
 - include every explicit acceptance criterion, definition-of-done item, and non-goal; do not skip items
 - <!-- rule: REFINER-DOD-PROPOSED-SUBSECTION --> `REFINER-DOD-PROPOSED-SUBSECTION`: if no explicit definition of done exists, add a `Proposed DoD` subsection before the matrix
+- a size forecast per slice that follows `PLAN-SIZE-BAND` in [Local planning](../skills/docs/local-planning.md#size-estimate-refinement), including its `## Size forecast` section and the split and merge assessments
 - explicit risks, watchpoints, and unresolved questions
 - validation steps and tests to write first
 - durable decisions that SHOULD be preserved in the phase doc

@@ -18,6 +18,7 @@ import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-
 import { detectLinkedIssuePr } from "./detect-linked-issue-pr.mjs";
 import { evaluateCommentDiscipline } from "../loop/check-comment-discipline.mjs";
 import { evaluateEarlySurface } from "../loop/early-surface-checks.mjs";
+import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { PRE_PR_REVIEW_MISSING, validatePrePrReview } from "../loop/_pre-pr-review-record.mjs";
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
@@ -73,6 +74,7 @@ Behavior:
   - refuses any \`adr-tripwire:allow\` line in the body, and \`--fill\`/\`--fill-verbose\`/\`--fill-first\`/\`--template\` without \`--body\`/\`--body-file\`, and \`--recover\`/\`--editor\`/\`--web\` always (gh would source a body this wrapper cannot check); write a waiver only through \`dev-loops pr waive-adr-tripwire\`
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
+  - refuses with \`size_split_required_before_pr\` before creating when the local \`origin/<base>...<head>\` whole-PR logic LOC is at or above the resolved default-tier \`waiverLoc\` (PRE-PR-SIZE-CHECK); no override flag; an unknown size does not refuse
   - after a successful create, prints one JSON line \`{"adrTripwire":...,"sizeBudget":...}\` (ADR-TRIPWIRE-EARLY-SURFACE);
     a block or unknown outcome is advisory and never refuses the already-created PR
 Examples:
@@ -89,6 +91,7 @@ Exit codes:
   1  wrapper validation failed or \`gh\` could not be spawned
   N  same non-zero exit code returned by \`gh pr create\``.trim();
 const parseError = buildParseError(USAGE);
+const SIZE_SPLIT_REQUIRED_BEFORE_PR = "size_split_required_before_pr";
 const READY_FLAG_PATTERN = /^--ready(?:$|=)/u;
 // Bare and inline-boolean forms, mirroring DRAFT_FLAG_PATTERN below: every
 // matching token is consumed (never forwarded to gh, which rejects unknown
@@ -646,6 +649,21 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
       if (commentDiscipline.outcome === "block") {
         throw parseError(`comment discipline blocked before PR creation (LOCAL-COMMENT-DISCIPLINE): ${commentDiscipline.reasons.join("; ")}`);
       }
+      // PRE-PR-SIZE-CHECK: the one pre-creation size refusal. An evaluation failure
+      // (unknown) never refuses; the draft gate stays the authority.
+      let size = null;
+      try {
+        size = await (runtime.evaluatePrSizeBudget ?? evaluatePrSizeBudget)({ base: `origin/${bareBase}`, head: resolvedHead, repoRoot: resolveRepoRoot(diffCwd) });
+      } catch {
+        size = null;
+      }
+      const sizeWaiverLoc = size?.thresholds?.default?.waiverLoc;
+      if (typeof size?.wholeLogicLoc === "number" && typeof sizeWaiverLoc === "number" && size.wholeLogicLoc >= sizeWaiverLoc) {
+        throw Object.assign(
+          parseError(`${SIZE_SPLIT_REQUIRED_BEFORE_PR}: whole-PR logic LOC (${size.wholeLogicLoc}) is at or above default.waiverLoc (${sizeWaiverLoc}); split the local branch before any PR exists (PRE-PR-SIZE-CHECK)`),
+          { code: SIZE_SPLIT_REQUIRED_BEFORE_PR },
+        );
+      }
     }
   }
   // Issue-less lightweight: caller signals lightweight AND an explicit body
@@ -725,9 +743,9 @@ if (isDirectCliRun(import.meta.url)) {
     const exitCode = await main();
     process.exitCode = exitCode;
   } catch (error) {
-    // Only the typed pre-PR and head refusals carry `code` in the envelope; formatCliError forwards it for config_load_failed alone.
+    // Only the typed refusals listed below (pre-PR, head, size_split_required_before_pr) carry `code` in the envelope; formatCliError forwards it for config_load_failed alone.
     const envelope = JSON.parse(formatCliError(error));
-    if (error?.code === PRE_PR_REVIEW_MISSING || error?.code === HEAD_UNRESOLVABLE) envelope.code = error.code;
+    if (error?.code === PRE_PR_REVIEW_MISSING || error?.code === HEAD_UNRESOLVABLE || error?.code === SIZE_SPLIT_REQUIRED_BEFORE_PR) envelope.code = error.code;
     process.stderr.write(`${JSON.stringify(envelope)}\n`);
     process.exitCode = 1;
   }
