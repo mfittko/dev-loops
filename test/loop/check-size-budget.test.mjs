@@ -8,6 +8,7 @@ import {
   parseCheckSizeBudgetCliArgs,
   parseNumstatZ,
   resolveFileTier,
+  resolveSizeBounds,
 } from "../../scripts/loop/check-size-budget.mjs";
 
 // ---------------------------------------------------------------------------
@@ -815,4 +816,11 @@ test("a license/ownership-only diff passes the size budget with no classify rule
   });
   assert.equal(result.outcome, "pass");
   assert.ok(!result.reasons.some((r) => r.includes("unclassified")));
+});
+
+test("resolveSizeBounds reads softLoc, waiverLoc and minLoc from resolved config, with shipped fallbacks", () => {
+  assert.deepEqual(resolveSizeBounds({}), { softLoc: 400, waiverLoc: 1500, minLoc: 150 });
+  const config = { gates: { size: { tiers: { default: { softLoc: 40, waiverLoc: 75 } }, planningBand: { minLoc: 0 } } } };
+  assert.deepEqual(resolveSizeBounds(config), { softLoc: 40, waiverLoc: 75, minLoc: 0 });
+  assert.equal(resolveSizeBounds({ gates: { size: { tiers: { default: { waiverLoc: null } } } } }).waiverLoc, null);
 });

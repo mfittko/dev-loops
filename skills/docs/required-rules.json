@@ -553,6 +553,11 @@
       "enforcement": "doc"
     },
     {
+      "id": "LOCAL-DEV-SIZE-STOP",
+      "enforcement": "agent",
+      "enforcementNote": "The developer runs the size check at each local commit; only the pr create refusal at waiverLoc is mechanical (PRE-PR-SIZE-CHECK)."
+    },
+    {
       "id": "LOCAL-FAILURE-TRIAGE-ORDER"
     },
     {
@@ -623,6 +628,10 @@
       "id": "OPS-NO-INLINE-INTERPRETER"
     },
     {
+      "id": "PLAN-SIZE-BAND",
+      "enforcement": "runtime"
+    },
+    {
       "id": "PRE-PR-BEFORE-FIRST-PUSH",
       "enforcement": "runtime"
     },
@@ -649,6 +658,10 @@
     {
       "id": "PRE-PR-ONE-FRESH-REVIEWER",
       "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-SIZE-CHECK",
+      "enforcement": "runtime"
     },
     {
       "id": "PRE-PUSH-DELTA-EXIT-BOUND",
@@ -765,6 +778,10 @@
     },
     {
       "id": "RETRO-GATE-FAIL-CLOSED"
+    },
+    {
+      "id": "RETRO-SIZE-WAIVER-COUNT",
+      "enforcement": "doc"
     },
     {
       "id": "REVIEW-GATE-VERDICT-CANONICAL",

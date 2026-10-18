@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, test } from "bun:test";
 
 import { runCli } from "../../cli/index.mjs";
-import { indexDecisionRecords, lintSpec, main } from "../../scripts/loop/spec-lint.mjs";
+import { indexDecisionRecords, lintSizeForecast, lintSpec, main } from "../../scripts/loop/spec-lint.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const tempDirs = [];
@@ -15,6 +15,10 @@ const tempDirs = [];
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
+
+// A valid forecast line, so the citation tests see only their own findings.
+const FORECAST = "\n\n## Size forecast\n\n- forecast: slice=1 wloc=200 files=a.mjs\n";
+const lint = ({ body, repoRoot }) => lintSpec({ body: `${body}${FORECAST}`, repoRoot });
 
 function record(status) {
   return `# Title\n\n## Status\n\n${status}\n\n## Context\n\nText.\n`;
@@ -55,7 +59,7 @@ test("only an unregistered rule ID gets unknown_rule_id", async () => {
     "~~~~",
     "AFTER-FENCE-RULE",
   ].join("\n");
-  const result = await lintSpec({ body, repoRoot: root });
+  const result = await lint({ body, repoRoot: root });
   assert.deepEqual(result.findings.map(({ kind, id }) => ({ kind, id })), [
     { kind: "unknown_rule_id", id: "MISSING-RULE-ID" },
     { kind: "unknown_rule_id", id: "AFTER-FENCE-RULE" },
@@ -74,7 +78,7 @@ test("ADR existence and status findings carry their detail", async () => {
     },
   });
   const body = "See ADR 0001, ADR 0002, [the old record](docs/decisions/0003-old.md) and ADR 0009.";
-  const { findings } = await lintSpec({ body, repoRoot: root });
+  const { findings } = await lint({ body, repoRoot: root });
   assert.deepEqual(findings.map(({ kind, id }) => `${kind}:${id}`).sort(), ["adr_not_accepted:0002", "adr_superseded:0003", "unknown_adr:0009"]);
   assert.equal(findings.find((f) => f.kind === "adr_superseded").detail.supersededBy, "0004");
   assert.match(findings.find((f) => f.kind === "adr_not_accepted").detail.status, /^Proposed/);
@@ -90,7 +94,7 @@ test("adr_amended names each amender and whether the body cites it", async () =>
       "0013-draft.md": "Proposed\n\nAmends ADR 0010.",
     },
   });
-  const { findings } = await lintSpec({ body: "Follows ADR 0010 and ADR 0011.", repoRoot: root });
+  const { findings } = await lint({ body: "Follows ADR 0010 and ADR 0011.", repoRoot: root });
   assert.deepEqual(findings, [{
     kind: "adr_amended",
     id: "0010",
@@ -108,7 +112,7 @@ test("an (Amended by M) annotation in the target Status creates the edge", async
       "0002-amender.md": "Accepted — 2026-01-02",
     },
   });
-  const { findings } = await lintSpec({ body: "Follows ADR 0001.", repoRoot: root });
+  const { findings } = await lint({ body: "Follows ADR 0001.", repoRoot: root });
   assert.deepEqual(findings.map(({ kind, id }) => `${kind}:${id}`), ["adr_amended:0001"]);
 });
 
@@ -123,7 +127,7 @@ test("records numbered 1000 or higher create amendment edges", async () => {
   const records = await indexDecisionRecords(path.join(root, "docs", "decisions"));
   assert.deepEqual([...records.get("1000").amends], ["0999"]);
   assert.deepEqual([...records.get("1000").amendedBy], ["1001"]);
-  const { findings } = await lintSpec({ body: "Follows ADR 0999 and docs/decisions/1000-mid.md.", repoRoot: root });
+  const { findings } = await lint({ body: "Follows ADR 0999 and docs/decisions/1000-mid.md.", repoRoot: root });
   assert.deepEqual(findings.map(({ kind, id, detail }) => `${kind}:${id}:${detail.amenders.map((a) => a.id).join(",")}`), [
     "adr_amended:0999:1000",
     "adr_amended:1000:1001",
@@ -189,7 +193,7 @@ test("a wrong-shape registry exits 2 as malformed", async () => {
 });
 
 test("the #2438 and #2528 failures reproduce against this repo", async () => {
-  const rules = await lintSpec({
+  const rules = await lint({
     body: "Cites GATE-EXEC-VALIDATION-ARTIFACT, COORDINATOR-VERIFY-DELEGATION and VALIDATE-TARGETED-FIRST.",
     repoRoot,
   });
@@ -197,17 +201,17 @@ test("the #2438 and #2528 failures reproduce against this repo", async () => {
     "unknown_rule_id:GATE-EXEC-VALIDATION-ARTIFACT",
     "unknown_rule_id:COORDINATOR-VERIFY-DELEGATION",
   ]);
-  const adrs = await lintSpec({ body: "The ADR 0070 entry cap applies.", repoRoot });
+  const adrs = await lint({ body: "The ADR 0070 entry cap applies.", repoRoot });
   const amended = adrs.findings.find((f) => f.kind === "adr_amended" && f.id === "0070");
   assert.ok(amended.detail.amenders.some((a) => a.id === "0086" && a.amenderCited === false));
 });
 
 test("a missing registry or decisions directory skips that check", async () => {
-  const noRules = await lintSpec({ body: "ADR 0001 and SOME-RULE-ID", repoRoot: await fixtureRepo({ rules: null }) });
+  const noRules = await lint({ body: "ADR 0001 and SOME-RULE-ID", repoRoot: await fixtureRepo({ rules: null }) });
   assert.equal(noRules.checks.rules.status, "skipped");
   assert.match(noRules.checks.rules.reason, /required-rules\.json/);
   assert.deepEqual(noRules.checks.adrs, { status: "ran" });
-  const noAdrs = await lintSpec({ body: "ADR 0001", repoRoot: await fixtureRepo({ decisions: null }) });
+  const noAdrs = await lint({ body: "ADR 0001", repoRoot: await fixtureRepo({ decisions: null }) });
   assert.equal(noAdrs.checks.adrs.status, "skipped");
   assert.match(noAdrs.checks.adrs.reason, /docs\/decisions/);
   assert.deepEqual(noAdrs.findings, []);
@@ -240,4 +244,88 @@ test("the CLI route prints help and rejects bad input", async () => {
   assert.equal(await run(["loop", "spec-lint", "--help"]), 0);
   assert.equal(await run(["loop", "spec-lint", "--bogus"]), 1);
   assert.equal(await run(["loop", "spec-lint"]), 1);
+});
+
+const forecastLine = (slice, wloc) => `- forecast: slice=${slice} wloc=${wloc} files=a.mjs,b.mjs`;
+const sizeKinds = (findings) => findings.filter((f) => f.kind.startsWith("size_forecast_")).map(({ kind, id }) => `${kind}:${id}`);
+
+test("size forecast: no line gives size_forecast_missing", async () => {
+  const root = await fixtureRepo();
+  for (const body of ["no forecast here", "## Size forecast\n\nprose only", `${forecastLine(1, 100)}\n(outside the section)`, `## Size forecast\n\n~~~\n${forecastLine(1, 100)}\n~~~`]) {
+    assert.deepEqual(sizeKinds((await lintSpec({ body, repoRoot: root })).findings), ["size_forecast_missing:size-forecast"]);
+  }
+});
+
+test("size forecast: two lines under waiverLoc pass; a line at or above it gives size_forecast_split_required", async () => {
+  const root = await fixtureRepo();
+  const run = (...lines) => lintSpec({ body: `## Size forecast\n\n${lines.join("\n")}\n\nwLOC: note`, repoRoot: root });
+  assert.deepEqual(sizeKinds((await run(forecastLine(1, 240), forecastLine(2, 235))).findings), []);
+  assert.deepEqual(sizeKinds((await run(forecastLine(1, 1499))).findings), []);
+  assert.deepEqual(sizeKinds((await run(forecastLine(1, 1500), forecastLine("b", 1501), forecastLine(3, 10))).findings), ["size_forecast_split_required:1", "size_forecast_split_required:b"]);
+});
+
+test("size forecast: a malformed forecast bullet next to a valid one is a size_forecast_malformed finding, not dropped", async () => {
+  const root = await fixtureRepo();
+  const valid = "- forecast: slice=1 wloc=200 files=a.mjs";
+  const run = (...lines) => lintSpec({ body: `## Size forecast\n\n${lines.join("\n")}`, repoRoot: root });
+  for (const line of [
+    "- forecast: slice=2 wloc=1800 files=a.mjs, b.mjs",
+    "- forecast: slice=2 wloc=1,600 files=a.mjs",
+    "- forecast: slice=2 wloc=1600 files=a.mjs trailing note",
+    "* forecast: slice=2 wloc=1600 files=a.mjs",
+    "- forecast: slice=2 wloc=1600 files=",
+    "- Forecast: slice=2 wloc=1800 files=b.mjs",
+    "+ forecast: slice=2 wloc=1800 files=b.mjs",
+    "1. forecast: slice=2 wloc=1800 files=b.mjs",
+    "1) forecast: slice=2 wloc=1800 files=b.mjs",
+    "* FORECAST: slice=2 wloc=1800 files=b.mjs",
+    "- forecast slice=2 wloc=1800 files=b.mjs",
+    "- forecast : slice=2 wloc=1800 files=b.mjs",
+    "- Forecast slice=2 wloc=1800 files=b.mjs",
+    "- slice=2 wloc=1800 files=b.mjs",
+    "1. forecast slice=2 wloc=1800 files=b.mjs",
+    "- wloc=1800 slice=2 files=b.mjs",
+    "- slice = 2 wloc = 1800 files=b.mjs",
+    "- wloc=1800 files=b.mjs",
+    "- slice 2: wloc=1800 files=b.mjs",
+    "- forecast (slice 2): wloc=1800 files=b.mjs",
+    // Accepted fail-closed cost: a list-item prose line containing `wloc =` is claimed.
+    "- note: wloc = 130 here",
+  ]) {
+    const { findings } = await run(valid, line);
+    assert.deepEqual(sizeKinds(findings), ["size_forecast_malformed:size-forecast"], line);
+    assert.deepEqual(findings.find((f) => f.kind === "size_forecast_malformed").detail, { line }, line);
+  }
+  // Accepted forms stay clean, including a comma-joined files list.
+  assert.deepEqual(sizeKinds((await run(valid, "- forecast: slice=2 wloc=1800 files=a.mjs,b.mjs")).findings), ["size_forecast_split_required:2"]);
+  assert.deepEqual(sizeKinds((await run(valid)).findings), []);
+  // Non-list lines are never claimed, even when they look like a forecast.
+  assert.deepEqual(sizeKinds((await run(valid, "wLOC = source + 0.25 × test: 130 + 440 and 85 + 600.", "Each slice = one PR.", "Forecast: two slices, both under budget.", "Forecast is below", "The forecast for slice 2 is below.", "forecast: slice=2 wloc=1800 files=b.mjs", "slice=2 wloc=1800 files=b.mjs")).findings), []);
+  // A malformed bullet with no valid line still reports the missing forecast too.
+  assert.deepEqual(sizeKinds((await run("- forecast: slice=2 wloc=1800 files=a.mjs, b.mjs")).findings), ["size_forecast_missing:size-forecast", "size_forecast_malformed:size-forecast"]);
+});
+
+test("size forecast: a null waiverLoc never reports size_forecast_split_required", () => {
+  assert.deepEqual(lintSizeForecast("## Size forecast\n\n- forecast: slice=1 wloc=10 files=a.mjs", { waiverLoc: null }), []);
+  assert.deepEqual(lintSizeForecast("## Size forecast\n\n- forecast: slice=1 wloc=1800 files=a.mjs", { waiverLoc: 1500 }).map((f) => f.kind), ["size_forecast_split_required"]);
+});
+
+test("size forecast: the split bound moves with a .devloops waiverLoc override", async () => {
+  const root = await fixtureRepo();
+  const body = `## Size forecast\n\n${forecastLine(1, 600)}`;
+  assert.deepEqual(sizeKinds((await lintSpec({ body, repoRoot: root })).findings), []);
+  await writeFile(path.join(root, ".devloops"), "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 400\n        waiverLoc: 600\n");
+  const { findings } = await lintSpec({ body, repoRoot: root });
+  assert.deepEqual(sizeKinds(findings), ["size_forecast_split_required:1"]);
+  assert.deepEqual(findings.find((f) => f.kind === "size_forecast_split_required").detail, { wloc: 600, waiverLoc: 600 });
+});
+
+test("a broken .devloops exits 2 instead of falling back to the default bounds", async () => {
+  const root = await fixtureRepo();
+  await writeFile(path.join(root, ".devloops"), "gates:\n  size:\n    tiers:\n      default:\n        waiverLoc: 100\n");
+  const bodyFile = path.join(root, "body.md");
+  await writeFile(bodyFile, `## Size forecast\n\n${forecastLine(1, 500)}`);
+  const stdout = buffer();
+  assert.equal(await main(["--body-file", bodyFile, "--repo-root", root], { stdout: stdout.stream, stderr: buffer().stream }), 2);
+  assert.equal(stdout.read(), "");
 });

@@ -15,7 +15,7 @@ import { PLAN_FILE_REFINEMENT_SECTIONS } from "@dev-loops/core/loop/plan-file-in
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { classifyDocsGrillFinding } from "../loop/docs-grill-contract.mjs";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
-import { DEFAULT_TIER_DEFAULTS } from "../loop/check-size-budget.mjs";
+import { resolveSizeBounds } from "../loop/check-size-budget.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
@@ -31,14 +31,22 @@ Required:
   --plan-file <path>  Path to the phase-doc-format plan file to refine in place
   --payload <path>    Path to a JSON file with the refiner output
                       ({ acceptanceCriteria, definitionOfDone, coverageMatrix,
-                        sizeEstimate: { logicLoc, tier?, oversizeJustification? },
+                        sizeEstimate: { logicLoc, sourceFiles, tier?,
+                          oversizeJustification?, mergeAssessment? },
                         grillFindings? })
                       sizeEstimate uses check-size-budget.mjs's vocabulary
                       (logicLoc, tier: default|t1|t3). An estimate over the
                       repo's gates.size.tiers.default.softLoc must carry a
-                      non-empty oversizeJustification (the refiner looked for
-                      a seam to split the phase and, finding none, records
-                      why it is cohesive) or the refine fails closed.
+                      non-empty oversizeJustification (the split assessment:
+                      the seam considered and why the phase stays whole) or
+                      the refine fails closed. An estimate at or above the
+                      default tier's waiverLoc always fails closed
+                      (size_estimate_split_required; PLAN-SIZE-BAND).
+                      sourceFiles (forecast paths) is required when
+                      logicLoc > 0. An estimate under gates.size.planningBand.minLoc
+                      (0 disables) must carry a non-empty mergeAssessment or
+                      the refine fails closed (size_estimate_merge_not_assessed;
+                      PLAN-SIZE-BAND).
 Optional:
   --json              Machine-readable JSON output
   --help              Show this help
@@ -134,7 +142,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   // check-size-budget.mjs fallback — the plan-time estimate and the real diff
   // measurement are checked against the same number.
   const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
-  // A broken .devloops must not silently pick the fallback threshold at plan
+  // A broken .devloops must not silently pick the fallback bounds (softLoc, waiverLoc, minLoc) at plan
   // time and diverge from the post-hoc size-budget gate (which fails closed on
   // config errors). Plan-time is advisory — the real diff measurement re-checks
   // fail-closed — so surface the errors rather than aborting the refine.
@@ -143,12 +151,10 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       .map((e) => (typeof e === "string" ? e : e?.message ?? JSON.stringify(e)))
       .join("; ");
     process.stderr.write(
-      `refine-plan-file: ${configErrors.length} .devloops config error(s); the plan-time size threshold falls back to the default softLoc, and the post-hoc size-budget gate re-checks fail-closed: ${detail}\n`,
+      `refine-plan-file: ${configErrors.length} .devloops config error(s); the plan-time size bounds softLoc, waiverLoc and minLoc all fall back to the shipped defaults, and the post-hoc size-budget gate re-checks fail-closed: ${detail}\n`,
     );
   }
-  const sizeSoftLoc = typeof config?.gates?.size?.tiers?.default?.softLoc === "number"
-    ? config.gates.size.tiers.default.softLoc
-    : DEFAULT_TIER_DEFAULTS.softLoc;
+  const { softLoc: sizeSoftLoc, waiverLoc: sizeWaiverLoc, minLoc: sizeMinLoc } = resolveSizeBounds(config);
 
   const [acHeading, dodHeading] = PLAN_FILE_REFINEMENT_SECTIONS;
   const result = refinePlanFileInPlace({
@@ -158,6 +164,8 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     hasDefinitionOfDone: extractSection(markdownText, dodHeading) ? true : false,
     payload: { ...payload, grillDispositions },
     sizeSoftLoc,
+    sizeWaiverLoc,
+    sizeMinLoc,
   });
 
   if (!result.ok) {
@@ -166,7 +174,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       const failurePayload = { ok: false, reason: result.reason, planFileIntakeState: result.planFileIntakeState ?? null };
       process.exitCode = emitResult(failurePayload, { jq: options.jq, silent: options.silent, stdout });
     } else {
-      stdout.write(`refine-plan-file: FAIL (${result.reason})\n`);
+      stdout.write(`refine-plan-file: FAIL (${result.reason}${result.reason.startsWith("size_estimate_") ? "; PLAN-SIZE-BAND" : ""})\n`);
       process.exitCode = 1;
     }
     return result;

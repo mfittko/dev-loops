@@ -74,14 +74,17 @@ const DEFAULT_SIZE_SOFT_LOC = 400;
  * @param {number} sizeEstimate.logicLoc  estimated logic LOC for the phase (non-negative integer)
  * @param {string} [sizeEstimate.tier]  "default" (implicit) | "t1" | "t3"
  * @param {string} [sizeEstimate.oversizeJustification]  required non-empty text when logicLoc exceeds softLoc
+ * @param {string[]} [sizeEstimate.sourceFiles]  forecast source files; required non-empty when logicLoc > 0 (the merge rule needs the shared-file signal)
+ * @param {string} [sizeEstimate.mergeAssessment]  the merge assessment recorded for a slice under minLoc
  * @param {number} [softLoc]  default-tier soft-LOC escalation threshold (falls back to DEFAULT_SIZE_SOFT_LOC)
- * @returns {{ ok: boolean, reason?: string, logicLoc?: number, tier?: string, softLoc?: number, overBudget?: boolean, oversizeNote?: string|null, body?: string }}
+ * @param {{ waiverLoc?: number|null, minLoc?: number|null }} [bounds]  PLAN-SIZE-BAND bounds from resolved config: an estimate at or above waiverLoc fails `size_estimate_split_required` whatever the justification; one under minLoc (when above 0) is a merge candidate
+ * @returns {{ ok: boolean, reason?: string, logicLoc?: number, tier?: string, softLoc?: number, overBudget?: boolean, oversizeNote?: string|null, mergeCandidate?: boolean, sourceFiles?: string[], body?: string }}
  */
-export function validatePhaseSizeEstimate(sizeEstimate, softLoc = DEFAULT_SIZE_SOFT_LOC) {
+export function validatePhaseSizeEstimate(sizeEstimate, softLoc = DEFAULT_SIZE_SOFT_LOC, { waiverLoc = null, minLoc = null } = {}) {
   if (!sizeEstimate || typeof sizeEstimate !== "object") {
     return { ok: false, reason: "missing_size_estimate" };
   }
-  const { logicLoc, tier = "default", oversizeJustification } = sizeEstimate;
+  const { logicLoc, tier = "default", oversizeJustification, mergeAssessment } = sizeEstimate;
   if (!Number.isInteger(logicLoc) || logicLoc < 0) {
     return { ok: false, reason: "invalid_size_estimate_loc" };
   }
@@ -90,21 +93,39 @@ export function validatePhaseSizeEstimate(sizeEstimate, softLoc = DEFAULT_SIZE_S
   }
   const effectiveSoftLoc = typeof softLoc === "number" && softLoc > 0 ? softLoc : DEFAULT_SIZE_SOFT_LOC;
   const overBudget = logicLoc > effectiveSoftLoc;
+  // PLAN-SIZE-BAND: at or above waiverLoc the split is mandatory; no justification clears it.
+  if (typeof waiverLoc === "number" && waiverLoc > 0 && logicLoc >= waiverLoc) {
+    return { ok: false, reason: "size_estimate_split_required" };
+  }
   const justification = typeof oversizeJustification === "string" ? oversizeJustification.trim() : "";
   if (overBudget && justification.length === 0) {
-    // Fail closed: this is the refiner's prompt to look for a seam and split the
-    // phase before proceeding; a cohesive phase must say so explicitly instead.
+    // Fail closed: the oversize justification is the split assessment. It names the seam
+    // considered and says why the phase stays whole.
     return { ok: false, reason: "size_estimate_oversize_not_justified" };
   }
+  const sourceFiles = Array.isArray(sizeEstimate.sourceFiles)
+    ? sizeEstimate.sourceFiles.filter((f) => typeof f === "string" && f.trim().length > 0).map((f) => f.trim())
+    : [];
+  if (logicLoc > 0 && sourceFiles.length === 0) {
+    return { ok: false, reason: "size_estimate_source_files_missing" };
+  }
   const oversizeNote = overBudget ? justification : null;
+  const mergeCandidate = typeof minLoc === "number" && minLoc > 0 && logicLoc < minLoc;
+  const assessment = typeof mergeAssessment === "string" ? mergeAssessment.trim() : "";
+  // PLAN-SIZE-BAND: the merge assessment under minLoc fails closed like the split assessment above softLoc.
+  if (mergeCandidate && assessment.length === 0) {
+    return { ok: false, reason: "size_estimate_merge_not_assessed" };
+  }
   const body = [
     `- Estimated logic LOC: ${logicLoc}`,
     `- Tier: ${tier}`,
+    `- Source files: ${sourceFiles.length > 0 ? sourceFiles.join(", ") : "none"}`,
     overBudget
       ? `- Oversize: justified — ${oversizeNote}`
       : `- Oversize: n/a (within default tier's softLoc budget of ${effectiveSoftLoc})`,
+    ...(mergeCandidate ? [`- Merge candidate: under minLoc ${minLoc}; merge assessment: ${assessment}`] : []),
   ].join("\n");
-  return { ok: true, logicLoc, tier, softLoc: effectiveSoftLoc, overBudget, oversizeNote, body };
+  return { ok: true, logicLoc, tier, softLoc: effectiveSoftLoc, overBudget, oversizeNote, mergeCandidate, sourceFiles, body };
 }
 
 /**
@@ -178,16 +199,18 @@ function renderGrillFindings(classified) {
  * @param {string} params.payload.acceptanceCriteria  Acceptance criteria section body
  * @param {string} params.payload.definitionOfDone  Definition of done section body
  * @param {string} params.payload.coverageMatrix  AC/DoD/Non-goal coverage matrix (markdown table)
- * @param {object} params.payload.sizeEstimate  per-phase size estimate (see `validatePhaseSizeEstimate`); an over-`sizeSoftLoc` estimate must carry a non-empty `oversizeJustification` or the refine fails closed, prompting a seam search
+ * @param {object} params.payload.sizeEstimate  per-phase size estimate (see `validatePhaseSizeEstimate`); an over-`sizeSoftLoc` estimate must carry a non-empty `oversizeJustification` or the refine fails closed, prompting a seam search; `sourceFiles` is required when `logicLoc` > 0 and `mergeAssessment` is required under `sizeMinLoc`
  * @param {object[]} [params.payload.grillDispositions]  docs-grill dispositions the caller pre-classified via #948's `classifyDocsGrillFinding`; each entry is `{ kind, summary, disposition }` and a null/invalid `disposition` fails the grill closed
- * @param {number} [params.sizeSoftLoc]  default-tier soft-LOC escalation threshold the size estimate is checked against — the caller threads this from `gates.size.tiers.default.softLoc` (falls back to check-size-budget.mjs's own default when config carries none)
+ * @param {number} [params.sizeWaiverLoc]  default-tier waiverLoc (resolved config); an estimate at or above it fails `size_estimate_split_required`
+ * @param {number} [params.sizeMinLoc]  `gates.size.planningBand.minLoc` (resolved config); an estimate under it is a merge candidate, 0 disables
+ * @param {number} [params.sizeSoftLoc] default-tier soft-LOC escalation threshold the size estimate is checked against — the caller threads this from `gates.size.tiers.default.softLoc` (falls back to check-size-budget.mjs's own default when config carries none)
  * @returns {{
  *   ok: boolean,
  *   reason?: string,
  *   planFileIntakeState?: string,
  *   refinedMarkdown?: string,
  *   grillDispositions?: object[],
- *   sizeEstimate?: { logicLoc: number, tier: string, softLoc: number, overBudget: boolean, oversizeNote: string|null },
+ *   sizeEstimate?: { logicLoc: number, tier: string, softLoc: number, overBudget: boolean, oversizeNote: string|null, mergeCandidate: boolean },
  *   stop?: { kind: string },
  * }}
  */
@@ -198,6 +221,8 @@ export function refinePlanFileInPlace({
   hasDefinitionOfDone,
   payload,
   sizeSoftLoc,
+  sizeWaiverLoc,
+  sizeMinLoc,
 } = {}) {
   if (typeof markdownText !== "string" || markdownText.length === 0) {
     return { ok: false, reason: "missing_plan_markdown" };
@@ -237,7 +262,7 @@ export function refinePlanFileInPlace({
   // Plan-time size estimate (phase 4 of #1480): the same fail-closed check as an
   // over-budget PR, run at plan time instead of on a real diff. `validatePhaseSizeEstimate`
   // owns the vocabulary/threshold and the oversize-without-justification fail-closed reason.
-  const sizeEstimateResult = validatePhaseSizeEstimate(payload.sizeEstimate, sizeSoftLoc);
+  const sizeEstimateResult = validatePhaseSizeEstimate(payload.sizeEstimate, sizeSoftLoc, { waiverLoc: sizeWaiverLoc, minLoc: sizeMinLoc });
   if (!sizeEstimateResult.ok) {
     return { ok: false, reason: sizeEstimateResult.reason, planFileIntakeState: startState };
   }
@@ -304,6 +329,7 @@ export function refinePlanFileInPlace({
       softLoc: sizeEstimateResult.softLoc,
       overBudget: sizeEstimateResult.overBudget,
       oversizeNote: sizeEstimateResult.oversizeNote,
+      mergeCandidate: sizeEstimateResult.mergeCandidate,
     },
     // Generalized proposal-first stop: the refined plan is the local artifact,
     // it is written in-place, and the loop stops here for human review before
