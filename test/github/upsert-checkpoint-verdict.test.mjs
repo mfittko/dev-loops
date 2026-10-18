@@ -12071,6 +12071,12 @@ test("round cap: a past-cap post with only --findings-json is refused and names 
   });
 });
 
+test("round cap: a past-cap verdict-only post with neither --findings-ledger nor --findings-json is not refused", async () => {
+  await withCapRound({ findings: [] }, async ({ post }) => {
+    await post({ findingsLedger: undefined, verdict: "blocked" });
+  });
+});
+
 test("round cap: past the cap a --findings-json act item the ledger does not list is refused naming the ledger; below the cap it is unchanged", async () => {
   const extra = capFinding("low", "act", { summary: "extra act item" });
   await withCapRound({ findings: [], overallVerdict: "clean" }, async ({ post, repoRoot }) => {

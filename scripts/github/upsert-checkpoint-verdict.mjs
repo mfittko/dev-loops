@@ -2832,7 +2832,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // Round cap (draft_gate only): past the cap an open act item or a severity disagreement blocks.
   // Cap logic runs on a judged ledger only; a --findings-json-only post past the cap is refused.
   const capState = await readRoundCapState({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.tmpRoot }, config, repoRoot);
-  if (capState.pastCap && !preloadedFindingsLedger) {
+  if (capState.pastCap && !preloadedFindingsLedger && options.findingsJson) {
     throw new Error(`${options.gate} @ ${canonicalHeadSha} is at or past the gates.draft.maxReviewRounds cap (round ${capState.round} of ${capState.cap}) and needs a cap decision, which runs on a judged ledger only. Post with --findings-ledger (write-gate-findings-log.mjs); --findings-json alone is refused.`);
   }
   const capFindings = preloadedFindingsLedger?.findings ?? [];
