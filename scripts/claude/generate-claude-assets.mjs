@@ -11,8 +11,10 @@
  *   node scripts/claude/generate-claude-assets.mjs --check    Exit non-zero if the committed
  *                                                             tree drifts from the sources.
  *   --repo-root <path>   Override the repo root (default: cwd).
+ *   --help, -h           Print usage and exit 0 without writing anything.
  */
 import fs from "node:fs";
+import { parseArgs } from "node:util";
 import path from "node:path";
 
 import { transformAgent, transformSkill, transformCommand, stripPiOnlyBlocks, rewriteCliInvocation, splitFrontmatter, isSkillExcludedFromClaude } from "@dev-loops/core/claude/asset-generation";
@@ -254,13 +256,31 @@ export function checkAssets(assets, { repoRoot = process.cwd() } = {}) {
   return drifted;
 }
 
+const USAGE = "Usage: node scripts/claude/generate-claude-assets.mjs [--check] [--repo-root <path>] [--help]\n";
+
 function main(argv) {
-  const check = argv.includes("--check");
-  const rootIdx = argv.indexOf("--repo-root");
+  let values;
+  try {
+    ({ values } = parseArgs({
+      args: argv,
+      strict: true,
+      options: { check: { type: "boolean" }, "repo-root": { type: "string" }, help: { type: "boolean", short: "h" } },
+    }));
+  } catch (error) {
+    const missingValue = error?.code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE" && /repo-root/.test(error.message);
+    const message = missingValue ? "--repo-root requires a path value" : error.message;
+    process.stderr.write(JSON.stringify({ ok: false, error: message }) + "\n" + USAGE);
+    process.exit(1);
+  }
+  if (values.help) {
+    process.stdout.write(USAGE);
+    return;
+  }
+  const check = values.check === true;
   let repoRoot = process.cwd();
-  if (rootIdx !== -1) {
-    const value = argv[rootIdx + 1];
-    if (typeof value !== "string" || value.length === 0 || value.startsWith("--")) {
+  if (values["repo-root"] !== undefined) {
+    const value = values["repo-root"];
+    if (value.length === 0) {
       process.stderr.write(JSON.stringify({ ok: false, error: "--repo-root requires a path value" }) + "\n");
       process.exit(1);
     }
