@@ -274,6 +274,11 @@ async function emitCompletionOnly({ repo, pr, headSha, tmpRoot, cwd, fetchPr, ex
     }
     const sourceBytes = await capture.read(order.requiredReads.find((read) => read.kind === order.source)?.path ?? "");
     if (!sourceBytes || jsonContentDigest(JSON.parse(sourceBytes)) !== order.authority?.sourceDigest) throw new Refusal("--completion-only refused: the source differs from the plan's source authority");
+    if (order.source === "act-list") {
+      for (const root of new Set([canonicalRoot, path.join(resolveRepoRoot(cwd), "tmp")])) {
+        if (findRetirementAfter(root, order.gate, headSha, emittedAt(plan.executionIdentity))) throw new Refusal("--completion-only refused: the plan's source round was retired");
+      }
+    }
     assertCandidateAuthority({ cwd, branch: order.mutationAuthority.branch, head: headSha });
     const handoff = await verifyPulledResult({ resultPath: path.join(dir, plan.executionIdentity, "fixer-disposition.json"), receiptTmpRoot: canonicalRoot, role: "fixer", workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity });
     if (!["result_missing", "result_predates_pull"].includes(handoff.reason)) throw new Refusal(`--completion-only refused: the active fixer handoff is ${handoff.reason ?? "current"}, not missing or stale`);

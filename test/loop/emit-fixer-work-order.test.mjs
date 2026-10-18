@@ -2142,3 +2142,15 @@ for (const defect of ["fakePlan", "foreignReceipt", "branchDrift", "threadBytes"
     assert.deepEqual(await refusalState(fixture, old), state, "a refusal leaves the archive and the execution index unchanged");
   });
 });
+
+test("completion-only refuses a plan whose source round was retired", async () => {
+  await withFixture(async (fixture) => {
+    const { f, old, reenter } = await stuckFull(fixture);
+    const round = path.join(fixture.root, "tmp", "retired-gate-rounds", f.candidate, "r1");
+    await mkdir(round, { recursive: true });
+    await writeFile(path.join(round, "retirement.json"), JSON.stringify({ gate: old.workOrder.gate, retiredAt: new Date(Date.now() + 1000).toISOString() }));
+    const active = await readFile(old.planPath);
+    await assert.rejects(reenter(), /source round was retired/);
+    assert.deepEqual(await readFile(old.planPath), active);
+  });
+});
