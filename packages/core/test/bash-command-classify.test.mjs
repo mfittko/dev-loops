@@ -1366,6 +1366,7 @@ test("commandContainsTimeoutWrappedSanctionedTool flags timeout in front of sanc
     "timeout 60 bun /w/cli/index.mjs loop startup",
     "/usr/bin/timeout 60 dev-loops-run x",
     "env timeout 60 dev-loops-run x",
+    "timeout 60 node scripts/projects/remove-queue-item.mjs --repo o/r",
     "command timeout 60 dev-loops-run x",
     "sudo timeout 60 dev-loops-run x",
     "nice timeout 60 dev-loops-run x",
