@@ -683,3 +683,43 @@ test("defaultReadCi maps the gh view fields to headSha and rollup", async () => 
   assert.equal(calls[0].repo, "o/r");
   assert.equal(calls[0].pr, 7);
 });
+
+// Run draft_gate, optionally rewrite its artifact, then resolve pre_approval_gate.
+async function secondGate(rewrite, firstProfile = "full-repository", secondProfile = "full-repository") {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    const suite = (profile) => profile === "targeted" ? ["--suite", "passing"] : [];
+    const first = await resolveValidation(parseResolveValidationArgs([...args(headSha, firstProfile), ...suite(firstProfile)]), { repoRoot });
+    const file = path.join(repoRoot, first.artifactPath);
+    if (rewrite) await writeFile(file, JSON.stringify(rewrite(first.artifact)));
+    const second = await resolveValidation({ ...parseResolveValidationArgs([...args(headSha, secondProfile), ...suite(secondProfile)]), gate: "pre_approval_gate" }, { repoRoot });
+    return { first, second };
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+}
+
+test("an exact passing artifact from the other lifecycle gate is reused", async () => {
+  const { first, second } = await secondGate();
+  assert.equal(second.status, "complete");
+  assert.equal(second.artifact.reusedFrom, "draft_gate");
+  assert.equal(second.artifact.gate, "pre_approval_gate");
+  assert.deepEqual(second.artifact.suites, first.artifact.suites);
+});
+
+test("a prior artifact for another head is not reused", async () => {
+  const { second } = await secondGate((a) => ({ ...a, headSha: "0".repeat(40) }));
+  assert.equal(second.status, "complete");
+  assert.equal(second.artifact.reusedFrom, undefined);
+});
+
+test("a failed prior artifact is not reused and a real run happens", async () => {
+  const { first, second } = await secondGate((a) => ({ ...a, ok: false, allPassed: false }));
+  assert.equal(second.artifact.reusedFrom, undefined);
+  assert.notEqual(second.artifact.generatedAt, first.artifact.generatedAt);
+  assert.equal(second.status, "complete");
+});
+
+test("a prior artifact from a different profile is not reused", async () => {
+  const { second } = await secondGate(null, "targeted", "full-repository");
+  assert.equal(second.status, "complete");
+  assert.equal(second.artifact.reusedFrom, undefined);
+});

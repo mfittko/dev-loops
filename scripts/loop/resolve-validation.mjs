@@ -11,7 +11,7 @@ import { LOOP_DERIVED_CI_CHECK_NAMES, deriveLoopCiStatusFromRollup, partitionEnt
 
 import { parsePrNumber } from "../_cli-primitives.mjs";
 import { isDirectCliRun } from "../_core-helpers.mjs";
-import { normalizeGate, normalizeHeadSha } from "../github/_gate-names.mjs";
+import { LIFECYCLE_GATES, normalizeGate, normalizeHeadSha } from "../github/_gate-names.mjs";
 import { viewPr } from "../github/view-pr.mjs";
 import { buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
@@ -210,7 +210,21 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
       if (options.profile === "targeted" && classification === "full-repository") return incomplete("targeted profile cannot run full-repository validation");
       if (options.profile === "targeted" && classification !== "targeted") return incomplete("targeted profile requires a validation suite");
       if (options.profile === "full-repository" && classification !== "full-repository") return incomplete("verify script is not classified as full-repository validation");
-      artifact = { ...await buildValidationArtifact(options, { repoRoot }), profile: options.profile, toolchain: pinned };
+      // Reuse another lifecycle gate's passing artifact for the same head, profile, toolchain and suites.
+      for (const gate of LIFECYCLE_GATES.filter((g) => g !== options.gate)) {
+        try {
+          const prior = JSON.parse(await readFile(path.resolve(repoRoot, buildValidationResultsPath({ ...options, gate })), "utf8"));
+          if (prior.ok === true && prior.allPassed === true
+            && prior.repo === options.repo && prior.pr === options.pr && String(prior.headSha).toLowerCase() === options.headSha
+            && prior.profile === options.profile && prior.toolchain === pinned
+            && JSON.stringify(prior.suites.map((s) => s.name)) === JSON.stringify(options.suites)
+            && prior.suites.every((s) => s.exitCode === 0)) {
+            artifact = { ...prior, gate: options.gate, generatedAt: new Date().toISOString(), reusedFrom: gate };
+            break;
+          }
+        } catch { /* An unreadable or malformed prior artifact is never reused. */ }
+      }
+      artifact ??= { ...await buildValidationArtifact(options, { repoRoot }), profile: options.profile, toolchain: pinned };
     }
     const afterProblem = currentTreeProblem();
     if (afterProblem) return incomplete(`validation changed the worktree: ${afterProblem.reason}`, afterProblem);
