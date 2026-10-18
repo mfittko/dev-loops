@@ -166,6 +166,7 @@ function evaluatePredicate(value, predicate) {
       // closed when operand types differ so numeric-string fields don't misfire.
       // jq sorts null below every other value (documented: select(.x > 10) on a null x is false).
       if (left === null && right !== null) return parsed.op === "<" || parsed.op === "<=";
+      if (right === null && left !== null) return parsed.op === ">" || parsed.op === ">=";
       if (typeof left !== typeof right) {
         throw new JqFilterError(`Cannot order-compare ${typeof left} and ${typeof right}`);
       }

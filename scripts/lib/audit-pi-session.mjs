@@ -148,11 +148,14 @@ function latestTranscriptMtime(directoryPath) {
 const NO_SESSION = { path: null, mtime: -Infinity };
 
 function newestPiSession(sessionsBaseDir, repositoryCwd) {
-  if (!fs.existsSync(sessionsBaseDir)) return NO_SESSION;
-
   const repositoryPrefix = piSessionDirectoryPrefix(canonicalRepositoryRoot(repositoryCwd));
   const worktreePrefix = `${repositoryPrefix.slice(0, -2)}-tmp-worktrees-`;
-  const entries = fs.readdirSync(sessionsBaseDir, { withFileTypes: true });
+  let entries;
+  try {
+    entries = fs.readdirSync(sessionsBaseDir, { withFileTypes: true });
+  } catch {
+    return NO_SESSION;
+  }
   const matchingDirs = entries
     .filter((entry) => entry.isDirectory() && (
       entry.name === repositoryPrefix ||
@@ -169,7 +172,12 @@ function newestSessionIn(matchingDirs) {
   let latestMtime = -Infinity;
 
   for (const dir of matchingDirs) {
-    const dirEntries = fs.readdirSync(dir, { withFileTypes: true });
+    let dirEntries;
+    try {
+      dirEntries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
     for (const entry of dirEntries) {
       if (entry.name === "subagent-artifacts") continue;
       const fullPath = path.join(dir, entry.name);

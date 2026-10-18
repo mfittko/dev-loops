@@ -971,7 +971,7 @@ describe("audit-pi-session unit & integration", () => {
       1,
     );
     assert.equal(stdout.value, "");
-    assert.match(stderr.value, /Could not automatically locate latest Pi session directory/);
+    assert.match(stderr.value, /Could not automatically locate latest Pi or Claude Code session for this repository/);
 
     stdout = captureStream();
     stderr = captureStream();
@@ -1845,6 +1845,33 @@ describe("audit-pi-session #2436 measurement fixes", () => {
 
     assert.equal(findLatestSession(piBase, "/Users/tester/dev-loops", claudeBase), claudeFile);
     assert.equal(findLatestSession(piBase, "/Users/tester/dev-loops", path.join(tmpDir, "absent")), piDir);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("still selects the Claude session when the Pi base is not a directory", () => {
+    const tmpDir = createTempDir();
+    const piBase = path.join(tmpDir, "sessions-file");
+    const claudeFile = path.join(tmpDir, "projects", "-Users-tester-dev-loops", "abc.jsonl");
+    fs.writeFileSync(piBase, "not a directory");
+    fs.mkdirSync(path.dirname(claudeFile), { recursive: true });
+    fs.writeFileSync(claudeFile, "claude");
+
+    assert.equal(findLatestSession(piBase, "/Users/tester/dev-loops", path.join(tmpDir, "projects")), claudeFile);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("keeps snapshot output_tokens when it exceeds the content-length estimate", async () => {
+    const tmpDir = createTempDir();
+    const file = path.join(tmpDir, "agent-big-snap.jsonl");
+    fs.writeFileSync(file, JSON.stringify({
+      type: "assistant",
+      message: { id: "m1", role: "assistant", model: "claude-opus-5-5", stop_reason: null, content: [{ type: "text", text: "a".repeat(20) }], usage: usage(50) },
+    }) + "\n");
+
+    const result = await auditPiSession(file);
+    assert.equal(result.summary.outputTokens, 50);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });

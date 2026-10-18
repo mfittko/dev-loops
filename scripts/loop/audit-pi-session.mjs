@@ -125,7 +125,7 @@ export async function runAuditCli(
     if (!targetPath) {
       const latest = findLatestSession(undefined, cwd);
       if (!latest) {
-        stderr.write(`${formatCliError("Could not automatically locate latest Pi session directory.", { usage: USAGE })}\n`);
+        stderr.write(`${formatCliError("Could not automatically locate latest Pi or Claude Code session for this repository.", { usage: USAGE })}\n`);
         return 1;
       }
       targetPath = latest;
