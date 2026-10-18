@@ -262,8 +262,8 @@ export function decideBashGate({
       decision: "deny",
       reason:
         "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through a bounded FOREGROUND probe (scripts/github/" +
-        "probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit --timeout/" +
-        "--timeout-ms; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops-run cli/index.mjs loop watch-cycle; " +
+        "probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit " +
+        "--timeout <seconds>; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops-run cli/index.mjs loop watch-cycle; " +
         "gh run watch) — nohup/disown/tmux/screen detach, while-sleep-poll loops, and bare-`&` " +
         "backgrounding of a probe/wait script are barred for the coordinator and every subagent (a " +
         "backgrounded wait orphans under Claude Code, which has no async wake to join it).",

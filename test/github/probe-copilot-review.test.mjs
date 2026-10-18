@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { test } from "bun:test";
+import { captureStderr } from "../_helpers.mjs";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import { buildAttemptBudget, buildPollDelayMs, findFreshCopilotActivity, formatProbeConcise, parseWatchCliArgs, watchCopilotReview } from "../../scripts/github/probe-copilot-review.mjs";
@@ -349,4 +350,9 @@ test("probe-copilot-review parses --timeout in seconds; --timeout-ms is a deprec
   assert.equal(parseWatchCliArgs([...base, "--timeout", "0.1"]).timeoutMs, 100);
   assert.equal(parseWatchCliArgs([...base, "--timeout", "60"]).timeoutMs, 60_000);
   assert.throws(() => parseWatchCliArgs([...base, "--timeout", "1", "--timeout-ms", "1000"]), /mutually exclusive/);
+});
+
+test("probe-copilot-review warns on stderr for deprecated --timeout-ms", () => {
+  const err = captureStderr(() => parseWatchCliArgs(["--repo", "o/r", "--pr", "1", "--timeout-ms", "1500"]));
+  assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
 });

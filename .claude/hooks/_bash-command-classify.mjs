@@ -1127,9 +1127,11 @@ export function commandContainsDetachedWaitTool(command) {
  * matching. Sanctioned wait tools bound themselves with `--timeout <seconds>` instead (issue 2755).
  * @param {string} command @returns {boolean}
  */
+const TIMEOUT_DURATION = "(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?[smhd]?";
 const TIMEOUT_WRAPPER_RE = new RegExp(
-  `^${ENV_ASSIGNMENT_RUN}g?timeout\\s+(?:-{1,2}[\\w-]+(?:=\\S+|\\s+(?:\\d+(?:\\.\\d+)?[smhd]?|[A-Z]+))?\\s+)*\\d+(?:\\.\\d+)?[smhd]?\\s+` +
-    "(?:(?:node|bun)\\s+)?(?:\\S*/)?(?:dev-loops(?:-run)?\\s|\\S*scripts/\\S+\\.mjs)",
+  `^${ENV_ASSIGNMENT_RUN}(?:(?:env|command|sudo|nice)\\s+(?:(?:-\\S+|[A-Za-z_]\\w*=\\S*)\\s+)*)*` +
+    `(?:\\S*/)?g?timeout\\s+(?:-{1,2}[\\w-]+(?:=\\S+|\\s+(?:${TIMEOUT_DURATION}|[A-Z]+))?\\s+)*${TIMEOUT_DURATION}\\s+` +
+    "(?:(?:node|bun)\\s+)?['\"]?(?:\\S*/)?(?:dev-loops(?:-run)?['\"]?(?:\\s|$)|\\S*scripts/\\S+\\.mjs|\\S*cli/index\\.mjs)",
 );
 export function commandContainsTimeoutWrappedSanctionedTool(command) {
   return shellSegments(command).some((segment) => TIMEOUT_WRAPPER_RE.test(segment));

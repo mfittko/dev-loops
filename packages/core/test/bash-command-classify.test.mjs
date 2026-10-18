@@ -1362,6 +1362,18 @@ test("commandContainsTimeoutWrappedSanctionedTool flags timeout in front of sanc
     "gtimeout 1.5 dev-loops-run scripts/loop/wait-for-gate-units.mjs",
     "FOO=1 timeout 10 dev-loops-run scripts/github/probe-ci-status.mjs",
     "cd x && timeout 30 dev-loops-run scripts/github/merge-pr.mjs",
+    "timeout 60 node packages/cli/index.mjs loop startup",
+    "timeout 60 bun /w/cli/index.mjs loop startup",
+    "/usr/bin/timeout 60 dev-loops-run x",
+    "env timeout 60 dev-loops-run x",
+    "command timeout 60 dev-loops-run x",
+    "sudo timeout 60 dev-loops-run x",
+    "nice timeout 60 dev-loops-run x",
+    "timeout .5 dev-loops-run x",
+    "timeout 1e3 dev-loops-run x",
+    "timeout 60 'dev-loops-run' x",
+    'timeout 60 "dev-loops-run" x',
+    "timeout 60 dev-loops-run",
   ]) {
     assert.equal(commandContainsTimeoutWrappedSanctionedTool(cmd), true, cmd);
   }

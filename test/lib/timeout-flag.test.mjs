@@ -27,6 +27,9 @@ describe("resolveTimeoutMs", () => {
   test("--timeout-ms rejects non-integers", () => {
     expect(() => run({ timeoutMs: "1.5" })).toThrow("--timeout-ms must be");
   });
+  test("rejects values that overflow to a non-finite budget", () => {
+    expect(() => run({ timeout: "9".repeat(400) })).toThrow("--timeout must be");
+  });
   test("both flags fail closed", () => {
     expect(() => run({ timeout: "1", timeoutMs: "1000" })).toThrow("mutually exclusive");
   });

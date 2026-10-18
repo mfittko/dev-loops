@@ -157,7 +157,7 @@ test("no skill, agent, or generated Claude asset prescribes a `timeout N` shell 
   const markdownIn = (dir) => readdirSync(join(root, dir), { recursive: true })
     .filter((p) => p.endsWith(".md") && !p.split("/").includes("node_modules"))
     .map((p) => join(dir, p));
-  const wrapper = /`(?:g?timeout) (?:-\S+ )*\d+[smhd]? /;
+  const wrapper = /(?:^|[`\s])g?timeout (?:-\S+ )*\d+[smhd]?\s/m;
   const offenders = ["skills", "agents", ".claude"].flatMap(markdownIn)
     .filter((file) => wrapper.test(readFileSync(join(root, file), "utf8")));
   assert.deepEqual(offenders, []);

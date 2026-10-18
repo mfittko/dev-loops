@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { test } from "bun:test";
+import { captureStderr } from "../_helpers.mjs";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
@@ -700,4 +701,9 @@ test("watch-initial-copilot-pr returns prior_linked_pr_closed_unmerged", async (
   assert.equal(result.ok, true);
   assert.equal(result.status, "prior_linked_pr_closed_unmerged");
   assert.equal(result.prNumber, 101);
+});
+
+test("watch-initial-copilot-pr warns on stderr for deprecated --timeout-ms", () => {
+  const err = captureStderr(() => parseWatchInitialCopilotPrCliArgs(["--repo", "owner/repo", "--issue", "59", "--timeout-ms", "3600000"]));
+  assert.match(err, /--timeout-ms is deprecated; use --timeout 3600/);
 });

@@ -339,6 +339,7 @@ Optional:
 - `--poll-interval-ms <positive-integer>` (default `60000`, i.e. 1 minute)
 - `--timeout <seconds>` (non-negative number, fractions allowed; default `1800`, i.e. 30 minutes)
 - `--timeout-ms <n>` is a deprecated alias: it warns on stderr and converts to seconds. Passing both flags fails closed.
+- `scripts/loop/watch-initial-copilot-pr.mjs` takes the same `--timeout <seconds>` flag with a persistent-wait floor: a non-zero value must be at least `3600` (`0` = a single immediate check). A shorter value fails closed.
 
 Contract:
 - captures a baseline snapshot, then performs a bounded number of follow-up polls

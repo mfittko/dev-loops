@@ -16,7 +16,9 @@ export function resolveTimeoutMs({ timeout, timeoutMs }, { warn = (m) => process
   }
   if (timeout !== undefined) {
     if (!NON_NEGATIVE_NUMBER.test(timeout)) throw new Error("--timeout must be a non-negative number of seconds");
-    return Math.round(Number(timeout) * 1000);
+    const ms = Math.round(Number(timeout) * 1000);
+    if (!Number.isFinite(ms)) throw new Error("--timeout must be a non-negative number of seconds");
+    return ms;
   }
   if (timeoutMs !== undefined) {
     if (!/^\d+$/u.test(timeoutMs)) throw new Error("--timeout-ms must be a non-negative integer");

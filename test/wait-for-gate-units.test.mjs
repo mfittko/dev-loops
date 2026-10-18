@@ -8,7 +8,7 @@ import { test } from "bun:test";
 import { pullReceiptPath } from "../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../cli/index.mjs";
 import { parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
-import { withTempDir } from "./_helpers.mjs";
+import { captureStderr, withTempDir } from "./_helpers.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/loop/wait-for-gate-units.mjs", import.meta.url));
 const HEAD = "a".repeat(40);
@@ -310,4 +310,9 @@ test("a round retired while the unit checks are in flight is round_retired, not 
     await writer.close();
     assert.equal((await pending).outcome, "round_retired");
   });
+});
+
+test("wait-for-gate-units warns on stderr for deprecated --timeout-ms", () => {
+  const err = captureStderr(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "1500"]));
+  assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
 });
