@@ -1566,9 +1566,8 @@ export function summarizeRefinementGateCheck({ body = "", issueNumber = null } =
 }
 
 /**
- * Comparable items of a spec section body: each list item (continuation lines joined) and each
- * narrative paragraph is one item, so prose and wrapped lines take part in the comparison.
- * Fenced code is skipped. Empty checkbox placeholders yield no item.
+ * Comparable items of a spec section body: each list item with its wrapped continuation lines joined.
+ * Prose paragraphs, rules and comments are not items. Fenced code is skipped. Empty checkbox placeholders yield no item.
  */
 function extractComparableItems(body) {
   const items = [];
@@ -1587,10 +1586,7 @@ function extractComparableItems(body) {
       items.push(marker[1].replace(/^\[[ xX]\]\s*/u, "").trim());
       open = true;
     } else if (open) {
-      items[items.length - 1] = `${items[items.length - 1]} ${line.trim()}`;
-    } else {
-      items.push(line.trim());
-      open = true;
+      items[items.length - 1] = `${items[items.length - 1]} ${line.replace(/^\s*(?:>\s*)*/u, "").trim()}`;
     }
   }
   return items.filter((item) => item.length > 0);

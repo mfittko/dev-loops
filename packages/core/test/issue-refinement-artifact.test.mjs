@@ -1306,9 +1306,8 @@ test("diffPrBodyAgainstIssue flags PR items the issue lacks, including non-goals
   assert.deepEqual(hits.map((h) => h.site), ["pr-body/non-goals:2"]);
 });
 
-test("diffPrBodyAgainstIssue compares narrative Non-goals prose and list continuation lines", () => {
-  const prose = diffPrBodyAgainstIssue({ prBody: prWith({ goals: "API changes are allowed." }), issueBody: issueWith({ goals: "No API changes." }) });
-  assert.deepEqual(prose.map((h) => h.site).sort(), ["issue-body/non-goals:1", "pr-body/non-goals:1"]);
+test("diffPrBodyAgainstIssue does not compare prose paragraphs; list continuation lines are joined", () => {
+  assert.deepEqual(diffPrBodyAgainstIssue({ prBody: prWith({ goals: "API changes are allowed." }), issueBody: issueWith({ goals: "No API changes." }) }), []);
   const wrapped = diffPrBodyAgainstIssue({
     prBody: prWith({ scope: "- Alpha\n  for all platforms.\n- Beta wide" }),
     issueBody: issueWith({ scope: "- Alpha\n  for one platform.\n- Beta wide" }),
@@ -1324,6 +1323,22 @@ test("diffPrBodyAgainstIssue reads content under deeper sub-headings of a spec s
   assert.deepEqual(drift.map((h) => h.site), ["issue-body/in-scope:3"]);
   const nested = prWith().replace("## Acceptance criteria\n", "## Acceptance criteria\n\n### Details\n").replace("## Definition of done", "## Definition of done");
   assert.deepEqual(diffPrBodyAgainstIssue({ prBody: nested, issueBody: issueWith() }), []);
+});
+
+test("diffPrBodyAgainstIssue yields no hits for a projected PR body with gate and merge outcomes", () => {
+  const matrix = [
+    "## AC / DoD matrix", "",
+    "| Criterion outcome | Required completion evidence |",
+    "|---|---|",
+    "| the feature works end to end | a focused test proves the feature works |",
+    "| the change is reviewed | draft_gate and pre_approval_gate pass on the final head; merge only on a full gate pass |",
+    "",
+  ].join("\n");
+  const issueBody = `## In scope\n\n- Alpha\n\n${matrix}\n## Non-goals\n\n- No new scanner\n`;
+  const { markdown } = derivePrChecklistsFromIssueMatrix({ body: issueBody });
+  assert.match(markdown, /Gate and merge outcomes are not checkboxes/);
+  const prBody = `## In scope\n\n- Alpha\n\n${markdown}\n\n## Non-goals\n\n- No new scanner\n`;
+  assert.deepEqual(diffPrBodyAgainstIssue({ prBody, issueBody }), []);
 });
 
 test("diffPrBodyAgainstIssue reads decorated AC and DoD headings on the PR side", () => {
