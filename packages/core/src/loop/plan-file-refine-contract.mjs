@@ -112,6 +112,10 @@ export function validatePhaseSizeEstimate(sizeEstimate, softLoc = DEFAULT_SIZE_S
   const oversizeNote = overBudget ? justification : null;
   const mergeCandidate = typeof minLoc === "number" && minLoc > 0 && logicLoc < minLoc;
   const assessment = typeof mergeAssessment === "string" ? mergeAssessment.trim() : "";
+  // PLAN-SIZE-BAND: the merge assessment under minLoc fails closed like the split assessment above softLoc.
+  if (mergeCandidate && assessment.length === 0) {
+    return { ok: false, reason: "size_estimate_merge_not_assessed" };
+  }
   const body = [
     `- Estimated logic LOC: ${logicLoc}`,
     `- Tier: ${tier}`,
@@ -119,7 +123,7 @@ export function validatePhaseSizeEstimate(sizeEstimate, softLoc = DEFAULT_SIZE_S
     overBudget
       ? `- Oversize: justified — ${oversizeNote}`
       : `- Oversize: n/a (within default tier's softLoc budget of ${effectiveSoftLoc})`,
-    ...(mergeCandidate ? [`- Merge candidate: under minLoc ${minLoc}; merge assessment: ${assessment || "not recorded"}`] : []),
+    ...(mergeCandidate ? [`- Merge candidate: under minLoc ${minLoc}; merge assessment: ${assessment}`] : []),
   ].join("\n");
   return { ok: true, logicLoc, tier, softLoc: effectiveSoftLoc, overBudget, oversizeNote, mergeCandidate, sourceFiles, body };
 }

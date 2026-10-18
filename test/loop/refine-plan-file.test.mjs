@@ -29,7 +29,7 @@ const PAYLOAD = {
   acceptanceCriteria: "- The thing works.",
   definitionOfDone: "- Tests pass; CHANGELOG updated.",
   coverageMatrix: "| Item | Type | Status | Evidence | Notes |\n|---|---|---|---|---|\n| The thing works | AC | Met | test | |",
-  sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc: 90, tier: "default" },
+  sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc: 90, tier: "default", mergeAssessment: "no sibling shares a file" },
   grillFindings: [{ kind: "drift", docOnly: false, summary: "claim contradicts contract" }],
 };
 
@@ -234,13 +234,13 @@ describe("refine-plan-file CLI", () => {
     }
   });
 
-  test("a broken .devloops surfaces config errors to stderr and falls back to the default softLoc", async () => {
+  test("a broken .devloops surfaces config errors to stderr and falls back to the default bounds", async () => {
     // logicLoc 90 stays under the fallback 400 so the refine still succeeds; the
     // point is that a config error is SURFACED (not silently swallowed) and the
     // plan-time threshold falls back to the default, matching the post-hoc gate.
     const { tempDir, planPath, payloadPath, ghStub } = await setup(BASE_PLAN, {
       ...PAYLOAD,
-      sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc: 90, tier: "default" },
+      sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc: 90, tier: "default", mergeAssessment: "no sibling shares a file" },
     });
     try {
       // Missing `version: 1` — the config schema rejects it.
@@ -266,7 +266,7 @@ describe("refine-plan-file CLI", () => {
     const run = async (logicLoc, devloops) => {
       const { tempDir, planPath, payloadPath, ghStub } = await setup(BASE_PLAN, {
         ...PAYLOAD,
-        sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc, tier: "default", oversizeJustification: "cohesive" },
+        sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc, tier: "default", oversizeJustification: "cohesive", mergeAssessment: "no sibling shares a file" },
       });
       try {
         if (devloops) await writeFile(path.join(tempDir, ".devloops"), devloops, "utf8");

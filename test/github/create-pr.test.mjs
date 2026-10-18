@@ -2119,7 +2119,9 @@ test("create-pr creates when the branch is below the resolved waiverLoc, with no
 });
 
 test("create-pr creates when the size cannot be evaluated (unknown does not refuse)", async () => {
-  for (const evaluatePrSizeBudget of [async () => { throw new Error("no ref"); }, async () => null]) {
+  for (const result of [() => { throw new Error("no ref"); }, () => null]) {
+    let calls = 0;
+    const evaluatePrSizeBudget = async () => { calls += 1; return result(); };
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-size-unknown-"));
     try {
       await initSizeBudgetFixtureRepo(tempDir, { headFiles: [{ path: "notes.txt", content: "x\n" }] });
@@ -2144,6 +2146,7 @@ test("create-pr creates when the size cannot be evaluated (unknown does not refu
         }
       })();
       assert.equal(code, 0);
+      assert.equal(calls, 1, "the size evaluator must be called exactly once");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

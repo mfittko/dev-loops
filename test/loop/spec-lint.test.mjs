@@ -264,6 +264,28 @@ test("size forecast: two lines under waiverLoc pass; a line at or above it gives
   assert.deepEqual(sizeKinds((await run(forecastLine(1, 1500), forecastLine("b", 1501), forecastLine(3, 10))).findings), ["size_forecast_split_required:1", "size_forecast_split_required:b"]);
 });
 
+test("size forecast: a malformed forecast bullet next to a valid one is a size_forecast_malformed finding, not dropped", async () => {
+  const root = await fixtureRepo();
+  const valid = "- forecast: slice=1 wloc=200 files=a.mjs";
+  const run = (...lines) => lintSpec({ body: `## Size forecast\n\n${lines.join("\n")}`, repoRoot: root });
+  for (const line of [
+    "- forecast: slice=2 wloc=1800 files=a.mjs, b.mjs",
+    "- forecast: slice=2 wloc=1,600 files=a.mjs",
+    "- forecast: slice=2 wloc=1600 files=a.mjs trailing note",
+    "* forecast: slice=2 wloc=1600 files=a.mjs",
+    "- forecast: slice=2 wloc=1600 files=",
+  ]) {
+    const { findings } = await run(valid, line);
+    assert.deepEqual(sizeKinds(findings), ["size_forecast_malformed:size-forecast"], line);
+    assert.deepEqual(findings.find((f) => f.kind === "size_forecast_malformed").detail, { line }, line);
+  }
+  // Accepted forms stay clean, including a comma-joined files list.
+  assert.deepEqual(sizeKinds((await run(valid, "- forecast: slice=2 wloc=1800 files=a.mjs,b.mjs")).findings), ["size_forecast_split_required:2"]);
+  assert.deepEqual(sizeKinds((await run(valid)).findings), []);
+  // A malformed bullet with no valid line still reports the missing forecast too.
+  assert.deepEqual(sizeKinds((await run("- forecast: slice=2 wloc=1800 files=a.mjs, b.mjs")).findings), ["size_forecast_missing:size-forecast", "size_forecast_malformed:size-forecast"]);
+});
+
 test("size forecast: the split bound moves with a .devloops waiverLoc override", async () => {
   const root = await fixtureRepo();
   const body = `## Size forecast\n\n${forecastLine(1, 600)}`;

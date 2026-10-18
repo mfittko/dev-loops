@@ -26,26 +26,28 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-
 
 const USAGE = `Usage: dev-loops loop spec-lint --body-file <path> [--repo-root <path>]
 
-Lint an issue body against skills/docs/required-rules.json and docs/decisions.
+Lint an issue body against skills/docs/required-rules.json, docs/decisions and the .devloops size bounds.
 
   --body-file <path>   File that holds the issue body (required)
   --repo-root <path>   Repository root to lint against (default: cwd)
 
 Output (stdout, JSON):
   { "ok": true, "findings": [{ "kind", "id", "detail" }],
-    "checks": { "rules": { "status": "ran" } | { "status": "skipped", "reason" },
+    "checks": { "sizeForecast": { "status": "ran" },
+                "rules": { "status": "ran" } | { "status": "skipped", "reason" },
                 "adrs":  { "status": "ran" } | { "status": "skipped", "reason" } } }
 
 Finding kinds: unknown_rule_id, unknown_adr, adr_not_accepted, adr_superseded, adr_amended,
-size_forecast_missing, size_forecast_split_required (PLAN-SIZE-BAND; one
+size_forecast_missing, size_forecast_malformed, size_forecast_split_required (PLAN-SIZE-BAND; one
 "- forecast: slice=<id> wloc=<n> files=<path>,<path>" line per slice under "## Size forecast";
-a line at or above the resolved default-tier waiverLoc must be split, not disposed).
+a line at or above the resolved default-tier waiverLoc must be split, not disposed;
+a forecast bullet that does not parse is size_forecast_malformed, also not disposable).
 ADR citation forms: "ADR NNNN", "ADR-<digits>" and docs/decisions/NNNN-*.md links.
 
 ${JQ_OUTPUT_USAGE}
 
 Exit codes: 0 lint completed (with or without findings); 1 usage error;
-2 malformed required-rules.json, another runtime error, or an invalid --jq filter.`;
+2 malformed required-rules.json, a .devloops config error, another runtime error, or an invalid --jq filter.`;
 
 const RECORD_FILE_RE = /^(\d{4,})-[a-z0-9-]+\.md$/;
 const BODY_ADR_RE = /\bADR[\s-]+(\d{4,})\b|docs\/decisions\/(\d{4,})-[\w-]*\.md/g;
@@ -204,22 +206,32 @@ export function lintAdrCitations(body, records) {
 }
 
 const FORECAST_LINE_RE = /^\s*-\s+forecast:\s+slice=(\S+)\s+wloc=(\d+)\s+files=(\S+)\s*$/;
+// Any bullet that claims to be a forecast line; one that misses FORECAST_LINE_RE is reported, never dropped.
+const FORECAST_BULLET_RE = /^\s*[-*]\s*forecast:/;
 
 /**
  * PLAN-SIZE-BAND forecast lines under `## Size forecast`: one line per slice,
  * `- forecast: slice=<id> wloc=<n> files=<path>,<path>`. A missing line and a
- * line at or above the resolved waiverLoc are findings; neither can be disposed.
+ * line at or above the resolved waiverLoc are findings, and so is a forecast
+ * bullet that fails to parse (size_forecast_malformed); none can be disposed.
  */
 export function lintSizeForecast(body, { waiverLoc }) {
   const section = extractSection(stripFencedCode(body), "Size forecast") ?? "";
-  const lines = section.split(/\r?\n/).map((line) => FORECAST_LINE_RE.exec(line)).filter(Boolean);
-  if (lines.length === 0) {
-    return [{ kind: "size_forecast_missing", id: "size-forecast", detail: { reason: "no `- forecast: slice=<id> wloc=<n> files=<path>,<path>` line under `## Size forecast`" } }];
-  }
-  if (typeof waiverLoc !== "number") return [];
-  return lines
-    .filter(([, , wloc]) => Number(wloc) >= waiverLoc)
-    .map(([, slice, wloc]) => ({ kind: "size_forecast_split_required", id: slice, detail: { wloc: Number(wloc), waiverLoc } }));
+  const rawLines = section.split(/\r?\n/);
+  const lines = rawLines.map((line) => FORECAST_LINE_RE.exec(line)).filter(Boolean);
+  const malformed = rawLines
+    .filter((line) => FORECAST_BULLET_RE.test(line) && !FORECAST_LINE_RE.test(line))
+    .map((line) => ({ kind: "size_forecast_malformed", id: "size-forecast", detail: { line: line.trim() } }));
+  const missing = lines.length === 0
+    ? [{ kind: "size_forecast_missing", id: "size-forecast", detail: { reason: "no `- forecast: slice=<id> wloc=<n> files=<path>,<path>` line under `## Size forecast`" } }]
+    : [];
+  if (lines.length === 0 || typeof waiverLoc !== "number") return [...missing, ...malformed];
+  return [
+    ...malformed,
+    ...lines
+      .filter(([, , wloc]) => Number(wloc) >= waiverLoc)
+      .map(([, slice, wloc]) => ({ kind: "size_forecast_split_required", id: slice, detail: { wloc: Number(wloc), waiverLoc } })),
+  ];
 }
 
 export async function lintSpec({ body, repoRoot }) {

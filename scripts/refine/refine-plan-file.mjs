@@ -139,7 +139,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   // check-size-budget.mjs fallback — the plan-time estimate and the real diff
   // measurement are checked against the same number.
   const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
-  // A broken .devloops must not silently pick the fallback threshold at plan
+  // A broken .devloops must not silently pick the fallback bounds (softLoc, waiverLoc, minLoc) at plan
   // time and diverge from the post-hoc size-budget gate (which fails closed on
   // config errors). Plan-time is advisory — the real diff measurement re-checks
   // fail-closed — so surface the errors rather than aborting the refine.
@@ -148,7 +148,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       .map((e) => (typeof e === "string" ? e : e?.message ?? JSON.stringify(e)))
       .join("; ");
     process.stderr.write(
-      `refine-plan-file: ${configErrors.length} .devloops config error(s); the plan-time size threshold falls back to the default softLoc, and the post-hoc size-budget gate re-checks fail-closed: ${detail}\n`,
+      `refine-plan-file: ${configErrors.length} .devloops config error(s); the plan-time size bounds softLoc, waiverLoc and minLoc all fall back to the shipped defaults, and the post-hoc size-budget gate re-checks fail-closed: ${detail}\n`,
     );
   }
   const { softLoc: sizeSoftLoc, waiverLoc: sizeWaiverLoc, minLoc: sizeMinLoc } = resolveSizeBounds(config);

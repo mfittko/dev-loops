@@ -323,6 +323,15 @@ describe("validatePhaseSizeEstimate PLAN-SIZE-BAND bounds", () => {
     assert.equal(validatePhaseSizeEstimate({ logicLoc: 0 }, 400).ok, true);
   });
 
+  test("a merge candidate without a recorded merge assessment fails closed; minLoc 0 disables the rule", () => {
+    for (const mergeAssessment of [undefined, "", "   "]) {
+      const result = validatePhaseSizeEstimate({ sourceFiles: files, logicLoc: 100, mergeAssessment }, 400, { minLoc: 150 });
+      assert.deepEqual([result.ok, result.reason], [false, "size_estimate_merge_not_assessed"]);
+    }
+    assert.equal(validatePhaseSizeEstimate({ sourceFiles: files, logicLoc: 100 }, 400, { minLoc: 0 }).ok, true);
+    assert.equal(validatePhaseSizeEstimate({ sourceFiles: files, logicLoc: 100, mergeAssessment: "none shares a file" }, 400, { minLoc: 150 }).ok, true);
+  });
+
   test("a slice under minLoc is a merge candidate and minLoc 0 turns the rule off", () => {
     const estimate = { sourceFiles: files, logicLoc: 100, mergeAssessment: "no sibling shares a file" };
     const under = validatePhaseSizeEstimate(estimate, 400, { minLoc: 150 });

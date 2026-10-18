@@ -228,8 +228,9 @@ export const DEFAULT_TIER_DEFAULTS = Object.freeze({ softLoc: 400, waiverLoc: 15
 const DEFAULT_PLANNING_BAND_MIN_LOC = 150;
 
 /**
- * Resolved planning-size bounds (PLAN-SIZE-BAND): every planning-time and
- * pre-PR size check reads its numbers from here. `null` disables a bound.
+ * Resolved planning-size bounds (PLAN-SIZE-BAND): every planning-time size
+ * check (refine-plan-file, spec-lint) reads its numbers from here. `pr create`
+ * reads the resolved thresholds through evaluatePrSizeBudget. `null` disables a bound.
  */
 export function resolveSizeBounds(config) {
   const tier = config?.gates?.size?.tiers?.default ?? {};
