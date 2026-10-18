@@ -12107,3 +12107,15 @@ test("round cap: below the cap and with maxReviewRounds 0 the verdict is unchang
     assert.doesNotMatch(body, /round_cap_reached/);
   });
 });
+
+test("round cap: an unjudged ledger low judged defer only through --findings-json posts clean and lists it as cap-closed", async () => {
+  const unjudged = { severity: "low", angle: "correctness", summary: "low defer item" };
+  await withCapRound({ findings: [unjudged], overallVerdict: "clean" }, async ({ post, postedBody, repoRoot }) => {
+    const findingsJson = await writeCapFindingsJson(repoRoot, [capFinding("low", "defer")]);
+    await post({ findingsJson });
+    const body = postedBody();
+    assert.match(body, /\*\*Verdict:\*\* clean/);
+    assert.match(body, /\*\*Cap-closed items \(1\)\*\*/);
+    assert.match(body, /- low defer \(round 4 of cap 4\): `low defer item`/);
+  });
+});

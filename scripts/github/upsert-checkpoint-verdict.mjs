@@ -2837,8 +2837,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const capSummary = (f) => (typeof f?.summary === "string" ? f.summary.trim() : f?.summary);
   const ledgerCapFindings = preloadedFindingsLedger?.findings ?? [];
   const flatCapFindings = structuredFlatFindings.filter((a) => !ledgerCapFindings.some((l) => capSummary(l) === capSummary(a)));
-  stampCapClosed(flatCapFindings, capState);
   const capFindings = [...ledgerCapFindings, ...flatCapFindings];
+  // Stamp the merged set: a ledger finding judged only through --findings-json (disposition copied above) closes with a record too.
+  stampCapClosed(capFindings, capState);
   const capBlockers = evaluateRoundCap(capFindings, capState).blockers;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
