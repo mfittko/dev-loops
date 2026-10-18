@@ -222,7 +222,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
             && prior.profile === options.profile && prior.toolchain === pinned && prior.prTitle === currentTitle
             && JSON.stringify(prior.suites.map((s) => s.name)) === JSON.stringify(options.suites)
             && prior.suites.every((s) => s.exitCode === 0)) {
-            artifact = { ...prior, gate: options.gate, generatedAt: new Date().toISOString(), reusedFrom: gate };
+            artifact = { ...prior, gate: options.gate, generatedAt: new Date().toISOString(), reusedFrom: prior.reusedFrom ?? gate };
             break;
           }
         } catch { /* An unreadable or malformed prior artifact is never reused. */ }

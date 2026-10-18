@@ -735,3 +735,9 @@ test("a prior artifact without a prTitle is not reused", async () => {
   const { second } = await secondGate(({ prTitle: _t, ...a }) => a);
   assert.equal(second.artifact.reusedFrom, undefined);
 });
+
+test("reusing an artifact that already carries reusedFrom keeps the original gate", async () => {
+  const { second } = await secondGate((a) => ({ ...a, reusedFrom: "original_gate" }));
+  assert.equal(second.artifact.reusedFrom, "original_gate");
+  assert.equal(second.artifact.gate, "pre_approval_gate");
+});
