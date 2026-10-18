@@ -15,7 +15,7 @@
  * only ever run what the repo's own package.json already declares runnable.
  */
 import { execFile } from "node:child_process";
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -435,7 +435,8 @@ async function resolveDepState(repoRoot) {
   const bunLockPath = path.join(repoRoot, "bun.lock");
   const bunLockRaw = await readFile(bunLockPath, "utf8").catch(() => null);
   if (bunLockRaw !== null) {
-    const ownModules = await stat(path.join(repoRoot, "node_modules")).catch(() => null);
+    // lstat: a node_modules symlink (e.g. to the main checkout) is not the worktree's own install.
+    const ownModules = await lstat(path.join(repoRoot, "node_modules")).catch(() => null);
     if (!ownModules?.isDirectory()) {
       return { status: "stale", detail: "node_modules absent in repoRoot (ancestor installs are not used) — run bun install --frozen-lockfile in this worktree" };
     }
@@ -445,6 +446,10 @@ async function resolveDepState(repoRoot) {
     } catch {
       return { status: "stale", detail: "bun.lock unparseable — cannot verify installed deps" };
     }
+    // Root dependencies must be linked at node_modules/<name>; a store-only copy is not importable.
+    // ponytail: transitive store reachability is not checked.
+    const rootWorkspace = lock.workspaces?.[""] ?? {};
+    const rootDeps = new Set([rootWorkspace.dependencies, rootWorkspace.devDependencies, rootWorkspace.optionalDependencies].flatMap((d) => Object.keys(d ?? {})));
     const missing = [];
     const mismatched = [];
     let checked = 0;
@@ -467,7 +472,7 @@ async function resolveDepState(repoRoot) {
       // Bun's isolated linker keeps transitive packages under node_modules/.bun/node_modules and per-version dirs.
       const installedRaw = await readFile(path.join(repoRoot, "node_modules", relativeManifestPath), "utf8")
         .catch(() => readFile(path.join(repoRoot, "node_modules", ".bun", "node_modules", relativeManifestPath), "utf8"))
-        .catch(() => readBunStoreManifest(repoRoot, packageName, expectedVersion))
+        .catch(() => (lockKey === packageName && rootDeps.has(packageName) ? null : readBunStoreManifest(repoRoot, packageName, expectedVersion)))
         .catch(() => null);
       if (installedRaw === null) {
         missing.push(lockKey);

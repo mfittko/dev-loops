@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -502,6 +502,37 @@ test("buildValidationArtifact: Bun lock matches a hash-suffixed isolated-linker 
     assert.equal(synced.depState.status, "synced");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildValidationArtifact: Bun lock rejects a symlinked node_modules and a root dependency present only in the store", async () => {
+  const outerRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-bun-symlink-"));
+  try {
+    const repoRoot = path.join(outerRoot, "worktree");
+    await mkdir(repoRoot, { recursive: true });
+    await writeFile(path.join(repoRoot, "bun.lock"), JSON.stringify({
+      lockfileVersion: 2,
+      workspaces: { "": { name: "fixture", dependencies: { a: "1.0.0" } } },
+      packages: { a: ["a@1.0.0", "", {}] },
+    }), "utf8");
+    const input = { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" };
+    const shared = path.join(outerRoot, "shared");
+    await mkdir(path.join(shared, "a"), { recursive: true });
+    await writeFile(path.join(shared, "a", "package.json"), JSON.stringify({ name: "a", version: "1.0.0" }), "utf8");
+    await symlink(shared, path.join(repoRoot, "node_modules"));
+    const linked = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(linked.depState.status, "stale");
+    assert.match(linked.depState.detail, /node_modules absent in repoRoot/);
+
+    await rm(path.join(repoRoot, "node_modules"));
+    const store = path.join(repoRoot, "node_modules", ".bun", "a@1.0.0", "node_modules", "a");
+    await mkdir(store, { recursive: true });
+    await writeFile(path.join(store, "package.json"), JSON.stringify({ name: "a", version: "1.0.0" }), "utf8");
+    const storeOnly = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(storeOnly.depState.status, "stale");
+    assert.match(storeOnly.depState.detail, /1 missing \[a\]/);
+  } finally {
+    await rm(outerRoot, { recursive: true, force: true });
   }
 });
 
