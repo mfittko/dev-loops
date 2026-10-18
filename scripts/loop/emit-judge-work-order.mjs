@@ -18,7 +18,8 @@ import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "..
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { buildGateArtifactPath, buildGateContextPath } from "../github/_gate-artifact-paths.mjs";
-import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { readClosedPriorRoundLogs, renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { priorActFingerprints } from "../github/_gate-round-cap.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
@@ -117,6 +118,8 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   if (evidence.read.sha256 !== evidenceRead.sha256) throw new Refusal(`gate-context evidence ${evidenceRead.path} changed since the round was built; rebuild the round context`);
   const priors = [];
   for (const prior of priorVerdicts) priors.push(await readSource("prior-judge-verdict", abs(prior)));
+  // The act fingerprints of closed prior rounds: the only values a judge may name in `resurfaces`.
+  const closedPriorActFingerprints = [...priorActFingerprints(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: checkoutRoot }))].sort();
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
   const workOrder = {
     role: "judge",
@@ -133,6 +136,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
       priorVerdictDigests: priors.map((prior) => sha256Hex(parseSource(prior))),
     },
     contracts,
+    ...(closedPriorActFingerprints.length > 0 ? { closedPriorActFingerprints } : {}),
     requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read)],
     // Per-round paths: a superseded round's late verdict never lands where this round's is read.
     outputRefs: [path.join(dir, roundId, "judge-verdict.json"), path.join(dir, roundId, "spec-authority-verdict.json")],

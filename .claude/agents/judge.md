@@ -60,11 +60,14 @@ Write a single JSON object to the deterministic path your work order names (unde
       "disposition": "act" | "defer" | "reject",
       "rationale": "<names the criterion, non-goal, scope boundary, or defer-bar test this finding turns on>",
       "criterion": "<the specific AC / DoD / non-goal / scope clause>",
-      "followUpDraft": { "title": "...", "body": "..." }
+      "followUpDraft": { "title": "...", "body": "..." },
+      "resurfaces": "<fingerprint, act dispositions only>"
     }
   ]
 }
 ```
+
+- `resurfaces` (optional): set `resurfaces: <fingerprint>` only on an `act` item that repeats an act item listed in the work order's `closedPriorActFingerprints` (the closed prior round act items). Otherwise omit it. A fingerprint not in that list is dropped by judge-pass.
 
 - `index` is the 0-based position of the finding in the consolidated ledger's `findings` array (the order fan-in produced). One disposition per finding, in the same order.
 - `disposition`:

@@ -7,6 +7,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, pullWorkOrder, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import { seedJudgeSources } from "./_judge-delivery-fixture.mjs";
@@ -77,6 +78,20 @@ test("J1: a spec/identity or head mismatch refuses; a changed ledger changes the
     await assert.rejects(emitJudgeWorkOrder({ ...sources, headSha: "e".repeat(40) }), /is for head/);
     await writeFile(path.join(root, sources.specFile), JSON.stringify({ acceptanceCriteria: ["Changed"], definitionOfDone: [], nonGoals: [] }));
     await assert.rejects(emitJudgeWorkOrder(sources), /re-run spec-context\.mjs/);
+  });
+});
+
+test("J1: the work order lists the act fingerprints of closed prior rounds for the judge's resurfaces mark", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    assert.equal((await emitJudgeWorkOrder(sources)).workOrder.closedPriorActFingerprints, undefined, "no closed prior round, no list");
+    const priorSha = "a".repeat(40);
+    const act = { severity: "high", angle: "correctness", summary: "earlier act", judgeDisposition: "act" };
+    const dir = path.join(root, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `pre_approval_gate-${priorSha}.json`), JSON.stringify({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha: priorSha, verdict: "findings_present", loggedAt: "2026-01-01T00:00:00Z", findings: [act] }));
+    const plan = await emitJudgeWorkOrder(sources);
+    assert.deepEqual(plan.workOrder.closedPriorActFingerprints, [fingerprintFinding(act)]);
   });
 });
 
