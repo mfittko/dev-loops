@@ -211,7 +211,8 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
       if (options.profile === "targeted" && classification !== "targeted") return incomplete("targeted profile requires a validation suite");
       if (options.profile === "full-repository" && classification !== "full-repository") return incomplete("verify script is not classified as full-repository validation");
       // Reuse another lifecycle gate's passing artifact for the same head, profile, toolchain and suites.
-      for (const gate of LIFECYCLE_GATES.filter((g) => g !== options.gate)) {
+      // ponytail: reused suites keep the source gate's outputPath log; a rerun of that gate at the same head may overwrite it.
+      for (const gate of LIFECYCLE_GATES.includes(options.gate) ? LIFECYCLE_GATES.filter((g) => g !== options.gate) : []) {
         try {
           const prior = JSON.parse(await readFile(path.resolve(repoRoot, buildValidationResultsPath({ ...options, gate })), "utf8"));
           if (prior.ok === true && prior.allPassed === true
