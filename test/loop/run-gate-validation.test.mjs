@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -438,31 +438,178 @@ test("buildValidationArtifact: Bun lock structurally verifies installed package 
   }
 });
 
-test("buildValidationArtifact: Bun lock resolves missing worktree packages from an ancestor install", async () => {
+test("buildValidationArtifact: Bun lock resolves isolated-linker packages under node_modules/.bun and still flags a missing one", async () => {
+  const { repoRoot } = await makeFixtureRepo();
+  try {
+    await writeFile(path.join(repoRoot, "bun.lock"), JSON.stringify({
+      lockfileVersion: 2,
+      workspaces: { "": { name: "fixture", dependencies: { a: "1.0.0" } } },
+      packages: {
+        a: ["a@1.0.0", "", {}],
+        "a/@s/b": ["@s/b@2.0.0", "", {}],
+        c: ["c@3.0.0", "", {}],
+      },
+    }), "utf8");
+    const write = async (dir, name, version) => {
+      await mkdir(path.join(repoRoot, "node_modules", dir), { recursive: true });
+      await writeFile(path.join(repoRoot, "node_modules", dir, "package.json"), JSON.stringify({ name, version }), "utf8");
+    };
+    await write("a", "a", "1.0.0");
+    await write(path.join(".bun", "@s+b@2.0.0", "node_modules", "@s", "b"), "@s/b", "2.0.0");
+    const input = { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" };
+
+    const missing = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(missing.depState.status, "stale");
+    assert.match(missing.depState.detail, /1 missing \[c\]/);
+
+    await write(path.join(".bun", "node_modules", "c"), "c", "3.0.0");
+    const synced = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(synced.depState.status, "synced");
+    assert.match(synced.depState.detail, /3 packages/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildValidationArtifact: Bun lock matches a hash-suffixed isolated-linker store dir and rejects look-alike dirs", async () => {
+  const { repoRoot } = await makeFixtureRepo();
+  try {
+    await writeFile(path.join(repoRoot, "bun.lock"), JSON.stringify({
+      lockfileVersion: 2,
+      workspaces: { "": { name: "fixture", dependencies: { a: "1.0.0" } } },
+      packages: {
+        a: ["a@1.0.0", "", {}],
+        "a/openai": ["openai@6.40.0", "", {}],
+        "a/@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.91.1", "", {}],
+      },
+    }), "utf8");
+    const write = async (dir, name, version) => {
+      await mkdir(path.join(repoRoot, "node_modules", dir), { recursive: true });
+      await writeFile(path.join(repoRoot, "node_modules", dir, "package.json"), JSON.stringify({ name, version }), "utf8");
+    };
+    await write("a", "a", "1.0.0");
+    const input = { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" };
+    // look-alike dirs must not match
+    await write(path.join(".bun", "openai@6.40.01", "node_modules", "openai"), "openai", "6.40.0");
+    await write(path.join(".bun", "openai@6.40.0-beta", "node_modules", "openai"), "openai", "6.40.0");
+    await write(path.join(".bun", "@anthropic-ai+sdk@0.91.1+68a1e3a0c4588df3", "node_modules", "@anthropic-ai", "sdk"), "@anthropic-ai/sdk", "0.91.1");
+    const missing = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(missing.depState.status, "stale");
+    assert.match(missing.depState.detail, /1 missing \[a\/openai\]/);
+
+    await write(path.join(".bun", "openai@6.40.0+0b4562c55df77e9b", "node_modules", "openai"), "openai", "6.40.0");
+    const synced = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(synced.depState.status, "synced");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildValidationArtifact: Bun lock rejects a symlinked node_modules and a root dependency present only in the store", async () => {
+  const outerRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-bun-symlink-"));
+  try {
+    const repoRoot = path.join(outerRoot, "worktree");
+    await mkdir(repoRoot, { recursive: true });
+    await writeFile(path.join(repoRoot, "bun.lock"), JSON.stringify({
+      lockfileVersion: 2,
+      workspaces: { "": { name: "fixture", dependencies: { a: "1.0.0" } } },
+      packages: { a: ["a@1.0.0", "", {}] },
+    }), "utf8");
+    const input = { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" };
+    const shared = path.join(outerRoot, "shared");
+    await mkdir(path.join(shared, "a"), { recursive: true });
+    await writeFile(path.join(shared, "a", "package.json"), JSON.stringify({ name: "a", version: "1.0.0" }), "utf8");
+    await symlink(shared, path.join(repoRoot, "node_modules"));
+    const linked = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(linked.depState.status, "stale");
+    assert.match(linked.depState.detail, /node_modules absent in repoRoot/);
+
+    await rm(path.join(repoRoot, "node_modules"));
+    const store = path.join(repoRoot, "node_modules", ".bun", "a@1.0.0", "node_modules", "a");
+    await mkdir(store, { recursive: true });
+    await writeFile(path.join(store, "package.json"), JSON.stringify({ name: "a", version: "1.0.0" }), "utf8");
+    const storeOnly = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(storeOnly.depState.status, "stale");
+    assert.match(storeOnly.depState.detail, /1 missing \[a\]/);
+
+    await rm(path.join(repoRoot, "node_modules", ".bun", "a@1.0.0"), { recursive: true, force: true });
+    const hoisted = path.join(repoRoot, "node_modules", ".bun", "node_modules", "a");
+    await mkdir(hoisted, { recursive: true });
+    await writeFile(path.join(hoisted, "package.json"), JSON.stringify({ name: "a", version: "1.0.0" }), "utf8");
+    const hoistedOnly = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(hoistedOnly.depState.status, "stale");
+    assert.match(hoistedOnly.depState.detail, /1 missing \[a\]/);
+  } finally {
+    await rm(outerRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildValidationArtifact: Bun lock treats an aliased root dependency present only in the store as stale", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-bun-alias-"));
+  try {
+    await writeFile(path.join(repoRoot, "bun.lock"), JSON.stringify({
+      lockfileVersion: 2,
+      workspaces: { "": { name: "fixture", dependencies: { foo: "npm:bar@1.0.0" } } },
+      packages: { foo: ["bar@1.0.0", "", {}] },
+    }), "utf8");
+    const store = path.join(repoRoot, "node_modules", ".bun", "bar@1.0.0", "node_modules", "bar");
+    await mkdir(store, { recursive: true });
+    await writeFile(path.join(store, "package.json"), JSON.stringify({ name: "bar", version: "1.0.0" }), "utf8");
+    const input = { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" };
+    const result = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(result.depState.status, "stale");
+    assert.match(result.depState.detail, /1 missing \[foo\]/);
+    await mkdir(path.join(repoRoot, "node_modules", "foo"), { recursive: true });
+    await writeFile(path.join(repoRoot, "node_modules", "foo", "package.json"), JSON.stringify({ name: "bar", version: "1.0.0" }), "utf8");
+    const linked = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(linked.depState.status, "synced");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildValidationArtifact: Bun lock ignores an ancestor install and reports the worktree's own missing node_modules as stale", async () => {
   const outerRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-bun-worktree-"));
+  try {
+    const repoRoot = path.join(outerRoot, "worktree");
+    await mkdir(repoRoot, { recursive: true });
+    await mkdir(path.join(outerRoot, "node_modules", "a"), { recursive: true });
+    await writeFile(path.join(repoRoot, "bun.lock"), JSON.stringify({
+      lockfileVersion: 2,
+      workspaces: { "": { name: "fixture", dependencies: { a: "1.0.0" } } },
+      packages: { a: ["a@1.0.0", "", {}] },
+    }), "utf8");
+    await writeFile(path.join(outerRoot, "node_modules", "a", "package.json"), JSON.stringify({ name: "a", version: "1.0.0" }), "utf8");
+    const artifact = await buildValidationArtifact(
+      { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
+      { repoRoot },
+    );
+    assert.equal(artifact.depState.status, "stale");
+    assert.match(artifact.depState.detail, /node_modules absent in repoRoot/);
+  } finally {
+    await rm(outerRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildValidationArtifact: Bun lock with an own node_modules never resolves a package from an ancestor install", async () => {
+  const outerRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-bun-own-modules-"));
   try {
     const repoRoot = path.join(outerRoot, "worktree");
     await mkdir(path.join(repoRoot, "node_modules", "@dev-loops", "core"), { recursive: true });
     await mkdir(path.join(outerRoot, "node_modules", "a"), { recursive: true });
     await writeFile(path.join(repoRoot, "bun.lock"), JSON.stringify({
       lockfileVersion: 2,
-      workspaces: {
-        "": { name: "fixture", dependencies: { a: "1.0.0", "@dev-loops/core": "workspace:*" } },
-        "packages/core": { name: "@dev-loops/core", version: "1.0.1" },
-      },
-      packages: {
-        a: ["a@1.0.0", "", {}],
-        "@dev-loops/core": ["@dev-loops/core@workspace:packages/core"],
-      },
+      workspaces: { "": { name: "fixture", dependencies: { a: "1.0.0" } } },
+      packages: { a: ["a@1.0.0", "", {}] },
     }), "utf8");
-    await writeFile(path.join(repoRoot, "node_modules", "@dev-loops", "core", "package.json"), JSON.stringify({ name: "@dev-loops/core", version: "1.0.1" }), "utf8");
     await writeFile(path.join(outerRoot, "node_modules", "a", "package.json"), JSON.stringify({ name: "a", version: "1.0.0" }), "utf8");
     const artifact = await buildValidationArtifact(
       { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
       { repoRoot },
     );
-    assert.equal(artifact.depState.status, "synced");
-    assert.match(artifact.depState.detail, /including ancestor/);
+    assert.equal(artifact.depState.status, "stale");
+    assert.match(artifact.depState.detail, /missing/);
+    assert.match(artifact.depState.detail, /\ba\b/);
   } finally {
     await rm(outerRoot, { recursive: true, force: true });
   }
@@ -544,21 +691,19 @@ test("buildValidationArtifact: stamps depState stale when installed lockfile is 
       JSON.stringify({ lockfileVersion: 3, packages: {} }),
       "utf8",
     );
-    // No node_modules/.package-lock.json anywhere up the ancestor chain →
-    // deps not materialized → stale. Passing at all also confirms the
-    // ancestor walk-up terminates (does not hang) when it finds nothing.
+    // No node_modules/.package-lock.json in the worktree → deps not materialized → stale.
     const artifact = await buildValidationArtifact(
       { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
       { repoRoot },
     );
     assert.equal(artifact.depState.status, "stale");
-    assert.match(artifact.depState.detail, /absent in repoRoot or any ancestor/);
+    assert.match(artifact.depState.detail, /absent in this worktree/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
 
-test("buildValidationArtifact: stamps depState synced for a linked worktree with no local node_modules (ancestor installed lock matches)", async () => {
+test("buildValidationArtifact: stamps depState stale, never synced, for a linked worktree whose ancestor installed lock matches", async () => {
   // Mirrors ensure-worktree.mjs's linked layout: the worktree has its own
   // package-lock.json (checked out via git) but no local node_modules — only
   // the ancestor (main checkout) has the installed lock the suites actually
@@ -580,37 +725,8 @@ test("buildValidationArtifact: stamps depState synced for a linked worktree with
       { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
       { repoRoot },
     );
-    assert.equal(artifact.depState.status, "synced");
-    assert.match(artifact.depState.detail, new RegExp(`resolved from ancestor ${outerRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-  } finally {
-    await rm(outerRoot, { recursive: true, force: true });
-  }
-});
-
-test("buildValidationArtifact: stamps depState stale for a linked worktree when the ancestor's installed deps genuinely diverge", async () => {
-  const outerRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-worktree-"));
-  try {
-    const repoRoot = path.join(outerRoot, "worktree");
-    await mkdir(repoRoot, { recursive: true });
-    await mkdir(path.join(outerRoot, "node_modules"), { recursive: true });
-    const lock = JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/a": { version: "2.0.0" } } });
-    const installed = JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/a": { version: "1.0.0" } } });
-    await writeFile(path.join(repoRoot, "package-lock.json"), lock, "utf8");
-    await writeFile(path.join(outerRoot, "node_modules", ".package-lock.json"), installed, "utf8");
-
-    const artifact = await buildValidationArtifact(
-      { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
-      { repoRoot },
-    );
     assert.equal(artifact.depState.status, "stale");
-    // Pin the walk-up specifically: the pre-walk-up code only ever reads
-    // repoRoot's own node_modules (which does not exist here), so it would
-    // stamp "stale" via the absent-lockfile branch instead — same status,
-    // different detail. Asserting the ancestor is named in the detail means
-    // this only passes when resolveDepState actually found and compared the
-    // outer checkout's installed lock.
-    assert.match(artifact.depState.detail, /diverge/);
-    assert.match(artifact.depState.detail, new RegExp(`resolved from ancestor ${outerRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    assert.match(artifact.depState.detail, /absent in this worktree/);
   } finally {
     await rm(outerRoot, { recursive: true, force: true });
   }
