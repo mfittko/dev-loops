@@ -94,8 +94,12 @@ test("C19 the allowed files include changes/<issue>-*.md when the scope names no
 });
 
 test("C19 a lightweight unit without an issue uses its PR number", () => {
-  const { workOrder } = buildCoordinatorWorkOrder({ envelope: prEnvelope() });
+  const { workOrder } = buildCoordinatorWorkOrder({ envelope: { ...prEnvelope(), specSource: "pr_body" } });
   assert.deepEqual(workOrder.allowedFiles, ["changes/2900-*.md"]);
+});
+
+test("C19 a non-lightweight PR target without an issue is refused", () => {
+  assert.throws(() => buildCoordinatorWorkOrder({ envelope: prEnvelope() }), CoordinatorWorkOrderRefusal);
 });
 
 test("C19 an absolute or escaping allowed file is refused", () => {

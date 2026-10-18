@@ -15,10 +15,10 @@ const INPUT_KEYS = new Set(["envelope", "allowedFiles"]);
 
 export class CoordinatorWorkOrderRefusal extends Error {}
 
-/** `changes/<n>-*.md`: n is the unit's issue number, else its PR number (lightweight unit). */
-export function changesFragmentGlob(target) {
-  const n = target?.issue ?? target?.pr;
-  if (!Number.isInteger(n) || n < 1) throw new CoordinatorWorkOrderRefusal("coordinator target names no issue or PR number");
+/** `changes/<n>-*.md`: n is the unit's issue number; the PR number only for a lightweight (specSource pr_body) unit. */
+export function changesFragmentGlob(target, specSource) {
+  const n = target?.issue ?? (specSource === "pr_body" ? target?.pr : undefined);
+  if (!Number.isInteger(n) || n < 1) throw new CoordinatorWorkOrderRefusal("coordinator target names no issue number (a PR number is accepted only for a lightweight pr_body unit)");
   return `changes/${n}-*.md`;
 }
 
@@ -36,7 +36,7 @@ export function buildCoordinatorWorkOrder(input) {
   if (!Array.isArray(allowedFiles) || allowedFiles.some((p) => typeof p !== "string" || /[\u0000-\u001f\u007f\\]/.test(p))) {
     throw new CoordinatorWorkOrderRefusal("allowedFiles must be repository-relative paths without control characters or backslashes");
   }
-  const ownGlob = changesFragmentGlob(envelope.target);
+  const ownGlob = changesFragmentGlob(envelope.target, envelope.specSource);
   const normalized = allowedFiles.map((p) => p.split("/").filter((seg) => seg !== "" && seg !== ".").join("/"));
   if (normalized.some((p, i) => p === "" || p.split("/").includes("..") || allowedFiles[i].startsWith("/"))) {
     throw new CoordinatorWorkOrderRefusal("allowedFiles must be repository-relative paths");
