@@ -97,3 +97,38 @@ test("git unavailable falls back to full", async () => {
   assert.equal(ev.decision, "fallback_full");
   assert.match(ev.reason, /ENOENT/);
 });
+
+test("git: indentation-only PR change forces full re-gate", async () => {
+  const s = setup();
+  s.put("ci.yml", "a:\n  b: 1\n"); s.git("add", "-A"); s.git("commit", "-qm", "yaml");
+  const prev = s.head();
+  s.put("ci.yml", "a:\n    b: 1\n"); s.git("add", "-A"); s.git("commit", "-qm", "reindent");
+  const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
+  assert.equal(ev.decision, "full_regate");
+});
+
+test("git: non-ancestor prev head falls back to full", async () => {
+  const s = setup();
+  const head = s.head();
+  s.git("checkout", "-q", "main");
+  const ev = await computeBaseMergeCarry({ prevHead: s.head(), headSha: head, baseRef: "main", repoRoot: s.dir });
+  assert.equal(ev.decision, "fallback_full");
+});
+
+test("gate tooling covers agent mirrors and lockfiles", () => {
+  for (const p of [".claude/skills/x.md", "package-lock.json", "packages/core/src/foo/bar.mjs", "schemas/a.json"]) {
+    assert.equal(classifyBaseMergeCarry({ ...ok, baseDeltaPaths: [p] }).decision, "full_regate", p);
+  }
+});
+
+test("validator: rejects forged records and head mismatch", () => {
+  const partial = classifyBaseMergeCarry({ ...ok, baseDeltaPaths: ["src/x.mjs"] });
+  assert.equal(validateBaseMergeCarryEvidence(partial).ok, true);
+  // decision flipped to carry_verdict with the intersection emptied
+  assert.equal(validateBaseMergeCarryEvidence({ ...partial, decision: "carry_verdict", pathIntersection: [] }).ok, false);
+  const ev = classifyBaseMergeCarry(ok);
+  assert.equal(validateBaseMergeCarryEvidence(ev, { expectedSourceHead: A, expectedNewHead: B }).ok, true);
+  assert.equal(validateBaseMergeCarryEvidence(ev, { expectedNewHead: A }).ok, false);
+  assert.equal(validateBaseMergeCarryEvidence(ev, { expectedSourceHead: B }).ok, false);
+  assert.equal(validateBaseMergeCarryEvidence({ ...partial, patchIdAfter: "p2" }).ok, false);
+});

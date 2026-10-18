@@ -23,8 +23,9 @@ export function buildBaseMergeCarryPath({ repo, pr, gate, headSha, tmpRoot = "tm
   return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, dir: "base-merge-carry", suffix: ".base-merge-carry.json" });
 }
 
+// --verbatim keeps whitespace significant: an indentation-only change must change the id.
 function stablePatchId(diffText) {
-  const r = spawnSync("git", ["patch-id", "--stable"], { input: diffText, encoding: "utf8" });
+  const r = spawnSync("git", ["patch-id", "--verbatim"], { input: diffText, encoding: "utf8" });
   if (r.error || r.status !== 0) throw new Error(`git patch-id failed: ${r.error?.message ?? r.stderr}`);
   return r.stdout.split(/\s+/)[0] || "";
 }
@@ -36,19 +37,26 @@ async function git(runGit, repoRoot, args) {
 }
 
 const lines = (s) => s.split("\n").filter(Boolean);
+const nulLines = (s) => s.split("\0").filter(Boolean);
+const DIFF_FLAGS = ["--no-ext-diff", "--no-color", "--no-relative", "--no-renames"];
 
 export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRoot, runGit = runGitCommand, patchId = stablePatchId }) {
   try {
+    const anc = await runGit(["merge-base", "--is-ancestor", prevHead, headSha], { repoRoot });
+    if (anc.code === 1) throw new Error("prev-head is not an ancestor of head-sha");
+    if (anc.code !== 0) throw new Error(`git merge-base --is-ancestor failed: ${anc.stderr.trim()}`);
     const mbA = (await git(runGit, repoRoot, ["merge-base", baseRef, prevHead])).trim();
     const mbB = (await git(runGit, repoRoot, ["merge-base", baseRef, headSha])).trim();
-    const diffA = await git(runGit, repoRoot, ["diff", mbA, prevHead]);
-    const diffB = await git(runGit, repoRoot, ["diff", mbB, headSha]);
-    const prDiffPaths = lines(await git(runGit, repoRoot, ["diff", "--name-only", mbB, headSha]));
-    const baseDeltaPaths = lines(await git(runGit, repoRoot, ["diff", "--name-only", mbA, mbB]));
-    const parents = (await git(runGit, repoRoot, ["rev-list", "--parents", "-n", "1", headSha])).trim().split(/\s+/);
+    const diffA = await git(runGit, repoRoot, ["diff", ...DIFF_FLAGS, mbA, prevHead]);
+    const diffB = await git(runGit, repoRoot, ["diff", ...DIFF_FLAGS, mbB, headSha]);
+    const prDiffPaths = nulLines(await git(runGit, repoRoot, ["diff", ...DIFF_FLAGS, "--name-only", "-z", mbB, headSha]));
+    const baseDeltaPaths = nulLines(await git(runGit, repoRoot, ["diff", ...DIFF_FLAGS, "--name-only", "-z", mbA, mbB]));
     // A merge commit's combined diff (--cc) is non-empty only when the merge hand-resolved something.
-    const conflictResolutionHunks = parents.length > 2
-      && (await git(runGit, repoRoot, ["diff-tree", "--cc", "--format=", headSha])).trim() !== "";
+    // Check every merge commit in prevHead..headSha.
+    let conflictResolutionHunks = false;
+    for (const merge of lines(await git(runGit, repoRoot, ["rev-list", "--merges", `${prevHead}..${headSha}`]))) {
+      if ((await git(runGit, repoRoot, ["diff-tree", "--cc", "--no-ext-diff", "--no-color", "--format=", merge])).trim() !== "") conflictResolutionHunks = true;
+    }
     return classifyBaseMergeCarry({
       sourceHead: prevHead, newHead: headSha, patchIdBefore: patchId(diffA), patchIdAfter: patchId(diffB),
       prDiffPaths, baseDeltaPaths, conflictResolutionHunks,

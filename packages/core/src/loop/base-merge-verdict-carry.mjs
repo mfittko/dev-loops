@@ -17,7 +17,7 @@ export const BASE_MERGE_CARRY_DECISIONS = Object.freeze(["carry_verdict", "parti
 
 // Paths whose change alters how a gate runs: gate contracts, gate scripts and
 // core loop code, the installed dev-loops version (manifests and lockfiles), CI.
-const GATE_TOOLING_RE = /^(skills\/|scripts\/|packages\/core\/src\/(loop|config)\/|\.github\/|package\.json$|bun\.lockb?$|packages\/[^/]+\/package\.json$)/;
+const GATE_TOOLING_RE = /^(skills\/|scripts\/|agents\/|cli\/|lib\/|schemas\/|\.claude\/|\.pi\/|packages\/core\/src\/|\.github\/|package\.json$|package-lock\.json$|yarn\.lock$|pnpm-lock\.yaml$|bun\.lockb?$|packages\/[^/]+\/package\.json$)/;
 
 export function isGateToolingPath(filePath) {
   if (typeof filePath !== "string") return false;
@@ -46,6 +46,9 @@ export function classifyBaseMergeCarry(input = {}) {
     newHead: newHead ?? null,
     patchIdBefore: patchIdBefore ?? null,
     patchIdAfter: patchIdAfter ?? null,
+    prDiffPaths: prDiffPaths ?? null,
+    baseDeltaPaths: baseDeltaPaths ?? null,
+    conflictResolutionHunks: conflictResolutionHunks ?? null,
     pathIntersection: [],
     gateToolingPaths: [],
     decision: "fallback_full",
@@ -73,19 +76,25 @@ export function classifyBaseMergeCarry(input = {}) {
 }
 
 /**
- * Tamper-evidence check for merge-pr: shape plus decision recomputed from the
- * recorded facts. Returns { ok, reason }.
+ * Tamper-evidence check for merge-pr: shape, then the decision and every derived
+ * field recomputed from the recorded facts. Optional expectedSourceHead and
+ * expectedNewHead bind the record to the heads the caller is merging.
+ * Returns { ok, reason }.
  */
-export function validateBaseMergeCarryEvidence(evidence) {
+export function validateBaseMergeCarryEvidence(evidence, { expectedSourceHead, expectedNewHead } = {}) {
   if (!evidence || typeof evidence !== "object") return { ok: false, reason: "evidence missing" };
-  const keys = ["sourceHead", "newHead", "patchIdBefore", "patchIdAfter", "pathIntersection", "gateToolingPaths", "decision", "reason"];
+  const keys = ["sourceHead", "newHead", "patchIdBefore", "patchIdAfter", "prDiffPaths", "baseDeltaPaths", "conflictResolutionHunks", "pathIntersection", "gateToolingPaths", "decision", "reason"];
   for (const k of keys) if (!(k in evidence)) return { ok: false, reason: `missing field ${k}` };
   if (!BASE_MERGE_CARRY_DECISIONS.includes(evidence.decision)) return { ok: false, reason: "unknown decision" };
   if (!isPathList(evidence.pathIntersection) || !isPathList(evidence.gateToolingPaths)) return { ok: false, reason: "malformed path lists" };
-  if (evidence.decision === "carry_verdict") {
-    if (!FULL_SHA_RE.test(evidence.sourceHead) || !FULL_SHA_RE.test(evidence.newHead) || evidence.sourceHead === evidence.newHead) return { ok: false, reason: "invalid heads" };
-    if (!evidence.patchIdBefore || evidence.patchIdBefore !== evidence.patchIdAfter) return { ok: false, reason: "carry_verdict with differing patch ids" };
-    if (evidence.pathIntersection.length > 0 || evidence.gateToolingPaths.length > 0) return { ok: false, reason: "carry_verdict with overlap or gate tooling" };
+  if (expectedSourceHead !== undefined && evidence.sourceHead !== expectedSourceHead) return { ok: false, reason: "sourceHead mismatch" };
+  if (expectedNewHead !== undefined && evidence.newHead !== expectedNewHead) return { ok: false, reason: "newHead mismatch" };
+  if (evidence.decision === "fallback_full") return { ok: true, reason: "" }; // never carries
+  if (evidence.decision === "partial_carry" && evidence.patchIdBefore !== evidence.patchIdAfter) return { ok: false, reason: "partial_carry with differing patch ids" };
+  const re = classifyBaseMergeCarry(evidence);
+  if (re.decision !== evidence.decision) return { ok: false, reason: `decision recomputes to ${re.decision}` };
+  for (const k of ["pathIntersection", "gateToolingPaths"]) {
+    if (JSON.stringify(re[k]) !== JSON.stringify(evidence[k])) return { ok: false, reason: `${k} does not match recorded paths` };
   }
   return { ok: true, reason: "" };
 }
