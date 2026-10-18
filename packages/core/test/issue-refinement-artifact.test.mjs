@@ -1325,6 +1325,14 @@ test("diffPrBodyAgainstIssue reads content under deeper sub-headings of a spec s
   assert.deepEqual(diffPrBodyAgainstIssue({ prBody: nested, issueBody: issueWith() }), []);
 });
 
+test("diffPrBodyAgainstIssue reads AC/DoD-named sub-headings under In scope on the issue side", () => {
+  const issueBody = issueWith({ scope: "- Alpha\n- Beta wide\n\n### Done when\n\n- Gamma ships to all users" });
+  const hits = diffPrBodyAgainstIssue({ prBody: prWith(), issueBody });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].file, "issue-body/in-scope");
+  assert.match(hits[0].needle, /Gamma ships to all users/u);
+});
+
 test("diffPrBodyAgainstIssue yields no hits for a projected PR body with gate and merge outcomes", () => {
   const matrix = [
     "## AC / DoD matrix", "",
