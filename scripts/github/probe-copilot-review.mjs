@@ -102,7 +102,7 @@ const COPILOT_ACTIVITY_QUERY = [
 const parseError = buildParseError(USAGE);
 function rejectRemovedFlag(token) {
   throw parseError(
-    `${token} has been removed. Poll interval and timeout are centralized policy constants. Omit the flag.`,
+    `${token} has been removed. The poll interval is a centralized policy constant. Omit the flag.`,
   );
 }
 export function parseWatchCliArgs(argv) {

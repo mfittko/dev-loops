@@ -16,7 +16,7 @@ import {
 const REMOVED_FLAGS = new Set([
   "--poll-interval-ms",
 ]);
-const USAGE = `Usage: watch-initial-copilot-pr.mjs --repo <owner/name> --issue <number>
+const USAGE = `Usage: watch-initial-copilot-pr.mjs --repo <owner/name> --issue <number> [--timeout <seconds>]
 Wait for the Copilot-first bootstrap-only draft PR to become substantive.
 Polls detect-initial-copilot-pr-state in a durable loop until the linked PR
 leaves the bootstrap-only draft shape or the watch budget is exhausted.

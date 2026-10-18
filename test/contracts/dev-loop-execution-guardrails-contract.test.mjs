@@ -152,10 +152,11 @@ test("dev-loop agent contract broadens the blocking-wait invariant to CI/Copilot
 
 test("no skill, agent, or generated Claude asset prescribes a `timeout N` shell wrapper (issue 2755)", async () => {
   const { readdirSync, readFileSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
   const { join } = await import("node:path");
-  const root = new URL("../../", import.meta.url).pathname;
+  const root = fileURLToPath(new URL("../../", import.meta.url));
   const markdownIn = (dir) => readdirSync(join(root, dir), { recursive: true })
-    .filter((p) => p.endsWith(".md") && !p.split("/").includes("node_modules"))
+    .filter((p) => p.endsWith(".md") && !p.split("/").some((s) => s === "node_modules" || s === "worktrees"))
     .map((p) => join(dir, p));
   const wrapper = /(?:^|[`\s])g?timeout (?:-\S+ )*\d+[smhd]?\s/m;
   assert.ok(wrapper.test("\`timeout 90 bun test x\` "), "the wrapper regex must match a known wrapper line");
