@@ -56,6 +56,18 @@ test("an ungranted marker whose baseline object is missing still refuses", () =>
   assert.equal(found.fullGranted, false);
 });
 
+test("stacked branches: each push is covered only by its own branch marker", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "find-active-sequence-"));
+  writeSequenceMarker({ tmpRoot, baselineHead: "aaa1", fullGranted: false, branch: "issue-a" });
+  writeSequenceMarker({ tmpRoot, baselineHead: "bbb2", fullGranted: true, branch: "issue-b" });
+  // isAncestor is always true: B descends from A's baseline.
+  const find = (head, remoteRef, baselines) => findActiveSequence({ tmpRoot, head, remoteRef, ...seams(baselines) });
+  assert.equal(find("ccc3", "refs/heads/issue-a", ["aaa1"]).branch, "issue-a");
+  assert.equal(find("ccc3", "refs/heads/issue-b", ["bbb2"]).branch, "issue-b");
+  assert.equal(find("ccc3", "refs/heads/issue-b", ["aaa1"]), null);
+  assert.equal(find("ccc3", "refs/heads/issue-a", ["bbb2"]), null);
+});
+
 test("an ungranted marker covering the head refuses", () => {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "find-active-sequence-"));
   writeSequenceMarker({ tmpRoot, baselineHead: "aaa1", fullGranted: false, branch: "issue-9" });
