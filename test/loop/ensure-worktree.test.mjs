@@ -1370,3 +1370,76 @@ test("requireClaudeSession: the value survives a refresh and follows a default-b
     repo.cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Create-path dependency install (#2535, WORKTREE-DEPS-ISOLATED)
+// ---------------------------------------------------------------------------
+
+function commitBunLock(repo) {
+  writeFileSync(path.join(repo.root, "bun.lock"), "{}");
+  repo.git("add", "-A");
+  repo.git("commit", "-q", "-m", "lock");
+  repo.git("fetch", "-q", "origin");
+}
+
+test("ensure: create runs the dep install inside the new worktree before provision and reports deps", async () => {
+  const repo = makeRepo();
+  try {
+    commitBunLock(repo);
+    const order = [];
+    const res = await ensureWorktree(
+      { repoRoot: repo.root, issue: 21 },
+      {
+        installDeps: (cwd) => { order.push(["install", cwd]); return { ok: true }; },
+        provision: () => { order.push(["provision"]); return { ok: true, summary: {} }; },
+      },
+    );
+    assert.deepEqual(order.map((o) => o[0]), ["install", "provision"]);
+    assert.equal(order[0][1], res.path);
+    assert.deepEqual(res.deps, { ran: true, ok: true });
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: a failing or throwing dep install never fails the worktree", async () => {
+  const repo = makeRepo();
+  try {
+    commitBunLock(repo);
+    const failed = await ensureWorktree({ repoRoot: repo.root, issue: 22 }, { installDeps: () => ({ ok: false, exitCode: 1, reason: "drift" }) });
+    assert.equal(failed.ok, true);
+    assert.deepEqual(failed.deps, { ran: true, ok: false, exitCode: 1, reason: "drift" });
+    const thrown = await ensureWorktree({ repoRoot: repo.root, issue: 23 }, { installDeps: () => { throw new Error("no bun"); } });
+    assert.equal(thrown.ok, true);
+    assert.equal(thrown.deps.ok, false);
+    assert.equal(thrown.deps.reason, "no bun");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: no bun.lock skips the install", async () => {
+  const repo = makeRepo();
+  try {
+    const created = await ensureWorktree({ repoRoot: repo.root, issue: 24 }, { installDeps: () => assert.fail("must not install") });
+    assert.deepEqual(created.deps, { ok: true, ran: false, reason: "no bun.lock" });
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: reuse does not install", async () => {
+  const repo = makeRepo();
+  try {
+    commitBunLock(repo);
+    let calls = 0;
+    const installDeps = () => { calls += 1; return { ok: true }; };
+    await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps });
+    const reused = await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps });
+    assert.equal(reused.reused, true);
+    assert.equal(reused.deps, undefined);
+    assert.equal(calls, 1);
+  } finally {
+    repo.cleanup();
+  }
+});

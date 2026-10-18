@@ -393,28 +393,6 @@ async function findAncestorInstalledLock(startDir) {
   }
 }
 
-async function findAncestorNodeModules(startDir) {
-  let dir = path.resolve(startDir);
-  for (;;) {
-    const info = await stat(path.join(dir, "node_modules")).catch(() => null);
-    if (info?.isDirectory()) return { info, root: dir };
-    const parent = path.dirname(dir);
-    if (parent === dir) return { info: null, root: null };
-    dir = parent;
-  }
-}
-
-async function findAncestorPackageManifest(startDir, relativeManifestPath) {
-  let dir = path.resolve(startDir);
-  for (;;) {
-    const raw = await readFile(path.join(dir, "node_modules", relativeManifestPath), "utf8").catch(() => null);
-    if (raw !== null) return { raw, root: dir };
-    const parent = path.dirname(dir);
-    if (parent === dir) return { raw: null, root: null };
-    dir = parent;
-  }
-}
-
 /**
  * Compare the authoritative dependency lock against the installed tree.
  * Bun lock entries are checked against installed package manifests;
@@ -434,10 +412,9 @@ async function findAncestorPackageManifest(startDir, relativeManifestPath) {
  * are excluded from the comparison to avoid false "stale" stamps on a synced
  * tree.
  *
- * A linked loop worktree can resolve dependencies from the main checkout's
- * ancestor `node_modules`. The installed-lock lookup therefore walks upward
- * to the dependency root the suites actually used; this also preserves the
- * retained package-lock fallback when validating older branches.
+ * The bun.lock path reports the repoRoot's OWN install only: a linked worktree
+ * must not borrow the main checkout's (possibly stale) `node_modules`. The
+ * retained package-lock fallback still walks to an ancestor install.
  *
  * @param {string} repoRoot - Absolute path to the repo (main checkout or worktree).
  * @returns {Promise<{status: string, detail: string}>}
@@ -446,9 +423,9 @@ async function resolveDepState(repoRoot) {
   const bunLockPath = path.join(repoRoot, "bun.lock");
   const bunLockRaw = await readFile(bunLockPath, "utf8").catch(() => null);
   if (bunLockRaw !== null) {
-    const { root: nearestDepRoot } = await findAncestorNodeModules(repoRoot);
-    if (!nearestDepRoot) {
-      return { status: "stale", detail: "node_modules absent in repoRoot or any ancestor — installed deps not materialized (bun install --frozen-lockfile not run)" };
+    const ownModules = await stat(path.join(repoRoot, "node_modules")).catch(() => null);
+    if (!ownModules?.isDirectory()) {
+      return { status: "stale", detail: "node_modules absent in repoRoot (ancestor installs are not used) — run bun install --frozen-lockfile in this worktree" };
     }
     let lock;
     try {
@@ -458,7 +435,6 @@ async function resolveDepState(repoRoot) {
     }
     const missing = [];
     const mismatched = [];
-    const resolvedRoots = new Set();
     let checked = 0;
     for (const [lockKey, entry] of Object.entries(lock.packages ?? {})) {
       if (!Array.isArray(entry) || typeof entry[0] !== "string") continue;
@@ -476,12 +452,11 @@ async function resolveDepState(repoRoot) {
       const relativeManifestPath = parentKey
         ? path.join(parentKey, "node_modules", packageName, "package.json")
         : path.join(packageName, "package.json");
-      const { raw: installedRaw, root: installedRoot } = await findAncestorPackageManifest(repoRoot, relativeManifestPath);
+      const installedRaw = await readFile(path.join(repoRoot, "node_modules", relativeManifestPath), "utf8").catch(() => null);
       if (installedRaw === null) {
         missing.push(lockKey);
         continue;
       }
-      resolvedRoots.add(installedRoot);
       checked += 1;
       let installedVersion;
       try {
@@ -492,16 +467,14 @@ async function resolveDepState(repoRoot) {
       }
       if (installedVersion !== expectedVersion) mismatched.push(`${lockKey} (${installedVersion ?? "missing"} != ${expectedVersion})`);
     }
-    const ancestorRoots = [...resolvedRoots].filter((root) => root !== path.resolve(repoRoot));
-    const depRootNote = ancestorRoots.length === 0 ? "" : ` (including ancestor ${ancestorRoots.join(", ")})`;
     if (missing.length === 0 && mismatched.length === 0 && checked > 0) {
-      return { status: "synced", detail: `installed deps match bun.lock (${checked} packages)${depRootNote}` };
+      return { status: "synced", detail: `installed deps match bun.lock (${checked} packages)` };
     }
     const parts = [];
     if (missing.length > 0) parts.push(`${missing.length} missing [${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""}]`);
     if (mismatched.length > 0) parts.push(`${mismatched.length} version-mismatched [${mismatched.slice(0, 5).join(", ")}${mismatched.length > 5 ? ", …" : ""}]`);
     if (checked === 0) parts.push("no installed package manifests verified");
-    return { status: "stale", detail: `installed deps diverge from bun.lock${depRootNote}: ${parts.join(", ")}` };
+    return { status: "stale", detail: `installed deps diverge from bun.lock: ${parts.join(", ")}` };
   }
   const lockRaw = await readFile(path.join(repoRoot, "package-lock.json"), "utf8").catch(() => null);
   if (lockRaw === null) {

@@ -438,31 +438,24 @@ test("buildValidationArtifact: Bun lock structurally verifies installed package 
   }
 });
 
-test("buildValidationArtifact: Bun lock resolves missing worktree packages from an ancestor install", async () => {
+test("buildValidationArtifact: Bun lock ignores an ancestor install and reports the worktree's own missing node_modules as stale", async () => {
   const outerRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-bun-worktree-"));
   try {
     const repoRoot = path.join(outerRoot, "worktree");
-    await mkdir(path.join(repoRoot, "node_modules", "@dev-loops", "core"), { recursive: true });
+    await mkdir(repoRoot, { recursive: true });
     await mkdir(path.join(outerRoot, "node_modules", "a"), { recursive: true });
     await writeFile(path.join(repoRoot, "bun.lock"), JSON.stringify({
       lockfileVersion: 2,
-      workspaces: {
-        "": { name: "fixture", dependencies: { a: "1.0.0", "@dev-loops/core": "workspace:*" } },
-        "packages/core": { name: "@dev-loops/core", version: "1.0.1" },
-      },
-      packages: {
-        a: ["a@1.0.0", "", {}],
-        "@dev-loops/core": ["@dev-loops/core@workspace:packages/core"],
-      },
+      workspaces: { "": { name: "fixture", dependencies: { a: "1.0.0" } } },
+      packages: { a: ["a@1.0.0", "", {}] },
     }), "utf8");
-    await writeFile(path.join(repoRoot, "node_modules", "@dev-loops", "core", "package.json"), JSON.stringify({ name: "@dev-loops/core", version: "1.0.1" }), "utf8");
     await writeFile(path.join(outerRoot, "node_modules", "a", "package.json"), JSON.stringify({ name: "a", version: "1.0.0" }), "utf8");
     const artifact = await buildValidationArtifact(
       { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
       { repoRoot },
     );
-    assert.equal(artifact.depState.status, "synced");
-    assert.match(artifact.depState.detail, /including ancestor/);
+    assert.equal(artifact.depState.status, "stale");
+    assert.match(artifact.depState.detail, /node_modules absent in repoRoot/);
   } finally {
     await rm(outerRoot, { recursive: true, force: true });
   }
