@@ -14,7 +14,6 @@ import {
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { COMPLETE_FIXER_DISPOSITION_ACTION } from "@dev-loops/core/loop/fixer-disposition";
 import { resolveFixerDispositionInput } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { fetchGateEvidenceComments } from "./_gate-finding-surface.mjs";
@@ -32,7 +31,6 @@ const NO_CHANGES_SINCE_LAST_REVIEW_STATUS = "no_changes_since_last_review";
 const SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS = "suppressed_post_convergence_docs_only";
 const SUPPRESSED_POST_CONVERGENCE_STATUS = "suppressed_post_convergence";
 const SUPPRESSED_DRAFT_STATUS = "suppressed_draft";
-const BLOCKED_BY_FIXER_DISPOSITION_STATUS = "blocked_by_fixer_disposition";
 // The app-style Copilot reviewer login. The REST requested_reviewers endpoint
 // only registers the Copilot bot under this exact `[bot]`-suffixed login.
 const COPILOT_REVIEWER_BOT_LOGIN = "copilot-pull-request-reviewer[bot]";
@@ -73,14 +71,14 @@ Debug:
   DEVLOOPS_DEBUG=1      Emit stderr traces when best-effort same-head clean
                             convergence detection falls back to unsuppressed behavior
 Output (stdout, JSON):
-  { "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_post_convergence"|"suppressed_post_convergence_docs_only"|"suppressed_draft"|"blocked_by_fixer_disposition",
+  { "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_post_convergence"|"suppressed_post_convergence_docs_only"|"suppressed_draft",
     "repo": "...", "pr": N, "reviewer": "Copilot", "detail"?: "...",
     "sameHeadCleanConverged"?: true, "violationCommentIds"?: [N], "completedRounds"?: N, "maxRounds"?: N,
-    "nextAction"?: "complete_fixer_disposition" }
+    "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] } }
 Request statuses:
-  blocked_by_fixer_disposition  GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: the fixer disposition for the live head is incomplete
-                                (including a fixer handoff that verify-fixer-disposition never verified); run
-                                verify-fixer-disposition to completion first
+  (any status but suppressed_draft and blocked_by_copilot_comment, which return before the
+   disposition read) An incomplete fixer disposition never blocks a request; it adds fixerDispositionWarning
+                                (GATE-EXEC-FIXER-DISPOSITION-BOUNDARY is advisory, ADR 0155)
   requested                     Copilot review was successfully requested
   already-requested             Copilot review was already observably in progress; no new request needed
   unavailable                   Copilot review is not enabled/requestable and no in-progress evidence was found
@@ -687,7 +685,13 @@ export async function checkForCopilotComments({ repo, pr }, { env = process.env,
     violationCommentIds,
   };
 }
-export async function performCopilotReviewRequest(
+export async function performCopilotReviewRequest(options, deps = {}) {
+  const advisory = {};
+  const result = await performRequest(options, deps, advisory);
+  return { ...result, ...advisory };
+}
+
+async function performRequest(
   options,
   {
     env = process.env,
@@ -696,6 +700,7 @@ export async function performCopilotReviewRequest(
     delayImpl = delay,
     repoRoot = process.cwd(),
   } = {},
+  advisory,
 ) {
   const runtime = { env, ghCommand, runChild };
   const before = await fetchCopilotReviewState(options, runtime);
@@ -741,17 +746,8 @@ export async function performCopilotReviewRequest(
       { ...runtime, repoRoot },
     )
     : null;
-  if (fixerDisposition && fixerDisposition.complete !== true) {
-    return {
-      ok: true,
-      status: BLOCKED_BY_FIXER_DISPOSITION_STATUS,
-      repo: options.repo,
-      pr: options.pr,
-      reviewer: "Copilot",
-      nextAction: COMPLETE_FIXER_DISPOSITION_ACTION,
-      detail: `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: the fixer disposition for head ${currentHeadSha} is incomplete (${fixerDisposition.incomplete.map((entry) => `thread ${entry.threadId}: ${entry.failedStep}`).join("; ")}). No Copilot review is requested. Next action: ${COMPLETE_FIXER_DISPOSITION_ACTION} (run verify-fixer-disposition.mjs --repo ${options.repo} --pr ${options.pr} --head-sha ${currentHeadSha} --fixer-plan <fixer-emit-plan.json> to completion).`,
-    };
-  }
+  // ADR 0155: an incomplete disposition is advisory; the warning rides on the final result.
+  if (fixerDisposition?.warning) advisory.fixerDispositionWarning = { warning: fixerDisposition.warning, incomplete: fixerDisposition.incomplete };
   if (currentHeadSha && !before.requested && !before.hasPendingReviewOnCurrentHead && !before.hasSubmittedReviewOnCurrentHead) {
     const markerCarry = await resolvePostConvergenceReviewSuppressed(
       { repo: options.repo, pr: options.pr, currentHeadSha, prData: before.prData, copilotReviewRequestStatus: "none", rules: resolveClassifyRules((await loadDevLoopConfigStrict({ repoRoot })).config) },

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -2791,7 +2791,7 @@ describe("converged-once mode suppresses a post-convergence request as suppresse
 // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY (PR 2647 replay): a verify that failed on missing arguments wrote no
 // checkpoint, then the request ran. A delivered tackled handoff with no checkpoint for the live head blocks it.
 const FIXER_HEAD = "abc9988776";
-async function withFixerHandoff(fn, { checkpoint = false, active } = {}) {
+async function withFixerHandoff(fn, { checkpoint = false, active, receiptMtime } = {}) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-fixer-"));
   try {
     const { initGitFixture } = await import("../_helpers.mjs");
@@ -2815,6 +2815,7 @@ async function withFixerHandoff(fn, { checkpoint = false, active } = {}) {
       const receipt = pullReceiptPath(path.join(repoRoot, "tmp"), plan.workOrderRef);
       await mkdir(path.dirname(receipt), { recursive: true });
       await writeFile(receipt, JSON.stringify({ ...plan, role: "fixer", pulledAt: new Date().toISOString(), subject: { planPath } }));
+      if (receiptMtime) await utimes(receipt, receiptMtime, receiptMtime);
       if (active === "missing") await rm(output);
       else await writeFile(output, active === "malformed" ? "{" : JSON.stringify({ headSha: active === "stale" ? "b".repeat(40) : head, dispositions: [] }));
       const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
@@ -2827,7 +2828,7 @@ async function withFixerHandoff(fn, { checkpoint = false, active } = {}) {
       const logPath = path.join(repoRoot, buildLogPath({ repo: "owner/repo", pr: 17, gate: "fixer-disposition", headSha: FIXER_HEAD, tmpRoot: "tmp" }));
       await mkdir(path.dirname(logPath), { recursive: true });
       // A deferred entry needs no live evidence, so the recorded checkpoint is complete.
-      await writeFile(logPath, JSON.stringify({ headSha: FIXER_HEAD, dispositions: [{ ...handoff.dispositions[0], disposition: "deferred" }] }));
+      await writeFile(logPath, JSON.stringify({ headSha: FIXER_HEAD, dispositions: [{ ...handoff.dispositions[0], disposition: checkpoint === "tackled" ? "tackled" : "deferred" }] }));
     }
     return await fn(repoRoot);
   } finally {
@@ -2837,8 +2838,14 @@ async function withFixerHandoff(fn, { checkpoint = false, active } = {}) {
 const FIXER_PR_VIEW = { assertArgs: PR_VIEW_ARGS, stdout: `${JSON.stringify({ headRefOid: FIXER_HEAD, isDraft: false, reviews: [] })}\n` };
 const FIXER_REQUESTED = { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' };
 
-for (const [active, failure] of [["missing", /result_missing/], ["empty", /PRRT_T1/], ["malformed", /not valid JSON/], ["stale", /not the observed head/], ["omitted ACT", /PRRT_ACT/]]) {
-  test(`Copilot requests nothing for active full ${active} output despite an empty checkpoint`, async () => {
+const PROCEED = (headRefOid) => [
+  { assertArgs: REQUEST_COPILOT_ARGS, stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+  { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+  { assertArgs: PR_VIEW_ARGS, stdout: JSON.stringify({ headRefOid, isDraft: false, reviews: [] }) },
+];
+
+for (const [active, failure, opts] of [["missing", /result_missing/], ["empty", /PRRT_T1/], ["malformed", /not valid JSON/], ["stale", /not the observed head/], ["omitted ACT", /PRRT_ACT/], ["empty", /result_predates_pull/, { receiptMtime: new Date("2999-01-01T00:00:00Z") }]]) {
+  test(`Copilot request proceeds with a warning for active full ${active} output (${failure.source})`, async () => {
     await withFixerHandoff(async (repoRoot) => {
       const headRefOid = "a".repeat(40);
       const extra = active === "omitted ACT" ? [
@@ -2846,26 +2853,42 @@ for (const [active, failure] of [["missing", /result_missing/], ["empty", /PRRT_
         { assertArgs: GRAPHQL_ARGS, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_ACT", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "<!-- dev-loops:finding 0123456789abcdef -->", author: { login: "gate", __typename: "User" } }] } }] } } } } }) },
         { assertArgs: ["api", "user"], stdout: '{"login":"gate"}' },
       ] : [];
-      const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [FIXER_REQUESTED, { assertArgs: PR_VIEW_ARGS, stdout: JSON.stringify({ headRefOid, isDraft: false, reviews: [] }) }, ...extra], { repoRoot });
-      assert.equal(result.status, "blocked_by_fixer_disposition");
-      assert.equal(result.nextAction, "complete_fixer_disposition");
-      assert.match(result.detail, failure);
-      assert.equal(calls.some(isCopilotRequestCall), false);
-    }, { active });
+      const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [FIXER_REQUESTED, { assertArgs: PR_VIEW_ARGS, stdout: JSON.stringify({ headRefOid, isDraft: false, reviews: [] }) }, ...extra, ...PROCEED(headRefOid)], { repoRoot });
+      assert.equal(result.status, "requested");
+      assert.equal(result.nextAction, undefined);
+      assert.match(result.fixerDispositionWarning.warning, failure);
+      assert.equal(calls.some(isCopilotRequestCall), true);
+    }, { active, ...opts });
   });
 }
 
-test("request-copilot-review refuses while a delivered tackled fixer handoff has no checkpoint for the live head, and requests nothing", async () => {
+for (const [step, compare, reply] of [["commit_not_contained", "diverged", false], ["reply_missing", "ahead", false], ["not_resolved", "ahead", true]]) {
+  test(`request-copilot-review proceeds with a ${step} warning for a tackled checkpoint`, async () => {
+    await withFixerHandoff(async (repoRoot) => {
+      const comments = reply ? [{ id: "c1", databaseId: 1, body: "Fixed in commit fed9876543", author: { login: "bot", __typename: "User" } }] : [];
+      const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+        FIXER_REQUESTED,
+        FIXER_PR_VIEW,
+        { assertArgs: ["api", `repos/owner/repo/compare/fed9876543...${FIXER_HEAD}`], stdout: JSON.stringify({ status: compare }) },
+        { assertArgs: GRAPHQL_ARGS, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: comments } }] } } } } }) },
+        ...PROCEED(FIXER_HEAD),
+      ], { repoRoot });
+      assert.equal(result.status, "requested");
+      assert.deepEqual(result.fixerDispositionWarning.incomplete.map((entry) => [entry.threadId, entry.failedStep]), [["PRRT_T1", step]]);
+      assert.equal(calls.some(isCopilotRequestCall), true);
+    }, { checkpoint: "tackled" });
+  });
+}
+
+test("request-copilot-review proceeds with a not_verified warning while a delivered tackled fixer handoff has no checkpoint for the live head", async () => {
   await withFixerHandoff(async (repoRoot) => {
-    const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [FIXER_REQUESTED, FIXER_PR_VIEW], { repoRoot });
-    assert.equal(result.status, "blocked_by_fixer_disposition");
-    assert.equal(result.nextAction, "complete_fixer_disposition");
-    assert.match(result.detail, /GATE-EXEC-FIXER-DISPOSITION-BOUNDARY/);
-    assert.match(result.detail, /PRRT_T1: not_verified/);
-    assert.equal(calls.some(isCopilotRequestCall), false);
+    const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [FIXER_REQUESTED, FIXER_PR_VIEW, ...PROCEED(FIXER_HEAD)], { repoRoot });
+    assert.equal(result.status, "requested");
+    assert.match(result.fixerDispositionWarning.warning, /PRRT_T1: not_verified/);
+    assert.deepEqual(result.fixerDispositionWarning.incomplete.map((entry) => entry.failedStep), ["not_verified"]);
+    assert.equal(calls.some(isCopilotRequestCall), true);
   });
 });
-
 test("request-copilot-review proceeds once the fixer-disposition checkpoint for the live head is complete", async () => {
   await withFixerHandoff(async (repoRoot) => {
     const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
@@ -2876,7 +2899,7 @@ test("request-copilot-review proceeds once the fixer-disposition checkpoint for 
       { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       FIXER_PR_VIEW,
     ], { repoRoot });
-    assert.notEqual(result.status, "blocked_by_fixer_disposition");
+    assert.equal(result.fixerDispositionWarning, undefined);
     assert.equal(calls.some(isCopilotRequestCall), true);
   }, { checkpoint: true });
 });

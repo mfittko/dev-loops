@@ -869,6 +869,16 @@ test("converged-once: a 🔵 review, a 🟡 review with its own resolved thread,
   assert.equal(recorded.copilotCarriedConvergence.sourceHeadSha, OLD_HEAD);
 });
 
+// ADR 0155: the fixer-disposition boundary is advisory; the merge gate still refuses an unresolved review thread.
+test("merge-pr refuses a PR with an unresolved review thread and performs no merge", async () => {
+  const refused = await expectCopilotRefusal("an unresolved review thread", {
+    maxCopilotRounds: 3,
+    reviews: [cleanAt(OLD_HEAD, "PRR_a")],
+    reviewThreads: [reviewThread({ reviewId: "PRR_a", isResolved: false })],
+  });
+  assert.ok(refusalReason(refused).includes(NO_CURRENT_HEAD_REVIEW_REFUSAL));
+});
+
 test("converged-once still refuses a never-reviewed PR, an unconverged latest review, an outstanding request, and a current-head 🟡", async () => {
   const never = await expectCopilotRefusal("no Copilot review", { maxCopilotRounds: 3 });
   assert.ok(refusalReason(never).includes(NO_CURRENT_HEAD_REVIEW_REFUSAL));

@@ -328,6 +328,46 @@ test("copilot-pr-handoff requests review and emits watch action for pr_ready_no_
   }
 });
 
+// ADR 0155: an incomplete tackled disposition places the request and the handoff output carries the warning.
+test("copilot-pr-handoff places the request and carries fixerDispositionWarning for an incomplete disposition", async () => {
+  const head = "abc9988776";
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-fixer-warning-"));
+  try {
+    const { initGitFixture } = await import("../_helpers.mjs");
+    const { mkdir } = await import("node:fs/promises");
+    const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
+    initGitFixture(repoRoot);
+    await writeFile(path.join(repoRoot, ".devloops"), await readFile(path.join(capFixtureRepoRoot, ".devloops"), "utf8"), "utf8");
+    const logPath = path.join(repoRoot, buildLogPath({ repo: "owner/repo", pr: 17, gate: "fixer-disposition", headSha: head, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(logPath), { recursive: true });
+    await writeFile(logPath, JSON.stringify({ headSha: head, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543", disposition: "tackled" }] }));
+    const prView = ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"];
+    const requestedReviewers = ["api", "repos/owner/repo/pulls/17/requested_reviewers"];
+    const threads = JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [] } }] } } } } });
+    const withHead =JSON.stringify({ headRefOid: head, reviews: [] });
+    const { env } = await writeGhStubHelper(repoRoot, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo"], stdout: OPEN_PR + "\n" },
+      { assertArgs: requestedReviewers, stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+      { assertArgs: requestedReviewers, stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: prView, stdout: withHead + "\n" },
+      { assertArgs: ["api", `repos/owner/repo/compare/fed9876543...${head}`], stdout: '{"status":"diverged"}\n' },
+      { assertArgs: ["api", "graphql"], stdout: threads + "\n" },
+      { assertArgs: [...requestedReviewers, "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+      { assertArgs: requestedReviewers, stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: prView, stdout: withHead + "\n" },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env: { ...env, DEVLOOPS_RUN_ID: "" }, cwd: repoRoot });
+    assert.equal(result.stderr, "");
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.reviewRequestStatus, "requested");
+    assert.equal(output.action, "watch");
+    assert.equal(output.fixerDispositionWarning.incomplete[0].threadId, "PRRT_T1");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Handoff: already-requested → watch
 // ---------------------------------------------------------------------------
