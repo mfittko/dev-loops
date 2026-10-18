@@ -129,7 +129,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     harness: { type: "string" }, entry: { type: "string" }, "tmp-root": { type: "string" },
     help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS,
   };
-  // One failure shape: {ok:false,error} on stdout unless --silent; --fields and --jq never apply to a failure.
+  // One failure shape: {ok:false,refusal?,error} on stdout unless --silent; --fields and --jq never apply to a failure.
   const fail = (error, stderrText, refusal) => {
     // Without parsed values, scan argv itself: a missing option value would make a non-strict parse swallow --silent.
     const terminator = argv.indexOf("--");
