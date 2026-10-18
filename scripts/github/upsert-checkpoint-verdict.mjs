@@ -2827,16 +2827,22 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // verdict (a proven pre-approval blocker over a completed ledger), so the
   // render records both layers. The ledger object itself is never mutated.
   let checkpointComposition = null;
+  // Round cap: past the cap an open act item or a severity disagreement blocks (draft_gate only).
+  // It runs over the ledger findings plus the --findings-json act items (ledger entry wins on a shared summary),
+  // so a post with no ledger, or a ledger without overallVerdict, cannot slip past it.
+  const capState = await readRoundCapState({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.tmpRoot }, config, repoRoot);
+  const capSummary = (f) => (typeof f?.summary === "string" ? f.summary.trim() : f?.summary);
+  const ledgerCapFindings = preloadedFindingsLedger?.findings ?? [];
+  const capFindings = [...ledgerCapFindings, ...enrichedActItems.filter((a) => !ledgerCapFindings.some((l) => capSummary(l) === capSummary(a)))];
+  const capBlockers = evaluateRoundCap(capFindings, capState).blockers;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
     const ledgerVerdict = composeReviewVerdict(preloadedFindingsLedger.overallVerdict, [...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]);
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
-    // Round cap: past the cap an open act item or a severity disagreement blocks (draft_gate only).
-    const capState = await readRoundCapState({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.tmpRoot }, config, repoRoot);
     const gateBlockers = [
       ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),
-      ...evaluateRoundCap(preloadedFindingsLedger.findings, capState).blockers,
+      ...capBlockers,
     ];
     const composedVerdict = composeCheckpointVerdict({ reviewVerdict: ledgerVerdict, blockers: gateBlockers });
     if (options.verdict === undefined) {
@@ -2875,11 +2881,15 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     throw new Error(
       `--verdict is required for ${options.gate} @ ${canonicalHeadSha}${options.findingsLedger ? `: --findings-ledger "${options.findingsLedger}" carries no overallVerdict to derive it from` : ""}. Pass --verdict, or supply a --findings-ledger written from a consolidate-fanin --ledger-out that carries overallVerdict.`,
     );
+  } else if (capBlockers.length > 0 && options.verdict !== "blocked") {
+    // Fail closed: a past-cap round without a verdict-bearing ledger must post blocked, never findings_present or clean.
+    throw new Error(`--verdict "${options.verdict}" for ${options.gate} @ ${canonicalHeadSha} is refused: the round is past the gates.draft.maxReviewRounds cap with ${capBlockers.length} cap blocker(s) (${capBlockers.map((b) => `${b.kind}: ${b.item}`).join("; ")}). Post "blocked" (skills/docs/gate-review-sub-loop-contract.md, round cap).`);
   } else if (options.verdict === "clean" && listOpenActItems([...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems]).length > 0) {
     // ADR 0089: a ledger without overallVerdict still carries its judge act list.
     const actItems = listOpenActItems([...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems]);
     throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-ledger "${options.findingsLedger}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
   }
+  if (!preloadedFindingsLedger?.overallVerdict && capBlockers.length > 0) checkpointComposition = { reviewVerdict: "findings_present", blockers: capBlockers };
   if (
     options.verdict === "clean"
     && activeGateConfig.blockCleanOnFindingSeverities

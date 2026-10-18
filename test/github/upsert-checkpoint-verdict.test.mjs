@@ -12009,10 +12009,16 @@ async function withCapRound({ findings, overallVerdict = "findings_present", pri
       ...overrides,
     }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild });
     const postedBody = () => JSON.parse(calls.find((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST")).stdinText).body;
-    await fn({ post, postedBody });
+    await fn({ post, postedBody, repoRoot });
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
+}
+
+async function writeCapFindingsJson(repoRoot, findings) {
+  const file = path.join(repoRoot, "cap-findings.json");
+  await writeFile(file, JSON.stringify(findings), "utf8");
+  return file;
 }
 
 const capFinding = (severity, judgeDisposition, extra = {}) => ({ severity, angle: "correctness", summary: `${severity} ${judgeDisposition} item`, judgeDisposition, ...extra });
@@ -12054,6 +12060,27 @@ test("round cap: past the cap a judge-rejected medium and a judge-deferred high 
       assert.match(body, new RegExp(`severity_disagreement: \`\\[${finding.severity}\\] ${finding.summary}\``));
     });
   }
+});
+
+test("round cap: a past-cap --findings-json act item with no ledger refuses findings_present and posts blocked", async () => {
+  await withCapRound({ findings: [] }, async ({ post, postedBody, repoRoot }) => {
+    const findingsJson = await writeCapFindingsJson(repoRoot, [capFinding("low", "act")]);
+    await assert.rejects(() => post({ findingsLedger: undefined, findingsJson, verdict: "findings_present" }), /past the gates\.draft\.maxReviewRounds cap/);
+    await post({ findingsLedger: undefined, findingsJson, verdict: "blocked" });
+    const body = postedBody();
+    assert.match(body, /\*\*Verdict:\*\* blocked/);
+    assert.match(body, /round_cap_reached: `\[low\] low act item`/);
+  });
+});
+
+test("round cap: a past-cap --findings-json act item is evaluated alongside a ledger that does not list it", async () => {
+  await withCapRound({ findings: [capFinding("nit", "reject")], overallVerdict: "findings_present" }, async ({ post, postedBody, repoRoot }) => {
+    const findingsJson = await writeCapFindingsJson(repoRoot, [capFinding("nit", "reject"), capFinding("high", "act")]);
+    await post({ findingsJson });
+    const body = postedBody();
+    assert.match(body, /\*\*Verdict:\*\* blocked/);
+    assert.match(body, /round_cap_reached: `\[high\] high act item`/);
+  });
 });
 
 test("round cap: below the cap and with maxReviewRounds 0 the verdict is unchanged", async () => {
