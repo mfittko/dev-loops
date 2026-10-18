@@ -2836,6 +2836,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     throw new Error(`${options.gate} @ ${canonicalHeadSha} is at or past the gates.draft.maxReviewRounds cap (round ${capState.round} of ${capState.cap}) and needs a cap decision, which runs on a judged ledger only. Post with --findings-ledger (write-gate-findings-log.mjs); --findings-json alone is refused.`);
   }
   const capFindings = preloadedFindingsLedger?.findings ?? [];
+  const unlistedAct = capState.pastCap ? enrichedActItems.filter((a) => !capFindings.some((f) => (typeof f.summary === "string" ? f.summary.trim() : f.summary) === a.summary)) : [];
+  if (unlistedAct.length > 0) {
+    throw new Error(`${options.gate} @ ${canonicalHeadSha} is at or past the gates.draft.maxReviewRounds cap and --findings-json carries ${unlistedAct.length} act item(s) that --findings-ledger "${options.findingsLedger}" does not list (${unlistedAct.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}). The cap decision runs on the judged ledger only; re-write the ledger with these findings (write-gate-findings-log.mjs), then post again.`);
+  }
   stampCapClosed(capFindings, capState);
   // Fail closed: the comment and detect-checkpoint-evidence.mjs (ledger only) must show the same capClosed items.
   const unpersisted = flatOnlyJudgedLedger.filter((f) => f.capClosed);

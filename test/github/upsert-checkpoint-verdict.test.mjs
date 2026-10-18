@@ -12071,6 +12071,24 @@ test("round cap: a past-cap post with only --findings-json is refused and names 
   });
 });
 
+test("round cap: past the cap a --findings-json act item the ledger does not list is refused naming the ledger; below the cap it is unchanged", async () => {
+  const extra = capFinding("low", "act", { summary: "extra act item" });
+  await withCapRound({ findings: [], overallVerdict: "clean" }, async ({ post, repoRoot }) => {
+    const findingsJson = await writeCapFindingsJson(repoRoot, [extra]);
+    await assert.rejects(() => post({ findingsJson }), /--findings-ledger/);
+  });
+  await withCapRound({ findings: [], overallVerdict: "clean", priorRounds: 1 }, async ({ post, postedBody, repoRoot }) => {
+    const findingsJson = await writeCapFindingsJson(repoRoot, [extra]);
+    await post({ findingsJson });
+    assert.match(postedBody(), /\*\*Verdict:\*\* findings_present/);
+  });
+  await withCapRound({ findings: [extra], overallVerdict: "findings_present" }, async ({ post, postedBody, repoRoot }) => {
+    const findingsJson = await writeCapFindingsJson(repoRoot, [extra]);
+    await post({ findingsJson });
+    assert.match(postedBody(), /\*\*Verdict:\*\* blocked/);
+  });
+});
+
 test("round cap: below the cap and with maxReviewRounds 0 a plain --findings-json post is unchanged", async () => {
   for (const options of [{ priorRounds: 1 }, { cap: 0 }]) {
     await withCapRound({ findings: [], ...options }, async ({ post, postedBody, repoRoot }) => {
