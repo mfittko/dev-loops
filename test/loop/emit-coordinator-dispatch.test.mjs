@@ -128,3 +128,14 @@ test("C6a a plan that lost its workOrder refuses with the integrity refusal, not
     await assert.rejects(pullWorkOrder({ ref: out.workOrderRef, digest: out.workOrderDigest, execution: out.executionIdentity, tmpRoots: [ctx.tmp], receiptTmpRoot: ctx.dir }), { refusal: "local_materialization_integrity_failure" });
   });
 });
+
+test("C6a the exact emitted pointer pulls its order with no --tmp-root added", async () => {
+  await withDirs(async (ctx) => {
+    const out = (await emit(ctx, "claude", "queue")).out;
+    const command = /`dev-loops-run (scripts\/github\/pull-work-order\.mjs [^`]+)`/.exec(out.dispatchPrompt)[1].split(" ");
+    assert.equal(command.includes("--tmp-root"), false);
+    const pull = await runNode(path.resolve(command[0]), command.slice(1), { cwd: ctx.dir });
+    assert.equal(pull.code, 0, pull.stderr);
+    assert.equal(pull.stdout, await readFile(path.join(path.dirname(out.planPath), "order.md"), "utf8"));
+  });
+});
