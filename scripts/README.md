@@ -123,7 +123,7 @@ Contract:
 
 Success output shape:
 - `{ "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_post_convergence"|"suppressed_post_convergence_docs_only"|"suppressed_draft"|"blocked_by_fixer_disposition", "repo": "owner/name", "pr": 17, "reviewer": "Copilot", ... }`
-- `blocked_by_fixer_disposition` places no request (`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`) and carries `nextAction: "complete_fixer_disposition"`: run `verify-fixer-disposition.mjs` to completion first
+- An incomplete fixer disposition never blocks a request (`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` is advisory, ADR 0155); the result carries `fixerDispositionWarning`.
 - `unavailable` also includes a `detail` string with the normalized GitHub/CLI limitation
 - `round_cap_reached` includes `completedRounds` and `maxRounds` fields
 - `suppressed_post_convergence` is the default converged-once suppression (`refinement.requireCopilotConvergenceAtLatestHead: false`, ADR 0090): the latest Copilot review converged on an earlier head, zero review threads are unresolved, and no request is outstanding, so no fresh round is opened below the cap, at the cap, or under `--force-rerequest-review`, whatever the delta. An operator suppression marker in this mode also returns this status. The round-cap return carries `completedRounds` and `maxRounds`; the below-cap return omits both fields

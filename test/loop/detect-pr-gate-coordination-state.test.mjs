@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it, test } from "bun:test";
@@ -3566,7 +3566,7 @@ test("detect-pr-gate-coordination-state routes to pre_approval_gate when a linge
 // in-flight checkpoint, only in the linked worktree's own tmp/. With "both",
 // a complete main checkpoint and a stale incomplete linked one exist for the
 // same head: the main-anchored copy wins, so the gate is not blocked.
-for (const location of ["main", "linked", "both"]) test(`detect-pr-gate-coordination-state ${location === "both" ? "reads the complete main checkpoint over a stale incomplete linked one" : "blocks on an incomplete fixer-disposition checkpoint"} for the current head (checkpoint in ${location} worktree)`, async () => {
+for (const [location, step] of [["main", "reply_missing"], ["linked", "reply_missing"], ["both", "reply_missing"], ["main", "commit_not_contained"], ["main", "not_resolved"]]) test(`detect-pr-gate-coordination-state ${location === "both" ? "reads the complete main checkpoint over a stale incomplete linked one" : "blocks on an incomplete fixer-disposition checkpoint"} for the current head (checkpoint in ${location} worktree, ${step})`, async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-fixer-disposition-"));
   const REPO = "owner/repo";
   const PR = 3001;
@@ -3622,7 +3622,7 @@ for (const location of ["main", "linked", "both"]) test(`detect-pr-gate-coordina
               pullRequest: {
                 // T1 is claimed tackled in the checkpoint above but carries no
                 // commit-evidenced reply live — an incomplete disposition.
-                reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } }] },
+                reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: step === "not_resolved" ? `Fixed in commit ${FIX_SHA}` : "please fix", author: { login: "reviewer", __typename: "User" } }] } }] },
               },
             },
           },
@@ -3663,7 +3663,7 @@ for (const location of ["main", "linked", "both"]) test(`detect-pr-gate-coordina
       // No tackled entry in the "both" main checkpoint, so no containment call.
       ...(location === "both" ? [] : [{
         assertArgs: ["api", `repos/${REPO}/compare/${FIX_SHA}...${HEAD_SHA}`],
-        stdout: jsonLine({ status: "ahead" }),
+        stdout: jsonLine({ status: step === "commit_not_contained" ? "diverged" : "ahead" }),
       }]),
       {
         assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
@@ -3677,15 +3677,14 @@ for (const location of ["main", "linked", "both"]) test(`detect-pr-gate-coordina
     assert.equal(result.ok, true);
     if (location === "both") {
       assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
-      assert.doesNotMatch(result.reason ?? "", /reply_missing/);
+      assert.doesNotMatch(result.reason ?? "", new RegExp(step));
       return;
     }
-    assert.equal(result.gateBoundary, PR_CHECKPOINT.FEEDBACK_RESOLUTION);
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
-    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
-    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
-    assert.match(result.reason, /T1/);
-    assert.match(result.reason, /reply_missing/);
+    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+    assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+    assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+    assert.match(result.fixerDispositionWarning.warning, /T1/);
+    assert.match(result.fixerDispositionWarning.warning, new RegExp(step));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -3762,9 +3761,9 @@ test("detect-pr-gate-coordination-state formats a legible reason (no raw null th
     const result = await detectPrGateCoordinationState({ repo: REPO, pr: PR }, runtime);
 
     assert.equal(result.ok, true);
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
-    assert.match(result.reason, /unreadable_checkpoint/);
-    assert.doesNotMatch(result.reason, /thread null(?!\w)/);
+    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+    assert.match(result.fixerDispositionWarning.warning, /unreadable_checkpoint/);
+    assert.doesNotMatch(result.fixerDispositionWarning.warning, /thread null(?!\w)/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -3841,9 +3840,9 @@ test("detect-pr-gate-coordination-state fails closed (not silently absent) when 
     const result = await detectPrGateCoordinationState({ repo: REPO, pr: PR }, runtime);
 
     assert.equal(result.ok, true);
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
-    assert.match(result.reason, /unreadable_checkpoint/);
-    assert.doesNotMatch(result.reason, /thread null(?!\w)/);
+    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+    assert.match(result.fixerDispositionWarning.warning, /unreadable_checkpoint/);
+    assert.doesNotMatch(result.fixerDispositionWarning.warning, /thread null(?!\w)/);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -3902,7 +3901,7 @@ test("detect-pr-gate-coordination-state behaves exactly as before when no fixer-
 
 // A full-phase fixer handoff delivered for the live head that lists a tackled thread, with no
 // verification checkpoint, means verify-fixer-disposition never completed: the boundary fails closed.
-async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, active }, assertResult) {
+async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, active, receiptMtime }, assertResult) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-fixer-not-verified-"));
   const REPO = "owner/repo";
   const PR = 3004;
@@ -3935,6 +3934,7 @@ async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, 
       const receipt = pullReceiptPath(path.join(tempDir, "tmp"), plan.workOrderRef);
       await mkdir(path.dirname(receipt), { recursive: true });
       await writeFile(receipt, JSON.stringify({ ...plan, role: "fixer", pulledAt: new Date().toISOString(), subject: { planPath } }));
+      if (receiptMtime) await utimes(receipt, receiptMtime, receiptMtime);
       if (active === "missing") await rm(output);
       else await writeFile(output, active === "malformed" ? "{" : JSON.stringify({ headSha: active === "stale" ? "b".repeat(40) : HEAD_SHA, dispositions: [] }));
       const checkpoint = path.join(tempDir, "tmp", "gate-findings", "owner-repo", `pr-${PR}`, `fixer-disposition-${HEAD_SHA}.json`);
@@ -3987,36 +3987,44 @@ async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, 
 for (const [active, failure] of [["missing", /result_missing/], ["empty", /PRRT_T1/], ["malformed", /not valid JSON/], ["stale", /not the observed head/], ["omitted ACT", /PRRT_ACT/]]) {
   test(`gate rejects active full ${active} output despite an empty complete checkpoint`, async () => {
     await runNotVerifiedFixture({ active }, (result) => {
-      assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
-      assert.match(result.reason, failure);
-      assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+      assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+      assert.match(result.fixerDispositionWarning.warning, failure);
+      assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
     });
   });
 }
 
+test("gate proceeds with a warning when the active full output predates the pull (result_predates_pull)", async () => {
+  await runNotVerifiedFixture({ active: "empty", receiptMtime: new Date("2999-01-01T00:00:00Z") }, (result) => {
+    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+    assert.match(result.fixerDispositionWarning.warning, /result_predates_pull/);
+    assert.equal(result.fixerDispositionWarning.incomplete.length, 1);
+  });
+});
+
 test("detect-pr-gate-coordination-state reports not_verified for a delivered tackled handoff with no checkpoint for the live head", async () => {
   await runNotVerifiedFixture({}, (result) => {
     assert.equal(result.ok, true);
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
-    assert.match(result.reason, /PRRT_T1/);
-    assert.match(result.reason, /not_verified/);
-    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+    assert.match(result.fixerDispositionWarning.warning, /PRRT_T1/);
+    assert.match(result.fixerDispositionWarning.warning, /not_verified/);
+    assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
   });
 });
 
 test("detect-pr-gate-coordination-state keeps not_verified after a later commit_only emission overwrote the plan", async () => {
   await runNotVerifiedFixture({ phase: "commit_only" }, (result) => {
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
-    assert.match(result.reason, /not_verified/);
-    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+    assert.match(result.fixerDispositionWarning.warning, /not_verified/);
+    assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
   });
 });
 
 test("detect-pr-gate-coordination-state fails closed on a malformed delivered handoff", async () => {
   await runNotVerifiedFixture({ handoffRaw: '{"headSha": "abc99887' }, (result) => {
-    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
-    assert.match(result.reason, /unreadable_handoff/);
-    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+    assert.match(result.fixerDispositionWarning.warning, /unreadable_handoff/);
+    assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
   });
 });
 
@@ -4033,8 +4041,8 @@ for (const [name, opts] of [["a tackled handoff for an older head", { handoffHea
 for (const [name, handoffHead] of [["an abbreviated", "abc9988"], ["an upper-case", "ABC9988776"], ["a whitespace-padded", "  abc9988776\n"]]) {
   test(`detect-pr-gate-coordination-state reports not_verified for ${name} handoff headSha`, async () => {
     await runNotVerifiedFixture({ handoffHead }, (result) => {
-      assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
-      assert.match(result.reason, /not_verified/);
+      assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+      assert.match(result.fixerDispositionWarning.warning, /not_verified/);
     });
   });
 }

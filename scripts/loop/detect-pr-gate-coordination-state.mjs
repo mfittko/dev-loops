@@ -819,8 +819,22 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
   return incomplete.length > 0 ? { complete: false, incomplete } : null;
 }
 
+// ADR 0155: an incomplete disposition is advisory. It keeps its `incomplete` detail and adds a warning,
+// with no next action and no forbidden actions, so gate coordination and Copilot requests proceed.
 // The one fixer-disposition input: detect-pr-gate-coordination-state and request-copilot-review both read it here.
-export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedThreads }, runtime = {}) {
+export async function resolveFixerDispositionInput(args, runtime = {}) {
+  const result = await readFixerDispositionEvidence(args, runtime);
+  if (!result || result.complete) return result;
+  const detail = result.incomplete.map((entry) => `thread ${entry.threadId}: ${entry.failedStep}`).join("; ");
+  return {
+    ...result,
+    warning: `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY (advisory): the fixer disposition for head ${args.currentHeadSha} is incomplete (${detail}). verify-fixer-disposition.mjs is optional; the merge gates are unchanged.`,
+    nextAction: null,
+    forbiddenActions: [],
+  };
+}
+
+async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedThreads }, runtime = {}) {
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   // Same main-anchored default verify-fixer-disposition.mjs writes under.
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
@@ -1239,11 +1253,6 @@ export function buildGateCoordinationEvaluatorInput({
     preApprovalGateMarker: context.gateEvidence.preApprovalGateMarker,
     refinementArtifact: context.refinementArtifact,
     postConvergenceSignificantChange,
-    // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: present only when a durable
-    // fixer-disposition checkpoint exists for this head (resolveFixerDispositionInput
-    // returns null otherwise), so a PR with no recorded fixer handoff behaves
-    // exactly as before this boundary existed.
-    ...(context.fixerDisposition ? { fixerDisposition: context.fixerDisposition } : {}),
     ...(earlySurface ?? {}),
   };
 }
@@ -1414,6 +1423,10 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // and the body-feedback disposition record, each null when none applies.
   // copilotBodyDispositionRequired names the review a disposition record must
   // name while a body-feedback flag blocks; null otherwise.
+  // ADR 0155: an incomplete fixer disposition is a visible warning, never a block.
+  if (context.fixerDisposition?.warning) {
+    result.fixerDispositionWarning = { warning: context.fixerDisposition.warning, incomplete: context.fixerDisposition.incomplete };
+  }
   result.carriedConvergence = context.carriedConvergence ?? null;
   result.copilotBodyDisposition = context.copilotBodyDisposition ?? null;
   result.copilotBodyDispositionRequired = context.copilotBodyDispositionRequired ?? null;

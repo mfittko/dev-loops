@@ -11,7 +11,6 @@ import {
   buildSizeBudgetField,
 } from "../src/loop/pr-gate-coordination.mjs";
 import { DISPOSITION, interpretLoopState, STATE } from "../src/loop/copilot-loop-state.mjs";
-import { FIXER_DISPOSITION_FORBIDDEN_ACTIONS } from "../src/loop/fixer-disposition.mjs";
 
 function gate({ visible = false, headSha = null, verdict = null, contractComplete = false } = {}) {
   return {
@@ -4353,14 +4352,9 @@ test("contract: nextAction is always allowed and never forbidden, across every l
   assert.ok(checked > 0);
 });
 
-// ---------------------------------------------------------------------------
-// GATE-EXEC-FIXER-DISPOSITION-BOUNDARY (#1988): a fixerDisposition input that
-// is present and NOT complete forces a blocked feedback-resolution result,
-// regardless of unresolvedThreadCount or lifecycleState.
-// ---------------------------------------------------------------------------
-
-test("incomplete fixerDisposition forces a blocked result even when unresolvedThreadCount reads 0 (bogus/uncontained evidence)", () => {
-  const result = evaluatePrGateCoordination({
+// The fixer-disposition boundary is advisory (ADR 0155): the evaluator ignores a fixerDisposition input.
+test("an incomplete fixerDisposition input never changes the evaluator result", () => {
+  const input = {
     pr: 1975,
     currentHeadSha: "fedcba987654",
     prDraft: false,
@@ -4374,144 +4368,11 @@ test("incomplete fixerDisposition forces a blocked result even when unresolvedTh
     draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: false }),
     preApprovalGateMarker: gate({ visible: false }),
-    fixerDisposition: {
-      complete: false,
-      incomplete: [
-        { threadId: "T1", expectedCommit: "abc1234", failedStep: "not_resolved" },
-      ],
-    },
-  });
-
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
-  assert.ok(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION));
-  assert.match(result.reason, /T1/);
-  assert.match(result.reason, /abc1234/);
-  assert.match(result.reason, /not_resolved/);
-  // Broader than postDraftForbidden: request/rerequest review + gate dispatch
-  // must ALL be forbidden, not just draft/merge transition tokens.
-  for (const token of FIXER_DISPOSITION_FORBIDDEN_ACTIONS) {
-    assert.ok(result.forbiddenActions.includes(token), `expected forbiddenActions to include ${token}`);
+  };
+  for (const failedStep of ["missing_from_handoff", "commit_not_contained", "reply_missing", "not_resolved", "not_verified", "result_predates_pull"]) {
+    const fixerDisposition = { complete: false, incomplete: [{ threadId: "T1", expectedCommit: "abc1234", failedStep }] };
+    assert.deepEqual(evaluatePrGateCoordination({ ...input, fixerDisposition }), evaluatePrGateCoordination(input));
   }
-});
-
-test("complete fixerDisposition does not block progression", () => {
-  const result = evaluatePrGateCoordination({
-    pr: 1975,
-    currentHeadSha: "fedcba987654",
-    prDraft: false,
-    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
-    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
-    sameHeadCleanConverged: true,
-    copilotReviewRequestStatus: "none",
-    unresolvedThreadCount: 0,
-    ciStatus: "success",
-    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
-    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
-    preApprovalGate: gate({ visible: false }),
-    preApprovalGateMarker: gate({ visible: false }),
-    fixerDisposition: { complete: true, incomplete: [] },
-  });
-
-  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
-});
-
-test("absent fixerDisposition input never blocks (backward compatible with existing callers)", () => {
-  const result = evaluatePrGateCoordination({
-    pr: 1975,
-    currentHeadSha: "fedcba987654",
-    prDraft: false,
-    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
-    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
-    sameHeadCleanConverged: true,
-    copilotReviewRequestStatus: "none",
-    unresolvedThreadCount: 0,
-    ciStatus: "success",
-    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
-    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
-    preApprovalGate: gate({ visible: false }),
-    preApprovalGateMarker: gate({ visible: false }),
-  });
-
-  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
-});
-
-test("incomplete fixerDisposition blocks even a draft PR's mark-ready-for-review", () => {
-  const result = evaluatePrGateCoordination({
-    pr: 10,
-    currentHeadSha: "abc123456789",
-    prDraft: true,
-    lifecycleState: STATE.PR_DRAFT,
-    loopDisposition: DISPOSITION.ACTION_REQUIRED,
-    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
-    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
-    fixerDisposition: {
-      complete: false,
-      incomplete: [{ threadId: "T1", expectedCommit: "abc1234", failedStep: "reply_missing" }],
-    },
-  });
-
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
-  assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
-  assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
-});
-
-// ADR 0088 (folded finding a): applyDraftGateEvidenceGuard must NOT rewrite an
-// in-progress draft-side COMPLETE_FIXER_DISPOSITION result to
-// reconcile_draft_gate. Absent/not-yet-clean draft_gate COMMENT evidence
-// (cleanEvidenceExists false — no draft_gate verdict posted yet for THIS
-// round) is the NORMAL state while a fixer is mid-remediation on a still-draft
-// PR; reconcile_draft_gate is the POST-draft merge-path remedy and would
-// misdirect the fixer here.
-test("#2381: incomplete fixerDisposition on a DRAFT PR with no clean draft_gate evidence yet is NOT rewritten to reconcile_draft_gate", () => {
-  const result = evaluatePrGateCoordination({
-    pr: 10,
-    currentHeadSha: "abc123456789",
-    prDraft: true,
-    lifecycleState: STATE.PR_DRAFT,
-    loopDisposition: DISPOSITION.ACTION_REQUIRED,
-    // No draft_gate evidence posted for this round yet (cleanEvidenceExists
-    // false) — the normal state mid-remediation, BEFORE upsert-checkpoint-
-    // verdict.mjs posts this round's verdict.
-    draftGate: gate({ visible: false }),
-    draftGateMarker: gate({ visible: false }),
-    fixerDisposition: {
-      complete: false,
-      incomplete: [{ threadId: "T1", expectedCommit: "abc1234", failedStep: "reply_missing" }],
-    },
-  });
-
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
-  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.FEEDBACK_RESOLUTION);
-  assert.ok(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION));
-});
-
-// Non-draft counterpart: the SAME absent draft_gate evidence, on a
-// NON-draft PR, still rewrites to reconcile_draft_gate — applyDraftGateEvidenceGuard's
-// prDraft exemption must not weaken the post-draft merge-path guard.
-test("#2381: incomplete fixerDisposition on a NON-draft PR with no clean draft_gate evidence IS rewritten to reconcile_draft_gate", () => {
-  const result = evaluatePrGateCoordination({
-    pr: 10,
-    currentHeadSha: "abc123456789",
-    prDraft: false,
-    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
-    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
-    sameHeadCleanConverged: true,
-    copilotReviewRequestStatus: "none",
-    unresolvedThreadCount: 0,
-    ciStatus: "success",
-    draftGate: gate({ visible: false }),
-    draftGateMarker: gate({ visible: false }),
-    preApprovalGate: gate({ visible: false }),
-    preApprovalGateMarker: gate({ visible: false }),
-    fixerDisposition: {
-      complete: false,
-      incomplete: [{ threadId: "T1", expectedCommit: "abc1234", failedStep: "reply_missing" }],
-    },
-  });
-
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
 });
 
 // A ready PR whose head advanced past a clean draft_gate recorded on an older
