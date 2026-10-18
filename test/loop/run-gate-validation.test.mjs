@@ -544,6 +544,30 @@ test("buildValidationArtifact: Bun lock rejects a symlinked node_modules and a r
   }
 });
 
+test("buildValidationArtifact: Bun lock treats an aliased root dependency present only in the store as stale", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-bun-alias-"));
+  try {
+    await writeFile(path.join(repoRoot, "bun.lock"), JSON.stringify({
+      lockfileVersion: 2,
+      workspaces: { "": { name: "fixture", dependencies: { foo: "npm:bar@1.0.0" } } },
+      packages: { foo: ["bar@1.0.0", "", {}] },
+    }), "utf8");
+    const store = path.join(repoRoot, "node_modules", ".bun", "bar@1.0.0", "node_modules", "bar");
+    await mkdir(store, { recursive: true });
+    await writeFile(path.join(store, "package.json"), JSON.stringify({ name: "bar", version: "1.0.0" }), "utf8");
+    const input = { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" };
+    const result = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(result.depState.status, "stale");
+    assert.match(result.depState.detail, /1 missing \[foo\]/);
+    await mkdir(path.join(repoRoot, "node_modules", "foo"), { recursive: true });
+    await writeFile(path.join(repoRoot, "node_modules", "foo", "package.json"), JSON.stringify({ name: "bar", version: "1.0.0" }), "utf8");
+    const linked = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(linked.depState.status, "synced");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("buildValidationArtifact: Bun lock ignores an ancestor install and reports the worktree's own missing node_modules as stale", async () => {
   const outerRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-bun-worktree-"));
   try {
