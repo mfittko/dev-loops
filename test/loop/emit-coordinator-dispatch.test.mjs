@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { test } from "bun:test";
 import { runNode } from "../_helpers.mjs";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, pullReceiptPath, pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
@@ -21,13 +22,14 @@ async function withDirs(fn) {
   try {
     const input = path.join(dir, "resolver.json");
     await writeFile(input, JSON.stringify(resolverOutput));
+    execFileSync("git", ["init", "-q", dir]); // the dir is a checkout, so its tmp/ is a listed ledger root
     return await fn({ dir, input, tmp: path.join(dir, "tmp") });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 }
-const emit = async ({ input, tmp }, harness, entry, extra = []) => {
-  const result = await runNode(script, ["--input", input, "--repo", "o/r", "--harness", harness, "--entry", entry, "--tmp-root", tmp, ...extra]);
+const emit = async ({ input, tmp, dir }, harness, entry, extra = []) => {
+  const result = await runNode(script, ["--input", input, "--repo", "o/r", "--harness", harness, "--entry", entry, "--tmp-root", tmp, ...extra], { cwd: dir });
   return { result, out: JSON.parse(result.stdout) };
 };
 
@@ -43,7 +45,7 @@ for (const harness of ["claude", "pi"]) {
           assert.ok(Buffer.byteLength(out.dispatchPrompt) <= DISPATCH_POINTER_MAX_BYTES);
           assert.deepEqual(out.dispatchPayload, harness === "pi"
             ? { agent: "dev-loop", task: out.dispatchPrompt }
-            : { subagent_type: "dev-loop", description: "coordinator work order", prompt: out.dispatchPrompt });
+            : { subagent_type: "dev-loops:dev-loop", description: "coordinator work order", prompt: out.dispatchPrompt });
         }
         assert.match(first.workOrderRef, new RegExp(`^coordinator:o/r#42:${entry}:[0-9a-f]{12}$`));
         assert.match(first.executionIdentity, /^c\d+-[0-9a-f]{8}$/);
@@ -88,7 +90,7 @@ test("C6a a coordinator pull prints the exact materialized order, writes a recei
 test("C6a the pull-work-order CLI registers the coordinator role and prints the materialized order", async () => {
   await withDirs(async (ctx) => {
     const out = (await emit(ctx, "claude", "queue")).out;
-    const pull = await runNode(path.resolve("scripts/github/pull-work-order.mjs"), ["--ref", out.workOrderRef, "--digest", out.workOrderDigest, "--execution", out.executionIdentity, "--tmp-root", ctx.tmp]);
+    const pull = await runNode(path.resolve("scripts/github/pull-work-order.mjs"), ["--ref", out.workOrderRef, "--digest", out.workOrderDigest, "--execution", out.executionIdentity, "--tmp-root", ctx.tmp], { cwd: ctx.dir });
     assert.equal(pull.code, 0, pull.stderr);
     assert.equal(pull.stdout, await readFile(path.join(path.dirname(out.planPath), "order.md"), "utf8"));
   });
@@ -101,4 +103,28 @@ test("C9 every cited rule owner exists as a rule marker in its document", () => 
     assert.ok(readFileSync(doc, "utf8").includes(`<!-- rule: ${rule} -->`), ref);
   }
   assert.equal(RULE_REFERENCES.guardFailure.onFailure, "stop_and_report");
+});
+
+test("C6a a --tmp-root outside the listed checkouts refuses, since the pointer cannot reach it", async () => {
+  await withDirs(async (ctx) => {
+    const other = await mkdtemp(path.join(os.tmpdir(), "coordinator-elsewhere-"));
+    try {
+      const { result, out } = await emit({ ...ctx, tmp: other }, "claude", "queue");
+      assert.equal(result.code, 1);
+      assert.match(out.error, /not a checkout's tmp root/);
+      assert.equal(existsSync(path.join(other, "coordinator-work-orders")), false);
+    } finally {
+      await rm(other, { recursive: true, force: true });
+    }
+  });
+});
+
+test("C6a a plan that lost its workOrder refuses with the integrity refusal, not a TypeError", async () => {
+  await withDirs(async (ctx) => {
+    const out = (await emit(ctx, "claude", "queue")).out;
+    const plan = JSON.parse(readFileSync(out.planPath, "utf8"));
+    delete plan.workOrder;
+    await writeFile(out.planPath, JSON.stringify(plan));
+    await assert.rejects(pullWorkOrder({ ref: out.workOrderRef, digest: out.workOrderDigest, execution: out.executionIdentity, tmpRoots: [ctx.tmp], receiptTmpRoot: ctx.dir }), { refusal: "local_materialization_integrity_failure" });
+  });
 });

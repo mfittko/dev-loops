@@ -10,11 +10,12 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { buildCoordinatorWorkOrder } from "@dev-loops/core/loop/coordinator-work-order";
+import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, executionIndexPath, materializationHash, registerWorkOrderRole, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
-import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { buildHandoffEnvelopeCli } from "./build-handoff-envelope.mjs";
 
 const USAGE = `Usage: emit-coordinator-work-order.mjs --input <resolver-output.json> [--repo <owner/name>] [--allowed-file <path>]... [--harness <claude|pi> --entry <queue|direct> [--tmp-root <path>]]
@@ -106,7 +107,11 @@ async function locateCoordinatorUnit({ ref, digest, execution, tmpRoots }) {
     });
     if (!plan || plan.workOrderRef !== ref) continue;
     const indexed = await readFile(executionIndexPath(tmpRoot, execution), "utf8").then(JSON.parse).catch(() => null);
-    const rendered = materializationHash(renderCoordinatorWorkOrder(plan.workOrder ?? {}));
+    // A plan that kept its reference but lost its order cannot render: refuse by name, not with a TypeError.
+    let rendered;
+    try { rendered = materializationHash(renderCoordinatorWorkOrder(plan.workOrder)); } catch {
+      throw new WorkOrderRefusal("local_materialization_integrity_failure", `coordinator plan ${planPath} has no renderable workOrder; re-emit the coordinator work order`);
+    }
     return {
       workOrder: plan.workOrder, workOrderDigest: plan.workOrderDigest, executionIdentity: indexed?.workOrderRef === ref ? execution : null,
       materializationPath: plan.promptPath, materializationHash: rendered, subject: { repo, target: Number(n), entry },
@@ -159,6 +164,9 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       if (values["tmp-root"]) {
         tmpRoot = path.resolve(cwd, values["tmp-root"]);
         assertTmpRootOutsideLinkedWorktree(tmpRoot, resolveRepoRoot(cwd));
+        // The pointer carries no root selector and the pull scans only listed checkouts' tmp directories.
+        const allowed = resolveLedgerCheckouts(cwd).map((root) => realpathNearestExisting(path.join(root, "tmp")));
+        if (!allowed.includes(realpathNearestExisting(tmpRoot))) throw new Error(`--tmp-root ${tmpRoot} is not a checkout's tmp root (${allowed.join(", ")}); the pull cannot find an order elsewhere, so omit --tmp-root or pass one of these`);
       }
       const unit = await materializeCoordinatorWorkOrder({ workOrder, workOrderDigest, entry: values.entry, tmpRoot });
       const { workOrderRef, executionIdentity, dispatchPrompt, planPath } = unit;
