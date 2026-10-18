@@ -11,7 +11,7 @@ import path from "node:path";
 import { workOrderDigest } from "./work-order-digest.mjs";
 import { validateHandoffEnvelope } from "./handoff-envelope.mjs";
 
-const INPUT_KEYS = new Set(["envelope", "allowedFiles", "attempt"]);
+const INPUT_KEYS = new Set(["envelope", "allowedFiles"]);
 
 export class CoordinatorWorkOrderRefusal extends Error {}
 
@@ -28,12 +28,11 @@ export function changesFragmentGlob(target) {
  */
 export function buildCoordinatorWorkOrder(input) {
   const unknown = Object.keys(input ?? {}).filter((key) => !INPUT_KEYS.has(key));
-  if (unknown.length > 0) throw new CoordinatorWorkOrderRefusal(`coordinator work order accepts only envelope, allowedFiles and attempt; refused: ${unknown.join(", ")}`);
-  const { envelope, allowedFiles = [], attempt = 1 } = input ?? {};
+  if (unknown.length > 0) throw new CoordinatorWorkOrderRefusal(`coordinator work order accepts only envelope and allowedFiles; refused: ${unknown.join(", ")}`);
+  const { envelope, allowedFiles = [] } = input ?? {};
   const valid = validateHandoffEnvelope(envelope);
   if (!valid.ok) throw new CoordinatorWorkOrderRefusal(`handoff envelope is invalid: ${valid.errors.map((e) => e.field).join(", ")}`);
   if (envelope.overrides !== undefined) throw new CoordinatorWorkOrderRefusal("handoff envelope overrides are not a coordinator source; re-resolve without overrides");
-  if (!Number.isSafeInteger(attempt) || attempt < 1) throw new CoordinatorWorkOrderRefusal("attempt must be a positive integer");
   if (!Array.isArray(allowedFiles) || allowedFiles.some((p) => typeof p !== "string" || /[\u0000-\u001f\u007f\\]/.test(p))) {
     throw new CoordinatorWorkOrderRefusal("allowedFiles must be repository-relative paths without control characters or backslashes");
   }
@@ -66,7 +65,6 @@ export function buildCoordinatorWorkOrder(input) {
     role: "coordinator",
     operation: "coordinate",
     target: envelope.target,
-    attempt,
     handoff: { ...handoff, gateState: semanticGateState },
     allowedFiles: [...new Set([...normalized, ownGlob])].sort(),
   };

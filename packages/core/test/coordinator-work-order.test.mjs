@@ -85,7 +85,6 @@ test("C2 changing a semantic input changes the digest", () => {
     assert.throws(() => buildCoordinatorWorkOrder({ envelope: issueEnvelope({ requiredReads: bad }) }), CoordinatorWorkOrderRefusal, bad.join());
   }
   assert.notEqual(buildCoordinatorWorkOrder({ envelope: issueEnvelope(), allowedFiles: ["src/x.mjs"] }).workOrderDigest, base);
-  assert.notEqual(buildCoordinatorWorkOrder({ envelope: issueEnvelope(), attempt: 2 }).workOrderDigest, base);
 });
 
 // C19
@@ -139,11 +138,14 @@ test("C1 missing input refuses with CoordinatorWorkOrderRefusal, not a TypeError
   for (const bad of [undefined, null]) assert.throws(() => buildCoordinatorWorkOrder(bad), CoordinatorWorkOrderRefusal);
 });
 
-test("C2 attempt 0, 1.5 and the string \"2\" are refused", () => {
-  for (const bad of [0, 1.5, "2", 1e20, 2 ** 53]) {
-    assert.throws(() => buildCoordinatorWorkOrder({ envelope: issueEnvelope(), attempt: bad }), CoordinatorWorkOrderRefusal, String(bad));
+
+// C9
+test("C9 the handoff carries the envelope's route and next action unchanged and still validates", () => {
+  const envelope = issueEnvelope();
+  const { workOrder } = buildCoordinatorWorkOrder({ envelope });
+  for (const key of ["strategy", "routeKind", "selectedStrategy", "nextAction", "executionMode"]) {
+    assert.deepEqual(workOrder.handoff[key], envelope[key], key);
   }
-  for (const good of [1, 2, Number.MAX_SAFE_INTEGER]) {
-    assert.equal(buildCoordinatorWorkOrder({ envelope: issueEnvelope(), attempt: good }).workOrder.attempt, good);
-  }
+  assert.equal(workOrder.handoff.nextAction, "Follow up on the PR.");
+  assert.equal(validateHandoffEnvelope({ ...workOrder.handoff, gateState: envelope.gateState }).ok, true);
 });

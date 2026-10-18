@@ -103,21 +103,6 @@ test("C1 failures are silent under --silent and ignore --fields", async () => {
   });
 });
 
-test("C2 --attempt accepts only positive decimal integers", async () => {
-  await withInput(async (input) => {
-    for (const good of ["1", "2", "10"]) {
-      const result = await runNode(["--input", input, "--repo", "o/r", `--attempt=${good}`]);
-      assert.equal(result.code, 0, good);
-      assert.equal(JSON.parse(result.stdout).workOrder.attempt, Number(good));
-    }
-    for (const bad of ["", "0", "0x2", " 2", "2e0", "1.0", "1.5", "-1", "99999999999999999999"]) {
-      const result = await runNode(["--input", input, "--repo", "o/r", `--attempt=${bad}`]);
-      assert.equal(result.code, 1, JSON.stringify(bad));
-      assert.equal(JSON.parse(result.stdout).ok, false, JSON.stringify(bad));
-    }
-  });
-});
-
 test("a missing --input emits ok:false JSON on stdout and exits 1", async () => {
   const result = await runNode([]);
   assert.equal(result.code, 1);

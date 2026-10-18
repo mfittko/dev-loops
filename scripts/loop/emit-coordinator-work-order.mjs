@@ -5,12 +5,12 @@
  * work order and its digest. It accepts no brief, summary file, overrides or payload JSON.
  */
 import { parseArgs } from "node:util";
-import { buildCoordinatorWorkOrder, CoordinatorWorkOrderRefusal } from "@dev-loops/core/loop/coordinator-work-order";
+import { buildCoordinatorWorkOrder } from "@dev-loops/core/loop/coordinator-work-order";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { buildHandoffEnvelopeCli } from "./build-handoff-envelope.mjs";
 
-const USAGE = `Usage: emit-coordinator-work-order.mjs --input <resolver-output.json> [--repo <owner/name>] [--allowed-file <path>]... [--attempt <n>]
+const USAGE = `Usage: emit-coordinator-work-order.mjs --input <resolver-output.json> [--repo <owner/name>] [--allowed-file <path>]...
 Derives the coordinator work order from the resolved handoff envelope. The allowed-file list
 always includes changes/<issue>-*.md (the PR number for a unit without an issue).
 ${JQ_OUTPUT_USAGE}
@@ -22,7 +22,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   let values;
   const options = {
     input: { type: "string" }, repo: { type: "string" }, "allowed-file": { type: "string", multiple: true },
-    attempt: { type: "string" }, help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS,
+    help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS,
   };
   // One failure shape: {ok:false,error} on stdout unless --silent; --fields and --jq never apply to a failure.
   const fail = (error, stderrText) => {
@@ -42,12 +42,9 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     if (!values.input) {
       return fail("--input is required", USAGE);
     }
-    if (values.attempt !== undefined && !/^[1-9]\d*$/.test(values.attempt)) {
-      throw new CoordinatorWorkOrderRefusal("--attempt must be a positive integer");
-    }
     const envelope = await buildHandoffEnvelopeCli({ inputPath: values.input, repo: values.repo });
     const { workOrder, workOrderDigest } = buildCoordinatorWorkOrder({
-      envelope, allowedFiles: values["allowed-file"] ?? [], ...(values.attempt !== undefined ? { attempt: Number(values.attempt) } : {}),
+      envelope, allowedFiles: values["allowed-file"] ?? [],
     });
     return emitResult({ ok: true, workOrder, workOrderDigest }, { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr });
   } catch (err) {
