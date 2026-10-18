@@ -384,7 +384,7 @@ const GateConfig = z.strictObject({
   ),
   // No schema-level `.default()` (same layering reason as mediumFixWindow);
   // resolveGateConfig applies the built-in fallback (4).
-  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for this gate: after this many completed rounds a new judge act item blocks with round_cap_reached instead of starting another automatic round. Default 4. 0 disables the cap."),
+  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap, applies to gates.draft only and is ignored on other gates: after this many completed rounds a new judge act item blocks with round_cap_reached instead of starting another automatic round. Default 4. 0 disables the cap."),
   // Ordered, first-match-wins diff-class angle tiers (see resolveGateTier).
   // Absent/empty = tiers never apply.
   tiers: z.array(GateTier).min(1).describe("Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class.").optional(),

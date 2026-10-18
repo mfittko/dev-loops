@@ -95,6 +95,26 @@ test("J1: the work order lists the act fingerprints of closed prior rounds for t
   });
 });
 
+test("J1: the emitter run in a linked worktree reads the closed prior act ledger from the main-worktree anchor", async () => {
+  await withDir(async (root) => {
+    const git = (cwd, ...args) => assert.equal(spawnSync("git", args, { cwd, encoding: "utf8" }).status, 0, args.join(" "));
+    const main = path.join(root, "main");
+    await mkdir(main);
+    git(main, "init", "-q");
+    git(main, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init");
+    const linked = path.join(root, "linked");
+    git(main, "worktree", "add", "-q", linked, "-b", "linked-branch");
+    const sources = await seed(linked);
+    const priorSha = "a".repeat(40);
+    const act = { severity: "high", angle: "correctness", summary: "earlier act", judgeDisposition: "act" };
+    const dir = path.join(await realpath(main), "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `pre_approval_gate-${priorSha}.json`), JSON.stringify({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha: priorSha, verdict: "findings_present", loggedAt: "2026-01-01T00:00:00Z", findings: [act] }));
+    const plan = await emitJudgeWorkOrder(sources);
+    assert.deepEqual(plan.workOrder.closedPriorActFingerprints, [fingerprintFinding(act)]);
+  });
+});
+
 test("J1: a prior verdict is a required read and a rewritten prior changes the digest", async () => {
   await withDir(async (root) => {
     const sources = { ...(await seed(root)), priorVerdicts: ["judge-fixture/prior-verdict.json"] };

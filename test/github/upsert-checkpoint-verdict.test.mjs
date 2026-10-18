@@ -12073,6 +12073,18 @@ test("round cap: a past-cap --findings-json act item with no ledger refuses find
   });
 });
 
+test("round cap: a past-cap --findings-json judge defer of a high with no ledger posts blocked with severity_disagreement and lists a low defer as cap-closed", async () => {
+  await withCapRound({ findings: [] }, async ({ post, postedBody, repoRoot }) => {
+    const findingsJson = await writeCapFindingsJson(repoRoot, [capFinding("high", "defer"), capFinding("low", "defer")]);
+    await post({ findingsLedger: undefined, findingsJson, verdict: "blocked" });
+    const body = postedBody();
+    assert.match(body, /\*\*Verdict:\*\* blocked/);
+    assert.match(body, /severity_disagreement: `\[high\] high defer item`/);
+    assert.match(body, /\*\*Cap-closed items \(1\)\*\*/);
+    assert.match(body, /- low defer \(round 4 of cap 4\): `low defer item`/);
+  });
+});
+
 test("round cap: a past-cap --findings-json act item is evaluated alongside a ledger that does not list it", async () => {
   await withCapRound({ findings: [capFinding("nit", "reject")], overallVerdict: "findings_present" }, async ({ post, postedBody, repoRoot }) => {
     const findingsJson = await writeCapFindingsJson(repoRoot, [capFinding("nit", "reject"), capFinding("high", "act")]);

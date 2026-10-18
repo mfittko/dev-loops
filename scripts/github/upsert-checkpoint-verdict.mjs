@@ -58,7 +58,7 @@ import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerd
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
 import { buildValidationResultsPath } from "./write-gate-context.mjs";
-import { evaluateRoundCap, readRoundCapState } from "./_gate-round-cap.mjs";
+import { evaluateRoundCap, readRoundCapState, stampCapClosed } from "./_gate-round-cap.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -2676,6 +2676,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   }
   // Open act items from an enriched --findings-json posted alongside a ledger.
   let enrichedActItems = [];
+  // Every flat --findings-json finding (all dispositions), for the round-cap evaluation.
+  let structuredFlatFindings = [];
   // Fan-out angle-coverage enforcement for a ledger-only round (no
   // --findings-json): runs BEFORE the tick below, so a ledger this post refuses
   // never leaves ticked boxes behind. The --findings-json coverage refusal runs
@@ -2801,6 +2803,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
     const actItems = listOpenActItems(flatFindings);
     enrichedActItems = actItems;
+    structuredFlatFindings = flatFindings;
     if (options.verdict === "clean" && actItems.length > 0) {
       throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
     }
@@ -2828,12 +2831,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // render records both layers. The ledger object itself is never mutated.
   let checkpointComposition = null;
   // Round cap: past the cap an open act item or a severity disagreement blocks (draft_gate only).
-  // It runs over the ledger findings plus the --findings-json act items (ledger entry wins on a shared summary),
+  // It runs over the ledger findings plus every flat --findings-json finding, judged or not (ledger entry wins on a shared summary),
   // so a post with no ledger, or a ledger without overallVerdict, cannot slip past it.
   const capState = await readRoundCapState({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.tmpRoot }, config, repoRoot);
   const capSummary = (f) => (typeof f?.summary === "string" ? f.summary.trim() : f?.summary);
   const ledgerCapFindings = preloadedFindingsLedger?.findings ?? [];
-  const capFindings = [...ledgerCapFindings, ...enrichedActItems.filter((a) => !ledgerCapFindings.some((l) => capSummary(l) === capSummary(a)))];
+  const flatCapFindings = structuredFlatFindings.filter((a) => !ledgerCapFindings.some((l) => capSummary(l) === capSummary(a)));
+  stampCapClosed(flatCapFindings, capState);
+  const capFindings = [...ledgerCapFindings, ...flatCapFindings];
   const capBlockers = evaluateRoundCap(capFindings, capState).blockers;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
@@ -3292,7 +3297,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     structuredFindings,
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
-    capClosed: (preloadedFindingsLedger?.findings ?? []).filter((f) => f.capClosed),
+    capClosed: capFindings.filter((f) => f.capClosed),
     ...(checkpointComposition ? { reviewVerdict: checkpointComposition.reviewVerdict, gateBlockers: checkpointComposition.blockers } : {}),
     ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable, locatableFindings: findingSurface.locatable, foldedFindings: findingSurface.folded } : {}),
   });

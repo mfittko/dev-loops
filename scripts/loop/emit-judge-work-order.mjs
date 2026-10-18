@@ -21,7 +21,7 @@ import { buildGateArtifactPath, buildGateContextPath } from "../github/_gate-art
 import { readClosedPriorRoundLogs, renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { priorActFingerprints } from "../github/_gate-round-cap.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
-import { resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--tmp-root <path>]
 Derives the judge's work order from the round's authoritative inputs: the consolidated
@@ -119,7 +119,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   const priors = [];
   for (const prior of priorVerdicts) priors.push(await readSource("prior-judge-verdict", abs(prior)));
   // The act fingerprints of closed prior rounds: the only values a judge may name in `resurfaces`.
-  const closedPriorActFingerprints = [...priorActFingerprints(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: checkoutRoot }))].sort();
+  const closedPriorActFingerprints = [...priorActFingerprints(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot: resolveGateArtifactTmpRoot(checkoutRoot) }, { repoRoot: checkoutRoot }))].sort();
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
   const workOrder = {
     role: "judge",

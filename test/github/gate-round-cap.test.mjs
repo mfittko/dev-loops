@@ -163,6 +163,9 @@ test("capClosed is stamped on a past-cap defer or reject; a locatable question s
     { severity: "question", judgeDisposition: "reject", files: ["a.mjs"], line: 3 },
     { severity: "question", judgeDisposition: "defer" },
     { severity: "medium", judgeDisposition: "act" },
+    { severity: "high", judgeDisposition: "defer" },
+    { severity: "medium", judgeDisposition: "reject" },
+    { severity: "bogus", judgeDisposition: "defer" },
   ];
   stampCapClosed(findings, { cap: 4, round: 4, pastCap: true });
   assert.deepEqual(findings.map((f) => f.capClosed), [
@@ -170,6 +173,9 @@ test("capClosed is stamped on a past-cap defer or reject; a locatable question s
     { judgeDisposition: "reject", severity: "nit", round: 4, cap: 4 },
     undefined,
     { judgeDisposition: "defer", severity: "question", round: 4, cap: 4 },
+    undefined,
+    undefined,
+    undefined,
     undefined,
   ]);
   const below = [{ severity: "low", judgeDisposition: "defer" }];

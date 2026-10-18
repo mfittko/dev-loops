@@ -45,13 +45,15 @@ export function keepKnownResurfaces(findings, priorActFingerprints) {
   return findings;
 }
 
-/** Stamp `capClosed` on a past-cap judge defer or reject. A locatable question stays open. Mutates. */
+/** Stamp `capClosed` on a past-cap judge defer or reject of a low, nit or question. A locatable question stays open. Mutates. */
 export function stampCapClosed(findings, { cap, round, pastCap }) {
   if (!pastCap) return findings;
   for (const f of findings) {
     const judgeDisposition = f.judgeDisposition;
     if (judgeDisposition !== "defer" && judgeDisposition !== "reject") continue;
     if (normalizeSeverity(f.severity) === "question" && hasLocatableShape(f)) continue;
+    // A high, a medium and an unknown severity block as severity_disagreement; they do not close.
+    if (isHighOrMedium(f) || !VALID_SEVERITIES.has(normalizeSeverity(f.severity))) continue;
     f.capClosed = { judgeDisposition, severity: normalizeSeverity(f.severity), round, cap };
   }
   return findings;
