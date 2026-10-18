@@ -2195,8 +2195,10 @@ test("create-pr --lightweight refuses with pre_pr_review_missing naming the writ
 });
 
 test("create-pr --lightweight creates when a record covers the head", async () => {
-  const { result } = await runLightweightWithFeatureBranch({ record: "feature" });
+  const { result, calls } = await runLightweightWithFeatureBranch({ record: "feature" });
   assert.equal(result.code, 0, result.stderr);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].slice(0, 2), ["pr", "create"]);
 });
 
 test("create-pr --lightweight refuses when the only record is for a different head", async () => {
