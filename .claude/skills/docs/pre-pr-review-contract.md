@@ -278,6 +278,8 @@ report is retried through normal/check, never removed and reconstructed. Legacy 
 pre-push Delta policy and compact dispatch payloads retain their existing behavior. Isolated
 mixed-root tests establish command routing, not actual worker qualification or recovery.
 
+`emit-fixer-work-order.mjs --phase full --completion-only` produces that order from the canonical active full plan when its handoff is missing or stale; see `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`.
+
 Explicit full `operation: complete` consumes already-reviewed delivery with empty source
 selectors, exactly one authenticated ACT/THREAD source and only its own output authority.
 Follow `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`: ACT completion input is mandatory, even when

@@ -33,6 +33,7 @@ import { captureParsedReviewThreads } from "../github/_review-thread-mutations.m
 import { resolveAuthenticatedLogin } from "../github/post-gate-findings.mjs";
 import { selectActThreadBinding } from "../github/_fixer-act-thread-bindings.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
+import { resolveFixerDispositionInput } from "./detect-pr-gate-coordination-state.mjs";
 
 const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path>) [--delta-result <path>] [--allowed-path <repo-relative path>]... [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
@@ -47,6 +48,9 @@ the PR's own head branch (gh pr view headRefName) and the --allowed-path selecto
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
 (default: the main checkout's tmp/; an explicit --tmp-root inside a linked worktree is refused) and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath }.
+--completion-only (with --phase full, no source input) re-enters the canonical active full plan as
+an "operation: complete" delivery-only order when its disposition handoff is missing or stale; head, branch,
+sources and a clean tree must be unchanged.
 Each run supersedes the previous emission for this PR. Dispatch the printed
 dispatchPayload (the --harness adapter call carrying only dispatchPrompt) unchanged; an
 unsupported harness refuses. It accepts no brief, payload or summary input.
@@ -161,11 +165,11 @@ ${JSON.stringify(workOrder, null, 2)}
   const { branch, allowedPaths } = workOrder.mutationAuthority;
   const completion = workOrder.phase === "full" && workOrder.requiredReads.some((read) => read.kind === "completion-input");
   const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-  const verifier = completion ? `node ${shellQuote(path.join(path.dirname(path.dirname(workOrder.executionRules.contract)), "scripts/github/verify-fixer-disposition.mjs"))} --repo ${shellQuote(workOrder.target.repo)} --pr ${workOrder.target.pr} --head-sha ${workOrder.headSha} --fixer-plan ${shellQuote(path.join(path.dirname(path.dirname(dispositionPath)), PLAN_FILE))}` : null;
+  const verifier = completion || workOrder.phase === "full" && workOrder.source === "threads" ? `node ${shellQuote(path.join(path.dirname(path.dirname(workOrder.executionRules.contract)), "scripts/github/verify-fixer-disposition.mjs"))} --repo ${shellQuote(workOrder.target.repo)} --pr ${workOrder.target.pr} --head-sha ${workOrder.headSha} --fixer-plan ${shellQuote(path.join(path.dirname(path.dirname(dispositionPath)), PLAN_FILE))}` : null;
   const task = workOrder.phase === "commit_only"
     ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery.${workOrder.siteCoverage ? " Start from the \`siteCoverage\` skeleton in the work order JSON below:" : ""} Set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site. Run each siteQuery and set \`returnedSites\` to exactly the sites it returns (empty when it returns none), add each returned site missing from \`sites\`, then delete the \`FILL:\` \`noSitesReason\` when the query returned sites, else replace it with the query outcome. Keep fingerprints and \`input_form\` texts unchanged.${workOrder.handbackCheck ? " Before you hand back, run the work order's \`handbackCheck\` command from your worktree and correct the record until it exits 0 (skip it when you made no commit)." : ""}`
-    : completion ? `Push only the reviewed committed candidate \`${workOrder.headSha}\`; do not re-fix source or reclassify coverage. Keep every command's cwd at the mutation authority worktree. If the outputRef does not exist, run \`${verifier} --construct\`, then run \`${verifier}\` to reply, resolve and verify. If the outputRef already exists, run that normal command (or append \`--check\` for read-only verification); never delete, overwrite or reconstruct it. The authenticated completion-input preserves the original fixing commit and raw site coverage. Construction alone does not complete delivery.`
-    :`Apply and commit any fixes not yet committed, then push, reply to and resolve the addressed threads per agents/fixer.agent.md (pass \`--disposition fixed\` and the full 40-character SHA of the fixing commit in each fixed reply), then write the disposition handoff \`{ headSha, dispositions: [...] }\` (headSha = the pushed PR head) to \`${dispositionPath}\`. Also write \`siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }]\` in that handoff, ${workOrder.siteCoverage ? "starting from the \`siteCoverage\` skeleton in the work order JSON below (fill it as the commit_only phase describes), " : ""}one entry per act item that has a siteQuery (threadless items included): verify-fixer-disposition refuses a handoff without it. A threadless act item gets no disposition handoff entry; every entry's \`threadId\` is a review-thread node id.`;
+    : completion ? `Do these steps in order, with every command's cwd at the mutation authority worktree. (1) Push only the reviewed committed candidate \`${workOrder.headSha}\`; do not re-fix source or reclassify coverage. (2) Confirm the PR remote branch ${JSON.stringify(branch)} points at \`${workOrder.headSha}\` (for example with git ls-remote); stop if it does not. (3) If the outputRef does not exist, run \`${verifier} --construct\`, then run \`${verifier}\` to reply, resolve and verify. If the outputRef already exists, run that normal command (or append \`--check\` for read-only verification); never delete, overwrite or reconstruct it. The authenticated completion-input preserves the original fixing commit and raw site coverage. Construction alone does not complete delivery.`
+    :`Apply and commit any fixes not yet committed, then push, reply to and resolve the addressed threads per agents/fixer.agent.md (pass \`--disposition fixed\` and the full 40-character SHA of the fixing commit in each fixed reply), then write the disposition handoff \`{ headSha, dispositions: [...] }\` (headSha = the pushed PR head) to \`${dispositionPath}\`. Also write \`siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }]\` in that handoff, ${workOrder.siteCoverage ? "starting from the \`siteCoverage\` skeleton in the work order JSON below (fill it as the commit_only phase describes), " : ""}one entry per act item that has a siteQuery (threadless items included): verify-fixer-disposition refuses a handoff without it. A threadless act item gets no disposition handoff entry; every entry's \`threadId\` is a review-thread node id.${verifier ? ` After the handoff is written, run \`${verifier}\`, then \`${verifier} --check\`.` : ""}`;
   return `# Fixer work order (ADR 0106)
 
 Source: the \`${workOrder.source}\` read${workOrder.gate ? ` (${workOrder.gate} act list)` : ""}. Phase: \`${workOrder.phase}\`. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.
@@ -233,6 +237,73 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidat
   }
 }
 
+// The checkout at `cwd` is the PR branch's one worktree, on `head`, with a clean tree.
+function assertCandidateAuthority({ cwd, branch, head }) {
+  const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnvNoDirOverrides(), timeout: 10000, maxBuffer: 1024 * 1024 }).trim();
+  const entries = listWorktreeEntries(cwd, { timeout: 10000, maxBuffer: 1024 * 1024 }).filter((entry) => entry.branch === `refs/heads/${branch}`);
+  if (entries.length !== 1 || !path.isAbsolute(entries[0].path) || entries[0].path !== resolveRepoRoot(cwd)
+    || git("symbolic-ref", "HEAD") !== `refs/heads/${branch}` || git("rev-parse", "HEAD") !== head
+    || git("rev-parse", `refs/heads/${branch}`) !== head || git("status", "--porcelain")) throw new Refusal("candidate branch, HEAD or clean committed authority changed");
+}
+
+/**
+ * --completion-only: re-enter the canonical active full plan whose disposition handoff is missing or
+ * stale (result_predates_pull) as an `operation: complete` order. Source, branch, head and tree must be
+ * unchanged. The old plan is archived by `preserve`; the stale handoff stays where it is.
+ */
+async function emitCompletionOnly({ repo, pr, headSha, tmpRoot, cwd, fetchPr, executionIdentity, env, ghCommand, runChild }) {
+  const canonicalRoot = resolveGateArtifactTmpRoot(cwd);
+  if (tmpRoot && path.resolve(tmpRoot) !== path.resolve(canonicalRoot)) throw new Refusal("--completion-only reads only the canonical plan path; --tmp-root is not accepted");
+  const dir = path.resolve(buildFixerDir({ repo, pr, tmpRoot: canonicalRoot }));
+  const capture = await beginFixerEmission(dir);
+  try {
+    const planPath = path.join(dir, PLAN_FILE);
+    const planBytes = await capture.read(planPath);
+    if (!planBytes) throw new Refusal("--completion-only needs the canonical active fixer plan; none exists");
+    await capture.preserve(planPath, path.resolve(canonicalRoot), canonicalRoot);
+    const plan = JSON.parse(planBytes), order = plan.workOrder;
+    if (order?.phase !== "full") throw new Refusal("--completion-only refused: the canonical plan is not a full-phase plan (a superseded plan is not re-entered)");
+    await authenticateOriginalPlan({ plan, canonical: planPath, emissionTmpRoot: path.resolve(canonicalRoot), receiptTmpRoot: canonicalRoot, requireReceipt: true,
+      read: async (file) => { const bytes = await capture.read(file); if (!bytes) throw Object.assign(new Error(`missing ${file}`), { code: "ENOENT" }); return bytes; } });
+    const prState = await fetchPr({ repo, pr });
+    if (order.headSha !== headSha || order.target.repo !== repo || order.target.pr !== Number(pr) || prState?.headRefName !== order.mutationAuthority?.branch
+      || String(prState.headRefOid ?? "").toLowerCase() !== headSha) throw new Refusal("--completion-only refused: the plan, --head-sha and the PR head or branch differ");
+    for (const read of order.requiredReads) {
+      const bytes = await capture.read(read.path);
+      if (read.required !== true || !bytes || sha256(bytes) !== read.sha256 || bytes.length !== read.bytes) throw new Refusal(`--completion-only refused: required read ${read.kind} changed`);
+    }
+    const sourceBytes = await capture.read(order.requiredReads.find((read) => read.kind === order.source)?.path ?? "");
+    if (!sourceBytes || jsonContentDigest(JSON.parse(sourceBytes)) !== order.authority?.sourceDigest) throw new Refusal("--completion-only refused: the source differs from the plan's source authority");
+    assertCandidateAuthority({ cwd, branch: order.mutationAuthority.branch, head: headSha });
+    const handoff = await verifyPulledResult({ resultPath: path.join(dir, plan.executionIdentity, "fixer-disposition.json"), receiptTmpRoot: canonicalRoot, role: "fixer", workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity });
+    if (!["result_missing", "result_predates_pull"].includes(handoff.reason)) throw new Refusal(`--completion-only refused: the active fixer handoff is ${handoff.reason ?? "current"}, not missing or stale`);
+    const stuck = await resolveFixerDispositionInput({ repo, pr: Number(pr), currentHeadSha: headSha }, { env, ghCommand, runChild, repoRoot: resolveRepoRoot(cwd) });
+    const bound = stuck.activeFixer;
+    if (handoff.reason === "result_missing" ? !(bound?.outputMissing === true && bound.workOrderRef === plan.workOrderRef && path.resolve(bound.planPath) === planPath)
+      : !(stuck.complete === false && stuck.incomplete?.some((entry) => String(entry.failedStep).includes("result_predates_pull")))) throw new Refusal("--completion-only refused: the active fixer is not stuck at a missing or stale disposition");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
+    if (errors?.length > 0) throw new Refusal(`dev-loops config is invalid; fix it before emitting: ${errors.map((e) => e?.message ?? String(e)).join("; ")}`);
+    const outputRef = path.join(dir, executionIdentity, "fixer-disposition.json");
+    const workOrder = { ...order, operation: "complete", mutationAuthority: { ...order.mutationAuthority, allowedPaths: [] }, outputRefs: [outputRef], configSha256: sha256(JSON.stringify(config ?? {})),
+      contracts: await Promise.all(FIXER_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) }))),
+      executionRules: { ...order.executionRules, contract: fileURLToPath(new URL("agents/fixer.agent.md", PACKAGE_ROOT)) } };
+    const invalid = completeAdmissionError(workOrder);
+    if (invalid) throw new Refusal(`--completion-only refused: ${invalid}`);
+    if (Object.hasOwn(workOrder.authority, "reviewBaselineHead")) assertFixerReviewBaseline(workOrder, new Map(await Promise.all(workOrder.requiredReads.map(async (read) => [read, await capture.read(read.path)]))));
+    const identityTriple = { workOrderRef: `fixer:${repo}#${pr}:${headSha}:${executionIdentity}`, workOrderDigest: workOrderDigest(workOrder), executionIdentity };
+    const text = renderWorkOrder(workOrder), promptPath = path.join(dir, "work-orders", `${executionIdentity}.md`);
+    await capture.write(promptPath, text);
+    await writeExecutionIndex(canonicalRoot, identityTriple);
+    const next = { ...identityTriple, materializationHash: materializationHash(text), promptPath, dispatchPrompt: buildDispatchPointer(identityTriple), workOrder };
+    const tempPath = `${planPath}.tmp-${executionIdentity}`;
+    await capture.write(tempPath, `${JSON.stringify(next, null, 2)}\n`);
+    await capture.recheck();
+    assertCandidateAuthority({ cwd, branch: order.mutationAuthority.branch, head: headSha });
+    await rename(tempPath, planPath);
+    return { ...next, planPath };
+  } finally { await capture.release(); }
+}
+
 /**
  * Emit one fixer work order. Returns the plan record written beside it. Throws
  * Refusal on a missing or conflicting source or authority. `executionIdentity`
@@ -241,10 +312,14 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidat
 export async function emitFixerWorkOrder({
   repo, pr, headSha, phase, actListFile, gate, threadsFile, deltaResult, allowedPaths = [], cwd = process.cwd(), tmpRoot,
   fetchPr = defaultFetchPr, executionIdentity = `f${Date.now()}-${randomBytes(4).toString("hex")}`,
-  env = process.env, ghCommand = "gh", runChild,
+  env = process.env, ghCommand = "gh", runChild, completionOnly = false,
 }) {
   if (!/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Refusal(`--head-sha must be a full 40- or 64-char lowercase SHA, got ${headSha}`);
   if (!FIXER_PHASES.includes(phase)) throw new Refusal(`--phase must be one of ${FIXER_PHASES.join(", ")}, got ${phase}`);
+  if (completionOnly) {
+    if (phase !== "full" || actListFile || threadsFile || gate || deltaResult || allowedPaths.length) throw new Refusal("--completion-only takes --phase full and no source, gate, delta-result or allowed-path input");
+    return emitCompletionOnly({ repo, pr, headSha, tmpRoot, cwd, fetchPr, executionIdentity, env, ghCommand, runChild });
+  }
   if (Boolean(actListFile) === Boolean(threadsFile)) throw new Refusal("pass exactly one of --act-list-file and --threads-file");
   if (actListFile && !GATE_NAMES.includes(gate)) throw new Refusal(`--act-list-file needs --gate ${GATE_NAMES.join("|")}, got ${gate}`);
   if (threadsFile && gate) throw new Refusal("--gate applies only to an --act-list-file source");
@@ -316,10 +391,7 @@ export async function emitFixerWorkOrder({
     const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnvNoDirOverrides(), timeout: 10000, maxBuffer: 1024 * 1024 }).trim();
     candidateHead = git("rev-parse", "HEAD");
     recheckCandidate = () => {
-      const entries = listWorktreeEntries(cwd, { timeout: 10000, maxBuffer: 1024 * 1024 }).filter((entry) => entry.branch === `refs/heads/${prState.headRefName}`);
-      if (entries.length !== 1 || !path.isAbsolute(entries[0].path) || entries[0].path !== resolveRepoRoot(cwd)
-        || git("symbolic-ref", "HEAD") !== `refs/heads/${prState.headRefName}` || git("rev-parse", "HEAD") !== candidateHead
-        || git("rev-parse", `refs/heads/${prState.headRefName}`) !== candidateHead || git("status", "--porcelain")) throw new Refusal("candidate branch, HEAD or clean committed authority changed");
+      assertCandidateAuthority({ cwd, branch: prState.headRefName, head: candidateHead });
       for (const [from, to] of [[headSha, raw.headSha], [raw.headSha, candidateHead]]) git("merge-base", "--is-ancestor", from, to);
     };
     recheckCandidate();
@@ -571,7 +643,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   const { values } = parseArgs({ args: argv, options: {
     repo: { type: "string" }, pr: { type: "string" }, "head-sha": { type: "string" }, phase: { type: "string" },
     "act-list-file": { type: "string" }, gate: { type: "string" }, "threads-file": { type: "string" },
-    "delta-result": { type: "string" }, "allowed-path": { type: "string", multiple: true },
+    "completion-only": { type: "boolean" }, "delta-result": { type: "string" }, "allowed-path": { type: "string", multiple: true },
     "tmp-root": { type: "string" }, harness: { type: "string" }, help: { type: "boolean", short: "h" },
     ...JQ_OUTPUT_PARSE_OPTIONS,
   } });
@@ -593,7 +665,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     const plan = await emitFixerWorkOrder({
       repo: values.repo, pr: values.pr, headSha: values["head-sha"].toLowerCase(), phase: values.phase,
       actListFile: values["act-list-file"], gate: values.gate, threadsFile: values["threads-file"],
-      deltaResult: values["delta-result"], allowedPaths: values["allowed-path"] ?? [], cwd,
+      completionOnly: values["completion-only"], deltaResult: values["delta-result"], allowedPaths: values["allowed-path"] ?? [], cwd,
       ...(values["tmp-root"] ? { tmpRoot: path.resolve(cwd, values["tmp-root"]) } : {}),
       ...(fetchPr ? { fetchPr } : {}),
     });

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, realpathSync } from "node:fs";
-import { cp, link, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { cp, link, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "bun:test";
@@ -1220,7 +1220,8 @@ test("ordinary rendering matches the independent approved base renderer byte for
   const { runInNewContext } = await import("node:vm");
   const baseline = runInNewContext(`(${source.slice(start, end).replace("export function", "function")})`, { path, PLAN_FILE: "fixer-emit-plan.json", renderRequiredReadLine: (await import("../../scripts/github/write-gate-context.mjs")).renderRequiredReadLine });
   await withFixture(async ({ emit, prepareFull }) => {
-    for (const unit of [await emit(), await (await prepareFull()).full()]) {
+    // The full-phase completion text is the deliberate target of #2787 (numbered push-before-construct steps), so only the ordinary commit_only render stays byte-pinned.
+    for (const unit of [await emit()]) {
       assert.equal(renderWorkOrder(unit.workOrder), baseline(unit.workOrder));
       delete unit.workOrder.operation;
       assert.equal(renderWorkOrder(unit.workOrder), baseline(unit.workOrder));
@@ -1991,5 +1992,73 @@ test("delta gate: a threads order lists the delta record as a delta-result read 
       assert.ok(plan.workOrder.authority.deltaResultDigest);
     }
     await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads, deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);
+  });
+});
+
+// --completion-only: delivery-only re-entry of the canonical active full plan (#2787).
+async function stuckFull(fixture, { stale = false } = {}) {
+  const f = await fixture.prepareFull();
+  const old = await f.full();
+  assert.equal(pull(old, fixture.root).status, 0);
+  if (stale) {
+    await mkdir(path.dirname(old.workOrder.outputRefs[0]), { recursive: true });
+    await writeFile(old.workOrder.outputRefs[0], '{ "stale": true }\n');
+    await utimes(old.workOrder.outputRefs[0], 1, 1);
+  }
+  const reenter = (over = {}) => emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: f.candidate, phase: "full", completionOnly: true, cwd: fixture.wt,
+    fetchPr: async () => ({ headRefName: "issue-1", headRefOid: f.candidate }), executionIdentity: nextExecution(), runChild: f.runtime().runChild, ...over });
+  return { f, old, reenter };
+}
+
+for (const stale of [false, true]) test(`completion-only re-enters a ${stale ? "stale" : "missing"} handoff as a delivery-only complete order and archives the old plan`, async () => {
+  await withFixture(async (fixture) => {
+    const { old, reenter } = await stuckFull(fixture, { stale });
+    const oldPlan = await readFile(old.planPath), handoff = stale ? await readFile(old.workOrder.outputRefs[0]) : null;
+    const unit = await reenter();
+    assert.equal(unit.workOrder.operation, "complete");
+    assert.deepEqual(unit.workOrder.mutationAuthority.allowedPaths, []);
+    assert.notEqual(unit.executionIdentity, old.executionIdentity);
+    assert.deepEqual(await readFile(path.join(path.dirname(old.planPath), old.executionIdentity, "original-fixer-emit-plan.json")), oldPlan);
+    if (stale) assert.deepEqual(await readFile(old.workOrder.outputRefs[0]), handoff, "stale handoff stays byte for byte");
+    for (const harness of ["claude", "codex"]) assertFixerDispatchPayload({ harness, payload: buildFixerDispatchPayload({ harness, plan: unit, cwd: fixture.wt }), plan: unit, cwd: fixture.wt });
+    const result = pull(unit, fixture.wt);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout.split("## Required reads")[0], /Operation: complete/);
+    assert.equal(hook(fixture.wt, unit.workOrder.outputRefs[0]), "allow");
+    assert.equal(hook(fixture.wt, path.join(fixture.wt, "src/a.mjs")), "deny");
+  });
+});
+
+for (const defect of ["currentHandoff", "dirty", "movedHead", "source", "noReceipt", "superseded", "tmpRoot", "sourceInput"]) test(`completion-only refuses ${defect} without replacing the active plan`, async () => {
+  await withFixture(async (fixture) => {
+    const { f, old, reenter } = await stuckFull(fixture);
+    let over = {};
+    if (defect === "currentHandoff") { await mkdir(path.dirname(old.workOrder.outputRefs[0]), { recursive: true }); await writeFile(old.workOrder.outputRefs[0], '{ "fresh": true }\n'); }
+    if (defect === "dirty") await writeFile(path.join(fixture.wt, "dirty"), "x");
+    if (defect === "movedHead") over = { fetchPr: async () => ({ headRefName: "issue-1", headRefOid: fixture.head }) };
+    if (defect === "source") await writeFile(fixture.files.actList, JSON.stringify([...ACT, withFp({ ...ACT[0], summary: "other" })]));
+    if (defect === "noReceipt") await rm(pullReceiptPath(path.join(fixture.root, "tmp"), old.workOrderRef));
+    if (defect === "superseded") await fixture.emit({ phase: "commit_only" });
+    if (defect === "tmpRoot") over = { tmpRoot: path.join(fixture.root, "elsewhere") };
+    if (defect === "sourceInput") over = { actListFile: fixture.files.actList, gate: "draft_gate" };
+    const active = await readFile(old.planPath);
+    await assert.rejects(reenter(over), { currentHandoff: /not missing or stale/, dirty: /clean committed authority/, movedHead: /PR head or branch differ/, source: /required read act-list changed/, noReceipt: /receipt/, superseded: /superseded plan/, tmpRoot: /canonical plan path/, sourceInput: /no source/ }[defect]);
+    if (defect !== "superseded") assert.deepEqual(await readFile(old.planPath), active);
+    assert.ok(f.candidate);
+  });
+});
+
+test("completion text orders push, remote confirmation and construct", async () => {
+  await withFixture(async ({ prepareFull }) => {
+    const text = renderWorkOrder((await (await prepareFull()).full()).workOrder);
+    const at = (needle) => text.indexOf(needle);
+    assert.ok(at("(1) Push only") > 0 && at("(1) Push only") < at("(2) Confirm") && at("(2) Confirm") < at("(3) If the outputRef") && at("(3) If the outputRef") < at("--construct"));
+  });
+});
+
+test("a THREAD full order lists the verifier step", async () => {
+  await withFixture(async ({ files, emit }) => {
+    const thread = renderWorkOrder((await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined })).workOrder);
+    assert.match(thread, /After the handoff is written, run `node [^`]+verify-fixer-disposition\.mjs[^`]+`, then `[^`]+ --check`/);
   });
 });
