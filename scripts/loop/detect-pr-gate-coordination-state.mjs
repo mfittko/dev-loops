@@ -863,7 +863,7 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
   // "ahead"). The fixer-disposition-<X>.json checkpoint is then re-evaluated at H: tackled-commit
   // containment and live resolution are re-checked. Never a gate verdict; behind, diverged, stale, or
   // unreadable evidence refuses. The checkpoint must record as tackled every thread the plan's own handoff tackles (ACT and THREAD),
-  // and a THREAD plan's tackled threads must also cover every thread it pins.
+  // and a THREAD plan's checkpoint must record every thread it pins under any disposition (tackled, rejected or deferred).
   let boundPlan = null;
   const pinnedPlanThreads = async (order) => {
     if (order.source !== "threads") return null;
@@ -891,10 +891,12 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
       const raw = await readFile(path.resolve(repoRoot, path.dirname(logPath), `fixer-disposition-${x}.json`), "utf8");
       // The checkpoint must record as tackled every thread the plan's own handoff tackles (ACT and THREAD),
       // so an earlier plan's checkpoint at the same head X never clears this plan's unverified delivery.
-      const tackledIds = (value) => new Set(normalizeFixerDispositionHandoff(value).dispositions
-        .filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.threadId));
-      const tackled = tackledIds(JSON.parse(raw));
-      if (![...tackledIds(handoff), ...(cover ?? [])].every((id) => tackled.has(id))) return null;
+      const entries = (value) => normalizeFixerDispositionHandoff(value).dispositions;
+      const checkpoint = entries(JSON.parse(raw));
+      const tackled = new Set(checkpoint.filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.threadId));
+      const recorded = new Set(checkpoint.map((entry) => entry.threadId));
+      if (!entries(handoff).filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).every((entry) => tackled.has(entry.threadId))
+        || ![...(cover ?? [])].every((id) => recorded.has(id))) return null;
       if (!(await isCommitContainedByHead({ repo, commitSha: order.headSha, headSha: x }, runtime)).contained) return null;
       if (!(await isCommitContainedByHead({ repo, commitSha: x, headSha: currentHeadSha }, runtime)).contained) return null;
       const evaluated = await evaluateCheckpoint(raw);

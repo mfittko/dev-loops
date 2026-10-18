@@ -266,7 +266,13 @@ async function emitCompletionOnly({ repo, pr, headSha, tmpRoot, cwd, fetchPr, ex
     await authenticateOriginalPlan({ plan, canonical: planPath, emissionTmpRoot: path.resolve(canonicalRoot), receiptTmpRoot: canonicalRoot, requireReceipt: true,
       read: async (file) => { const bytes = await capture.read(file); if (!bytes) throw Object.assign(new Error(`missing ${file}`), { code: "ENOENT" }); return bytes; } });
     const prState = await fetchPr({ repo, pr });
-    if (order.headSha !== headSha || order.target.repo !== repo || order.target.pr !== Number(pr) || prState?.headRefName !== order.mutationAuthority?.branch
+    // A THREAD plan pins the pre-fix head and its fixer pushes a descendant; only that source accepts a strictly-ahead live head.
+    const advanced = order.source === "threads" && order.headSha !== headSha;
+    if (advanced) {
+      try { execFileSync("git", ["merge-base", "--is-ancestor", order.headSha, headSha], { cwd, env: gitEnvNoDirOverrides(), timeout: 10000, stdio: "ignore" }); }
+      catch { throw new Refusal("--completion-only refused: the plan head is not an ancestor of --head-sha"); }
+    }
+    if ((order.headSha !== headSha && !advanced) || order.target.repo !== repo || order.target.pr !== Number(pr) || prState?.headRefName !== order.mutationAuthority?.branch
       || String(prState.headRefOid ?? "").toLowerCase() !== headSha) throw new Refusal("--completion-only refused: the plan, --head-sha and the PR head or branch differ");
     for (const read of order.requiredReads) {
       const bytes = await capture.read(read.path);
@@ -288,7 +294,7 @@ async function emitCompletionOnly({ repo, pr, headSha, tmpRoot, cwd, fetchPr, ex
     const { config, errors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
     if (errors?.length > 0) throw new Refusal(`dev-loops config is invalid; fix it before emitting: ${errors.map((e) => e?.message ?? String(e)).join("; ")}`);
     const outputRef = path.join(dir, executionIdentity, "fixer-disposition.json");
-    const workOrder = { ...order, operation: "complete", mutationAuthority: { ...order.mutationAuthority, allowedPaths: [] }, outputRefs: [outputRef], configSha256: sha256(JSON.stringify(config ?? {})),
+    const workOrder = { ...order, operation: "complete", headSha, mutationAuthority: { ...order.mutationAuthority, allowedPaths: [] }, outputRefs: [outputRef], configSha256: sha256(JSON.stringify(config ?? {})),
       contracts: await Promise.all(FIXER_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) }))),
       executionRules: { ...order.executionRules, contract: fileURLToPath(new URL("agents/fixer.agent.md", PACKAGE_ROOT)) } };
     const invalid = completeAdmissionError(workOrder);

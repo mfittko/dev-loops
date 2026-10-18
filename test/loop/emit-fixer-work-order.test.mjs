@@ -2106,12 +2106,13 @@ test("completion-only re-enters a THREAD plan with no source edits, no new Delta
   await withFixture(async (fixture) => {
     const { old, reenter } = await stuckThread(fixture);
     const delta = path.join(fixture.root, "tmp", "gate-delta");
-    const before = await Promise.all((await readdir(delta)).map(async (file) => [file, await readFile(path.join(delta, file))]));
+    const listing = async () => Promise.all((await readdir(delta)).sort().map(async (file) => [file, await readFile(path.join(delta, file))]));
+    const before = await listing();
     const unit = await reenter();
     assert.equal(unit.workOrder.operation, "complete");
     assert.equal(unit.workOrder.source, "threads");
     assert.match(renderWorkOrder(unit.workOrder), /Write your own after-pull report/);
-    assert.deepEqual(await Promise.all((await readdir(delta)).map(async (file) => [file, await readFile(path.join(delta, file))])), before, "no new Delta and no counter reset");
+    assert.deepEqual(await listing(), before, "no new Delta and no counter reset");
     assert.equal(pull(unit, fixture.root).status, 0);
     await mkdir(path.dirname(unit.workOrder.outputRefs[0]), { recursive: true });
     await writeFile(unit.workOrder.outputRefs[0], '{ "genuine": true }\n');
@@ -2119,6 +2120,73 @@ test("completion-only re-enters a THREAD plan with no source edits, no new Delta
     await assert.rejects(reenter(), /not missing or stale/);
     assert.deepEqual(await readFile(unit.workOrder.outputRefs[0]), output, "existing genuine output stays byte for byte");
     assert.ok(old.executionIdentity);
+  });
+});
+
+// The fixer pushed a descendant commit B of the THREAD plan head A and stopped before writing the handoff.
+const aheadRunChild = async () => ({ code: 0, stdout: JSON.stringify({ status: "ahead" }), stderr: "" });
+const stuckThreadAhead = async (fixture) => {
+  const { old, reenter } = await stuckThread(fixture);
+  git(fixture.wt, "commit", "-q", "--allow-empty", "-m", "fix pushed by the THREAD fixer");
+  const pushed = git(fixture.wt, "rev-parse", "HEAD");
+  const live = (head, over = {}) => reenter({ headSha: head, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }), runChild: aheadRunChild, ...over });
+  return { old, reenter, pushed, live };
+};
+
+test("completion-only binds a THREAD plan to the pushed descendant head and leaves an ACT plan on exact equality", async () => {
+  await withFixture(async (fixture) => {
+    const { old, pushed, live } = await stuckThreadAhead(fixture);
+    const unit = await live(pushed);
+    assert.equal(unit.workOrder.operation, "complete");
+    assert.equal(unit.workOrder.headSha, pushed);
+    assert.equal(unit.workOrderRef, `fixer:${REPO}#${PR}:${pushed}:${unit.executionIdentity}`);
+    assert.notEqual(old.workOrder.headSha, pushed);
+    assert.equal(pull(unit, fixture.root).status, 0);
+  });
+});
+
+for (const defect of ["behind", "diverged", "headDiffersFromPr", "headDiffersFromWorktree"]) test(`completion-only refuses a THREAD re-entry whose head is ${defect}`, async () => {
+  await withFixture(async (fixture) => {
+    const { old, pushed, live } = await stuckThreadAhead(fixture);
+    let head = pushed, over = {};
+    if (defect === "behind") { git(fixture.wt, "reset", "-q", "--hard", `${fixture.head}~1`); head = git(fixture.wt, "rev-parse", "HEAD"); }
+    if (defect === "diverged") { git(fixture.wt, "reset", "-q", "--hard", `${fixture.head}~1`); git(fixture.wt, "commit", "-q", "--allow-empty", "-m", "sibling"); head = git(fixture.wt, "rev-parse", "HEAD"); }
+    if (defect === "headDiffersFromPr") over = { fetchPr: async () => ({ headRefName: "issue-1", headRefOid: fixture.head }) };
+    if (defect === "headDiffersFromWorktree") head = fixture.head;
+    const plan = await readFile(old.planPath);
+    const state = await refusalState(fixture, old);
+    await assert.rejects(live(head, over), { behind: /not an ancestor/, diverged: /not an ancestor/, headDiffersFromPr: /PR head or branch differ/, headDiffersFromWorktree: /clean committed authority/ }[defect]);
+    assert.deepEqual(await readFile(old.planPath), plan, "refusal leaves the active plan untouched");
+    assert.deepEqual(await refusalState(fixture, old), state, "a refusal leaves the archive and the execution index unchanged");
+  });
+});
+
+test("completion-only refuses an ACT re-entry whose live head is a descendant of the plan head", async () => {
+  await withFixture(async (fixture) => {
+    const { f, old, reenter } = await stuckFull(fixture);
+    git(fixture.wt, "commit", "-q", "--allow-empty", "-m", "later commit");
+    const later = git(fixture.wt, "rev-parse", "HEAD");
+    const state = await refusalState(fixture, old);
+    await assert.rejects(reenter({ headSha: later, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: later }) }), /PR head or branch differ/);
+    assert.deepEqual(await refusalState(fixture, old), state);
+    assert.notEqual(later, f.candidate);
+  });
+});
+
+test("completion-only refuses when the resolver binds no active fixer to the plan", async () => {
+  await withFixture(async (fixture) => {
+    const { old, reenter } = await stuckThread(fixture);
+    // A symlinked execution directory is not the emitted one, so the resolver reports the missing handoff without an activeFixer.
+    const executionDir = path.join(path.dirname(old.planPath), old.executionIdentity);
+    const elsewhere = path.join(fixture.root, "tmp", "elsewhere-exec");
+    await mkdir(elsewhere, { recursive: true });
+    await rm(executionDir, { recursive: true, force: true });
+    await symlink(elsewhere, executionDir);
+    const plan = await readFile(old.planPath);
+    const state = await refusalState(fixture, old);
+    await assert.rejects(reenter(), /not stuck at a missing or stale disposition/);
+    assert.deepEqual(await readFile(old.planPath), plan);
+    assert.deepEqual(await refusalState(fixture, old), state, "plan, archive and execution index stay unchanged");
   });
 });
 
