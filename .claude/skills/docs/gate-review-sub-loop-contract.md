@@ -143,6 +143,18 @@ coordinator MUST push the merge before it dispatches the round, so the round rev
 head. On a ready PR, the `pre_approval_gate` re-runs on the new head per
 `GATE-EXEC-REGATE-MANDATORY`. An integrate-only base move keeps carry-forward eligibility per `GATE-EXEC-ANGLE-CARRY-FORWARD` (`deltaComplete`). ADR 0096 records this rule.
 
+<!-- rule: GATE-EXEC-BASE-MERGE-VERDICT-CARRY -->
+`GATE-EXEC-BASE-MERGE-VERDICT-CARRY`: A head advance that only integrated the base branch keeps
+the verdict posted at the previous head when `scripts/github/classify-base-merge-carry.mjs`
+records `carry_verdict`. That needs an identical stable patch id of the PR diff, an empty
+intersection of the PR diff paths and the base delta paths, a base delta that touches no gate
+tooling or config, and no conflict-resolution hunks. `partial_carry` defers to
+`GATE-EXEC-ANGLE-CARRY-FORWARD`. `full_regate` and `fallback_full` (any detection failure)
+require the full round. The evidence record (source head, new head, both patch ids, path
+intersection, gate tooling paths, decision, reason) is validated by
+`validateBaseMergeCarryEvidence`; a malformed or tampered record is a full re-gate. ADR 0156
+records this rule.
+
 ### Phase 1 — Preamble: context-builder
 
 Before fanning out reviewers, run a preamble pass that produces review handoff context
@@ -1046,7 +1058,7 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
 
 After applying fixes and advancing the head SHA:
 
-- <!-- rule: GATE-EXEC-REGATE-MANDATORY --> `GATE-EXEC-REGATE-MANDATORY`: **Re-gate is mandatory:** a new head SHA MUST always trigger a fresh full-chain gate pass; the gate MUST NOT be skipped because a previous head was clean. The `draft_gate` one-time skip is a narrow exemption from this rule that only applies after the PR has left draft ([GATE-COMMENT-DRAFT-REQUIREMENTS](./gate-review-comment-contract.md#draft-gate-draft_gate-comment-requirements)); while the PR is still draft, every new head is re-gated per this rule. A `draft_gate` never re-runs on a non-draft PR whose draft gate is already satisfied: `write-gate-context.mjs` refuses it before any reviewer work, and a new ready head instead takes a Copilot re-request when it answers Copilot findings, and a current-head `pre_approval_gate`.
+- <!-- rule: GATE-EXEC-REGATE-MANDATORY --> `GATE-EXEC-REGATE-MANDATORY`: **Re-gate is mandatory:** a new head SHA MUST always trigger a fresh full-chain gate pass; the gate MUST NOT be skipped because a previous head was clean, except where `GATE-EXEC-BASE-MERGE-VERDICT-CARRY` carries a verdict across a base-only merge (ADR 0156). The `draft_gate` one-time skip is a narrow exemption from this rule that only applies after the PR has left draft ([GATE-COMMENT-DRAFT-REQUIREMENTS](./gate-review-comment-contract.md#draft-gate-draft_gate-comment-requirements)); while the PR is still draft, every new head is re-gated per this rule. A `draft_gate` never re-runs on a non-draft PR whose draft gate is already satisfied: `write-gate-context.mjs` refuses it before any reviewer work, and a new ready head instead takes a Copilot re-request when it answers Copilot findings, and a current-head `pre_approval_gate`.
 - rerun the sub-loop from Phase 1 (context-builder preamble for the new head SHA)
 - continue the fix-then-retry cycle until the posted review verdict is `clean`
 - on retry, re-invoke every reviewer whose review surface the new head's delta touched (including any angle whose prior finding attribution is ambiguous) and every mandatory / always-run angle; the context-builder and consolidation always run fresh. Other angles are carried forward per [GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed), on that rule's proof and never on guesswork (a carried `findings_present` angle brings its open findings forward and the round still blocks on them)
