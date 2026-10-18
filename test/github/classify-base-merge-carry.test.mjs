@@ -97,6 +97,21 @@ test("git: ambient GIT_DIFF_OPTS does not change the decision or patch ids", asy
   try { assert.deepEqual(await computeBaseMergeCarry(args), clean); } finally { if (saved === undefined) delete process.env.GIT_DIFF_OPTS; else process.env.GIT_DIFF_OPTS = saved; }
 });
 
+test("git: ambient GIT_ATTR_SOURCE with a -diff attribute does not change the decision or patch ids", async () => {
+  const s = setup();
+  s.put("base.txt", `PR\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits top of base.txt");
+  const prev = s.head();
+  s.git("checkout", "-q", "main"); s.put("base.txt", `${LINES.slice(0, -7)}MAIN\n`); s.git("add", "-A"); s.git("commit", "-qm", "main edits bottom");
+  s.git("checkout", "-q", "pr"); s.git("merge", "-q", "--no-edit", "main");
+  s.git("checkout", "-qb", "attrs"); s.put(".gitattributes", "* -diff\n"); s.git("add", "-A"); s.git("commit", "-qm", "attrs");
+  s.git("checkout", "-q", "pr");
+  const args = { prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir };
+  const clean = await computeBaseMergeCarry(args);
+  const saved = process.env.GIT_ATTR_SOURCE;
+  process.env.GIT_ATTR_SOURCE = "attrs";
+  try { assert.deepEqual(await computeBaseMergeCarry(args), clean); } finally { if (saved === undefined) delete process.env.GIT_ATTR_SOURCE; else process.env.GIT_ATTR_SOURCE = saved; }
+});
+
 test("git: PR patch changed forces full re-gate", async () => {
   const s = setup();
   const prev = s.head();
