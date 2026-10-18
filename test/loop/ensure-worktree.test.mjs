@@ -1428,17 +1428,21 @@ test("ensure: no bun.lock skips the install", async () => {
   }
 });
 
-test("ensure: reuse does not install", async () => {
+test("ensure: reuse installs only without own node_modules", async () => {
   const repo = makeRepo();
   try {
     commitBunLock(repo);
     let calls = 0;
     const installDeps = () => { calls += 1; return { ok: true }; };
-    await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps });
+    const first = await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps });
     const reused = await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps });
     assert.equal(reused.reused, true);
-    assert.equal(reused.deps, undefined);
-    assert.equal(calls, 1);
+    assert.equal(reused.deps.ran, true);
+    assert.equal(calls, 2);
+    mkdirSync(path.join(first.path, "node_modules"));
+    const again = await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps });
+    assert.equal(again.deps, undefined);
+    assert.equal(calls, 2);
   } finally {
     repo.cleanup();
   }

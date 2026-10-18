@@ -24,9 +24,9 @@
  *   branch — a restricted refspec is not widened by fetch.
  * - Provisioning is invoked via the imported provisionWorktree core (shared
  *   with provision-worktree.mjs's CLI) — not shelled out. It fails soft: a
- *   provision warning never aborts the worktree. Does NOT install
- *   dependencies on the REUSE path.
- * - On CREATE only, `bun install --frozen-lockfile` runs inside the new worktree
+ *   provision warning never aborts the worktree. On REUSE it installs only when the
+ *   worktree has no own node_modules directory.
+ * - On create, and on reuse when node_modules is absent, `bun install --frozen-lockfile` runs inside the new worktree
  *   first (WORKTREE-DEPS-ISOLATED), then provisioning. Fail-soft: the result's
  *   `deps` field reports it; a failed or skipped install never fails the worktree.
  *
@@ -605,7 +605,7 @@ function installCommitMsgGuardForRoot(gitCommand, root) {
   }
 }
 
-// Fail-soft `bun install --frozen-lockfile` in a fresh worktree so it never
+// Fail-soft `bun install --frozen-lockfile` in a worktree without its own node_modules so it never
 // resolves packages from the main checkout's stale node_modules.
 function defaultInstallDeps(cwd) {
   const r = spawnSync(process.env.BUN_BIN || "bun", ["install", "--frozen-lockfile"], { cwd, timeout: 300000, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -695,6 +695,7 @@ export async function ensureWorktree(
     }
     // Reuse: still (re-)provision — provisioning is idempotent, on BOTH the
     // detached and local-branch reuse outcomes below.
+    const deps = existsSync(path.join(target, "node_modules")) ? undefined : ensureDeps(target, installDeps);
     const summary = await provision({ worktreePath: target, repoRoot: root });
     if (!existing.branch) {
       // DETACHED HEAD (e.g. ui-review's pinPrHead runs `git checkout --detach`
@@ -708,6 +709,7 @@ export async function ensureWorktree(
         created: false,
         reused: true,
         branchOrigin: "reused-detached",
+        ...(deps ? { deps } : {}),
         provision: summary,
         guard: installGuard(gitCommand, root, base),
         commitMsgGuard: installCommitMsgGuardForRoot(gitCommand, root),
@@ -727,6 +729,7 @@ export async function ensureWorktree(
       branchOrigin: "reused-local",
       ...(diverged ? { diverged } : {}),
       ...(fetchDegraded ? { fetchDegraded: true } : {}),
+      ...(deps ? { deps } : {}),
       provision: summary,
       guard: installGuard(gitCommand, root, base),
       commitMsgGuard: installCommitMsgGuardForRoot(gitCommand, root),
