@@ -106,7 +106,7 @@ test("pr create refuses before gh when no record exists, and a failing validator
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("pr create proceeds past the guard with a valid record, and the --lightweight path needs none", async () => {
+test("pr create proceeds past the guard with a valid record, and the --lightweight path needs one too", async () => {
   const dir = fixtureRepo();
   try {
     let calls = 0;
@@ -115,7 +115,9 @@ test("pr create proceeds past the guard with a valid record, and the --lightweig
     const env = { PATH: process.env.PATH, DEV_LOOPS_GH_STUB: "1" };
     assert.equal(await createPr(prArgs, { cwd: dir, env, ghCommand: "true", validatePrePrReview }), 0);
     assert.equal(calls, 1);
-    assert.equal(await createPr([...prArgs, "--lightweight"], { cwd: dir, env, ghCommand: "true", validatePrePrReview: () => { throw new Error("must not run"); } }), 0);
+    await assert.rejects(() => createPr([...prArgs, "--lightweight"], { cwd: dir, env: { PATH: process.env.PATH }, ghCommand: "false" }), /pre_pr_review_missing/);
+    assert.equal(await createPr([...prArgs, "--lightweight"], { cwd: dir, env, ghCommand: "true", validatePrePrReview }), 0);
+    assert.equal(calls, 2);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
