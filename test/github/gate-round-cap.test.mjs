@@ -125,7 +125,8 @@ test("convergence: a re-surfaced medium below the cap runs another round; a re-s
 test("past the cap a re-surfaced medium blocks", () => {
   const result = evaluateRoundCap([act("medium", { resurfaces: "x" })], state({ round: 4, pastCap: true }));
   assert.equal(result.runNextRound, false);
-  assert.deepEqual(result.blockers, [{ kind: "round_cap_reached", item: "[medium] medium act" }]);
+  assert.deepEqual(result.blockers.map(({ kind, item }) => ({ kind, item })), [{ kind: "round_cap_reached", item: "[medium] medium act" }]);
+  assert.match(result.blockers[0].reason, /GATE-EXEC-ROUND-CAP/);
 });
 
 test("past the cap every new act severity blocks and composes blocked", () => {

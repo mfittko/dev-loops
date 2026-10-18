@@ -57,6 +57,11 @@ export function stampCapClosed(findings, { cap, round, pastCap }) {
   return findings;
 }
 
+const ROUND_CAP_BLOCK_REASONS = Object.freeze({
+  round_cap_reached: "blocked: open act item at the round cap (GATE-EXEC-ROUND-CAP)",
+  severity_disagreement: "blocked: past-cap judge disposition cannot close this item (GATE-EXEC-ROUND-CAP-CLOSED)",
+});
+
 /**
  * Round-cap decision over one round's findings. `runNextRound` is the
  * convergence rule: a round with a new act item, or below the cap with an open
@@ -69,12 +74,12 @@ export function evaluateRoundCap(findings, { cap, pastCap }) {
   const open = findings.filter(isOpenActItem);
   if (cap === 0) return { runNextRound: open.length > 0, blockers: [] };
   const runNextRound = !pastCap && open.some((f) => !f.resurfaces || isHighOrMedium(f));
-  const blockers = runNextRound ? [] : open.map((f) => ({ kind: "round_cap_reached", item: itemText(f) }));
+  const blockers = runNextRound ? [] : open.map((f) => ({ kind: "round_cap_reached", item: itemText(f), reason: ROUND_CAP_BLOCK_REASONS.round_cap_reached }));
   if (pastCap) {
     for (const f of findings) {
       const closed = f.judgeDisposition === "defer" || f.judgeDisposition === "reject";
       const disagrees = !f.judgeDisposition || !VALID_SEVERITIES.has(normalizeSeverity(f.severity)) || (closed && isHighOrMedium(f));
-      if (disagrees && !isOpenActItem(f)) blockers.push({ kind: "severity_disagreement", item: itemText(f) });
+      if (disagrees && !isOpenActItem(f)) blockers.push({ kind: "severity_disagreement", item: itemText(f), reason: ROUND_CAP_BLOCK_REASONS.severity_disagreement });
     }
   }
   return { runNextRound, blockers };
