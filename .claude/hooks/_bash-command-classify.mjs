@@ -1131,10 +1131,20 @@ const TIMEOUT_DURATION = "(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?[smhd]?"
 const TIMEOUT_WRAPPER_RE = new RegExp(
   `^${ENV_ASSIGNMENT_RUN}(?:(?:env|command|sudo|nice)\\s+(?:(?:-\\S+|[A-Za-z_]\\w*=\\S*)\\s+)*)*` +
     `(?:\\S*/)?g?timeout\\s+(?:-{1,2}[\\w-]+(?:=\\S+|\\s+(?:${TIMEOUT_DURATION}|[A-Z]+))?\\s+)*${TIMEOUT_DURATION}\\s+` +
-    "(?:(?:node|bun)\\s+)?['\"]?(?:\\S*/)?(?:dev-loops(?:-run)?['\"]?(?:\\s|$)|\\S*scripts/\\S+\\.mjs|\\S*cli/index\\.mjs)",
+    "(?:(?:node|bun)\\s+)?['\"]?(\\S+)",
 );
+const SANCTIONED_HEAD_RE = /^(?:\S*\/)?dev-loops(?:-run)?['"]?$/;
+// The wrapped head is checked on one captured token, not in the big regex, so `\S*` stretches cannot backtrack.
+function isSanctionedHead(token) {
+  if (SANCTIONED_HEAD_RE.test(token) || token.includes("cli/index.mjs")) return true;
+  const scripts = token.indexOf("scripts/");
+  return scripts !== -1 && token.lastIndexOf(".mjs") > scripts + "scripts/".length;
+}
 export function commandContainsTimeoutWrappedSanctionedTool(command) {
-  return shellSegments(command).some((segment) => TIMEOUT_WRAPPER_RE.test(segment));
+  return shellSegments(command).some((segment) => {
+    const head = TIMEOUT_WRAPPER_RE.exec(segment)?.[1];
+    return head !== undefined && isSanctionedHead(head);
+  });
 }
 
 /** Build a `node`/`python`/`python3` command-head matcher (env/wrapper/path prefix tolerated). */

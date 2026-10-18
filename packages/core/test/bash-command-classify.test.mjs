@@ -1385,3 +1385,11 @@ test("commandContainsTimeoutWrappedSanctionedTool flags timeout in front of sanc
     assert.equal(commandContainsTimeoutWrappedSanctionedTool(cmd), false, cmd);
   }
 });
+
+test("commandContainsTimeoutWrappedSanctionedTool stays linear on long path-like heads (no regex blowup)", () => {
+  const started = Date.now();
+  assert.equal(commandContainsTimeoutWrappedSanctionedTool(`timeout 5 ${"scripts/".repeat(5000)}!`), false);
+  assert.equal(commandContainsTimeoutWrappedSanctionedTool(`timeout 5 ${"a/".repeat(5000)}!`), false);
+  assert.equal(commandContainsTimeoutWrappedSanctionedTool(`timeout 5 ${"scripts/".repeat(5000)}x.mjs`), true);
+  assert.ok(Date.now() - started < 1000, "classification must not backtrack catastrophically");
+});
