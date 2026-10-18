@@ -32,7 +32,7 @@ export function buildCoordinatorWorkOrder(input) {
   const valid = validateHandoffEnvelope(envelope);
   if (!valid.ok) throw new CoordinatorWorkOrderRefusal(`handoff envelope is invalid: ${valid.errors.map((e) => e.field).join(", ")}`);
   if (envelope.overrides !== undefined) throw new CoordinatorWorkOrderRefusal("handoff envelope overrides are not a coordinator source; re-resolve without overrides");
-  if (!Number.isInteger(attempt) || attempt < 1) throw new CoordinatorWorkOrderRefusal("attempt must be a positive integer");
+  if (!Number.isSafeInteger(attempt) || attempt < 1) throw new CoordinatorWorkOrderRefusal("attempt must be a positive integer");
   if (!Array.isArray(allowedFiles) || allowedFiles.some((p) => typeof p !== "string" || /[\u0000-\u001f\u007f\\]/.test(p))) {
     throw new CoordinatorWorkOrderRefusal("allowedFiles must be repository-relative paths without control characters or backslashes");
   }
@@ -41,8 +41,8 @@ export function buildCoordinatorWorkOrder(input) {
   if (normalized.some((p, i) => p === "" || p.split("/").includes("..") || allowedFiles[i].startsWith("/"))) {
     throw new CoordinatorWorkOrderRefusal("allowedFiles must be repository-relative paths");
   }
-  // Own-fragment guard: any other entry whose first segment is `changes` or a glob could cover other units' fragments.
-  const coversChanges = (p) => p !== ownGlob && (p.split("/")[0] === "changes" || /[*?[{]/.test(p.split("/")[0]));
+  // Own-fragment guard: closed allowlist. The first segment must be a plain name that is not `changes` in any case; globs, extglobs and whitespace refuse.
+  const coversChanges = (p) => p !== ownGlob && !(/^[A-Za-z0-9._-]+$/.test(p.split("/")[0]) && p.split("/")[0].toLowerCase() !== "changes");
   if (normalized.some(coversChanges)) {
     throw new CoordinatorWorkOrderRefusal(`allowedFiles may name only the unit's own ${ownGlob}`);
   }

@@ -22,7 +22,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   let values;
   // One failure shape: {ok:false,error} on stdout unless --silent; --fields and --jq never apply to a failure.
   const fail = (error, stderrText) => {
-    if (!values?.silent) stdout.write(`${JSON.stringify({ ok: false, error })}\n`);
+    if (!(values?.silent ?? argv.includes("--silent"))) stdout.write(`${JSON.stringify({ ok: false, error })}\n`);
     stderr.write(`${stderrText}\n`);
     return 1;
   };

@@ -106,7 +106,7 @@ test("C19 allowed files are normalized and control characters are refused", () =
 });
 
 test("C19 a changes entry other than the unit's own fragment is refused", () => {
-  for (const bad of ["changes/9999-*.md", "changes/README.md", "./changes/2484-x.md", "changes/2483-a.md", "changes", "changes/", "**", "*/9999-x.md", "change?/x.md", "{changes,src}/x.md", "[c]hanges/x.md"]) {
+  for (const bad of ["changes/9999-*.md", "changes/README.md", "./changes/2484-x.md", "changes/2483-a.md", "changes", "changes/", "**", "*/9999-x.md", "change?/x.md", "{changes,src}/x.md", "[c]hanges/x.md", "Changes/9999-x.md", "CHANGES/README.md", "@(changes)/x.md", "+(changes)/x.md", "!(src)/x.md", " changes/9999-x.md"]) {
     assert.throws(() => buildCoordinatorWorkOrder({ envelope: issueEnvelope(), allowedFiles: [bad] }), CoordinatorWorkOrderRefusal, bad);
   }
 });
@@ -114,6 +114,9 @@ test("C19 a changes entry other than the unit's own fragment is refused", () => 
 test("C19 glob entries below a non-changes directory are accepted", () => {
   const { workOrder } = buildCoordinatorWorkOrder({ envelope: issueEnvelope(), allowedFiles: ["src/**"] });
   assert.deepEqual(workOrder.allowedFiles, ["changes/2483-*.md", "src/**"]);
+  for (const ok of ["src/a.mjs", "docs/x/y.md", "./src/a.mjs", ".github/workflows/ci.yml", "src/**/*.mjs"]) {
+    assert.doesNotThrow(() => buildCoordinatorWorkOrder({ envelope: issueEnvelope(), allowedFiles: [ok] }), ok);
+  }
 });
 
 test("C19 a target with neither issue nor pr is refused", () => {
@@ -129,7 +132,10 @@ test("C1 missing input refuses with CoordinatorWorkOrderRefusal, not a TypeError
 });
 
 test("C2 attempt 0, 1.5 and the string \"2\" are refused", () => {
-  for (const bad of [0, 1.5, "2"]) {
+  for (const bad of [0, 1.5, "2", 1e20, 2 ** 53]) {
     assert.throws(() => buildCoordinatorWorkOrder({ envelope: issueEnvelope(), attempt: bad }), CoordinatorWorkOrderRefusal, String(bad));
+  }
+  for (const good of [1, 2, Number.MAX_SAFE_INTEGER]) {
+    assert.equal(buildCoordinatorWorkOrder({ envelope: issueEnvelope(), attempt: good }).workOrder.attempt, good);
   }
 });
