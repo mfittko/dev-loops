@@ -11,7 +11,10 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
+import { loadDevLoopConfigStrict } from "@dev-loops/core/config";
+import { extractSection } from "@dev-loops/core/loop/markdown-sections";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { resolveSizeBounds } from "./check-size-budget.mjs";
 import {
   FORWARD_RULE_REFERENCES,
   NON_RULE_TOKENS,
@@ -23,23 +26,29 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-
 
 const USAGE = `Usage: dev-loops loop spec-lint --body-file <path> [--repo-root <path>]
 
-Lint an issue body against skills/docs/required-rules.json and docs/decisions.
+Lint an issue body against skills/docs/required-rules.json, docs/decisions and the .devloops size bounds.
 
   --body-file <path>   File that holds the issue body (required)
   --repo-root <path>   Repository root to lint against (default: cwd)
 
 Output (stdout, JSON):
   { "ok": true, "findings": [{ "kind", "id", "detail" }],
-    "checks": { "rules": { "status": "ran" } | { "status": "skipped", "reason" },
+    "checks": { "sizeForecast": { "status": "ran" },
+                "rules": { "status": "ran" } | { "status": "skipped", "reason" },
                 "adrs":  { "status": "ran" } | { "status": "skipped", "reason" } } }
 
-Finding kinds: unknown_rule_id, unknown_adr, adr_not_accepted, adr_superseded, adr_amended.
+Finding kinds: unknown_rule_id, unknown_adr, adr_not_accepted, adr_superseded, adr_amended,
+size_forecast_missing, size_forecast_malformed, size_forecast_split_required (PLAN-SIZE-BAND; one
+"- forecast: slice=<id> wloc=<n> files=<path>,<path>" line per slice under "## Size forecast";
+a line at or above the resolved default-tier waiverLoc must be split, not disposed;
+a list item that starts with the word "forecast" or contains "wloc=" and does not parse is
+size_forecast_malformed, also not disposable; non-list lines are never claimed).
 ADR citation forms: "ADR NNNN", "ADR-<digits>" and docs/decisions/NNNN-*.md links.
 
 ${JQ_OUTPUT_USAGE}
 
 Exit codes: 0 lint completed (with or without findings); 1 usage error;
-2 malformed required-rules.json, another runtime error, or an invalid --jq filter.`;
+2 malformed required-rules.json, a .devloops config error, another runtime error, or an invalid --jq filter.`;
 
 const RECORD_FILE_RE = /^(\d{4,})-[a-z0-9-]+\.md$/;
 const BODY_ADR_RE = /\bADR[\s-]+(\d{4,})\b|docs\/decisions\/(\d{4,})-[\w-]*\.md/g;
@@ -197,6 +206,35 @@ export function lintAdrCitations(body, records) {
   return findings;
 }
 
+const FORECAST_LINE_RE = /^\s*-\s+forecast:\s+slice=(\S+)\s+wloc=(\d+)\s+files=(\S+)\s*$/;
+// One grammar claims a forecast attempt: a LIST ITEM (marker `-`, `*`, `+`, `N.`, `N)`) whose first token (ignoring `*`, `_`, backtick) is the word `forecast`, or that contains `wloc=` (spaces around `=` allowed). Non-list lines are never claimed. A claimed line that misses FORECAST_LINE_RE is reported, never dropped.
+const FORECAST_BULLET_RE = /^\s*(?:[-*+]|\d+[.)])\s+(?:[*_`]*forecast\b|.*wloc\s*=)/iu;
+
+/**
+ * PLAN-SIZE-BAND forecast lines under `## Size forecast`: one line per slice,
+ * `- forecast: slice=<id> wloc=<n> files=<path>,<path>`. A missing line and a
+ * line at or above the resolved waiverLoc are findings, and so is a forecast
+ * bullet that fails to parse (size_forecast_malformed); none can be disposed.
+ */
+export function lintSizeForecast(body, { waiverLoc }) {
+  const section = extractSection(stripFencedCode(body), "Size forecast") ?? "";
+  const rawLines = section.split(/\r?\n/);
+  const lines = rawLines.map((line) => FORECAST_LINE_RE.exec(line)).filter(Boolean);
+  const malformed = rawLines
+    .filter((line) => FORECAST_BULLET_RE.test(line) && !FORECAST_LINE_RE.test(line))
+    .map((line) => ({ kind: "size_forecast_malformed", id: "size-forecast", detail: { line: line.trim() } }));
+  const missing = lines.length === 0
+    ? [{ kind: "size_forecast_missing", id: "size-forecast", detail: { reason: "no `- forecast: slice=<id> wloc=<n> files=<path>,<path>` line under `## Size forecast`" } }]
+    : [];
+  if (lines.length === 0 || typeof waiverLoc !== "number") return [...missing, ...malformed];
+  return [
+    ...malformed,
+    ...lines
+      .filter(([, , wloc]) => Number(wloc) >= waiverLoc)
+      .map(([, slice, wloc]) => ({ kind: "size_forecast_split_required", id: slice, detail: { wloc: Number(wloc), waiverLoc } })),
+  ];
+}
+
 export async function lintSpec({ body, repoRoot }) {
   const rootStat = await stat(repoRoot).catch((error) => {
     if (isMissing(error)) return null;
@@ -212,6 +250,9 @@ export async function lintSpec({ body, repoRoot }) {
     findings.push(...lintRuleIds(body, rules.ids));
     checks.rules = { status: "ran" };
   }
+  const { config } = await loadDevLoopConfigStrict({ repoRoot });
+  findings.push(...lintSizeForecast(body, resolveSizeBounds(config)));
+  checks.sizeForecast = { status: "ran" };
   const decisionsDir = path.join(repoRoot, "docs", "decisions");
   const records = await indexDecisionRecords(decisionsDir);
   if (records) {

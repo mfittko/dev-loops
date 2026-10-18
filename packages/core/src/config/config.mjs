@@ -492,10 +492,15 @@ const SizeTiersConfig = z.strictObject({
   t3: SizeTierConfig.pick({ patterns: true }).optional().describe("Relaxed tier (e.g. scaffold/template clones). Empty by default — a repo defines its own patterns; the absolute ceiling still applies. Per-tier soft/waiver thresholds are not yet honored (Phase 1)."),
 });
 
+const SizePlanningBandConfig = z.strictObject({
+  minLoc: z.number().int().min(0).default(150).describe("Lower edge of the planning band (PLAN-SIZE-BAND): a slice forecast under this many logic LOC is a merge candidate; 0 turns the merge rule off. The upper edge is tiers.default.softLoc."),
+});
+
 const SizeConfig = z.strictObject({
   testDiscount: z.number().min(0).max(1).default(0.25).describe("Weight applied to test LOC when computing logicLoc = code + testDiscount * test."),
   absoluteHardLoc: z.number().int().positive().default(2000).describe("Whole-PR logic-LOC ceiling; blocks with no waiver possible above this, for any tier."),
   tiers: SizeTiersConfig.default({}).describe("Per-tier soft/waiver/slice thresholds and path patterns."),
+  planningBand: SizePlanningBandConfig.default({}).describe("Planning-time size band (PLAN-SIZE-BAND): minLoc up to tiers.default.softLoc."),
 });
 
 const GatesConfig = z.strictObject({

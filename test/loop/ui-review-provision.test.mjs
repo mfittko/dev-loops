@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { provisionAndBoot } from "@dev-loops/core/loop/ui-review-provision";
 import { loadDevLoopConfig, resolveUiReviewRunRecipe, DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN } from "@dev-loops/core/config";
-import { parseUiReviewProvisionCliArgs, ensureOwnNodeModules, inspectMigrations, assertNotPrimary } from "../../scripts/loop/ui-review-provision.mjs";
+import { parseUiReviewProvisionCliArgs, ensureOwnNodeModules, inspectMigrations, assertNotPrimary, ensureWorktreeNoInstall } from "../../scripts/loop/ui-review-provision.mjs";
 import { parseMainWorktreePath } from "@dev-loops/core/loop/worktree-guard";
 import { execFileSync } from "node:child_process";
 
@@ -522,4 +522,14 @@ test("ensureOwnNodeModules: leaves a real node_modules alone", () => {
 
   assert.equal(ensureOwnNodeModules(worktree), false);
   assert.equal(lstatSync(path.join(worktree, "node_modules")).isDirectory(), true);
+});
+
+test("ensureWorktreeNoInstall skips the install in ensureWorktree", async () => {
+  let seen;
+  const result = await ensureWorktreeNoInstall({ pr: 1 }, async (args, opts) => {
+    seen = { args, opts };
+    return { path: "/w", created: true, reused: false, extra: 1 };
+  });
+  assert.deepEqual(seen.opts.installDeps(), { ran: false, ok: true });
+  assert.deepEqual(result, { path: "/w", created: true, reused: false });
 });

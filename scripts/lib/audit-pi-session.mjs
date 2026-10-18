@@ -145,22 +145,17 @@ function latestTranscriptMtime(directoryPath) {
   return latestMtime;
 }
 
-/**
- * Find the latest session directory or session file for this repository,
- * including sessions launched from one of its tmp/worktrees entries.
- * @param {string} [sessionsBaseDir]
- * @param {string} [repositoryCwd]
- * @returns {string | null}
- */
-export function findLatestPiSession(
-  sessionsBaseDir = path.join(os.homedir(), ".pi", "agent", "sessions"),
-  repositoryCwd = process.cwd(),
-) {
-  if (!fs.existsSync(sessionsBaseDir)) return null;
+const NO_SESSION = { path: null, mtime: -Infinity };
 
+function newestPiSession(sessionsBaseDir, repositoryCwd) {
   const repositoryPrefix = piSessionDirectoryPrefix(canonicalRepositoryRoot(repositoryCwd));
   const worktreePrefix = `${repositoryPrefix.slice(0, -2)}-tmp-worktrees-`;
-  const entries = fs.readdirSync(sessionsBaseDir, { withFileTypes: true });
+  let entries;
+  try {
+    entries = fs.readdirSync(sessionsBaseDir, { withFileTypes: true });
+  } catch {
+    return NO_SESSION;
+  }
   const matchingDirs = entries
     .filter((entry) => entry.isDirectory() && (
       entry.name === repositoryPrefix ||
@@ -168,14 +163,21 @@ export function findLatestPiSession(
     ))
     .map((entry) => path.join(sessionsBaseDir, entry.name));
 
-  if (matchingDirs.length === 0) return null;
+  return newestSessionIn(matchingDirs);
+}
 
-  // Among all matching dirs, find the session whose transcript was most recently modified.
+// Among all matching dirs, find the session whose transcript was most recently modified.
+function newestSessionIn(matchingDirs) {
   let latestPath = null;
   let latestMtime = -Infinity;
 
   for (const dir of matchingDirs) {
-    const dirEntries = fs.readdirSync(dir, { withFileTypes: true });
+    let dirEntries;
+    try {
+      dirEntries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
     for (const entry of dirEntries) {
       if (entry.name === "subagent-artifacts") continue;
       const fullPath = path.join(dir, entry.name);
@@ -208,7 +210,45 @@ export function findLatestPiSession(
     }
   }
 
-  return latestPath;
+  return { path: latestPath, mtime: latestMtime };
+}
+
+/**
+ * Find the latest session directory or session file for this repository,
+ * including sessions launched from one of its tmp/worktrees entries.
+ * @param {string} [sessionsBaseDir]
+ * @param {string} [repositoryCwd]
+ * @returns {string | null}
+ */
+export function findLatestPiSession(
+  sessionsBaseDir = path.join(os.homedir(), ".pi", "agent", "sessions"),
+  repositoryCwd = process.cwd(),
+) {
+  return newestPiSession(sessionsBaseDir, repositoryCwd).path;
+}
+
+/**
+ * Find the most recently modified session for this repository across Pi sessions and
+ * Claude Code project transcripts (`<claudeProjectsDir>/<repo-slug>`, worktree slugs included).
+ * @returns {string | null}
+ */
+export function findLatestSession(
+  sessionsBaseDir = path.join(os.homedir(), ".pi", "agent", "sessions"),
+  repositoryCwd = process.cwd(),
+  claudeProjectsDir = path.join(os.homedir(), ".claude", "projects"),
+) {
+  const slug = canonicalRepositoryRoot(repositoryCwd).replace(/[^a-zA-Z0-9]/g, "-");
+  let claudeDirs = [];
+  try {
+    claudeDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && (entry.name === slug || entry.name.startsWith(`${slug}-tmp-worktrees-`)))
+      .map((entry) => path.join(claudeProjectsDir, entry.name));
+  } catch {
+    // no Claude projects directory
+  }
+  const claude = newestSessionIn(claudeDirs);
+  const pi = newestPiSession(sessionsBaseDir, repositoryCwd);
+  return (claude.mtime > pi.mtime ? claude : pi).path;
 }
 
 /**
@@ -354,6 +394,49 @@ function incrementCount(map, key) {
   map[key] = (map[key] ?? 0) + 1;
 }
 
+function claudeContentChars(msg) {
+  let chars = 0;
+  for (const block of Array.isArray(msg.content) ? msg.content : []) {
+    if (block?.type === "text") chars += String(block.text ?? "").length;
+    else if (block?.type === "thinking") chars += String(block.thinking ?? "").length;
+    else if (block?.type === "tool_use") chars += JSON.stringify(block.input ?? {}).length;
+  }
+  return chars;
+}
+
+function setTurnOutput(turn, output) {
+  const u = turn.usage;
+  u.output = output;
+  // Recompute from components so a null-output snapshot merges to the same total in either order.
+  u.totalTokens = [u.input, u.cacheRead, u.cacheWrite].every((v) => v !== null) ? u.input + output + u.cacheRead + u.cacheWrite : null;
+}
+
+/**
+ * Merge two records sharing one message.id (`prev` appeared first). A final record wins over
+ * snapshots in any order. Snapshots alone keep the largest snapshot output and sum content chars.
+ */
+function mergeClaudeRecords(prev, next) {
+  const base = prev.outputFinal && !next.outputFinal ? prev : next;
+  const other = base === prev ? next : prev;
+  // One record per content block: keep every record's dispatches and tool calls, in file order.
+  base.dispatches = [...prev.dispatches, ...next.dispatches];
+  base.toolCalls = [...prev.toolCalls, ...next.toolCalls];
+  base.contentChars = prev.contentChars + next.contentChars;
+  if (!base.outputFinal && other.usage.output !== null && (base.usage.output === null || other.usage.output > base.usage.output)) {
+    setTurnOutput(base, other.usage.output);
+  }
+  return base;
+}
+
+/** Snapshot-only Claude messages: output is at least 1 token per 4 content characters. */
+function estimateSnapshotOutputs(turns) {
+  for (const turn of turns) {
+    if (turn.harness !== "claude" || turn.outputFinal || turn.promptTokens === null) continue;
+    turn.outputEstimated = true;
+    setTurnOutput(turn, Math.max(turn.usage.output ?? 0, Math.ceil(turn.contentChars / 4)));
+  }
+}
+
 /**
  * Build a turn from a Claude Code assistant usage envelope
  * (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`).
@@ -394,6 +477,9 @@ function buildClaudeTurn(data, msg, usage, currentAgent, segmentId) {
       cost: null, // Claude transcripts carry no cost; list-price estimation is out of scope.
     },
     harness: "claude",
+    // A non-null stop_reason marks the message's final usage; earlier records are streaming snapshots.
+    outputFinal: msg.stop_reason !== null && msg.stop_reason !== undefined,
+    contentChars: claudeContentChars(msg),
     toolCalls: extractToolCalls(msg, "tool_use", data.cwd),
     // Cross-file identity for a resumed session's replayed history (see the audit-wide
     // dedupe Set in auditPiSession). Pi turns never set this.
@@ -558,16 +644,15 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
 
           if (effectiveHarness === "claude") {
             const claudeTurn = buildClaudeTurn(data, msg, usage, currentAgent, segmentId);
-            // Keep only the last record's usage per message.id, in first-appearance
-            // order; a record without an id is pushed directly (see the class comment).
+            // Records sharing a message.id merge into one turn, in first-appearance order;
+            // the final record's usage (non-null stop_reason) wins over snapshots in any order.
+            // A record without an id is pushed directly (see the class comment).
             const messageId = typeof msg.id === "string" ? msg.id : null;
             if (messageId === null) {
               turns.push(claudeTurn);
             } else if (claudeTurnIndexById.has(messageId)) {
-              // One record per content block: keep earlier blocks' dispatches.
-              claudeTurn.dispatches.unshift(...turns[claudeTurnIndexById.get(messageId)].dispatches);
-              claudeTurn.toolCalls.unshift(...turns[claudeTurnIndexById.get(messageId)].toolCalls);
-              turns[claudeTurnIndexById.get(messageId)] = claudeTurn;
+              const index = claudeTurnIndexById.get(messageId);
+              turns[index] = mergeClaudeRecords(turns[index], claudeTurn);
             } else {
               claudeTurnIndexById.set(messageId, turns.length);
               turns.push(claudeTurn);
@@ -608,6 +693,7 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
     }
   }
 
+  estimateSnapshotOutputs(turns);
   // A file can carry both Pi- and Claude-shaped usage envelopes under auto-detection
   // (e.g. a mixed-content collection); report "mixed" rather than picking the last one.
   const fileHarness = fileHarnessesSeen.size > 1 ? "mixed" : [...fileHarnessesSeen][0] ?? null;
@@ -693,13 +779,14 @@ function aggregateAvailability(aggregate, dimension) {
 function aggregateCacheHitRatio(aggregate) {
   const input = aggregateValue(aggregate, "input");
   const cacheRead = aggregateValue(aggregate, "cacheRead");
-  if (input === null || cacheRead === null || input + cacheRead < 1) return null;
-  return Number((cacheRead / (input + cacheRead)).toFixed(4));
+  const cacheWrite = aggregateValue(aggregate, "cacheWrite") ?? 0;
+  if (input === null || cacheRead === null || input + cacheRead + cacheWrite < 1) return null;
+  return Number((cacheRead / (input + cacheRead + cacheWrite)).toFixed(4));
 }
 
 function aggregateCacheHitRatioAvailability(aggregate) {
   if (aggregateCacheHitRatio(aggregate) === null) return "unavailable";
-  return ["input", "cacheRead"].some(
+  return ["input", "cacheRead", "cacheWrite"].some(
     (dimension) => aggregateAvailability(aggregate, dimension) !== "complete",
   ) ? "partial" : "complete";
 }
@@ -798,6 +885,7 @@ export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
   let skippedInheritedForkTurns = 0;
   let unresolvedForkBoundaries = 0;
   let malformedLines = 0;
+  let estimatedOutputMessages = 0;
 
   for (const file of files) {
     const parsed = parsedByFile.get(file);
@@ -823,6 +911,7 @@ export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
       for (const turn of group.turns) {
         addUsageToAggregate(sessionAggregate, turn.usage);
         addUsageToAggregate(overallAggregate, turn.usage);
+        if (turn.outputEstimated) estimatedOutputMessages += 1;
         modelsInSession.add(turn.model);
 
         if (!modelAggregates[turn.model]) {
@@ -934,6 +1023,7 @@ export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
     activeSessionsCount: sessions.length,
     summary: {
       totalTurns: overallAggregate.turns,
+      estimatedOutputMessages,
       inputTokens: aggregateValue(overallAggregate, "input"),
       outputTokens: aggregateValue(overallAggregate, "output"),
       cacheReadTokens: aggregateValue(overallAggregate, "cacheRead"),
@@ -1023,10 +1113,14 @@ export function formatMarkdownSummary(auditResult) {
     ? "n/a"
     : `${(summary.totalTokens / 1_000_000).toFixed(2)}M`;
   lines.push(`- **Total Tokens**: ${formatTokenCount(summary.totalTokens, summary.availability?.totalTokens)} (${totalMillions})`);
-  lines.push(`- **Uncached Input**: ${formatTokenCount(summary.inputTokens, summary.availability?.inputTokens)}`);
+  lines.push(`- **Uncached Input**: ${formatTokenCount(summary.inputTokens, summary.availability?.inputTokens)} (excludes cache read and cache write; total prompt tokens = input + cache read + cache write)`);
   lines.push(`- **Cached Read**: ${formatTokenCount(summary.cacheReadTokens, summary.availability?.cacheReadTokens)}`);
+  lines.push(`- **Cache Write**: ${formatTokenCount(summary.cacheWriteTokens, summary.availability?.cacheWriteTokens)}`);
   lines.push(`- **Output**: ${formatTokenCount(summary.outputTokens, summary.availability?.outputTokens)}`);
-  lines.push(`- **Cache Hit Ratio**: ${formatRatio(summary.cacheHitRatio, summary.availability?.cacheHitRatio)}`);
+  lines.push(`- **Cache Hit Ratio**: ${formatRatio(summary.cacheHitRatio, summary.availability?.cacheHitRatio)} (cache read / (input + cache read + cache write))`);
+  if (summary.estimatedOutputMessages > 0) {
+    lines.push(`- **Estimated Output Messages**: ${summary.estimatedOutputMessages} (no final usage; output is the larger of the snapshot and content length / 4)`);
+  }
   lines.push(`- **Estimated Cost**: ${formatCost(summary.estimatedCost, summary.availability?.estimatedCost)}`);
   lines.push(`- **Fork Snapshots**: ${forkSnapshotsProcessed} processed; ${retainedForkTurns} fork-own turns retained; ${skippedInheritedForkTurns} inherited turns excluded`);
   if (unresolvedForkBoundaries > 0) {

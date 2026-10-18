@@ -24,16 +24,20 @@
  *   branch — a restricted refspec is not widened by fetch.
  * - Provisioning is invoked via the imported provisionWorktree core (shared
  *   with provision-worktree.mjs's CLI) — not shelled out. It fails soft: a
- *   provision warning never aborts the worktree. Does NOT install
- *   dependencies (out of scope).
+ *   provision warning never aborts the worktree.
+ * - On create only, `bun install --frozen-lockfile` runs inside the worktree
+ *   first (WORKTREE-DEPS-ISOLATED), then provisioning. Fail-soft: the result's
+ *   `deps` field reports it; a failed or skipped install never fails the worktree.
+ *   A reused worktree is not touched.
  *
  * Prints a JSON result to stdout:
  *   { ok, path, created|reused, base?, branchOrigin, diverged?,
- *     fetchDegraded?, provision: { actions, summary }, guard }
+ *     fetchDegraded?, provision: { actions, summary }, deps?, guard }
  * See the full USAGE block below for the field-by-field contract.
  * A git create failure is a hard error (exit 1); provisioning is fail-soft.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
@@ -93,6 +97,9 @@ Output (stdout, JSON):
                      // remote's best-effort fetch failed (offline, unknown
                      // remote, ...) — branch resolution above still ran,
                      // just against whatever was already fetched
+    "deps"?: { "ok": bool, "ran": bool, "reason"?, "exitCode"? },
+                     // create only: the fail-soft bun install --frozen-lockfile
+                     // result (ran:false when no bun.lock)
     "provision": { "actions": [...], "summary": {...} },
     "guard": { "ok": bool, "installed": [...], "refreshed": [...], "skipped": [...],
                "defaultBranches"?: [...], "droppedExplicitBranches"?: [...],
@@ -598,9 +605,30 @@ function installCommitMsgGuardForRoot(gitCommand, root) {
   }
 }
 
+// Fail-soft `bun install --frozen-lockfile` in a worktree without its own node_modules so it never
+// resolves packages from the main checkout's stale node_modules.
+function defaultInstallDeps(cwd) {
+  const r = spawnSync(process.env.BUN_BIN || "bun", ["install", "--frozen-lockfile"], { cwd, timeout: 300000, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  if (r.error) return { ok: false, reason: r.error.message };
+  if (r.status === null && r.signal) return { ok: false, reason: `bun install terminated by ${r.signal}` };
+  return r.status === 0 ? { ok: true } : { ok: false, exitCode: r.status, reason: (r.stderr ?? "").trim().split("\n").slice(-3).join(" | ") };
+}
+
+function ensureDeps(worktreePath, installDeps) {
+  if (!existsSync(path.join(worktreePath, "bun.lock"))) return { ok: true, ran: false, reason: "no bun.lock" };
+  let result;
+  try {
+    result = installDeps(worktreePath);
+  } catch (err) {
+    result = { ok: false, reason: err?.message ?? String(err) };
+  }
+  if (!result.ok) process.stderr.write(`[ensure-worktree] WARN bun install --frozen-lockfile failed (continuing): ${result.reason ?? ""}\n`);
+  return { ran: true, ...result };
+}
+
 export async function ensureWorktree(
   { repoRoot, issue, pr, branch, base },
-  { gitCommand = "git", provision = provisionWorktree } = {},
+  { gitCommand = "git", provision = provisionWorktree, installDeps = defaultInstallDeps } = {},
 ) {
   const root = path.resolve(repoRoot);
   // --base/--branch are refs/names an operator (or a config value) may hand
@@ -752,6 +780,8 @@ export async function ensureWorktree(
     }
   }
 
+  // Install before provision: provision's @dev-loops/core link then lands on top.
+  const deps = ensureDeps(target, installDeps);
   const summary = await provision({ worktreePath: target, repoRoot: root });
   return {
     ok: true,
@@ -762,6 +792,7 @@ export async function ensureWorktree(
     branchOrigin,
     ...(diverged ? { diverged } : {}),
     ...(fetchDegraded ? { fetchDegraded: true } : {}),
+    deps,
     provision: summary,
     guard: installGuard(gitCommand, root, base),
     commitMsgGuard: installCommitMsgGuardForRoot(gitCommand, root),

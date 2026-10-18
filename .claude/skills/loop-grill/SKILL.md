@@ -49,12 +49,12 @@ Before doing anything else:
 
 "Is it refined" is decided by `detectIssueRefinementArtifact` (`packages/core/src/loop/issue-refinement-artifact.mjs`) — the single source of truth, same as the enqueue gate; do not add a divergent check. A body carrying only AC/DoD checklists and no mapping matrix is NOT refined (`missing_ac_dod_matrix`) and MUST be grilled to synthesize the matrix — a matrix-missing issue can never emit `grill-clean`.
 
-The zero-iteration `grill_clean` exit requires BOTH a shape-clean artifact AND recorded provenance (ADR 0084, amends ADR 0029): a `🔬 Grill / refinement results` comment already posted on the target. Decide this deterministically — never by agent judgment of the fetched comments:
+The zero-iteration `grill_clean` exit requires a shape-clean artifact, recorded provenance (ADR 0084, amends ADR 0029; ADR 0154 amends ADR 0084: a `🔬 Grill / refinement results` comment already posted on the target) AND no `size_forecast_*` spec-lint finding (item 4 below, `GRILL-SPEC-LINT`). Decide this deterministically — never by agent judgment of the fetched comments:
 
 1. Fetch the body into its own file, extracting past the wrapper's envelope: for **tracker-first**, `dev-loops-run scripts/github/view-issue.mjs --repo <owner/repo> --issue <n> --json body --jq '.issue.body' > <body-path>` (never raw `gh`); for **PR body**, `dev-loops-run scripts/github/view-pr.mjs --repo <owner/repo> --pr <n> --json body --jq '.pr.body' > <body-path>`. `<body-path>` must hold only the raw markdown body; an unextracted envelope or an added title defeats the matrix detection.
 2. Fetch comments into their own JSON file, extracting past the wrapper's envelope: for **tracker-first**, `dev-loops-run scripts/github/view-issue.mjs --repo <owner/repo> --issue <n> --json comments --jq '.issue.comments' > <comments-path>` (never raw `gh`); for **PR body**, `dev-loops-run scripts/github/view-pr.mjs --repo <owner/repo> --pr <n> --json comments --jq '.pr.comments' > <comments-path>`. The `--jq` extraction is required: the detector's `--comments-file` accepts only a bare array or `{ "comments": [...] }` and fails closed on the envelope.
 3. Run `dev-loops-run scripts/loop/detect-refinement-grill-state.mjs --body-file <body-path> --surface <issue|pr> --comments-file <comments-path>`.
-4. Take the zero-iteration exit ONLY when the detector's output has `state == grill_clean`. On `state == grill_clean` the run stops here: it does not rewrite the body, posts no new results comment, and emits `grill-clean` — UNLESS the operator explicitly authorizes a re-grill of this already-provenanced target, which is a bypass (Step 4). In that case run Steps 2–4 anyway, and the results comment records the `bypass: operator-authorized by <handle>` line per Step 4. Without that explicit authorization, the exit is unconditional. Any other state (including `detect_gaps` with `reason: provenance_missing`) means the target is NOT a zero-iteration exit — run the full grill (Steps 2–4) anyway; a zero-gap pass still records its own provenance by posting the results comment (Step 4), stating that no gaps were found.
+4. Take the zero-iteration exit ONLY when the detector's output has `state == grill_clean`. Before taking the exit, run the Step 2 spec-lint (`GRILL-SPEC-LINT`) on the body; a `size_forecast_missing`, `size_forecast_malformed` or `size_forecast_split_required` finding means the target is NOT a zero-iteration exit, so run Steps 2–4. On `state == grill_clean` with no such finding the run stops here: it does not rewrite the body, posts no new results comment, and emits `grill-clean` — UNLESS the operator explicitly authorizes a re-grill of this already-provenanced target, which is a bypass (Step 4). In that case run Steps 2–4 anyway, and the results comment records the `bypass: operator-authorized by <handle>` line per Step 4. Without that explicit authorization, the exit is taken whenever the conditions above hold. Any other state (including `detect_gaps` with `reason: provenance_missing`) means the target is NOT a zero-iteration exit — run the full grill (Steps 2–4) anyway; a zero-gap pass still records its own provenance by posting the results comment (Step 4), stating that no gaps were found.
 
 **Local-planning** plan files have no comment surface, so they keep shape-only behavior: a shape-clean plan file is always a zero-iteration `grill_clean`, do not rewrite it.
 
@@ -92,7 +92,7 @@ Additional gaps discovered through semantic reading of the spec are also recorde
 ### Spec-lint of rule and ADR citations
 
 <!-- rule: GRILL-SPEC-LINT -->
-`GRILL-SPEC-LINT`: The grill MUST run `dev-loops-run cli/index.mjs loop spec-lint --body-file <path>` on the fetched body and record each finding as a gap. The lint is offline. It reports unregistered rule IDs and cited ADRs that are unknown, not accepted, superseded, or amended by a later accepted record. The grill resolves a finding in one of two ways. It corrects the citation in the rewritten body, or it records a disposition with cited evidence in the results comment (for example, a rule ID that this issue introduces). A finding the grill cannot resolve with cited evidence is an unresolved item. A check the lint reports as `skipped` produces no finding. Semantic contradiction between an AC row and a rule or ADR stays with the semantic reading and the spec-authority judge.
+`GRILL-SPEC-LINT`: The grill MUST run `dev-loops-run cli/index.mjs loop spec-lint --body-file <path>` on the fetched body and record each finding as a gap. The lint is offline. It reports unregistered rule IDs and cited ADRs that are unknown, not accepted, superseded, or amended by a later accepted record. The grill resolves a finding in one of two ways. It corrects the citation in the rewritten body, or it records a disposition with cited evidence in the results comment (for example, a rule ID that this issue introduces). A finding the grill cannot resolve with cited evidence is an unresolved item. It also reports `size_forecast_missing` and `size_forecast_split_required`; the grill MUST NOT dispose either one. `size_forecast_malformed` (a list item under `## Size forecast` that starts with the word forecast or contains `wloc=` and does not parse) is likewise not disposable. The grill corrects them by writing the `## Size forecast` lines or splitting the slice (`PLAN-SIZE-BAND`). A check the lint reports as `skipped` produces no finding. Semantic contradiction between an AC row and a rule or ADR stays with the semantic reading and the spec-authority judge.
 
 ### Count-based acceptance criteria guardrail
 
@@ -145,6 +145,8 @@ Synthesize the answers into the body as the authoritative **`## AC / DoD matrix`
 - This makes re-runs idempotent — no accumulated noise, no duplicate sections.
 - If parsing a section boundary fails, **abort with an error** rather than silently truncating.
 
+The synthesized body also carries a `## Size forecast` section with one `- forecast: slice=<id> wloc=<n> files=<path>,<path>` line per slice. Write the forecast and record the split and merge assessments at the record site `PLAN-SIZE-BAND` in [Local planning](../docs/local-planning.md#size-estimate-refinement) names for the surface (the results comment on tracker-first and PR-body targets; `sizeEstimate` `oversizeJustification` and `mergeAssessment` in a local-planning plan file).
+
 The synthesized sections carry no rationale scaffolding: do NOT write a `## Grill findings` section and do NOT embed the raw Q&A table in the body (`GRILL-SUBLOOP-NO-EMBED-SYNTHESIS`). The full rewrite below defines the complete content the locked body keeps.
 
 If a body migrated from older embed behavior still carries a `## Grill findings` section, **remove** it as part of write-back — strip from that heading through the next `##`-level heading (exclusive) or end of file, using the same replace-section boundary logic. This is a removal-only migration, never a re-introduction of the embed.
@@ -158,7 +160,7 @@ Write the raw Q&A transcript ONLY to the gitignored, ephemeral, session-scoped a
 - Any contradiction between now-stale prose and the locked AC/DoD/approach: resolve in favor of the locked form; delete the stale prose.
 - Any bare `#<number>` used as a defect/item enumeration rather than a genuine issue/PR reference (`GRILL-SUBLOOP-NO-BARE-HASH`): rewrite as `defect N` / `item N` / backticks. GitHub auto-links a bare `#<number>` to an unrelated issue/PR in this repo — reserve `#<number>` only for a real issue/PR cross-reference.
 
-The rewritten description carries ONLY normative locked content: context, the decided approach, the `## AC / DoD matrix` (the authoritative AC→DoD mapping table), `## Non-goals`, and a linked refinement doc reference if present. (A body MAY additionally carry human-readable `## Acceptance criteria` / `## Definition of done` prose, but the matrix — not those checklists — is what refinement detection requires.) Write it back with:
+The rewritten description carries ONLY normative locked content: context, the decided approach, the `## AC / DoD matrix` (the authoritative AC→DoD mapping table), `## Non-goals`, the `## Size forecast` section, and a linked refinement doc reference if present. (A body MAY additionally carry human-readable `## Acceptance criteria` / `## Definition of done` prose, but the matrix — not those checklists — is what refinement detection requires.) Write it back with:
 
 ```
 dev-loops-run cli/index.mjs issue edit --repo <owner/repo> --issue <n> --body-file <tmp-body-path>
@@ -184,7 +186,7 @@ Never `gh issue comment` directly, and never fold this content back into the iss
 
 Three distinct artifacts for tracker-first AND PR-body (two for local-planning, which has no comment surface at all in this contract):
 
-1. **Rewritten description** (issue/PR/plan body): the fully rewritten, locked spec — context, decided approach, the authoritative `## AC / DoD matrix`, and `## Non-goals` (optional human-readable AC/DoD prose may accompany the matrix). No raw Q&A, no rationale narrative, no unresolved "suggested … or …" phrasing, no bare non-issue `#<number>`.
+1. **Rewritten description** (issue/PR/plan body): the fully rewritten, locked spec — context, decided approach, the authoritative `## AC / DoD matrix`, `## Non-goals`, and `## Size forecast` (optional human-readable AC/DoD prose may accompany the matrix). No raw Q&A, no rationale narrative, no unresolved "suggested … or …" phrasing, no bare non-issue `#<number>`.
 
 2. **Results comment** (issue AND PR surfaces, posted separately per Step 4; its FIRST LINE MUST be exactly `## 🔬 Grill / refinement results`): the rationale. For an interactive run the `source:` line reads `source: <handle> answers via operator Q&A` using the same resolved handle (fallback: `source: human answers via operator Q&A`).
 
@@ -223,7 +225,7 @@ Before emitting the verdict for a tracker-first or PR-body grill whose semantic 
 
 After write-back (and, for tracker-first or PR-body, after the above verification passes), emit the verdict line to stdout:
 
-- `grill-clean` when no unresolved gaps remain. The grill refuses `grill-clean` while a `dev-loops-run cli/index.mjs loop spec-lint` finding is neither corrected in the body nor disposed in the results comment (`GRILL-SPEC-LINT`).
+- `grill-clean` when no unresolved gaps remain. The grill refuses `grill-clean` while a `dev-loops-run cli/index.mjs loop spec-lint` finding is neither corrected in the body nor disposed in the results comment. A `size_forecast_missing`, `size_forecast_split_required` or `size_forecast_malformed` finding blocks `grill-clean` until the body is corrected and is never disposable (`GRILL-SPEC-LINT`).
 - `N unresolved items` (e.g. `3 unresolved items`) when gaps remain after all questions are answered.
 
 ## Idempotency guarantee

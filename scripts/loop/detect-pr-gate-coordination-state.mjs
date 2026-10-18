@@ -133,8 +133,11 @@ Output (stdout, JSON):
     "allowedNextActions": ["resolve_merge_conflicts"],
     "forbiddenActions": ["run_pre_approval_gate", "declare_merge_ready"],
     "nextAction": "resolve_merge_conflicts",
-    "reason": "..."
+    "reason": "...",
+    "fixerDispositionWarning"?: { "warning": "...", "incomplete": [{ "threadId": "...", "failedStep": "..." }] }
   }
+  (fixerDispositionWarning is present only when the fixer disposition is
+  incomplete; it is advisory and blocks nothing, ADR 0155)
   (refinementArtifact.planDocPath is present only when specSource is
   "plan_file"; the key is omitted entirely for "linked_issue" and "pr_body")
 Error output (stderr, JSON):
@@ -773,9 +776,9 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
 // to enforce here (a PR with no fixer-disposition ledger entry behaves exactly as before this
 // boundary existed) — returns null so the evaluator input omits the field.
 // A fixer handoff delivered for the live head that lists a tackled thread, with no checkpoint, means
-// verify-fixer-disposition never completed (a failed run writes none): fail closed as not_verified.
+// verify-fixer-disposition never completed (a failed run writes none): report it incomplete as not_verified.
 // Scans every execution's handoff, not the latest plan: a later emission overwrites the plan but not the handoff.
-// Only absence (ENOENT) means "no handoff"; any other read or parse failure fails closed like unreadable_checkpoint.
+// Only absence (ENOENT) means "no handoff"; any other read or parse failure is reported incomplete like unreadable_checkpoint.
 async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot }) {
   const prDir = path.join(tmpRoot, "gate-fixer", repoSlugFor(repo), `pr-${pr}`);
   const unreadable = (error) => ({
@@ -819,8 +822,22 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
   return incomplete.length > 0 ? { complete: false, incomplete } : null;
 }
 
+// ADR 0155: an incomplete disposition is advisory. It keeps its `incomplete` detail and adds a warning,
+// with no next action and no forbidden actions, so gate coordination and Copilot requests proceed.
 // The one fixer-disposition input: detect-pr-gate-coordination-state and request-copilot-review both read it here.
-export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedThreads }, runtime = {}) {
+export async function resolveFixerDispositionInput(args, runtime = {}) {
+  const result = await readFixerDispositionEvidence(args, runtime);
+  if (!result || result.complete) return result;
+  const detail = result.incomplete.map((entry) => `thread ${entry.threadId}: ${entry.failedStep}`).join("; ");
+  return {
+    ...result,
+    warning: `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY (advisory): the fixer disposition for head ${args.currentHeadSha} is incomplete (${detail}). verify-fixer-disposition.mjs is optional; the merge gates are unchanged.`,
+    nextAction: null,
+    forbiddenActions: [],
+  };
+}
+
+async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedThreads }, runtime = {}) {
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   // Same main-anchored default verify-fixer-disposition.mjs writes under.
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
@@ -883,7 +900,7 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
       // A genuine absence (no checkpoint was ever written) is the only case
       // that behaves exactly as before — a PR with no checkpoint is unaffected
       // by this boundary. Any OTHER read error (EACCES, EIO, transient FS
-      // error) must fail closed instead of silently looking like "no
+      // error) must be reported incomplete instead of silently looking like "no
       // checkpoint": route it through the same shape used below for a
       // recorded-but-malformed checkpoint.
       if (error?.code === "ENOENT") continue;
@@ -898,7 +915,7 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
   try {
     handoff = normalizeFixerDispositionHandoff(JSON.parse(raw));
   } catch (error) {
-    // A recorded-but-malformed checkpoint must fail closed rather than
+    // A recorded-but-malformed checkpoint must be reported incomplete rather than
     // silently no-op — the fixer explicitly claimed tackled work here. No
     // real threadId is known for a checkpoint-level parse/schema failure, so
     // a sentinel ("unknown") is used instead of null: downstream reason
@@ -917,7 +934,16 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
   )];
   const containment = await buildContainmentMap(tackledShas, { repo, headSha: currentHeadSha }, runtime);
   // A caller that has not read the threads yet passes a loader, so a PR with no checkpoint costs no read.
-  const threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
+  // A failed thread read (for example HTTP 502) makes the disposition advisory-incomplete instead of aborting the caller (ADR 0155).
+  let threads;
+  try {
+    threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
+  } catch (error) {
+    return {
+      complete: false,
+      incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unverified_threads: ${error instanceof Error ? error.message : String(error)}` }],
+    };
+  }
   const liveThreads = threads.threads.map((thread) => ({
     threadId: thread.id,
     isResolved: thread.isResolved,
@@ -1239,11 +1265,6 @@ export function buildGateCoordinationEvaluatorInput({
     preApprovalGateMarker: context.gateEvidence.preApprovalGateMarker,
     refinementArtifact: context.refinementArtifact,
     postConvergenceSignificantChange,
-    // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: present only when a durable
-    // fixer-disposition checkpoint exists for this head (resolveFixerDispositionInput
-    // returns null otherwise), so a PR with no recorded fixer handoff behaves
-    // exactly as before this boundary existed.
-    ...(context.fixerDisposition ? { fixerDisposition: context.fixerDisposition } : {}),
     ...(earlySurface ?? {}),
   };
 }
@@ -1410,6 +1431,10 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   }
   // Expose effective round count in output for testability
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;
+  // ADR 0155: an incomplete fixer disposition is a visible warning, never a block.
+  if (context.fixerDisposition?.warning) {
+    result.fixerDispositionWarning = { warning: context.fixerDisposition.warning, incomplete: context.fixerDisposition.incomplete };
+  }
   // Recorded dispositions: the carried convergence (source review and head)
   // and the body-feedback disposition record, each null when none applies.
   // copilotBodyDispositionRequired names the review a disposition record must

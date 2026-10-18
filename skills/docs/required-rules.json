@@ -367,7 +367,7 @@
     {
       "id": "GATE-EXEC-FIXER-DISPOSITION-BOUNDARY",
       "enforcement": "runtime",
-      "enforcementNote": "packages/core/src/loop/fixer-disposition.mjs's pure evaluateFixerDisposition + pr-gate-coordination.mjs's fixerDisposition input force a blocked feedback_resolution result (forbiddenActions including request/rerequest Copilot review and gate-dispatch tokens) while a fixer's claimed-tackled thread is incomplete; scripts/github/verify-fixer-disposition.mjs is the enforcement CLI"
+      "enforcementNote": "resolveFixerDispositionInput in scripts/loop/detect-pr-gate-coordination-state.mjs is the advisory seam (ADR 0155): an incomplete claimed-tackled thread yields a warning (fixerDispositionWarning) with nextAction null and no forbiddenActions; evaluateFixerDisposition (packages/core/src/loop/fixer-disposition.mjs) and the optional scripts/github/verify-fixer-disposition.mjs keep their own nextAction output"
     },
     {
       "id": "GATE-EXEC-GATE-COORDINATOR",
@@ -553,6 +553,11 @@
       "enforcement": "doc"
     },
     {
+      "id": "LOCAL-DEV-SIZE-STOP",
+      "enforcement": "agent",
+      "enforcementNote": "The developer runs the size check at each local commit; only the pr create refusal at waiverLoc is mechanical (PRE-PR-SIZE-CHECK)."
+    },
+    {
       "id": "LOCAL-FAILURE-TRIAGE-ORDER"
     },
     {
@@ -623,6 +628,10 @@
       "id": "OPS-NO-INLINE-INTERPRETER"
     },
     {
+      "id": "PLAN-SIZE-BAND",
+      "enforcement": "runtime"
+    },
+    {
       "id": "PRE-PR-BEFORE-FIRST-PUSH",
       "enforcement": "runtime"
     },
@@ -649,6 +658,10 @@
     {
       "id": "PRE-PR-ONE-FRESH-REVIEWER",
       "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-SIZE-CHECK",
+      "enforcement": "runtime"
     },
     {
       "id": "PRE-PUSH-DELTA-EXIT-BOUND",
@@ -765,6 +778,10 @@
     },
     {
       "id": "RETRO-GATE-FAIL-CLOSED"
+    },
+    {
+      "id": "RETRO-SIZE-WAIVER-COUNT",
+      "enforcement": "doc"
     },
     {
       "id": "REVIEW-GATE-VERDICT-CANONICAL",
