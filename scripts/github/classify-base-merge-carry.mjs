@@ -16,6 +16,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { runGitCommand } from "../lib/git-delta.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { gitEnvWithoutDirOverrides } from "./write-gate-context.mjs";
 import { buildGateArtifactPath } from "./_gate-artifact-paths.mjs";
 
 const USAGE = `Usage: classify-base-merge-carry.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --prev-head <full sha> --head-sha <full sha> --base-ref <ref, e.g. origin/main> [--tmp-root <path>]
@@ -26,8 +27,9 @@ export function buildBaseMergeCarryPath({ repo, pr, gate, headSha, tmpRoot = "tm
 }
 
 // --verbatim keeps whitespace significant: an indentation-only change must change the id.
-function stablePatchId(diffText) {
-  const r = spawnSync("git", ["patch-id", "--verbatim"], { input: diffText, encoding: "utf8" });
+// --verbatim implies the stable mode (git rejects it together with --stable); repoRoot and env pin the id against ambient cwd and GIT_DIR.
+function stablePatchId(diffText, repoRoot) {
+  const r = spawnSync("git", ["patch-id", "--verbatim"], { input: diffText, encoding: "utf8", cwd: repoRoot, env: gitEnvWithoutDirOverrides() });
   if (r.error || r.status !== 0) throw new Error(`git patch-id failed: ${r.error?.message ?? r.stderr}`);
   return r.stdout.split(/\s+/)[0] || "";
 }
@@ -40,19 +42,21 @@ async function git(runGit, repoRoot, args) {
 
 const lines = (s) => s.split("\n").filter(Boolean);
 const nulLines = (s) => s.split("\0").filter(Boolean);
-const DIFF_FLAGS = ["--no-ext-diff", "--no-color", "--no-relative", "--no-renames"];
+// Pin the diff shape (context, algorithm, hunk joining, prefixes) so patch ids do not depend on ambient gitconfig.
+const GIT_ISOLATION = ["-c", "color.ui=false", "-c", "core.pager=cat", "-c", "core.autocrlf=false", "-c", "core.quotePath=false", "-c", "diff.interHunkContext=0", "-c", "diff.orderFile=/dev/null", "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false"];
+const DIFF_FLAGS = ["--no-ext-diff", "--no-color", "--no-relative", "--no-renames", "-U3", "--diff-algorithm=myers", "--no-indent-heuristic"];
 
-export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRoot, runGit = runGitCommand, patchId = stablePatchId }) {
+export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRoot, runGit = runGitCommand, patchId = (d) => stablePatchId(d, repoRoot) }) {
   try {
     const anc = await runGit(["merge-base", "--is-ancestor", prevHead, headSha], { repoRoot });
     if (anc.code === 1) throw new Error("prev-head is not an ancestor of head-sha");
     if (anc.code !== 0) throw new Error(`git merge-base --is-ancestor failed: ${anc.stderr.trim()}`);
     const mbA = (await git(runGit, repoRoot, ["merge-base", baseRef, prevHead])).trim();
     const mbB = (await git(runGit, repoRoot, ["merge-base", baseRef, headSha])).trim();
-    const diffA = await git(runGit, repoRoot, ["diff", ...DIFF_FLAGS, mbA, prevHead]);
-    const diffB = await git(runGit, repoRoot, ["diff", ...DIFF_FLAGS, mbB, headSha]);
-    const prDiffPaths = nulLines(await git(runGit, repoRoot, ["diff", ...DIFF_FLAGS, "--name-only", "-z", mbB, headSha]));
-    const baseDeltaPaths = nulLines(await git(runGit, repoRoot, ["diff", ...DIFF_FLAGS, "--name-only", "-z", mbA, mbB]));
+    const diffA = await git(runGit, repoRoot, [...GIT_ISOLATION, "diff", ...DIFF_FLAGS, mbA, prevHead]);
+    const diffB = await git(runGit, repoRoot, [...GIT_ISOLATION, "diff", ...DIFF_FLAGS, mbB, headSha]);
+    const prDiffPaths = nulLines(await git(runGit, repoRoot, [...GIT_ISOLATION, "diff", ...DIFF_FLAGS, "--name-only", "-z", mbB, headSha]));
+    const baseDeltaPaths = nulLines(await git(runGit, repoRoot, [...GIT_ISOLATION, "diff", ...DIFF_FLAGS, "--name-only", "-z", mbA, mbB]));
     // A merge commit's combined diff (--cc) is non-empty only when the merge hand-resolved something.
     // Check every merge commit in prevHead..headSha.
     let conflictResolutionHunks = false;

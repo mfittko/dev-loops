@@ -15,9 +15,11 @@ import { isDevLoopConfigSourcePath } from "../analysis/diff-analyzer.mjs";
 
 export const BASE_MERGE_CARRY_DECISIONS = Object.freeze(["carry_verdict", "partial_carry", "full_regate", "fallback_full"]);
 
-// Paths whose change alters how a gate runs: gate contracts, gate scripts and
-// core loop code, the installed dev-loops version (manifests and lockfiles), CI.
-const GATE_TOOLING_RE = /^(skills\/|scripts\/|agents\/|cli\/|lib\/|schemas\/|\.claude\/|\.pi\/|packages\/core\/src\/|\.github\/|package\.json$|package-lock\.json$|yarn\.lock$|pnpm-lock\.yaml$|bun\.lockb?$|packages\/[^/]+\/package\.json$)/;
+// Paths whose change alters how a gate runs: .devloops config (isDevLoopConfigSourcePath),
+// gate contracts, scripts, agents and agent mirrors, CLI, schemas, harness extension and
+// command prompts, core source, CI workflows, and the installed dev-loops version
+// (manifests and lockfiles). Broad on purpose: a miss fails open, a hit only re-gates.
+const GATE_TOOLING_RE = /^(skills\/|scripts\/|agents\/|cli\/|lib\/|schemas\/|extension\/|commands\/|AGENTS\.md$|bunfig\.toml$|\.claude\/|\.pi\/|packages\/core\/src\/|\.github\/|package\.json$|package-lock\.json$|yarn\.lock$|pnpm-lock\.yaml$|bun\.lockb?$|packages\/[^/]+\/package\.json$)/;
 
 export function isGateToolingPath(filePath) {
   if (typeof filePath !== "string") return false;
@@ -76,8 +78,11 @@ export function classifyBaseMergeCarry(input = {}) {
 }
 
 /**
- * Tamper-evidence check for merge-pr: shape, then the decision and every derived
- * field recomputed from the recorded facts. Optional expectedSourceHead and
+ * Consistency check for merge-pr: shape, then the decision and every derived
+ * field recomputed from the recorded facts. It rejects an internally inconsistent
+ * record only. It never re-derives patch ids or paths from git, so a consumer must
+ * re-run computeBaseMergeCarry for the bound heads and compare before trusting the facts.
+ * Optional expectedSourceHead and
  * expectedNewHead bind the record to the heads the caller is merging.
  * Returns { ok, reason }.
  */
@@ -93,8 +98,8 @@ export function validateBaseMergeCarryEvidence(evidence, { expectedSourceHead, e
   if (evidence.decision === "partial_carry" && evidence.patchIdBefore !== evidence.patchIdAfter) return { ok: false, reason: "partial_carry with differing patch ids" };
   const re = classifyBaseMergeCarry(evidence);
   if (re.decision !== evidence.decision) return { ok: false, reason: `decision recomputes to ${re.decision}` };
-  for (const k of ["pathIntersection", "gateToolingPaths"]) {
-    if (JSON.stringify(re[k]) !== JSON.stringify(evidence[k])) return { ok: false, reason: `${k} does not match recorded paths` };
+  for (const k of ["pathIntersection", "gateToolingPaths", "reason"]) {
+    if (JSON.stringify(re[k]) !== JSON.stringify(evidence[k])) return { ok: false, reason: `${k} does not match recomputed value` };
   }
   return { ok: true, reason: "" };
 }

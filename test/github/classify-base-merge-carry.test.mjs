@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { classifyBaseMergeCarry, validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-verdict-carry";
-import { computeBaseMergeCarry } from "../../scripts/github/classify-base-merge-carry.mjs";
+import { buildBaseMergeCarryPath, computeBaseMergeCarry, main } from "../../scripts/github/classify-base-merge-carry.mjs";
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
@@ -31,6 +31,7 @@ test("validator: accepts genuine evidence and rejects tampering", () => {
   assert.equal(validateBaseMergeCarryEvidence({ ...ev, pathIntersection: ["src/x.mjs"] }).ok, false);
   assert.equal(validateBaseMergeCarryEvidence({ ...ev, decision: "bogus" }).ok, false);
   const { reason, ...rest } = ev;
+  assert.equal(validateBaseMergeCarryEvidence({ ...ev, reason: "edited" }).ok, false);
   assert.equal(validateBaseMergeCarryEvidence(rest).ok, false);
   assert.equal(validateBaseMergeCarryEvidence(null).ok, false);
 });
@@ -61,7 +62,7 @@ function advance(s, file) {
 
 test("git: unrelated base move carries", async () => {
   const ev = await advance(setup(), "docs/other.md");
-  assert.equal(ev.decision, "carry_verdict");
+  assert.equal(ev.decision, "carry_verdict", ev.reason);
   assert.equal(ev.patchIdBefore, ev.patchIdAfter);
 });
 
@@ -116,7 +117,7 @@ test("git: non-ancestor prev head falls back to full", async () => {
 });
 
 test("gate tooling covers agent mirrors and lockfiles", () => {
-  for (const p of [".claude/skills/x.md", "package-lock.json", "packages/core/src/foo/bar.mjs", "schemas/a.json"]) {
+  for (const p of [".claude/skills/x.md", "package-lock.json", "packages/core/src/foo/bar.mjs", "schemas/a.json", "extension/readonly-role-gate.ts", "commands/loop-review.command.md", "AGENTS.md", "bunfig.toml"]) {
     assert.equal(classifyBaseMergeCarry({ ...ok, baseDeltaPaths: [p] }).decision, "full_regate", p);
   }
 });
@@ -131,4 +132,52 @@ test("validator: rejects forged records and head mismatch", () => {
   assert.equal(validateBaseMergeCarryEvidence(ev, { expectedNewHead: A }).ok, false);
   assert.equal(validateBaseMergeCarryEvidence(ev, { expectedSourceHead: B }).ok, false);
   assert.equal(validateBaseMergeCarryEvidence({ ...partial, patchIdAfter: "p2" }).ok, false);
+});
+
+test("gate tooling matcher rejects look-alike non-tooling paths", () => {
+  for (const p of ["src/app.js", "docs/guide.md", "test/foo.test.mjs", "extension.md"]) {
+    assert.equal(classifyBaseMergeCarry({ ...ok, baseDeltaPaths: [p] }).decision, "carry_verdict", p);
+  }
+});
+
+test("git: hand-resolved conflict merge forces full re-gate", async () => {
+  const s = setup();
+  s.put("base.txt", `PR\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits line0");
+  const prev = s.head();
+  s.git("checkout", "-q", "main"); s.put("base.txt", `MAIN\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "main edits line0");
+  s.git("checkout", "-q", "pr");
+  try { s.git("merge", "--no-edit", "main"); } catch { /* conflict expected */ }
+  s.put("base.txt", `PR\nMAIN\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "resolve");
+  const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
+  assert.equal(ev.conflictResolutionHunks, true);
+  assert.equal(ev.decision, "full_regate");
+});
+
+test("main: writes the keyed evidence artifact and refuses a short prev-head", async () => {
+  const s = setup();
+  const prev = s.head();
+  s.git("checkout", "-q", "main"); s.put("docs/other.md", "changed\n"); s.git("add", "-A"); s.git("commit", "-qm", "main move");
+  s.git("checkout", "-q", "pr"); s.git("merge", "-q", "--no-edit", "main");
+  const head = s.head();
+  const tmpRoot = path.join(s.dir, "out");
+  const args = ["--repo", "o/r", "--pr", "1", "--gate", "draft_gate", "--prev-head", prev, "--head-sha", head, "--base-ref", "main", "--tmp-root", tmpRoot];
+  const saved = process.exitCode;
+  const written = [];
+  const realWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (c) => { written.push(String(c)); return true; };
+  try {
+    await main(args, { repoRoot: s.dir });
+  } finally { process.stdout.write = realWrite; }
+  assert.equal(process.exitCode ?? 0, 0);
+  const out = JSON.parse(written.join(""));
+  assert.equal(out.decision, "carry_verdict");
+  assert.equal(out.path, path.resolve(s.dir, buildBaseMergeCarryPath({ repo: "o/r", pr: "1", gate: "draft_gate", headSha: head, tmpRoot })));
+  const errs = [];
+  const realErr = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (c) => { errs.push(String(c)); return true; };
+  try {
+    await main(args.map((a) => (a === prev ? prev.slice(0, 7) : a)), { repoRoot: s.dir });
+  } finally { process.stderr.write = realErr; }
+  assert.equal(process.exitCode, 1);
+  process.exitCode = saved;
 });
