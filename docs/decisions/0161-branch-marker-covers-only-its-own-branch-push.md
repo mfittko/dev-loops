@@ -11,7 +11,7 @@ Amends [0143](./0143-gate-fix-push-authority.md): it decided that a fix-sequence
 ## Decision
 
 - A fix-sequence marker that names a branch covers a push only when the push target is that branch (`remoteRef === refs/heads/<branch>`) or the push target is unknown. The ancestry test then applies as before.
-- A branchless or malformed marker stays fail-closed. An empty or whitespace-padded branch reads as branchless.
+- A branchless or malformed marker stays fail-closed. A branch value that fails the git ref-name check (for example empty, whitespace-padded or `HEAD`) reads as branchless.
 - `PRE-PUSH-DELTA-PUSH-AUTHORITY` in the [pre-push review contract](../../skills/docs/pre-pr-review-contract.md) records the rule.
 
 ## Consequences
