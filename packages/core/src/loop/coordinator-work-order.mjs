@@ -35,8 +35,16 @@ export function buildCoordinatorWorkOrder(input) {
   if (!valid.ok) throw new CoordinatorWorkOrderRefusal(`handoff envelope is invalid: ${valid.errors.map((e) => e.field).join(", ")}`);
   if (envelope.overrides !== undefined) throw new CoordinatorWorkOrderRefusal("handoff envelope overrides are not a coordinator source; re-resolve without overrides");
   if (!Number.isInteger(attempt) || attempt < 1) throw new CoordinatorWorkOrderRefusal("attempt must be a positive integer");
-  if (!Array.isArray(allowedFiles) || allowedFiles.some((p) => typeof p !== "string" || p === "" || p.startsWith("/") || p.split("/").includes(".."))) {
+  if (!Array.isArray(allowedFiles) || allowedFiles.some((p) => typeof p !== "string" || /[\u0000-\u001f\u007f]/.test(p))) {
+    throw new CoordinatorWorkOrderRefusal("allowedFiles must be repository-relative paths without control characters");
+  }
+  const ownGlob = changesFragmentGlob(envelope.target);
+  const normalized = allowedFiles.map((p) => p.split("/").filter((seg) => seg !== "" && seg !== ".").join("/"));
+  if (normalized.some((p, i) => p === "" || p.split("/").includes("..") || allowedFiles[i].startsWith("/"))) {
     throw new CoordinatorWorkOrderRefusal("allowedFiles must be repository-relative paths");
+  }
+  if (normalized.some((p) => p.startsWith("changes/") && p !== ownGlob)) {
+    throw new CoordinatorWorkOrderRefusal(`allowedFiles may name only the unit's own ${ownGlob}`);
   }
   // gateState.derivedAt is a collection timestamp, not semantic; every other envelope field is retained.
   const { gateState, ...handoff } = envelope;
@@ -48,7 +56,7 @@ export function buildCoordinatorWorkOrder(input) {
     target: envelope.target,
     attempt,
     handoff: { ...handoff, gateState: semanticGateState },
-    allowedFiles: [...new Set([...allowedFiles, changesFragmentGlob(envelope.target)])].sort(),
+    allowedFiles: [...new Set([...normalized, ownGlob])].sort(),
   };
   return { workOrder, workOrderDigest: workOrderDigest(workOrder) };
 }

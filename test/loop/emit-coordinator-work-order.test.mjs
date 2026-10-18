@@ -40,5 +40,7 @@ test("C1 emit-coordinator-work-order rejects brief, overrides and payload flags"
   for (const flag of ["--brief", "--overrides", "--payload", "--summary-file"]) {
     const result = await runNode(["--input", "x.json", flag, "text"]);
     assert.notEqual(result.code, 0, flag);
+    assert.equal(JSON.parse(result.stdout).ok, false, flag);
+    assert.match(JSON.parse(result.stdout).error, /Unknown option/, flag);
   }
 });

@@ -295,6 +295,7 @@ export const SUBCOMMAND_ROUTES = {
   loop: {
     startup:        "scripts/loop/resolve-dev-loop-startup.mjs",
     "build-envelope": "scripts/loop/build-handoff-envelope.mjs",
+    "coordinator-work-order": "scripts/loop/emit-coordinator-work-order.mjs",
     outer:          "scripts/loop/outer-loop.mjs",
     "watch-cycle":  "scripts/loop/run-watch-cycle.mjs",
     "claude-launch": "scripts/loop/claude-launch.mjs",
@@ -413,6 +414,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
   loop: {
     startup: "Resolve dev-loop startup bundle",
     "build-envelope": "Build handoff envelope from startup output",
+    "coordinator-work-order": "Emit coordinator work order from startup output",
     outer: "Run outer-loop detection",
     "watch-cycle": "Run Copilot wait cycle",
     "claude-launch": "Start Claude Code with .devloops extraTools delivered to developer/fixer/refiner",

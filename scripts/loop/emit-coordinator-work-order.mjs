@@ -17,19 +17,19 @@ ${JQ_OUTPUT_USAGE}
 Exit codes: 0 emitted, 1 refused or runtime failure.`;
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
-  const { values } = parseArgs({ args: argv, options: {
-    input: { type: "string" }, repo: { type: "string" }, "allowed-file": { type: "string", multiple: true },
-    attempt: { type: "string" }, help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS,
-  } });
-  if (values.help) {
-    stdout.write(`${USAGE}\n`);
-    return 0;
-  }
-  if (!values.input) {
-    stderr.write(`--input is required\n${USAGE}\n`);
-    return 1;
-  }
   try {
+    const { values } = parseArgs({ args: argv, options: {
+      input: { type: "string" }, repo: { type: "string" }, "allowed-file": { type: "string", multiple: true },
+      attempt: { type: "string" }, help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS,
+    } });
+    if (values.help) {
+      stdout.write(`${USAGE}\n`);
+      return 0;
+    }
+    if (!values.input) {
+      stderr.write(`--input is required\n${USAGE}\n`);
+      return 1;
+    }
     const envelope = await buildHandoffEnvelopeCli({ inputPath: values.input, repo: values.repo });
     const { workOrder, workOrderDigest } = buildCoordinatorWorkOrder({
       envelope, allowedFiles: values["allowed-file"] ?? [], ...(values.attempt ? { attempt: Number(values.attempt) } : {}),
@@ -37,6 +37,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     return emitResult({ ok: true, workOrder, workOrderDigest }, { jq: values.jq, silent: values.silent, stdout, stderr });
   } catch (err) {
     if (err instanceof CoordinatorWorkOrderRefusal) return emitResult({ ok: false, error: err.message }, { stdout, stderr });
+    stdout.write(`${JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) })}\n`);
     stderr.write(`${formatCliError(err)}\n`);
     return 1;
   }

@@ -85,3 +85,17 @@ test("C19 an absolute or escaping allowed file is refused", () => {
     assert.throws(() => buildCoordinatorWorkOrder({ envelope: issueEnvelope(), allowedFiles: [bad] }), CoordinatorWorkOrderRefusal, bad);
   }
 });
+
+test("C19 allowed files are normalized and control characters are refused", () => {
+  const { workOrder } = buildCoordinatorWorkOrder({ envelope: issueEnvelope(), allowedFiles: ["./src//a.mjs", "src/./a.mjs", "changes/2483-*.md"] });
+  assert.deepEqual(workOrder.allowedFiles, ["changes/2483-*.md", "src/a.mjs"]);
+  for (const bad of ["src/a\n.mjs", "src/a\u0000.mjs", "", "."]) {
+    assert.throws(() => buildCoordinatorWorkOrder({ envelope: issueEnvelope(), allowedFiles: [bad] }), CoordinatorWorkOrderRefusal, JSON.stringify(bad));
+  }
+});
+
+test("C19 a changes entry other than the unit's own fragment is refused", () => {
+  for (const bad of ["changes/9999-*.md", "changes/README.md", "./changes/2484-x.md", "changes/2483-a.md"]) {
+    assert.throws(() => buildCoordinatorWorkOrder({ envelope: issueEnvelope(), allowedFiles: [bad] }), CoordinatorWorkOrderRefusal, bad);
+  }
+});
