@@ -276,7 +276,7 @@ async function emitCompletionOnly({ repo, pr, headSha, tmpRoot, cwd, fetchPr, ex
     if (!sourceBytes || jsonContentDigest(JSON.parse(sourceBytes)) !== order.authority?.sourceDigest) throw new Refusal("--completion-only refused: the source differs from the plan's source authority");
     if (order.source === "act-list") {
       for (const root of new Set([canonicalRoot, path.join(resolveRepoRoot(cwd), "tmp")])) {
-        if (findRetirementAfter(root, order.gate, headSha, emittedAt(plan.executionIdentity))) throw new Refusal("--completion-only refused: the plan's source round was retired");
+        for (const head of new Set([headSha, order.authority?.reviewBaselineHead].filter(Boolean))) if (findRetirementAfter(root, order.gate, head, emittedAt(plan.executionIdentity))) throw new Refusal("--completion-only refused: the plan's source round was retired");
       }
     }
     assertCandidateAuthority({ cwd, branch: order.mutationAuthority.branch, head: headSha });

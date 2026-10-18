@@ -2143,10 +2143,12 @@ for (const defect of ["fakePlan", "foreignReceipt", "branchDrift", "threadBytes"
   });
 });
 
-test("completion-only refuses a plan whose source round was retired", async () => {
+for (const key of ["candidate", "reviewBaseline"]) test(`completion-only refuses a plan whose source round was retired under the ${key} head`, async () => {
   await withFixture(async (fixture) => {
     const { f, old, reenter } = await stuckFull(fixture);
-    const round = path.join(fixture.root, "tmp", "retired-gate-rounds", f.candidate, "r1");
+    const retiredHead = key === "candidate" ? f.candidate : old.workOrder.authority.reviewBaselineHead;
+    assert.ok(retiredHead);
+    const round = path.join(fixture.root, "tmp", "retired-gate-rounds", retiredHead, "r1");
     await mkdir(round, { recursive: true });
     await writeFile(path.join(round, "retirement.json"), JSON.stringify({ gate: old.workOrder.gate, retiredAt: new Date(Date.now() + 1000).toISOString() }));
     const active = await readFile(old.planPath);
