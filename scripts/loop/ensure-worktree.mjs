@@ -608,8 +608,9 @@ function installCommitMsgGuardForRoot(gitCommand, root) {
 // Fail-soft `bun install --frozen-lockfile` in a fresh worktree so it never
 // resolves packages from the main checkout's stale node_modules.
 function defaultInstallDeps(cwd) {
-  const r = spawnSync("bun", ["install", "--frozen-lockfile"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const r = spawnSync("bun", ["install", "--frozen-lockfile"], { cwd, timeout: 300000, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   if (r.error) return { ok: false, reason: r.error.message };
+  if (r.status === null && r.signal) return { ok: false, reason: `bun install terminated by ${r.signal}` };
   return r.status === 0 ? { ok: true } : { ok: false, exitCode: r.status, reason: (r.stderr ?? "").trim().split("\n").slice(-3).join(" | ") };
 }
 

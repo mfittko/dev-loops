@@ -60,7 +60,7 @@ local, remote }` report on both paths instead of picking a side. A
 unfetched remote branch can still fall through to `created-from-base`.
 
 It prints `{ ok, path, created|reused, base?, branchOrigin, diverged?,
-fetchDegraded?, provision: { actions, summary }, guard }`. `base` appears only on
+fetchDegraded?, provision: { actions, summary }, deps?, guard }`. `base` appears only on
 create; `provision` is the full `provisionWorktree()` result; `fetchDegraded: true`
 means at least one candidate remote's fetch failed, so branch resolution used the
 refs already present. Provisioning is fail-soft; a `git worktree add` failure is
