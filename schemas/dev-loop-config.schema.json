@@ -991,6 +991,20 @@
                 }
               },
               "additionalProperties": false
+            },
+            "planningBand": {
+              "default": {},
+              "description": "Planning-time size band (PLAN-SIZE-BAND): minLoc up to tiers.default.softLoc.",
+              "type": "object",
+              "properties": {
+                "minLoc": {
+                  "default": 150,
+                  "description": "Lower edge of the planning band (PLAN-SIZE-BAND): a slice forecast under this many logic LOC is a merge candidate; 0 turns the merge rule off. The upper edge is tiers.default.softLoc.",
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false,

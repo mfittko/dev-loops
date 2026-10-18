@@ -202,6 +202,8 @@ gates:
       default:
         softLoc: 400
         waiverLoc: 1500
+    planningBand:
+      minLoc: 150
   # The gate round's verdict review already carries every finding, so the
   # consolidated findings comment is opt-in duplication — keep it off.
   postFindingsComments: false

@@ -227,7 +227,7 @@ test("Step 1 states the zero-iteration grill_clean exit requires recorded proven
   const step1 = skill.split("## Step 1 — Load the target")[1]?.split("## Step 1b")[0] ?? "";
   assert.match(
     step1,
-    /zero-iteration `grill_clean` exit requires BOTH a shape-clean artifact AND recorded provenance/i,
+    /zero-iteration `grill_clean` exit requires a shape-clean artifact, recorded provenance[\s\S]*?AND no `size_forecast_\*` spec-lint finding/i,
     "Step 1 must state recorded provenance is required, not shape-clean alone",
   );
 });
@@ -308,8 +308,8 @@ test("Step 1 names the operator-authorized bypass exception to the grill_clean e
   );
   assert.match(
     step1,
-    /Without that explicit authorization, the exit is unconditional/,
-    "Step 1 must state the exit is unconditional absent explicit operator authorization",
+    /Without that explicit authorization, the exit is taken whenever the conditions above hold/,
+    "Step 1 must state the exit is taken whenever the conditions hold absent explicit operator authorization",
   );
 });
 
