@@ -2678,6 +2678,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let enrichedActItems = [];
   // Every flat --findings-json finding (all dispositions), for the round-cap evaluation.
   let structuredFlatFindings = [];
+  const flatOnlyJudgedLedger = [];
   // Fan-out angle-coverage enforcement for a ledger-only round (no
   // --findings-json): runs BEFORE the tick below, so a ledger this post refuses
   // never leaves ticked boxes behind. The --findings-json coverage refusal runs
@@ -2798,6 +2799,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       const judged = flatFindings.find((f) => f.judgeDisposition === "act" && same(f)) ?? flatFindings.find(same);
       if (judged) {
         lf.judgeDisposition = judged.judgeDisposition;
+        flatOnlyJudgedLedger.push(lf);
         if (lf.followUpIssueNumber == null && judged.followUpIssueNumber) lf.followUpIssueNumber = judged.followUpIssueNumber;
       }
     }
@@ -2838,8 +2840,12 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const ledgerCapFindings = preloadedFindingsLedger?.findings ?? [];
   const flatCapFindings = structuredFlatFindings.filter((a) => !ledgerCapFindings.some((l) => capSummary(l) === capSummary(a)));
   const capFindings = [...ledgerCapFindings, ...flatCapFindings];
-  // Stamp the merged set: a ledger finding judged only through --findings-json (disposition copied above) closes with a record too.
   stampCapClosed(capFindings, capState);
+  // Fail closed: the comment and detect-checkpoint-evidence.mjs (ledger only) must show the same capClosed items (AC 8).
+  const unpersisted = flatOnlyJudgedLedger.filter((f) => f.capClosed);
+  if (unpersisted.length > 0) {
+    throw new Error(`Past the gates.draft.maxReviewRounds cap, ${unpersisted.length} ledger finding(s) judged only through --findings-json would be cap-closed (${unpersisted.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}). The judge disposition must be persisted in the ledger (--findings-ledger) past the cap; re-write the ledger with the disposition, then post again.`);
+  }
   const capBlockers = evaluateRoundCap(capFindings, capState).blockers;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.

@@ -12108,14 +12108,22 @@ test("round cap: below the cap and with maxReviewRounds 0 the verdict is unchang
   });
 });
 
-test("round cap: an unjudged ledger low judged defer only through --findings-json posts clean and lists it as cap-closed", async () => {
+test("round cap: past the cap a ledger low judged defer only through --findings-json is refused until the ledger persists the disposition", async () => {
   const unjudged = { severity: "low", angle: "correctness", summary: "low defer item" };
-  await withCapRound({ findings: [unjudged], overallVerdict: "clean" }, async ({ post, postedBody, repoRoot }) => {
+  await withCapRound({ findings: [unjudged], overallVerdict: "clean" }, async ({ post, repoRoot }) => {
+    const findingsJson = await writeCapFindingsJson(repoRoot, [capFinding("low", "defer")]);
+    await assert.rejects(() => post({ findingsJson }), /judge disposition must be persisted in the ledger/);
+  });
+  // A ledger finding with its own disposition still posts clean as cap-closed.
+  await withCapRound({ findings: [capFinding("low", "defer")], overallVerdict: "clean" }, async ({ post, postedBody, repoRoot }) => {
     const findingsJson = await writeCapFindingsJson(repoRoot, [capFinding("low", "defer")]);
     await post({ findingsJson });
-    const body = postedBody();
-    assert.match(body, /\*\*Verdict:\*\* clean/);
-    assert.match(body, /\*\*Cap-closed items \(1\)\*\*/);
-    assert.match(body, /- low defer \(round 4 of cap 4\): `low defer item`/);
+    assert.match(postedBody(), /\*\*Cap-closed items \(1\)\*\*/);
+  });
+  // Below the cap the findings-json-only disposition path is unchanged.
+  await withCapRound({ findings: [unjudged], overallVerdict: "clean", priorRounds: 1 }, async ({ post, postedBody, repoRoot }) => {
+    const findingsJson = await writeCapFindingsJson(repoRoot, [capFinding("low", "defer")]);
+    await post({ findingsJson });
+    assert.match(postedBody(), /\*\*Verdict:\*\* clean/);
   });
 });
