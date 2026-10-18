@@ -17,7 +17,7 @@ import { parseArgs } from "node:util";
 import path from "node:path";
 
 import {
-  findLatestPiSession,
+  findLatestSession as findLatestAuditSession,
   auditPiSession,
   formatMarkdownSummary,
 } from "../lib/audit-pi-session.mjs";
@@ -55,7 +55,7 @@ export async function runAuditCli(
   {
     stdout = process.stdout,
     stderr = process.stderr,
-    findLatestSession = findLatestPiSession,
+    findLatestSession = findLatestAuditSession,
     cwd = process.cwd(),
   } = {},
 ) {

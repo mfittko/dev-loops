@@ -6,6 +6,7 @@ import os from "node:os";
 
 import {
   findLatestPiSession,
+  findLatestSession,
   collectTranscriptFiles,
   parseTranscriptFile,
   deriveSessionRole,
@@ -344,9 +345,9 @@ describe("audit-pi-session unit & integration", () => {
     assert.equal(s.snowball.finalPromptTokens, 30000);
     assert.equal(s.snowball.promptGrowthFactor, 30);
 
-    // Cache hit ratio = 35,000 / (6,000 + 35,000) = 35000 / 41000 = ~0.8537
-    assert.ok(Math.abs(s.snowball.cacheHitRatio - 0.8537) < 0.001);
-    assert.ok(Math.abs(audit.summary.cacheHitRatio - 0.8537) < 0.001);
+    // Cache hit ratio = 35,000 / (6,000 + 35,000 + 25 cacheWrite) = ~0.8531
+    assert.ok(Math.abs(s.snowball.cacheHitRatio - 0.8531) < 0.001);
+    assert.ok(Math.abs(audit.summary.cacheHitRatio - 0.8531) < 0.001);
     assert.equal(audit.summary.estimatedCost, 0.06);
 
     const md = formatMarkdownSummary(audit);
@@ -356,7 +357,7 @@ describe("audit-pi-session unit & integration", () => {
     assert.ok(md.includes("Severe context growth"));
     assert.match(md, /Transcript Files Examined\*\*: 1/);
     assert.match(md, /\| Role \| Turns \| Models \| Total Tokens \| Cache Write \|/);
-    assert.match(md, /\| 41,325 \| 25 \| 85\.4% \|/);
+    assert.match(md, /\| 41,325 \| 25 \| 85\.3% \|/);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -1088,7 +1089,7 @@ describe("audit-pi-session unit & integration", () => {
     const tmpDir = createTempDir();
 
     // Same prompt progression as the Pi snowball test: 1,000 -> 10,000 -> 30,000 prompt
-    // tokens (30x growth), 35,000 cached read of 41,000 total prompt tokens (~85.4% hit).
+    // tokens (30x growth), 35,000 cached read of 41,500 total prompt tokens incl. cache writes (~84.3% hit).
     // The middle turn also carries a nonzero cache_creation_input_tokens so the four-field
     // totalTokens sum and cacheWriteTokens are exercised without disturbing the
     // first/last-turn initial/final prompt (and growth) numbers above.
@@ -1114,10 +1115,10 @@ describe("audit-pi-session unit & integration", () => {
     assert.equal(s.snowball.initialPromptTokens, 1000);
     assert.equal(s.snowball.finalPromptTokens, 30000);
     assert.equal(s.snowball.promptGrowthFactor, 30);
-    assert.ok(Math.abs(s.snowball.cacheHitRatio - 0.8537) < 0.001);
+    assert.ok(Math.abs(s.snowball.cacheHitRatio - 0.8434) < 0.001);
     assert.equal(audit.summary.totalTurns, 3);
     assert.equal(audit.summary.totalTokens, 41800);
-    assert.ok(Math.abs(audit.summary.cacheHitRatio - 0.8537) < 0.001);
+    assert.ok(Math.abs(audit.summary.cacheHitRatio - 0.8434) < 0.001);
     // Claude transcripts carry no cost (list-price estimation is out of scope), so the
     // summary reports it as unavailable rather than a misleading $0.0000.
     assert.equal(audit.summary.estimatedCost, null);
@@ -1817,5 +1818,115 @@ describe("audit-pi-session tool calls and MCP usage", () => {
       mcpUsageByRole: { pi: { calls: 0, byTool: {}, denied: null, bySessionCwd: { main: 0, worktree: 0, other: 0 } } },
     });
     assert.match(md, /\| \*\*pi\*\* \| 0 \| n\/a \| 0 \| 0 \| 0 \|/);
+  });
+});
+
+describe("audit-pi-session #2436 measurement fixes", () => {
+  const usage = (output, extra = {}) => ({
+    input_tokens: 10,
+    cache_creation_input_tokens: 100,
+    cache_read_input_tokens: 890,
+    output_tokens: output,
+    ...extra,
+  });
+
+  it("findLatestSession selects a newer Claude transcript over an older Pi session, and Pi when only Pi exists", () => {
+    const tmpDir = createTempDir();
+    const piBase = path.join(tmpDir, "sessions");
+    const claudeBase = path.join(tmpDir, "projects");
+    const piDir = path.join(piBase, "--Users-tester-dev-loops--", "pi-session");
+    const claudeFile = path.join(claudeBase, "-Users-tester-dev-loops-tmp-worktrees-feature", "abc.jsonl");
+    fs.mkdirSync(piDir, { recursive: true });
+    fs.mkdirSync(path.dirname(claudeFile), { recursive: true });
+    fs.writeFileSync(path.join(piDir, "session.jsonl"), "pi");
+    fs.writeFileSync(claudeFile, "claude");
+    fs.utimesSync(path.join(piDir, "session.jsonl"), new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
+    fs.utimesSync(claudeFile, new Date("2026-01-02T00:00:00Z"), new Date("2026-01-02T00:00:00Z"));
+
+    assert.equal(findLatestSession(piBase, "/Users/tester/dev-loops", claudeBase), claudeFile);
+    assert.equal(findLatestSession(piBase, "/Users/tester/dev-loops", path.join(tmpDir, "absent")), piDir);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reports cache writes and includes cacheWrite in the cache-hit denominator", async () => {
+    const tmpDir = createTempDir();
+    const file = path.join(tmpDir, "agent-cache.jsonl");
+    writeClaudeTranscript(file, [{ usage: usage(5) }]);
+
+    const result = await auditPiSession(file);
+    assert.equal(result.summary.cacheWriteTokens, 100);
+    assert.equal(result.summary.cacheHitRatio, 0.89);
+    const md = formatMarkdownSummary(result);
+    assert.match(md, /Cache Write\*\*: 100/);
+    assert.match(md, /Uncached Input\*\*: 10 \(.*input \+ cache read \+ cache write/);
+    assert.match(md, /Cache Hit Ratio\*\*: 89\.0% \(cache read \/ \(input \+ cache read \+ cache write\)\)/);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("runs the documented --jq growth-factor example with a null factor and exits 0", async () => {
+    const tmpDir = createTempDir();
+    writeClaudeTranscript(path.join(tmpDir, "agent-null.jsonl"), [
+      { usage: { input_tokens: 0, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    ]);
+    writeClaudeTranscript(path.join(tmpDir, "agent-grow.jsonl"), [
+      { usage: { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+      { usage: { input_tokens: 200, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    ]);
+    const stdout = captureStream();
+    const stderr = captureStream();
+    const code = await runAuditCli(
+      [tmpDir, "--jq", ".sessions[] | select(.snowball.promptGrowthFactor > 10)"],
+      { stdout, stderr },
+    );
+    assert.equal(code, 0, stderr.value);
+    const rows = stdout.value.trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].snowball.promptGrowthFactor, 20);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("counts Claude output once per message.id from the final usage, in either order", async () => {
+    const tmpDir = createTempDir();
+    const snapshots = [{ id: "m1", usage: usage(1) }, { id: "m1", usage: usage(2) }];
+    const final = { id: "m1", stop_reason: "end_turn", usage: usage(40) };
+    for (const [name, order] of [["final-last", [...snapshots, final]], ["final-first", [final, ...snapshots]]]) {
+      const file = path.join(tmpDir, `${name}.jsonl`);
+      fs.writeFileSync(file, order.map((r) => JSON.stringify({
+        type: "assistant",
+        message: { id: r.id, role: "assistant", model: "claude-opus-5-5", stop_reason: r.stop_reason ?? null, content: [{ type: "text", text: "x".repeat(4000) }], usage: r.usage },
+      })).join("\n") + "\n");
+      const parsed = await parseTranscriptFile(file);
+      assert.equal(parsed.turns.length, 1, name);
+      assert.equal(parsed.turns[0].usage.output, 40, name);
+      assert.equal(parsed.turns[0].outputEstimated, undefined, name);
+    }
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("estimates snapshot-only Claude output from content length and counts estimated messages", async () => {
+    const tmpDir = createTempDir();
+    const file = path.join(tmpDir, "agent-snap.jsonl");
+    const record = (content, output) => JSON.stringify({
+      type: "assistant",
+      message: { id: "m1", role: "assistant", model: "claude-opus-5-5", stop_reason: null, content, usage: usage(output) },
+    });
+    fs.writeFileSync(file, [
+      record([{ type: "thinking", thinking: "t".repeat(40) }], 1),
+      record([{ type: "text", text: "a".repeat(20) }], 1),
+      record([{ type: "tool_use", id: "tu1", name: "Bash", input: { command: "ls" } }], 2),
+    ].join("\n") + "\n");
+
+    const result = await auditPiSession(file);
+    const toolChars = JSON.stringify({ command: "ls" }).length;
+    const expected = Math.ceil((40 + 20 + toolChars) / 4);
+    assert.equal(result.summary.outputTokens, expected);
+    assert.equal(result.summary.estimatedOutputMessages, 1);
+    assert.match(formatMarkdownSummary(result), /Estimated Output Messages\*\*: 1/);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });
