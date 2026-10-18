@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { provisionAndBoot } from "@dev-loops/core/loop/ui-review-provision";
 import { loadDevLoopConfig, resolveUiReviewRunRecipe, DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN } from "@dev-loops/core/config";
-import { parseUiReviewProvisionCliArgs, ensureOwnNodeModules, inspectMigrations, assertNotPrimary, skipInstallDeps } from "../../scripts/loop/ui-review-provision.mjs";
+import { parseUiReviewProvisionCliArgs, ensureOwnNodeModules, inspectMigrations, assertNotPrimary, skipInstallDeps, ensureWorktreeNoInstall } from "../../scripts/loop/ui-review-provision.mjs";
 import { parseMainWorktreePath } from "@dev-loops/core/loop/worktree-guard";
 import { execFileSync } from "node:child_process";
 
@@ -526,4 +526,14 @@ test("ensureOwnNodeModules: leaves a real node_modules alone", () => {
 
 test("skipInstallDeps reports a skipped install in ensure-worktree's deps shape", () => {
   assert.deepEqual(skipInstallDeps(), { ran: false, ok: true, reason: "ui-review installs the lock delta itself" });
+});
+
+test("ensureWorktreeNoInstall passes installDeps: skipInstallDeps to ensureWorktree", async () => {
+  let seen;
+  const result = await ensureWorktreeNoInstall({ pr: 1 }, async (args, opts) => {
+    seen = { args, opts };
+    return { path: "/w", created: true, reused: false, extra: 1 };
+  });
+  assert.equal(seen.opts.installDeps, skipInstallDeps);
+  assert.deepEqual(result, { path: "/w", created: true, reused: false });
 });

@@ -310,6 +310,9 @@ export async function pinPrHead({ worktreePath, pr }) {
 // ui-review installs only the lock delta itself, so ensure-worktree must not run a full install.
 export const skipInstallDeps = () => ({ ran: false, ok: true, reason: "ui-review installs the lock delta itself" });
 
+export const ensureWorktreeNoInstall = (a, ensure = ensureWorktree) =>
+  ensure(a, { installDeps: skipInstallDeps }).then((r) => ({ path: r.path, created: r.created, reused: r.reused }));
+
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
   const options = parseUiReviewProvisionCliArgs(argv);
   if (options.help) {
@@ -324,7 +327,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       ackDestructiveMigration: options.ackDestructiveMigration,
     },
     {
-      ensureWorktree: (a) => ensureWorktree(a, { installDeps: skipInstallDeps }).then((r) => ({ path: r.path, created: r.created, reused: r.reused })),
+      ensureWorktree: ensureWorktreeNoInstall,
       assertNotPrimary,
       pinPrHead,
       detectDepDelta,

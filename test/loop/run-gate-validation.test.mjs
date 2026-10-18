@@ -461,6 +461,30 @@ test("buildValidationArtifact: Bun lock ignores an ancestor install and reports 
   }
 });
 
+test("buildValidationArtifact: Bun lock with an own node_modules never resolves a package from an ancestor install", async () => {
+  const outerRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-bun-own-modules-"));
+  try {
+    const repoRoot = path.join(outerRoot, "worktree");
+    await mkdir(path.join(repoRoot, "node_modules", "@dev-loops", "core"), { recursive: true });
+    await mkdir(path.join(outerRoot, "node_modules", "a"), { recursive: true });
+    await writeFile(path.join(repoRoot, "bun.lock"), JSON.stringify({
+      lockfileVersion: 2,
+      workspaces: { "": { name: "fixture", dependencies: { a: "1.0.0" } } },
+      packages: { a: ["a@1.0.0", "", {}] },
+    }), "utf8");
+    await writeFile(path.join(outerRoot, "node_modules", "a", "package.json"), JSON.stringify({ name: "a", version: "1.0.0" }), "utf8");
+    const artifact = await buildValidationArtifact(
+      { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" },
+      { repoRoot },
+    );
+    assert.equal(artifact.depState.status, "stale");
+    assert.match(artifact.depState.detail, /missing/);
+    assert.match(artifact.depState.detail, /\ba\b/);
+  } finally {
+    await rm(outerRoot, { recursive: true, force: true });
+  }
+});
+
 test("buildValidationArtifact: stamps depState synced when installed deps match the lockfile (npm-shaped)", async () => {
   const { repoRoot } = await makeFixtureRepo();
   try {
