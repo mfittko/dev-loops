@@ -375,25 +375,6 @@ function isInstallableOnHost(pkg) {
 }
 
 /**
- * Walk up from `startDir` to the nearest ancestor (inclusive) with a
- * `node_modules/.package-lock.json`, returning its raw contents and the
- * directory it was found in. Returns `{ raw: null, root: null }` when no
- * ancestor up to the filesystem root has one.
- * @param {string} startDir
- * @returns {Promise<{raw: string | null, root: string | null}>}
- */
-async function findAncestorInstalledLock(startDir) {
-  let dir = path.resolve(startDir);
-  for (;;) {
-    const raw = await readFile(path.join(dir, "node_modules", ".package-lock.json"), "utf8").catch(() => null);
-    if (raw !== null) return { raw, root: dir };
-    const parent = path.dirname(dir);
-    if (parent === dir) return { raw: null, root: null };
-    dir = parent;
-  }
-}
-
-/**
  * Compare the authoritative dependency lock against the installed tree.
  * Bun lock entries are checked against installed package manifests;
  * npm's package-lock is checked against its installed hidden lock snapshot.
@@ -414,7 +395,7 @@ async function findAncestorInstalledLock(startDir) {
  *
  * The bun.lock path reports the repoRoot's OWN install only: a linked worktree
  * must not borrow the main checkout's (possibly stale) `node_modules`. The
- * retained package-lock fallback still walks to an ancestor install.
+ * The package-lock path likewise reads only repoRoot's own `node_modules/.package-lock.json`.
  *
  * @param {string} repoRoot - Absolute path to the repo (main checkout or worktree).
  * @returns {Promise<{status: string, detail: string}>}
@@ -502,11 +483,10 @@ async function resolveDepState(repoRoot) {
   if (lockRaw === null) {
     return { status: "n-a", detail: "no package-lock.json at repo root" };
   }
-  const { raw: installedRaw, root: depRoot } = await findAncestorInstalledLock(repoRoot);
+  const installedRaw = await readFile(path.join(repoRoot, "node_modules", ".package-lock.json"), "utf8").catch(() => null);
   if (installedRaw === null) {
-    return { status: "stale", detail: "node_modules/.package-lock.json absent in repoRoot or any ancestor — installed deps not materialized (npm ci/install not run)" };
+    return { status: "stale", detail: "node_modules/.package-lock.json absent in this worktree (ancestor installs are not used) — installed deps not materialized (npm ci/install not run)" };
   }
-  const depRootNote = depRoot === repoRoot ? "" : ` (resolved from ancestor ${depRoot})`;
   let lock;
   let installed;
   try {
@@ -517,7 +497,7 @@ async function resolveDepState(repoRoot) {
   try {
     installed = JSON.parse(installedRaw);
   } catch {
-    return { status: "stale", detail: `node_modules/.package-lock.json unparseable${depRootNote} — cannot verify installed deps` };
+    return { status: "stale", detail: `node_modules/.package-lock.json unparseable — cannot verify installed deps` };
   }
   const expected = lock.packages ?? {};
   const have = installed.packages ?? {};
@@ -536,12 +516,12 @@ async function resolveDepState(repoRoot) {
   }
   if (missing.length === 0 && mismatched.length === 0) {
     const installedCount = Object.keys(have).filter((k) => k !== "").length;
-    return { status: "synced", detail: `installed deps match package-lock.json (${installedCount} packages)${depRootNote}` };
+    return { status: "synced", detail: `installed deps match package-lock.json (${installedCount} packages)` };
   }
   const parts = [];
   if (missing.length) parts.push(`${missing.length} missing package(s)`);
   if (mismatched.length) parts.push(`${mismatched.length} version-mismatched package(s)`);
-  return { status: "stale", detail: `installed deps diverge from package-lock.json${depRootNote}: ${parts.join(", ")}` };
+  return { status: "stale", detail: `installed deps diverge from package-lock.json: ${parts.join(", ")}` };
 }
 
 /**

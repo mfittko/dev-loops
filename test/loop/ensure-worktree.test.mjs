@@ -1439,10 +1439,44 @@ test("ensure: reuse installs only without own node_modules", async () => {
     assert.equal(reused.reused, true);
     assert.equal(reused.deps.ran, true);
     assert.equal(calls, 2);
-    mkdirSync(path.join(first.path, "node_modules"));
+    mkdirSync(path.join(first.path, "node_modules", "pkg"), { recursive: true });
     const again = await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps });
     assert.equal(again.deps, undefined);
     assert.equal(calls, 2);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ensure: reuse treats node_modules as owned only with an entry beyond the @dev-loops self-link (every shape)", async () => {
+  const repo = makeRepo();
+  try {
+    mkdirSync(path.join(repo.root, "packages", "core"), { recursive: true });
+    writeFileSync(path.join(repo.root, "packages", "core", "package.json"), "{}");
+    commitBunLock(repo);
+    const first = await ensureWorktree({ repoRoot: repo.root, issue: 27 }, { installDeps: () => ({ ok: true }) });
+    const nm = path.join(first.path, "node_modules");
+    let calls = 0;
+    const installDeps = () => { calls += 1; return { ok: true }; };
+    const reuse = () => ensureWorktree({ repoRoot: repo.root, issue: 27 }, { installDeps });
+    // Rejected forms: each must install and report deps.
+    for (const setup of [
+      () => rmSync(nm, { recursive: true, force: true }), // absent
+      () => { rmSync(nm, { recursive: true, force: true }); mkdirSync(path.join(nm, "@dev-loops", "core"), { recursive: true }); }, // self-link only
+      () => { rmSync(nm, { recursive: true, force: true }); mkdirSync(nm); }, // empty directory
+    ]) {
+      setup();
+      const before = calls;
+      const res = await reuse();
+      assert.equal(res.deps.ran, true);
+      assert.equal(calls, before + 1);
+    }
+    // Accepted form: a real package entry means owned, so no install and no deps field.
+    mkdirSync(path.join(nm, "pkg"), { recursive: true });
+    const before = calls;
+    const owned = await reuse();
+    assert.equal(owned.deps, undefined);
+    assert.equal(calls, before);
   } finally {
     repo.cleanup();
   }

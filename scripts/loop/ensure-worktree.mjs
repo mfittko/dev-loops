@@ -24,9 +24,9 @@
  *   branch — a restricted refspec is not widened by fetch.
  * - Provisioning is invoked via the imported provisionWorktree core (shared
  *   with provision-worktree.mjs's CLI) — not shelled out. It fails soft: a
- *   provision warning never aborts the worktree. On REUSE it installs only when the
- *   worktree has no own node_modules directory.
- * - On create, and on reuse when node_modules is absent, `bun install --frozen-lockfile` runs inside the new worktree
+ *   provision warning never aborts the worktree.
+ * - On create, and on reuse when node_modules holds no install beyond the
+ *   @dev-loops self-link, `bun install --frozen-lockfile` runs inside the worktree
  *   first (WORKTREE-DEPS-ISOLATED), then provisioning. Fail-soft: the result's
  *   `deps` field reports it; a failed or skipped install never fails the worktree.
  *
@@ -37,7 +37,7 @@
  * A git create failure is a hard error (exit 1); provisioning is fail-soft.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
@@ -98,7 +98,7 @@ Output (stdout, JSON):
                      // remote, ...) — branch resolution above still ran,
                      // just against whatever was already fetched
     "deps"?: { "ok": bool, "ran": bool, "reason"?, "exitCode"? },
-                     // create, and reuse without own node_modules: the fail-soft bun install
+                     // create, and reuse without an own install: the fail-soft bun install
                      // --frozen-lockfile result (ran:false when no bun.lock)
     "provision": { "actions": [...], "summary": {...} },
     "guard": { "ok": bool, "installed": [...], "refreshed": [...], "skipped": [...],
@@ -725,7 +725,10 @@ export async function ensureWorktree(
     // detached and local-branch reuse outcomes below.
     const nm = path.join(target, "node_modules");
     let owned = false;
-    try { owned = lstatSync(nm).isDirectory(); } catch { /* absent */ }
+    try {
+      // provision's @dev-loops/core self-link alone is not an install
+      owned = lstatSync(nm).isDirectory() && readdirSync(nm).some((e) => e !== "@dev-loops");
+    } catch { /* absent */ }
     if (!owned) ensureOwnNodeModules(target); // unlink a symlink into the primary; never its real dir
     const deps = owned ? undefined : ensureDeps(target, installDeps);
     const summary = await provision({ worktreePath: target, repoRoot: root });
