@@ -29,6 +29,7 @@ const CONTRACT_RULES = [
   "PRE-PR-MODEL-CONFIG-RESOLVED",
   "PRE-PR-GATE-STILL-AUTHORITY",
   "PRE-PR-NOT-GATE-EVIDENCE",
+  "PRE-PR-STALE-SURFACE-SWEEP",
 ];
 
 // The prose paragraph owned by a rule: from its marker to the next rule marker,

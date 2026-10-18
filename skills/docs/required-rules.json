@@ -664,6 +664,10 @@
       "enforcement": "runtime"
     },
     {
+      "id": "PRE-PR-STALE-SURFACE-SWEEP",
+      "enforcement": "runtime"
+    },
+    {
       "id": "PRE-PUSH-DELTA-EXIT-BOUND",
       "enforcement": "doc"
     },
