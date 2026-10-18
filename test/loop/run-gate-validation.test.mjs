@@ -471,6 +471,40 @@ test("buildValidationArtifact: Bun lock resolves isolated-linker packages under 
   }
 });
 
+test("buildValidationArtifact: Bun lock matches a hash-suffixed isolated-linker store dir and rejects look-alike dirs", async () => {
+  const { repoRoot } = await makeFixtureRepo();
+  try {
+    await writeFile(path.join(repoRoot, "bun.lock"), JSON.stringify({
+      lockfileVersion: 2,
+      workspaces: { "": { name: "fixture", dependencies: { a: "1.0.0" } } },
+      packages: {
+        a: ["a@1.0.0", "", {}],
+        "a/openai": ["openai@6.40.0", "", {}],
+        "a/@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.91.1", "", {}],
+      },
+    }), "utf8");
+    const write = async (dir, name, version) => {
+      await mkdir(path.join(repoRoot, "node_modules", dir), { recursive: true });
+      await writeFile(path.join(repoRoot, "node_modules", dir, "package.json"), JSON.stringify({ name, version }), "utf8");
+    };
+    await write("a", "a", "1.0.0");
+    const input = { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" };
+    // look-alike dirs must not match
+    await write(path.join(".bun", "openai@6.40.01", "node_modules", "openai"), "openai", "6.40.0");
+    await write(path.join(".bun", "openai@6.40.0-beta", "node_modules", "openai"), "openai", "6.40.0");
+    await write(path.join(".bun", "@anthropic-ai+sdk@0.91.1+68a1e3a0c4588df3", "node_modules", "@anthropic-ai", "sdk"), "@anthropic-ai/sdk", "0.91.1");
+    const missing = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(missing.depState.status, "stale");
+    assert.match(missing.depState.detail, /1 missing \[a\/openai\]/);
+
+    await write(path.join(".bun", "openai@6.40.0+0b4562c55df77e9b", "node_modules", "openai"), "openai", "6.40.0");
+    const synced = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(synced.depState.status, "synced");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("buildValidationArtifact: Bun lock ignores an ancestor install and reports the worktree's own missing node_modules as stale", async () => {
   const outerRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-bun-worktree-"));
   try {

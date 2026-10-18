@@ -15,7 +15,7 @@
  * only ever run what the repo's own package.json already declares runnable.
  */
 import { execFile } from "node:child_process";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -419,6 +419,18 @@ async function findAncestorInstalledLock(startDir) {
  * @param {string} repoRoot - Absolute path to the repo (main checkout or worktree).
  * @returns {Promise<{status: string, detail: string}>}
  */
+async function readBunStoreManifest(repoRoot, packageName, version) {
+  const storeRoot = path.join(repoRoot, "node_modules", ".bun");
+  const exact = `${packageName.replace("/", "+")}@${version}`;
+  // Bun appends "+<peer-hash>" to the store dir when the package has peers; sorted for a deterministic pick.
+  const dirs = (await readdir(storeRoot)).filter((d) => d === exact || d.startsWith(`${exact}+`)).sort();
+  for (const dir of dirs) {
+    const raw = await readFile(path.join(storeRoot, dir, "node_modules", packageName, "package.json"), "utf8").catch(() => null);
+    if (raw !== null) return raw;
+  }
+  throw new Error("bun store entry not found");
+}
+
 async function resolveDepState(repoRoot) {
   const bunLockPath = path.join(repoRoot, "bun.lock");
   const bunLockRaw = await readFile(bunLockPath, "utf8").catch(() => null);
@@ -455,7 +467,7 @@ async function resolveDepState(repoRoot) {
       // Bun's isolated linker keeps transitive packages under node_modules/.bun/node_modules and per-version dirs.
       const installedRaw = await readFile(path.join(repoRoot, "node_modules", relativeManifestPath), "utf8")
         .catch(() => readFile(path.join(repoRoot, "node_modules", ".bun", "node_modules", relativeManifestPath), "utf8"))
-        .catch(() => readFile(path.join(repoRoot, "node_modules", ".bun", `${packageName.replace("/", "+")}@${expectedVersion}`, "node_modules", packageName, "package.json"), "utf8"))
+        .catch(() => readBunStoreManifest(repoRoot, packageName, expectedVersion))
         .catch(() => null);
       if (installedRaw === null) {
         missing.push(lockKey);
