@@ -150,7 +150,7 @@ is the fallback when the resolver inherits (the judge uses it to pin the strong 
 | Write to `packages/core/src/foo.mjs` | **BREACH** — must delegate to `dev-loop` |
 | `git status` | Allowed — read-only |
 | `git commit -m "..."` | **BREACH** — must delegate to `dev-loop` |
-| `subagent dev-loop` | Allowed — correct delegation. For queue and direct entries, emit the coordinator work order with `scripts/loop/emit-coordinator-work-order.mjs --harness <claude or pi> --entry <queue or direct>` and dispatch the printed `dispatchPayload` unchanged; never a prose brief (ADR 0107) |
+| `subagent dev-loop` | Allowed — correct delegation. For queue and direct entries, emit the coordinator work order with `scripts/loop/emit-coordinator-work-order.mjs --input <resolver-output.json> --harness <claude|pi> --entry <queue|direct>` (the input is the startup resolver output) and dispatch the printed `dispatchPayload` unchanged; never a prose brief (ADR 0106) |
 | `subagent fixer` | Allowed only when called from within `dev-loop`. Emit its work order with `scripts/loop/emit-fixer-work-order.mjs` and dispatch the printed `dispatchPayload` unchanged; never a prose brief (ADR 0107) |
 | Claude Code: the `dev-loop` coordinator writes `packages/core/src/foo.mjs` directly | **BREACH** when `DEVLOOPS_COORDINATOR_READONLY=1` is enforced — must delegate to a fresh worker subagent (`developer`/`fixer`/`quality`/`docs`) |
 | Claude Code: the `dev-loop` coordinator writes `tmp/gate-findings/...` (gate evidence) | Allowed — ephemeral/gitignored, not a tracked-file mutation |
