@@ -685,14 +685,15 @@ test("defaultReadCi maps the gh view fields to headSha and rollup", async () => 
 });
 
 // Run draft_gate, optionally rewrite its artifact, then resolve pre_approval_gate.
-async function secondGate(rewrite, firstProfile = "full-repository", secondProfile = "full-repository") {
+async function secondGate(rewrite, firstProfile = "full-repository", secondProfile = "full-repository", secondTitle = "feat: x") {
+  const readPrTitle = async () => "feat: x";
   const { repoRoot, headSha } = await fixture();
   try {
     const suite = (profile) => profile === "targeted" ? ["--suite", "passing"] : [];
-    const first = await resolveValidation(parseResolveValidationArgs([...args(headSha, firstProfile), ...suite(firstProfile)]), { repoRoot });
+    const first = await resolveValidation(parseResolveValidationArgs([...args(headSha, firstProfile), ...suite(firstProfile)]), { repoRoot, readPrTitle });
     const file = path.join(repoRoot, first.artifactPath);
     if (rewrite) await writeFile(file, JSON.stringify(rewrite(first.artifact)));
-    const second = await resolveValidation({ ...parseResolveValidationArgs([...args(headSha, secondProfile), ...suite(secondProfile)]), gate: "pre_approval_gate" }, { repoRoot });
+    const second = await resolveValidation({ ...parseResolveValidationArgs([...args(headSha, secondProfile), ...suite(secondProfile)]), gate: "pre_approval_gate" }, { repoRoot, readPrTitle: async () => secondTitle });
     return { first, second };
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 }
@@ -719,7 +720,18 @@ test("a failed prior artifact is not reused and a real run happens", async () =>
 });
 
 test("a prior artifact from a different profile is not reused", async () => {
-  const { second } = await secondGate(null, "targeted", "full-repository");
+  const { second } = await secondGate((a) => ({ ...a, profile: "targeted" }));
   assert.equal(second.status, "complete");
+  assert.equal(second.artifact.reusedFrom, undefined);
+});
+
+test("a prior artifact under a different PR title is not reused", async () => {
+  const { second } = await secondGate(null, "full-repository", "full-repository", "chore: x");
+  assert.equal(second.status, "complete");
+  assert.equal(second.artifact.reusedFrom, undefined);
+});
+
+test("a prior artifact without a prTitle is not reused", async () => {
+  const { second } = await secondGate(({ prTitle: _t, ...a }) => a);
   assert.equal(second.artifact.reusedFrom, undefined);
 });
