@@ -131,6 +131,30 @@ describe("resolveReviewProportionality judgeTrack", () => {
     }
   });
 
+  for (const gate of ["draft", "preApproval"]) {
+    test(`${gate}: tierless config with an unknown file kind keeps track full, below and above the cap`, () => {
+      const tierless = { version: 1, localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } } };
+      for (const scope of [{ filesChanged: 1, linesChanged: 5 }, { filesChanged: 1, linesChanged: 400 }]) {
+        for (const judgeTrack of ["light", "reduced"]) {
+          const r = resolveReviewProportionality(tierless, gate, { sizeOutcome: PASS, scope, changedFiles: ["data/blob.unknownkind"], judgeTrack });
+          assert.deepEqual([r.track, r.trackReason], ["full", "risk_floor"], JSON.stringify({ scope, judgeTrack }));
+        }
+      }
+    });
+  }
+
+  test("a gate:full label (any case) beats a valid lowering record for both tracks", () => {
+    for (const track of ["light", "reduced"]) {
+      const lowering = track === "light" ? GATE_LIGHT_LABEL : GATE_REDUCED_LABEL;
+      for (const full of [GATE_FULL_LABEL, " Gate:FULL "]) {
+        assert.deepEqual(
+          resolveJudgeTrack({ record: record({ track }), labels: [lowering, full], headSha: HEAD }),
+          { track: "full", reason: "judge_gate_full_label" },
+        );
+      }
+    }
+  });
+
   test("gate:full label wins over a lowering judge track", () => {
     const r = plan("draft", { ...small, hasFullLabel: true, judgeTrack: "light" });
     assert.deepEqual([r.track, r.trackReason], ["full", "gate_full_label"]);

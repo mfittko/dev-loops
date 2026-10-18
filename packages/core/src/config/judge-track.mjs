@@ -1,4 +1,4 @@
-import { GATE_LIGHT_LABEL, GATE_REDUCED_LABEL } from "./config.mjs";
+import { GATE_FULL_LABEL, GATE_LIGHT_LABEL, GATE_REDUCED_LABEL } from "./config.mjs";
 
 const TRACKS = new Set(["light", "reduced", "full"]);
 const RECORD_KEYS = new Set(["schemaVersion", "headSha", "track", "signals"]);
@@ -48,8 +48,9 @@ export function resolveJudgeTrack({ record, labels, headSha } = {}) {
   if (typeof headSha !== "string" || headSha.toLowerCase() !== checked.record.headSha.toLowerCase()) {
     return { track: "full", reason: "judge_head_mismatch" };
   }
-  const lowering = (Array.isArray(labels) ? labels : [])
-    .map((l) => String(l).trim().toLowerCase())
+  const normalized = (Array.isArray(labels) ? labels : []).map((l) => String(l).trim().toLowerCase());
+  if (normalized.includes(GATE_FULL_LABEL)) return { track: "full", reason: "judge_gate_full_label" };
+  const lowering = normalized
     .filter((l) => l === GATE_LIGHT_LABEL || l === GATE_REDUCED_LABEL);
   if (lowering.length !== 1 || lowering[0] !== LOWERING_LABEL[checked.record.track]) {
     return { track: "full", reason: "judge_label_unmatched" };

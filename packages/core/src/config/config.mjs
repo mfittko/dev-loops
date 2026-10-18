@@ -2997,11 +2997,15 @@ export function resolveReviewProportionality(config, gate, {
     && (!Array.isArray(changedFiles)
       || touchesRiskPath(changedFiles, threshold.riskPaths)
       || !isSizeOutcomeT1Clean(sizeOutcome));
+  // resolveGateTier returns before classifying when no tiers are configured, so
+  // classify here independently of tier configuration before lowering the track.
+  const unknownKind = Array.isArray(changedFiles)
+    && changedFiles.some((f) => typeof f !== "string" || f === "" || classifyFile(f, resolveClassifyRules(config)) === "unknown");
   let track = "full";
   let trackReason = judgeTrackReason;
   if (hasFullLabel) trackReason = "gate_full_label";
   else if (dispatch.reason === "escalated") trackReason = "escalated";
-  else if (floored || overCapRisk) trackReason = "risk_floor";
+  else if (floored || overCapRisk || unknownKind) trackReason = "risk_floor";
   else if (judgeTrack !== "full" && !threshold) trackReason = "light_mode_disabled";
   else if (judgeTrack === "light" && dispatch.mode === "inline") [track, trackReason] = ["light", "judge_light"];
   else if (judgeTrack === "light") [track, trackReason] = ["reduced", "judge_light_degraded_to_reduced"];
