@@ -147,6 +147,7 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/loop/resolve-human-merge-only.mjs` | Default `humanMergeOnly=true` |
 | `scripts/refine/refine-plan-file.mjs` | Default: advisory warning |
 | `scripts/github/create-pr.mjs` | Not a gate decision: base branch falls back to the default |
+| `scripts/loop/record-pre-pr-review.mjs` | Not a gate decision: default base branch falls back to auto-detection |
 | `scripts/github/offer-human-handoff.mjs` | Not a gate decision: handoff candidates only |
 | `scripts/github/resolve-handoff-candidates.mjs` | Not a gate decision: handoff candidates only |
 | `scripts/github/resolve-tracker-local-spec.mjs` | Not a gate decision: default tracker adapter |

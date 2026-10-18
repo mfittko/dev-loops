@@ -80,8 +80,10 @@ test("a hand-built or tampered record file fails validation", async () => {
 test("the CLI writes the record from git HEAD and takes no head argument", async () => {
   const dir = fixtureRepo();
   try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    commit(dir, "src/b.mjs", "export const b = 1;\n");
     let out = "";
-    const code = await runCli(["--verdict", "findings_fixed", "--disposition", "all_applied"], { cwd: dir, stdout: { write: (s) => { out += s; } }, stderr: { write() {} } });
+    const code = await runCli(["--verdict", "findings_fixed", "--disposition", "all_applied", "--base", "main", "--no-linked-issue"], { cwd: dir, stdout: { write: (s) => { out += s; } }, stderr: { write() {} } });
     assert.equal(code, 0);
     const result = JSON.parse(out);
     assert.equal(result.head, git(dir, "rev-parse", "HEAD"));
@@ -90,7 +92,7 @@ test("the CLI writes the record from git HEAD and takes no head argument", async
     assert.equal(JSON.parse(readFileSync(result.file, "utf8")).verdict, "findings_fixed");
     let err = "";
     assert.equal(await runCli(["--head", "abc", "--verdict", "clean", "--disposition", "none"], { cwd: dir, stdout: { write() {} }, stderr: { write: (s) => { err += s; } } }), 1);
-    assert.equal(await runCli(["--verdict", "bogus", "--disposition", "none"], { cwd: dir, stdout: { write() {} }, stderr: { write() {} } }), 1);
+    assert.equal(await runCli(["--verdict", "bogus", "--disposition", "none", "--base", "main", "--no-linked-issue"], { cwd: dir, stdout: { write() {} }, stderr: { write() {} } }), 1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

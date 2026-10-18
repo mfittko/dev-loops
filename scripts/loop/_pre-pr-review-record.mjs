@@ -16,7 +16,7 @@ import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } fro
 export const PRE_PR_REVIEW_VERDICTS = Object.freeze(["clean", "findings_fixed"]);
 export const PRE_PR_REVIEW_DISPOSITIONS = Object.freeze(["none", "all_applied", "rationale_recorded"]);
 export const PRE_PR_REVIEW_MISSING = "pre_pr_review_missing";
-export const RECORD_COMMAND = "dev-loops loop pre-pr-review --verdict <clean|findings_fixed> --disposition <none|all_applied|rationale_recorded>";
+export const RECORD_COMMAND = "dev-loops loop pre-pr-review --verdict <clean|findings_fixed> --disposition <none|all_applied|rationale_recorded> (--body-file <file> --issue <n> | --no-linked-issue)";
 
 const git = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: gitEnvNoDirOverrides() }).trim();
 const recordDir = (cwd) => path.join(resolveGateArtifactTmpRoot(cwd), "pre-pr-review");
