@@ -1,3 +1,3 @@
 ### Fixed
 
-- New and reused-without-node_modules worktrees from ensure-worktree get their own `bun install --frozen-lockfile` (fail-soft, reported as `deps`), and gate depState checks the worktree's own install (#2535)
+- ensure-worktree runs its own `bun install --frozen-lockfile` on create and on reuse without a real node_modules (fail-soft `deps` report); gate depState reads that install (#2535)

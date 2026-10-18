@@ -37,7 +37,7 @@
  * A git create failure is a hard error (exit 1); provisioning is fail-soft.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePositiveInteger, requireTokenValue } from "../_cli-primitives.mjs";
@@ -98,7 +98,7 @@ Output (stdout, JSON):
                      // remote, ...) — branch resolution above still ran,
                      // just against whatever was already fetched
     "deps"?: { "ok": bool, "ran": bool, "reason"?, "exitCode"? },
-                     // create path only: the fail-soft bun install
+                     // create, and reuse without own node_modules: the fail-soft bun install
                      // --frozen-lockfile result (ran:false when no bun.lock)
     "provision": { "actions": [...], "summary": {...} },
     "guard": { "ok": bool, "installed": [...], "refreshed": [...], "skipped": [...],
@@ -614,6 +614,34 @@ function defaultInstallDeps(cwd) {
   return r.status === 0 ? { ok: true } : { ok: false, exitCode: r.status, reason: (r.stderr ?? "").trim().split("\n").slice(-3).join(" | ") };
 }
 
+/**
+ * Ensure the worktree owns its node_modules before installing. linkOnInit can
+ * symlink node_modules into the primary checkout; running `bun install` through
+ * that symlink would write into the primary's real node_modules — mutating
+ * shared deps. Replace a symlinked node_modules with a real (empty) directory so
+ * the install is isolated to the worktree, leaving the primary untouched.
+ *
+ * Note: materializing to an empty dir makes `bun install` reinstall the full
+ * tree (not just the lock delta). If that install cost matters, copy the
+ * primary's real node_modules into the worktree first for an incremental
+ * reconcile.
+ *
+ * @returns {boolean} true when a symlinked node_modules was materialized.
+ */
+export function ensureOwnNodeModules(worktreePath) {
+  const nm = path.join(worktreePath, "node_modules");
+  let st;
+  try {
+    st = lstatSync(nm);
+  } catch {
+    return false; // absent — bun install creates a real dir
+  }
+  if (!st.isSymbolicLink()) return false;
+  rmSync(nm); // unlinks only the symlink; the primary's real dir is untouched
+  mkdirSync(nm);
+  return true;
+}
+
 function ensureDeps(worktreePath, installDeps) {
   if (!existsSync(path.join(worktreePath, "bun.lock"))) return { ok: true, ran: false, reason: "no bun.lock" };
   let result;
@@ -695,7 +723,11 @@ export async function ensureWorktree(
     }
     // Reuse: still (re-)provision — provisioning is idempotent, on BOTH the
     // detached and local-branch reuse outcomes below.
-    const deps = existsSync(path.join(target, "node_modules")) ? undefined : ensureDeps(target, installDeps);
+    const nm = path.join(target, "node_modules");
+    let owned = false;
+    try { owned = lstatSync(nm).isDirectory(); } catch { /* absent */ }
+    if (!owned) ensureOwnNodeModules(target); // unlink a symlink into the primary; never its real dir
+    const deps = owned ? undefined : ensureDeps(target, installDeps);
     const summary = await provision({ worktreePath: target, repoRoot: root });
     if (!existing.branch) {
       // DETACHED HEAD (e.g. ui-review's pinPrHead runs `git checkout --detach`

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterAll as after, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, symlinkSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -1447,3 +1447,29 @@ test("ensure: reuse installs only without own node_modules", async () => {
     repo.cleanup();
   }
 });
+
+for (const [label, make] of [
+  ["a symlink to the primary's node_modules", (nm, primaryNm) => symlinkSync(primaryNm, nm)],
+  ["a dangling symlink", (nm) => symlinkSync(path.join(path.dirname(nm), "missing-target"), nm)],
+]) {
+  test(`ensure: reuse with node_modules as ${label} installs into a real directory`, async () => {
+    const repo = makeRepo();
+    try {
+      commitBunLock(repo);
+      const first = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, { installDeps: () => ({ ok: true }) });
+      const primaryNm = path.join(repo.root, "node_modules");
+      mkdirSync(path.join(primaryNm, "pkg"), { recursive: true });
+      const nm = path.join(first.path, "node_modules");
+      make(nm, primaryNm);
+      let seen;
+      const reused = await ensureWorktree({ repoRoot: repo.root, issue: 26 }, {
+        installDeps: (cwd) => { seen = lstatSync(path.join(cwd, "node_modules")); return { ok: true }; },
+      });
+      assert.equal(reused.deps.ran, true);
+      assert.equal(seen.isDirectory() && !seen.isSymbolicLink(), true);
+      assert.equal(existsSync(path.join(primaryNm, "pkg")), true);
+    } finally {
+      repo.cleanup();
+    }
+  });
+}

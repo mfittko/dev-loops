@@ -12,7 +12,7 @@
  * orchestrator (packages/core/src/loop/ui-review-provision.mjs).
  */
 import { execFileSync, spawn } from "node:child_process";
-import { lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
@@ -22,7 +22,7 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveUiReviewRunRecipe } from "@dev-loops/core/config";
 import { provisionAndBoot } from "@dev-loops/core/loop/ui-review-provision";
 import { isMainCheckout, isListedWorktree, parseMainWorktreePath, parseAllWorktreePaths } from "@dev-loops/core/loop/worktree-guard";
-import { ensureWorktree } from "./ensure-worktree.mjs";
+import { ensureOwnNodeModules, ensureWorktree } from "./ensure-worktree.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
@@ -133,34 +133,6 @@ function detectDepDelta({ repoRoot, worktreePath }) {
     return Promise.resolve({ changed: false, detail: "bun.lock identical" });
   }
   return Promise.resolve({ changed: true, detail: "bun.lock differs" });
-}
-
-/**
- * Ensure the worktree owns its node_modules before installing. linkOnInit can
- * symlink node_modules into the primary checkout; running `bun install` through
- * that symlink would write into the primary's real node_modules — mutating
- * shared deps. Replace a symlinked node_modules with a real (empty) directory so
- * the install is isolated to the worktree, leaving the primary untouched.
- *
- * Note: materializing to an empty dir makes `bun install` reinstall the full
- * tree (not just the lock delta). If that install cost matters, copy the
- * primary's real node_modules into the worktree first for an incremental
- * reconcile.
- *
- * @returns {boolean} true when a symlinked node_modules was materialized.
- */
-export function ensureOwnNodeModules(worktreePath) {
-  const nm = path.join(worktreePath, "node_modules");
-  let st;
-  try {
-    st = lstatSync(nm);
-  } catch {
-    return false; // absent — bun install creates a real dir
-  }
-  if (!st.isSymbolicLink()) return false;
-  rmSync(nm); // unlinks only the symlink; the primary's real dir is untouched
-  mkdirSync(nm);
-  return true;
 }
 
 /** Frozen Bun install in the worktree, after ensuring it owns its node_modules. */
