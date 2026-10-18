@@ -16,12 +16,15 @@ export function resolveTimeoutMs({ timeout, timeoutMs }, { warn = (m) => process
   }
   if (timeout !== undefined) {
     if (!NON_NEGATIVE_NUMBER.test(timeout)) throw new Error("--timeout must be a non-negative number of seconds");
-    const ms = Math.round(Number(timeout) * 1000);
+    const seconds = Number(timeout);
+    // A positive value never rounds to 0, which means "one immediate check".
+    const ms = seconds > 0 ? Math.max(1, Math.round(seconds * 1000)) : 0;
     if (!Number.isFinite(ms)) throw new Error("--timeout must be a non-negative number of seconds");
     return ms;
   }
   if (timeoutMs !== undefined) {
     if (!/^\d+$/u.test(timeoutMs)) throw new Error("--timeout-ms must be a non-negative integer");
+    if (!Number.isFinite(Number(timeoutMs))) throw new Error("--timeout-ms must be a non-negative integer");
     warn(`warning: --timeout-ms is deprecated; use --timeout ${Number(timeoutMs) / 1000} (seconds)`);
     return Number(timeoutMs);
   }

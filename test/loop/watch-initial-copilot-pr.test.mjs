@@ -169,7 +169,8 @@ test("parseWatchInitialCopilotPrCliArgs accepts --timeout 0 and an hour-or-longe
   const base = ["--repo", "owner/repo", "--issue", "59"];
   assert.equal(parseWatchInitialCopilotPrCliArgs([...base, "--timeout", "0"]).timeoutMs, 0);
   assert.equal(parseWatchInitialCopilotPrCliArgs([...base, "--timeout", "7200"]).timeoutMs, 7_200_000);
-  assert.throws(() => parseWatchInitialCopilotPrCliArgs([...base, "--timeout", "0.1"]), /requires at least/);
+  assert.throws(() => parseWatchInitialCopilotPrCliArgs([...base, "--timeout", "0.1"]), /--timeout must be 0 or at least 3600 seconds/);
+  assert.throws(() => parseWatchInitialCopilotPrCliArgs([...base, "--timeout", "0.0004"]), /--timeout must be 0 or at least 3600 seconds/);
 });
 
 test("parseWatchInitialCopilotPrCliArgs keeps --timeout-ms as a deprecated alias and fails closed with --timeout", () => {

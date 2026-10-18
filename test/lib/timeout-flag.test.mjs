@@ -14,6 +14,7 @@ describe("resolveTimeoutMs", () => {
     assert.equal(run({ timeout: "0" }).ms, 0);
     assert.equal(run({ timeout: "0.1" }).ms, 100);
     assert.equal(run({ timeout: "90" }).ms, 90_000);
+    assert.equal(run({ timeout: "0.0004" }).ms, 1);
   });
   test("rejects negative, exponent and junk values", () => {
     for (const bad of ["-1", "1e3", "abc", "", "1."]) {
@@ -32,6 +33,9 @@ describe("resolveTimeoutMs", () => {
   });
   test("rejects values that overflow to a non-finite budget", () => {
     assert.throws(() => run({ timeout: "9".repeat(400) }), /--timeout must be/);
+  });
+  test("--timeout-ms rejects values that overflow to a non-finite budget", () => {
+    assert.throws(() => run({ timeoutMs: "9".repeat(400) }), /--timeout-ms must be/);
   });
   test("both flags fail closed", () => {
     assert.throws(() => run({ timeout: "1", timeoutMs: "1000" }), /mutually exclusive/);

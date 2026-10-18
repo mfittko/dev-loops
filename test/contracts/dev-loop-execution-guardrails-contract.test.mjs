@@ -158,7 +158,10 @@ test("no skill, agent, or generated Claude asset prescribes a `timeout N` shell 
     .filter((p) => p.endsWith(".md") && !p.split("/").includes("node_modules"))
     .map((p) => join(dir, p));
   const wrapper = /(?:^|[`\s])g?timeout (?:-\S+ )*\d+[smhd]?\s/m;
-  const offenders = ["skills", "agents", ".claude"].flatMap(markdownIn)
+  assert.ok(wrapper.test("\`timeout 90 bun test x\` "), "the wrapper regex must match a known wrapper line");
+  const scanned = ["skills", "agents", ".claude"].flatMap(markdownIn);
+  assert.ok(scanned.length > 0, "the scan must visit markdown files");
+  const offenders = scanned
     .filter((file) => wrapper.test(readFileSync(join(root, file), "utf8")));
   assert.deepEqual(offenders, []);
 });

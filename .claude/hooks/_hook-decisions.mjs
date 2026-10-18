@@ -256,7 +256,7 @@ export function decideBashGate({
   // (`gh pr create --repo other/x && node …/probe-copilot-review.mjs … &`) cannot short-circuit
   // past it via the create/ready ALLOW paths. The sanctioned wait is always a bounded FOREGROUND
   // inline probe (`probe-copilot-review.mjs` / `wait-pr-checks.mjs` with an explicit
-  // --timeout/--timeout-ms; `gh run watch`; the watch-cycle CLIs).
+  // --timeout <seconds>; `gh run watch`; the watch-cycle CLIs).
   if (inManagedRepo && commandContainsDetachedWaitTool(command)) {
     return {
       decision: "deny",

@@ -8,7 +8,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { detectInitialCopilotPrState, LINKED_PR_STATE } from "./detect-initial-copilot-pr-state.mjs";
 import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
-import { enforcePersistentInternalWaitTimeout } from "@dev-loops/core/loop/timeout-policy";
+import { enforcePersistentInternalWaitTimeout, PERSISTENT_INTERNAL_WAIT_TIMEOUT_POLICY } from "@dev-loops/core/loop/timeout-policy";
 import {
   DEFAULT_POLL_INTERVAL_MS,
   COPILOT_FIRST_DURABLE_WAIT_TIMEOUT_MS,
@@ -164,6 +164,9 @@ export function parseWatchInitialCopilotPrCliArgs(argv) {
   }
   try {
     options.timeoutMs = resolveTimeoutMs(rawTimeout) ?? options.timeoutMs;
+    if (options.timeoutMs !== 0 && options.timeoutMs < PERSISTENT_INTERNAL_WAIT_TIMEOUT_POLICY.minimumTimeoutMs) {
+      throw new Error(`--timeout must be 0 or at least ${PERSISTENT_INTERNAL_WAIT_TIMEOUT_POLICY.minimumTimeoutMs / 1000} seconds for persistent waits`);
+    }
     options.timeoutMs = options.timeoutMs === 0
       ? 0
       : enforcePersistentInternalWaitTimeout({
