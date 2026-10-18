@@ -31,10 +31,10 @@ merges locally, a follow-up session on a PR that already exists, or a session on
 a Copilot-authored PR.
 
 <!-- rule: PRE-PR-SIZE-CHECK -->
-`PRE-PR-SIZE-CHECK`: the pre-PR review MUST run `node <dev-loops-package-root>/cli/index.mjs gate size-budget --base origin/<base>` on the local `base...HEAD` diff. When the whole-PR logic LOC is over the resolved default-tier `softLoc`, the developer MUST split the local branch before any PR exists. The one enforcement point is `node <dev-loops-package-root>/cli/index.mjs pr create`: before it creates anything, it refuses with `size_split_required_before_pr` at or above the resolved default-tier `waiverLoc`. An `unknown` size does not refuse, because the draft gate stays the authority (`PRE-PR-GATE-STILL-AUTHORITY`). The refusal has no override flag.
+`PRE-PR-SIZE-CHECK`: the pre-PR review MUST run `node <dev-loops-package-root>/cli/index.mjs gate size-budget --base origin/<base>` on the local `base...HEAD` diff. When the whole-PR logic LOC is over the resolved default-tier `softLoc`, the developer MUST split the local branch before any PR exists, unless the branch's plan recorded a `PLAN-SIZE-BAND` split assessment for that slice (`oversizeJustification` on the plan-file path, the grill results comment on the tracker-first path). At or above `waiverLoc` the split stays mandatory. The one enforcement point is `node <dev-loops-package-root>/cli/index.mjs pr create`: before it creates anything, it refuses with `size_split_required_before_pr` at or above the resolved default-tier `waiverLoc`. An `unknown` size does not refuse, because the draft gate stays the authority (`PRE-PR-GATE-STILL-AUTHORITY`). The refusal has no override flag.
 
 <!-- rule: LOCAL-DEV-SIZE-STOP -->
-`LOCAL-DEV-SIZE-STOP`: the developer MUST run the same `gate size-budget` check at each local commit. When the whole-PR logic LOC crosses the resolved default-tier `softLoc`, the developer MUST stop and hand back a split point instead of continuing.
+`LOCAL-DEV-SIZE-STOP`: the developer MUST run the same `gate size-budget` check at each local commit. When the whole-PR logic LOC crosses the resolved default-tier `softLoc`, the developer MUST stop and hand back a split point instead of continuing, unless the branch's plan recorded a `PLAN-SIZE-BAND` split assessment for that slice. At or above `waiverLoc` the stop applies in every case.
 
 ## The review pass
 

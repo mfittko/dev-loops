@@ -145,7 +145,7 @@ Synthesize the answers into the body as the authoritative **`## AC / DoD matrix`
 - This makes re-runs idempotent — no accumulated noise, no duplicate sections.
 - If parsing a section boundary fails, **abort with an error** rather than silently truncating.
 
-The synthesized body also carries a `## Size forecast` section with one `- forecast: slice=<id> wloc=<n> files=<path>,<path>` line per slice. The forecast follows `PLAN-SIZE-BAND` in [Local planning](../docs/local-planning.md#size-estimate-refinement), and the results comment records the merge assessment for each slice under `minLoc`.
+The synthesized body also carries a `## Size forecast` section with one `- forecast: slice=<id> wloc=<n> files=<path>,<path>` line per slice. The forecast follows `PLAN-SIZE-BAND` in [Local planning](../docs/local-planning.md#size-estimate-refinement), and the results comment records the split assessment (the seam considered and why the slice stays whole) for each slice above `softLoc` and under `waiverLoc`, beside the merge assessment for each slice under `minLoc`.
 
 The synthesized sections carry no rationale scaffolding: do NOT write a `## Grill findings` section and do NOT embed the raw Q&A table in the body (`GRILL-SUBLOOP-NO-EMBED-SYNTHESIS`). The full rewrite below defines the complete content the locked body keeps.
 
