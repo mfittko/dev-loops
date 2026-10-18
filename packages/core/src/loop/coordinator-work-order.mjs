@@ -28,13 +28,13 @@ export function changesFragmentGlob(target) {
 export function buildCoordinatorWorkOrder(input) {
   const unknown = Object.keys(input ?? {}).filter((key) => !INPUT_KEYS.has(key));
   if (unknown.length > 0) throw new CoordinatorWorkOrderRefusal(`coordinator work order accepts only envelope, allowedFiles and attempt; refused: ${unknown.join(", ")}`);
-  const { envelope, allowedFiles = [], attempt = 1 } = input;
+  const { envelope, allowedFiles = [], attempt = 1 } = input ?? {};
   const valid = validateHandoffEnvelope(envelope);
   if (!valid.ok) throw new CoordinatorWorkOrderRefusal(`handoff envelope is invalid: ${valid.errors.map((e) => e.field).join(", ")}`);
   if (envelope.overrides !== undefined) throw new CoordinatorWorkOrderRefusal("handoff envelope overrides are not a coordinator source; re-resolve without overrides");
   if (!Number.isInteger(attempt) || attempt < 1) throw new CoordinatorWorkOrderRefusal("attempt must be a positive integer");
-  if (!Array.isArray(allowedFiles) || allowedFiles.some((p) => typeof p !== "string" || /[\u0000-\u001f\u007f]/.test(p))) {
-    throw new CoordinatorWorkOrderRefusal("allowedFiles must be repository-relative paths without control characters");
+  if (!Array.isArray(allowedFiles) || allowedFiles.some((p) => typeof p !== "string" || /[\u0000-\u001f\u007f\\]/.test(p))) {
+    throw new CoordinatorWorkOrderRefusal("allowedFiles must be repository-relative paths without control characters or backslashes");
   }
   const ownGlob = changesFragmentGlob(envelope.target);
   const normalized = allowedFiles.map((p) => p.split("/").filter((seg) => seg !== "" && seg !== ".").join("/"));

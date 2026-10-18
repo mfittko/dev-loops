@@ -100,7 +100,7 @@ test("C19 an absolute or escaping allowed file is refused", () => {
 test("C19 allowed files are normalized and control characters are refused", () => {
   const { workOrder } = buildCoordinatorWorkOrder({ envelope: issueEnvelope(), allowedFiles: ["./src//a.mjs", "src/./a.mjs", "changes/2483-*.md"] });
   assert.deepEqual(workOrder.allowedFiles, ["changes/2483-*.md", "src/a.mjs"]);
-  for (const bad of ["src/a\n.mjs", "src/a\u0000.mjs", "", "."]) {
+  for (const bad of ["src/a\n.mjs", "src/a\u0000.mjs", "", ".", "changes\\README.md", "changes\\9999-x.md", "a\\..\\..\\x", "\\etc\\passwd", "src\\a.mjs"]) {
     assert.throws(() => buildCoordinatorWorkOrder({ envelope: issueEnvelope(), allowedFiles: [bad] }), CoordinatorWorkOrderRefusal, JSON.stringify(bad));
   }
 });
@@ -114,6 +114,18 @@ test("C19 a changes entry other than the unit's own fragment is refused", () => 
 test("C19 glob entries below a non-changes directory are accepted", () => {
   const { workOrder } = buildCoordinatorWorkOrder({ envelope: issueEnvelope(), allowedFiles: ["src/**"] });
   assert.deepEqual(workOrder.allowedFiles, ["changes/2483-*.md", "src/**"]);
+});
+
+test("C19 a target with neither issue nor pr is refused", () => {
+  const envelope = issueEnvelope();
+  const target = { ...envelope.target };
+  delete target.issue;
+  delete target.pr;
+  assert.throws(() => buildCoordinatorWorkOrder({ envelope: { ...envelope, target } }), CoordinatorWorkOrderRefusal);
+});
+
+test("C1 missing input refuses with CoordinatorWorkOrderRefusal, not a TypeError", () => {
+  for (const bad of [undefined, null]) assert.throws(() => buildCoordinatorWorkOrder(bad), CoordinatorWorkOrderRefusal);
 });
 
 test("C2 attempt 0, 1.5 and the string \"2\" are refused", () => {

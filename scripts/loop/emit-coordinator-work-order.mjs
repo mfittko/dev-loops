@@ -14,10 +14,18 @@ const USAGE = `Usage: emit-coordinator-work-order.mjs --input <resolver-output.j
 Derives the coordinator work order from the resolved handoff envelope. The allowed-file list
 always includes changes/<issue>-*.md (the PR number for a unit without an issue).
 ${JQ_OUTPUT_USAGE}
-Exit codes: 0 emitted, 1 refused or runtime failure.`;
+Stdout: {ok:true,workOrder,workOrderDigest} on success, {ok:false,error} on failure (nothing under --silent).
+A failure ignores --fields and --jq.
+Exit codes: 0 emitted, 1 refused or runtime failure, 2 invalid --jq/--fields usage on success output.`;
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
   let values;
+  // One failure shape: {ok:false,error} on stdout unless --silent; --fields and --jq never apply to a failure.
+  const fail = (error, stderrText) => {
+    if (!values?.silent) stdout.write(`${JSON.stringify({ ok: false, error })}\n`);
+    stderr.write(`${stderrText}\n`);
+    return 1;
+  };
   try {
     ({ values } = parseArgs({ args: argv, options: {
       input: { type: "string" }, repo: { type: "string" }, "allowed-file": { type: "string", multiple: true },
@@ -28,9 +36,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       return 0;
     }
     if (!values.input) {
-      stdout.write(`${JSON.stringify({ ok: false, error: "--input is required" })}\n`);
-      stderr.write(`${USAGE}\n`);
-      return 1;
+      return fail("--input is required", USAGE);
     }
     if (values.attempt !== undefined && !/^[1-9]\d*$/.test(values.attempt)) {
       throw new CoordinatorWorkOrderRefusal("--attempt must be a positive integer");
@@ -41,10 +47,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     });
     return emitResult({ ok: true, workOrder, workOrderDigest }, { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr });
   } catch (err) {
-    if (err instanceof CoordinatorWorkOrderRefusal) return emitResult({ ok: false, error: err.message }, { jq: values?.jq, silent: values?.silent, fields: values?.fields, stdout, stderr });
-    stdout.write(`${JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) })}\n`);
-    stderr.write(`${formatCliError(err)}\n`);
-    return 1;
+    return fail(err instanceof Error ? err.message : String(err), formatCliError(err));
   }
 }
 

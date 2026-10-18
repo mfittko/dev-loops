@@ -75,6 +75,20 @@ test("C19 a refused allowed file exits 1 with ok:false JSON on stdout", async ()
   });
 });
 
+test("C1 failures are silent under --silent and ignore --fields", async () => {
+  await withInput(async (input) => {
+    const missing = await runNode(["--repo", "o/r", "--silent"]);
+    assert.equal(missing.code, 1);
+    assert.equal(missing.stdout, "");
+    const refused = await runNode(["--input", input, "--repo", "o/r", "--allowed-file", "../x", "--fields", "workOrderDigest"]);
+    assert.equal(refused.code, 1);
+    assert.equal(JSON.parse(refused.stdout).ok, false);
+    const silentRefused = await runNode(["--input", input, "--repo", "o/r", "--allowed-file", "../x", "--silent"]);
+    assert.equal(silentRefused.code, 1);
+    assert.equal(silentRefused.stdout, "");
+  });
+});
+
 test("C2 --attempt accepts only positive decimal integers", async () => {
   await withInput(async (input) => {
     for (const good of ["1", "2", "10"]) {
