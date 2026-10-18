@@ -284,10 +284,13 @@ test("size forecast: a malformed forecast bullet next to a valid one is a size_f
     "- Forecast slice=2 wloc=1800 files=b.mjs",
     "- slice=2 wloc=1800 files=b.mjs",
     "1. forecast slice=2 wloc=1800 files=b.mjs",
-    "forecast: slice=2 wloc=1800 files=b.mjs",
     "- wloc=1800 slice=2 files=b.mjs",
-    "slice=2 wloc=1800 files=b.mjs",
     "- slice = 2 wloc = 1800 files=b.mjs",
+    "- wloc=1800 files=b.mjs",
+    "- slice 2: wloc=1800 files=b.mjs",
+    "- forecast (slice 2): wloc=1800 files=b.mjs",
+    // Accepted fail-closed cost: a list-item prose line containing `wloc =` is claimed.
+    "- note: wloc = 130 here",
   ]) {
     const { findings } = await run(valid, line);
     assert.deepEqual(sizeKinds(findings), ["size_forecast_malformed:size-forecast"], line);
@@ -296,8 +299,8 @@ test("size forecast: a malformed forecast bullet next to a valid one is a size_f
   // Accepted forms stay clean, including a comma-joined files list.
   assert.deepEqual(sizeKinds((await run(valid, "- forecast: slice=2 wloc=1800 files=a.mjs,b.mjs")).findings), ["size_forecast_split_required:2"]);
   assert.deepEqual(sizeKinds((await run(valid)).findings), []);
-  // Ordinary prose that mentions `wLOC =` is not a forecast bullet.
-  assert.deepEqual(sizeKinds((await run(valid, "wLOC = source + 0.25 x test: 130 + 440 and 85 + 600.", "- note: wloc = 130 here", "Forecast is below", "The forecast for slice 2 is below.")).findings), []);
+  // Non-list lines are never claimed, even when they look like a forecast.
+  assert.deepEqual(sizeKinds((await run(valid, "wLOC = source + 0.25 × test: 130 + 440 and 85 + 600.", "Each slice = one PR.", "Forecast: two slices, both under budget.", "Forecast is below", "The forecast for slice 2 is below.", "forecast: slice=2 wloc=1800 files=b.mjs", "slice=2 wloc=1800 files=b.mjs")).findings), []);
   // A malformed bullet with no valid line still reports the missing forecast too.
   assert.deepEqual(sizeKinds((await run("- forecast: slice=2 wloc=1800 files=a.mjs, b.mjs")).findings), ["size_forecast_missing:size-forecast", "size_forecast_malformed:size-forecast"]);
 });

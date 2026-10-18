@@ -41,7 +41,8 @@ Finding kinds: unknown_rule_id, unknown_adr, adr_not_accepted, adr_superseded, a
 size_forecast_missing, size_forecast_malformed, size_forecast_split_required (PLAN-SIZE-BAND; one
 "- forecast: slice=<id> wloc=<n> files=<path>,<path>" line per slice under "## Size forecast";
 a line at or above the resolved default-tier waiverLoc must be split, not disposed;
-a forecast bullet that does not parse is size_forecast_malformed, also not disposable).
+a list item that starts with the word "forecast" or contains "wloc=" and does not parse is
+size_forecast_malformed, also not disposable; non-list lines are never claimed).
 ADR citation forms: "ADR NNNN", "ADR-<digits>" and docs/decisions/NNNN-*.md links.
 
 ${JQ_OUTPUT_USAGE}
@@ -206,8 +207,8 @@ export function lintAdrCitations(body, records) {
 }
 
 const FORECAST_LINE_RE = /^\s*-\s+forecast:\s+slice=(\S+)\s+wloc=(\d+)\s+files=(\S+)\s*$/;
-// Any line that claims to be a forecast attempt (`slice=` anywhere, or a leading `forecast:`/`forecast slice|wloc`); one that misses FORECAST_LINE_RE is reported, never dropped.
-const FORECAST_BULLET_RE = /\bslice\s*=|^\s*(?:(?:[-*+]|\d+[.)])\s+)?[*_`\s]*forecast[*_`]*(?::|\s+(?:slice|wloc)\b)/iu;
+// One grammar claims a forecast attempt: a LIST ITEM (marker `-`, `*`, `+`, `N.`, `N)`) whose first token (ignoring `*`, `_`, backtick) is the word `forecast`, or that contains `wloc=` (spaces around `=` allowed). Non-list lines are never claimed. A claimed line that misses FORECAST_LINE_RE is reported, never dropped.
+const FORECAST_BULLET_RE = /^\s*(?:[-*+]|\d+[.)])\s+(?:[*_`]*forecast\b|.*wloc\s*=)/iu;
 
 /**
  * PLAN-SIZE-BAND forecast lines under `## Size forecast`: one line per slice,
