@@ -21,7 +21,7 @@ required helper is unavailable.
 | --- | --- |
 | Initial Copilot implementation, no follow-up-ready PR | `dev-loops-run cli/index.mjs loop watch-initial --repo <owner/name> --issue <N>`; preserve the bootstrap budget and exceptions in `FACADE-BOOTSTRAP-WATCH-ROUTE` and its adjacent rules in the public contract. |
 | Current PR | Refresh with `dev-loops-run cli/index.mjs loop loop-state --repo <owner/name> --pr <N>` (add `--lightweight` for a light-dispatched PR so the round cap composes correctly). If the refreshed state remains waiting and preflight below is satisfied, use `dev-loops-run cli/index.mjs loop watch-cycle --repo <owner/name> --pr <N> --concise`. |
-| Pending/absent CI | The cycle routes to the provider-agnostic CI watcher. The direct equivalent is `dev-loops-run cli/index.mjs loop watch-ci --repo <owner/name> --pr <N> --timeout-ms <remaining-budget-ms>`. Failed CI needs follow-up, not more waiting. |
+| Pending/absent CI | The cycle routes to the provider-agnostic CI watcher. The direct equivalent is `dev-loops-run cli/index.mjs loop watch-ci --repo <owner/name> --pr <N> --timeout <remaining-budget-seconds>`. Failed CI needs follow-up, not more waiting. |
 
 Before invoking handoff/watch-cycle, route a newly actionable state through the
 fresh-envelope sequence below. If the snapshot reports `mergeStateStatus=BEHIND`

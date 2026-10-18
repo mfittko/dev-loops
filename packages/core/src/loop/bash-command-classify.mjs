@@ -1119,6 +1119,21 @@ export function commandContainsDetachedWaitTool(command) {
   return WAIT_PROBE_FAMILY_RE.test(whole);
 }
 
+/**
+ * A `timeout [options] <duration>` shell wrapper in front of a sanctioned dev-loops command
+ * (`dev-loops`, `dev-loops-run`, or a `scripts/…` entrypoint). The wrapped head no longer starts
+ * with `dev-loops-run`, so operator allow rules such as `Bash(dev-loops-run scripts/github/*)` stop
+ * matching. Sanctioned wait tools bound themselves with `--timeout <seconds>` instead (issue 2755).
+ * @param {string} command @returns {boolean}
+ */
+const TIMEOUT_WRAPPER_RE = new RegExp(
+  `^${ENV_ASSIGNMENT_RUN}g?timeout\\s+(?:-{1,2}[\\w-]+(?:=\\S+|\\s+(?:\\d+(?:\\.\\d+)?[smhd]?|[A-Z]+))?\\s+)*\\d+(?:\\.\\d+)?[smhd]?\\s+` +
+    "(?:(?:node|bun)\\s+)?(?:\\S*/)?(?:dev-loops(?:-run)?\\s|\\S*scripts/\\S+\\.mjs)",
+);
+export function commandContainsTimeoutWrappedSanctionedTool(command) {
+  return shellSegments(command).some((segment) => TIMEOUT_WRAPPER_RE.test(segment));
+}
+
 /** Build a `node`/`python`/`python3` command-head matcher (env/wrapper/path prefix tolerated). */
 function interpreterRegex(bin) {
   return new RegExp(`^${SHELL_EXEC_PREFIX}${bin}(?:\\s|$)`, "i");

@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  commandContainsTimeoutWrappedSanctionedTool,
   TARGET_REPO_SLUG,
   deriveInManagedRepo,
   explicitRepoProvenForeign,
@@ -1350,4 +1351,25 @@ test("raw PR body denies see through quoted flag tokens", () => {
   assert.equal(commandContainsRawPrBodyEdit('gh pr edit 5 "-F" body.md'), true);
   assert.equal(commandContainsRawPrBodyApiWrite('gh api -X PATCH repos/o/n/pulls/5 -f "body"=x'), true);
   assert.equal(commandContainsRawPrBodyEdit("gh pr edit 5 --title 'a title'"), false);
+});
+
+test("commandContainsTimeoutWrappedSanctionedTool flags timeout in front of sanctioned dev-loops commands only", () => {
+  for (const cmd of [
+    "timeout 300 dev-loops-run scripts/github/merge-pr.mjs --repo o/r --pr 5",
+    "timeout -k 5 60 dev-loops loop startup",
+    "timeout 90s node scripts/github/wait-pr-checks.mjs --repo o/r --pr 5",
+    "timeout --signal=KILL -k 5 60 dev-loops-run scripts/github/merge-pr.mjs",
+    "gtimeout 1.5 dev-loops-run scripts/loop/wait-for-gate-units.mjs",
+    "FOO=1 timeout 10 dev-loops-run scripts/github/probe-ci-status.mjs",
+    "cd x && timeout 30 dev-loops-run scripts/github/merge-pr.mjs",
+  ]) {
+    assert.equal(commandContainsTimeoutWrappedSanctionedTool(cmd), true, cmd);
+  }
+  for (const cmd of [
+    "dev-loops-run scripts/github/merge-pr.mjs --repo o/r --pr 5",
+    "timeout 90 bun test foo.test.mjs",
+    "echo timeout 300 dev-loops-run x",
+  ]) {
+    assert.equal(commandContainsTimeoutWrappedSanctionedTool(cmd), false, cmd);
+  }
 });

@@ -35,6 +35,7 @@ import {
   commandContainsRawPrBodyEdit,
   commandContainsRawPrBodyApiWrite,
   commandContainsDetachedWaitTool,
+  commandContainsTimeoutWrappedSanctionedTool,
   commandContainsInlineInterpreter,
   commandContainsCodeVerificationEntrypoint,
 } from "./_bash-command-classify.mjs";
@@ -266,6 +267,18 @@ export function decideBashGate({
         "gh run watch) — nohup/disown/tmux/screen detach, while-sleep-poll loops, and bare-`&` " +
         "backgrounding of a probe/wait script are barred for the coordinator and every subagent (a " +
         "backgrounded wait orphans under Claude Code, which has no async wake to join it).",
+    };
+  }
+
+  // `timeout N <sanctioned command>` hides the `dev-loops-run` head from operator allow rules
+  // (issue 2755). Sanctioned wait tools bound themselves with `--timeout <seconds>`.
+  if (inManagedRepo && commandContainsTimeoutWrappedSanctionedTool(command)) {
+    return {
+      decision: "deny",
+      reason:
+        "Do not wrap sanctioned dev-loops commands in `timeout N`: the wrapper hides the " +
+        "`dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound " +
+        "themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
     };
   }
 

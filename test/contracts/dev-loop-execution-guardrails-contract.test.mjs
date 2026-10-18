@@ -42,8 +42,8 @@ test("dev-loop SKILL enforces bounded-timeout test runs (#1650)", async () => {
   const skill = await readRepo("skills/dev-loop/SKILL.md");
   assert.match(
     skill,
-    /timeout 90 bun test <file>/,
-    "the dev-loop SKILL should mandate a hard timeout on test runs",
+    /bun test --timeout <ms> <file>/,
+    "the dev-loop SKILL should bound test runs with bun's own --timeout flag",
   );
 
 });
@@ -52,10 +52,10 @@ test("dev-loop SKILL enforces bounded Copilot/CI watch (#1660)", async () => {
   const skill = await readRepo("skills/dev-loop/SKILL.md");
   assert.match(
     skill,
-    /node <dev-loops-package-root>\/cli\/index\.mjs gate probe-copilot --timeout-ms 300000/,
+    /node <dev-loops-package-root>\/cli\/index\.mjs gate probe-copilot --timeout 300/,
     "the bounded-watch guardrail should name the bounded probe invocation",
   );
-  assert.match(skill, /timeout 540 <cmd>/);
+  assert.doesNotMatch(skill, /timeout 540 <cmd>/);
   // Prior-stall anecdotes and wording cannot prove the timeout policy.
   // probe-copilot-review/run-watch-cycle tests cover executable timeout behavior.
 
@@ -148,4 +148,17 @@ test("dev-loop agent contract broadens the blocking-wait invariant to CI/Copilot
     /Every sub-loop[\s\S]{0,120}runs in its own dedicated fresh-context agent/i,
     "the delegation section should state the fresh-context-per-sub-loop invariant",
   );
+});
+
+test("no skill, agent, or generated Claude asset prescribes a `timeout N` shell wrapper (issue 2755)", async () => {
+  const { readdirSync, readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const root = new URL("../../", import.meta.url).pathname;
+  const markdownIn = (dir) => readdirSync(join(root, dir), { recursive: true })
+    .filter((p) => p.endsWith(".md") && !p.split("/").includes("node_modules"))
+    .map((p) => join(dir, p));
+  const wrapper = /`(?:g?timeout) (?:-\S+ )*\d+[smhd]? /;
+  const offenders = ["skills", "agents", ".claude"].flatMap(markdownIn)
+    .filter((file) => wrapper.test(readFileSync(join(root, file), "utf8")));
+  assert.deepEqual(offenders, []);
 });
