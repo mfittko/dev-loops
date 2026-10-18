@@ -934,7 +934,16 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
   )];
   const containment = await buildContainmentMap(tackledShas, { repo, headSha: currentHeadSha }, runtime);
   // A caller that has not read the threads yet passes a loader, so a PR with no checkpoint costs no read.
-  const threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
+  // A failed thread read (for example HTTP 502) makes the disposition advisory-incomplete instead of aborting the caller (ADR 0155).
+  let threads;
+  try {
+    threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
+  } catch (error) {
+    return {
+      complete: false,
+      incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unverified_threads: ${error instanceof Error ? error.message : String(error)}` }],
+    };
+  }
   const liveThreads = threads.threads.map((thread) => ({
     threadId: thread.id,
     isResolved: thread.isResolved,
