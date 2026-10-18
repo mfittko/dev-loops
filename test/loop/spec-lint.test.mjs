@@ -284,6 +284,8 @@ test("size forecast: a malformed forecast bullet next to a valid one is a size_f
     "- Forecast slice=2 wloc=1800 files=b.mjs",
     "- slice=2 wloc=1800 files=b.mjs",
     "1. forecast slice=2 wloc=1800 files=b.mjs",
+    "forecast: slice=2 wloc=1800 files=b.mjs",
+    "- wloc=1800 slice=2 files=b.mjs",
   ]) {
     const { findings } = await run(valid, line);
     assert.deepEqual(sizeKinds(findings), ["size_forecast_malformed:size-forecast"], line);
