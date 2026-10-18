@@ -743,7 +743,7 @@ if (isDirectCliRun(import.meta.url)) {
     const exitCode = await main();
     process.exitCode = exitCode;
   } catch (error) {
-    // Only the typed pre-PR and head refusals carry `code` in the envelope; formatCliError forwards it for config_load_failed alone.
+    // Only the typed refusals listed below (pre-PR, head, size_split_required_before_pr) carry `code` in the envelope; formatCliError forwards it for config_load_failed alone.
     const envelope = JSON.parse(formatCliError(error));
     if (error?.code === PRE_PR_REVIEW_MISSING || error?.code === HEAD_UNRESOLVABLE || error?.code === SIZE_SPLIT_REQUIRED_BEFORE_PR) envelope.code = error.code;
     process.stderr.write(`${JSON.stringify(envelope)}\n`);

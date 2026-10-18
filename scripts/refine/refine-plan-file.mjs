@@ -43,7 +43,10 @@ Required:
                       default tier's waiverLoc always fails closed
                       (size_estimate_split_required; PLAN-SIZE-BAND).
                       sourceFiles (forecast paths) is required when
-                      logicLoc > 0.
+                      logicLoc > 0. An estimate under gates.size.planningBand.minLoc
+                      (0 disables) must carry a non-empty mergeAssessment or
+                      the refine fails closed (size_estimate_merge_not_assessed;
+                      PLAN-SIZE-BAND).
 Optional:
   --json              Machine-readable JSON output
   --help              Show this help
