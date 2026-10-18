@@ -4,9 +4,11 @@
 
 Accepted — 2026-10-18 ([PR 2813](https://github.com/mfittko/dev-loops/pull/2813))
 
+Amends [0123](./0123-adr-tripwire-early-surface.md) and [0084](./0084-grill-clean-requires-recorded-provenance.md).
+
 ## Context
 
-Amends [0123](./0123-adr-tripwire-early-surface.md) and [0084](./0084-grill-clean-requires-recorded-provenance.md). 0123 decides that a block never refuses PR creation and lists refusing creation as a rejected alternative. This record reverses that for the size check only. Record 0084 decides that the zero-iteration `grill_clean` exit requires a shape-clean artifact and recorded provenance. This record adds a third condition: no `size_forecast_*` spec-lint finding. Records 0123 and 0084 stay unedited.
+0123 decides that a block never refuses PR creation and lists refusing creation as a rejected alternative. This record reverses that for the size check only. Record 0084 decides that the zero-iteration `grill_clean` exit requires a shape-clean artifact and recorded provenance. This record adds a third condition: no `size_forecast_*` spec-lint finding. Records 0123 and 0084 stay unedited.
 
 A branch far above the size budget was created as a PR and then needed a split after review rounds were spent. The size is known locally before the PR exists ([issue 2756](https://github.com/mfittko/dev-loops/issues/2756)).
 
