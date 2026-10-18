@@ -43,7 +43,7 @@ async function run(dir, argv, extra = {}) {
   return { code, out: out ? JSON.parse(out) : null, err: err ? JSON.parse(err.trim().split("\n").pop()) : null };
 }
 
-const record = ["--verdict", "clean", "--disposition", "none", "--base", "main"];
+const record = ["--verdict", "clean", "--disposition", "none", "--base", "main", "--no-linked-issue"];
 const withRepo = (fn) => async () => {
   const dir = staleRepo();
   try { await fn(dir); } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -116,8 +116,8 @@ test("the PR body is compared with the linked issue: a widened issue yields hits
   const scan = async () => (await run(dir, ["--scan", "--base", "main", "--body-file", body, "--issue", "7"], { readIssueBody })).out;
   writeFileSync(body, PR_OLD);
   const stale = (await scan()).staleSurfaceHits.filter((h) => h.kind === "pr-body").map((h) => h.site).sort();
-  assert.deepEqual(stale, ["pr-body/acceptance-criteria:2", "pr-body/definition-of-done:2", "pr-body/in-scope:2", "pr-body/in-scope:2"]);
-  const refused = await run(dir, [...record, "--body-file", body, "--issue", "7"], { readIssueBody });
+  assert.deepEqual(stale, ["issue-body/acceptance-criteria:2", "issue-body/definition-of-done:2", "issue-body/in-scope:2", "pr-body/in-scope:2"]);
+  const refused = await run(dir, [...record.slice(0, -1), "--body-file", body, "--issue", "7"], { readIssueBody });
   assert.equal(refused.err.code, "pre_pr_stale_surface_unaddressed");
   assert.match(refused.err.error, /pr-body\/in-scope:2/);
   writeFileSync(body, PR_NEW);
@@ -130,6 +130,21 @@ test("without --issue no comparison runs, and --body-file and --issue come as a 
   assert.equal((await run(dir, ["--scan", "--base", "main"], { readIssueBody })).code, 0);
   assert.equal((await run(dir, ["--scan", "--base", "main", "--issue", "7"], { readIssueBody })).code, 1);
   assert.equal((await run(dir, ["--scan", "--base", "main", "--body-file", "b.md"], { readIssueBody })).code, 1);
+}));
+
+test("record mode needs a linked-issue flag, flags are exclusive, and --scan rejects verdict flags", withRepo(async (dir) => {
+  const noSweepFlag = ["--verdict", "clean", "--disposition", "none", "--base", "main"];
+  assert.equal((await run(dir, noSweepFlag)).code, 1);
+  assert.equal((await run(dir, [...noSweepFlag, "--no-linked-issue", "--issue", "7", "--body-file", "b.md"])).code, 1);
+  assert.equal((await run(dir, ["--scan", "--base", "main", "--verdict", "clean"])).code, 1);
+  assert.equal((await run(dir, ["--scan", "--base", "main", "--disposition", "none"])).code, 1);
+  assert.equal((await validatePrePrReview({ cwd: dir })).ok, false);
+}));
+
+test("an empty scan range fails closed in scan and record mode", withRepo(async (dir) => {
+  assert.equal((await run(dir, ["--scan", "--base", "HEAD"])).code, 1);
+  assert.equal((await run(dir, [...record.slice(0, -3), "--base", "HEAD", "--no-linked-issue"])).code, 1);
+  assert.equal((await validatePrePrReview({ cwd: dir })).ok, false);
 }));
 
 test("scan and refusal behave identically for the claude and pi harness environments", withRepo(async (dir) => {

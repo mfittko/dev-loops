@@ -29,6 +29,7 @@ function readIssueBodyFromGitHub({ cwd, issue }) {
 export async function scanPrePrStaleSurface({ cwd, base, bodyFile, issue, staleSurface = gitStaleSurfaceHits, readIssueBody = readIssueBodyFromGitHub }) {
   const head = git(cwd, ["rev-parse", "HEAD"]);
   const baseline = git(cwd, ["merge-base", base, "HEAD"]);
+  if (baseline === head) throw new Error(`empty scan range: merge-base of ${base} and HEAD is HEAD, nothing to scan (PRE-PR-STALE-SURFACE-SWEEP fails closed)`);
   const found = staleSurface(cwd, baseline, head);
   const staleSurfaceHits = [...found.hits];
   if (bodyFile) {

@@ -22,7 +22,9 @@ Sweep flags:
   --scan               Print the sweep result and write nothing (paste it into the reviewer brief)
   --base <ref>         Base ref of base...HEAD (default: origin/<configured base branch>)
   --body-file <path>   PR body file to compare with the linked issue (pair with --issue)
-  --issue <n>          Linked issue number (pair with --body-file); omit when the PR body is the spec
+  --issue <n>          Linked issue number (pair with --body-file)
+  --no-linked-issue    The PR body is the spec (exclusive with --body-file and --issue)
+                       Record mode requires --body-file with --issue, or --no-linked-issue.
   --skips-file <path>  JSON array of { "site": "<file>|<file>:<line>|<file>:<a>-<b>", "reason": "<non-empty>" }
 Output (stdout, JSON): { "ok": true, "head", "verdict", "disposition", "file" }
 Scan output (stdout, JSON): { "ok", "head", "base", "staleSurfaceHits", "staleSurfaceTruncated", "truncatedNeedles" }
@@ -37,10 +39,15 @@ async function defaultBase(cwd) {
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, cwd = process.cwd(), readIssueBody } = {}) {
   try {
-    const { values } = parseArgs({ args: argv, options: { help: { type: "boolean", short: "h" }, verdict: { type: "string" }, disposition: { type: "string" }, scan: { type: "boolean" }, base: { type: "string" }, "body-file": { type: "string" }, issue: { type: "string" }, "skips-file": { type: "string" }, ...JQ_OUTPUT_PARSE_OPTIONS }, strict: true });
+    const { values } = parseArgs({ args: argv, options: { help: { type: "boolean", short: "h" }, verdict: { type: "string" }, disposition: { type: "string" }, scan: { type: "boolean" }, "no-linked-issue": { type: "boolean" }, base: { type: "string" }, "body-file": { type: "string" }, issue: { type: "string" }, "skips-file": { type: "string" }, ...JQ_OUTPUT_PARSE_OPTIONS }, strict: true });
     if (values.help) { stdout.write(`${USAGE}\n`); return 0; }
+    if (values.scan && (values.verdict || values.disposition)) throw parseError("--scan cannot be combined with --verdict or --disposition");
     if (!values.scan && (!values.verdict || !values.disposition)) throw parseError("pre-pr-review requires --verdict and --disposition (or --scan)");
+    if (!values.scan && !PRE_PR_REVIEW_VERDICTS.includes(values.verdict)) throw parseError(`--verdict must be one of ${PRE_PR_REVIEW_VERDICTS.join(", ")}`);
+    if (!values.scan && !PRE_PR_REVIEW_DISPOSITIONS.includes(values.disposition)) throw parseError(`--disposition must be one of ${PRE_PR_REVIEW_DISPOSITIONS.join(", ")}`);
     if (Boolean(values["body-file"]) !== Boolean(values.issue)) throw parseError("--body-file and --issue come as a pair");
+    if (values["no-linked-issue"] && values.issue) throw parseError("--no-linked-issue cannot be combined with --body-file or --issue");
+    if (!values.scan && !values.issue && !values["no-linked-issue"]) throw parseError("record mode requires --body-file with --issue, or --no-linked-issue when the PR body is the spec");
     const output = { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr };
     const scan = await scanPrePrStaleSurface({ cwd, base: values.base ?? await defaultBase(cwd), bodyFile: values["body-file"], issue: values.issue, ...(readIssueBody ? { readIssueBody } : {}) });
     if (values.scan) return emitResult(scan, output);

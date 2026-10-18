@@ -1270,7 +1270,7 @@ test("diffPrBodyAgainstIssue flags a widened issue: missing AC row and stale In 
   const matrix = MATRIX + "| AC3 — the widened case is handled | D3 — a test pins the widened case |\n";
   const hits = diffPrBodyAgainstIssue({ prBody: prWith({ scope: "- Alpha\n- Beta" }), issueBody: issueWith({ matrix }) });
   const sites = hits.map((h) => h.site).sort();
-  assert.deepEqual(sites, ["pr-body/acceptance-criteria:3", "pr-body/definition-of-done:3", "pr-body/in-scope:2", "pr-body/in-scope:2"]);
+  assert.deepEqual(sites, ["issue-body/acceptance-criteria:3", "issue-body/definition-of-done:3", "issue-body/in-scope:2", "pr-body/in-scope:2"]);
   assert.ok(hits.every((h) => h.kind === "pr-body" && h.file === h.site.replace(/:\d+$/u, "")));
   assert.ok(hits.some((h) => h.needle.includes("widened case is handled")));
 });
@@ -1284,7 +1284,21 @@ test("diffPrBodyAgainstIssue ignores markers, case and whitespace, and skips a m
 test("diffPrBodyAgainstIssue fails closed with one hit when the issue has no valid matrix", () => {
   const hits = diffPrBodyAgainstIssue({ prBody: prWith(), issueBody: issueWith({ matrix: "" }) });
   assert.equal(hits.length, 1);
-  assert.equal(hits[0].site, "pr-body/issue-matrix");
+  assert.equal(hits[0].site, "issue-body/issue-matrix");
+});
+
+test("diffPrBodyAgainstIssue reads heading variants on both sides", () => {
+  const issueBody = issueWith().replace("## In scope", "### Scope (slice 1)").replace("## Non-goals", "## Out of scope");
+  const prBody = prWith({ scope: "* Alpha\n  + Beta wide" }).replace("## Non-goals", "## Non goals");
+  assert.deepEqual(diffPrBodyAgainstIssue({ prBody, issueBody }), []);
+  const mismatched = diffPrBodyAgainstIssue({ prBody: prWith({ scope: "1. Alpha\n2) Other" }), issueBody });
+  assert.deepEqual(mismatched.map((h) => h.site).sort(), ["issue-body/in-scope:2", "pr-body/in-scope:2"]);
+});
+
+test("diffPrBodyAgainstIssue flags a PR Non-goals list when the issue has no Non-goals section", () => {
+  const issueBody = issueWith().replace(/## Non-goals[\s\S]*$/u, "");
+  const hits = diffPrBodyAgainstIssue({ prBody: prWith(), issueBody });
+  assert.deepEqual(hits.map((h) => h.site), ["pr-body/non-goals:1"]);
 });
 
 test("diffPrBodyAgainstIssue flags PR items the issue lacks, including non-goals", () => {

@@ -20,7 +20,6 @@
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { extractSection } from "./markdown-sections.mjs";
 
 /**
  * This module owns:
@@ -310,7 +309,7 @@ export function parseMarkdownSections(body) {
  * Only called on an already-recognized AC/DoD section, so counting
  * plain bullets never affects prose sections.
  */
-function parseChecklistItems(sectionBody) {
+function parseChecklistItems(sectionBody, { anyMarker = false } = {}) {
   if (typeof sectionBody !== "string" || sectionBody.length === 0) {
     return [];
   }
@@ -349,7 +348,9 @@ function parseChecklistItems(sectionBody) {
     }
     // Top-level plain bullet: dash at column 0, space required (so `---`
     // horizontal rules and `-x` do not match; indented sub-bullets do not).
-    const bulletMatch = /^-\s+(.+?)\s*$/u.exec(line);
+    // `anyMarker` (the PR body versus issue comparison) also accepts indented
+    // `*`/`+`/numbered items, consistent with the checkbox grammar above.
+    const bulletMatch = (anyMarker ? /^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$/u : /^-\s+(.+?)\s*$/u).exec(line);
     if (bulletMatch) {
       const text = bulletMatch[1].trim();
       if (text.length > 0) {
@@ -369,8 +370,8 @@ function parseChecklistItems(sectionBody) {
  * that). Thin wrapper over `parseChecklistItems` so the text-only contract
  * stays byte-identical to its original shape.
  */
-export function extractChecklistItems(sectionBody) {
-  return parseChecklistItems(sectionBody).map((item) => item.text);
+export function extractChecklistItems(sectionBody, options) {
+  return parseChecklistItems(sectionBody, options).map((item) => item.text);
 }
 
 /**
@@ -1570,41 +1571,46 @@ const normalizeSpecItem = (text) =>
 /**
  * Compare the PR body's In scope, Acceptance criteria, Definition of done and Non-goals items with the
  * linked issue body. Returns stale-surface-shaped hits `{ kind: "pr-body", side, needle, file, line, site }`
- * for every PR item the issue lacks and every issue item the PR lacks. `file` is `pr-body/<section-slug>`,
- * `line` the 1-based index in the list that holds the item, `site` is `file:line`. Issue AC and DoD come
- * from the issue matrix; an issue without a valid matrix yields one `pr-body/issue-matrix` hit. Pure.
+ * for every PR item the issue lacks and every issue item the PR lacks. `file` is `pr-body/<section-slug>`
+ * for a PR-side hit and `issue-body/<section-slug>` for an issue-side hit, so the two sides never share a
+ * site. `line` is the 1-based index in the list that holds the item, `site` is `file:line`. Issue AC and
+ * DoD come from the issue matrix; an issue without a valid matrix yields one `issue-body/issue-matrix` hit. Pure.
  *
  * @param {{ prBody?: string, issueBody?: string }} input
  */
 export function diffPrBodyAgainstIssue({ prBody = "", issueBody = "" } = {}) {
   const prSections = parseMarkdownSections(prBody);
-  const prList = (patterns) => {
-    const section = prSections[findSpecSectionIndex(prSections, patterns)];
-    return section ? extractChecklistItems(section.bodyLines.join("\n")) : [];
+  const issueSections = parseMarkdownSections(issueBody);
+  const sectionItems = (sections, patterns) => {
+    const section = sections[findSpecSectionIndex(sections, patterns)];
+    return section ? extractChecklistItems(section.bodyLines.join("\n"), { anyMarker: true }) : [];
   };
-  const issueList = (heading) => extractChecklistItems(extractSection(issueBody, heading) ?? "");
+  const prList = (patterns) => sectionItems(prSections, patterns);
+  const issueList = (patterns) => sectionItems(issueSections, patterns);
+  const nonGoalPatterns = [...PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns, ...SPEC_SECTION_NAME_PATTERNS.nonGoals];
   const hits = [];
   const compare = (slug, prItems, issueItems) => {
-    const file = `pr-body/${slug}`;
-    const add = (side, items, other) => {
+    const add = (side, prefix, items, other) => {
+      const file = `${prefix}/${slug}`;
       const known = new Set(other.map(normalizeSpecItem));
       items.forEach((needle, index) => {
         if (!known.has(normalizeSpecItem(needle))) hits.push({ kind: "pr-body", side, needle, file, line: index + 1, site: `${file}:${index + 1}` });
       });
     };
-    add("pr", prItems, issueItems);
-    add("issue", issueItems, prItems);
+    add("pr", "pr-body", prItems, issueItems);
+    add("issue", "issue-body", issueItems, prItems);
   };
-  if (extractSection(issueBody, "In scope") !== null) {
-    compare("in-scope", prList(PR_BODY_SPEC_NARRATIVE_SECTIONS.in_scope.patterns), issueList("In scope"));
+  const inScope = PR_BODY_SPEC_NARRATIVE_SECTIONS.in_scope.patterns;
+  if (findSpecSectionIndex(issueSections, inScope) !== -1) {
+    compare("in-scope", prList(inScope), issueList(inScope));
   }
   try {
     const { acChecklist, dodChecklist } = derivePrChecklistsFromIssueMatrix({ body: issueBody });
     compare("acceptance-criteria", prList(SPEC_SECTION_NAME_PATTERNS.acceptanceCriteria), acChecklist);
     compare("definition-of-done", prList(SPEC_SECTION_NAME_PATTERNS.definitionOfDone), dodChecklist);
   } catch (error) {
-    hits.push({ kind: "pr-body", side: "issue", needle: error.message, file: "pr-body/issue-matrix", line: 0, site: "pr-body/issue-matrix" });
+    hits.push({ kind: "pr-body", side: "issue", needle: error.message, file: "issue-body/issue-matrix", line: 0, site: "issue-body/issue-matrix" });
   }
-  compare("non-goals", prList(SPEC_SECTION_NAME_PATTERNS.nonGoals), issueList("Non-goals"));
+  compare("non-goals", prList(nonGoalPatterns), issueList(nonGoalPatterns));
   return hits;
 }
