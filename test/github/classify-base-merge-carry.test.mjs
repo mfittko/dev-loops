@@ -229,3 +229,18 @@ test("main: writes the keyed evidence artifact and refuses a short prev-head", a
   assert.equal(process.exitCode, 1);
   process.exitCode = saved;
 });
+
+test("git: patch ids ignore repo-local core.abbrev and diff.suppressBlankEmpty", async () => {
+  const s = setup();
+  s.put("blank.txt", "a\n\nb\n"); s.put("bin.dat", Buffer.from([0, 1, 2, 3]));
+  s.git("add", "-A"); s.git("commit", "-qm", "files");
+  const prev = s.head();
+  s.put("blank.txt", "a\n\nc\n"); s.put("bin.dat", Buffer.from([0, 9, 2, 3]));
+  s.git("add", "-A"); s.git("commit", "-qm", "edit");
+  const args = { prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir };
+  const plain = await computeBaseMergeCarry(args);
+  s.git("config", "core.abbrev", "12"); s.git("config", "diff.suppressBlankEmpty", "true");
+  const configured = await computeBaseMergeCarry(args);
+  assert.ok(plain.patchIdAfter);
+  assert.equal(configured.patchIdAfter, plain.patchIdAfter);
+});

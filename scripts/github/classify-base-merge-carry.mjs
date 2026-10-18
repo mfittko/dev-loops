@@ -28,23 +28,25 @@ export function buildBaseMergeCarryPath({ repo, pr, gate, headSha, tmpRoot = "tm
 
 // --verbatim keeps whitespace significant: an indentation-only change must change the id.
 // --verbatim implies the stable mode (git rejects it together with --stable); repoRoot and env pin the id against ambient cwd and GIT_DIR.
+const ISOLATED_ENV = () => ({ ...gitEnvWithoutDirOverrides(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" });
+
 function stablePatchId(diffText, repoRoot) {
-  const r = spawnSync("git", ["patch-id", "--verbatim"], { input: diffText, encoding: "utf8", cwd: repoRoot, env: gitEnvWithoutDirOverrides() });
+  const r = spawnSync("git", ["patch-id", "--verbatim"], { input: diffText, encoding: "utf8", cwd: repoRoot, env: ISOLATED_ENV() });
   if (r.error || r.status !== 0) throw new Error(`git patch-id failed: ${r.error?.message ?? r.stderr}`);
   return r.stdout.split(/\s+/)[0] || "";
 }
 
 async function git(runGit, repoRoot, args) {
-  const r = await runGit(args, { repoRoot });
+  const r = await runGit(args, { repoRoot, env: ISOLATED_ENV() });
   if (r.code !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr.trim()}`);
   return r.stdout;
 }
 
 const lines = (s) => s.split("\n").filter(Boolean);
 const nulLines = (s) => s.split("\0").filter(Boolean);
-// Pin the diff shape (context, algorithm, hunk joining, prefixes) so patch ids do not depend on ambient gitconfig.
-const GIT_ISOLATION = ["-c", "color.ui=false", "-c", "core.pager=cat", "-c", "core.autocrlf=false", "-c", "core.quotePath=false", "-c", "diff.interHunkContext=0", "-c", "diff.orderFile=/dev/null", "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false"];
-const DIFF_FLAGS = ["--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--src-prefix=a/", "--dst-prefix=b/", "--no-color", "--no-relative", "--no-renames", "-U3", "--diff-algorithm=myers", "--no-indent-heuristic"];
+// Pin the diff shape (context, algorithm, hunk joining, prefixes, blank-context rendering, full index line) and drop global/system config via ISOLATED_ENV; repo-local config is covered by the pinned -c knobs.
+const GIT_ISOLATION = ["-c", "color.ui=false", "-c", "core.pager=cat", "-c", "core.autocrlf=false", "-c", "core.quotePath=false", "-c", "diff.interHunkContext=0", "-c", "diff.orderFile=/dev/null", "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "-c", "diff.suppressBlankEmpty=false"];
+const DIFF_FLAGS = ["--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--src-prefix=a/", "--dst-prefix=b/", "--no-color", "--no-relative", "--no-renames", "-U3", "--diff-algorithm=myers", "--no-indent-heuristic", "--full-index"];
 
 export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRoot, runGit = runGitCommand, patchId = (d) => stablePatchId(d, repoRoot) }) {
   try {
