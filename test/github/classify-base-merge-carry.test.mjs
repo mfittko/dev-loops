@@ -84,6 +84,19 @@ test("git: base move touching a PR path is partial", async () => {
   assert.equal(ev.decision, "partial_carry", ev.reason);
 });
 
+test("git: ambient GIT_DIFF_OPTS does not change the decision or patch ids", async () => {
+  const s = setup();
+  s.put("base.txt", `PR\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits top of base.txt");
+  const prev = s.head();
+  s.git("checkout", "-q", "main"); s.put("base.txt", `${LINES.slice(0, -7)}MAIN\n`); s.git("add", "-A"); s.git("commit", "-qm", "main edits bottom");
+  s.git("checkout", "-q", "pr"); s.git("merge", "-q", "--no-edit", "main");
+  const args = { prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir };
+  const clean = await computeBaseMergeCarry(args);
+  const saved = process.env.GIT_DIFF_OPTS;
+  process.env.GIT_DIFF_OPTS = "-u0";
+  try { assert.deepEqual(await computeBaseMergeCarry(args), clean); } finally { if (saved === undefined) delete process.env.GIT_DIFF_OPTS; else process.env.GIT_DIFF_OPTS = saved; }
+});
+
 test("git: PR patch changed forces full re-gate", async () => {
   const s = setup();
   const prev = s.head();

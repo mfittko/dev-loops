@@ -28,7 +28,12 @@ export function buildBaseMergeCarryPath({ repo, pr, gate, headSha, tmpRoot = "tm
 
 // --verbatim keeps whitespace significant: an indentation-only change must change the id.
 // --verbatim implies the stable mode (git rejects it together with --stable); repoRoot and env pin the id against ambient cwd and GIT_DIR.
-const ISOLATED_ENV = () => ({ ...gitEnvWithoutDirOverrides(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" });
+// ISOLATED_ENV also strips the diff-shaping (GIT_DIFF_OPTS, GIT_EXTERNAL_DIFF) and config-injecting (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT, GIT_CONFIG_KEY_n, GIT_CONFIG_VALUE_n) variables, which would override the pinned diff flags.
+const ISOLATED_ENV = () => {
+  const env = { ...gitEnvWithoutDirOverrides(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+  for (const k of Object.keys(env)) if (/^GIT_(DIFF_OPTS|EXTERNAL_DIFF|CONFIG_PARAMETERS|CONFIG_COUNT|CONFIG_KEY_\d+|CONFIG_VALUE_\d+)$/.test(k)) delete env[k];
+  return env;
+};
 
 function stablePatchId(diffText, repoRoot) {
   const r = spawnSync("git", ["patch-id", "--verbatim"], { input: diffText, encoding: "utf8", cwd: repoRoot, env: ISOLATED_ENV() });
