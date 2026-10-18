@@ -292,6 +292,8 @@ test("size forecast: a malformed forecast bullet next to a valid one is a size_f
   // Accepted forms stay clean, including a comma-joined files list.
   assert.deepEqual(sizeKinds((await run(valid, "- forecast: slice=2 wloc=1800 files=a.mjs,b.mjs")).findings), ["size_forecast_split_required:2"]);
   assert.deepEqual(sizeKinds((await run(valid)).findings), []);
+  // Ordinary prose that mentions `wLOC =` is not a forecast bullet.
+  assert.deepEqual(sizeKinds((await run(valid, "wLOC = source + 0.25 x test: 130 + 440 and 85 + 600.", "- note: wloc = 130 here")).findings), []);
   // A malformed bullet with no valid line still reports the missing forecast too.
   assert.deepEqual(sizeKinds((await run("- forecast: slice=2 wloc=1800 files=a.mjs, b.mjs")).findings), ["size_forecast_missing:size-forecast", "size_forecast_malformed:size-forecast"]);
 });

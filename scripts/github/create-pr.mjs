@@ -653,7 +653,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
       // (unknown) never refuses; the draft gate stays the authority.
       let size = null;
       try {
-        size = await (runtime.evaluatePrSizeBudget ?? evaluatePrSizeBudget)({ base: `origin/${bareBase}`, head: resolvedHead, repoRoot: diffCwd });
+        size = await (runtime.evaluatePrSizeBudget ?? evaluatePrSizeBudget)({ base: `origin/${bareBase}`, head: resolvedHead, repoRoot: resolveRepoRoot(diffCwd) });
       } catch {
         size = null;
       }

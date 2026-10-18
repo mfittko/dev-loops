@@ -207,7 +207,7 @@ export function lintAdrCitations(body, records) {
 
 const FORECAST_LINE_RE = /^\s*-\s+forecast:\s+slice=(\S+)\s+wloc=(\d+)\s+files=(\S+)\s*$/;
 // Any bullet that claims to be a forecast line; one that misses FORECAST_LINE_RE is reported, never dropped.
-const FORECAST_BULLET_RE = /^\s*(?:[-*+]|\d+[.)])\s*forecast\b|\bwloc\s*=/iu;
+const FORECAST_BULLET_RE = /^\s*(?:[-*+]|\d+[.)])\s*(?:forecast\b|.*\bslice=.*\bwloc\s*=)/iu;
 
 /**
  * PLAN-SIZE-BAND forecast lines under `## Size forecast`: one line per slice,
