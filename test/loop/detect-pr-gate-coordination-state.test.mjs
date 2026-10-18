@@ -3901,7 +3901,7 @@ test("detect-pr-gate-coordination-state behaves exactly as before when no fixer-
 });
 
 // A full-phase fixer handoff delivered for the live head that lists a tackled thread, with no
-// verification checkpoint, means verify-fixer-disposition never completed: the boundary fails closed.
+// verification checkpoint, means verify-fixer-disposition never completed: the boundary warns (advisory, ADR 0155).
 async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, active, receiptMtime }, assertResult) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-fixer-not-verified-"));
   const REPO = "owner/repo";
