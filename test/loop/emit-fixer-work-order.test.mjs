@@ -1220,7 +1220,13 @@ test("ordinary rendering matches the independent approved base renderer byte for
   const { runInNewContext } = await import("node:vm");
   const baseline = runInNewContext(`(${source.slice(start, end).replace("export function", "function")})`, { path, PLAN_FILE: "fixer-emit-plan.json", renderRequiredReadLine: (await import("../../scripts/github/write-gate-context.mjs")).renderRequiredReadLine });
   await withFixture(async ({ emit, prepareFull }) => {
-    // The full-phase completion text is the deliberate target of #2787 (numbered push-before-construct steps), so only the ordinary commit_only render stays byte-pinned.
+    // The full-phase ACT fix text is the sanctioned #2787 change (numbered push-before-construct steps): pin it against an explicit string; everything else stays equal to the base render.
+    const full = (await (await prepareFull()).full()).workOrder;
+    const q = (value) => `'${value}'`;
+    const verifier = `node ${q(path.join(path.dirname(path.dirname(full.executionRules.contract)), "scripts/github/verify-fixer-disposition.mjs"))} --repo ${q(REPO)} --pr ${PR} --head-sha ${full.headSha} --fixer-plan ${q(path.join(path.dirname(path.dirname(full.outputRefs[0])), "fixer-emit-plan.json"))}`;
+    const completion = `Do these steps in order, with every command's cwd at the mutation authority worktree. (1) Push only the reviewed committed candidate \`${full.headSha}\`; do not re-fix source or reclassify coverage. (2) Confirm the PR remote branch "issue-1" points at \`${full.headSha}\` (for example with git ls-remote); stop if it does not. (3) If the outputRef does not exist, run \`${verifier} --construct\`, then run \`${verifier}\` to reply, resolve and verify. If the outputRef already exists, run that normal command (or append \`--check\` for read-only verification); never delete, overwrite or reconstruct it. The authenticated completion-input preserves the original fixing commit and raw site coverage. Construction alone does not complete delivery.`;
+    const swapTask = (text) => text.split("\n").map((line) => (line.startsWith("Push only the reviewed committed candidate") ? completion : line)).join("\n");
+    assert.equal(renderWorkOrder(full), swapTask(baseline(full)));
     for (const unit of [await emit()]) {
       assert.equal(renderWorkOrder(unit.workOrder), baseline(unit.workOrder));
       delete unit.workOrder.operation;
@@ -2059,6 +2065,54 @@ test("completion text orders push, remote confirmation and construct", async () 
 test("a THREAD full order lists the verifier step", async () => {
   await withFixture(async ({ files, emit }) => {
     const thread = renderWorkOrder((await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined })).workOrder);
-    assert.match(thread, /After the handoff is written, run `node [^`]+verify-fixer-disposition\.mjs[^`]+`, then `[^`]+ --check`/);
+    assert.match(thread, /After the handoff is written and the push is done, replace `<pushed-head-sha>` with .*`git rev-parse HEAD`.*, run `node [^`]+verify-fixer-disposition\.mjs[^`]+`, then `[^`]+ --check`/);
+  });
+});
+
+// THREAD-source re-entry plus its refusal and no-side-effect boundaries (#2787).
+async function stuckThread(fixture) {
+  const old = await fixture.emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: fixture.files.threads, deltaResult: undefined });
+  assert.equal(pull(old, fixture.root).status, 0);
+  const reenter = (over = {}) => emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: fixture.head, phase: "full", completionOnly: true, cwd: fixture.wt,
+    fetchPr: async () => ({ headRefName: "issue-1", headRefOid: fixture.head }), executionIdentity: nextExecution(), ...over });
+  return { old, reenter };
+}
+
+test("completion-only re-enters a THREAD plan with no source edits, no new Delta and the genuine output untouched", async () => {
+  await withFixture(async (fixture) => {
+    const { old, reenter } = await stuckThread(fixture);
+    const delta = path.join(fixture.root, "tmp", "gate-delta");
+    const before = await Promise.all((await readdir(delta)).map(async (file) => [file, await readFile(path.join(delta, file))]));
+    const unit = await reenter();
+    assert.equal(unit.workOrder.operation, "complete");
+    assert.equal(unit.workOrder.source, "threads");
+    assert.match(renderWorkOrder(unit.workOrder), /Write your own after-pull report/);
+    assert.deepEqual(await Promise.all((await readdir(delta)).map(async (file) => [file, await readFile(path.join(delta, file))])), before, "no new Delta and no counter reset");
+    assert.equal(pull(unit, fixture.root).status, 0);
+    await mkdir(path.dirname(unit.workOrder.outputRefs[0]), { recursive: true });
+    await writeFile(unit.workOrder.outputRefs[0], '{ "genuine": true }\n');
+    const output = await readFile(unit.workOrder.outputRefs[0]);
+    await assert.rejects(reenter(), /not missing or stale/);
+    assert.deepEqual(await readFile(unit.workOrder.outputRefs[0]), output, "existing genuine output stays byte for byte");
+    assert.ok(old.executionIdentity);
+  });
+});
+
+for (const defect of ["fakePlan", "foreignReceipt", "branchDrift", "threadBytes", "missingPlan", "allowedPath"]) test(`completion-only refuses a THREAD re-entry with ${defect}`, async () => {
+  await withFixture(async (fixture) => {
+    const { old, reenter } = await stuckThread(fixture);
+    let over = {};
+    if (defect === "fakePlan") { const fake = JSON.parse(await readFile(old.planPath)); fake.workOrder.headSha = "d".repeat(40); await writeFile(old.planPath, JSON.stringify(fake)); }
+    if (defect === "foreignReceipt") {
+      const receiptPath = pullReceiptPath(path.join(fixture.root, "tmp"), old.workOrderRef);
+      await writeFile(receiptPath, JSON.stringify({ ...JSON.parse(await readFile(receiptPath)), role: "reviewer" }));
+    }
+    if (defect === "branchDrift") over = { fetchPr: async () => ({ headRefName: "other", headRefOid: fixture.head }) };
+    if (defect === "threadBytes") await writeFile(fixture.files.threads, JSON.stringify({ ...THREADS, extra: true }));
+    if (defect === "missingPlan") await rm(old.planPath);
+    if (defect === "allowedPath") over = { allowedPaths: ["src/a.mjs"] };
+    const plan = existsSync(old.planPath) ? await readFile(old.planPath) : null;
+    await assert.rejects(reenter(over));
+    if (plan) assert.deepEqual(await readFile(old.planPath), plan, "refusal leaves the active plan untouched");
   });
 });

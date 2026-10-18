@@ -43,6 +43,7 @@ import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
+import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 // Gate-coordination terminal stop actions where the dev-loop run is completing
@@ -859,31 +860,47 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
   // A verified disposition carries to a descendant head: a fixer-disposition-<X>.json checkpoint X is
   // evaluated at the live head H when X is strictly contained by H (compare "ahead"); the tackled-commit
   // containment and live resolution are re-checked at H. Never a gate verdict; behind, diverged, or
-  // unreadable ancestors are skipped (null) and an incomplete ancestor checkpoint refuses.
+  // unreadable ancestors are skipped. Only a checkpoint bound to the active plan carries: its tackled
+  // threads must cover every thread the plan pins (THREAD source, hash-checked here). Any bound contained
+  // ancestor that is incomplete refuses, so an older complete one never wins over a newer incomplete one.
+  let planThreadIds = null;
+  const pinnedPlanThreads = async (order) => {
+    const read = (order.requiredReads ?? []).find((entry) => entry?.kind === "threads");
+    if (order.source !== "threads" || !read) return null;
+    const bytes = await readFile(read.path);
+    if (createHash("sha256").update(bytes).digest("hex") !== String(read.sha256 ?? "").replace(/^sha256:/, "")) return null;
+    const ids = JSON.parse(bytes.toString("utf8"))?.threads?.map((thread) => thread?.threadId);
+    return Array.isArray(ids) && ids.length > 0 && ids.every((id) => typeof id === "string" && id) ? new Set(ids) : null;
+  };
   const carryAncestorCheckpoint = async () => {
+    // An unverified handoff for the live head always refuses first.
+    if (!planThreadIds || await resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot })) return null;
+    const dir = path.dirname(path.resolve(repoRoot, logPath));
     let names;
     try {
-      names = await readdir(path.dirname(path.resolve(repoRoot, logPath)));
+      names = await readdir(dir);
     } catch {
       return null;
     }
-    let result = null;
+    let carried = null;
     for (const name of names) {
       const ancestor = /^fixer-disposition-([0-9a-f]{40})\.json$/.exec(name)?.[1];
       if (!ancestor || ancestor === currentHeadSha.toLowerCase()) continue;
-      const relation = await isCommitContainedByHead({ repo, commitSha: ancestor, headSha: currentHeadSha }, runtime);
-      if (!relation.contained) continue;
       let raw;
       try {
-        raw = await readFile(path.join(path.dirname(path.resolve(repoRoot, logPath)), name), "utf8");
+        raw = await readFile(path.join(dir, name), "utf8");
+        const tackled = new Set(normalizeFixerDispositionHandoff(JSON.parse(raw)).dispositions
+          .filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.threadId));
+        if (![...planThreadIds].every((id) => tackled.has(id))) continue;
       } catch {
         continue;
       }
+      if (!(await isCommitContainedByHead({ repo, commitSha: ancestor, headSha: currentHeadSha }, runtime)).contained) continue;
       const evaluated = await evaluateCheckpoint(raw);
-      if (evaluated.complete) return evaluated;
-      result = evaluated;
+      if (!evaluated.complete) return null;
+      carried = evaluated;
     }
-    return result;
+    return carried;
   };
   let planBytes;
   try {
@@ -910,6 +927,7 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
           applicable = relation.contained;
         }
         if (applicable) {
+          planThreadIds = await pinnedPlanThreads(order).catch(() => null);
           const checked = await verifyFixerDisposition({ repo, pr, headSha: currentHeadSha, fixerPlan: planPath, check: true }, { ...runtime, repoRoot });
           if (!checked.complete) {
             const carried = checked.activeFixer ? null : await carryAncestorCheckpoint();
@@ -928,7 +946,8 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
     }
     const unchanged = planBytes && await readFile(planPath).then((bytes) => bytes.equals(planBytes), () => false);
     return { complete: false, incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unverified_active_fixer: ${error instanceof Error ? error.message : String(error)}` }],
-      ...(unchanged && error?.code === "FIXER_RESULT_MISSING" && error.activeFixer ? { activeFixer: error.activeFixer } : {}) };
+      ...(unchanged && error?.code === "FIXER_RESULT_MISSING" && error.activeFixer ? { activeFixer: error.activeFixer } : {}),
+      ...(unchanged && error?.code === "FIXER_RESULT_STALE" && error.staleFixer ? { staleFixer: error.staleFixer } : {}) };
   }
   // Main-anchored copy first, then a legacy checkpoint an in-flight PR wrote
   // under a checkout's own tmp/ (the old cwd-relative default), so the

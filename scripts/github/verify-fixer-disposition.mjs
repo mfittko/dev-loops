@@ -266,7 +266,9 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   }
   // verifyPulledResult compares the handoff mtime to the receipt file mtime: one filesystem clock.
   if (receipt.reason === "result_predates_pull") {
-    throw new Error(`result_predates_pull: the disposition handoff ${handoffPath} was written before the pull at ${receipt.receipt.pulledAt}; a stale or replayed disposition never advances`);
+    const error = new Error(`result_predates_pull: the disposition handoff ${handoffPath} was written before the pull at ${receipt.receipt.pulledAt}; a stale or replayed disposition never advances`);
+    const staleFixer = await bindActiveFixer(false);
+    throw staleFixer ? Object.assign(error, { code: "FIXER_RESULT_STALE", staleFixer }) : error;
   }
   const bytesByRead = new Map();
   if (Object.hasOwn(order.authority ?? {}, "reviewBaselineHead")) {
