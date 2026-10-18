@@ -79,7 +79,7 @@ test("an ungranted marker covering the head refuses", () => {
   assert.equal(findActiveSequence({ tmpRoot, head: "aaa1", ...seams(["aaa1"]) }).fullGranted, false);
 });
 
-for (const [label, branch] of [["empty", ""], ["whitespace-padded", " issue-a "], ["whitespace-only", "   "], ["inner space", "issue a"], ["double dot", "issue..a"], ["trailing .lock", "issue.lock"], ["leading dash", "-issue"]]) {
+for (const [label, branch] of [["empty", ""], ["whitespace-padded", " issue-a "], ["whitespace-only", "   "], ["inner space", "issue a"], ["double dot", "issue..a"], ["trailing .lock", "issue.lock"], ["leading dash", "-issue"], ["literal HEAD", "HEAD"]]) {
   test(`a marker with ${label} branch reads as branchless and refuses a descendant push`, () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "find-active-sequence-"));
     const file = writeSequenceMarker({ tmpRoot, baselineHead: "aaa1", fullGranted: false });

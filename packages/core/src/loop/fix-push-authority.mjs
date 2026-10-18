@@ -29,7 +29,7 @@ export const recoveryHint = (markerPath) => markerPath ? ` To recover an abandon
 
 /** Approximates git check-ref-format for a branch name; an invalid name reads as no branch (fail closed). */
 const isValidBranchName = (b) =>
-  typeof b === "string" && b !== "" && b !== "@" &&
+  typeof b === "string" && b !== "" && b !== "@" && b !== "HEAD" &&
   !/[\x00-\x20\x7f~^:?*[\\]/.test(b) &&
   !b.includes("..") && !b.includes("@{") && !b.includes("//") &&
   !/^[/.-]|[/.]$|\.lock(\/|$)|(^|\/)\./.test(b);
