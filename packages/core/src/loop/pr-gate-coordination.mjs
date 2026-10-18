@@ -73,10 +73,11 @@ export const PR_CHECKPOINT_ACTION = Object.freeze({
   REPORT_DONE: "report_done",
   RUN_UI_E2E_SUITE: "run_ui_e2e_suite",
   RECORD_DESIGNER_REVIEW: "record_designer_review",
-  // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: the only legal next action while a
-  // fixer's claimed-tackled threads have incomplete disposition. Value is the
-  // shared literal fixer-disposition.mjs's pure evaluator also returns as
-  // `nextAction` (asserted equal by test — see fixer-disposition.test.mjs).
+  // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: the action name the pure evaluator
+  // and verify-fixer-disposition.mjs report. Gate coordination no longer routes
+  // on it (advisory, ADR 0155). Value is the shared literal fixer-disposition.mjs's
+  // pure evaluator also returns as `nextAction` (asserted equal by test — see
+  // fixer-disposition.test.mjs).
   COMPLETE_FIXER_DISPOSITION: COMPLETE_FIXER_DISPOSITION_ACTION,
 });
 
@@ -799,7 +800,7 @@ function applyDraftGateEvidenceGuard(result, { prDraft = false } = {}) {
   }
   // The PR is still draft: absent/not-yet-clean draft_gate evidence is the
   // EXPECTED state while draft_gate remediation is in progress (e.g. a fixer
-  // mid-way through COMPLETE_FIXER_DISPOSITION for threads it tackled from an
+  // mid-way through disposition for threads it tackled from an
   // earlier draft_gate round) — the PR_DRAFT branch above already owns this
   // state (RUN_DRAFT_GATE / MARK_READY_FOR_REVIEW). This guard exists for the
   // POST-draft merge-path boundaries only (mirrors the wrapper's own
