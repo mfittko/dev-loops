@@ -32,8 +32,8 @@ export function canonicalizeWorkOrder(value) {
 /** Hard cap for the compact dispatch envelope every role sends (bytes). */
 export const DISPATCH_POINTER_MAX_BYTES = 499;
 
-/** Execution identity: `r` review unit (with `-u<n>`), `j` judge round, `f` fixer execution (ADR 0115). */
-export const EXECUTION_IDENTITY_RE = /^[rjf]\d+-[0-9a-f]{8}(?:-u\d+)?$/;
+/** Execution identity: `r` review unit (with `-u<n>`), `j` judge round, `f` fixer execution, `c` coordinator execution (ADR 0115). */
+export const EXECUTION_IDENTITY_RE = /^[rjfc]\d+-[0-9a-f]{8}(?:-u\d+)?$/;
 
 /** The emitter's execution index entry `{ executionIdentity, workOrderRef, workOrderDigest }` for one unit. */
 export const executionIndexPath = (tmpRoot, executionIdentity) => path.join(tmpRoot, "work-order-executions", `${executionIdentity}.json`);
