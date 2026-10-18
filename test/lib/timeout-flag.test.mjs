@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import { describe, test } from "bun:test";
 import { resolveTimeoutMs } from "../../scripts/lib/timeout-flag.mjs";
 
-// node:assert only: a bun:test `expect` makes Bun print an "N expect() calls" line before
-// the "Ran N tests" summary, which scripts/run-bun-test.mjs parseBunSummary rejects.
 describe("resolveTimeoutMs", () => {
   const run = (raw) => {
     const warnings = [];
