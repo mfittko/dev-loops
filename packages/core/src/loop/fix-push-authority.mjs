@@ -37,7 +37,7 @@ export function readSequenceMarker(tmpRoot, baselineHead) {
   }
   try {
     const marker = JSON.parse(text);
-    if (marker?.baselineHead === baselineHead) return { baselineHead, fullGranted: marker.fullGranted === true, branch: typeof marker.branch === "string" ? marker.branch : undefined };
+    if (marker?.baselineHead === baselineHead) return { baselineHead, fullGranted: marker.fullGranted === true, branch: typeof marker.branch === "string" && marker.branch !== "" && marker.branch === marker.branch.trim() ? marker.branch : undefined };
   } catch {
     // Falls through to the fail-closed reading.
   }

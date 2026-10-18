@@ -66,10 +66,32 @@ test("stacked branches: each push is covered only by its own branch marker", () 
   assert.equal(find("ccc3", "refs/heads/issue-b", ["bbb2"]).branch, "issue-b");
   assert.equal(find("ccc3", "refs/heads/issue-b", ["aaa1"]), null);
   assert.equal(find("ccc3", "refs/heads/issue-a", ["bbb2"]), null);
+  // Both markers listed together: the real stacked push.
+  assert.equal(find("ccc3", "refs/heads/issue-b", ["aaa1", "bbb2"]).branch, "issue-b");
+  assert.equal(find("ccc3", "refs/heads/issue-b", ["aaa1", "bbb2"]).fullGranted, true);
+  assert.equal(find("ccc3", "refs/heads/issue-a", ["aaa1", "bbb2"]).branch, "issue-a");
+  assert.equal(find("ccc3", "refs/heads/issue-a", ["aaa1", "bbb2"]).fullGranted, false);
 });
 
 test("an ungranted marker covering the head refuses", () => {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "find-active-sequence-"));
   writeSequenceMarker({ tmpRoot, baselineHead: "aaa1", fullGranted: false, branch: "issue-9" });
   assert.equal(findActiveSequence({ tmpRoot, head: "aaa1", ...seams(["aaa1"]) }).fullGranted, false);
+});
+
+for (const [label, branch] of [["empty", ""], ["whitespace-padded", " issue-a "], ["whitespace-only", "   "]]) {
+  test(`a marker with ${label} branch reads as branchless and refuses a descendant push`, () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "find-active-sequence-"));
+    const file = writeSequenceMarker({ tmpRoot, baselineHead: "aaa1", fullGranted: false });
+    fs.writeFileSync(file, JSON.stringify({ baselineHead: "aaa1", fullGranted: false, branch }));
+    const found = findActiveSequence({ tmpRoot, head: "ccc3", remoteRef: "refs/heads/issue-a", ...seams(["aaa1"]) });
+    assert.equal(found.baselineHead, "aaa1");
+    assert.equal(found.branch, undefined);
+  });
+}
+
+test("a marker with a trimmed non-empty branch keeps it", () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "find-active-sequence-"));
+  writeSequenceMarker({ tmpRoot, baselineHead: "aaa1", fullGranted: false, branch: "issue-a" });
+  assert.equal(findActiveSequence({ tmpRoot, head: "ccc3", remoteRef: "refs/heads/issue-a", ...seams(["aaa1"]) }).branch, "issue-a");
 });
