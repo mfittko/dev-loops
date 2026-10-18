@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import {
   loadDevLoopConfigStrict,
@@ -8,13 +9,14 @@ import {
   resolveLightMode,
   GATE_FULL_LABEL,
 } from "@dev-loops/core/config";
+import { resolveJudgeTrack } from "@dev-loops/core/config/judge-track";
 import { detectScope } from "./detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "./check-size-budget.mjs";
 import { DIFF_ISOLATION_FLAGS, gitEnvWithoutDirOverrides } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { formatCliError } from "../_core-helpers.mjs";
 
-const USAGE = `Usage: resolve-gate-dispatch.mjs --gate <draft|preApproval> [--base <ref>] [--head <ref>] [--full-label] [--inline-severities <csv>]
+const USAGE = `Usage: resolve-gate-dispatch.mjs --gate <draft|preApproval> [--base <ref>] [--head <ref>] [--full-label] [--inline-severities <csv>] [--judge-record <path>] [--labels <csv>] [--head-sha <sha>]
 Compute the gate-coordinator-owned deterministic review-proportionality plan
 (GATE-EXEC-PROPORTIONALITY, resolveReviewProportionality): mode (inline vs
 full fan-out) + resolved angle set + fan-out grouping, from lightMode config +
@@ -29,13 +31,19 @@ Options:
   --head <ref>                 Head ref; ignored unless --base is also set
   --full-label                 PR has the ${GATE_FULL_LABEL} label (forces full fan-out)
   --inline-severities <csv>    Comma-separated severities from the inline pass (escalation phase)
+  --judge-record <path>        JSON judge track record; absent, unreadable or invalid routes to track full
+  --labels <csv>               PR label names; ${GATE_FULL_LABEL} counts as --full-label, gate:light/gate:reduced
+                               lower the track only when they match a valid judge record for --head-sha
+  --head-sha <sha>             Current PR head commit SHA the judge record must match
   --help, -h                   Show this help
+Output also carries "track" (light|reduced|full) and "trackReason". The judge track never changes
+mode, angles, groups or floors.
 Output (stdout, JSON):
-  { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 1, "linesChanged": 5 }, "mode": "inline", "reason": "under_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": { "sizeCap": false, "riskPath": false, "sizeOutcome": false, "ambiguity": false, "unclassifiable": false } }
-  { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 9, "linesChanged": 300 }, "mode": "full_fanout", "reason": "over_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": {...} }
-  { "ok": true, "gate": "draft", "scope": { "ok": true, ... }, "mode": "full_fanout", "reason": "risk_path_touch", "threshold": {...}, "angles": [...], "groups": [...], "floors": {...} }
-  { "ok": true, "gate": "draft", "scope": { "ok": true, ... }, "mode": "full_fanout", "reason": "size_outcome_escalate"|"size_outcome_block"|"size_outcome_t1"|"size_outcome_unavailable"|"unclassifiable_diff", "threshold": {...}, "angles": [...], "groups": [...], "floors": {...} }
-  { "ok": true, "gate": "draft", "scope": { "ok": false, ... }, "mode": "full_fanout", "reason": "scope_detection_failed", "threshold": null }
+  { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 1, "linesChanged": 5 }, "mode": "inline", "reason": "under_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": { "sizeCap": false, "riskPath": false, "sizeOutcome": false, "ambiguity": false, "unclassifiable": false }, "track": "full", "trackReason": "judge_record_absent" }
+  { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 9, "linesChanged": 300 }, "mode": "full_fanout", "reason": "over_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": {...}, "track": ..., "trackReason": ... }
+  { "ok": true, "gate": "draft", "scope": { "ok": true, ... }, "mode": "full_fanout", "reason": "risk_path_touch", "threshold": {...}, "angles": [...], "groups": [...], "floors": {...}, "track": ..., "trackReason": ... }
+  { "ok": true, "gate": "draft", "scope": { "ok": true, ... }, "mode": "full_fanout", "reason": "size_outcome_escalate"|"size_outcome_block"|"size_outcome_t1"|"size_outcome_unavailable"|"unclassifiable_diff", "threshold": {...}, "angles": [...], "groups": [...], "floors": {...}, "track": ..., "trackReason": ... }
+  { "ok": true, "gate": "draft", "scope": { "ok": false, ... }, "mode": "full_fanout", "reason": "scope_detection_failed", "threshold": null, "track": "full", "trackReason": "scope_detection_failed" }
 Error output (stderr, JSON, the shared CLI error format — see formatCliError):
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" }
 
@@ -68,6 +76,9 @@ function parseCliArgs(argv) {
       head: { type: "string" },
       "full-label": { type: "boolean", default: false },
       "inline-severities": { type: "string" },
+      "judge-record": { type: "string" },
+      labels: { type: "string" },
+      "head-sha": { type: "string" },
       help: { type: "boolean", short: "h" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -81,11 +92,15 @@ function parseCliArgs(argv) {
   if (!values.gate || !VALID_GATES.has(values.gate)) {
     throw new Error("--gate must be one of: draft, preApproval");
   }
+  const labels = parseSeverities(values.labels) ?? [];
   return {
     gate: values.gate,
     base: values.base ?? null,
     head: values.head ?? null,
-    hasFullLabel: Boolean(values["full-label"]),
+    hasFullLabel: Boolean(values["full-label"]) || labels.some((l) => l.toLowerCase() === GATE_FULL_LABEL),
+    labels,
+    judgeRecordPath: values["judge-record"] ?? null,
+    headSha: values["head-sha"] ?? null,
     inlineFindingSeverities: parseSeverities(values["inline-severities"]),
     jq: values.jq,
     silent: values.silent === true,
@@ -101,6 +116,30 @@ function diffRange(base, head) {
   if (base && head) return `${base}..${head}`;
   if (base) return base;
   return "HEAD~1..HEAD";
+}
+
+/** Read the judge record file. Only an omitted flag is absent (null); a missing, unreadable, non-JSON or JSON-null file is invalid (never throws). */
+function readJudgeRecord(path) {
+  if (path == null) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) ?? { unreadable: true };
+  } catch {
+    return { unreadable: true }; // schema-invalid, so it routes to full
+  }
+}
+
+/** Resolve the diffed head ref to a commit sha, or null when it cannot be resolved or the diff includes the working tree (--base without --head). */
+function resolveHeadSha({ base, head, cwd }) {
+  if (base && !head) return null; // base-vs-working-tree diff: no commit the judge could have seen
+  try {
+    return execFileSync(
+      "git",
+      [...DIFF_ISOLATION_FLAGS, "rev-parse", "--verify", `${(base && head) ? head : "HEAD"}^{commit}`],
+      { cwd: cwd || undefined, encoding: "utf8", env: gitEnvWithoutDirOverrides(), stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -145,6 +184,8 @@ export async function run(argv) {
         mode: "full_fanout",
         reason: "scope_detection_failed",
         threshold: null,
+        track: "full",
+        trackReason: "scope_detection_failed",
       }, { jq: opts.jq, silent: opts.silent });
       return;
     }
@@ -182,8 +223,17 @@ export async function run(argv) {
     // stale or lenient coordinator decision. A future unification would read both
     // facts from ONE captured diff object (mirroring write-gate-context.mjs's
     // build-once bundle) rather than two independent git reads.
+    // The judge track needs the size outcome even over the cap, so a lowering
+    // track can re-check the size floor there.
+    const suppliedHeadSha = typeof opts.headSha === "string" ? opts.headSha.trim().toLowerCase() : null;
+    const resolvedHeadSha = resolveHeadSha({ base: opts.base, head: opts.head, cwd: process.cwd() });
+    const judge = resolveJudgeTrack({
+      record: readJudgeRecord(opts.judgeRecordPath),
+      labels: opts.labels,
+      headSha: resolvedHeadSha != null && resolvedHeadSha.toLowerCase() === suppliedHeadSha ? resolvedHeadSha : undefined,
+    });
     let sizeOutcome = null;
-    if (isCandidate) {
+    if (isCandidate || judge.track !== "full") {
       try {
         sizeOutcome = await evaluatePrSizeBudget({
           base: opts.base ?? "HEAD~1",
@@ -205,9 +255,11 @@ export async function run(argv) {
       sizeOutcome,
       hasFullLabel: opts.hasFullLabel,
       inlineFindingSeverities: opts.inlineFindingSeverities,
+      judgeTrack: judge.track,
+      judgeTrackReason: judge.reason,
     });
     process.exitCode = emitResult(
-      { ok: true, gate: opts.gate, scope, mode: decision.mode, reason: decision.reason, threshold, angles: decision.angles, groups: decision.groups, floors: decision.floors },
+      { ok: true, gate: opts.gate, scope, mode: decision.mode, reason: decision.reason, threshold, angles: decision.angles, groups: decision.groups, floors: decision.floors, track: decision.track, trackReason: decision.trackReason },
       { jq: opts.jq, silent: opts.silent },
     );
   } catch (err) {
