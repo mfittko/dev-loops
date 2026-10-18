@@ -60,11 +60,11 @@ local, remote }` report on both paths instead of picking a side. A
 unfetched remote branch can still fall through to `created-from-base`.
 
 It prints `{ ok, path, created|reused, base?, branchOrigin, diverged?,
-fetchDegraded?, provision: { actions, summary }, guard }`. `base` appears only on
+fetchDegraded?, provision: { actions, summary }, deps?, guard }`. `base` appears only on
 create; `provision` is the full `provisionWorktree()` result; `fetchDegraded: true`
 means at least one candidate remote's fetch failed, so branch resolution used the
 refs already present. Provisioning is fail-soft; a `git worktree add` failure is
-a hard error. It does **not** install dependencies (see below).
+a hard error. A newly created worktree first runs `bun install --frozen-lockfile` inside it when a `bun.lock` exists and reports `deps: { ok, ran, reason?, exitCode? }`; a failed install never fails the worktree (`WORKTREE-DEPS-ISOLATED`). A reused worktree is not touched and reports no `deps`.
 
 `guard` is the default-branch guard's install result for the primary checkout
 (`{ ok, installed, refreshed, skipped, defaultBranches?, droppedExplicitBranches?, reason? }`),
@@ -107,8 +107,7 @@ worktree:
 - **Fail-soft:** a missing source or an empty glob logs one warning and continues
   — provisioning never aborts init. Idempotent on worktree reuse.
 - **Opt-in:** empty/absent by default; no baked-in file list.
-- **Not for `node_modules`:** use `bun install --frozen-lockfile` inside the
-  worktree (`WORKTREE-DEPS-ISOLATED`).
+- **Not for `node_modules`:** `ensure-worktree` installs them in a newly created worktree via `bun install --frozen-lockfile` (`WORKTREE-DEPS-ISOLATED`).
 
 Run manually with:
 
@@ -348,7 +347,7 @@ branch's commits.
 `WORKTREE-DEPS-ISOLATED`: A worktree's dependencies MUST NOT be assumed present
 or valid from the main checkout's `node_modules`; run the repository-pinned
 Bun 1.4.1 command `bun install --frozen-lockfile` inside the worktree whenever
-it needs dependencies. If the frozen install reports manifest/`bun.lock` drift,
+it needs dependencies (`ensure-worktree` does this for a newly created worktree, fail-soft and reported as `deps`; a reused worktree is not touched). If the frozen install reports manifest/`bun.lock` drift,
 fix and commit the lockfile deliberately rather than weakening the frozen mode.
 
 ## Coordination and collision checks
