@@ -89,6 +89,9 @@ test("C1 failures are silent under --silent and ignore --fields", async () => {
     const unknownFlag = await runNode(["--bogus", "x", "--silent"]);
     assert.equal(unknownFlag.code, 1);
     assert.equal(unknownFlag.stdout, "");
+    const unknownFlagShort = await runNode(["--bogus", "x", "-s"]);
+    assert.equal(unknownFlagShort.code, 1);
+    assert.equal(unknownFlagShort.stdout, "");
   });
 });
 

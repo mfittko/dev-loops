@@ -20,17 +20,18 @@ Exit codes: 0 emitted, 1 refused or runtime failure, 2 invalid --jq/--fields usa
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
   let values;
+  const options = {
+    input: { type: "string" }, repo: { type: "string" }, "allowed-file": { type: "string", multiple: true },
+    attempt: { type: "string" }, help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS,
+  };
   // One failure shape: {ok:false,error} on stdout unless --silent; --fields and --jq never apply to a failure.
   const fail = (error, stderrText) => {
-    if (!(values?.silent ?? argv.includes("--silent"))) stdout.write(`${JSON.stringify({ ok: false, error })}\n`);
+    if (!(values?.silent ?? parseArgs({ args: argv, options, strict: false }).values.silent)) stdout.write(`${JSON.stringify({ ok: false, error })}\n`);
     stderr.write(`${stderrText}\n`);
     return 1;
   };
   try {
-    ({ values } = parseArgs({ args: argv, options: {
-      input: { type: "string" }, repo: { type: "string" }, "allowed-file": { type: "string", multiple: true },
-      attempt: { type: "string" }, help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS,
-    } }));
+    ({ values } = parseArgs({ args: argv, options }));
     if (values.help) {
       stdout.write(`${USAGE}\n`);
       return 0;
