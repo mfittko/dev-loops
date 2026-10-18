@@ -48,7 +48,9 @@ export function resolveJudgeTrack({ record, labels, headSha } = {}) {
   if (typeof headSha !== "string" || headSha.toLowerCase() !== checked.record.headSha.toLowerCase()) {
     return { track: "full", reason: "judge_head_mismatch" };
   }
-  const lowering = (Array.isArray(labels) ? labels : []).filter((l) => l === GATE_LIGHT_LABEL || l === GATE_REDUCED_LABEL);
+  const lowering = (Array.isArray(labels) ? labels : [])
+    .map((l) => String(l).trim().toLowerCase())
+    .filter((l) => l === GATE_LIGHT_LABEL || l === GATE_REDUCED_LABEL);
   if (lowering.length !== 1 || lowering[0] !== LOWERING_LABEL[checked.record.track]) {
     return { track: "full", reason: "judge_label_unmatched" };
   }

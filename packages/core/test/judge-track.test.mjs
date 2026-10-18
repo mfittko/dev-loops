@@ -128,4 +128,23 @@ describe("resolveReviewProportionality judgeTrack", () => {
     assert.deepEqual([r.track, r.trackReason], ["full", "gate_full_label"]);
     assert.equal(GATE_FULL_LABEL, "gate:full");
   });
+
+  test("over the cap, a missing size outcome with a lowering track is full (risk_floor); without a lowering track nothing changes", () => {
+    const r = plan("draft", { ...big, sizeOutcome: null, judgeTrack: "light" });
+    assert.deepEqual([r.track, r.trackReason], ["full", "risk_floor"]);
+    const none = plan("draft", { ...big, sizeOutcome: null });
+    assert.deepEqual([none.track, none.trackReason], ["full", "judge_full"]);
+  });
+
+  test("an inline-severity escalation forces track full", () => {
+    const r = plan("draft", { ...small, judgeTrack: "light", inlineFindingSeverities: ["high"] });
+    assert.deepEqual([r.reason, r.track, r.trackReason], ["escalated", "full", "escalated"]);
+  });
+
+  test("labels compare case-insensitively", () => {
+    assert.deepEqual(
+      resolveJudgeTrack({ record: record(), labels: [" GATE:Light "], headSha: HEAD }),
+      { track: "light", reason: "judge_light" },
+    );
+  });
 });

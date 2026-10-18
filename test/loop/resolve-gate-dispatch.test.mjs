@@ -287,3 +287,69 @@ test("judge record + matching label + current head lowers the track; every misma
     await rm(tmp, { recursive: true, force: true });
   }
 });
+
+const BIG_DOC = `${"A line of documentation.\n".repeat(150)}`;
+const judgeRec = (headSha, track = "light") => JSON.stringify({ schemaVersion: 1, headSha, track, signals: [{ signal: "additive", reason: "docs only" }] });
+
+test("over the cap, a lowering judge track re-checks the size outcome and risk facts", async () => {
+  const clean = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "docs/big.md": BIG_DOC } });
+  // A t1 pattern that matches a docs file makes the size outcome unusable (block).
+  const t1 = await makeFixture({
+    devloops: `${LIGHT_DEVLOOPS}gates:\n  size:\n    tiers:\n      t1:\n        patterns: ["docs/**"]\n        sliceHardLoc: 10\n`,
+    headFiles: { "docs/big.md": BIG_DOC },
+  });
+  try {
+    for (const [f, tmp, expected] of [[clean.fixture, clean.tmp, "reduced"], [t1.fixture, t1.tmp, "full"]]) {
+      const sha = execSync("git rev-parse HEAD", { cwd: f, encoding: "utf8" }).trim();
+      const rec = path.join(tmp, "rec.json");
+      await writeFile(rec, judgeRec(sha));
+      const r = runJudge(f, { record: rec, labels: "gate:light", headSha: sha });
+      assert.equal(r.reason, "over_threshold");
+      assert.equal(r.track, expected, JSON.stringify(r));
+      if (expected === "full") assert.equal(r.trackReason, "risk_floor");
+    }
+  } finally {
+    await rm(clean.tmp, { recursive: true, force: true });
+    await rm(t1.tmp, { recursive: true, force: true });
+  }
+});
+
+test("a --head-sha that is not the resolved head, and case-variant labels", async () => {
+  const { tmp, fixture } = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "docs/note.md": "A trivial docs change.\n" } });
+  try {
+    const sha = execSync("git rev-parse HEAD", { cwd: fixture, encoding: "utf8" }).trim();
+    const other = "c".repeat(40);
+    const rec = path.join(tmp, "rec.json");
+    const recOther = path.join(tmp, "rec-other.json");
+    const recNull = path.join(tmp, "rec-null.json");
+    await writeFile(rec, judgeRec(sha));
+    await writeFile(recOther, judgeRec(other));
+    await writeFile(recNull, "null");
+    // Record and supplied sha agree with each other but not with the real head.
+    const spoof = runJudge(fixture, { record: recOther, labels: "gate:light", headSha: other });
+    assert.deepEqual([spoof.track, spoof.trackReason], ["full", "judge_head_mismatch"]);
+    const upper = runJudge(fixture, { record: rec, labels: " GATE:Light ", headSha: sha });
+    assert.deepEqual([upper.track, upper.trackReason], ["light", "judge_light"]);
+    const fullUpper = runJudge(fixture, { record: rec, labels: "gate:light,GATE:FULL", headSha: sha });
+    assert.deepEqual([fullUpper.mode, fullUpper.track], ["full_fanout", "full"]);
+    const nul = runJudge(fixture, { record: recNull, labels: "gate:light", headSha: sha });
+    assert.equal(nul.trackReason, "judge_record_invalid");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("an inline-severity escalation forces track full", async () => {
+  const { tmp, fixture } = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "docs/note.md": "A trivial docs change.\n" } });
+  try {
+    const sha = execSync("git rev-parse HEAD", { cwd: fixture, encoding: "utf8" }).trim();
+    const rec = path.join(tmp, "rec.json");
+    await writeFile(rec, judgeRec(sha));
+    const out = JSON.parse(execFileSync((Bun.which("node") ?? "node"),
+      [SCRIPT, "--gate", "draft", "--base", "base", "--head", "HEAD", "--judge-record", rec, "--labels", "gate:light", "--head-sha", sha, "--inline-severities", "high"],
+      { cwd: fixture, encoding: "utf8" }).trim());
+    assert.deepEqual([out.reason, out.track, out.trackReason], ["escalated", "full", "escalated"]);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});

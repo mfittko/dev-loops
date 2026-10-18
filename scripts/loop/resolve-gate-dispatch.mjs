@@ -97,7 +97,7 @@ function parseCliArgs(argv) {
     gate: values.gate,
     base: values.base ?? null,
     head: values.head ?? null,
-    hasFullLabel: Boolean(values["full-label"]) || labels.includes(GATE_FULL_LABEL),
+    hasFullLabel: Boolean(values["full-label"]) || labels.some((l) => l.toLowerCase() === GATE_FULL_LABEL),
     labels,
     judgeRecordPath: values["judge-record"] ?? null,
     headSha: values["head-sha"] ?? null,
@@ -118,13 +118,26 @@ function diffRange(base, head) {
   return "HEAD~1..HEAD";
 }
 
-/** Read the judge record file; a missing, unreadable or non-JSON file is treated as absent/invalid (never throws). */
+/** Read the judge record file. Only an omitted flag is absent (null); a missing, unreadable, non-JSON or JSON-null file is invalid (never throws). */
 function readJudgeRecord(path) {
   if (path == null) return null;
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    return JSON.parse(readFileSync(path, "utf8")) ?? { unreadable: true };
   } catch {
     return { unreadable: true }; // schema-invalid, so it routes to full
+  }
+}
+
+/** Resolve the diffed head ref to a commit sha, or null when it cannot be resolved. */
+function resolveHeadSha({ base, head, cwd }) {
+  try {
+    return execFileSync(
+      "git",
+      [...DIFF_ISOLATION_FLAGS, "rev-parse", "--verify", `${(base && head) ? head : "HEAD"}^{commit}`],
+      { cwd: cwd || undefined, encoding: "utf8", env: gitEnvWithoutDirOverrides(), stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+  } catch {
+    return null;
   }
 }
 
@@ -209,8 +222,17 @@ export async function run(argv) {
     // stale or lenient coordinator decision. A future unification would read both
     // facts from ONE captured diff object (mirroring write-gate-context.mjs's
     // build-once bundle) rather than two independent git reads.
+    // The judge track needs the size outcome even over the cap, so a lowering
+    // track can re-check the size floor there.
+    const suppliedHeadSha = typeof opts.headSha === "string" ? opts.headSha.trim().toLowerCase() : null;
+    const resolvedHeadSha = resolveHeadSha({ base: opts.base, head: opts.head, cwd: process.cwd() });
+    const judge = resolveJudgeTrack({
+      record: readJudgeRecord(opts.judgeRecordPath),
+      labels: opts.labels,
+      headSha: resolvedHeadSha != null && resolvedHeadSha.toLowerCase() === suppliedHeadSha ? resolvedHeadSha : undefined,
+    });
     let sizeOutcome = null;
-    if (isCandidate) {
+    if (isCandidate || judge.track !== "full") {
       try {
         sizeOutcome = await evaluatePrSizeBudget({
           base: opts.base ?? "HEAD~1",
@@ -226,11 +248,6 @@ export async function run(argv) {
     // file-kind-based lower bound of write-gate-context.mjs's authoritative
     // category-aware set, except that gate:full returns the full static pool
     // here. Both entry points still share this composer's floor determination.
-    const judge = resolveJudgeTrack({
-      record: readJudgeRecord(opts.judgeRecordPath),
-      labels: opts.labels,
-      headSha: opts.headSha,
-    });
     const decision = resolveReviewProportionality(config, opts.gate, {
       scope,
       changedFiles,

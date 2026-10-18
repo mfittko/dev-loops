@@ -14,6 +14,10 @@ We add an optional judge track record with schema version 1: `headSha`, `track` 
 
 The judge never changes `mode`, `angles`, `groups` or `floors` from `resolveReviewProportionality`. It adds `track` and `trackReason` only. A risk-path touch, a size-budget outcome that is not a clean pass, an unavailable or unclassifiable diff, and the `gate:full` label keep the track at `full`. A `light` judge track over the light-mode cap degrades to `reduced`. The existing thresholds stay unchanged.
 
+A lowering judge track also re-checks the risk facts over the cap. The CLI evaluates the size budget whenever the judge track is not `full`, even over the cap, and a missing or unclean size outcome over the cap keeps the track at `full` with reason `risk_floor`. An inline-severity escalation (dispatch reason `escalated`) forces track `full` with reason `escalated`.
+
+The CLI does not trust `--head-sha`. It resolves the diffed head (`--head` when `--base` is also set, else `HEAD`) with `git rev-parse` and passes the sha on only when it equals the supplied value. Otherwise the track is `full` with reason `judge_head_mismatch`. Labels compare case-insensitively after trimming, so `GATE:FULL` is the full label. A supplied record file that is missing, unreadable, or parses to JSON null is `judge_record_invalid`; only an omitted `--judge-record` flag is `judge_record_absent`.
+
 Both gates (`draft` and `preApproval`) receive the same fact. `pre_approval` gains no new inline provenance path. Angle reduction by track is deferred to a later slice.
 
 Rejected: letting a label alone lower the track (fail-open on stale or hand-applied labels), and raising the light-mode cap (a size proxy that does not separate additive from risky changes).

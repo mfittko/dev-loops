@@ -2993,13 +2993,14 @@ export function resolveReviewProportionality(config, gate, {
   // An over-cap dispatch returns before the risk checks, so re-check the
   // risk-signal facts here before honoring a lowering judge track.
   const threshold = resolveLightMode(config);
-  const overCapRisk = dispatch.reason === "over_threshold"
+  const overCapRisk = judgeTrack !== "full" && dispatch.reason === "over_threshold"
     && (!Array.isArray(changedFiles)
       || touchesRiskPath(changedFiles, threshold.riskPaths)
-      || (sizeOutcome != null && !isSizeOutcomeT1Clean(sizeOutcome)));
+      || !isSizeOutcomeT1Clean(sizeOutcome));
   let track = "full";
   let trackReason = judgeTrackReason;
   if (hasFullLabel) trackReason = "gate_full_label";
+  else if (dispatch.reason === "escalated") trackReason = "escalated";
   else if (floored || overCapRisk) trackReason = "risk_floor";
   else if (judgeTrack !== "full" && !threshold) trackReason = "light_mode_disabled";
   else if (judgeTrack === "light" && dispatch.mode === "inline") [track, trackReason] = ["light", "judge_light"];
