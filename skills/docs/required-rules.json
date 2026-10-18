@@ -435,7 +435,7 @@
     {
       "id": "GATE-EXEC-ROUND-CAP",
       "enforcement": "runtime",
-      "enforcementNote": "scripts/github/_gate-round-cap.mjs counts closed draft_gate ledgers and upsert-checkpoint-verdict.mjs composes a round_cap_reached blocker through composeCheckpointVerdict; write-gate-findings-log.mjs and judge-pass.mjs keep only known resurfaces fingerprints"
+      "enforcementNote": "scripts/github/_gate-round-cap.mjs counts closed draft_gate ledgers and upsert-checkpoint-verdict.mjs composes a round_cap_reached blocker through composeCheckpointVerdict on a judged ledger and refuses a past-cap --findings-json-only post; write-gate-findings-log.mjs and judge-pass.mjs keep only known resurfaces fingerprints"
     },
     {
       "id": "GATE-EXEC-ROUND-CAP-CLOSED",

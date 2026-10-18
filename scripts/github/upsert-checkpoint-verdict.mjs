@@ -2676,8 +2676,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   }
   // Open act items from an enriched --findings-json posted alongside a ledger.
   let enrichedActItems = [];
-  // Every flat --findings-json finding (all dispositions), for the round-cap evaluation.
-  let structuredFlatFindings = [];
   const flatOnlyJudgedLedger = [];
   // Fan-out angle-coverage enforcement for a ledger-only round (no
   // --findings-json): runs BEFORE the tick below, so a ledger this post refuses
@@ -2805,7 +2803,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
     const actItems = listOpenActItems(flatFindings);
     enrichedActItems = actItems;
-    structuredFlatFindings = flatFindings;
     if (options.verdict === "clean" && actItems.length > 0) {
       throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
     }
@@ -2832,16 +2829,15 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // verdict (a proven pre-approval blocker over a completed ledger), so the
   // render records both layers. The ledger object itself is never mutated.
   let checkpointComposition = null;
-  // Round cap: past the cap an open act item or a severity disagreement blocks (draft_gate only).
-  // It runs over the ledger findings plus every flat --findings-json finding, judged or not (ledger entry wins on a shared summary),
-  // so a post with no ledger, or a ledger without overallVerdict, cannot slip past it.
+  // Round cap (draft_gate only): past the cap an open act item or a severity disagreement blocks.
+  // Cap logic runs on a judged ledger only; a --findings-json-only post past the cap is refused.
   const capState = await readRoundCapState({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.tmpRoot }, config, repoRoot);
-  const capSummary = (f) => (typeof f?.summary === "string" ? f.summary.trim() : f?.summary);
-  const ledgerCapFindings = preloadedFindingsLedger?.findings ?? [];
-  const flatCapFindings = structuredFlatFindings.filter((a) => !ledgerCapFindings.some((l) => capSummary(l) === capSummary(a)));
-  const capFindings = [...ledgerCapFindings, ...flatCapFindings];
+  if (capState.pastCap && !preloadedFindingsLedger) {
+    throw new Error(`${options.gate} @ ${canonicalHeadSha} is at or past the gates.draft.maxReviewRounds cap (round ${capState.round} of ${capState.cap}) and needs a cap decision, which runs on a judged ledger only. Post with --findings-ledger (write-gate-findings-log.mjs); --findings-json alone is refused.`);
+  }
+  const capFindings = preloadedFindingsLedger?.findings ?? [];
   stampCapClosed(capFindings, capState);
-  // Fail closed: the comment and detect-checkpoint-evidence.mjs (ledger only) must show the same capClosed items (AC 8).
+  // Fail closed: the comment and detect-checkpoint-evidence.mjs (ledger only) must show the same capClosed items.
   const unpersisted = flatOnlyJudgedLedger.filter((f) => f.capClosed);
   if (unpersisted.length > 0) {
     throw new Error(`Past the gates.draft.maxReviewRounds cap, ${unpersisted.length} ledger finding(s) judged only through --findings-json would be cap-closed (${unpersisted.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}). The judge disposition must be persisted in the ledger (--findings-ledger) past the cap; re-write the ledger with the disposition, then post again.`);
