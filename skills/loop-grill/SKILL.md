@@ -52,7 +52,7 @@ Before doing anything else:
 
 "Is it refined" is decided by `detectIssueRefinementArtifact` (`packages/core/src/loop/issue-refinement-artifact.mjs`) — the single source of truth, same as the enqueue gate; do not add a divergent check. A body carrying only AC/DoD checklists and no mapping matrix is NOT refined (`missing_ac_dod_matrix`) and MUST be grilled to synthesize the matrix — a matrix-missing issue can never emit `grill-clean`.
 
-The zero-iteration `grill_clean` exit requires a shape-clean artifact, recorded provenance (ADR 0084, amends ADR 0029; ADR 0154 amends ADR 0084: a `🔬 Grill / refinement results` comment already posted on the target) AND no `size_forecast_*` spec-lint finding (Step 4). Decide this deterministically — never by agent judgment of the fetched comments:
+The zero-iteration `grill_clean` exit requires a shape-clean artifact, recorded provenance (ADR 0084, amends ADR 0029; ADR 0154 amends ADR 0084: a `🔬 Grill / refinement results` comment already posted on the target) AND no `size_forecast_*` spec-lint finding (item 4 below, `GRILL-SPEC-LINT`). Decide this deterministically — never by agent judgment of the fetched comments:
 
 1. Fetch the body into its own file, extracting past the wrapper's envelope: for **tracker-first**, `node scripts/github/view-issue.mjs --repo <owner/repo> --issue <n> --json body --jq '.issue.body' > <body-path>` (never raw `gh`); for **PR body**, `node scripts/github/view-pr.mjs --repo <owner/repo> --pr <n> --json body --jq '.pr.body' > <body-path>`. `<body-path>` must hold only the raw markdown body; an unextracted envelope or an added title defeats the matrix detection.
 2. Fetch comments into their own JSON file, extracting past the wrapper's envelope: for **tracker-first**, `node scripts/github/view-issue.mjs --repo <owner/repo> --issue <n> --json comments --jq '.issue.comments' > <comments-path>` (never raw `gh`); for **PR body**, `node scripts/github/view-pr.mjs --repo <owner/repo> --pr <n> --json comments --jq '.pr.comments' > <comments-path>`. The `--jq` extraction is required: the detector's `--comments-file` accepts only a bare array or `{ "comments": [...] }` and fails closed on the envelope.
@@ -228,7 +228,7 @@ Before emitting the verdict for a tracker-first or PR-body grill whose semantic 
 
 After write-back (and, for tracker-first or PR-body, after the above verification passes), emit the verdict line to stdout:
 
-- `grill-clean` when no unresolved gaps remain. The grill refuses `grill-clean` while a `node <dev-loops-package-root>/cli/index.mjs loop spec-lint` finding is neither corrected in the body nor disposed in the results comment (`GRILL-SPEC-LINT`).
+- `grill-clean` when no unresolved gaps remain. The grill refuses `grill-clean` while a `node <dev-loops-package-root>/cli/index.mjs loop spec-lint` finding is neither corrected in the body nor disposed in the results comment. A `size_forecast_missing`, `size_forecast_split_required` or `size_forecast_malformed` finding blocks `grill-clean` until the body is corrected and is never disposable (`GRILL-SPEC-LINT`).
 - `N unresolved items` (e.g. `3 unresolved items`) when gaps remain after all questions are answered.
 
 ## Idempotency guarantee
