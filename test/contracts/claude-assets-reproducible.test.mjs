@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 import os from "node:os";
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -317,4 +318,17 @@ test("plugin manifest version is a generated asset stamped from package.json (#1
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
+});
+
+test("generator --help exits 0 and unknown flags exit 1 without writing (#2569)", () => {
+  const status = () => spawnSync("git", ["status", "--porcelain"], { cwd: repoRoot, encoding: "utf8" }).stdout;
+  const before = status();
+  const run = (flag) => spawnSync(process.execPath, ["scripts/claude/generate-claude-assets.mjs", flag], { cwd: repoRoot, encoding: "utf8" });
+  const help = run("--help");
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /Usage:/);
+  const bogus = run("--bogus");
+  assert.equal(bogus.status, 1);
+  assert.match(bogus.stderr, /Usage:/);
+  assert.equal(status(), before);
 });
