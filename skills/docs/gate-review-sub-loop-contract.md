@@ -1240,7 +1240,7 @@ Because an unresolved review thread routes the PR to the `unresolved_feedback_pr
 Distinctness differs by what closed the thread. A FIX-closing reply (the standard fix loop, or a dispute reply) follows `COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER` and names the specific change and resolving commit. An ANSWER reply names the answer (and, when it promotes the finding, the new severity and follow-up thread). A DEFERRAL reply is distinct by construction through the marker fields it stamps (fingerprint, severity, angle, round) and states the window/disposition reason (`dispositionMessage` in `close-gate-findings.mjs`). A RESOLVED-NOT-FILED reply (a nit, or a low with no operator-visibility signal; #1846) names the net-reduction disposition policy rationale and stamps no `disposition=deferred` (`unfiledResolutionMessage`). A shared body across multiple threads is permitted only when one named shared root cause genuinely closed them all.
 
 <!-- rule: GATE-EXEC-FIXER-DISPOSITION-BOUNDARY -->
-`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`: After every fixer push, each review thread marked
+`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` (advisory; ADR 0155): After every fixer push, each review thread marked
 `disposition: "tackled"` in its handoff MUST, in order, have a recorded `threadId` and
 fixing commit SHA, verified containment by the observed PR head, a reply evidencing that
 commit, resolution, and a live re-read confirming resolution. A finding fingerprint may

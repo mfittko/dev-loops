@@ -122,7 +122,7 @@ Contract:
 - normalizes known repository/tooling limitations into a machine-readable `unavailable` result instead of forcing callers to parse ad hoc stderr
 
 Success output shape:
-- `{ "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_post_convergence"|"suppressed_post_convergence_docs_only"|"suppressed_draft"|"blocked_by_fixer_disposition", "repo": "owner/name", "pr": 17, "reviewer": "Copilot", ... }`
+- `{ "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_post_convergence"|"suppressed_post_convergence_docs_only"|"suppressed_draft", "repo": "owner/name", "pr": 17, "reviewer": "Copilot", ... }`
 - An incomplete fixer disposition never blocks a request (`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` is advisory, ADR 0155); the result carries `fixerDispositionWarning`.
 - `unavailable` also includes a `detail` string with the normalized GitHub/CLI limitation
 - `round_cap_reached` includes `completedRounds` and `maxRounds` fields

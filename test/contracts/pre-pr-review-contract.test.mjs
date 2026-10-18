@@ -282,7 +282,7 @@ test("the Copilot follow-up skill emits commit_only, runs the thread-route delta
     assert.ok(line.includes(text), `follow-up skill must state: ${text}`);
   }
   assert.doesNotMatch(skill, /--phase full --threads-file/);
-  assert.match(skill, /`blocked_by_fixer_disposition`: no request was placed/);
+  assert.match(skill, /`fixerDispositionWarning` on any status: the fixer disposition is incomplete/);
 });
 
 test("every verify-fixer-disposition.mjs invocation under skills/ shows the full required synopsis", () => {

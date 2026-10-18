@@ -3557,8 +3557,8 @@ test("detect-pr-gate-coordination-state routes to pre_approval_gate when a linge
 // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY (#1988) — surfaced via
 // detect-pr-gate-coordination-state.mjs: a durable fixer-disposition
 // checkpoint for the CURRENT head is read, re-verified against live thread
-// state (never the checkpoint's own claim), and an incomplete result forces
-// a blocked complete_fixer_disposition boundary ahead of ordinary routing.
+// state (never the checkpoint's own claim), and an incomplete result only warns:
+// a warning (fixerDispositionWarning) without changing routing (advisory, ADR 0155).
 // ---------------------------------------------------------------------------
 
 // The detector runs from a linked worktree. The checkpoint sits in the main
@@ -3566,7 +3566,7 @@ test("detect-pr-gate-coordination-state routes to pre_approval_gate when a linge
 // in-flight checkpoint, only in the linked worktree's own tmp/. With "both",
 // a complete main checkpoint and a stale incomplete linked one exist for the
 // same head: the main-anchored copy wins, so the gate is not blocked.
-for (const [location, step] of [["main", "reply_missing"], ["linked", "reply_missing"], ["both", "reply_missing"], ["main", "commit_not_contained"], ["main", "not_resolved"]]) test(`detect-pr-gate-coordination-state ${location === "both" ? "reads the complete main checkpoint over a stale incomplete linked one" : "blocks on an incomplete fixer-disposition checkpoint"} for the current head (checkpoint in ${location} worktree, ${step})`, async () => {
+for (const [location, step] of [["main", "reply_missing"], ["linked", "reply_missing"], ["both", "reply_missing"], ["main", "commit_not_contained"], ["main", "not_resolved"]]) test(`detect-pr-gate-coordination-state ${location === "both" ? "reads the complete main checkpoint over a stale incomplete linked one" : "warns (does not block) on an incomplete fixer-disposition checkpoint"} for the current head (checkpoint in ${location} worktree, ${step})`, async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-fixer-disposition-"));
   const REPO = "owner/repo";
   const PR = 3001;
@@ -3985,7 +3985,7 @@ async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, 
 }
 
 for (const [active, failure] of [["missing", /result_missing/], ["empty", /PRRT_T1/], ["malformed", /not valid JSON/], ["stale", /not the observed head/], ["omitted ACT", /PRRT_ACT/]]) {
-  test(`gate rejects active full ${active} output despite an empty complete checkpoint`, async () => {
+  test(`gate warns on active full ${active} output despite an empty complete checkpoint (advisory)`, async () => {
     await runNotVerifiedFixture({ active }, (result) => {
       assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
       assert.match(result.fixerDispositionWarning.warning, failure);
