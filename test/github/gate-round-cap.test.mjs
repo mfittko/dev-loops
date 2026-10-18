@@ -6,7 +6,7 @@ import { test } from "bun:test";
 
 import { composeCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { fingerprintFinding, resolveGateRound } from "../../scripts/github/_gate-finding-surface.mjs";
-import { evaluateRoundCap, keepKnownResurfaces, readRoundCapState, stampCapClosed } from "../../scripts/github/_gate-round-cap.mjs";
+import { evaluateRoundCap, keepKnownResurfaces, priorActFingerprints, readRoundCapState, stampCapClosed } from "../../scripts/github/_gate-round-cap.mjs";
 import { readClosedPriorRoundLogs } from "../../scripts/github/write-gate-context.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 
@@ -105,6 +105,12 @@ test("resurfaces: valid, unknown, foreign-PR and missing fingerprints", async ()
     const { log } = await writeGateFindingsLog({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD, verdict: "findings_present", findings: JSON.stringify(findings), judgeVerdict, tmpRoot }, { repoRoot });
     assert.deepEqual(log.findings.map((f) => f.resurfaces), [fingerprintFinding(priorFinding), undefined, undefined, undefined]);
   });
+});
+
+test("priorActFingerprints keeps only the act items of a closed prior round", () => {
+  const item = (summary, judgeDisposition) => ({ severity: "low", angle: "correctness", summary, judgeDisposition });
+  const act = item("kept act", "act");
+  assert.deepEqual([...priorActFingerprints([{ findings: [act, item("deferred", "defer"), item("rejected", "reject")] }])], [fingerprintFinding(act)]);
 });
 
 test("keepKnownResurfaces drops a mark on a non-act finding", () => {

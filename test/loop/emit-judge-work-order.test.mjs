@@ -9,7 +9,7 @@ import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, p
 import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
-import { withTempDir } from "../_helpers.mjs";
+import { initGitFixture, runGitFixture, withTempDir } from "../_helpers.mjs";
 import { seedJudgeSources } from "./_judge-delivery-fixture.mjs";
 
 const HEAD = "d".repeat(40);
@@ -97,13 +97,13 @@ test("J1: the work order lists the act fingerprints of closed prior rounds for t
 
 test("J1: the emitter run in a linked worktree reads the closed prior act ledger from the main-worktree anchor", async () => {
   await withDir(async (root) => {
-    const git = (cwd, ...args) => assert.equal(spawnSync("git", args, { cwd, encoding: "utf8" }).status, 0, args.join(" "));
     const main = path.join(root, "main");
     await mkdir(main);
-    git(main, "init", "-q");
-    git(main, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init");
+    initGitFixture(main, { commit: null });
+    runGitFixture(main, ["config", "commit.gpgsign", "false"]);
+    runGitFixture(main, ["commit", "-q", "--allow-empty", "-m", "init"]);
     const linked = path.join(root, "linked");
-    git(main, "worktree", "add", "-q", linked, "-b", "linked-branch");
+    runGitFixture(main, ["worktree", "add", "-q", linked, "-b", "linked-branch"]);
     const sources = await seed(linked);
     const priorSha = "a".repeat(40);
     const act = { severity: "high", angle: "correctness", summary: "earlier act", judgeDisposition: "act" };
