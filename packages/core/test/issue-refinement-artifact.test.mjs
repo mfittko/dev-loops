@@ -1305,3 +1305,28 @@ test("diffPrBodyAgainstIssue flags PR items the issue lacks, including non-goals
   const hits = diffPrBodyAgainstIssue({ prBody: prWith({ goals: "- No new scanner\n- Extra goal" }), issueBody: issueWith() });
   assert.deepEqual(hits.map((h) => h.site), ["pr-body/non-goals:2"]);
 });
+
+test("diffPrBodyAgainstIssue compares narrative Non-goals prose and list continuation lines", () => {
+  const prose = diffPrBodyAgainstIssue({ prBody: prWith({ goals: "API changes are allowed." }), issueBody: issueWith({ goals: "No API changes." }) });
+  assert.deepEqual(prose.map((h) => h.site).sort(), ["issue-body/non-goals:1", "pr-body/non-goals:1"]);
+  const wrapped = diffPrBodyAgainstIssue({
+    prBody: prWith({ scope: "- Alpha\n  for all platforms.\n- Beta wide" }),
+    issueBody: issueWith({ scope: "- Alpha\n  for one platform.\n- Beta wide" }),
+  });
+  assert.deepEqual(wrapped.map((h) => h.site).sort(), ["issue-body/in-scope:1", "pr-body/in-scope:1"]);
+  assert.deepEqual(diffPrBodyAgainstIssue({ prBody: prWith({ scope: "- Alpha\n  for   one platform.\n- Beta wide" }), issueBody: issueWith({ scope: "- Alpha\n  for one platform.\n- Beta wide" }) }), []);
+});
+
+test("diffPrBodyAgainstIssue reads content under deeper sub-headings of a spec section", () => {
+  const issueBody = issueWith({ scope: "- Alpha\n\n### Platforms\n\n- Beta wide" });
+  assert.deepEqual(diffPrBodyAgainstIssue({ prBody: prWith({ scope: "- Alpha\n\n### Platforms\n\n- Beta wide" }), issueBody }), []);
+  const drift = diffPrBodyAgainstIssue({ prBody: prWith({ scope: "- Alpha\n- Beta wide" }), issueBody: issueWith({ scope: "- Alpha\n- Beta wide\n\n### Platforms\n\n- Gamma" }) });
+  assert.deepEqual(drift.map((h) => h.site), ["issue-body/in-scope:3"]);
+  const nested = prWith().replace("## Acceptance criteria\n", "## Acceptance criteria\n\n### Details\n").replace("## Definition of done", "## Definition of done");
+  assert.deepEqual(diffPrBodyAgainstIssue({ prBody: nested, issueBody: issueWith() }), []);
+});
+
+test("diffPrBodyAgainstIssue reads decorated AC and DoD headings on the PR side", () => {
+  const prBody = prWith().replace("## Acceptance criteria", "## Acceptance criteria (v2)").replace("## Definition of done", "## DoD (v2)");
+  assert.deepEqual(diffPrBodyAgainstIssue({ prBody, issueBody: issueWith() }), []);
+});

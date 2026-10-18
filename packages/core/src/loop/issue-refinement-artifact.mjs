@@ -1565,7 +1565,38 @@ export function summarizeRefinementGateCheck({ body = "", issueNumber = null } =
   };
 }
 
-const normalizeSpecItem = (text) =>
+/**
+ * Comparable items of a spec section body: each list item (continuation lines joined) and each
+ * narrative paragraph is one item, so prose and wrapped lines take part in the comparison.
+ * Fenced code is skipped. Empty checkbox placeholders yield no item.
+ */
+function extractComparableItems(body) {
+  const items = [];
+  let open = false;
+  let fence = null;
+  for (const line of body.split(/\r?\n/u)) {
+    const step = stepFence(fence, line);
+    fence = step.fence;
+    if (step.insideFence) continue;
+    if (line.trim() === "") {
+      open = false;
+      continue;
+    }
+    const marker = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+(.*)$/u.exec(line);
+    if (marker) {
+      items.push(marker[1].replace(/^\[[ xX]\]\s*/u, "").trim());
+      open = true;
+    } else if (open) {
+      items[items.length - 1] = `${items[items.length - 1]} ${line.trim()}`;
+    } else {
+      items.push(line.trim());
+      open = true;
+    }
+  }
+  return items.filter((item) => item.length > 0);
+}
+
+const normalizeSpecItem =(text) =>
   String(text).replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, "").replace(/^\[[ xX]\]\s*/u, "").replace(/\s+/gu, " ").trim().toLowerCase();
 
 /**
@@ -1581,13 +1612,19 @@ const normalizeSpecItem = (text) =>
 export function diffPrBodyAgainstIssue({ prBody = "", issueBody = "" } = {}) {
   const prSections = parseMarkdownSections(prBody);
   const issueSections = parseMarkdownSections(issueBody);
+  const inScopePatterns = PR_BODY_SPEC_NARRATIVE_SECTIONS.in_scope.patterns;
+  const nonGoalPatterns = [...PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns, ...SPEC_SECTION_NAME_PATTERNS.nonGoals];
+  const families = [inScopePatterns, ACCEPTANCE_SECTION_PATTERNS, DOD_SECTION_PATTERNS, nonGoalPatterns];
+  // Flatten deeper sub-headings into the section, skipping sub-sections another family selected.
   const sectionItems = (sections, patterns) => {
-    const section = sections[findSpecSectionIndex(sections, patterns)];
-    return section ? extractChecklistItems(section.bodyLines.join("\n"), { anyMarker: true }) : [];
+    const index = findSpecSectionIndex(sections, patterns);
+    if (index === -1) return [];
+    const selected = new Set(families.map((family) => findSpecSectionIndex(sections, family)).filter((i) => i !== -1));
+    selected.delete(index);
+    return extractComparableItems(flattenSectionDeep(sections, index, (i) => selected.has(i)));
   };
   const prList = (patterns) => sectionItems(prSections, patterns);
   const issueList = (patterns) => sectionItems(issueSections, patterns);
-  const nonGoalPatterns = [...PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns, ...SPEC_SECTION_NAME_PATTERNS.nonGoals];
   const hits = [];
   const compare = (slug, prItems, issueItems) => {
     const add = (side, prefix, items, other) => {
@@ -1600,14 +1637,13 @@ export function diffPrBodyAgainstIssue({ prBody = "", issueBody = "" } = {}) {
     add("pr", "pr-body", prItems, issueItems);
     add("issue", "issue-body", issueItems, prItems);
   };
-  const inScope = PR_BODY_SPEC_NARRATIVE_SECTIONS.in_scope.patterns;
-  if (findSpecSectionIndex(issueSections, inScope) !== -1) {
-    compare("in-scope", prList(inScope), issueList(inScope));
+  if (findSpecSectionIndex(issueSections, inScopePatterns) !== -1) {
+    compare("in-scope", prList(inScopePatterns), issueList(inScopePatterns));
   }
   try {
     const { acChecklist, dodChecklist } = derivePrChecklistsFromIssueMatrix({ body: issueBody });
-    compare("acceptance-criteria", prList(SPEC_SECTION_NAME_PATTERNS.acceptanceCriteria), acChecklist);
-    compare("definition-of-done", prList(SPEC_SECTION_NAME_PATTERNS.definitionOfDone), dodChecklist);
+    compare("acceptance-criteria", prList(ACCEPTANCE_SECTION_PATTERNS), acChecklist);
+    compare("definition-of-done", prList(DOD_SECTION_PATTERNS), dodChecklist);
   } catch (error) {
     hits.push({ kind: "pr-body", side: "issue", needle: error.message, file: "issue-body/issue-matrix", line: 0, site: "issue-body/issue-matrix" });
   }
