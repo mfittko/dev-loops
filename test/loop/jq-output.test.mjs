@@ -369,3 +369,12 @@ test("emitResult: --fields TSV output is cut(1)-consumable even with a null/empt
   assert.equal(execFileSync("cut", ["-f1"], { input: `${line}\n` }).toString(), "\n");
   assert.equal(execFileSync("cut", ["-f2"], { input: `${line}\n` }).toString(), "3\n");
 });
+
+test("evaluateJqFilter: null sorts below numbers in order comparisons", () => {
+  const rows = [{ f: null }, { f: 20 }];
+  assert.deepEqual(evaluateJqFilter(rows, ".[] | select(.f > 10)"), [{ f: 20 }]);
+  assert.deepEqual(evaluateJqFilter(rows, ".[] | select(.f < 10)"), [{ f: null }]);
+  assert.deepEqual(evaluateJqFilter(rows, ".[] | select(.f <= 10)"), [{ f: null }]);
+  assert.deepEqual(evaluateJqFilter(rows, ".[] | select(.f >= 10)"), [{ f: 20 }]);
+  assert.deepEqual(evaluateJqFilter(rows, ".[] | select(.f > null)"), [{ f: 20 }]);
+});
