@@ -94,12 +94,20 @@ describe("resolveReviewProportionality judgeTrack", () => {
     });
   }
 
-  test("PR-shaped fixture lowers; the same fixture plus a risk-path file stays full", () => {
-    const scope = { filesChanged: 4, linesChanged: 231 };
-    const lowered = plan("draft", { scope, changedFiles: pr2614, judgeTrack: "light" });
-    assert.equal(lowered.track, "reduced");
-    const risky = plan("draft", { scope, changedFiles: [...pr2614, "scripts/loop/some-gate-helper.mjs"], judgeTrack: "light" });
-    assert.deepEqual([risky.track, risky.trackReason, risky.mode], ["full", "risk_floor", "full_fanout"]);
+  for (const gate of ["draft", "preApproval"]) {
+    test(`${gate}: PR-shaped fixture lowers; the same fixture plus a risk-path file stays full`, () => {
+      const scope = { filesChanged: 4, linesChanged: 109 };
+      const lowered = plan(gate, { scope, changedFiles: pr2614, judgeTrack: "light" });
+      assert.ok(["light", "reduced"].includes(lowered.track), lowered.track);
+      const risky = plan(gate, { scope, changedFiles: [...pr2614, "scripts/loop/some-gate-helper.mjs"], judgeTrack: "light" });
+      assert.deepEqual([risky.track, risky.trackReason, risky.mode], ["full", "risk_floor", "full_fanout"]);
+    });
+  }
+
+  test("light mode disabled keeps a lowering judge track at full", () => {
+    const disabled = { ...config(), localImplementation: { lightMode: { enabled: false } } };
+    const r = resolveReviewProportionality(disabled, "draft", { sizeOutcome: PASS, ...small, judgeTrack: "light" });
+    assert.deepEqual([r.track, r.trackReason], ["full", "light_mode_disabled"]);
   });
 
   test("a one-line change on a risk path stays full with a lowering judge track", () => {

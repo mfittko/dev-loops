@@ -247,8 +247,8 @@ test("diff-class tier matching reads the raw diff, not the light-mode counted sc
 });
 
 // Judge track: the record file + label + head sha flags lower only the track.
-function runJudge(fixture, { record, labels, headSha, gate = "draft" }) {
-  const args = [SCRIPT, "--gate", gate, "--base", "base", "--head", "HEAD"];
+function runJudge(fixture, { record, labels, headSha, gate = "draft", baseOnly = false, noRange = false }) {
+  const args = [SCRIPT, "--gate", gate, ...(noRange ? [] : ["--base", "base", ...(baseOnly ? [] : ["--head", "HEAD"])])];
   if (record !== undefined) args.push("--judge-record", record);
   if (labels !== undefined) args.push("--labels", labels);
   if (headSha !== undefined) args.push("--head-sha", headSha);
@@ -334,6 +334,23 @@ test("a --head-sha that is not the resolved head, and case-variant labels", asyn
     assert.deepEqual([fullUpper.mode, fullUpper.track], ["full_fanout", "full"]);
     const nul = runJudge(fixture, { record: recNull, labels: "gate:light", headSha: sha });
     assert.equal(nul.trackReason, "judge_record_invalid");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("--base without --head diffs the working tree, so a matching --head-sha never lowers", async () => {
+  const { tmp, fixture } = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "docs/note.md": "A trivial docs change.\n" } });
+  try {
+    const sha = execSync("git rev-parse HEAD", { cwd: fixture, encoding: "utf8" }).trim();
+    const rec = path.join(tmp, "rec.json");
+    await writeFile(rec, judgeRec(sha));
+    const both = runJudge(fixture, { record: rec, labels: "gate:light", headSha: sha });
+    assert.equal(both.track, "light");
+    const noBase = runJudge(fixture, { record: rec, labels: "gate:light", headSha: sha, noRange: true });
+    assert.equal(noBase.track, "light");
+    const baseOnly = runJudge(fixture, { record: rec, labels: "gate:light", headSha: sha, baseOnly: true });
+    assert.deepEqual([baseOnly.track, baseOnly.trackReason], ["full", "judge_head_mismatch"]);
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

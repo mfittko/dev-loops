@@ -39,11 +39,11 @@ Options:
 Output also carries "track" (light|reduced|full) and "trackReason". The judge track never changes
 mode, angles, groups or floors.
 Output (stdout, JSON):
-  { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 1, "linesChanged": 5 }, "mode": "inline", "reason": "under_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": { "sizeCap": false, "riskPath": false, "sizeOutcome": false, "ambiguity": false, "unclassifiable": false } }
-  { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 9, "linesChanged": 300 }, "mode": "full_fanout", "reason": "over_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": {...} }
-  { "ok": true, "gate": "draft", "scope": { "ok": true, ... }, "mode": "full_fanout", "reason": "risk_path_touch", "threshold": {...}, "angles": [...], "groups": [...], "floors": {...} }
-  { "ok": true, "gate": "draft", "scope": { "ok": true, ... }, "mode": "full_fanout", "reason": "size_outcome_escalate"|"size_outcome_block"|"size_outcome_t1"|"size_outcome_unavailable"|"unclassifiable_diff", "threshold": {...}, "angles": [...], "groups": [...], "floors": {...} }
-  { "ok": true, "gate": "draft", "scope": { "ok": false, ... }, "mode": "full_fanout", "reason": "scope_detection_failed", "threshold": null }
+  { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 1, "linesChanged": 5 }, "mode": "inline", "reason": "under_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": { "sizeCap": false, "riskPath": false, "sizeOutcome": false, "ambiguity": false, "unclassifiable": false }, "track": "full", "trackReason": "judge_record_absent" }
+  { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 9, "linesChanged": 300 }, "mode": "full_fanout", "reason": "over_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": {...}, "track": ..., "trackReason": ... }
+  { "ok": true, "gate": "draft", "scope": { "ok": true, ... }, "mode": "full_fanout", "reason": "risk_path_touch", "threshold": {...}, "angles": [...], "groups": [...], "floors": {...}, "track": ..., "trackReason": ... }
+  { "ok": true, "gate": "draft", "scope": { "ok": true, ... }, "mode": "full_fanout", "reason": "size_outcome_escalate"|"size_outcome_block"|"size_outcome_t1"|"size_outcome_unavailable"|"unclassifiable_diff", "threshold": {...}, "angles": [...], "groups": [...], "floors": {...}, "track": ..., "trackReason": ... }
+  { "ok": true, "gate": "draft", "scope": { "ok": false, ... }, "mode": "full_fanout", "reason": "scope_detection_failed", "threshold": null, "track": "full", "trackReason": "scope_detection_failed" }
 Error output (stderr, JSON, the shared CLI error format — see formatCliError):
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" }
 
@@ -128,8 +128,9 @@ function readJudgeRecord(path) {
   }
 }
 
-/** Resolve the diffed head ref to a commit sha, or null when it cannot be resolved. */
+/** Resolve the diffed head ref to a commit sha, or null when it cannot be resolved or the diff includes the working tree (--base without --head). */
 function resolveHeadSha({ base, head, cwd }) {
+  if (base && !head) return null; // base-vs-working-tree diff: no commit the judge could have seen
   try {
     return execFileSync(
       "git",
