@@ -29,7 +29,7 @@ test("C1 the order carries the resolver envelope's route, next action, stops, ac
     assert.deepEqual(workOrder.handoff[key], envelope[key], key);
   }
   assert.deepEqual(workOrder.handoff.stopRules, envelope.stopRules);
-  assert.deepEqual([...workOrder.handoff.requiredReads].sort(), [...envelope.requiredReads].sort());
+  assert.deepEqual(workOrder.handoff.requiredReads, envelope.requiredReads);
   assert.equal(workOrder.role, "coordinator");
 });
 
@@ -63,9 +63,13 @@ test("C1 an envelope with overrides, or a missing or malformed envelope, emits n
 
 // C2
 test("C2 permuted set ordering, two checkout roots and different collection times give one digest", () => {
-  const a = buildCoordinatorWorkOrder({ envelope: issueEnvelope({ repoRoot: "/checkout-a", now: new Date(1) }), allowedFiles: ["src/a.mjs", "src/b.mjs"] });
+  const withGate = (envelope, gateConfig) => ({ ...envelope, gateConfig });
+  const a = buildCoordinatorWorkOrder({
+    envelope: withGate(issueEnvelope({ repoRoot: "/checkout-a", now: new Date(1) }), { angles: ["x", "y"], excludeAngles: ["p", "q"], blockCleanOnFindingSeverities: ["high", "medium"], requireCi: true }),
+    allowedFiles: ["src/a.mjs", "src/b.mjs"],
+  });
   const b = buildCoordinatorWorkOrder({
-    envelope: issueEnvelope({ repoRoot: "/elsewhere/checkout-b", requiredReads: ["skills/docs/a.md", "skills/docs/b.md"], now: new Date(2) }),
+    envelope: withGate(issueEnvelope({ repoRoot: "/elsewhere/checkout-b", now: new Date(2) }), { angles: ["y", "x"], excludeAngles: ["q", "p"], blockCleanOnFindingSeverities: ["medium", "high"], requireCi: true }),
     allowedFiles: ["src/b.mjs", "src/a.mjs"],
   });
   assert.notEqual(a.workOrder.handoff.cwd, b.workOrder.handoff.cwd);
@@ -76,6 +80,10 @@ test("C2 permuted set ordering, two checkout roots and different collection time
 test("C2 changing a semantic input changes the digest", () => {
   const base = buildCoordinatorWorkOrder({ envelope: issueEnvelope() }).workOrderDigest;
   assert.notEqual(buildCoordinatorWorkOrder({ envelope: issueEnvelope({ requiredReads: ["skills/docs/c.md"] }) }).workOrderDigest, base);
+  assert.notEqual(buildCoordinatorWorkOrder({ envelope: issueEnvelope({ requiredReads: ["skills/docs/a.md", "skills/docs/b.md"] }) }).workOrderDigest, base);
+  for (const bad of [["/checkout/skills/docs/a.md"], ["skills/docs/a.md", "/checkout/skills/docs/b.md"]]) {
+    assert.throws(() => buildCoordinatorWorkOrder({ envelope: issueEnvelope({ requiredReads: bad }) }), CoordinatorWorkOrderRefusal, bad.join());
+  }
   assert.notEqual(buildCoordinatorWorkOrder({ envelope: issueEnvelope(), allowedFiles: ["src/x.mjs"] }).workOrderDigest, base);
   assert.notEqual(buildCoordinatorWorkOrder({ envelope: issueEnvelope(), attempt: 2 }).workOrderDigest, base);
 });

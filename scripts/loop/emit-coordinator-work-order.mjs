@@ -26,7 +26,10 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   };
   // One failure shape: {ok:false,error} on stdout unless --silent; --fields and --jq never apply to a failure.
   const fail = (error, stderrText) => {
-    if (!(values?.silent ?? parseArgs({ args: argv, options, strict: false }).values.silent)) stdout.write(`${JSON.stringify({ ok: false, error })}\n`);
+    // Without parsed values, scan argv itself: a missing option value would make a non-strict parse swallow --silent.
+    const terminator = argv.indexOf("--");
+    const silent = values?.silent ?? argv.slice(0, terminator < 0 ? undefined : terminator).some((a) => a === "--silent" || a === "-s");
+    if (!silent) stdout.write(`${JSON.stringify({ ok: false, error })}\n`);
     stderr.write(`${stderrText}\n`);
     return 1;
   };

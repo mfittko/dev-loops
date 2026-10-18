@@ -7,6 +7,7 @@
  * file or envelope override: every route, next-action, stop, acceptance, required-read
  * and sanctioned-command fact is the envelope's own.
  */
+import path from "node:path";
 import { workOrderDigest } from "./work-order-digest.mjs";
 import { validateHandoffEnvelope } from "./handoff-envelope.mjs";
 
@@ -49,8 +50,18 @@ export function buildCoordinatorWorkOrder(input) {
   // gateState.derivedAt is a collection timestamp, not semantic; every other envelope field is retained.
   const { gateState, ...handoff } = envelope;
   const { derivedAt: _derivedAt, ...semanticGateState } = gateState ?? {};
-  // stopRules order is semantic (reconciliation tuple) and stays verbatim; requiredReads is an unordered set of validated strings.
-  if (Array.isArray(handoff.requiredReads)) handoff.requiredReads = [...handoff.requiredReads].sort();
+  // stopRules and requiredReads order is semantic (consumed in order) and stays verbatim.
+  // The digest drops absolute strings, so an absolute read has no portable identity: refuse it.
+  if (Array.isArray(handoff.requiredReads) && handoff.requiredReads.some((p) => path.isAbsolute(p))) {
+    throw new CoordinatorWorkOrderRefusal("requiredReads must be repository-relative paths");
+  }
+  // gateConfig lists are unordered sets: sort them so equivalent configurations share one digest.
+  if (handoff.gateConfig) {
+    handoff.gateConfig = { ...handoff.gateConfig };
+    for (const key of ["angles", "excludeAngles", "blockCleanOnFindingSeverities"]) {
+      if (Array.isArray(handoff.gateConfig[key])) handoff.gateConfig[key] = [...handoff.gateConfig[key]].sort();
+    }
+  }
   const workOrder = {
     role: "coordinator",
     operation: "coordinate",
