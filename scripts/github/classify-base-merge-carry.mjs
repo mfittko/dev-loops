@@ -15,9 +15,11 @@ import { classifyBaseMergeCarry } from "@dev-loops/core/loop/base-merge-verdict-
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { runGitCommand } from "../lib/git-delta.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { buildGateArtifactPath } from "./_gate-artifact-paths.mjs";
 
-const USAGE = "Usage: classify-base-merge-carry.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --prev-head <full sha> --head-sha <full sha> --base-ref <ref, e.g. origin/main> [--tmp-root <path>]";
+const USAGE = `Usage: classify-base-merge-carry.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --prev-head <full sha> --head-sha <full sha> --base-ref <ref, e.g. origin/main> [--tmp-root <path>]
+${JQ_OUTPUT_USAGE}`;
 
 export function buildBaseMergeCarryPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
   return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, dir: "base-merge-carry", suffix: ".base-merge-carry.json" });
@@ -70,7 +72,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
   try {
     const { values } = parseArgs({
       args: argv,
-      options: { repo: { type: "string" }, pr: { type: "string" }, gate: { type: "string" }, "prev-head": { type: "string" }, "head-sha": { type: "string" }, "base-ref": { type: "string" }, "tmp-root": { type: "string" } },
+      options: { repo: { type: "string" }, pr: { type: "string" }, gate: { type: "string" }, "prev-head": { type: "string" }, "head-sha": { type: "string" }, "base-ref": { type: "string" }, "tmp-root": { type: "string" }, ...JQ_OUTPUT_PARSE_OPTIONS },
     });
     const prevHead = normalizeFullHeadSha(values["prev-head"] ?? "");
     const headSha = normalizeFullHeadSha(values["head-sha"] ?? "");
@@ -81,7 +83,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     const out = path.resolve(repoRoot, buildBaseMergeCarryPath({ repo: values.repo, pr: values.pr, gate: values.gate, headSha, tmpRoot: values["tmp-root"] || "tmp" }));
     await mkdir(path.dirname(out), { recursive: true });
     await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
-    process.stdout.write(`${JSON.stringify({ ok: true, path: out, ...evidence })}\n`);
+    process.exitCode = emitResult({ ok: true, path: out, ...evidence }, { jq: values.jq, silent: values.silent, fields: values.fields });
   } catch (error) {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;
