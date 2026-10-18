@@ -17,26 +17,31 @@ ${JQ_OUTPUT_USAGE}
 Exit codes: 0 emitted, 1 refused or runtime failure.`;
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
+  let values;
   try {
-    const { values } = parseArgs({ args: argv, options: {
+    ({ values } = parseArgs({ args: argv, options: {
       input: { type: "string" }, repo: { type: "string" }, "allowed-file": { type: "string", multiple: true },
       attempt: { type: "string" }, help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS,
-    } });
+    } }));
     if (values.help) {
       stdout.write(`${USAGE}\n`);
       return 0;
     }
     if (!values.input) {
-      stderr.write(`--input is required\n${USAGE}\n`);
+      stdout.write(`${JSON.stringify({ ok: false, error: "--input is required" })}\n`);
+      stderr.write(`${USAGE}\n`);
       return 1;
+    }
+    if (values.attempt !== undefined && !/^[1-9]\d*$/.test(values.attempt)) {
+      throw new CoordinatorWorkOrderRefusal("--attempt must be a positive integer");
     }
     const envelope = await buildHandoffEnvelopeCli({ inputPath: values.input, repo: values.repo });
     const { workOrder, workOrderDigest } = buildCoordinatorWorkOrder({
-      envelope, allowedFiles: values["allowed-file"] ?? [], ...(values.attempt ? { attempt: Number(values.attempt) } : {}),
+      envelope, allowedFiles: values["allowed-file"] ?? [], ...(values.attempt !== undefined ? { attempt: Number(values.attempt) } : {}),
     });
-    return emitResult({ ok: true, workOrder, workOrderDigest }, { jq: values.jq, silent: values.silent, stdout, stderr });
+    return emitResult({ ok: true, workOrder, workOrderDigest }, { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr });
   } catch (err) {
-    if (err instanceof CoordinatorWorkOrderRefusal) return emitResult({ ok: false, error: err.message }, { stdout, stderr });
+    if (err instanceof CoordinatorWorkOrderRefusal) return emitResult({ ok: false, error: err.message }, { jq: values?.jq, silent: values?.silent, fields: values?.fields, stdout, stderr });
     stdout.write(`${JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) })}\n`);
     stderr.write(`${formatCliError(err)}\n`);
     return 1;

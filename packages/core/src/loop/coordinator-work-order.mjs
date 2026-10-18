@@ -11,8 +11,6 @@ import { workOrderDigest } from "./work-order-digest.mjs";
 import { validateHandoffEnvelope } from "./handoff-envelope.mjs";
 
 const INPUT_KEYS = new Set(["envelope", "allowedFiles", "attempt"]);
-const SET_FIELDS = ["stopRules", "requiredReads"];
-const byJson = (a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1);
 
 export class CoordinatorWorkOrderRefusal extends Error {}
 
@@ -43,13 +41,16 @@ export function buildCoordinatorWorkOrder(input) {
   if (normalized.some((p, i) => p === "" || p.split("/").includes("..") || allowedFiles[i].startsWith("/"))) {
     throw new CoordinatorWorkOrderRefusal("allowedFiles must be repository-relative paths");
   }
-  if (normalized.some((p) => p.startsWith("changes/") && p !== ownGlob)) {
+  // Own-fragment guard: any other entry whose first segment is `changes` or a glob could cover other units' fragments.
+  const coversChanges = (p) => p !== ownGlob && (p.split("/")[0] === "changes" || /[*?[{]/.test(p.split("/")[0]));
+  if (normalized.some(coversChanges)) {
     throw new CoordinatorWorkOrderRefusal(`allowedFiles may name only the unit's own ${ownGlob}`);
   }
   // gateState.derivedAt is a collection timestamp, not semantic; every other envelope field is retained.
   const { gateState, ...handoff } = envelope;
   const { derivedAt: _derivedAt, ...semanticGateState } = gateState ?? {};
-  for (const field of SET_FIELDS) if (Array.isArray(handoff[field])) handoff[field] = [...handoff[field]].sort(byJson);
+  // stopRules order is semantic (reconciliation tuple) and stays verbatim; requiredReads is an unordered set of validated strings.
+  if (Array.isArray(handoff.requiredReads)) handoff.requiredReads = [...handoff.requiredReads].sort();
   const workOrder = {
     role: "coordinator",
     operation: "coordinate",

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { buildDevLoopHandoffEnvelope } from "../src/loop/handoff-envelope.mjs";
+import { buildDevLoopHandoffEnvelope, validateHandoffEnvelope } from "../src/loop/handoff-envelope.mjs";
 import { buildCoordinatorWorkOrder, CoordinatorWorkOrderRefusal } from "../src/loop/coordinator-work-order.mjs";
 import { INTERNAL_DEV_LOOP_STRATEGY } from "../src/loop/public-dev-loop-routing-contract.mjs";
 
@@ -28,9 +28,20 @@ test("C1 the order carries the resolver envelope's route, next action, stops, ac
   for (const key of ["nextAction", "currentGate", "executionMode", "acceptance", "sanctionedCommands", "target", "control"]) {
     assert.deepEqual(workOrder.handoff[key], envelope[key], key);
   }
-  assert.deepEqual([...workOrder.handoff.stopRules].sort(), [...envelope.stopRules].sort());
+  assert.deepEqual(workOrder.handoff.stopRules, envelope.stopRules);
   assert.deepEqual([...workOrder.handoff.requiredReads].sort(), [...envelope.requiredReads].sort());
   assert.equal(workOrder.role, "coordinator");
+});
+
+test("C1 a needs_reconcile envelope keeps its stop-rule order and still validates", () => {
+  const envelope = buildDevLoopHandoffEnvelope(
+    { bundleKind: "needs_reconcile", selectedStrategy: "none", bundle: { bundleKind: "needs_reconcile", selectedStrategy: null, routeKind: "needs_reconcile", selectedGate: "fail_closed_reconcile", executionMode: "bounded_handoff", nextAction: "Reconcile the canonical state before routing.", requiredReads: [], activeArtifact: artifact("issue", { issue: 2483 }) } },
+    { workflow: { humanMergeOnly: true } }, { currentHeadSha: "a".repeat(40) }, { repoSlug: "o/r", repoRoot: "/checkout-a" },
+  );
+  assert.equal(envelope.stopRules[0], "reconcile");
+  const { workOrder } = buildCoordinatorWorkOrder({ envelope });
+  assert.deepEqual(workOrder.handoff.stopRules, envelope.stopRules);
+  assert.equal(validateHandoffEnvelope(workOrder.handoff).ok, true);
 });
 
 test("C1 a free-form brief, appended instructions, payload JSON or summary file is refused", () => {
@@ -95,7 +106,18 @@ test("C19 allowed files are normalized and control characters are refused", () =
 });
 
 test("C19 a changes entry other than the unit's own fragment is refused", () => {
-  for (const bad of ["changes/9999-*.md", "changes/README.md", "./changes/2484-x.md", "changes/2483-a.md"]) {
+  for (const bad of ["changes/9999-*.md", "changes/README.md", "./changes/2484-x.md", "changes/2483-a.md", "changes", "changes/", "**", "*/9999-x.md", "change?/x.md", "{changes,src}/x.md", "[c]hanges/x.md"]) {
     assert.throws(() => buildCoordinatorWorkOrder({ envelope: issueEnvelope(), allowedFiles: [bad] }), CoordinatorWorkOrderRefusal, bad);
+  }
+});
+
+test("C19 glob entries below a non-changes directory are accepted", () => {
+  const { workOrder } = buildCoordinatorWorkOrder({ envelope: issueEnvelope(), allowedFiles: ["src/**"] });
+  assert.deepEqual(workOrder.allowedFiles, ["changes/2483-*.md", "src/**"]);
+});
+
+test("C2 attempt 0, 1.5 and the string \"2\" are refused", () => {
+  for (const bad of [0, 1.5, "2"]) {
+    assert.throws(() => buildCoordinatorWorkOrder({ envelope: issueEnvelope(), attempt: bad }), CoordinatorWorkOrderRefusal, String(bad));
   }
 });

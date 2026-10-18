@@ -44,3 +44,54 @@ test("C1 emit-coordinator-work-order rejects brief, overrides and payload flags"
     assert.match(JSON.parse(result.stdout).error, /Unknown option/, flag);
   }
 });
+
+async function withInput(fn) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "emit-coordinator-"));
+  try {
+    const input = path.join(dir, "resolver.json");
+    await writeFile(input, JSON.stringify(resolverOutput));
+    return await fn(input);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test("C1 --fields workOrderDigest prints only the digest", async () => {
+  await withInput(async (input) => {
+    const result = await runNode(["--input", input, "--repo", "o/r", "--fields", "workOrderDigest"]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout.trim(), /^sha256:[0-9a-f]{64}$/);
+  });
+});
+
+test("C19 a refused allowed file exits 1 with ok:false JSON on stdout", async () => {
+  await withInput(async (input) => {
+    const result = await runNode(["--input", input, "--repo", "o/r", "--allowed-file", "../x"]);
+    assert.equal(result.code, 1);
+    assert.equal(JSON.parse(result.stdout).ok, false);
+    const silent = await runNode(["--input", input, "--repo", "o/r", "--allowed-file", "../x", "--silent"]);
+    assert.equal(silent.code, 1);
+    assert.equal(silent.stdout, "");
+  });
+});
+
+test("C2 --attempt accepts only positive decimal integers", async () => {
+  await withInput(async (input) => {
+    for (const good of ["1", "2", "10"]) {
+      const result = await runNode(["--input", input, "--repo", "o/r", `--attempt=${good}`]);
+      assert.equal(result.code, 0, good);
+      assert.equal(JSON.parse(result.stdout).workOrder.attempt, Number(good));
+    }
+    for (const bad of ["", "0", "0x2", " 2", "2e0", "1.0", "1.5", "-1"]) {
+      const result = await runNode(["--input", input, "--repo", "o/r", `--attempt=${bad}`]);
+      assert.equal(result.code, 1, JSON.stringify(bad));
+      assert.equal(JSON.parse(result.stdout).ok, false, JSON.stringify(bad));
+    }
+  });
+});
+
+test("a missing --input emits ok:false JSON on stdout and exits 1", async () => {
+  const result = await runNode([]);
+  assert.equal(result.code, 1);
+  assert.equal(JSON.parse(result.stdout).ok, false);
+});
