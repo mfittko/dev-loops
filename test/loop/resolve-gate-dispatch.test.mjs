@@ -245,3 +245,45 @@ test("diff-class tier matching reads the raw diff, not the light-mode counted sc
     await rm(mixed.tmp, { recursive: true, force: true });
   }
 });
+
+// Judge track: the record file + label + head sha flags lower only the track.
+function runJudge(fixture, { record, labels, headSha, gate = "draft" }) {
+  const args = [SCRIPT, "--gate", gate, "--base", "base", "--head", "HEAD"];
+  if (record !== undefined) args.push("--judge-record", record);
+  if (labels !== undefined) args.push("--labels", labels);
+  if (headSha !== undefined) args.push("--head-sha", headSha);
+  return JSON.parse(execFileSync((Bun.which("node") ?? "node"), args, { cwd: fixture, encoding: "utf8" }).trim());
+}
+
+test("judge record + matching label + current head lowers the track; every mismatch routes to full", async () => {
+  const { tmp, fixture } = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "docs/note.md": "A trivial docs change.\n" } });
+  try {
+    const sha = execSync("git rev-parse HEAD", { cwd: fixture, encoding: "utf8" }).trim();
+    const good = path.join(tmp, "good.json");
+    const stale = path.join(tmp, "stale.json");
+    const broken = path.join(tmp, "broken.json");
+    const rec = (headSha) => JSON.stringify({ schemaVersion: 1, headSha, track: "light", signals: [{ signal: "additive", reason: "docs only" }] });
+    await writeFile(good, rec(sha));
+    await writeFile(stale, rec("b".repeat(40)));
+    await writeFile(broken, "{not json");
+
+    for (const gate of ["draft", "preApproval"]) {
+      const lowered = runJudge(fixture, { gate, record: good, labels: "gate:light", headSha: sha });
+      assert.deepEqual([lowered.mode, lowered.track, lowered.trackReason], ["inline", "light", "judge_light"]);
+    }
+    const baseline = runJudge(fixture, {});
+    assert.deepEqual([baseline.track, baseline.trackReason], ["full", "judge_record_absent"]);
+    const full = (opts) => runJudge(fixture, opts).track;
+    assert.equal(full({ labels: "gate:light", headSha: sha }), "full");
+    assert.equal(full({ record: good, headSha: sha }), "full");
+    assert.equal(full({ record: stale, labels: "gate:light", headSha: sha }), "full");
+    assert.equal(full({ record: broken, labels: "gate:light", headSha: sha }), "full");
+    assert.equal(full({ record: path.join(tmp, "missing.json"), labels: "gate:light", headSha: sha }), "full");
+    const withFull = runJudge(fixture, { record: good, labels: "gate:light,gate:full", headSha: sha });
+    assert.deepEqual([withFull.mode, withFull.track], ["full_fanout", "full"]);
+    // The judge never changes the dispatch plan.
+    for (const k of ["mode", "reason", "angles", "groups", "floors"]) assert.deepEqual(runJudge(fixture, { record: good, labels: "gate:light", headSha: sha })[k], baseline[k], k);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
