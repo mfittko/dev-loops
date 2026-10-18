@@ -15,6 +15,7 @@
     "./claude/headless-entry": "./src/claude/headless-entry.mjs",
     "./claude/hook-decisions": "./src/claude/hook-decisions.mjs",
     "./config": "./src/config/config.mjs",
+    "./config/judge-track": "./src/config/judge-track.mjs",
     "./debt/cluster": "./src/debt/cluster.mjs",
     "./debt/remediation-to-issue": "./src/debt/remediation-to-issue.mjs",
     "./debt/shape": "./src/debt/shape.mjs",

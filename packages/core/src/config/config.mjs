@@ -2317,6 +2317,10 @@ export function resolveRequireCopilotConvergenceAtLatestHead(config) {
 /** Label that forces full fan-out regardless of change size. */
 export const GATE_FULL_LABEL = "gate:full";
 
+/** Judge-decided lowering labels; each counts only with a matching current-head judge record. */
+export const GATE_LIGHT_LABEL = "gate:light";
+export const GATE_REDUCED_LABEL = "gate:reduced";
+
 /**
  * Conservative, hard-coded risk-path denylist floor (GATE-EXEC-PROPORTIONALITY,
  * gate-review-sub-loop-contract.md): a diff touching any of these trees forces
@@ -2944,6 +2948,8 @@ export function resolveReviewProportionality(config, gate, {
   sizeOutcome,
   hasFullLabel = false,
   inlineFindingSeverities,
+  judgeTrack = "full",
+  judgeTrackReason = "judge_full",
 } = {}) {
   const dispatch = resolveGateDispatchMode(config, gate, { scope, changedFiles, sizeOutcome, hasFullLabel, inlineFindingSeverities });
   const tier = resolveGateTier(config, gate, {
@@ -2982,12 +2988,36 @@ export function resolveReviewProportionality(config, gate, {
     ? staticAngles
     : (tier.angles ?? (staticAngles === null ? null : selectFloorPlusJustifiedAngles(config, gate, changedFiles)));
   const groups = resolveFanoutGroups(config, gate, angles ?? [], { fullLabel: hasFullLabel });
+  // The judge track only ever lowers the review track inside the floors above;
+  // it never changes mode, angles, groups or floors.
+  // An over-cap dispatch returns before the risk checks, so re-check the
+  // risk-signal facts here before honoring a lowering judge track.
+  const threshold = resolveLightMode(config);
+  const overCapRisk = judgeTrack !== "full" && dispatch.reason === "over_threshold"
+    && (!Array.isArray(changedFiles)
+      || touchesRiskPath(changedFiles, threshold.riskPaths)
+      || !isSizeOutcomeT1Clean(sizeOutcome));
+  // resolveGateTier returns before classifying when no tiers are configured, so
+  // classify here independently of tier configuration before lowering the track.
+  const unknownKind = Array.isArray(changedFiles)
+    && changedFiles.some((f) => typeof f !== "string" || f === "" || classifyFile(f, resolveClassifyRules(config)) === "unknown");
+  let track = "full";
+  let trackReason = judgeTrackReason;
+  if (hasFullLabel) trackReason = "gate_full_label";
+  else if (dispatch.reason === "escalated") trackReason = "escalated";
+  else if (floored || overCapRisk || unknownKind) trackReason = "risk_floor";
+  else if (judgeTrack !== "full" && !threshold) trackReason = "light_mode_disabled";
+  else if (judgeTrack === "light" && dispatch.mode === "inline") [track, trackReason] = ["light", "judge_light"];
+  else if (judgeTrack === "light") [track, trackReason] = ["reduced", "judge_light_degraded_to_reduced"];
+  else if (judgeTrack === "reduced") [track, trackReason] = ["reduced", "judge_reduced"];
   return Object.freeze({
     mode,
     angles,
     groups,
     reason,
     floors,
+    track,
+    trackReason,
   });
 }
 

@@ -245,3 +245,128 @@ test("diff-class tier matching reads the raw diff, not the light-mode counted sc
     await rm(mixed.tmp, { recursive: true, force: true });
   }
 });
+
+// Judge track: the record file + label + head sha flags lower only the track.
+function runJudge(fixture, { record, labels, headSha, gate = "draft", baseOnly = false, noRange = false }) {
+  const args = [SCRIPT, "--gate", gate, ...(noRange ? [] : ["--base", "base", ...(baseOnly ? [] : ["--head", "HEAD"])])];
+  if (record !== undefined) args.push("--judge-record", record);
+  if (labels !== undefined) args.push("--labels", labels);
+  if (headSha !== undefined) args.push("--head-sha", headSha);
+  return JSON.parse(execFileSync((Bun.which("node") ?? "node"), args, { cwd: fixture, encoding: "utf8" }).trim());
+}
+
+test("judge record + matching label + current head lowers the track; every mismatch routes to full", async () => {
+  const { tmp, fixture } = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "docs/note.md": "A trivial docs change.\n" } });
+  try {
+    const sha = execSync("git rev-parse HEAD", { cwd: fixture, encoding: "utf8" }).trim();
+    const good = path.join(tmp, "good.json");
+    const stale = path.join(tmp, "stale.json");
+    const broken = path.join(tmp, "broken.json");
+    const rec = (headSha) => JSON.stringify({ schemaVersion: 1, headSha, track: "light", signals: [{ signal: "additive", reason: "docs only" }] });
+    await writeFile(good, rec(sha));
+    await writeFile(stale, rec("b".repeat(40)));
+    await writeFile(broken, "{not json");
+
+    for (const gate of ["draft", "preApproval"]) {
+      const lowered = runJudge(fixture, { gate, record: good, labels: "gate:light", headSha: sha });
+      assert.deepEqual([lowered.mode, lowered.track, lowered.trackReason], ["inline", "light", "judge_light"]);
+    }
+    const baseline = runJudge(fixture, {});
+    assert.deepEqual([baseline.track, baseline.trackReason], ["full", "judge_record_absent"]);
+    const full = (opts) => runJudge(fixture, opts).track;
+    assert.equal(full({ labels: "gate:light", headSha: sha }), "full");
+    assert.equal(full({ record: good, headSha: sha }), "full");
+    assert.equal(full({ record: stale, labels: "gate:light", headSha: sha }), "full");
+    assert.equal(full({ record: broken, labels: "gate:light", headSha: sha }), "full");
+    assert.equal(full({ record: path.join(tmp, "missing.json"), labels: "gate:light", headSha: sha }), "full");
+    const withFull = runJudge(fixture, { record: good, labels: "gate:light,gate:full", headSha: sha });
+    assert.deepEqual([withFull.mode, withFull.track], ["full_fanout", "full"]);
+    // The judge never changes the dispatch plan.
+    for (const k of ["mode", "reason", "angles", "groups", "floors"]) assert.deepEqual(runJudge(fixture, { record: good, labels: "gate:light", headSha: sha })[k], baseline[k], k);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+const BIG_DOC = `${"A line of documentation.\n".repeat(150)}`;
+const judgeRec = (headSha, track = "light") => JSON.stringify({ schemaVersion: 1, headSha, track, signals: [{ signal: "additive", reason: "docs only" }] });
+
+test("over the cap, a lowering judge track re-checks the size outcome and risk facts", async () => {
+  const clean = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "docs/big.md": BIG_DOC } });
+  // A t1 pattern that matches a docs file makes the size outcome unusable (block).
+  const t1 = await makeFixture({
+    devloops: `${LIGHT_DEVLOOPS}gates:\n  size:\n    tiers:\n      t1:\n        patterns: ["docs/**"]\n        sliceHardLoc: 10\n`,
+    headFiles: { "docs/big.md": BIG_DOC },
+  });
+  try {
+    for (const [f, tmp, expected] of [[clean.fixture, clean.tmp, "reduced"], [t1.fixture, t1.tmp, "full"]]) {
+      const sha = execSync("git rev-parse HEAD", { cwd: f, encoding: "utf8" }).trim();
+      const rec = path.join(tmp, "rec.json");
+      await writeFile(rec, judgeRec(sha));
+      const r = runJudge(f, { record: rec, labels: "gate:light", headSha: sha });
+      assert.equal(r.reason, "over_threshold");
+      assert.equal(r.track, expected, JSON.stringify(r));
+      if (expected === "full") assert.equal(r.trackReason, "risk_floor");
+    }
+  } finally {
+    await rm(clean.tmp, { recursive: true, force: true });
+    await rm(t1.tmp, { recursive: true, force: true });
+  }
+});
+
+test("a --head-sha that is not the resolved head, and case-variant labels", async () => {
+  const { tmp, fixture } = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "docs/note.md": "A trivial docs change.\n" } });
+  try {
+    const sha = execSync("git rev-parse HEAD", { cwd: fixture, encoding: "utf8" }).trim();
+    const other = "c".repeat(40);
+    const rec = path.join(tmp, "rec.json");
+    const recOther = path.join(tmp, "rec-other.json");
+    const recNull = path.join(tmp, "rec-null.json");
+    await writeFile(rec, judgeRec(sha));
+    await writeFile(recOther, judgeRec(other));
+    await writeFile(recNull, "null");
+    // Record and supplied sha agree with each other but not with the real head.
+    const spoof = runJudge(fixture, { record: recOther, labels: "gate:light", headSha: other });
+    assert.deepEqual([spoof.track, spoof.trackReason], ["full", "judge_head_mismatch"]);
+    const upper = runJudge(fixture, { record: rec, labels: " GATE:Light ", headSha: sha });
+    assert.deepEqual([upper.track, upper.trackReason], ["light", "judge_light"]);
+    const fullUpper = runJudge(fixture, { record: rec, labels: "gate:light,GATE:FULL", headSha: sha });
+    assert.deepEqual([fullUpper.mode, fullUpper.track], ["full_fanout", "full"]);
+    const nul = runJudge(fixture, { record: recNull, labels: "gate:light", headSha: sha });
+    assert.equal(nul.trackReason, "judge_record_invalid");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("--base without --head diffs the working tree, so a matching --head-sha never lowers", async () => {
+  const { tmp, fixture } = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "docs/note.md": "A trivial docs change.\n" } });
+  try {
+    const sha = execSync("git rev-parse HEAD", { cwd: fixture, encoding: "utf8" }).trim();
+    const rec = path.join(tmp, "rec.json");
+    await writeFile(rec, judgeRec(sha));
+    const both = runJudge(fixture, { record: rec, labels: "gate:light", headSha: sha });
+    assert.equal(both.track, "light");
+    const noBase = runJudge(fixture, { record: rec, labels: "gate:light", headSha: sha, noRange: true });
+    assert.equal(noBase.track, "light");
+    const baseOnly = runJudge(fixture, { record: rec, labels: "gate:light", headSha: sha, baseOnly: true });
+    assert.deepEqual([baseOnly.track, baseOnly.trackReason], ["full", "judge_head_mismatch"]);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("an inline-severity escalation forces track full", async () => {
+  const { tmp, fixture } = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "docs/note.md": "A trivial docs change.\n" } });
+  try {
+    const sha = execSync("git rev-parse HEAD", { cwd: fixture, encoding: "utf8" }).trim();
+    const rec = path.join(tmp, "rec.json");
+    await writeFile(rec, judgeRec(sha));
+    const out = JSON.parse(execFileSync((Bun.which("node") ?? "node"),
+      [SCRIPT, "--gate", "draft", "--base", "base", "--head", "HEAD", "--judge-record", rec, "--labels", "gate:light", "--head-sha", sha, "--inline-severities", "high"],
+      { cwd: fixture, encoding: "utf8" }).trim());
+    assert.deepEqual([out.reason, out.track, out.trackReason], ["escalated", "full", "escalated"]);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
