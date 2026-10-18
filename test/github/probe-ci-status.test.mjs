@@ -1193,3 +1193,11 @@ test("watch-ci single check (timeout-ms 0) on an all-queued run reports pending,
     },
   );
 });
+
+test("probe-ci-status parses --timeout in seconds; --timeout-ms is a deprecated alias; both fail closed", () => {
+  const base = ["--repo", "o/r", "--pr", "1"];
+  assert.equal(parseCiWatchCliArgs([...base, "--timeout", "0"]).timeoutMs, 0);
+  assert.equal(parseCiWatchCliArgs([...base, "--timeout", "0.1"]).timeoutMs, 100);
+  assert.equal(parseCiWatchCliArgs([...base, "--timeout", "60"]).timeoutMs, 60_000);
+  assert.throws(() => parseCiWatchCliArgs([...base, "--timeout", "1", "--timeout-ms", "1000"]), /mutually exclusive/);
+});

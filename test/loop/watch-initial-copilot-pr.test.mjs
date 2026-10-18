@@ -163,18 +163,19 @@ test("parseWatchInitialCopilotPrCliArgs rejects --poll-interval-ms as a removed 
   );
 });
 
-test("parseWatchInitialCopilotPrCliArgs rejects --timeout-ms 0 as a removed policy flag", () => {
-  assert.throws(
-    () => parseWatchInitialCopilotPrCliArgs(["--repo", "owner/repo", "--issue", "59", "--timeout-ms", "0"]),
-    /--timeout-ms has been removed/,
-  );
+
+test("parseWatchInitialCopilotPrCliArgs accepts --timeout 0 and an hour-or-longer --timeout in seconds", () => {
+  const base = ["--repo", "owner/repo", "--issue", "59"];
+  assert.equal(parseWatchInitialCopilotPrCliArgs([...base, "--timeout", "0"]).timeoutMs, 0);
+  assert.equal(parseWatchInitialCopilotPrCliArgs([...base, "--timeout", "7200"]).timeoutMs, 7_200_000);
+  assert.throws(() => parseWatchInitialCopilotPrCliArgs([...base, "--timeout", "0.1"]), /requires at least/);
 });
 
-test("parseWatchInitialCopilotPrCliArgs rejects --timeout-ms 30000 as a removed policy flag", () => {
-  assert.throws(
-    () => parseWatchInitialCopilotPrCliArgs(["--repo", "owner/repo", "--issue", "59", "--timeout-ms", "30000"]),
-    /--timeout-ms has been removed/,
-  );
+test("parseWatchInitialCopilotPrCliArgs keeps --timeout-ms as a deprecated alias and fails closed with --timeout", () => {
+  const base = ["--repo", "owner/repo", "--issue", "59"];
+  assert.equal(parseWatchInitialCopilotPrCliArgs([...base, "--timeout-ms", "0"]).timeoutMs, 0);
+  assert.throws(() => parseWatchInitialCopilotPrCliArgs([...base, "--timeout", "0", "--timeout-ms", "0"]), /mutually exclusive/);
+  assert.throws(() => parseWatchInitialCopilotPrCliArgs([...base, "--timeout-ms", "-1"]), /--timeout-ms must be/);
 });
 
 test("parseWatchInitialCopilotPrCliArgs trims whitespace from --repo", () => {
@@ -214,12 +215,6 @@ test("parseWatchInitialCopilotPrCliArgs rejects --poll-interval-ms 0 as a remove
   );
 });
 
-test("parseWatchInitialCopilotPrCliArgs rejects --timeout-ms -1 as a removed policy flag", () => {
-  assert.throws(
-    () => parseWatchInitialCopilotPrCliArgs(["--repo", "owner/repo", "--issue", "1", "--timeout-ms", "-1"]),
-    /--timeout-ms has been removed/,
-  );
-});
 
 test("parseWatchInitialCopilotPrCliArgs throws on unknown flag", () => {
   assert.throws(

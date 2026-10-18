@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
+import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import {
   normalizeHeadScopedCiContract,
@@ -18,7 +19,7 @@ import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs"
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { observeHeadCiSignals } from "./observe-head-ci.mjs";
 import { waitWithHeartbeat } from "./_watch-heartbeat.mjs";
-const USAGE = `Usage: probe-ci-status.mjs --repo <owner/name> (--pr <number> | --commit <oid>) [--timeout-ms <n>] [--poll-interval-ms <n>]
+const USAGE = `Usage: probe-ci-status.mjs --repo <owner/name> (--pr <number> | --commit <oid>) [--timeout <seconds>] [--poll-interval-ms <n>]
 Block-wait on a PR's combined CI check/status state (GitHub Actions + CircleCI +
 any external commit-status / check-run) for the current head SHA, until terminal
 or timeout. Provider-agnostic — unlike \`gh run watch\`, which is Actions-only.
@@ -29,7 +30,9 @@ Required:
                                  commit on the default branch). Mutually
                                  exclusive with --pr.
 Optional:
-  --timeout-ms <n>              Total watch budget (default 1800000; 0 = single check, no wait)
+  --timeout <seconds>           Total watch budget (default 1800; 0 = single check, no wait)
+  --timeout-ms <n>              Deprecated alias for --timeout (milliseconds); warns on stderr.
+                                Passing both flags fails closed.
   --poll-interval-ms <n>        Delay between polls (default 60000)
 Output (stdout, JSON):
   PR-scoped (--pr):
@@ -47,7 +50,7 @@ Output (stdout, JSON):
 Statuses:
   success    Combined CI is green (or no checks present — see no-checks rule)
   failure    At least one check/status failed (failedChecks populated)
-  pending    Timed-out single check (timeout-ms 0) found CI still in flight
+  pending    Timed-out single check (--timeout 0) found CI still in flight
   timeout    Watch budget elapsed while CI was still pending
   changed    Head SHA advanced during the wait; caller must re-baseline
   stuck      Zero-allocation stall bail (#1631): every check-run stayed QUEUED
@@ -66,7 +69,7 @@ No-checks rule (grace, race-safe):
   is pending (checks expected, not yet reported), never none. A gh-api / parse
   failure is never treated as empty — it forces pending so the watch keeps
   polling, and a persistent error settles as "timeout", never fabricated green.
-  (timeout-ms 0 single check has no waiting budget, so a clean no-checks head
+  (--timeout 0 single check has no waiting budget, so a clean no-checks head
   settles immediately.)
 Diagnostic output (stderr):
   { "ok": true, "type": "watch_heartbeat", "elapsedMs": N, "totalBudgetMs": N, "poll": N, "maxPolls": N }
@@ -86,6 +89,7 @@ export function parseCiWatchCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       commit: { type: "string" },
+      timeout: { type: "string" },
       "timeout-ms": { type: "string" },
       "poll-interval-ms": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
@@ -102,6 +106,7 @@ export function parseCiWatchCliArgs(argv) {
     pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
     timeoutMs: COPILOT_REVIEW_WAIT_TIMEOUT_MS,
   };
+  const rawTimeout = {};
   for (const token of tokens) {
     if (token.kind === "positional") {
       throw parseError(`Unknown argument: ${token.value}`);
@@ -129,8 +134,8 @@ export function parseCiWatchCliArgs(argv) {
       options.commit = commit;
       continue;
     }
-    if (token.name === "timeout-ms") {
-      options.timeoutMs = parseNonNegativeMs(requireTokenValue(token, parseError), "--timeout-ms");
+    if (token.name === "timeout" || token.name === "timeout-ms") {
+      rawTimeout[token.name === "timeout" ? "timeout" : "timeoutMs"] = requireTokenValue(token, parseError);
       continue;
     }
     if (token.name === "poll-interval-ms") {
@@ -139,6 +144,11 @@ export function parseCiWatchCliArgs(argv) {
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
+  }
+  try {
+    options.timeoutMs = resolveTimeoutMs(rawTimeout) ?? options.timeoutMs;
+  } catch (error) {
+    throw parseError(error instanceof Error ? error.message : String(error));
   }
   if (options.repo === undefined || (options.pr === undefined && options.commit === undefined)) {
     throw parseError("Watching CI requires --repo <owner/name> and either --pr <number> or --commit <oid>");
@@ -152,14 +162,6 @@ export function parseCiWatchCliArgs(argv) {
     throw parseError(error instanceof Error ? error.message : String(error));
   }
   return options;
-}
-
-function parseNonNegativeMs(raw, flag) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) {
-    throw parseError(`${flag} must be a non-negative integer`);
-  }
-  return value;
 }
 
 function parsePositiveMs(raw, flag) {
@@ -523,7 +525,7 @@ const FAILURE_RUN_CONCLUSIONS = new Set([
 /**
  * Read the combined GitHub Actions workflow-run state for one commit.
  * ponytail: an empty run list reads as "pending" (no grace window) — a run
- * that never appears bails out via the watch's own --timeout-ms budget rather
+ * that never appears bails out via the watch's own --timeout budget rather
  * than a bespoke settle-on-genuinely-none heuristic like the PR path's.
  *
  * @returns {{ ciStatus: "success"|"failure"|"pending", failedRuns: Array<{ name: string, conclusion: string }>, runCount: number }}

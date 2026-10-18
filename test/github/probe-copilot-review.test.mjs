@@ -342,3 +342,11 @@ test("formatProbeConcise reports (none) when no new bodies", () => {
   });
   assert.match(text, /new Copilot comment bodies this round: \(none\)/);
 });
+
+test("probe-copilot-review parses --timeout in seconds; --timeout-ms is a deprecated alias; both fail closed", () => {
+  const base = ["--repo", "o/r", "--pr", "1"];
+  assert.equal(parseWatchCliArgs([...base, "--timeout", "0"]).timeoutMs, 0);
+  assert.equal(parseWatchCliArgs([...base, "--timeout", "0.1"]).timeoutMs, 100);
+  assert.equal(parseWatchCliArgs([...base, "--timeout", "60"]).timeoutMs, 60_000);
+  assert.throws(() => parseWatchCliArgs([...base, "--timeout", "1", "--timeout-ms", "1000"]), /mutually exclusive/);
+});

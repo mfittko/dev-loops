@@ -182,17 +182,17 @@ test("wait-pr-checks rejects malformed arguments deterministically", async () =>
 
   const badTimeout = await runNode(["--repo", "owner/repo", "--pr", "7", "--timeout", "-1"]);
   assert.equal(badTimeout.code, 1);
-  assert.match(JSON.parse(badTimeout.stderr).error, /--timeout must be a non-negative integer/);
+  assert.match(JSON.parse(badTimeout.stderr).error, /--timeout must be a non-negative number/);
 
   const badPoll = await runNode(["--repo", "owner/repo", "--pr", "7", "--poll", "0"]);
   assert.equal(badPoll.code, 1);
   assert.match(JSON.parse(badPoll.stderr).error, /--poll must be a positive integer/);
 
-  // Canonical digits only: JS-coercible spellings (1e3, hex, decimals) are rejected.
-  for (const nonCanonical of ["1e3", "0x10", "1.0"]) {
+  // Plain decimal numbers only: JS-coercible spellings (1e3, hex) are rejected.
+  for (const nonCanonical of ["1e3", "0x10", "1."]) {
     const badSpelling = await runNode(["--repo", "owner/repo", "--pr", "7", "--timeout", nonCanonical]);
     assert.equal(badSpelling.code, 1, `--timeout ${nonCanonical} must be rejected`);
-    assert.match(JSON.parse(badSpelling.stderr).error, /--timeout must be a non-negative integer/);
+    assert.match(JSON.parse(badSpelling.stderr).error, /--timeout must be a non-negative number/);
   }
 });
 
@@ -385,4 +385,13 @@ test("wait-pr-checks --help names the RATE_LIMITED result and its resetAt field"
   assert.equal(await runCli(["--help"], { stdout }), 0);
   assert(stdout.text().includes("RATE_LIMITED"));
   assert(stdout.text().includes("resetAt"));
+});
+
+test("wait-pr-checks accepts --timeout 0, fractions and deprecated --timeout-ms; both flags fail closed", () => {
+  const base = ["--repo", "owner/repo", "--pr", "7"];
+  assert.equal(parseWaitPrChecksCliArgs([...base, "--timeout", "0"]).timeoutMs, 0);
+  assert.equal(parseWaitPrChecksCliArgs([...base, "--timeout", "0.1"]).timeoutMs, 100);
+  assert.equal(parseWaitPrChecksCliArgs([...base, "--timeout", "90"]).timeoutMs, 90_000);
+  assert.equal(parseWaitPrChecksCliArgs([...base, "--timeout-ms", "1500"]).timeoutMs, 1500);
+  assert.throws(() => parseWaitPrChecksCliArgs([...base, "--timeout", "1", "--timeout-ms", "1000"]), /mutually exclusive/);
 });

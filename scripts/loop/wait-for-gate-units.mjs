@@ -15,6 +15,7 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-protocol.mjs";
@@ -27,14 +28,15 @@ export const MAX_TIMEOUT_MS = 570000;
 export const RECHECK_INTERVAL_MS = 2000;
 const EXIT = { all_done: 0, timeout: 2, round_retired: 3 };
 
-const USAGE = `Usage: wait-for-gate-units.mjs (--emit-plan <path> [--unit <scope>]... | --judge-plan <path>) --tmp-root <worktree>/tmp [--timeout-ms <n>]
+const USAGE = `Usage: wait-for-gate-units.mjs (--emit-plan <path> [--unit <scope>]... | --judge-plan <path>) --tmp-root <worktree>/tmp [--timeout <seconds>]
 Block in one foreground process until the round's dispatched units are done.
 Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), round_retired (exit 3). Invalid input: ok false, exit 1.
   --emit-plan <path>   the round's <gate>-<headSha>.emit-plan.json; waits on every unit unless --unit narrows it
   --unit <scope>       repeatable; restrict the wait to these unit scopes
   --judge-plan <path>  the round's judge-emit-plan.json; waits on the one judge unit
   --tmp-root <dir>     worktree-local tmp root with the sentinels and retirement records
-  --timeout-ms <n>     1 to ${MAX_TIMEOUT_MS} (default ${DEFAULT_TIMEOUT_MS})`;
+  --timeout <seconds>  0 to ${MAX_TIMEOUT_MS / 1000} (default ${DEFAULT_TIMEOUT_MS / 1000}; 0 = single immediate check)
+  --timeout-ms <n>     Deprecated alias for --timeout (milliseconds); warns on stderr. Passing both fails closed.`;
 
 export function parseWaitArgs(argv) {
   const { values } = parseArgs({
@@ -45,6 +47,7 @@ export function parseWaitArgs(argv) {
       unit: { type: "string", multiple: true },
       "judge-plan": { type: "string" },
       "tmp-root": { type: "string" },
+      timeout: { type: "string" },
       "timeout-ms": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -55,9 +58,8 @@ export function parseWaitArgs(argv) {
   if ((values["emit-plan"] === undefined) === (values["judge-plan"] === undefined)) throw new Error("pass exactly one of --emit-plan and --judge-plan");
   if (values["judge-plan"] !== undefined && values.unit !== undefined) throw new Error("--unit applies only to --emit-plan");
   if (!values["tmp-root"]) throw new Error("--tmp-root is required");
-  const timeoutText = values["timeout-ms"] ?? String(DEFAULT_TIMEOUT_MS);
-  const timeoutMs = Number(timeoutText);
-  if (!/^\d+$/u.test(timeoutText) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS) throw new Error(`--timeout-ms must be an integer from 1 to ${MAX_TIMEOUT_MS}`);
+  const timeoutMs = resolveTimeoutMs({ timeout: values.timeout, timeoutMs: values["timeout-ms"] }) ?? DEFAULT_TIMEOUT_MS;
+  if (timeoutMs > MAX_TIMEOUT_MS) throw new Error(`--timeout must be at most ${MAX_TIMEOUT_MS / 1000} seconds`);
   return { emitPlan: values["emit-plan"], judgePlan: values["judge-plan"], units: values.unit, tmpRoot: values["tmp-root"], timeoutMs, jq: values.jq, fields: values.fields, silent: values.silent };
 }
 

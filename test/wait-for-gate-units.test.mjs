@@ -65,8 +65,13 @@ test("routes the gate subcommand to the script", () => {
 test("invalid input is rejected", async () => {
   assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--judge-plan", "b", "--tmp-root", "t"]), /exactly one/);
   assert.throws(() => parseWaitArgs(["--tmp-root", "t"]), /exactly one/);
-  assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "570001"]), /--timeout-ms/);
-  assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "0"]), /--timeout-ms/);
+  assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "571"]), /--timeout must be at most 570/);
+  assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout=-1"]), /--timeout must be/);
+  assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "1", "--timeout-ms", "1000"]), /mutually exclusive/);
+  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "0"]).timeoutMs, 0);
+  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "0.1"]).timeoutMs, 100);
+  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "30"]).timeoutMs, 30000);
+  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "570000"]).timeoutMs, 570000);
   assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t"]).timeoutMs, 540000);
   await withDir(async (root) => {
     const { planPath } = await seedPlan(root, [["g1", ["a"]]]);
