@@ -420,7 +420,7 @@ function mergeClaudeRecords(prev, next) {
   base.dispatches = [...prev.dispatches, ...next.dispatches];
   base.toolCalls = [...prev.toolCalls, ...next.toolCalls];
   base.contentChars = prev.contentChars + next.contentChars;
-  if (!base.outputFinal && base.usage.output !== null && other.usage.output !== null && other.usage.output > base.usage.output) {
+  if (!base.outputFinal && other.usage.output !== null && (base.usage.output === null || other.usage.output > base.usage.output)) {
     setTurnOutput(base, other.usage.output);
   }
   return base;
@@ -642,8 +642,9 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
 
           if (effectiveHarness === "claude") {
             const claudeTurn = buildClaudeTurn(data, msg, usage, currentAgent, segmentId);
-            // Keep only the last record's usage per message.id, in first-appearance
-            // order; a record without an id is pushed directly (see the class comment).
+            // Records sharing a message.id merge into one turn, in first-appearance order;
+            // the final record's usage (non-null stop_reason) wins over snapshots in any order.
+            // A record without an id is pushed directly (see the class comment).
             const messageId = typeof msg.id === "string" ? msg.id : null;
             if (messageId === null) {
               turns.push(claudeTurn);
@@ -690,9 +691,9 @@ export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
     }
   }
 
+  estimateSnapshotOutputs(turns);
   // A file can carry both Pi- and Claude-shaped usage envelopes under auto-detection
   // (e.g. a mixed-content collection); report "mixed" rather than picking the last one.
-  estimateSnapshotOutputs(turns);
   const fileHarness = fileHarnessesSeen.size > 1 ? "mixed" : [...fileHarnessesSeen][0] ?? null;
 
   return {

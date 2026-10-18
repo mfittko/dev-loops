@@ -50,8 +50,9 @@ Harness auto-detects per record from the usage envelope's field-naming shape (Cl
 present, the error names the detected shape and suggests `--harness auto`.
 
 Claude records sharing one `message.id` count as a single turn, even when the repeats
-are not adjacent. The deduped turn keeps the last record's usage and the position of
-its first appearance. That position decides the first and last turn for the Init
+are not adjacent. The record with a non-null `stop_reason` supplies the turn's usage in any order.
+Snapshot-only messages keep the last record's prompt fields with output = max(largest snapshot output, ceil(content chars / 4)).
+The deduped turn sits at the position of its first appearance. That position decides the first and last turn for the Init
 Prompt and Final Prompt metrics. A turn replayed across
 resumed-session files (same `message.id` + `requestId`) counts once, in the file with
 the earliest usage-turn timestamp. Path order breaks a timestamp tie. A Claude Code transcript's prompt size is
@@ -70,7 +71,7 @@ file that is not a transcript (plain text or other JSON, e.g. `{"ok":true}`) is 
 - **Total Turns**: Sum of assistant turns carrying a non-zero usage envelope (any of `input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`, or `cost`). For a genuine fork transcript (its `session` header has a non-empty string `parentSession`), this excludes the inherited replay prefix and includes the fork's own turns; multiple `session_info` records in an ordinary transcript are all retained.
 - **Total Tokens**: Sum of `input + output + cacheRead + cacheWrite` when those provider dimensions are reported.
 - **Cache Write**: Sum of `cacheWrite` tokens (Claude `cache_creation_input_tokens`).
-- **Estimated Output Messages**: Count of Claude messages with no final usage (only streaming snapshots). Their output is the larger of the snapshot value and content length / 4. The line appears only when the count is non-zero.
+- **Estimated Output Messages**: Count of Claude messages with no final usage (only streaming snapshots). Their output is the larger of the snapshot value and content length / 4. The line appears only when the count is non-zero. The JSON field `summary.estimatedOutputMessages` is always present (0 when no estimate applied).
 - **Cache Hit Ratio**: Calculated as `cacheRead / (input + cacheRead + cacheWrite)`. JSON reports a 0-1 fraction; Markdown reports a percentage. In long coordinator sessions with good prefix alignment, this should typically exceed 85-90%.
 - **Estimated Cost**: Sum of provider billed costs from message usage envelopes that report cost.
 - **Partial usage data**: Known values are still summed when only some envelopes report a dimension. JSON exposes `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `totalTokens`, `cacheHitRatio`, and `estimatedCost` under each `availability` object as `complete`, `partial`, or `unavailable`; the vocabulary is identical in `summary`, `sessions[]`, and `byModel[]`. Markdown appends `(partial)` to incomplete sums. A dimension renders as `n/a` only when no envelope reports it.
