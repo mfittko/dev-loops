@@ -7,4 +7,3 @@
 - The carry binds to the active ACT or THREAD plan's own after-pull handoff head X, and X must contain the plan head (#2787)
 - The carry re-checks every tackled thread live and never overrides an unverified live-head handoff (#2787)
 - THREAD full-order verifier-step render bytes intentionally change (#2787)
-- The archive-file interpretation of the disposition checkpoint is unchanged in meaning and now documented (#2787)
