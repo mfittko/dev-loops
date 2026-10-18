@@ -57,7 +57,7 @@ Prompt and Final Prompt metrics. A turn replayed across
 resumed-session files (same `message.id` + `requestId`) counts once, in the file with
 the earliest usage-turn timestamp. Path order breaks a timestamp tie. A Claude Code transcript's prompt size is
 `input + cacheRead + cacheCreate` on its first/last turn (Pi's is `input + cacheRead`);
-this is the only place the two harnesses' metric definitions differ. Role and session
+this and the snapshot-only output estimate above are the only places the two harnesses' metric definitions differ. Role and session
 name come from the sibling `agent-<id>.meta.json` (`agentType` / `description`) when
 present. Without a meta sidecar, a Claude `agent-<id>.jsonl` transcript defaults to
 `subagent` and a main-session transcript (`<uuid>.jsonl`) to `coordinator`. A `.output`
