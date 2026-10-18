@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it, test } from "bun:test";
@@ -4039,40 +4039,47 @@ for (const [name, handoffHead] of [["an abbreviated", "abc9988"], ["an upper-cas
   });
 }
 
-// A verified fixer-disposition checkpoint for an ancestor head carries to a descendant live head only when it
-// is bound to the active plan (its tackled threads cover every thread the plan pins) (#2787).
+// A verified fixer-disposition checkpoint carries to a descendant live head only when it is bound to the
+// active plan's own post-pull handoff (ACT or THREAD source): the handoff head X names the checkpoint (#2787).
 describe("resolveFixerDispositionInput ancestor checkpoint carry", () => {
   const REPO = "owner/repo";
   const PR = 3002;
   const ANCESTOR = "b".repeat(40);
-  const NEWER = "c".repeat(40);
+  const OTHER = "c".repeat(40);
+  const PLAN_HEAD = "d".repeat(40);
   const HEAD = "7".repeat(40);
   const FIX = "a".repeat(40);
-  async function run({ compare = () => "ahead", plan = ["PRRT_T1"], checkpoints = [{ head: ANCESTOR, threads: ["PRRT_T1"] }], open = [], noReply = [], tamper, liveHandoff } = {}) {
+  async function run({ source = "threads", compare = () => "ahead", plan = ["PRRT_T1"], checkpointThreads = ["PRRT_T1"], handoffHead = ANCESTOR, stale = false, receipt = true, open = [], noReply = [], tamper } = {}) {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fixer-carry-"));
     try {
       initGitFixture(tempDir);
       const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
       const { resolveFixerDispositionInput } = await import("../../scripts/loop/detect-pr-gate-coordination-state.mjs");
-      for (const { head, threads } of checkpoints) {
-        const file = path.join(tempDir, buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: head, tmpRoot: "tmp" }));
-        await mkdir(path.dirname(file), { recursive: true });
-        await writeFile(file, JSON.stringify({ headSha: head, dispositions: threads.map((threadId) => ({ threadId, fixingCommitSha: FIX, disposition: "tackled", validation: "ok" })) }), "utf8");
-      }
+      const file = path.join(tempDir, buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: ANCESTOR, tmpRoot: "tmp" }));
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ headSha: ANCESTOR, dispositions: checkpointThreads.map((threadId) => ({ threadId, fixingCommitSha: FIX, disposition: "tackled", validation: "ok" })) }), "utf8");
       const fixerDir = path.join(tempDir, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
-      await mkdir(path.join(fixerDir, "f1-0000abcd"), { recursive: true });
-      if (plan) {
-        const source = path.join(fixerDir, "threads.json");
+      const handoff = path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json");
+      await mkdir(path.dirname(handoff), { recursive: true });
+      const workOrder = { role: "fixer", phase: "full", source, target: { repo: REPO, pr: PR }, headSha: PLAN_HEAD, outputRefs: [handoff], requiredReads: [] };
+      if (source === "threads") {
+        const pinned = path.join(fixerDir, "threads.json");
         const bytes = JSON.stringify({ threads: plan.map((threadId) => ({ threadId })) });
-        await writeFile(source, bytes);
-        const workOrder = { role: "fixer", phase: "full", source: "threads", target: { repo: REPO, pr: PR }, headSha: ANCESTOR, outputRefs: [path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json")],
-          requiredReads: [{ kind: "threads", path: source, sha256: createHash("sha256").update(bytes).digest("hex") }] };
-        await writeFile(path.join(fixerDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: tamper === "digest" ? "0".repeat(64) : workOrderDigest(workOrder) }));
-        if (tamper === "threads") await writeFile(source, JSON.stringify({ threads: [{ threadId: "PRRT_T1" }] }));
+        await writeFile(pinned, bytes);
+        workOrder.requiredReads = [{ kind: "threads", path: pinned, sha256: createHash("sha256").update(bytes).digest("hex") }];
+        if (tamper === "threads") await writeFile(pinned, JSON.stringify({ threads: [{ threadId: "PRRT_T1" }] }));
       }
-      if (liveHandoff) await writeFile(path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json"), JSON.stringify({ headSha: HEAD, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: FIX, disposition: "tackled" }] }));
+      const digest = tamper === "digest" ? "0".repeat(64) : workOrderDigest(workOrder);
+      const workOrderRef = "fixer:owner/repo#3002:ref";
+      await writeFile(path.join(fixerDir, "fixer-emit-plan.json"), JSON.stringify({ workOrder, workOrderDigest: digest, workOrderRef, executionIdentity: "f1-0000abcd" }));
+      if (receipt) {
+        await mkdir(path.join(tempDir, "tmp", "work-order-receipts"), { recursive: true });
+        await writeFile(pullReceiptPath(path.join(tempDir, "tmp"), workOrderRef), JSON.stringify({ role: "fixer", workOrderRef, workOrderDigest: digest, executionIdentity: "f1-0000abcd" }));
+      }
+      await writeFile(handoff, JSON.stringify({ headSha: handoffHead, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: FIX, disposition: "tackled" }] }));
+      if (stale) await utimes(handoff, new Date(Date.now() - 60000), new Date(Date.now() - 60000));
       const runChild = async (_cmd, args) => ({ code: 0, stdout: JSON.stringify({ status: compare(args[1].split("/compare/")[1]) }), stderr: "" });
-      const ids = [...new Set([...checkpoints.flatMap((c) => c.threads), ...(plan ?? []), ...open])];
+      const ids = [...new Set([...checkpointThreads, ...(plan ?? []), ...open])];
       const parsedThreads = { threads: ids.map((id) => ({ id, isResolved: !open.includes(id) })), comments: ids.filter((id) => !noReply.includes(id)).map((threadId) => ({ threadId, body: `fixed in ${FIX}` })) };
       return await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: HEAD, parsedThreads }, { runChild, repoRoot: tempDir });
     } finally {
@@ -4081,35 +4088,44 @@ describe("resolveFixerDispositionInput ancestor checkpoint carry", () => {
   }
   const refused = (result) => assert.notEqual(result?.complete, true, JSON.stringify(result));
 
-  it("accepts a complete ancestor checkpoint bound to the active plan", async () => {
-    assert.equal((await run()).complete, true);
-  });
-  it("accepts when every bound ancestor is complete", async () => {
-    assert.equal((await run({ checkpoints: [{ head: ANCESTOR, threads: ["PRRT_T1"] }, { head: NEWER, threads: ["PRRT_T1", "PRRT_T2"] }] })).complete, true);
-  });
-  it("refuses when the head diverged from the checkpoint head", async () => {
-    refused(await run({ compare: (range) => (range.startsWith(ANCESTOR) ? "diverged" : "ahead") }));
-  });
-  it("refuses when a tackled thread is no longer resolved", async () => {
-    refused(await run({ open: ["PRRT_T1"] }));
-  });
-  it("refuses an incomplete ancestor checkpoint", async () => {
-    refused(await run({ noReply: ["PRRT_T1"] }));
-  });
-  it("refuses a newer incomplete bound ancestor even when an older one is complete", async () => {
-    refused(await run({ checkpoints: [{ head: ANCESTOR, threads: ["PRRT_T1"] }, { head: NEWER, threads: ["PRRT_T1", "PRRT_T2"] }], open: ["PRRT_T2"] }));
-  });
-  it("refuses a checkpoint that does not cover the threads the active plan pins", async () => {
+  for (const source of ["threads", "act-list"]) {
+    describe(`${source} plan`, () => {
+      it("accepts a complete checkpoint of the plan's own handoff head at a descendant head", async () => {
+        assert.equal((await run({ source })).complete, true);
+      });
+      it("refuses when the head diverged from the checkpoint head", async () => {
+        refused(await run({ source, compare: (range) => (range.startsWith(ANCESTOR) ? "diverged" : "ahead") }));
+      });
+      it("refuses when the handoff head does not contain the plan head", async () => {
+        refused(await run({ source, compare: (range) => (range.startsWith(PLAN_HEAD) ? "diverged" : "ahead") }));
+      });
+      it("refuses when a tackled thread is no longer resolved", async () => {
+        refused(await run({ source, open: ["PRRT_T1"] }));
+      });
+      it("refuses an incomplete checkpoint", async () => {
+        refused(await run({ source, noReply: ["PRRT_T1"] }));
+      });
+      it("refuses when the handoff head names no checkpoint", async () => {
+        refused(await run({ source, handoffHead: OTHER }));
+      });
+      it("refuses a handoff that predates its pull", async () => {
+        refused(await run({ source, stale: true }));
+      });
+      it("refuses without a pull receipt", async () => {
+        refused(await run({ source, receipt: false }));
+      });
+      it("refuses when the plan digest was altered", async () => {
+        refused(await run({ source, tamper: "digest" }));
+      });
+      it("refuses when the handoff names the live head (unverified live-head handoff)", async () => {
+        refused(await run({ source, handoffHead: HEAD }));
+      });
+    });
+  }
+  it("refuses a THREAD checkpoint that does not cover the threads the plan pins", async () => {
     refused(await run({ plan: ["PRRT_T1", "PRRT_T2"] }));
   });
-  it("refuses without an active plan", async () => {
-    refused(await run({ plan: null }));
-  });
-  it("refuses when the plan digest or its pinned threads were altered", async () => {
-    refused(await run({ tamper: "digest" }));
-    refused(await run({ plan: ["PRRT_T1", "PRRT_T2"], checkpoints: [{ head: ANCESTOR, threads: ["PRRT_T1", "PRRT_T2"] }], tamper: "threads" }));
-  });
-  it("refuses when an unverified live-head handoff coexists with a complete ancestor", async () => {
-    refused(await run({ liveHandoff: true }));
+  it("refuses when the pinned threads were altered", async () => {
+    refused(await run({ plan: ["PRRT_T1", "PRRT_T2"], checkpointThreads: ["PRRT_T1", "PRRT_T2"], tamper: "threads" }));
   });
 });

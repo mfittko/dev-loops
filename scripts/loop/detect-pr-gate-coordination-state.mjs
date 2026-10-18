@@ -28,7 +28,7 @@ import {
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
-import { workOrderDigest } from "../github/_work-order-protocol.mjs";
+import { verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { verifyFixerDisposition } from "../github/verify-fixer-disposition.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "../github/_gate-finding-surface.mjs";
@@ -857,50 +857,48 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
     const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment });
     return { complete: evaluation.ok, incomplete: evaluation.incomplete };
   };
-  // A verified disposition carries to a descendant head: a fixer-disposition-<X>.json checkpoint X is
-  // evaluated at the live head H when X is strictly contained by H (compare "ahead"); the tackled-commit
-  // containment and live resolution are re-checked at H. Never a gate verdict; behind, diverged, or
-  // unreadable ancestors are skipped. Only a checkpoint bound to the active plan carries: its tackled
-  // threads must cover every thread the plan pins (THREAD source, hash-checked here). Any bound contained
-  // ancestor that is incomplete refuses, so an older complete one never wins over a newer incomplete one.
-  let planThreadIds = null;
+  // A verified disposition carries to a descendant head. The carry binds to the active plan's own
+  // delivered output (ACT or THREAD source): the plan's handoff must postdate its pull receipt, name a
+  // head X that contains the plan head, and X must be strictly contained by the live head H (compare
+  // "ahead"). The fixer-disposition-<X>.json checkpoint is then re-evaluated at H: tackled-commit
+  // containment and live resolution are re-checked. Never a gate verdict; behind, diverged, stale, or
+  // unreadable evidence refuses. A THREAD plan's tackled threads must also cover every thread it pins.
+  let boundPlan = null;
   const pinnedPlanThreads = async (order) => {
+    if (order.source !== "threads") return null;
     const read = (order.requiredReads ?? []).find((entry) => entry?.kind === "threads");
-    if (order.source !== "threads" || !read) return null;
+    if (!read) return false;
     const bytes = await readFile(read.path);
-    if (createHash("sha256").update(bytes).digest("hex") !== String(read.sha256 ?? "").replace(/^sha256:/, "")) return null;
+    if (createHash("sha256").update(bytes).digest("hex") !== String(read.sha256 ?? "").replace(/^sha256:/, "")) return false;
     const ids = JSON.parse(bytes.toString("utf8"))?.threads?.map((thread) => thread?.threadId);
-    return Array.isArray(ids) && ids.length > 0 && ids.every((id) => typeof id === "string" && id) ? new Set(ids) : null;
+    return Array.isArray(ids) && ids.length > 0 && ids.every((id) => typeof id === "string" && id) ? new Set(ids) : false;
   };
   const carryAncestorCheckpoint = async () => {
-    // An unverified handoff for the live head always refuses first.
-    if (!planThreadIds || await resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot })) return null;
-    const dir = path.dirname(path.resolve(repoRoot, logPath));
-    let names;
+    // Without a bound active plan, an unread thread list, or an unverified handoff for the live head, no carry.
+    if (!boundPlan || !parsedThreads || await resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot })) return null;
     try {
-      names = await readdir(dir);
+      const { plan, order, cover } = boundPlan;
+      const handoffPath = path.join(path.dirname(planPath), plan.executionIdentity, "fixer-disposition.json");
+      const pulled = await verifyPulledResult({
+        resultPath: handoffPath, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), role: "fixer",
+        workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity,
+      });
+      if (!pulled.ok) return null;
+      const x = String(JSON.parse(await readFile(handoffPath, "utf8"))?.headSha ?? "").trim().toLowerCase();
+      if (!/^[0-9a-f]{40}$/.test(x) || x === currentHeadSha.toLowerCase()) return null;
+      const raw = await readFile(path.resolve(repoRoot, path.dirname(logPath), `fixer-disposition-${x}.json`), "utf8");
+      if (cover) {
+        const tackled = new Set(normalizeFixerDispositionHandoff(JSON.parse(raw)).dispositions
+          .filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.threadId));
+        if (![...cover].every((id) => tackled.has(id))) return null;
+      }
+      if (!(await isCommitContainedByHead({ repo, commitSha: order.headSha, headSha: x }, runtime)).contained) return null;
+      if (!(await isCommitContainedByHead({ repo, commitSha: x, headSha: currentHeadSha }, runtime)).contained) return null;
+      const evaluated = await evaluateCheckpoint(raw);
+      return evaluated.complete ? evaluated : null;
     } catch {
       return null;
     }
-    let carried = null;
-    for (const name of names) {
-      const ancestor = /^fixer-disposition-([0-9a-f]{40})\.json$/.exec(name)?.[1];
-      if (!ancestor || ancestor === currentHeadSha.toLowerCase()) continue;
-      let raw;
-      try {
-        raw = await readFile(path.join(dir, name), "utf8");
-        const tackled = new Set(normalizeFixerDispositionHandoff(JSON.parse(raw)).dispositions
-          .filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.threadId));
-        if (![...planThreadIds].every((id) => tackled.has(id))) continue;
-      } catch {
-        continue;
-      }
-      if (!(await isCommitContainedByHead({ repo, commitSha: ancestor, headSha: currentHeadSha }, runtime)).contained) continue;
-      const evaluated = await evaluateCheckpoint(raw);
-      if (!evaluated.complete) return null;
-      carried = evaluated;
-    }
-    return carried;
   };
   let planBytes;
   try {
@@ -927,7 +925,8 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
           applicable = relation.contained;
         }
         if (applicable) {
-          planThreadIds = await pinnedPlanThreads(order).catch(() => null);
+          const cover = await pinnedPlanThreads(order).catch(() => false);
+          boundPlan = cover === false ? null : { plan, order, cover };
           const checked = await verifyFixerDisposition({ repo, pr, headSha: currentHeadSha, fixerPlan: planPath, check: true }, { ...runtime, repoRoot });
           if (!checked.complete) {
             const carried = checked.activeFixer ? null : await carryAncestorCheckpoint();
@@ -940,7 +939,7 @@ export async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, p
       }
     }
   } catch (error) {
-    if (!error?.activeFixer) {
+    if (!error?.activeFixer && !error?.staleFixer) {
       const carried = await carryAncestorCheckpoint();
       if (carried?.complete) return carried;
     }
