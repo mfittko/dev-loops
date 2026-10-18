@@ -6,7 +6,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { buildCoordinatorWorkOrder } from "@dev-loops/core/loop/coordinator-work-order";
@@ -25,7 +25,7 @@ With --harness and --entry it also materializes the order under <tmp-root>/coord
 dispatchPrompt,dispatchPayload,planPath}. Dispatch dispatchPayload unchanged. A changed order has a new
 digest and ref; a resume re-emits the same ref under a fresh execution identity. Any other harness refuses.
 ${JQ_OUTPUT_USAGE}
-Stdout: {ok:true,workOrder,workOrderDigest} on success, {ok:false,error} on failure (nothing under --silent).
+Stdout: {ok:true,workOrder,workOrderDigest} on success, {ok:false,refusal?,error} on failure (refusal is unsupported_adapter or invalid_entry for a refused emit) (nothing under --silent).
 A failure ignores --fields and --jq.
 Exit codes: 0 emitted, 1 refused or runtime failure, 2 invalid --jq/--fields usage on success output.`;
 
@@ -80,9 +80,15 @@ export async function materializeCoordinatorWorkOrder({ workOrder, workOrderDige
   const identity = { workOrderRef: `coordinator:${repo}#${n}:${entry}:${hex}`, workOrderDigest, executionIdentity };
   const dispatchPrompt = buildDispatchPointer(identity);
   await mkdir(dir, { recursive: true });
-  await writeFile(promptPath, text);
+  // Atomic (temp + rename): a concurrent pull never reads a half-written file.
+  const writeAtomic = async (target, body) => {
+    const tempPath = `${target}.tmp-${executionIdentity}`;
+    await writeFile(tempPath, body, "utf8");
+    await rename(tempPath, target);
+  };
+  await writeAtomic(promptPath, text);
   // The plan holds no execution identity: a resume re-emits identical bytes.
-  await writeFile(planPath, `${JSON.stringify({ workOrderRef: identity.workOrderRef, workOrderDigest, materializationHash: materializationHash(text), promptPath, workOrder }, null, 2)}\n`);
+  await writeAtomic(planPath, `${JSON.stringify({ workOrderRef: identity.workOrderRef, workOrderDigest, materializationHash: materializationHash(text), promptPath, workOrder }, null, 2)}\n`);
   await writeExecutionIndex(tmpRoot, identity);
   return { ...identity, dispatchPrompt, planPath };
 }

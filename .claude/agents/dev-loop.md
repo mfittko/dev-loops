@@ -14,11 +14,11 @@ Your job is to provide the callable `dev-loop` public façade and route to the c
 
 ## Pull-pointer dispatch (before anything else)
 
-When your dispatch prompt is a pull pointer (it starts `Run dev-loops-run scripts/github/pull-work-order.mjs ...`), run that exact line alone first. Treat the printed coordinator work order as the handoff envelope. It needs no prose instructions. On exit 1, report its JSON verbatim and stop.
+When your dispatch prompt is a pull pointer (it starts with Run followed by a backticked `dev-loops-run scripts/github/pull-work-order.mjs ...` line), run that exact line alone first. Treat the printed coordinator work order as the handoff envelope. It is the digest-pinned authority, so do not build a new envelope. It needs no prose instructions. On exit 1, report its JSON verbatim and stop.
 
 ## Handoff envelope mandate (first action)
 
-The agent's first action after resolving authoritative state MUST be to build the handoff envelope via `buildDevLoopHandoffEnvelope()` from `@dev-loops/core`.
+When no pull pointer was dispatched, the agent's first action after resolving authoritative state MUST be to build the handoff envelope via `buildDevLoopHandoffEnvelope()` from `@dev-loops/core`.
 
 The envelope is the primary handoff artifact — it is derived from resolver output, settings, and gate state, and it determines:
 - `requiredReads` — the canonical ordered list of files to load
