@@ -440,7 +440,7 @@
     {
       "id": "GATE-EXEC-ROUND-CAP-CLOSED",
       "enforcement": "runtime",
-      "enforcementNote": "write-gate-findings-log.mjs stamps capClosed on a past-cap judge defer or reject; upsert-checkpoint-verdict.mjs composes severity_disagreement blockers and lists capClosed items; detect-checkpoint-evidence.mjs lists them in the merge-ready result"
+      "enforcementNote": "write-gate-findings-log.mjs stamps capClosed on a past-cap judge defer or reject of a low, nit or non-locatable question (never a high, medium or unknown severity); upsert-checkpoint-verdict.mjs composes severity_disagreement blockers and lists capClosed items; detect-checkpoint-evidence.mjs lists them in the merge-ready result"
     },
     {
       "id": "GATE-EXEC-ROUND-RETIREMENT",
