@@ -546,7 +546,7 @@ export async function runBunTest(args, {
     try {
         summary = parseBunSummary(await capture.readTail());
         if (!summary) {
-          const tail = (await capture.readTail()).split("\n").slice(-20).join("\n");
+          const tail = (await capture.readTail()).trimEnd().split("\n").slice(-20).join("\n");
           throw new Error(`Could not parse Bun test summary from captured output. Last 20 lines:\n${tail}`);
         }
         const failedCount = Number(summary.match(/, (\d+) fail across/)?.[1] ?? 0);

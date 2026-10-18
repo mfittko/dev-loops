@@ -135,7 +135,8 @@ test("an unparseable summary fails closed and prints the last 20 lines of output
     }),
     (error) => /Could not parse Bun test summary/.test(error.message)
       && error.message.includes("noise line 29")
-      && error.message.includes("noise line 11")
+      && error.message.includes("noise line 10")
+      && !error.message.includes("noise line 9\n")
       && !error.message.includes("noise line 5\n"),
   );
 });
