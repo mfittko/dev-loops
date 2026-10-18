@@ -244,7 +244,7 @@ test("J3: a round retired from another checkout refuses as stale_dispatch on pul
 test("J3: an emission from a checkout subdirectory lands under the checkout root and pulls", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
-    assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
+    initGitFixture(root, { commit: null });
     const sub = path.join(root, "scripts");
     await mkdir(sub);
     const rel = (p) => path.join("..", p);
