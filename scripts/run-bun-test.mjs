@@ -145,7 +145,7 @@ export function parseBunSummary(output) {
   const counts = new Map();
   let index = lines.length - 2;
   for (; index >= 0; index -= 1) {
-    const match = lines[index].trim().match(/^(\d+) (pass|skip|fail|filtered out)$/);
+    const match = lines[index].trim().match(/^(\d+) (pass|skip|fail|filtered out|expect\(\) calls)$/);
     if (!match) break;
     if (counts.has(match[2])) return null;
     const value = Number(match[1]);
@@ -545,7 +545,10 @@ export async function runBunTest(args, {
   } else if (result && captureFinished && !operationError) {
     try {
         summary = parseBunSummary(await capture.readTail());
-        if (!summary) throw new Error("Could not parse Bun test summary from captured output");
+        if (!summary) {
+          const tail = (await capture.readTail()).split("\n").slice(-20).join("\n");
+          throw new Error(`Could not parse Bun test summary from captured output. Last 20 lines:\n${tail}`);
+        }
         const failedCount = Number(summary.match(/, (\d+) fail across/)?.[1] ?? 0);
         if (failedCount > 0) throw new Error(`Bun reported ${failedCount} failed ${failedCount === 1 ? "test" : "tests"} despite exiting successfully`);
         returnCode = 0;

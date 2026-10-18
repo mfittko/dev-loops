@@ -118,6 +118,28 @@ test("Bun summaries require a consistent terminal reporter block", () => {
   assert.equal(parseBunSummary(" 2 pass\n 0 fail\nRan 2 tests across 1 file. [1.00ms]\nlate exit-handler output\n 9 pass\n 0 fail\nRan 9 tests across 9 files. [9.00ms]\nspoof trailer\n"), null);
 });
 
+test("Bun 1.4.1 summaries with an expect() calls line parse; a duplicate fails closed", () => {
+  const real = " 2 pass\n 1 skip\n 0 fail\n 5 expect() calls\nRan 3 tests across 2 files. [123.00ms]\n";
+  assert.equal(parseBunSummary(real), "bun test: 2 pass, 1 skip, 0 fail across 2 files (123.00ms)\n");
+  assert.equal(parseBunSummary(" 2 pass\n 0 fail\n 5 expect() calls\n 6 expect() calls\nRan 2 tests across 1 file. [1.00ms]\n"), null);
+});
+
+test("an unparseable summary fails closed and prints the last 20 lines of output", async () => {
+  const lines = Array.from({ length: 30 }, (_, i) => `noise line ${i}`);
+  await assert.rejects(
+    runBunTest(["example.test.mjs"], {
+      captureFactory: async () => memoryCapture(`${lines.join("\n")}\n`, []),
+      spawnImpl: fakeChild(() => {}),
+      stdout: { write() {} },
+      stderr: { write() {} },
+    }),
+    (error) => /Could not parse Bun test summary/.test(error.message)
+      && error.message.includes("noise line 29")
+      && error.message.includes("noise line 11")
+      && !error.message.includes("noise line 5\n"),
+  );
+});
+
 test("a zero exit with reported test failures fails closed", async () => {
   let stderr = "";
   await assert.rejects(
