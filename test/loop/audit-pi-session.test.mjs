@@ -1941,11 +1941,12 @@ describe("audit-pi-session #2436 measurement fixes", () => {
       const file = path.join(tmpDir, `${name}.jsonl`);
       fs.writeFileSync(file, outputs.map((o) => JSON.stringify({
         type: "assistant",
-        message: { id: "m1", role: "assistant", model: "claude-opus-5-5", stop_reason: null, content: [{ type: "text", text: "a" }], usage: o === undefined ? { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } : usage(o) },
+        message: { id: "m1", role: "assistant", model: "claude-opus-5-5", stop_reason: null, content: [{ type: "text", text: "a" }], usage: o === undefined ? { input_tokens: 10, cache_read_input_tokens: 890, cache_creation_input_tokens: 100 } : usage(o) },
       })).join("\n") + "\n");
       const parsed = await parseTranscriptFile(file);
       assert.equal(parsed.turns.length, 1, name);
       assert.equal(parsed.turns[0].usage.output, expected, name);
+      if (name.startsWith("null-")) assert.equal(parsed.turns[0].usage.totalTokens, 1005, name);
     }
 
     fs.rmSync(tmpDir, { recursive: true, force: true });

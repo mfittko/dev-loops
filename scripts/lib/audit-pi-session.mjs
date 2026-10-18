@@ -405,8 +405,10 @@ function claudeContentChars(msg) {
 }
 
 function setTurnOutput(turn, output) {
-  if (turn.usage.totalTokens !== null) turn.usage.totalTokens += output - turn.usage.output;
-  turn.usage.output = output;
+  const u = turn.usage;
+  u.output = output;
+  // Recompute from components so a null-output snapshot merges to the same total in either order.
+  u.totalTokens = [u.input, u.cacheRead, u.cacheWrite].every((v) => v !== null) ? u.input + output + u.cacheRead + u.cacheWrite : null;
 }
 
 /**
