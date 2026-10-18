@@ -20,6 +20,7 @@
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { extractSection } from "./markdown-sections.mjs";
 
 /**
  * This module owns:
@@ -1561,4 +1562,49 @@ export function summarizeRefinementGateCheck({ body = "", issueNumber = null } =
     blocking: !artifact.hasACs,
     reason: artifact.reason,
   };
+}
+
+const normalizeSpecItem = (text) =>
+  String(text).replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, "").replace(/^\[[ xX]\]\s*/u, "").replace(/\s+/gu, " ").trim().toLowerCase();
+
+/**
+ * Compare the PR body's In scope, Acceptance criteria, Definition of done and Non-goals items with the
+ * linked issue body. Returns stale-surface-shaped hits `{ kind: "pr-body", side, needle, file, line, site }`
+ * for every PR item the issue lacks and every issue item the PR lacks. `file` is `pr-body/<section-slug>`,
+ * `line` the 1-based index in the list that holds the item, `site` is `file:line`. Issue AC and DoD come
+ * from the issue matrix; an issue without a valid matrix yields one `pr-body/issue-matrix` hit. Pure.
+ *
+ * @param {{ prBody?: string, issueBody?: string }} input
+ */
+export function diffPrBodyAgainstIssue({ prBody = "", issueBody = "" } = {}) {
+  const prSections = parseMarkdownSections(prBody);
+  const prList = (patterns) => {
+    const section = prSections[findSpecSectionIndex(prSections, patterns)];
+    return section ? extractChecklistItems(section.bodyLines.join("\n")) : [];
+  };
+  const issueList = (heading) => extractChecklistItems(extractSection(issueBody, heading) ?? "");
+  const hits = [];
+  const compare = (slug, prItems, issueItems) => {
+    const file = `pr-body/${slug}`;
+    const add = (side, items, other) => {
+      const known = new Set(other.map(normalizeSpecItem));
+      items.forEach((needle, index) => {
+        if (!known.has(normalizeSpecItem(needle))) hits.push({ kind: "pr-body", side, needle, file, line: index + 1, site: `${file}:${index + 1}` });
+      });
+    };
+    add("pr", prItems, issueItems);
+    add("issue", issueItems, prItems);
+  };
+  if (extractSection(issueBody, "In scope") !== null) {
+    compare("in-scope", prList(PR_BODY_SPEC_NARRATIVE_SECTIONS.in_scope.patterns), issueList("In scope"));
+  }
+  try {
+    const { acChecklist, dodChecklist } = derivePrChecklistsFromIssueMatrix({ body: issueBody });
+    compare("acceptance-criteria", prList(SPEC_SECTION_NAME_PATTERNS.acceptanceCriteria), acChecklist);
+    compare("definition-of-done", prList(SPEC_SECTION_NAME_PATTERNS.definitionOfDone), dodChecklist);
+  } catch (error) {
+    hits.push({ kind: "pr-body", side: "issue", needle: error.message, file: "pr-body/issue-matrix", line: 0, site: "pr-body/issue-matrix" });
+  }
+  compare("non-goals", prList(SPEC_SECTION_NAME_PATTERNS.nonGoals), issueList("Non-goals"));
+  return hits;
 }

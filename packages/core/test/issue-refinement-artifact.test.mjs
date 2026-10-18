@@ -14,6 +14,7 @@ import {
   detectGrillMarker,
   detectGrillEmbedHeading,
   derivePrChecklistsFromIssueMatrix,
+  diffPrBodyAgainstIssue,
   extractChecklistItems,
   extractPrBodyUncheckedChecklistItems,
   extractUncheckedChecklistItems,
@@ -1250,4 +1251,43 @@ test("#2333 review (overview finding): `+ + +` is NOT a thematic break and stays
   const result = validatePrBodySpec({ body, expectedIssue: 123 });
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((e) => e.code === "definition_of_done_not_checkboxes"));
+});
+
+// ---------------------------------------------------------------------------
+// diffPrBodyAgainstIssue: PR body sections versus the linked issue body
+// ---------------------------------------------------------------------------
+
+const issueWith = ({ scope = "- Alpha\n- Beta wide", matrix = MATRIX, goals = "- No new scanner" } = {}) =>
+  `## In scope\n\n${scope}\n${matrix}\n## Non-goals\n\n${goals}\n`;
+const prWith = ({ scope = "- Alpha\n- Beta wide", ac = "- [ ] AC1 — the feature works end to end\n- [ ] AC2 — the edge case is handled", dod = "- [ ] D1 — a focused test proves the feature works\n- [ ] D2 — a regression test pins the edge case", goals = "- No new scanner" } = {}) =>
+  `## In scope\n\n${scope}\n\n## Acceptance criteria\n\n${ac}\n\n## Definition of done\n\n${dod}\n\n## Non-goals\n\n${goals}\n`;
+
+test("diffPrBodyAgainstIssue yields no hits for a matching PR body", () => {
+  assert.deepEqual(diffPrBodyAgainstIssue({ prBody: prWith(), issueBody: issueWith() }), []);
+});
+
+test("diffPrBodyAgainstIssue flags a widened issue: missing AC row and stale In scope line", () => {
+  const matrix = MATRIX + "| AC3 — the widened case is handled | D3 — a test pins the widened case |\n";
+  const hits = diffPrBodyAgainstIssue({ prBody: prWith({ scope: "- Alpha\n- Beta" }), issueBody: issueWith({ matrix }) });
+  const sites = hits.map((h) => h.site).sort();
+  assert.deepEqual(sites, ["pr-body/acceptance-criteria:3", "pr-body/definition-of-done:3", "pr-body/in-scope:2", "pr-body/in-scope:2"]);
+  assert.ok(hits.every((h) => h.kind === "pr-body" && h.file === h.site.replace(/:\d+$/u, "")));
+  assert.ok(hits.some((h) => h.needle.includes("widened case is handled")));
+});
+
+test("diffPrBodyAgainstIssue ignores markers, case and whitespace, and skips a missing issue In scope section", () => {
+  const issueBody = issueWith().replace("## In scope\n\n- Alpha\n- Beta wide\n", "");
+  const prBody = prWith({ ac: "* [x]  ac1 — The feature  works end to end\n1. [ ] AC2 — the edge case is handled" });
+  assert.deepEqual(diffPrBodyAgainstIssue({ prBody, issueBody }), []);
+});
+
+test("diffPrBodyAgainstIssue fails closed with one hit when the issue has no valid matrix", () => {
+  const hits = diffPrBodyAgainstIssue({ prBody: prWith(), issueBody: issueWith({ matrix: "" }) });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].site, "pr-body/issue-matrix");
+});
+
+test("diffPrBodyAgainstIssue flags PR items the issue lacks, including non-goals", () => {
+  const hits = diffPrBodyAgainstIssue({ prBody: prWith({ goals: "- No new scanner\n- Extra goal" }), issueBody: issueWith() });
+  assert.deepEqual(hits.map((h) => h.site), ["pr-body/non-goals:2"]);
 });
