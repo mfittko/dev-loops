@@ -431,9 +431,9 @@ function mergeClaudeRecords(prev, next) {
 /** Snapshot-only Claude messages: output is at least 1 token per 4 content characters. */
 function estimateSnapshotOutputs(turns) {
   for (const turn of turns) {
-    if (turn.harness !== "claude" || turn.outputFinal || turn.usage.output === null) continue;
+    if (turn.harness !== "claude" || turn.outputFinal || turn.promptTokens === null) continue;
     turn.outputEstimated = true;
-    setTurnOutput(turn, Math.max(turn.usage.output, Math.ceil(turn.contentChars / 4)));
+    setTurnOutput(turn, Math.max(turn.usage.output ?? 0, Math.ceil(turn.contentChars / 4)));
   }
 }
 

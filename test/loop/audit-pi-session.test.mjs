@@ -1952,6 +1952,21 @@ describe("audit-pi-session #2436 measurement fixes", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("estimates snapshot-only output when every snapshot lacks an output count", async () => {
+    const tmpDir = createTempDir();
+    const file = path.join(tmpDir, "agent-nulls.jsonl");
+    fs.writeFileSync(file, JSON.stringify({
+      type: "assistant",
+      message: { id: "m1", role: "assistant", model: "claude-opus-5-5", stop_reason: null, content: [{ type: "text", text: "a".repeat(400) }], usage: { input_tokens: 10, cache_read_input_tokens: 890, cache_creation_input_tokens: 100 } },
+    }) + "\n");
+
+    const result = await auditPiSession(file);
+    assert.equal(result.summary.outputTokens, 100);
+    assert.equal(result.summary.estimatedOutputMessages, 1);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   it("estimates snapshot-only Claude output from content length and counts estimated messages", async () => {
     const tmpDir = createTempDir();
     const file = path.join(tmpDir, "agent-snap.jsonl");
