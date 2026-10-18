@@ -438,6 +438,39 @@ test("buildValidationArtifact: Bun lock structurally verifies installed package 
   }
 });
 
+test("buildValidationArtifact: Bun lock resolves isolated-linker packages under node_modules/.bun and still flags a missing one", async () => {
+  const { repoRoot } = await makeFixtureRepo();
+  try {
+    await writeFile(path.join(repoRoot, "bun.lock"), JSON.stringify({
+      lockfileVersion: 2,
+      workspaces: { "": { name: "fixture", dependencies: { a: "1.0.0" } } },
+      packages: {
+        a: ["a@1.0.0", "", {}],
+        "a/@s/b": ["@s/b@2.0.0", "", {}],
+        c: ["c@3.0.0", "", {}],
+      },
+    }), "utf8");
+    const write = async (dir, name, version) => {
+      await mkdir(path.join(repoRoot, "node_modules", dir), { recursive: true });
+      await writeFile(path.join(repoRoot, "node_modules", dir, "package.json"), JSON.stringify({ name, version }), "utf8");
+    };
+    await write("a", "a", "1.0.0");
+    await write(path.join(".bun", "@s+b@2.0.0", "node_modules", "@s", "b"), "@s/b", "2.0.0");
+    const input = { repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", suites: [], tmpRoot: "tmp" };
+
+    const missing = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(missing.depState.status, "stale");
+    assert.match(missing.depState.detail, /1 missing \[c\]/);
+
+    await write(path.join(".bun", "node_modules", "c"), "c", "3.0.0");
+    const synced = await buildValidationArtifact(input, { repoRoot });
+    assert.equal(synced.depState.status, "synced");
+    assert.match(synced.depState.detail, /3 packages/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("buildValidationArtifact: Bun lock ignores an ancestor install and reports the worktree's own missing node_modules as stale", async () => {
   const outerRoot = await mkdtemp(path.join(os.tmpdir(), "run-gate-validation-bun-worktree-"));
   try {
