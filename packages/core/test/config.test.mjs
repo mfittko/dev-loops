@@ -863,6 +863,7 @@ describe("loader — graceful degradation", () => {
         testDiscount: 0.25,
         absoluteHardLoc: 2000,
         tiers: { default: { softLoc: 400, waiverLoc: 1500 } },
+        planningBand: { minLoc: 150 },
       });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -7547,5 +7548,14 @@ describe("classify config", () => {
       },
     };
     assert.ok(FileConfigSchema.safeParse({ version: 1, gates }).success);
+  });
+});
+
+describe("gates.size.planningBand", () => {
+  test("minLoc accepts an override and 0, and rejects a negative or unknown key", () => {
+    assert.equal(DevLoopConfigSchema.parse({ version: 1, gates: { size: { planningBand: { minLoc: 90 } } } }).gates.size.planningBand.minLoc, 90);
+    assert.equal(DevLoopConfigSchema.parse({ version: 1, gates: { size: { planningBand: { minLoc: 0 } } } }).gates.size.planningBand.minLoc, 0);
+    assert.ok(!DevLoopConfigSchema.safeParse({ version: 1, gates: { size: { planningBand: { minLoc: -1 } } } }).success);
+    assert.ok(!DevLoopConfigSchema.safeParse({ version: 1, gates: { size: { planningBand: { maxLoc: 400 } } } }).success);
   });
 });

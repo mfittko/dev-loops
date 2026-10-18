@@ -29,7 +29,7 @@ const PAYLOAD = {
   acceptanceCriteria: "- The thing works.",
   definitionOfDone: "- Tests pass; CHANGELOG updated.",
   coverageMatrix: "| Item | Type | Status | Evidence | Notes |\n|---|---|---|---|---|\n| The thing works | AC | Met | test | |",
-  sizeEstimate: { logicLoc: 90, tier: "default" },
+  sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc: 90, tier: "default" },
   grillFindings: [{ kind: "drift", docOnly: false, summary: "claim contradicts contract" }],
 };
 
@@ -165,7 +165,7 @@ describe("refine-plan-file CLI", () => {
     // check-size-budget.mjs's own default of 400 — 900 is over it.
     const { tempDir, planPath, payloadPath, ghStub } = await setup(BASE_PLAN, {
       ...PAYLOAD,
-      sizeEstimate: { logicLoc: 900, tier: "default" },
+      sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc: 900, tier: "default" },
     });
     try {
       const before = await readFile(planPath, "utf8");
@@ -187,7 +187,7 @@ describe("refine-plan-file CLI", () => {
   test("a cohesive over-softLoc size estimate with oversizeJustification proceeds and the note flows into the file", async () => {
     const { tempDir, planPath, payloadPath, ghStub } = await setup(BASE_PLAN, {
       ...PAYLOAD,
-      sizeEstimate: { logicLoc: 900, tier: "default", oversizeJustification: "one cohesive migration; no clean seam" },
+      sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc: 900, tier: "default", oversizeJustification: "one cohesive migration; no clean seam" },
     });
     try {
       const result = await runNode(cliPath, ["--plan-file", planPath, "--payload", payloadPath, "--json"], {
@@ -213,7 +213,7 @@ describe("refine-plan-file CLI", () => {
     // (the plan-time threshold must match the post-hoc gate's configured one).
     const { tempDir, planPath, payloadPath, ghStub } = await setup(BASE_PLAN, {
       ...PAYLOAD,
-      sizeEstimate: { logicLoc: 900, tier: "default" },
+      sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc: 900, tier: "default" },
     });
     try {
       await writeFile(
@@ -240,7 +240,7 @@ describe("refine-plan-file CLI", () => {
     // plan-time threshold falls back to the default, matching the post-hoc gate.
     const { tempDir, planPath, payloadPath, ghStub } = await setup(BASE_PLAN, {
       ...PAYLOAD,
-      sizeEstimate: { logicLoc: 90, tier: "default" },
+      sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc: 90, tier: "default" },
     });
     try {
       // Missing `version: 1` — the config schema rejects it.
@@ -260,6 +260,30 @@ describe("refine-plan-file CLI", () => {
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  test("PLAN-SIZE-BAND bounds come from resolved config: waiverLoc and minLoc overrides move the verdict", async () => {
+    const run = async (logicLoc, devloops) => {
+      const { tempDir, planPath, payloadPath, ghStub } = await setup(BASE_PLAN, {
+        ...PAYLOAD,
+        sizeEstimate: { sourceFiles: ["src/a.mjs"], logicLoc, tier: "default", oversizeJustification: "cohesive" },
+      });
+      try {
+        if (devloops) await writeFile(path.join(tempDir, ".devloops"), devloops, "utf8");
+        const result = await runNode(cliPath, ["--plan-file", planPath, "--payload", payloadPath, "--json"], { cwd: tempDir, env: ghStub.env });
+        return { code: result.code, parsed: JSON.parse(result.stdout) };
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    };
+    // 600 passes under today's defaults (waiverLoc 1500) and fails under a waiverLoc override of 500.
+    assert.equal((await run(600)).parsed.ok, true);
+    const split = await run(600, "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 400\n        waiverLoc: 500\n");
+    assert.deepEqual([split.code, split.parsed.reason], [1, "size_estimate_split_required"]);
+    // 100 is a merge candidate under today's minLoc, and not under minLoc 50 or 0.
+    assert.equal((await run(100)).parsed.sizeEstimate.mergeCandidate, true);
+    assert.equal((await run(100, "version: 1\ngates:\n  size:\n    planningBand:\n      minLoc: 50\n")).parsed.sizeEstimate.mergeCandidate, false);
+    assert.equal((await run(100, "version: 1\ngates:\n  size:\n    planningBand:\n      minLoc: 0\n")).parsed.sizeEstimate.mergeCandidate, false);
   });
 
   test("rejects missing --plan-file / --payload", async () => {

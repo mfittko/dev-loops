@@ -30,6 +30,12 @@ A session that opens no PR has no pre-PR step: a phase-doc-backed session that
 merges locally, a follow-up session on a PR that already exists, or a session on
 a Copilot-authored PR.
 
+<!-- rule: PRE-PR-SIZE-CHECK -->
+`PRE-PR-SIZE-CHECK`: the pre-PR review MUST run `dev-loops-run cli/index.mjs gate size-budget --base origin/<base>` on the local `base...HEAD` diff. When the whole-PR logic LOC is over the resolved default-tier `softLoc`, the developer MUST split the local branch before any PR exists. The one enforcement point is `dev-loops-run cli/index.mjs pr create`: before it creates anything, it refuses with `size_split_required_before_pr` at or above the resolved default-tier `waiverLoc`. An `unknown` size does not refuse, because the draft gate stays the authority (`PRE-PR-GATE-STILL-AUTHORITY`). The refusal has no override flag.
+
+<!-- rule: LOCAL-DEV-SIZE-STOP -->
+`LOCAL-DEV-SIZE-STOP`: the developer MUST run the same `gate size-budget` check at each local commit. When the whole-PR logic LOC crosses the resolved default-tier `softLoc`, the developer MUST stop and hand back a split point instead of continuing.
+
 ## The review pass
 
 <!-- rule: PRE-PR-ONE-FRESH-REVIEWER -->

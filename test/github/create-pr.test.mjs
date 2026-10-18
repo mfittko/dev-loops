@@ -2068,14 +2068,86 @@ test("create-pr reports adrTripwire block with both remedies and still creates t
   assert.equal(sizeBudget.outcome, "pass");
 });
 
-test("create-pr reports a waivable sizeBudget block for a 1961-LOC diff and still creates the PR", async () => {
+test("create-pr reports a sizeBudget escalate for a 450-LOC diff and still creates the PR", async () => {
   const { adrTripwire, sizeBudget } = await createPrEarlySurface([
-    { path: "scripts/big.mjs", content: repeatedLinesContent(1961) },
+    { path: "scripts/big.mjs", content: repeatedLinesContent(450) },
   ]);
   assert.equal(adrTripwire.outcome, "pass");
-  assert.equal(sizeBudget.outcome, "block");
-  assert.equal(sizeBudget.waivable, true);
-  assert.equal(sizeBudget.wholeLogicLoc, 1961);
+  assert.equal(sizeBudget.outcome, "escalate");
+  assert.equal(sizeBudget.wholeLogicLoc, 450);
+});
+
+// PRE-PR-SIZE-CHECK: the refusal bound is the resolved default-tier waiverLoc. Each case
+// builds a 300-LOC branch and moves only the .devloops waiverLoc.
+async function createPrAtWaiverLoc(waiverLoc, { branchLines = 300, harnessEnv = {} } = {}) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-size-split-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, {
+      devloopsYaml: waiverLoc === null ? null : `version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 100\n        waiverLoc: ${waiverLoc}\n`,
+      headFiles: [{ path: "scripts/big.mjs", content: repeatedLinesContent(branchLines) }],
+    });
+    execFileSync("git", ["branch", "feature"], { cwd: tempDir });
+    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
+      "--title", "T", "--body", "no closing keyword",
+    ], { env: { ...env, ...harnessEnv }, cwd: tempDir });
+    return { result, ghCalls: await readGhCalls(ghLogPath) };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("create-pr refuses with size_split_required_before_pr at and above waiverLoc and creates nothing", async () => {
+  // Claude Code (CLAUDECODE) and the neutral run-id (DEVLOOPS_RUN_ID, as Pi injects) rows: the refusal does not branch by harness.
+  for (const [waiverLoc, harnessEnv] of [[300, {}], [250, {}], [300, { CLAUDECODE: "1" }], [300, { DEVLOOPS_RUN_ID: "run-1" }]]) {
+    const { result, ghCalls } = await createPrAtWaiverLoc(waiverLoc, { harnessEnv });
+    assert.equal(result.code, 1, result.stderr);
+    const envelope = JSON.parse(result.stderr);
+    assert.equal(envelope.code, "size_split_required_before_pr");
+    assert.match(envelope.error, /PRE-PR-SIZE-CHECK/u);
+    assert.deepEqual(ghCalls, []);
+  }
+});
+
+test("create-pr creates when the branch is below the resolved waiverLoc, with no override needed", async () => {
+  for (const waiverLoc of [301, 1500, null]) {
+    const { result, ghCalls } = await createPrAtWaiverLoc(waiverLoc);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(ghCalls.length, 1);
+  }
+});
+
+test("create-pr creates when the size cannot be evaluated (unknown does not refuse)", async () => {
+  for (const evaluatePrSizeBudget of [async () => { throw new Error("no ref"); }, async () => null]) {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-size-unknown-"));
+    try {
+      await initSizeBudgetFixtureRepo(tempDir, { headFiles: [{ path: "notes.txt", content: "x\n" }] });
+      runGitFixture(tempDir, ["branch", "feature"]);
+      const { env } = await writeGhStub(tempDir, []);
+      const code = await (async () => {
+        const stdoutWrite = process.stdout.write;
+        process.stdout.write = () => true;
+        try {
+          return await createPrMain([
+            "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
+            "--title", "T", "--body", "no closing keyword", "--lightweight",
+          ], {
+            cwd: tempDir,
+            env,
+            evaluatePrSizeBudget,
+            evaluateEarlySurface: async () => ({}),
+            runChild: async () => ({ code: 0, stdout: "", stderr: "" }),
+          });
+        } finally {
+          process.stdout.write = stdoutWrite;
+        }
+      })();
+      assert.equal(code, 0);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  }
 });
 
 test("create-pr refuses with pre_pr_review_missing when --head does not resolve to a commit", async () => {

@@ -95,7 +95,7 @@ Additional gaps discovered through semantic reading of the spec are also recorde
 ### Spec-lint of rule and ADR citations
 
 <!-- rule: GRILL-SPEC-LINT -->
-`GRILL-SPEC-LINT`: The grill MUST run `node <dev-loops-package-root>/cli/index.mjs loop spec-lint --body-file <path>` on the fetched body and record each finding as a gap. The lint is offline. It reports unregistered rule IDs and cited ADRs that are unknown, not accepted, superseded, or amended by a later accepted record. The grill resolves a finding in one of two ways. It corrects the citation in the rewritten body, or it records a disposition with cited evidence in the results comment (for example, a rule ID that this issue introduces). A finding the grill cannot resolve with cited evidence is an unresolved item. A check the lint reports as `skipped` produces no finding. Semantic contradiction between an AC row and a rule or ADR stays with the semantic reading and the spec-authority judge.
+`GRILL-SPEC-LINT`: The grill MUST run `node <dev-loops-package-root>/cli/index.mjs loop spec-lint --body-file <path>` on the fetched body and record each finding as a gap. The lint is offline. It reports unregistered rule IDs and cited ADRs that are unknown, not accepted, superseded, or amended by a later accepted record. The grill resolves a finding in one of two ways. It corrects the citation in the rewritten body, or it records a disposition with cited evidence in the results comment (for example, a rule ID that this issue introduces). A finding the grill cannot resolve with cited evidence is an unresolved item. It also reports `size_forecast_missing` and `size_forecast_split_required`; the grill MUST NOT dispose either one. It corrects them by writing the `## Size forecast` lines or splitting the slice (`PLAN-SIZE-BAND`). A check the lint reports as `skipped` produces no finding. Semantic contradiction between an AC row and a rule or ADR stays with the semantic reading and the spec-authority judge.
 
 ### Count-based acceptance criteria guardrail
 
@@ -147,6 +147,8 @@ Synthesize the answers into the body as the authoritative **`## AC / DoD matrix`
 - **Replace** that range in place with the synthesized content; if the section is absent, **append** it.
 - This makes re-runs idempotent — no accumulated noise, no duplicate sections.
 - If parsing a section boundary fails, **abort with an error** rather than silently truncating.
+
+The synthesized body also carries a `## Size forecast` section with one `- forecast: slice=<id> wloc=<n> files=<path>,<path>` line per slice. The forecast follows `PLAN-SIZE-BAND` in [Local planning](../docs/local-planning.md#size-estimate-refinement), and the results comment records the merge assessment for each slice under `minLoc`.
 
 The synthesized sections carry no rationale scaffolding: do NOT write a `## Grill findings` section and do NOT embed the raw Q&A table in the body (`GRILL-SUBLOOP-NO-EMBED-SYNTHESIS`). The full rewrite below defines the complete content the locked body keeps.
 

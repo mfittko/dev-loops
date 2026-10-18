@@ -225,6 +225,20 @@ const DEFAULT_ABSOLUTE_HARD_LOC = 2000;
 // same vocabulary/thresholds instead of a divergent copy. This is the ONLY
 // export of the default-tier fallback; `gates.size` config still wins when set.
 export const DEFAULT_TIER_DEFAULTS = Object.freeze({ softLoc: 400, waiverLoc: 1500 });
+const DEFAULT_PLANNING_BAND_MIN_LOC = 150;
+
+/**
+ * Resolved planning-size bounds (PLAN-SIZE-BAND): every planning-time and
+ * pre-PR size check reads its numbers from here. `null` disables a bound.
+ */
+export function resolveSizeBounds(config) {
+  const tier = config?.gates?.size?.tiers?.default ?? {};
+  return {
+    softLoc: tier.softLoc === undefined ? DEFAULT_TIER_DEFAULTS.softLoc : tier.softLoc,
+    waiverLoc: tier.waiverLoc === undefined ? DEFAULT_TIER_DEFAULTS.waiverLoc : tier.waiverLoc,
+    minLoc: config?.gates?.size?.planningBand?.minLoc ?? DEFAULT_PLANNING_BAND_MIN_LOC,
+  };
+}
 // Fail-closed threshold for the "substantially unclassified" case: the
 // shared classifier only recognizes JS/TS as `code` (see diff-analyzer.mjs),
 // so a non-JS-source PR (e.g. Ruby) classifies every file `unknown` and would
