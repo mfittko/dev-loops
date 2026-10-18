@@ -31,6 +31,11 @@ Whether the checkpoint is evaluated MUST be controlled by `.devloops` at repo ro
 <!-- rule: RETRO-SIZE-WAIVER-COUNT -->
 `RETRO-SIZE-WAIVER-COUNT`: each retrospective MUST count the milestone's size waivers and size-class `approve merge` markers and record the count in the `size waivers and size merge approvals this milestone` line of the retrospective template. The target is at most 1 per milestone after v1.0.7. The v1.0.6 baseline is 10: 1 size waiver (PR 2630) and 9 size-class approvals (PRs 2623, 2630, 2634, 2638, 2643, 2669, 2684, 2704, 2719).
 
+## Round cap quality
+
+<!-- rule: RETRO-ROUND-CAP-QUALITY -->
+`RETRO-ROUND-CAP-QUALITY`: each retrospective MUST measure the quality of the `draft_gate` round cap ([GATE-EXEC-ROUND-CAP](./gate-review-sub-loop-contract.md#round-cap)) for every capped PR merged 7 or more days earlier. The retrospective counts the fix or revert commits on `main` within 7 days of each merge and compares the count with the v1.0.6 baseline recorded on issue #2268. It audits up to 3 `capClosed` findings against the merged code. It samples late `defer` and `reject` findings at `low` for missed real defects.
+
 ## Relationship to formal dev mode
 
 Formal local dev mode and the required post-run behavioral retrospective are related but distinct:

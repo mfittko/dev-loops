@@ -1052,6 +1052,18 @@ After applying fixes and advancing the head SHA:
 - on retry, re-invoke every reviewer whose review surface the new head's delta touched (including any angle whose prior finding attribution is ambiguous) and every mandatory / always-run angle; the context-builder and consolidation always run fresh. Other angles are carried forward per [GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed), on that rule's proof and never on guesswork (a carried `findings_present` angle brings its open findings forward and the round still blocks on them)
 - a clean pass means all gate-specific review angles pass, no findings with a severity in `blockCleanOnFindingSeverities` remain, and the judge act list is empty (ADR 0089): the posted review verdict composes the ledger's severity `overallVerdict` with the act list
 
+#### Round cap {#round-cap}
+
+<!-- rule: GATE-EXEC-ROUND-CAP --> `GATE-EXEC-ROUND-CAP`: a `draft_gate` round sequence ends when `gates.draft.maxReviewRounds` rounds have completed (default 4; `0` disables the cap and keeps the behavior before the cap; a negative, fractional or non-numeric value fails config resolution). Only `draft_gate` is capped.
+
+- One completed round is one durable `draft_gate` findings-log ledger of this PR with verdict `clean` or `findings_present`, read with `readClosedPriorRoundLogs` (ADR 0109). The round being posted counts. An unreadable in-range ledger counts. An angle, a sentinel, a dispatch unit, a foreign ledger, a `blocked` ledger and a sidecar file never count. A round is past the cap when its count is at or above the cap.
+- The posted `round=` marker and the cap agree: source (C) of `resolveGateRound` counts only `<gate>-<full-sha>.json` findings logs.
+- A judge `act` item is new unless the judge sets `resurfaces: <fingerprint>` and that fingerprint is the act fingerprint of a closed prior round. `judge-pass.mjs` and `write-gate-findings-log.mjs` each drop a `resurfaces` mark that is not in that set.
+- Convergence stop: a round with no new act item ends the sequence, unless it is below the cap and a re-surfaced `high` or `medium` act item is open; then one more automatic round runs.
+- Past the cap, and at a convergence stop, every open act item (new `high`, `medium`, `low` or `nit`, and every re-surfaced item) composes `blocked` through `composeCheckpointVerdict` with a `round_cap_reached` blocker. No fixer runs. `--verdict findings_present` is refused as a contradiction of the composed verdict. A further round runs only on an explicit operator instruction.
+
+<!-- rule: GATE-EXEC-ROUND-CAP-CLOSED --> `GATE-EXEC-ROUND-CAP-CLOSED`: past the cap, a judge `defer` or `reject` gets `capClosed: { judgeDisposition, severity, round, cap }` in the ledger, with no commit and at an unchanged head. A locatable `question` is never cap-closed. A reviewer `high` or `medium` that the judge defers or rejects, a finding with no judge disposition and a finding with an unknown severity join the verdict as `severity_disagreement` blockers. A judge `defer` of a `low` and a judge `reject` of a `nit` post `clean`. The verdict comment lists every `capClosed` item, and the merge-ready result of `detect-checkpoint-evidence.mjs` lists the `capClosed` items of the draft ledger. The `delta_verified` evidence kind and the fixer path for `low` and `nit` act items arrive in a later slice (ADR 0158).
+
 #### Angle carry-forward (fail-closed) {#angle-carry-forward-fail-closed}
 
 <!-- rule: GATE-EXEC-ANGLE-CARRY-FORWARD --> `GATE-EXEC-ANGLE-CARRY-FORWARD`: On every head bump A→B,
@@ -1112,6 +1124,7 @@ Each gate chain exits when one of these conditions is met:
 | `pre_approval_gate` checkpoint `blocked` composed from a deterministic AC/DoD blocker over a completed review ledger (the comment records a **Review verdict** and **Gate blockers**) | Resolve each remaining blocker per [acceptance-criteria-verification.md step 5](acceptance-criteria-verification.md), which says when the writer ticks automatically and when the operator ticks with the CLI; then rerun the gate (the writer's next action is "rerun gate") |
 | `blocked` verdict from the review/fan-in itself (gate could not complete) | Stop; escalate to operator |
 | Maximum retry cycles exhausted without reaching `clean` | Stop; escalate to operator |
+| `draft_gate` `blocked` with a `round_cap_reached` blocker ([GATE-EXEC-ROUND-CAP](#round-cap)) | Stop; escalate to operator |
 | Fix cycle produces no net progress (same findings after fix attempt) | Stop; escalate to operator |
 
 ## Copilot round-cap interplay

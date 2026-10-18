@@ -433,6 +433,16 @@
       "id": "GATE-EXEC-REVIEWER-BUDGET-PREFLIGHT"
     },
     {
+      "id": "GATE-EXEC-ROUND-CAP",
+      "enforcement": "runtime",
+      "enforcementNote": "scripts/github/_gate-round-cap.mjs counts closed draft_gate ledgers and upsert-checkpoint-verdict.mjs composes a round_cap_reached blocker through composeCheckpointVerdict; write-gate-findings-log.mjs and judge-pass.mjs keep only known resurfaces fingerprints"
+    },
+    {
+      "id": "GATE-EXEC-ROUND-CAP-CLOSED",
+      "enforcement": "runtime",
+      "enforcementNote": "write-gate-findings-log.mjs stamps capClosed on a past-cap judge defer or reject; upsert-checkpoint-verdict.mjs composes severity_disagreement blockers and lists capClosed items; detect-checkpoint-evidence.mjs lists them in the merge-ready result"
+    },
+    {
       "id": "GATE-EXEC-ROUND-RETIREMENT",
       "enforcement": "runtime"
     },
@@ -778,6 +788,10 @@
     },
     {
       "id": "RETRO-GATE-FAIL-CLOSED"
+    },
+    {
+      "id": "RETRO-ROUND-CAP-QUALITY",
+      "enforcement": "doc"
     },
     {
       "id": "RETRO-SIZE-WAIVER-COUNT",
