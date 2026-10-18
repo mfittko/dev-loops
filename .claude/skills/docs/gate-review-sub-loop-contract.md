@@ -146,14 +146,17 @@ head. On a ready PR, the `pre_approval_gate` re-runs on the new head per
 <!-- rule: GATE-EXEC-BASE-MERGE-VERDICT-CARRY -->
 `GATE-EXEC-BASE-MERGE-VERDICT-CARRY`: A head advance that only integrated the base branch keeps
 the verdict posted at the previous head when `scripts/github/classify-base-merge-carry.mjs`
-records `carry_verdict`. That needs an identical stable patch id of the PR diff, an empty
-intersection of the PR diff paths and the base delta paths, a base delta that touches no gate
-tooling or config, and no conflict-resolution hunks. `partial_carry` defers to
-`GATE-EXEC-ANGLE-CARRY-FORWARD`. `full_regate` and `fallback_full` (any detection failure)
-require the full round. The evidence record (source head, new head, both patch ids, path
-intersection, gate tooling paths, decision, reason) is validated by
-`validateBaseMergeCarryEvidence`; a malformed or tampered record is a full re-gate. ADR 0156
-records this rule.
+records `carry_verdict`. That needs an identical whitespace-sensitive patch id of the PR diff
+(`git patch-id --verbatim`), an empty intersection of the PR diff paths and the base delta
+paths, a base delta that touches no gate tooling or config, and no conflict-resolution hunks
+in any merge commit between the two heads. `partial_carry` defers to
+`GATE-EXEC-ANGLE-CARRY-FORWARD`. `full_regate` and `fallback_full` (any detection failure,
+including a previous head that is not an ancestor of the new head) require the full round. The
+evidence record (source head, new head, both patch ids, the PR diff paths, the base delta
+paths, the conflict-resolution flag, path intersection, gate tooling paths, decision, reason)
+is validated by `validateBaseMergeCarryEvidence`, which recomputes the decision and every
+derived field and can bind the record to the expected heads; a malformed or tampered record is
+a full re-gate. ADR 0156 records this rule.
 
 ### Phase 1 — Preamble: context-builder
 

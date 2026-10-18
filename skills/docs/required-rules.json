@@ -302,8 +302,7 @@
     },
     {
       "id": "GATE-EXEC-BASE-MERGE-VERDICT-CARRY",
-      "enforcement": "runtime",
-      "enforcementNote": "packages/core/src/loop/base-merge-verdict-carry.mjs classifies and validates; scripts/github/classify-base-merge-carry.mjs persists the evidence; merge-pr wiring lands in a later slice"
+      "enforcement": "doc"
     },
     {
       "id": "GATE-EXEC-BLOCKING-ONLY-FIX"

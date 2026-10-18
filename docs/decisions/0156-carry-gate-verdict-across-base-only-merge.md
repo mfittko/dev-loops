@@ -19,9 +19,9 @@ A head advance A to B that integrated the base keeps the verdict posted at A whe
 - The base delta touches no gate tooling or config (`.devloops`, gate contracts and scripts, core loop code, dependency manifests).
 - The merge carries no conflict-resolution hunks.
 
-Other outcomes: `partial_carry` (patch identical, paths overlap) defers to angle carry-forward. `full_regate` applies when the patch changed, gate tooling changed, or the merge resolved conflicts. `fallback_full` applies when any input cannot be computed. A durable evidence record keyed by the new head stores the source head, the new head, both patch ids, the path intersection, the gate tooling paths, the decision and the reason. `validateBaseMergeCarryEvidence` checks the record shape and recomputes the carry invariants, so a tampered record fails closed. CI must still be green at B.
+Other outcomes: `partial_carry` (patch identical, paths overlap) defers to angle carry-forward. `full_regate` applies when the patch changed, gate tooling changed, or the merge resolved conflicts. `fallback_full` applies when any input cannot be computed. A durable evidence record keyed by the new head stores the source head, the new head, both patch ids, the PR diff paths, the base delta paths, the conflict-resolution flag, the path intersection, the gate tooling paths, the decision and the reason. The patch id is whitespace-sensitive (`git patch-id --verbatim`). `validateBaseMergeCarryEvidence` checks the record shape, recomputes the decision and every derived field, and can bind the record to the expected heads, so a tampered record fails closed. CI must still be green at B.
 
-`GATE-EXEC-REGATE-MANDATORY` and `MERGE-PRECOND-REQUIRED` item 4 gain a pointer to this carry. A scope change with new authored logic changes the patch id and still invalidates the posted gate.
+`GATE-EXEC-REGATE-MANDATORY` gains a pointer to this carry. `MERGE-PRECOND-REQUIRED` item 4 gains its pointer in slice 2, with the `merge-pr` wiring. A scope change with new authored logic changes the patch id and still invalidates the posted gate.
 
 Rejected: carrying on a clean textual merge alone (a clean merge can still change behavior when both sides edit one file); rebasing the PR branch (it rewrites reviewed history).
 
