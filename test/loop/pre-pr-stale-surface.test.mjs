@@ -146,3 +146,10 @@ test("an empty scan range fails closed in scan and record mode", withRepo(async 
   assert.equal((await run(dir, [...record.slice(0, -3), "--base", "HEAD", "--no-linked-issue"])).code, 1);
   assert.equal((await validatePrePrReview({ cwd: dir })).ok, false);
 }));
+
+test("--issue accepts only a positive integer, never a URL, #N or zero", withRepo(async (dir) => {
+  const readIssueBody = async () => { throw new Error("must not read the issue"); };
+  for (const bad of ["abc", "0", "-1", "https://github.com/other/repo/issues/1", "#7"]) {
+    assert.equal((await run(dir, ["--scan", "--base", "main", "--body-file", "b.md", "--issue", bad], { readIssueBody })).code, 1, bad);
+  }
+}));

@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { parseIssueNumber } from "../_cli-primitives.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { PRE_PR_REVIEW_DISPOSITIONS, PRE_PR_REVIEW_VERDICTS, writePrePrReviewRecord } from "./_pre-pr-review-record.mjs";
 import { PRE_PR_STALE_SURFACE_UNADDRESSED, readSkipsFile, requireStaleSurfaceAddressed, scanPrePrStaleSurface } from "./_pre-pr-stale-surface.mjs";
@@ -45,11 +46,12 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     if (!values.scan && (!values.verdict || !values.disposition)) throw parseError("pre-pr-review requires --verdict and --disposition (or --scan)");
     if (!values.scan && !PRE_PR_REVIEW_VERDICTS.includes(values.verdict)) throw parseError(`--verdict must be one of ${PRE_PR_REVIEW_VERDICTS.join(", ")}`);
     if (!values.scan && !PRE_PR_REVIEW_DISPOSITIONS.includes(values.disposition)) throw parseError(`--disposition must be one of ${PRE_PR_REVIEW_DISPOSITIONS.join(", ")}`);
+    const issue = values.issue === undefined ? undefined : String(parseIssueNumber(values.issue, parseError));
     if (Boolean(values["body-file"]) !== Boolean(values.issue)) throw parseError("--body-file and --issue come as a pair");
     if (values["no-linked-issue"] && values.issue) throw parseError("--no-linked-issue cannot be combined with --body-file or --issue");
     if (!values.scan && !values.issue && !values["no-linked-issue"]) throw parseError("record mode requires --body-file with --issue, or --no-linked-issue when the PR body is the spec");
     const output = { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr };
-    const scan = await scanPrePrStaleSurface({ cwd, base: values.base ?? await defaultBase(cwd), bodyFile: values["body-file"], issue: values.issue, ...(readIssueBody ? { readIssueBody } : {}) });
+    const scan = await scanPrePrStaleSurface({ cwd, base: values.base ?? await defaultBase(cwd), bodyFile: values["body-file"], issue, ...(readIssueBody ? { readIssueBody } : {}) });
     if (values.scan) return emitResult(scan, output);
     requireStaleSurfaceAddressed(scan, readSkipsFile(values["skips-file"]));
     const { record, file } = writePrePrReviewRecord({ cwd, verdict: values.verdict, disposition: values.disposition });
