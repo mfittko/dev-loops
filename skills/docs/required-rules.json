@@ -391,6 +391,11 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-EXEC-LOW-NIT-CONVERGENCE",
+      "enforcement": "runtime",
+      "enforcementNote": "composeConvergedDraftGate (packages/core/src/loop/pre-push-delta-review.mjs) throws unless the gate is draft_gate, every act item is low or nit, and the delta result is valid, fresh and locally_clear; upsert-checkpoint-verdict.mjs permits clean over act items only through it"
+    },
+    {
       "id": "GATE-EXEC-NO-CWD-DEPENDENCE"
     },
     {

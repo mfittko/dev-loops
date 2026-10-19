@@ -393,6 +393,13 @@ function normalizeGateSizeWaiver(value) {
   return null;
 }
 
+// `**Converged:** fixer <sha> delta sha256:<digest>` (GATE-EXEC-LOW-NIT-CONVERGENCE): a present but
+// unparseable line is `{ malformed: true }`, never silently absent.
+function normalizeGateConverged(value) {
+  const m = /^fixer\s+`?([0-9a-f]{40}|[0-9a-f]{64})`?\s+delta\s+`?(sha256:[0-9a-f]{64})`?$/iu.exec(value.trim());
+  return m ? { fixerCommit: m[1].toLowerCase(), deltaDigest: m[2].toLowerCase() } : { malformed: true };
+}
+
 function parseGateReviewCommentFields(body) {
   if (typeof body !== "string" || body.trim().length === 0) {
     return null;
@@ -492,6 +499,12 @@ function parseGateReviewCommentFields(body) {
       continue;
     }
 
+    match = line.match(/^(?:[-*]\s*)?converged\s*:\s*(.+)$/iu);
+    if (match) {
+      fields.converged ??= normalizeGateConverged(match[1]);
+      continue;
+    }
+
     match = line.match(/^(?:[-*]\s*)?size[\s-]budget\s+outcome\s*:\s*(.+)$/iu);
     if (match) {
       if (fields.sizeOutcome === null) {
@@ -559,6 +572,7 @@ export function parseGateReviewCommentMarkerBody(body) {
     sizeTouchesT1: fields.sizeTouchesT1,
     sizeWaiverGranted: fields.sizeWaiverGranted,
     sizeWaiverApprovedBy: fields.sizeWaiverApprovedBy,
+    ...(fields.converged ? { converged: fields.converged } : {}),
     contractComplete: Boolean(fields.verdict && fields.findingsSummary && fields.nextAction),
   };
 }
@@ -605,6 +619,7 @@ export function summarizeGateReviewComments(comments) {
       sizeTouchesT1: parsed.sizeTouchesT1 ?? null,
       sizeWaiverGranted: parsed.sizeWaiverGranted ?? null,
       sizeWaiverApprovedBy: parsed.sizeWaiverApprovedBy ?? null,
+      ...(parsed.converged ? { converged: parsed.converged } : {}),
       surface: normalizeVerdictSurface(comment?.surface),
       commentId: Number.isInteger(comment?.id) ? comment.id : null,
       commentUrl: trimmedOrNull(comment?.html_url),
@@ -645,7 +660,11 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
       continue;
     }
 
-    if (normalizedHeadSha && parsed.headSha !== normalizedHeadSha) {
+    // GATE-EXEC-LOW-NIT-CONVERGENCE: a clean, contract-complete draft_gate comment at head A whose valid
+    // converged marker names the requested head as its fixer commit is the draft_gate marker for that head.
+    const convergedFor = normalizedHeadSha !== null && parsed.gate === "draft_gate" && parsed.verdict === "clean"
+      && parsed.contractComplete && parsed.converged?.fixerCommit === normalizedHeadSha;
+    if (normalizedHeadSha && parsed.headSha !== normalizedHeadSha && !convergedFor) {
       continue;
     }
 
@@ -653,7 +672,9 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
     const candidate = {
       visible: true,
       gate: parsed.gate,
-      headSha: parsed.headSha,
+      headSha: convergedFor ? normalizedHeadSha : parsed.headSha,
+      ...(convergedFor ? { convergedFromHeadSha: parsed.headSha } : {}),
+      ...(parsed.converged ? { converged: parsed.converged } : {}),
       verdict: parsed.verdict,
       findingsSummary: parsed.findingsSummary,
       nextAction: parsed.nextAction,

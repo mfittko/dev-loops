@@ -318,6 +318,18 @@ consulted live by `buildPreMergeGateCheck` (`scripts/github/detect-checkpoint-ev
 the authoritative pre-merge path in addition to `evaluateMergePreconditions`/the lifecycle state
 machine, reads absent size evidence as "human approval required", never as a silent pass.
 
+## Optional converged field
+
+A `draft_gate` comment updated by `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) renders one more line
+beyond `GATE-COMMENT-REQUIRED-FIELDS`: `**Converged:** fixer <sha> delta sha256:<digest>`. The
+`<sha>` is the full fixer commit and the digest is the sha256 of the clean pre-push delta result.
+The line appears only on a `clean` `draft_gate` comment, and it is the only case where `clean`
+stands over open judge act items (all low or nit). A body without the line reads back as absent
+(unchanged). A present line that does not match the format reads back as malformed, and
+`buildPreMergeGateCheck` fails closed on it. Gate coordination treats a valid line as the
+`draft_gate` marker of the fixer commit's head. The line is not merge evidence: merge still needs a
+clean current-head `pre_approval_gate`.
+
 ## Verdict definitions
 
 <!-- rule: GATE-COMMENT-VERDICT-VALUES -->
