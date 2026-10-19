@@ -211,7 +211,7 @@ test("a comment at A that is already clean or already converged is not converged
   }, { prefix: "dev-loops-converged-twice-" });
 });
 
-test("the act items come from the ledger at A: a caller cannot list a subset", async () => {
+test("the act items include the ledger at A: a caller cannot list a subset", async () => {
   await withTempDir(async (tempDir) => {
     const lows = [finding("low", 1)];
     const findingsJson = path.join(tempDir, "findings.json");
@@ -253,7 +253,7 @@ test("a judge-enriched --findings-json medium act item over an all-low ledger re
   }, { prefix: "dev-loops-converged-enriched-" });
 });
 
-test("a converged post without --findings-ledger refuses while the round's durable ledger exists", async () => {
+for (const requireFanoutEvidence of [true, false]) test(`a converged post without --findings-ledger refuses while the round's durable ledger exists (requireFanoutEvidence ${requireFanoutEvidence})`, async () => {
   await withTempDir(async (tempDir) => {
     const lows = [finding("low", 1)];
     const findingsJson = path.join(tempDir, "findings.json");
@@ -262,7 +262,7 @@ test("a converged post without --findings-ledger refuses while the round's durab
     const ledgerPath = path.join(root, buildLogPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
     await mkdir(path.dirname(ledgerPath), { recursive: true });
     await writeFile(ledgerPath, JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, verdict: "clean", findings: lows }), "utf8");
-    await writeFile(path.join(root, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+    await writeFile(path.join(root, ".devloops"), `version: 1\ngates:\n  requireFanoutEvidence: ${requireFanoutEvidence}\n`, "utf8");
     const converged = path.join(tempDir, "converged.json");
     await writeFile(converged, JSON.stringify(convergedInput(lows)), "utf8");
     const puts = [];

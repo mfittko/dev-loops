@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -28,7 +28,7 @@ import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
 import { listIssueComments, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
-import { VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
+import { buildLogPath, VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
 import {
   buildCommentableLineSet,
   buildNonLocatableFindingMarker,
@@ -238,7 +238,9 @@ Optional:
                                             item is low/nit and the delta result
                                             is fresh and locally_clear with no
                                             new findings. Also needs --verdict
-                                            clean (or omitted), and refuses when
+                                            clean (or omitted when
+                                            --findings-ledger carries an
+                                            overallVerdict), and refuses when
                                             A has no draft_gate comment or that
                                             comment is already clean or
                                             converged.
@@ -2526,14 +2528,18 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // (composeConvergedDraftGate throws on anything else). Items dedupe by severity|summary: the ledger and
   // --findings-json can carry the same finding.
   let convergedMarker = null;
-  const guardedActItems = (findings) => {
+  const guardedActItems = async (findings) => {
     // A converged round's act items are the union of A's ledger and the passed (judge-enriched) findings, so a caller cannot list a subset.
     // Without a ledger the passed findings stand alone, and a durable ledger on disk refuses below.
     const items = listOpenActItems(convergedInput && preloadedFindingsLedger ? [...(preloadedFindingsLedger.findings ?? []), ...findings] : findings);
     if (!convergedInput) return items;
     if (!preloadedFindingsLedger) {
-      const postingGate = postTimeFanoutEnforcement?.gates?.find((gateResult) => gateResult.name === options.gate);
-      if (postingGate?.ledgerExists) throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs --findings-ledger: the ledger at ${postingGate.ledgerPath} defines the round's act items.`);
+      // Checked on disk directly: the fan-out enforcement descriptor is empty when gates.requireFanoutEvidence is off.
+      const ledgerPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: "tmp" });
+      for (const root of resolveLedgerCheckouts(repoRoot)) {
+        const found = await access(path.resolve(root, ledgerPath)).then(() => true, () => false);
+        if (found) throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs --findings-ledger: the ledger at ${ledgerPath} defines the round's act items.`);
+      }
     }
     const roundActItems = [...new Map(items.map((f) => [`${f.severity}|${typeof f.summary === "string" ? f.summary.trim() : f.summary}`, f])).values()];
     convergedMarker = composeConvergedDraftGate({ gate: options.gate, headSha: canonicalHeadSha, roundActItems, converged: convergedInput });
@@ -2857,7 +2863,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
     const actItems = listOpenActItems(flatFindings);
     enrichedActItems = actItems;
-    if (options.verdict === "clean" && guardedActItems(actItems).length > 0) {
+    if (options.verdict === "clean" && (await guardedActItems(actItems)).length > 0) {
       throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
     }
   }
@@ -2885,7 +2891,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let checkpointComposition = null;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
-    const ledgerVerdict = composeReviewVerdict(preloadedFindingsLedger.overallVerdict, guardedActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]));
+    const ledgerVerdict = composeReviewVerdict(preloadedFindingsLedger.overallVerdict, await guardedActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]));
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
     const gateBlockers = collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact);
@@ -2926,7 +2932,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     throw new Error(
       `--verdict is required for ${options.gate} @ ${canonicalHeadSha}${options.findingsLedger ? `: --findings-ledger "${options.findingsLedger}" carries no overallVerdict to derive it from` : ""}. Pass --verdict, or supply a --findings-ledger written from a consolidate-fanin --ledger-out that carries overallVerdict.`,
     );
-  } else if (options.verdict === "clean" && guardedActItems([...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems]).length > 0) {
+  } else if (options.verdict === "clean" && (await guardedActItems([...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems])).length > 0) {
     // ADR 0089: a ledger without overallVerdict still carries its judge act list.
     const actItems = listOpenActItems([...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems]);
     throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-ledger "${options.findingsLedger}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
