@@ -18,7 +18,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, executionIndexPath, materializationHash, registerWorkOrderRole, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
-import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { buildHandoffEnvelopeCli } from "./build-handoff-envelope.mjs";
 
 const USAGE = `Usage: emit-coordinator-work-order.mjs --input <startup-output path> [--repo <owner/name>] [--allowed-file <path>]... [--harness <claude|pi|codex> --entry <queue|direct> [--tmp-root <path>]]
@@ -94,7 +94,7 @@ function codexBootstrap(cwd) {
     return { path: relativePath, absolutePath, sha256: createHash("sha256").update(bytes).digest("hex"), required: true };
   });
   const processCwd = realpathSync(cwd);
-  const git = (...args) => execFileSync("git", ["-C", processCwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const git = (...args) => execFileSync("git", ["-C", processCwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: gitEnvNoDirOverrides() }).trim();
   const repositoryRoot = realpathSync(git("rev-parse", "--show-toplevel"));
   return {
     version: 1, toolchainRoot: TOOLCHAIN_ROOT, contracts,

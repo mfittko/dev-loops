@@ -113,6 +113,21 @@ test("Codex bootstrap pins emitting source bytes and keeps canonical authority a
   });
 });
 
+test("Codex bootstrap uses the supplied cwd despite inherited Git directory overrides", async () => {
+  await withDirs(async (ctx) => withDirs(async (foreign) => {
+    execFileSync("git", ["-C", ctx.dir, "symbolic-ref", "HEAD", "refs/heads/issue-2843"]);
+    execFileSync("git", ["-C", foreign.dir, "symbolic-ref", "HEAD", "refs/heads/foreign-main"]);
+    const result = await runNode(script, ["--input", ctx.input, "--repo", "o/r", "--harness", "codex", "--entry", "direct", "--tmp-root", ctx.tmp], {
+      cwd: ctx.dir,
+      env: { ...process.env, GIT_DIR: path.join(foreign.dir, ".git"), GIT_WORK_TREE: foreign.dir },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const { planPath } = JSON.parse(result.stdout);
+    const { workOrder } = JSON.parse(await readFile(planPath, "utf8"));
+    assert.deepEqual(workOrder.codexBootstrap.cwd, { processCwd: await realpath(ctx.dir), repositoryRoot: await realpath(ctx.dir), branch: "issue-2843" });
+  }));
+});
+
 test("Codex bootstrap refuses missing, empty, directory and redirected emitting contracts before writing", async () => {
   await withDirs(async (ctx) => {
     const toolchain = path.join(ctx.dir, "toolchain");
