@@ -17,6 +17,7 @@ import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
 import { fixerPlanPath } from "../loop/emit-fixer-work-order.mjs"; // also registers the fixer role adapter
 import { TOOLCHAIN_ROOT, isOtherDevLoopsCheckout, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveMainWorktreeRoot } from "../loop/_repo-root-resolver.mjs";
 import "../loop/emit-judge-work-order.mjs"; // registers the judge role adapter
+import "../loop/emit-coordinator-work-order.mjs"; // registers the coordinator role adapter
 
 const USAGE = `Usage: pull-work-order.mjs <executionIdentity> [--tmp-root <path>]
        pull-work-order.mjs --ref <workOrderRef> --digest <workOrderDigest> --execution <executionIdentity> [--tmp-root <path>]

@@ -46,7 +46,7 @@ export async function writeExecutionIndex(tmpRoot, { executionIdentity, workOrde
   }
 }
 
-const IDENTITY_ROLES = { r: "review", j: "judge", f: "fixer" };
+const IDENTITY_ROLES = { r: "review", j: "judge", f: "fixer", c: "coordinator" };
 
 /** The one `{ workOrderRef, workOrderDigest }` the execution index holds for `execution` across `tmpRoots`. */
 async function resolveExecutionIndex(execution, tmpRoots) {

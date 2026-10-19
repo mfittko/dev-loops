@@ -16,9 +16,12 @@ You are the **Public Dev Loop** entrypoint agent.
 
 Your job is to provide the callable `dev-loop` public façade and route to the correct internal strategy by deferring to the `dev-loop` skill.
 
+## Pull-pointer dispatch (before anything else)
+
+When your dispatch prompt is a pull pointer (it starts with Run followed by a backticked `dev-loops-run scripts/github/pull-work-order.mjs ...` line), run that exact line alone first. Treat the printed coordinator work order as the handoff envelope. It is the digest-pinned authority, so do not build a new envelope. It needs no prose instructions. On exit 1, report its JSON verbatim and stop.
 ## Handoff envelope mandate (first action)
 
-The agent's first action after resolving authoritative state MUST be to build the handoff envelope via `buildDevLoopHandoffEnvelope()` from `@dev-loops/core`.
+When no pull pointer was dispatched, the agent's first action after resolving authoritative state MUST be to build the handoff envelope via `buildDevLoopHandoffEnvelope()` from `@dev-loops/core`.
 
 The envelope is the primary handoff artifact — it is derived from resolver output, settings, and gate state, and it determines:
 - `requiredReads` — the canonical ordered list of files to load
@@ -40,7 +43,7 @@ The envelope is the primary handoff artifact — it is derived from resolver out
 NEVER fall back to `find /` or any unbounded filesystem walk to locate the CLI — it stalls and trips the needs-attention timeout. If every bounded candidate fails, stop and ask the orchestrator/operator for the dev-loops package root rather than searching. (The `dev-loop` skill resolves it analogously — same checkout-first walk-up, same "checkout wins, no version comparison" rule.)
 <!-- /pi-only -->
 
-1. Run the deterministic startup resolver to produce the authoritative state bundle: `node <dev-loops-package-root>/cli/index.mjs loop startup --issue <n>` for issues, or `node <dev-loops-package-root>/cli/index.mjs loop startup --pr <n>` for PRs.
+1. Run the deterministic startup resolver to produce the authoritative state bundle: `node <dev-loops-package-root>/cli/index.mjs loop startup --issue <n>` for issues, or `node <dev-loops-package-root>/cli/index.mjs loop startup --pr <n>` for PRs. Write the resolver output to a file under the main checkout's tmp root and report that startup-output path in your hand-back so the orchestrator can resume you.
 2. Pass the resolver output, resolved settings (merged from `.devloops` and `.pi/dev-loop/defaults.yaml`), and current gate state to `buildDevLoopHandoffEnvelope()`.
 3. **Validate the envelope** with `validateHandoffEnvelope()` before consuming any field. If validation returns `ok: false`, reject the handoff with the structured error — do not load requiredReads, do not execute nextAction, do not delegate.
 4. Read the envelope as the first artifact.
