@@ -119,11 +119,11 @@ async function unexpectedDelay(ms) {
   throw new Error(`runInProcess: unexpected delay(${ms}ms) — this test path must not enter the verification retry loop`);
 }
 
-async function runInProcess(args, entries, { env = { GH_SEQUENCE_PATH: "1" }, delayImpl = unexpectedDelay, repoRoot = capFixtureRepoRoot } = {}) {
+async function runInProcess(args, entries, { env = { GH_SEQUENCE_PATH: "1" }, delayImpl = unexpectedDelay, repoRoot = capFixtureRepoRoot, detectEvidence = async () => ({}) } = {}) {
   const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
   const options = parseRequestCliArgs(args);
   try {
-    const result = await performCopilotReviewRequest(options, { env, ghCommand: "gh", runChild, delayImpl, repoRoot });
+    const result = await performCopilotReviewRequest(options, { env, ghCommand: "gh", runChild, delayImpl, repoRoot, detectEvidence });
     return { result, calls };
   } catch (error) {
     // Attach the recorded gh calls to a rejection too, so a test asserting
@@ -2805,7 +2805,7 @@ async function withFixerHandoff(fn, { checkpoint = false, active, receiptMtime }
       const output = path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json");
       const source = path.join(fixerDir, "source.json");
       const act = active === "omitted ACT";
-      const bytes = JSON.stringify(act ? [{ fingerprint: "0123456789abcdef", summary: "fix", judgeDisposition: "act" }] : { threads: [{ threadId: "PRRT_T1" }] });
+      const bytes = JSON.stringify(act ? [{ fingerprint: "0123456789abcdef", summary: "fix", judgeDisposition: "act" }] : { threads: active === "complete" ? [] : [{ threadId: "PRRT_T1" }] });
       await writeFile(source, bytes);
       const workOrder = { role: "fixer", phase: "full", target: { repo: "owner/repo", pr: 17 }, headSha: head, outputRefs: [output], requiredReads: [{ kind: act ? "act-list" : "threads", path: source, sha256: createHash("sha256").update(bytes).digest("hex") }] };
       workOrder.authority = { sourceDigest: sha256Hex(JSON.parse(bytes)).slice(7) };
@@ -2880,6 +2880,27 @@ for (const [step, compare, reply] of [["commit_not_contained", "diverged", false
   });
 }
 
+// GATE-EXEC-BASE-MERGE-VERDICT-CARRY: at a carried head a plan bound to the origin head is checked at the origin head.
+for (const [label, carriedFrom, warns] of [["carried", "a".repeat(40), false], ["uncarried", undefined, true]]) {
+  test(`request-copilot-review ${warns ? "raises" : "does not raise"} the unverified_active_fixer warning at an ${label} head`, async () => {
+    await withFixerHandoff(async (repoRoot) => {
+      const origin = "a".repeat(40);
+      const head = "b".repeat(40);
+      const detectEvidence = async () => ({ preApprovalGateMarker: { visible: true, carriedFrom } });
+      const entries = [
+        FIXER_REQUESTED,
+        { assertArgs: PR_VIEW_ARGS, stdout: JSON.stringify({ headRefOid: head, isDraft: false, reviews: [] }) },
+        { assertArgs: ["api", `repos/owner/repo/compare/${origin}...${head}`], stdout: JSON.stringify({ status: "ahead" }) },
+        // The carried re-read verifies the plan at the origin head, which the live-head guard reads as the plan head.
+        ...(warns ? [] : [{ assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid: origin }) }, { assertArgs: GRAPHQL_ARGS, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' }, { assertArgs: GRAPHQL_ARGS, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' }]),
+        ...PROCEED(head),
+      ];
+      const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { repoRoot, detectEvidence });
+      assert.equal(result.status, "requested");
+      assert.equal(result.fixerDispositionWarning === undefined, !warns);
+    }, { active: "complete" });
+  });
+}
 test("request-copilot-review proceeds with a not_verified warning while a delivered tackled fixer handoff has no checkpoint for the live head", async () => {
   await withFixerHandoff(async (repoRoot) => {
     const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [FIXER_REQUESTED, FIXER_PR_VIEW, ...PROCEED(FIXER_HEAD)], { repoRoot });
