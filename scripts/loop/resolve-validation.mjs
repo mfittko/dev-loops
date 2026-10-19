@@ -250,7 +250,7 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     options = parseResolveValidationArgs(argv);
     if (options.help) { process.stdout.write(`${USAGE}\n`); return; }
-    if (preflightJqFilter(options.jq) === 2) { process.exitCode = 2; return; }
+    if (preflightJqFilter(options.jq) === 2) { await removeParseFailedArtifact(argv); process.exitCode = 2; return; }
     result = await resolveValidation(options);
   } catch (error) {
     if (!options) await removeParseFailedArtifact(argv);

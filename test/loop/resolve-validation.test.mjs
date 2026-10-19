@@ -761,10 +761,14 @@ test("top-level allPassed matches the artifact, and --jq is validated before any
     execFileSync("git", ["add", "scripts"], { cwd: marked.repoRoot });
     execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "marker"], { cwd: marked.repoRoot });
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: marked.repoRoot, encoding: "utf8" }).trim();
+    const staleArtifact = path.join(marked.repoRoot, buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: head, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(staleArtifact), { recursive: true });
+    await writeFile(staleArtifact, JSON.stringify({ allPassed: true }));
     const bad = await runNode(CLI, ["gate", "resolve-validation", ...args(head), "--jq", "{ok,allPassed}"], { cwd: marked.repoRoot });
     assert.equal(bad.code, 2);
     assert.ok(bad.stderr.includes("--jq (BASE-JQ-OUTPUT-GUARANTEE)"), bad.stderr);
     assert.equal(bad.stdout, "");
     await assert.rejects(readFile(marker, "utf8"));
+    await assert.rejects(readFile(staleArtifact, "utf8"), /ENOENT/);
   } finally { await rm(marked.repoRoot, { recursive: true, force: true }); }
 });
