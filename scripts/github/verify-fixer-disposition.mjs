@@ -39,7 +39,7 @@ import { normalizeHeadScopedCiContract } from "@dev-loops/core/loop/copilot-ci-s
 
 // Provenance mark: the sha256 of the report bytes --construct wrote, kept beside the report.
 const RESIDUAL_REPLY_MARKER = "Residual delta status:";
-const constructMarkPath =(handoffPath) => `${handoffPath}.constructed`;
+const constructMarkPath = (handoffPath) => `${handoffPath}.constructed`;
 
 const USAGE = `Usage: verify-fixer-disposition.mjs --repo <owner/name> --pr <number> --head-sha <sha> --fixer-plan <path> [--tmp-root <path>]
 Enforce GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: verify every review thread a fixer
@@ -621,8 +621,10 @@ export async function verifyFixerDisposition(
   }
   // A refused handoff writes no checkpoint: capture and assert before the write.
   const initialSnapshot = await captureParsedReviewThreads({ repo: options.repo, pr: options.pr }, runtime);
+  let gateLogin = null;
   if (Array.isArray(actList)) {
-    assertActItemThreadsDisposed(actList, handoff, initialSnapshot, await resolveAuthenticatedLogin({ env, ghCommand, runChild }), deltaStatuses, completion);
+    gateLogin = await resolveAuthenticatedLogin({ env, ghCommand, runChild });
+    assertActItemThreadsDisposed(actList, handoff, initialSnapshot, gateLogin, deltaStatuses, completion);
   }
   if (options.construct) {
     await mkdir(path.dirname(handoffPath), { recursive: true });
@@ -670,6 +672,7 @@ export async function verifyFixerDisposition(
   });
 
   const actions = [];
+  const residualFailures = [];
   // A deferred thread the delta review left not_resolved or cannot_verify gets one residual-status reply and stays open.
   // Shared by the ACT and THREAD routes; a live reply carrying the marker makes re-entry post nothing.
   if (!options.check) {
@@ -678,13 +681,23 @@ export async function verifyFixerDisposition(
     for (const entry of deferred) {
       const target = openTargets.find((candidate) => candidate.threadId === entry.threadId);
       if (!target) continue;
-      const blocked = await findDeltaBlockedFixedReply(
+      // The ACT route's authenticated delta statuses are authoritative; the delta record lookup serves the THREAD route.
+      let blocked = null;
+      if (Array.isArray(actList) && deltaStatuses) {
+        const actFingerprints = new Set(actList.map((item) => item?.fingerprint ?? fingerprintFinding(item)));
+        const { members } = selectActThreadBinding(initialSnapshot, entry.threadId, gateLogin, actFingerprints);
+        const status = members.map((fp) => deltaStatuses.get(fp)).find((value) => value === "not_resolved" || value === "cannot_verify");
+        if (status) blocked = { status };
+      }
+      blocked ??= await findDeltaBlockedFixedReply(
         [{ threadId: entry.threadId, body: "", commit: entry.fixingCommitSha }],
         { repo: options.repo, pr: options.pr, parsed: initialSnapshot, tmpRoot: path.resolve(repoRoot, tmpRoot) },
         runtime,
       );
       if (!blocked) continue;
-      if (initialSnapshot.comments.some((comment) => comment.threadId === entry.threadId && String(comment.body).includes(RESIDUAL_REPLY_MARKER))) continue;
+      // Idempotent per fixing commit: a marker from an earlier round's commit never suppresses this round's status.
+      if (initialSnapshot.comments.some((comment) => comment.threadId === entry.threadId
+        && String(comment.body).includes(RESIDUAL_REPLY_MARKER) && String(comment.body).includes(entry.fixingCommitSha))) continue;
       try {
         await replyAndMaybeResolve(
           {
@@ -696,7 +709,9 @@ export async function verifyFixerDisposition(
         );
         actions.push({ threadId: entry.threadId, ok: true, step: "residual_replied" });
       } catch (error) {
-        actions.push({ threadId: entry.threadId, ok: false, error: error instanceof Error ? error.message : String(error) });
+        const message = error instanceof Error ? error.message : String(error);
+        actions.push({ threadId: entry.threadId, ok: false, error: message });
+        residualFailures.push({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha, failedStep: "residual_reply_failed", error: message });
       }
     }
   }
@@ -774,22 +789,25 @@ export async function verifyFixerDisposition(
     });
   }
 
-  const incomplete = evaluation.incomplete.map((entry) => (deltaBlocked.has(entry.threadId)
+  const incomplete = [...evaluation.incomplete, ...residualFailures].map((entry) => (deltaBlocked.has(entry.threadId)
     ? { ...entry, failedStep: FIXER_DISPOSITION_FAILED_STEP.DELTA_BLOCKED, deltaStatus: deltaBlocked.get(entry.threadId).status, deltaRecord: deltaBlocked.get(entry.threadId).recordPath }
     : entry));
   const activeFixer = evaluation.ok ? undefined : await bindActiveFixer(false);
   return {
-    ok: true,
+    // A failed residual-status reply is not delivered: nonzero exit naming the thread.
+    ok: residualFailures.length === 0,
+    ...(residualFailures.length ? { error: `residual-status reply failed for thread(s) ${residualFailures.map((failure) => failure.threadId).join(", ")}; re-run the verifier` } : {}),
     repo: options.repo,
     pr: options.pr,
     headSha: options.headSha,
     checkpointPath: options.check ? null : logPath,
-    complete: evaluation.ok,
+    complete: evaluation.ok && residualFailures.length === 0,
     ...(activeFixer ? { activeFixer } : {}),
     incomplete,
     forbiddenActions: evaluation.forbiddenActions,
     nextAction: evaluation.nextAction,
-    reason: deltaBlocked.size > 0 ? deltaBlockedReason(incomplete) : evaluation.reason,
+    reason: residualFailures.length > 0 ? `residual-status reply failed for thread(s) ${residualFailures.map((failure) => failure.threadId).join(", ")}; re-run the verifier`
+      : deltaBlocked.size > 0 ? deltaBlockedReason(incomplete) : evaluation.reason,
     actions,
   };
 }
