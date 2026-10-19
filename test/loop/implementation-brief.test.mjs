@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
@@ -35,12 +35,14 @@ async function fixtureRepo({ rules, decisions = {}, files = {} } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "implementation-brief-"));
   tempDirs.push(root);
   await mkdir(path.join(root, "skills", "docs"), { recursive: true });
-  await writeFile(
-    path.join(root, "skills", "docs", "required-rules.json"),
-    rules === undefined
-      ? JSON.stringify({ requiredRules: [{ id: "KNOWN-RULE-ID" }], optOutRules: [] })
-      : typeof rules === "string" ? rules : JSON.stringify(rules),
-  );
+  if (rules !== null) {
+    await writeFile(
+      path.join(root, "skills", "docs", "required-rules.json"),
+      rules === undefined
+        ? JSON.stringify({ requiredRules: [{ id: "KNOWN-RULE-ID" }], optOutRules: [] })
+        : typeof rules === "string" ? rules : JSON.stringify(rules),
+    );
+  }
   if (Object.keys(decisions).length > 0) {
     await mkdir(path.join(root, "docs", "decisions"), { recursive: true });
   }
@@ -117,17 +119,19 @@ test("cited ADRs, accepted ADRs naming a touched path and amending records are a
         status: "Proposed",
         body: "Also mentions src/touched.mjs.",
       }),
+      "0040-replaced.md": record({ title: "0040. Replaced record", status: "Superseded by ADR 0041" }),
+      "0041-replacement.md": record({ title: "0041. Replacement record" }),
     },
     files: { "src/touched.mjs": "export const value = 1;\n" },
   });
   const brief = await buildImplementationBrief({
-    body: "Follows ADR 0010.",
+    body: "Follows ADR 0010 and ADR 0040.",
     repoRoot: root,
     paths: ["src/touched.mjs"],
   });
 
-  assert.deepEqual(brief.adrs.map(({ number }) => number), ["0010", "0020"]);
-  const [base, byPath] = brief.adrs;
+  assert.deepEqual(brief.adrs.map(({ number }) => number), ["0010", "0020", "0040"]);
+  const [base, byPath, superseded] = brief.adrs;
   assert.equal(base.title, "Base record");
   assert.equal(base.path, "docs/decisions/0010-base.md");
   assert.deepEqual(base.amendedBy.map(({ number, title, path: recordPath }) => ({ number, title, path: recordPath })), [
@@ -135,6 +139,11 @@ test("cited ADRs, accepted ADRs naming a touched path and amending records are a
   ]);
   assert.equal(base.supersededBy, null);
   assert.equal(byPath.title, "Names a path");
+  assert.deepEqual(superseded.supersededBy, {
+    number: "0041",
+    title: "Replacement record",
+    path: "docs/decisions/0041-replacement.md",
+  });
 });
 
 test("adrNeed carries the ADR need section, and reads unstated when the body has none", async () => {
@@ -225,6 +234,49 @@ test("a missing --body-file and an unknown flag are usage errors that exit 1", a
   }
 });
 
+test("an unregistered rule ID is absent and a missing registry is a finding, not silence", async () => {
+  const root = await fixtureRepo({
+    files: { "skills/docs/owner.md": "<!-- rule: KNOWN-RULE-ID -->\n`KNOWN-RULE-ID`: Owner doc.\n" },
+  });
+  const cited = await buildImplementationBrief({ body: "Cites KNOWN-RULE-ID and MISSING-RULE-ID.", repoRoot: root });
+  assert.deepEqual(cited.rules, [{ id: "KNOWN-RULE-ID", doc: "skills/docs/owner.md" }]);
+
+  const absent = await fixtureRepo({ rules: null });
+  const brief = await buildImplementationBrief({ body: "Cites KNOWN-RULE-ID.", repoRoot: absent });
+  assert.deepEqual(brief.rules, []);
+  assert.deepEqual(brief.findings.map(({ kind }) => kind), ["missing_ac_dod_matrix", "missing_rule_registry"]);
+  // The reason must stay root-independent, or two checkouts disagree on the bytes.
+  assert.ok(!JSON.stringify(brief).includes(absent), "the finding must not echo the checkout root");
+  const otherAbsent = await fixtureRepo({ rules: null });
+  const second = await buildImplementationBrief({ body: "Cites KNOWN-RULE-ID.", repoRoot: otherAbsent });
+  assert.equal(JSON.stringify(second), JSON.stringify(brief));
+});
+
+test("a declared path whose real target leaves the repository is refused", async () => {
+  const root = await fixtureRepo();
+  const outside = await mkdtemp(path.join(os.tmpdir(), "implementation-brief-outside-"));
+  tempDirs.push(outside);
+  await writeFile(path.join(outside, "escaped.mjs"), "export const escaped = 1;\n");
+  await symlink(path.join(outside, "escaped.mjs"), path.join(root, "escaped.mjs"));
+  await mkdir(path.join(root, "src"), { recursive: true });
+  await writeFile(path.join(root, "src", "inside.mjs"), "export const inside = 1;\n");
+  await symlink(path.join(root, "src", "inside.mjs"), path.join(root, "linked.mjs"));
+
+  await assert.rejects(
+    () => buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["escaped.mjs"] }),
+    (error) => error.exitCode === 1 && /outside --repo-root/u.test(error.message),
+  );
+  const inside = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["linked.mjs"] });
+  assert.deepEqual(inside.touchedPaths, ["linked.mjs"]);
+  assert.deepEqual(inside.unresolvedPaths, []);
+});
+
+test("a body citation written with a ./ prefix still resolves", async () => {
+  const root = await fixtureRepo({ files: { "src/dotted.mjs": "export const dotted = 1;\n" } });
+  const brief = await buildImplementationBrief({ body: `${MATRIX}\nEdits ./src/dotted.mjs next.\n`, repoRoot: root });
+  assert.deepEqual(brief.touchedPaths, ["src/dotted.mjs"]);
+});
+
 test("a malformed required-rules.json exits 2", async () => {
   const root = await fixtureRepo({ rules: '{"requiredRules": "not-an-array"}' });
   const bodyFile = await writeBody(root, MATRIX);
@@ -272,6 +324,13 @@ test("cli/index.mjs registers and describes the implementation-brief verb", asyn
   assert.equal((await viaCli(["loop", "implementation-brief"])).code, 1);
   const described = await viaCli(["loop", "--help"]);
   assert.match(described.stdout, /implementation-brief\s+Print the canonical review expectations/u);
+});
+
+test("no gate, judge or reviewer surface consumes the brief", async () => {
+  for (const relPath of ["scripts/github/write-gate-context.mjs", "scripts/loop/judge-pass.mjs", "agents/review.agent.md"]) {
+    const content = await readFile(path.join(repoRoot, relPath), "utf8");
+    assert.ok(!content.includes("implementation-brief"), `${relPath} must not consume the brief`);
+  }
 });
 
 test("both the developer agent source and its generated mirror carry the brief instruction", async () => {

@@ -15,7 +15,7 @@
  * check-adr-tripwire. A second parser for any of those surfaces would be
  * authority drift.
  */
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -41,15 +41,10 @@ Read-only and offline: the brief parses local files and makes no network call.
   --repo-root <path>   Repository root to resolve paths against (default: cwd)
 
 Output (stdout, JSON):
-  { "ok": true,
-    "matrix": [{ "criterion", "evidence" }] | null,
-    "nonGoals": ["..."],
-    "touchedPaths": ["..."],
-    "unresolvedPaths": ["..."],
-    "rules": [{ "id", "doc" }],
+  { "ok": true, "matrix": [{ "criterion", "evidence" }] | null, "nonGoals": ["..."],
+    "touchedPaths": ["..."], "unresolvedPaths": ["..."], "rules": [{ "id", "doc" }],
     "adrs": [{ "number", "title", "path", "amendedBy": [...], "supersededBy" }],
-    "adrNeed": "<section text>" | "unstated",
-    "adrTripwirePaths": ["..."],
+    "adrNeed": "<section text>" | "unstated", "adrTripwirePaths": ["..."],
     "requiredReads": ["skills/docs/structural-quality.md", "changes/README.md"],
     "findings": [{ "kind", "reason" }] }
 
@@ -70,12 +65,11 @@ const REQUIRED_READS = Object.freeze(["skills/docs/structural-quality.md", "chan
 const ADR_NEED_UNSTATED = "unstated";
 // Repo-relative path citation: at least one directory segment, no URL scheme, no
 // whitespace. Segments are validated again before a token is used as a path.
-const PATH_CANDIDATE_RE = /(?<![\w./-])((?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+)(?![\w/-])/gu;
+const PATH_CANDIDATE_RE = /(?<![\w./-])((?:\.\/)?(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+)(?![\w/-])/gu;
 const PATH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/u;
 const NON_GOALS_HEADING_RE = /^non-?\s?goals?$/iu;
 const BULLET_RE = /^\s*[-*+]\s+(.*\S)\s*$/u;
-const RECORD_HEADING_RE = /^#\s+(.*\S)\s*$/u;
-const RECORD_NUMBER_PREFIX_RE = /^\d{4,}\.\s*/u;
+const RECORD_TITLE_RE = /^#\s+(?:\d{4,}\.\s*)?(.*\S)\s*$/mu;
 const DEVLOOPS_CONFIG_PATH_SET = new Set(DEVLOOPS_CONFIG_PATHS);
 
 function isMissing(error) {
@@ -84,10 +78,6 @@ function isMissing(error) {
 
 function sortedUnique(values) {
   return [...new Set(values)].sort();
-}
-
-function isAbsoluteLike(value) {
-  return value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value);
 }
 
 /**
@@ -99,7 +89,7 @@ function normalizeDeclaredPath(raw) {
   const value = String(raw).trim();
   if (value === "") return null;
   const segments = value.replace(/\\/gu, "/").split("/");
-  if (isAbsoluteLike(value) || segments.includes("..")) {
+  if (value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value) || segments.includes("..")) {
     throw Object.assign(
       new Error(`--paths entry must be a repo-relative path without ".." segments: ${value}`),
       { exitCode: 1 },
@@ -112,24 +102,32 @@ function normalizeDeclaredPath(raw) {
 /** Path citations in the body: a token is claimed only when it is a plausible
  * repo-relative path and it actually resolves under `--repo-root`. */
 function citedPathCandidates(body) {
-  const candidates = [];
-  for (const [token] of body.matchAll(PATH_CANDIDATE_RE)) {
-    if (token.includes(":")) continue;
-    const segments = token.split("/");
-    if (!segments.every((segment) => PATH_SEGMENT_RE.test(segment) && segment !== "." && segment !== "..")) continue;
-    candidates.push(token);
-  }
-  return candidates;
+  return [...body.matchAll(PATH_CANDIDATE_RE)]
+    .map(([raw]) => raw.replace(/^\.\//u, ""))
+    .filter((token) => !token.includes(":"))
+    .filter((token) => token.split("/").every((segment) => PATH_SEGMENT_RE.test(segment) && segment !== "." && segment !== ".."));
 }
 
-async function pathKind(repoRoot, relPath) {
+/**
+ * Resolve one repo-relative path, and report whether its real target is still
+ * inside the repository: a symlinked path can pass the syntactic check and
+ * still point outside `--repo-root`, so containment is decided on the resolved
+ * target, not on the string.
+ */
+async function pathKind(repoRoot, rootReal, relPath) {
   const target = path.join(repoRoot, ...relPath.split("/"));
   const info = await stat(target).catch((error) => {
     if (isMissing(error)) return null;
     throw error;
   });
   if (!info) return null;
-  return info.isDirectory() ? "directory" : "file";
+  const real = await realpath(target).catch((error) => {
+    if (isMissing(error)) return null;
+    throw error;
+  });
+  if (real === null) return null;
+  const inside = real === rootReal || real.startsWith(rootReal + path.sep);
+  return { kind: info.isDirectory() ? "directory" : "file", inside };
 }
 
 async function readTextOrNull(file) {
@@ -153,29 +151,14 @@ async function ruleOwnerIndex(repoRoot) {
   return owners;
 }
 
-function recordTitle(text) {
-  const heading = text.split(/\r?\n/u).map((line) => RECORD_HEADING_RE.exec(line)).find(Boolean);
-  if (!heading) return null;
-  return heading[1].replace(RECORD_NUMBER_PREFIX_RE, "").trim();
-}
-
 function nonGoalsFromBody(body) {
   const section = parseMarkdownSections(body).find((entry) => NON_GOALS_HEADING_RE.test(entry.name));
   if (!section) return [];
-  return section.bodyLines
-    .map((line) => BULLET_RE.exec(line)?.[1])
-    .filter((item) => typeof item === "string");
+  return section.bodyLines.map((line) => BULLET_RE.exec(line)?.[1]).filter((item) => typeof item === "string");
 }
 
-function matrixFromBody(body) {
-  const detection = detectAcDodMatrix(body);
-  if (detection.valid) return { rows: detection.rows, findings: [] };
-  return { rows: null, findings: [{ kind: "missing_ac_dod_matrix", reason: detection.reason }] };
-}
-
-function matchesAdrTripwire(relPath) {
-  return CONTRACT_DOC_RE.test(relPath) || relPath === GATE_CONFIG_PATH || DEVLOOPS_CONFIG_PATH_SET.has(relPath);
-}
+const matchesAdrTripwire = (relPath) =>
+  CONTRACT_DOC_RE.test(relPath) || relPath === GATE_CONFIG_PATH || DEVLOOPS_CONFIG_PATH_SET.has(relPath);
 
 /**
  * Build the brief for one spec body. All inputs are files: `paths` is the
@@ -198,30 +181,40 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
     if (normalized !== null) declared.push(normalized);
   }
 
+  const rootReal = await realpath(root);
+
   // Declared paths are validated: a declared path that does not resolve is
-  // reported so the caller can correct the touch set. A body citation is only
-  // claimed when it resolves, so prose that looks path-shaped stays out of both
-  // lists instead of becoming noise.
+  // reported so the caller can correct the touch set, and one whose real target
+  // leaves the repository is a usage error. A body citation is only claimed
+  // when it resolves inside the root, so prose that looks path-shaped stays out
+  // of both lists instead of becoming noise.
   const resolved = new Map();
   const unresolved = [];
   for (const candidate of declared) {
     if (resolved.has(candidate)) continue;
-    const kind = await pathKind(root, candidate);
-    if (kind) resolved.set(candidate, kind);
-    else unresolved.push(candidate);
+    const found = await pathKind(root, rootReal, candidate);
+    if (!found) unresolved.push(candidate);
+    else if (!found.inside) {
+      throw Object.assign(new Error(`--paths entry resolves outside --repo-root: ${candidate}`), { exitCode: 1 });
+    } else resolved.set(candidate, found.kind);
   }
   for (const candidate of citedPathCandidates(body)) {
     if (resolved.has(candidate) || unresolved.includes(candidate)) continue;
-    const kind = await pathKind(root, candidate);
-    if (kind) resolved.set(candidate, kind);
+    const found = await pathKind(root, rootReal, candidate);
+    if (found?.inside) resolved.set(candidate, found.kind);
   }
   const touchedPaths = sortedUnique([...resolved.keys()]);
 
-  const { rows: matrix, findings } = matrixFromBody(body);
+  // A missing matrix is a spec finding, not a tool failure: the exit code stays 0.
+  const detection = detectAcDodMatrix(body);
+  const matrix = detection.valid ? detection.rows : null;
+  const findings = detection.valid ? [] : [{ kind: "missing_ac_dod_matrix", reason: detection.reason }];
 
   // Registered rule IDs the work will meet: cited by the spec, or defined/cited
   // in a touched file. Registry ownership stays with required-rules.json.
   const registry = await loadKnownRuleIds(root);
+  // Root-independent reason: the brief's output must not carry a checkout path.
+  if (registry.skipped) findings.push({ kind: "missing_rule_registry", reason: "no skills/docs/required-rules.json under --repo-root" });
   const citedRuleIds = new Set();
   if (!registry.skipped) {
     for (const [token] of body.matchAll(RULE_ID_SHAPE_RE)) {
@@ -261,7 +254,7 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
     if (!record) return null;
     if (!titles.has(id)) {
       const text = await readTextOrNull(path.join(root, "docs", "decisions", record.file));
-      titles.set(id, text == null ? null : recordTitle(text));
+      titles.set(id, text == null ? null : (RECORD_TITLE_RE.exec(text)?.[1] ?? null));
     }
     return { number: id, title: titles.get(id), path: `docs/decisions/${record.file}` };
   };
