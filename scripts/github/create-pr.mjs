@@ -69,8 +69,8 @@ Behavior:
     \`--repo\`, no explicit body source, or an enqueue error is a non-fatal no-op (noted in
     that line; exit code unaffected). Omitting \`--lightweight\`, or a body that already
     carries a closing keyword (tracker-backed), never calls the board.
-  - refuses with \`pre_pr_review_missing\` unless a pre-PR review record covers the branch head (PRE-PR-BEFORE-FIRST-PUSH); the writer command is in that rule. \`--lightweight\` skips this record check only (the review phase still applies)
-  - refuses with \`head_unresolvable\` (on \`--lightweight\`, where the pre-PR record check is skipped; the default path refuses the same input earlier with \`pre_pr_review_missing\`, which also names \`git fetch origin\`) when \`origin/<base>\` resolves but \`--head\` resolves neither locally nor as \`origin/<branch>\`; run \`git fetch origin\` and retry
+  - refuses with \`pre_pr_review_missing\` unless a pre-PR review record covers the branch head (PRE-PR-BEFORE-FIRST-PUSH); the writer command is in that rule.
+  - refuses with \`head_unresolvable\` (a defensive fallback; the earlier pre-PR record guard normally refuses the same input with \`pre_pr_review_missing\`, which also names \`git fetch origin\`) when \`origin/<base>\` resolves but \`--head\` resolves neither locally nor as \`origin/<branch>\`; run \`git fetch origin\` and retry
   - refuses any \`adr-tripwire:allow\` line in the body, and \`--fill\`/\`--fill-verbose\`/\`--fill-first\`/\`--template\` without \`--body\`/\`--body-file\`, and \`--recover\`/\`--editor\`/\`--web\` always (gh would source a body this wrapper cannot check); write a waiver only through \`dev-loops pr waive-adr-tripwire\`
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
@@ -594,11 +594,11 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
       throw parseError(refusal);
     }
   }
-  // PRE-PR-BEFORE-FIRST-PUSH guard: a non-lightweight create needs a pre-PR review record for the
+  // PRE-PR-BEFORE-FIRST-PUSH guard: every create (lightweight included) needs a pre-PR review record for the
   // branch head named by --head (an `owner:` prefix is stripped), else the current HEAD. The head is the
   // local ref, or origin/<head> when only that exists; a local/remote divergence is refused. Plan-doc
   // promotion (a diff of only docs/phases/**/*.md) is exempt; skills/** prose needs a record.
-  if (!lightweight) {
+  {
     const headFlag = getFlagValue(forwardedArgv, HEAD_FLAG_PATTERN);
     const headRef = headFlag ? headFlag.trim().replace(/^[^:]*:/u, "") : undefined;
     const baseRef = hasBase ? getFlagValue(forwardedArgv, BASE_FLAG_PATTERN) : baseDefault;

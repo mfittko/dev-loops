@@ -50,6 +50,32 @@ test("a record for the current head passes", async () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a same-named tag never satisfies the record check; a record for the branch head does", async () => {
+  const dir = fixtureRepo();
+  try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    record(dir);
+    git(dir, "update-ref", "refs/tags/feature", "HEAD");
+    commit(dir, "src/a.mjs", "export const a = 3;\n");
+    const result = await validatePrePrReview({ cwd: dir, head: "feature" });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "pre_pr_review_missing");
+    record(dir);
+    assert.equal((await validatePrePrReview({ cwd: dir, head: "feature" })).ok, true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("with no head argument, a same-named tag at another commit still resolves the branch head", async () => {
+  const dir = fixtureRepo();
+  try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    git(dir, "update-ref", "refs/tags/feature", "HEAD");
+    commit(dir, "src/a.mjs", "export const a = 3;\n");
+    record(dir);
+    assert.equal((await validatePrePrReview({ cwd: dir })).ok, true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a record for an older head passes when later commits touch docs and tests only, and fails after a logic change", async () => {
   const dir = fixtureRepo();
   try {
@@ -106,7 +132,7 @@ test("pr create refuses before gh when no record exists, and a failing validator
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("pr create proceeds past the guard with a valid record, and the --lightweight path needs none", async () => {
+test("pr create proceeds past the guard with a valid record, and the --lightweight path needs one too", async () => {
   const dir = fixtureRepo();
   try {
     let calls = 0;
@@ -115,7 +141,9 @@ test("pr create proceeds past the guard with a valid record, and the --lightweig
     const env = { PATH: process.env.PATH, DEV_LOOPS_GH_STUB: "1" };
     assert.equal(await createPr(prArgs, { cwd: dir, env, ghCommand: "true", validatePrePrReview }), 0);
     assert.equal(calls, 1);
-    assert.equal(await createPr([...prArgs, "--lightweight"], { cwd: dir, env, ghCommand: "true", validatePrePrReview: () => { throw new Error("must not run"); } }), 0);
+    await assert.rejects(() => createPr([...prArgs, "--lightweight"], { cwd: dir, env: { PATH: process.env.PATH }, ghCommand: "false" }), /pre_pr_review_missing/);
+    assert.equal(await createPr([...prArgs, "--lightweight"], { cwd: dir, env, ghCommand: "true", validatePrePrReview }), 0);
+    assert.equal(calls, 2);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

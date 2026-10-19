@@ -48,7 +48,7 @@ export function writePrePrReviewRecord({ cwd = process.cwd(), verdict, dispositi
 
 /**
  * Validate that a pre-PR review record covers the PR content. Head resolution: `head` (a branch name,
- * default: HEAD of `cwd`) resolves to the local ref and to `origin/<head>`. When both exist and name
+ * default: HEAD of `cwd`) resolves to `refs/heads/<head>` and `refs/remotes/origin/<head>` (branch refs only; a same-named tag never counts). When both exist and name
  * different commits, the guard refuses (the PR opens at the pushed branch, not the local one); when
  * only one exists, that one is used. A record for that head covers it, as does a record for an ancestor
  * head when every file changed since classifies as docs or tests under the repository classify rules.
@@ -61,8 +61,8 @@ export async function validatePrePrReview({ cwd = process.cwd(), head: wanted, b
   const missing = (detail) => ({ ok: false, code: PRE_PR_REVIEW_MISSING, detail: `${detail} (PRE-PR-BEFORE-FIRST-PUSH). Record the review with: ${RECORD_COMMAND}` });
   const resolve = (ref) => { try { return git(cwd, ["rev-parse", "--verify", `${ref}^{commit}`]); } catch { return null; } };
   let branch = wanted;
-  if (!branch) { try { branch = git(cwd, ["symbolic-ref", "--short", "HEAD"]); } catch { /* detached HEAD: compare HEAD only */ } }
-  const heads = (branch ? [resolve(branch), resolve(`origin/${branch}`)] : [resolve("HEAD")]).filter(Boolean);
+  if (!branch) { try { branch = git(cwd, ["symbolic-ref", "HEAD"]).replace(/^refs\/heads\//u, ""); } catch { /* detached HEAD: compare HEAD only */ } }
+  const heads = (branch ? [resolve(`refs/heads/${branch}`), resolve(`refs/remotes/origin/${branch}`)] : [resolve("HEAD")]).filter(Boolean);
   if (!heads.length) return missing(`cannot resolve the branch head ${branch ?? "HEAD"} from git; run git fetch origin and retry`);
   if (new Set(heads).size > 1) return missing(`local ${branch} and origin/${branch} name different commits, so the PR content is not the reviewed local head`);
   const [head] = heads;

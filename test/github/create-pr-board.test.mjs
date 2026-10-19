@@ -294,7 +294,7 @@ test("create-pr --lightweight on an issue-less body enqueues the new PR board it
     try {
       code = await main(
         ["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "t", "--body", "no closing keyword here", "--lightweight"],
-        { env, cwd: tempDir, runChild: mockRunChild(responses) },
+        { env, cwd: tempDir, runChild: mockRunChild(responses), validatePrePrReview: () => ({ ok: true }) },
       );
     } finally {
       process.stdout.write = originalWrite;
@@ -349,7 +349,7 @@ test("create-pr --lightweight on a no-board repo is a silent no-op noted in the 
     try {
       code = await main(
         ["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "t", "--body", "no closing keyword", "--lightweight"],
-        { env, cwd: tempDir, runChild: mockRunChild([]) },
+        { env, cwd: tempDir, runChild: mockRunChild([]), validatePrePrReview: () => ({ ok: true }) },
       );
     } finally {
       process.stdout.write = originalWrite;
@@ -406,7 +406,7 @@ test("create-pr --lightweight with --repo=owner/repo (equals form) enqueues the 
         // --base directly after --repo= proves the value comes from the inline
         // token, not the next argv element.
         ["--repo=owner/repo", "--base", "main", "--head", "feature", "--title", "t", "--body", "no closing keyword here", "--lightweight"],
-        { env, cwd: tempDir, runChild: mockRunChild(responses) },
+        { env, cwd: tempDir, runChild: mockRunChild(responses), validatePrePrReview: () => ({ ok: true }) },
       );
     } finally {
       process.stdout.write = originalWrite;
