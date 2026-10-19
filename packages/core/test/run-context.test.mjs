@@ -74,6 +74,16 @@ test("native Codex discovery is bounded, header-only and rejects uncertain IO", 
   const trackedFs = { ...fs, readSync(...args) { const count = fs.readSync(...args); bytes += count; return count; } };
   assert.equal(resolveNativeCodexContext({ env, fs: trackedFs }).status, "valid");
   assert.equal(bytes, fs.readFileSync(file).indexOf(10) + 1);
+  const oversizedMetadata = codexMetadata();
+  oversizedMetadata.payload.base_instructions.text = "x".repeat(128 * 1024);
+  const oversizedHeader = `${JSON.stringify(oversizedMetadata)}\n`;
+  assert.ok(Buffer.from(oversizedHeader).indexOf(10) > 128 * 1024);
+  fs.writeFileSync(file, oversizedHeader);
+  bytes = 0;
+  const oversizedResult = resolveNativeCodexContext({ env, fs: trackedFs });
+  assert.equal(oversizedResult.status, "rejected");
+  assert.match(oversizedResult.reason, /exceeds byte bound/);
+  assert.ok(bytes <= 128 * 1024);
   fs.copyFileSync(file, path.join(dir, `rollout-duplicate-${codexId}.jsonl`));
   assert.match(resolveNativeCodexContext({ env }).reason, /ambiguous/i);
   fs.unlinkSync(path.join(dir, `rollout-duplicate-${codexId}.jsonl`));
