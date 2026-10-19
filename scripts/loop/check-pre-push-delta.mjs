@@ -21,10 +21,10 @@
  * (`git cat-file`, `git diff`, `git grep`), and authenticates ACT coverage without writes.
  * Pure result checks live in @dev-loops/core/loop/pre-push-delta-review.
  */
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 
 import { clearSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import {
@@ -48,7 +48,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { writeGateDeltaRecord } from "./_gate-delta-record.mjs";
-import { main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
+import { createGitClient, main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
@@ -368,7 +368,10 @@ export async function runCli(
       const log = { log: (...args) => diagnostics.push(args.join(" ")), error: (...args) => diagnostics.push(args.join(" ")) };
       let code;
       try {
-        code = await changelog({ root: resolveRepoRoot(options.worktree), log });
+        const root = resolveRepoRoot(options.worktree);
+        const exec = promisify(execFile);
+        const git = createGitClient(root, (command, args, options) => exec(command, args, { ...options, env: gitEnvNoDirOverrides() }));
+        code = await changelog({ root, git, log });
       } catch (error) {
         diagnostics.push(error.message);
         code = 1;

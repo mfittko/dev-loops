@@ -107,6 +107,38 @@ test("real delta CLI exits 2 for a committed 201-character fragment and records 
   }
 });
 
+test("result-mode changelog ignores inherited Git directory overrides", async () => {
+  const { dir, threadsFile } = threadsFixture();
+  const target = path.join(dir, "target"), decoy = path.join(dir, "decoy");
+  try {
+    fs.mkdirSync(target);
+    fs.mkdirSync(decoy);
+    initGitFixture(target, { branch: "main", commit: "base" });
+    initGitFixture(decoy, { branch: "main", commit: "decoy without origin" });
+    const baseline = runGitFixture(target, ["rev-parse", "HEAD"]);
+    runGitFixture(target, ["update-ref", "refs/remotes/origin/main", baseline]);
+    fs.mkdirSync(path.join(target, "changes"));
+    fs.writeFileSync(path.join(target, "changes/note.md"), `- ${"x".repeat(194)} (#1)\n`);
+    runGitFixture(target, ["add", "."]);
+    runGitFixture(target, ["commit", "-qm", "fix(local): invalid fragment"]);
+    const args = ["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", target];
+    const input = (await runDeltaCli([...args, "--spec-identity", "spec@1"], quiet)).input;
+    const resultPath = path.join(dir, "review.json");
+    fs.writeFileSync(resultPath, JSON.stringify({ ...input.resultShape,
+      actionableItems: input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["checked"] })),
+      newFindings: [], widenedReads: [], outcome: "locally_clear",
+    }));
+    const recordDir = path.join(resolveGateArtifactTmpRoot(target), "gate-delta");
+    assert.equal(fs.existsSync(recordDir), false);
+    const out = spawnSync(process.execPath, [path.resolve("scripts/loop/check-pre-push-delta.mjs"), ...args, "--result", resultPath, "--invocation", "1"], {
+      cwd: dir, encoding: "utf8", env: { ...process.env, GIT_DIR: path.join(decoy, ".git"), GIT_WORK_TREE: decoy },
+    });
+    assert.equal(out.status, 2, out.stderr);
+    assert.match(JSON.parse(out.stderr).error, /^LIFECYCLE-CHANGELOG-COMPLETENESS/);
+    assert.equal(fs.existsSync(recordDir), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("without --result the CLI prints the cumulative delta input for the worktree head", async () => {
   const { dir, actList } = fixture();
   const out = await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], headAt(B));
