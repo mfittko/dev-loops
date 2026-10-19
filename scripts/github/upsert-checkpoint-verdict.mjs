@@ -1702,9 +1702,9 @@ function selectGateEvidence(evidence, gate) {
 // `surface` arrives already coerced by core's normalizeVerdictSurface (via
 // detectCheckpointEvidence's normalizeGateSummary/normalizeGateMarkerSummary);
 // pass it through rather than restating the vocabulary a second time here.
-function summarizeExistingComment({ strict, marker, headSha }) {
+export function summarizeExistingComment({ strict, marker, headSha }) {
   const strictSameHead = strict?.visible === true && strict.headSha === headSha ? strict : null;
-  const markerSameHead = marker?.visible === true && marker.headSha === headSha ? marker : null;
+  const markerSameHead = marker?.visible === true && marker.headSha === headSha && !marker.carriedFrom ? marker : null;
   if (markerSameHead && (!strictSameHead || markerSameHead.commentId !== strictSameHead.commentId)) {
     return {
       kind: "marker",

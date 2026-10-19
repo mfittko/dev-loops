@@ -35,6 +35,7 @@ import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from ".
 import { flattenPaginatedSlurp, resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
+import { carryGateMarker, isCarryCandidate } from "./_carried-verdict.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
@@ -63,6 +64,9 @@ Optional:
                               unjudged, or unreadable act list). Intended
                               for server-side/CI callers only; client-side callers
                               should omit this flag to keep full enforcement.
+Optional marker field: carriedFrom (the origin head of a carried verdict). A carried
+marker's headSha is the current head and differs from the comment summary's
+headSha; carriedFrom names the origin head the verdict was posted at.
 Output (stdout, JSON; always includes preMergeGateCheck):
   {
     "ok": true,
@@ -880,7 +884,8 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // The act list is read independently of requireFanoutEvidence; `actList` is
   // only added when the current-head pre_approval_gate ledger exists.
   const paHead = preApprovalGateMarker?.headSha ?? currentHeadSha;
-  const actList = preApprovalGateMarker?.visible && paHead === currentHeadSha
+  // A carried marker (carriedFrom === its origin head) reads the act list at the origin head, so a carry never loosens the ADR 0089 check.
+  const actList = preApprovalGateMarker?.visible && (paHead === currentHeadSha || preApprovalGateMarker.carriedFrom === paHead)
     ? await readActListInAny(checkouts, buildLogPath({ repo, pr, gate: "pre_approval_gate", headSha: paHead, tmpRoot: "tmp" }), preApprovalGateMarker.executionMode)
     : null;
   const withActList = (enforcement) => (actList ? { ...enforcement, actList } : enforcement);
@@ -1021,7 +1026,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
 // wrapper below strips them so no OTHER caller (e.g.
 // detect-pr-gate-coordination-state.mjs, which durably stores the whole
 // returned object) can re-expose them.
-async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd() } = {}) {
+async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd(), recordCarry = false } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({
     repo: options.repo,
     pr: options.pr,
@@ -1106,8 +1111,30 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   const allComments = [...commentsPayload, ...prReviews];
   const commentSummary = summarizeGateReviewComments(allComments);
   const markerSummary = summarizeGateReviewCommentMarkers(allComments, { headSha: currentHeadSha });
-  const draftGateMarker = normalizeGateMarkerSummary(markerSummary.draft_gate);
-  const preApprovalGateMarker = normalizeGateMarkerSummary(markerSummary.pre_approval_gate);
+  // The head-filtered summary hides markers at other heads, so the carry candidate is the latest
+  // marker per gate from an unfiltered summary. Only an actual carry replaces the output marker.
+  const anyHeadSummary = summarizeGateReviewCommentMarkers(allComments);
+  // baseRefName is fetched lazily, only for a clean contract-complete cross-head candidate,
+  // so non-carry flows make no extra gh call. A fetch failure means no carry (fail closed).
+  let baseRefPromise = null;
+  const fetchBaseRef = () => {
+    baseRefPromise ??= runGhJson(
+      ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "baseRefName"],
+      { env, ghCommand, runChild, restFallback: () => restFetchPrView(options.repo, options.pr, env) },
+    ).then((payload) => (typeof payload?.baseRefName === "string" && payload.baseRefName.trim() ? `origin/${payload.baseRefName.trim()}` : null), () => null);
+    return baseRefPromise;
+  };
+  const carryCtx = (gate, baseRef) => ({ gate, repo: options.repo, pr: options.pr, currentHeadSha, baseRef, repoRoot: resolveRepoRoot(cwd), record: recordCarry });
+  const resolveGateMarker = async (gate) => {
+    const filtered = normalizeGateMarkerSummary(markerSummary[gate]);
+    if (filtered.visible) return { marker: filtered, fanoutMarker: filtered };
+    const candidate = normalizeGateMarkerSummary(anyHeadSummary[gate]);
+    const carried = await carryGateMarker(candidate, carryCtx(gate, isCarryCandidate(candidate, currentHeadSha) ? await fetchBaseRef() : null));
+    // Fan-out keeps the origin-head marker for a carried gate so the ledger path stays at the origin head.
+    return carried.carriedFrom ? { marker: carried, fanoutMarker: { ...candidate, carriedFrom: carried.carriedFrom } } : { marker: filtered, fanoutMarker: filtered };
+  };
+  const { marker: draftGateMarker, fanoutMarker: rawDraftGateMarker } = await resolveGateMarker("draft_gate");
+  const { marker: preApprovalGateMarker, fanoutMarker: rawPreApprovalGateMarker } = await resolveGateMarker("pre_approval_gate");
   // A config load error throws config_load_failed: fan-out evidence
   // enforcement is never disabled by an unreadable config.
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(cwd) });
@@ -1141,8 +1168,8 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     repo: options.repo,
     pr: options.pr,
     currentHeadSha,
-    draftGateMarker,
-    preApprovalGateMarker,
+    draftGateMarker: rawDraftGateMarker,
+    preApprovalGateMarker: rawPreApprovalGateMarker,
     config,
     cwd,
     hasFullLabel,

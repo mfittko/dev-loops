@@ -4636,3 +4636,48 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES a ledger built from
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("detectCheckpointEvidence carries clean gate markers from an earlier head across a base-only merge only when the carry is recorded (#2752)", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-carry-"));
+  try {
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+    const git = (...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd: dir, env, encoding: "utf8" }).trim();
+    const put = async (f, c) => { await mkdir(path.dirname(path.join(dir, f)), { recursive: true }); await writeFile(path.join(dir, f), c); };
+    git("init", "-q", "-b", "main");
+    await put("base.txt", "base\n"); git("add", "-A"); git("commit", "-qm", "base");
+    git("checkout", "-qb", "pr");
+    await put("src/x.mjs", "x\n"); git("add", "-A"); git("commit", "-qm", "pr");
+    const headA = git("rev-parse", "HEAD");
+    git("checkout", "-q", "main");
+    await put("docs/a.md", "changed\n"); git("add", "-A"); git("commit", "-qm", "main docs");
+    git("update-ref", "refs/remotes/origin/main", "main");
+    git("checkout", "-q", "pr"); git("merge", "-q", "--no-edit", "main");
+    const headB = git("rev-parse", "HEAD");
+    const verdictBody = (gate, next) => ["Gate review: " + gate, `Reviewed head SHA: ${headA}`, "Verdict: clean", "Findings summary: no issues found", `Next action: ${next}`].join("\n");
+    const comments = [
+      { id: 1, body: verdictBody("draft_gate", "mark ready for review"), updated_at: "2026-05-29T21:00:00Z" },
+      { id: 2, body: verdictBody("pre_approval_gate", "await final human approval"), updated_at: "2026-05-29T22:00:00Z" },
+    ];
+    const runChild = async (_cmd, args) => {
+      const joined = args.join(" ");
+      const out = joined.startsWith("pr view") ? { headRefOid: headB, baseRefName: "main" }
+        : joined.includes("/issues/") ? [comments]
+          : joined.includes("/reviews") ? [[]] : null;
+      if (out === null) return { code: 0, stdout: "", stderr: "" };
+      return { code: 0, stdout: JSON.stringify(out), stderr: "" };
+    };
+    const run = (extra) => detectCheckpointEvidence({ repo: "owner/repo", pr: 2819 }, { env: { GH_TOKEN: "t" }, ghCommand: "gh", runChild, cwd: dir, ...extra });
+
+    const uncarried = await run({});
+    assert.equal(uncarried.preApprovalGateMarker.carriedFrom, undefined);
+    assert.equal(uncarried.preApprovalGateMarker.visible, false);
+
+    const carried = await run({ recordCarry: true });
+    for (const marker of [carried.preApprovalGateMarker, carried.draftGateMarker]) {
+      assert.equal(marker.carriedFrom, headA);
+      assert.equal(marker.headSha, headB);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

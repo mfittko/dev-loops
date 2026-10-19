@@ -224,3 +224,38 @@ test("a finding that is not an object or lacks a non-empty string summary, canon
     }
   }
 });
+
+// A carried pre_approval_gate verdict (ADR 0156) must not loosen the ADR 0089 act-list check:
+// the ledger is read at the origin head (marker.carriedFrom), the same place an uncarried verdict reads it.
+const CUR = "fedcba9876543210";
+async function probeCarried(repo, marker) {
+  const enforcement = await buildFanoutEnforcement({
+    repo: "owner/repo", pr: "42", currentHeadSha: CUR,
+    draftGateMarker: NO_DRAFT_MARKER, preApprovalGateMarker: marker, config: CONFIG, cwd: repo,
+  });
+  const evidence = { ...cleanEvidenceFor(CUR), preApprovalGateMarker: { ...cleanEvidenceFor(CUR).preApprovalGateMarker, carriedFrom: HEAD } };
+  return { enforcement, check: buildPreMergeGateCheck(evidence, 0, null, enforcement) };
+}
+
+test("a carried marker with an open act item in the origin-head ledger blocks the merge", async () => {
+  await withLedgerRepos([{ findings: [ACT_ITEM] }], async (repo) => {
+    const { enforcement, check } = await probeCarried(repo, { ...PA_MARKER, carriedFrom: HEAD });
+    assert.equal(enforcement.actList.open.items.length, 1);
+    assert.ok(check.failures.some((f) => f.includes("judge act list is not empty")), JSON.stringify(check.failures));
+  });
+});
+
+test("a carried marker with an empty act list in the origin-head ledger leaves the act-list check passing", async () => {
+  await withLedgerRepos([{ findings: [REJECTED_ITEM] }], async (repo) => {
+    const { enforcement, check } = await probeCarried(repo, { ...PA_MARKER, carriedFrom: HEAD });
+    assert.equal(enforcement.actList.open, null);
+    assert.ok(!check.failures.some((f) => f.includes("judge act list")), JSON.stringify(check.failures));
+  });
+});
+
+test("an uncarried stale-head marker never supplies an act list", async () => {
+  await withLedgerRepos([{ findings: [ACT_ITEM] }], async (repo) => {
+    const { enforcement } = await probeCarried(repo, PA_MARKER);
+    assert.equal(enforcement.actList, undefined);
+  });
+});
