@@ -1789,7 +1789,7 @@ for (const route of ["THREAD", "ACT", "HISTORICAL_CONSTRUCT", "LEGACY", "AUTHORI
     const parsedThreads = { threads: [{ id: "PRRT_OLD", isResolved: true }], comments: [{ threadId: "PRRT_OLD", body: `Fixed in commit ${candidate}.` }] };
     if (isAct && !legacy) nodes.push({ id: "PRRT_WARNING", isResolved: false, comments: { nodes: [{ id: "c2", databaseId: 2, body: `<!-- dev-loops:finding ${warning.fingerprint} severity=low angle=correctness round=1 -->`, author: { login: "bot", __typename: "User" } }] } });
     const comparison = (sha) => ({ assertArgs: ["api", `repos/${REPO}/compare/${sha}...${candidate}`], stdout: JSON.stringify({ status: sha === candidate ? "identical" : "ahead" }) });
-    const entries = (constructing = false) => [...construct ? [comparison(head), comparison(candidate)] : [], { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: candidate }) }, { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) }, ...(isAct ? [{ assertArgs: ["api", "user"], stdout: '{"login":"bot"}' }] : []), ...constructing ? [] : [...ciEntries(candidate), comparison(candidate)]];
+    const entries = (constructing = false, replying = false) => [...construct ? [comparison(head), comparison(candidate)] : [], { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: candidate }) }, { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) }, ...(isAct ? [{ assertArgs: ["api", "user"], stdout: '{"login":"bot"}' }] : []), ...constructing ? [] : [...ciEntries(candidate), comparison(candidate), ...(replying && isAct && !legacy ? [{ assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/2/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` }] : [])]];
     const featureVerifierPath = path.join(wt, "scripts/github/verify-fixer-disposition.mjs");
     assert.equal(await readFile(featureVerifierPath, "utf8"), await readFile(path.join(checkout, "scripts/github/verify-fixer-disposition.mjs"), "utf8"));
     const featureVerifier = await import(pathToFileURL(featureVerifierPath).href);
@@ -1801,9 +1801,9 @@ for (const route of ["THREAD", "ACT", "HISTORICAL_CONSTRUCT", "LEGACY", "AUTHORI
       assert.equal(result.complete, undefined);
       assert.deepEqual(JSON.parse(await readFile(result.outputRef, "utf8")).siteCoverage, completion.siteCoverage);
     }
-    const completed = await featureVerifier.verifyFixerDisposition(options, runtime(makeGhMock(entries())));
+    const completed = await featureVerifier.verifyFixerDisposition(options, runtime(makeGhMock(entries(false, true))));
     assert.equal(completed.complete, true);
-    assert.deepEqual(completed.actions, []);
+    assert.deepEqual(completed.actions, isAct && !legacy ? [{ threadId: "PRRT_WARNING", ok: true, step: "residual_replied" }] : []);
     if (isAct && !legacy) assert.equal(nodes[1].isResolved, false, "deferred residual receives no Fixed reply or resolution");
     const checkpoint = [await readFile(completed.checkpointPath, "utf8"), (await stat(completed.checkpointPath)).mtimeMs];
     const featureResolver = await import(pathToFileURL(path.join(wt, "scripts/loop/detect-pr-gate-coordination-state.mjs")).href);
