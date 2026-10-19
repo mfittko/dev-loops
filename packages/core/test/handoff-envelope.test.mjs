@@ -19,6 +19,7 @@ import {
   lookupAcceptanceTemplate,
   buildWorktreeSlug,
   flattenSlugSegment,
+  resolveWorktreePath,
 } from "../src/loop/handoff-envelope.mjs";
 
 import {
@@ -869,6 +870,40 @@ test("cwd: derived from repoRoot + issue slug", () => {
   );
 
   assert.equal(env.cwd, "/home/user/repo/tmp/worktrees/dev-loops/issue-42");
+});
+
+test("cwd: real tracker-local routing retains sanctioned issue acquisition identity", () => {
+  for (const issue of [2335, 2508]) {
+    const bundle = resolveAuthoritativeStartupResumeBundle({
+      targetPreference: "prefer_local",
+      currentState: {
+        target: { kind: "issue", issue }, ownership: "copilot", nextActor: "copilot",
+        status: "active", authorization: "needs_confirmation",
+      },
+      issueLinkageResolution: "resolved_no_open_pr", issueReadiness: "ready",
+      issueAssignmentState: "assigned_to_copilot", artifactState: "not_applicable", loopState: "awaiting_triage",
+    });
+    assert.equal(bundle.bundleKind, "resolved");
+    assert.equal(bundle.selectedStrategy, "local_implementation");
+    assert.equal(bundle.activeArtifact.kind, "local_phase");
+    assert.equal(bundle.activeArtifact.phase, `issue-${issue}`);
+    const envelope = buildDevLoopHandoffEnvelope(bundle, defaultSettings, {}, { ...defaultOptions, repoRoot: "/repo" });
+    assert.equal(envelope.cwd, resolveWorktreePath({ repoRoot: "/repo", kind: "issue", number: issue }));
+    assert.equal(envelope.target.kind, "local_phase");
+    assert.equal(envelope.target.phase, bundle.activeArtifact.phase);
+  }
+});
+
+test("cwd: explicit phases and branches keep their own identity", () => {
+  for (const [input, suffix] of [
+    [localPhaseBundle("issue-2335", { issue: 2335 }), "phase-2335-issue-2335"],
+    [localPhaseBundle("custom", { issue: 2335 }), "phase-2335-custom"],
+    [localBranchBundle("feature/local", { issue: 2335 }), "feature-local"],
+    [prBundle(99), "pr-99"],
+  ]) {
+    input.bundle.issueLinkageResolution = "not_applicable";
+    assert.equal(deriveCwd(input.bundle, { repoRoot: "/repo" }), `/repo/tmp/worktrees/dev-loops/${suffix}`);
+  }
 });
 
 test("cwd: null when no repoRoot or explicit cwd", () => {

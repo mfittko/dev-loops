@@ -21,6 +21,18 @@ template.
 | Envelope builder (timestamp) | `gateState.derivedAt` (build time, not detector-derived) |
 | Canonical sanctioned-command map (`scripts/loop/sanctioned-commands.mjs`) | `sanctionedCommands` |
 
+Tracker-backed local routing may synthesize a `local_phase` target with phase
+`issue-<number>`. When its strategy is `local_implementation` and authoritative
+linkage is `resolved_no_open_pr`, derive `cwd` with the sanctioned issue worktree
+identity (`resolveWorktreePath`), preserving the resolver target and action.
+Explicit phases (including the same label with `not_applicable` linkage) and local
+branches retain their own slug paths. Missing or conflicting startup authority
+still requires reconciliation; a path label alone never establishes issue authority.
+
+In dev mode, correct a shared derivation mismatch at this owning seam and prove
+the unchanged startup-to-coordinator boundary in isolation. Do not repair an
+emitted envelope by hand or treat an isolated test as native continuation proof.
+
 ## Sanctioned commands (MANDATORY DEFAULT — issue #1081)
 
 `sanctionedCommands` is a **mandatory default** element of every handoff
