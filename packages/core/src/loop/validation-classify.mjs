@@ -81,8 +81,8 @@ function checkoutRoot() {
 }
 
 /**
- * Pick the configured check for a single changed surface; mixed or unmapped
- * paths need full ownership. Without explicit `rules`, they come from the
+ * Union configured checks across mapped surfaces; unmapped, empty-command or
+ * unsafe templated paths need full ownership. Without explicit `rules`, they come from the
  * checkout's `.devloops` `validation.paths` (first match wins) at the git repo
  * root, an author-local worker self-check. The gate refuses a checkout
  * `validation` block that differs from the base branch (ADR 0137), so a
@@ -102,7 +102,7 @@ export function resolveTargetedValidation(paths, rules = readValidationPaths(che
     const gateSuites = [...(rule.gateSuites ?? []), ...commands.filter((c) => c.startsWith("bun run ")).map((c) => c.slice(8))];
     return { surface: rule.surface, commands, gateSuites };
   });
-  if (checks.includes(null) || new Set(checks.map((check) => check.surface)).size !== 1) return full;
+  if (checks.includes(null)) return full;
   const unique = (list) => [...new Set(list)].sort();
   return { profile: "targeted", commands: unique(checks.flatMap((c) => c.commands)), gateSuites: unique(checks.flatMap((c) => c.gateSuites)) };
 }

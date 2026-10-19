@@ -274,10 +274,10 @@ export const ValidationConfig = z
     fullCommand: ValidationCommand.describe("Optional full-validation command for `local` mode, run through `sh -c` at the repo root (for example `cargo test`). Without it, `local` mode runs the package.json `verify` script through Bun.").optional(),
     paths: z.array(z.strictObject({
       match: z.union([RepoRelativeGlob, z.array(RepoRelativeGlob).min(1)]).describe("Glob or globs this rule covers."),
-      surface: z.string().min(1).describe("Surface name. A change set that spans surfaces, or an unmapped path, needs full validation."),
+      surface: z.string().min(1).describe("Surface name. Fully mapped change sets combine checks across surfaces."),
       commands: z.array(ValidationCommand).describe("Targeted worker commands. `{path}` expands to each matching changed path, which must use only [A-Za-z0-9._/-]. An empty list pins matching paths to full validation."),
       gateSuites: z.array(z.string().min(1)).describe("Explicit gate `--suite` names; `bun run <name>` commands add theirs.").optional(),
-    })).describe("Ordered, first-match-wins path-to-command map for targeted worker checks (`resolveTargetedValidation`).").optional(),
+    })).describe("Ordered, first-match-wins path-to-command map for targeted worker checks (`resolveTargetedValidation`). When every path maps to non-empty commands, use the sorted, deduplicated union of commands and gateSuites across surfaces. An unmapped, empty-command or unsafe templated path needs full validation.").optional(),
   })
   .describe("Validation resolution: gate mode, optional full command, and a path-to-command map. Only the `.devloops` family file is read; the key has no effect in `.pi/dev-loop/defaults.*`. Requires a dev-loops CLI that knows the `validation` key.");
 
