@@ -267,7 +267,7 @@ disposition: all resolved means tackled; any residual means deferred/open withou
 A scalar fingerprint cannot narrow root membership, and distinct roots sharing a fingerprint each
 need an entry. This completion exception supplies no lifecycle gate evidence.
 
-After the push is confirmed and CI is green (ADR 0165), the full worker runs
+After the push is confirmed and CI is green (ADR 0166), the full worker runs
 `--construct` for every full-phase order (ACT and THREAD). For optional authenticated typed completion (ADR 0149), it uses
 `verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <plan> --construct`
 before normal verification. Follow the complete source,

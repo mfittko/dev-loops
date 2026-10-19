@@ -1,4 +1,4 @@
-# 0165. Liveness-first fixer lifecycle requirements
+# 0166. Liveness-first fixer lifecycle requirements
 
 ## Status
 
@@ -10,7 +10,7 @@ Amends [0155](./0155-advisory-fixer-disposition-boundary.md), [0107](./0107-fixe
 
 The gate fix loop assumes that only the fixer commits, and only from an emitted work order. Every evidence record binds to the fixer's latest commit. Any other event makes the next check refuse, and no sanctioned exit exists. In the v1.0.7 drain this deadlocked or nearly deadlocked nine PRs. About ten fixer re-dispatches came from the push and `--construct` order alone. ADR 0155 made the boundary advisory as a stopgap and named this redesign.
 
-The numbering check found 0165 free on origin/main.
+The numbering check found 0166 free on origin/main.
 
 ## Decision
 

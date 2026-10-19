@@ -1298,7 +1298,7 @@ unique required Delta/completion-input reads and both completion authorities; mi
 optional markers cannot fall back to ordinary delivery. THREAD rejects ACT/completion-input
 mixing and every extra delivered ID before checkpoint or reply/resolution mutation, while
 retaining required pinned IDs and ignoring unrelated live threads. THREAD reports are built by the
-verifier's `--construct` from the pinned threads source and the clearing delta record (ADR 0165).
+verifier's `--construct` from the pinned threads source and the clearing delta record (ADR 0166).
 The emitted task precedes generic guidance and immutable JSON identity evidence: preserve the
 branch/worktree/source-hash bootstrap, authorize only the exact own output and evidenced
 delivery/reply/resolution verification, and perform no source edit/test, stage, commit, push,
@@ -1310,7 +1310,7 @@ with unchanged marker behavior and ordinary renderer bytes. Main-checkout consum
 ship this support before a later producer enables delivery-only reentry; these fixtures do
 not establish producer eligibility, new publication, runtime worker qualification or recovery.
 
-The `--construct` operation (ADR 0149, extended by ADR 0165) builds the ACT report from completion
+The `--construct` operation (ADR 0149, extended by ADR 0166) builds the ACT report from completion
 input and the THREAD report from the threads source, the clearing delta record (its `candidateHead`
 is the pushed head) and the pushed head. Normal verification and `--check` accept only a report that
 `--construct` wrote (a sha256 mark beside the output). For a plan that has a source they also refuse
