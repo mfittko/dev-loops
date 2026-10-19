@@ -321,6 +321,7 @@ export const SUBCOMMAND_ROUTES = {
     "pre-push-delta":       "scripts/loop/check-pre-push-delta.mjs",
     "pre-pr-review":        "scripts/loop/record-pre-pr-review.mjs",
     "spec-lint":            "scripts/loop/spec-lint.mjs",
+    "implementation-brief": "scripts/loop/implementation-brief.mjs",
   },
   pr: {
     create:             "scripts/github/create-pr.mjs",
@@ -440,6 +441,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "pre-push-delta": "Build the delta-mode pre-push review input or check its result before an act-list or thread-route fix push",
     "pre-pr-review": "Write the pre-PR review record for the current head after the stale-surface sweep (required by pr create); --scan prints the sweep only",
     "spec-lint": "Lint an issue body offline against required-rules.json and docs/decisions",
+    "implementation-brief": "Print the canonical review expectations of a spec body, offline and read-only",
   },
   pr: {
     create: "Create PR (always draft, self-assigned by default)",

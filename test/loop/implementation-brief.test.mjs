@@ -1,0 +1,288 @@
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
+import { afterEach, test } from "bun:test";
+
+import { detectAcDodMatrix } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { runCli } from "../../cli/index.mjs";
+import { buildImplementationBrief, main } from "../../scripts/loop/implementation-brief.mjs";
+
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+const tempDirs = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+const MATRIX = [
+  "## AC / DoD matrix",
+  "",
+  "| Acceptance criterion | Required completion evidence |",
+  "| --- | --- |",
+  "| The brief carries the matrix. | A fixture body yields the same rows. |",
+  "| The brief lists the non-goals. | The non-goal items match the body. |",
+  "",
+].join("\n");
+
+function record({ title, status = "Accepted — 2026-01-01", body = "Text." }) {
+  return `# ${title}\n\n## Status\n\n${status}\n\n## Context\n\n${body}\n`;
+}
+
+async function fixtureRepo({ rules, decisions = {}, files = {} } = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "implementation-brief-"));
+  tempDirs.push(root);
+  await mkdir(path.join(root, "skills", "docs"), { recursive: true });
+  await writeFile(
+    path.join(root, "skills", "docs", "required-rules.json"),
+    rules === undefined
+      ? JSON.stringify({ requiredRules: [{ id: "KNOWN-RULE-ID" }], optOutRules: [] })
+      : typeof rules === "string" ? rules : JSON.stringify(rules),
+  );
+  if (Object.keys(decisions).length > 0) {
+    await mkdir(path.join(root, "docs", "decisions"), { recursive: true });
+  }
+  for (const [name, text] of Object.entries(decisions)) {
+    await writeFile(path.join(root, "docs", "decisions", name), text);
+  }
+  for (const [relPath, text] of Object.entries(files)) {
+    const target = path.join(root, ...relPath.split("/"));
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, text);
+  }
+  return root;
+}
+
+async function writeBody(root, body) {
+  const file = path.join(root, "spec-body.md");
+  await writeFile(file, body);
+  return file;
+}
+
+function buffer() {
+  let text = "";
+  return { stream: new Writable({ write(chunk, _enc, cb) { text += chunk; cb(); } }), read: () => text };
+}
+
+async function run(io, argv) {
+  const code = await main(argv, { stdout: io.stdout.stream, stderr: io.stderr.stream });
+  return { code, stdout: io.stdout.read(), stderr: io.stderr.read() };
+}
+
+function io() {
+  return { stdout: buffer(), stderr: buffer() };
+}
+
+test("the brief carries the body's AC/DoD matrix rows and non-goals unchanged", async () => {
+  const root = await fixtureRepo();
+  const body = `${MATRIX}\n## Non-goals\n\n- No reuse map.\n- No gate credit.\n`;
+  const brief = await buildImplementationBrief({ body, repoRoot: root });
+  assert.deepEqual(brief.matrix, detectAcDodMatrix(body).rows);
+  assert.equal(brief.matrix.length, 2);
+  assert.deepEqual(brief.nonGoals, ["No reuse map.", "No gate credit."]);
+  assert.deepEqual(brief.findings, []);
+});
+
+test("a body without a matrix yields matrix null, a missing_ac_dod_matrix finding and exit 0", async () => {
+  const root = await fixtureRepo();
+  const body = "## Problem\n\nProse only.\n";
+  const brief = await buildImplementationBrief({ body, repoRoot: root });
+  assert.equal(brief.matrix, null);
+  assert.deepEqual(brief.findings.map(({ kind }) => kind), ["missing_ac_dod_matrix"]);
+  assert.deepEqual(brief.nonGoals, []);
+
+  const output = io();
+  const bodyFile = await writeBody(root, body);
+  assert.equal((await run(output, ["--body-file", bodyFile, "--repo-root", root])).code, 0);
+  assert.equal(JSON.parse(output.stdout.read()).matrix, null);
+});
+
+test("cited ADRs, accepted ADRs naming a touched path and amending records are all listed", async () => {
+  const root = await fixtureRepo({
+    decisions: {
+      "0010-base.md": record({ title: "0010. Base record" }),
+      "0011-amender.md": record({
+        title: "0011. Amender record",
+        status: "Accepted — 2026-01-02\n\nAmends [0010](./0010-base.md): narrows it.",
+      }),
+      "0020-names-a-path.md": record({
+        title: "0020. Names a path",
+        status: "Accepted — 2026-01-03",
+        body: "Applies to src/touched.mjs only.",
+      }),
+      "0030-proposed.md": record({
+        title: "0030. Proposed",
+        status: "Proposed",
+        body: "Also mentions src/touched.mjs.",
+      }),
+    },
+    files: { "src/touched.mjs": "export const value = 1;\n" },
+  });
+  const brief = await buildImplementationBrief({
+    body: "Follows ADR 0010.",
+    repoRoot: root,
+    paths: ["src/touched.mjs"],
+  });
+
+  assert.deepEqual(brief.adrs.map(({ number }) => number), ["0010", "0020"]);
+  const [base, byPath] = brief.adrs;
+  assert.equal(base.title, "Base record");
+  assert.equal(base.path, "docs/decisions/0010-base.md");
+  assert.deepEqual(base.amendedBy.map(({ number, title, path: recordPath }) => ({ number, title, path: recordPath })), [
+    { number: "0011", title: "Amender record", path: "docs/decisions/0011-amender.md" },
+  ]);
+  assert.equal(base.supersededBy, null);
+  assert.equal(byPath.title, "Names a path");
+});
+
+test("adrNeed carries the ADR need section, and reads unstated when the body has none", async () => {
+  const root = await fixtureRepo();
+  const stated = await buildImplementationBrief({
+    body: "## ADR need\n\nOne record for the new CLI verb.\n\n## Problem\n\nText.\n",
+    repoRoot: root,
+  });
+  assert.equal(stated.adrNeed, "One record for the new CLI verb.");
+  const unstated = await buildImplementationBrief({ body: MATRIX, repoRoot: root });
+  assert.equal(unstated.adrNeed, "unstated");
+});
+
+test("adrTripwirePaths holds the tripwire-shaped touched paths from the imported matchers", async () => {
+  const root = await fixtureRepo({
+    files: {
+      "skills/docs/example-contract.md": "# Example contract\n",
+      "packages/core/src/config/extension-defaults.yaml": "gates: {}\n",
+      ".devloops": "version: 1\n",
+      "scripts/loop/thing.mjs": "export const thing = 1;\n",
+    },
+  });
+  const brief = await buildImplementationBrief({
+    body: MATRIX,
+    repoRoot: root,
+    paths: [
+      "skills/docs/example-contract.md",
+      "packages/core/src/config/extension-defaults.yaml",
+      ".devloops",
+      "scripts/loop/thing.mjs",
+    ],
+  });
+  assert.deepEqual(brief.adrTripwirePaths, [
+    ".devloops",
+    "packages/core/src/config/extension-defaults.yaml",
+    "skills/docs/example-contract.md",
+  ]);
+});
+
+test("requiredReads always names the structural-quality rule and the changelog fragment README", async () => {
+  const root = await fixtureRepo();
+  for (const body of [MATRIX, "## Problem\n\nProse only.\n"]) {
+    const brief = await buildImplementationBrief({ body, repoRoot: root });
+    assert.deepEqual(brief.requiredReads, ["skills/docs/structural-quality.md", "changes/README.md"]);
+  }
+});
+
+test("declared paths are resolved, de-duplicated and reported when missing", async () => {
+  const root = await fixtureRepo({ files: { "scripts/loop/known.mjs": "export const known = 1;\n" } });
+  const brief = await buildImplementationBrief({
+    body: MATRIX,
+    repoRoot: root,
+    paths: ["scripts/loop/known.mjs", "scripts/loop/missing.mjs", "scripts/loop/known.mjs"],
+  });
+  assert.deepEqual(brief.touchedPaths, ["scripts/loop/known.mjs"]);
+  assert.deepEqual(brief.unresolvedPaths, ["scripts/loop/missing.mjs"]);
+});
+
+test("an absolute or parent-relative --paths entry exits 1 and prints no brief", async () => {
+  const root = await fixtureRepo();
+  const bodyFile = await writeBody(root, MATRIX);
+  for (const bad of ["/etc/hosts", "../outside.mjs", "scripts/../../outside.mjs"]) {
+    const output = io();
+    const result = await run(output, ["--body-file", bodyFile, "--repo-root", root, "--paths", bad]);
+    assert.equal(result.code, 1, `${bad} must exit 1`);
+    assert.equal(result.stdout, "", `${bad} must print no brief`);
+    const error = JSON.parse(result.stderr.trim());
+    assert.equal(error.ok, false);
+    assert.match(error.error, /repo-relative path/u);
+  }
+});
+
+test("--help documents the flags, the output shape and the exit codes", async () => {
+  const output = io();
+  assert.equal((await run(output, ["--help"])).code, 0);
+  const usage = output.stdout.read();
+  for (const fragment of ["--body-file", "--paths", "--repo-root", "--jq", "Exit codes", "adrTripwirePaths", "requiredReads"]) {
+    assert.ok(usage.includes(fragment), `--help must document ${fragment}`);
+  }
+});
+
+test("a missing --body-file and an unknown flag are usage errors that exit 1", async () => {
+  for (const argv of [["--repo-root", repoRoot], ["--body-file", "spec.md", "--bogus"]]) {
+    const output = io();
+    assert.equal((await run(output, argv)).code, 1);
+    assert.equal(output.stdout.read(), "");
+    assert.equal(JSON.parse(output.stderr.read().trim()).ok, false);
+  }
+});
+
+test("a malformed required-rules.json exits 2", async () => {
+  const root = await fixtureRepo({ rules: '{"requiredRules": "not-an-array"}' });
+  const bodyFile = await writeBody(root, MATRIX);
+  const output = io();
+  const result = await run(output, ["--body-file", bodyFile, "--repo-root", root]);
+  assert.equal(result.code, 2);
+  assert.equal(result.stdout, "");
+  assert.match(JSON.parse(result.stderr.trim()).error, /Malformed registry/u);
+});
+
+test("--jq filters the brief through the shared emitResult seam", async () => {
+  const root = await fixtureRepo();
+  const bodyFile = await writeBody(root, MATRIX);
+  const output = io();
+  const result = await run(output, ["--body-file", bodyFile, "--repo-root", root, "--jq", ".requiredReads | length"]);
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.trim(), "2");
+});
+
+test("the same inputs produce byte-identical output across two checkout roots", async () => {
+  const tree = {
+    decisions: { "0010-base.md": record({ title: "0010. Base record" }) },
+    files: { "src/touched.mjs": "export const value = 1;\n", ".devloops": "version: 1\n" },
+  };
+  const first = await fixtureRepo(tree);
+  const second = await fixtureRepo(tree);
+  const body = `${MATRIX}\nFollows ADR 0010.\n`;
+  const argvFor = (root, bodyFile) => ["--body-file", bodyFile, "--repo-root", root, "--paths", "src/touched.mjs"];
+  const left = io();
+  const right = io();
+  assert.equal((await run(left, argvFor(first, await writeBody(first, body)))).code, 0);
+  assert.equal((await run(right, argvFor(second, await writeBody(second, body)))).code, 0);
+  assert.equal(left.stdout.read(), right.stdout.read());
+});
+
+test("cli/index.mjs registers and describes the implementation-brief verb", async () => {
+  const viaCli = (argv) => {
+    const output = io();
+    return runCli({ argv, stdout: output.stdout.stream, stderr: output.stderr.stream, cwd: repoRoot })
+      .then((code) => ({ code, stdout: output.stdout.read() }));
+  };
+  const help = await viaCli(["loop", "implementation-brief", "--help"]);
+  assert.equal(help.code, 0);
+  assert.ok(help.stdout.includes("Usage: dev-loops loop implementation-brief"));
+  assert.equal((await viaCli(["loop", "implementation-brief"])).code, 1);
+  const described = await viaCli(["loop", "--help"]);
+  assert.match(described.stdout, /implementation-brief\s+Print the canonical review expectations/u);
+});
+
+test("both the developer agent source and its generated mirror carry the brief instruction", async () => {
+  const source = await readFile(path.join(repoRoot, "agents/developer.agent.md"), "utf8");
+  const generated = await readFile(path.join(repoRoot, ".claude/agents/developer.md"), "utf8");
+  assert.ok(source.includes("node <dev-loops-package-root>/cli/index.mjs loop implementation-brief"));
+  assert.ok(generated.includes("dev-loops-run cli/index.mjs loop implementation-brief"));
+  assert.ok(!generated.includes("<dev-loops-package-root>"), "the Pi token must not reach the Claude mirror");
+  for (const doc of [source, generated]) {
+    for (const fragment of ["adrTripwirePaths", "adrNeed", "first commit"]) {
+      assert.ok(doc.includes(fragment), `both agent surfaces must carry ${fragment}`);
+    }
+  }
+});
