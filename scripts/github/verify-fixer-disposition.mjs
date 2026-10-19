@@ -363,7 +363,9 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     // THREAD route: the clearing delta record bound to the pushed head decides each thread. An ordinary order's head is
     // the review baseline; a complete order's head is the pushed candidate, so its record is found by candidateHead.
     // A record decides only when it clears the pushed head and its items cover the pinned thread IDs: an ACT-route or
-    // other-sequence record for the same candidate must not. Zero or several matches refuse (the directory read is sorted).
+    // other-sequence record for the same candidate must not. A complete THREAD order carries no sequence identity, so a
+    // record binds by the pinned thread IDs plus the pushed head. Zero or several matches refuse; only the matches are
+    // sorted (the directory read is not).
     const pinned = source.threads.map(({ threadId }) => threadId);
     const clears = (candidate) => candidate && DELTA_CLEARING_NEXT_STEPS.includes(candidate.nextStep) && candidate.candidateHead === options.headSha
       && pinned.every((id) => (candidate.items ?? []).some((item) => item?.ref === id));
@@ -630,8 +632,8 @@ export async function verifyFixerDisposition(
         commitStatus: ci.statuses.commitStatus,
         checkRunsUnsupportedCompleted: ci.checkRuns.fullSignal.unsupportedCompleted,
       }).overallStatus;
-    // A head with no check runs and no statuses at all is settled (wait-pr-checks settles it); anything else must be green.
-    const checkless = state === "none" && ci.checkRuns.rawCount === 0 && ci.statuses.rawCount === 0;
+    // A head with no check runs and no statuses besides the loop-derived gate-evidence is settled (wait-pr-checks settles it); anything else must be green.
+    const checkless = state === "none" && ci.checkRuns.nonLoopDerivedCount === 0 && ci.statuses.nonLoopDerivedCount === 0;
     if (state !== "success" && !checkless) {
       const code = state === "pending" ? "ci_pending" : "ci_unknown";
       throw new Error(`${code}: checks at ${options.headSha} are ${state}, not settled green; resolve no thread, hand back ${code}`);

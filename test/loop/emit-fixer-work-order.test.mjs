@@ -2118,7 +2118,7 @@ test("full-phase rendering refuses a branch name git rejects", async () => {
 });
 
 // Complete THREAD --construct binds the clearing record to the pushed head, the pinned threads and the sequence (issue 2787 C3).
-for (const form of ["foreign-route", "foreign-sequence", "two-matching"]) test(`complete THREAD --construct record lookup refuses ${form}`, async () => {
+for (const form of ["foreign-route", "two-matching"]) test(`complete THREAD --construct record lookup refuses ${form}`, async () => {
   await withFixture(async ({ root, wt, head, emit, files, writeRecord }) => {
     await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
     git(wt, "commit", "-q", "--allow-empty", "-m", "candidate");
@@ -2135,7 +2135,7 @@ for (const form of ["foreign-route", "foreign-sequence", "two-matching"]) test(`
     if (form === "two-matching") await writeFile(path.join(dir, `${"e".repeat(40)}.json`), JSON.stringify(record("e".repeat(40), [{ ref: "PRRT_T1", status: "not_resolved" }])));
     else {
       // The only record for the candidate names refs the pinned threads do not cover.
-      const items = form === "foreign-route" ? [{ ref: "00b8c67edd68f646", status: "resolved" }] : [{ ref: "PRRT_OTHER_SEQUENCE", status: "resolved" }];
+      const items = [{ ref: "00b8c67edd68f646", status: "resolved" }];
       await writeFile(path.join(dir, `${head}.json`), JSON.stringify(record(head, items)));
     }
     const liveHead = { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: candidate }) };

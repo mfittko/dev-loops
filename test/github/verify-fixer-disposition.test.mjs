@@ -235,6 +235,37 @@ for (const [label, over] of [
   });
 }
 
+test("THREAD full --construct with a pushed candidate later than the order head names the candidate; normal and --check pass", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    execFileSync("git", ["-C", f.root, "commit", "-q", "--allow-empty", "-m", "fix"], { env: gitEnvNoDirOverrides() });
+    const pushed = execFileSync("git", ["-C", f.root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+    const recordPath = path.join(f.root, "tmp", "gate-delta", `${f.head}.json`);
+    await writeFile(recordPath, JSON.stringify({ ...JSON.parse(await readFile(recordPath, "utf8")), candidateHead: pushed }));
+    const options = { ...f.options, headSha: pushed };
+    const mockFor = (entries) => runtime(entries, f.root, { live: false });
+    const ahead = compareEntry(f.head, "ahead", pushed);
+    const constructed = await verifyFixerDisposition({ ...options, construct: true }, mockFor([ahead, liveHeadEntry(pushed), threadsCallEntry([])]).deps);
+    assert.equal(constructed.constructed, true);
+    assert.deepEqual(JSON.parse(await readFile(f.output, "utf8")), { headSha: pushed, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: pushed, disposition: "tackled" }] });
+    for (const check of [false, true]) {
+      const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${pushed}.`, author: { login: "bot", __typename: "User" } }] } }];
+      const mock = mockFor([ahead, liveHeadEntry(pushed), threadsCallEntry(resolved), ...ciEntries(pushed), compareEntry(pushed, "identical", pushed)]);
+      assert.equal((await verifyFixerDisposition({ ...options, check }, mock.deps)).complete, true);
+    }
+  });
+});
+
+test("a head whose only check run is gate-evidence is settled check-less and accepted", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }];
+    const mock = f.runtimeFor([threadsCallEntry(resolved), ...ciEntries(f.head, { runs: [{ name: "gate-evidence", status: "completed", conclusion: "success" }] }), compareEntry(f.head, "identical", f.head)]);
+    assert.equal((await verifyFixerDisposition(f.options, mock.deps)).complete, true);
+  });
+});
+
 test("a hand-written fixer-disposition.json with valid content is refused and names --construct", async () => {
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);
