@@ -2117,7 +2117,7 @@ test("full-phase rendering refuses a branch name git rejects", async () => {
   });
 });
 
-// Complete THREAD --construct binds the clearing record to the pushed head, the pinned threads and the sequence (issue 2787 C3).
+// Complete THREAD --construct binds the clearing record to the pushed head, the pinned thread IDs and the pushed head (issue 2787 C3).
 for (const form of ["foreign-route", "two-matching"]) test(`complete THREAD --construct record lookup refuses ${form}`, async () => {
   await withFixture(async ({ root, wt, head, emit, files, writeRecord }) => {
     await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
