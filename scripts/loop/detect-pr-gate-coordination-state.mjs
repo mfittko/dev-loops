@@ -822,14 +822,14 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
   return incomplete.length > 0 ? { complete: false, incomplete } : null;
 }
 
-// ADR 0155: an incomplete disposition is advisory. It keeps its `incomplete` detail and adds a warning,
-// with no next action and no forbidden actions, so gate coordination and Copilot requests proceed.
-// The one fixer-disposition input: detect-pr-gate-coordination-state and request-copilot-review both read it here.
 // The origin head of a carried verdict, or null. The pre_approval marker wins; the draft marker counts only when pre_approval is not visible.
 export function carriedSourceHeadOf({ preApprovalGateMarker, draftGateMarker } = {}) {
   return (preApprovalGateMarker?.visible ? preApprovalGateMarker.carriedFrom : draftGateMarker?.carriedFrom) ?? null;
 }
 
+// ADR 0155: an incomplete disposition is advisory. It keeps its `incomplete` detail and adds a warning,
+// with no next action and no forbidden actions, so gate coordination and Copilot requests proceed.
+// The one fixer-disposition input: detect-pr-gate-coordination-state and request-copilot-review both read it here.
 export async function resolveFixerDispositionInput(args, runtime = {}) {
   const result = await readFixerDispositionEvidence(args, runtime);
   if (!result || result.complete) return result;

@@ -6,7 +6,7 @@
  * head that equals the recomputed one. The coordination path records (`record: true`);
  * merge-pr only reads, so it never accepts a carry nobody recorded.
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-verdict-carry";
@@ -24,7 +24,7 @@ export function buildCarriedHeadsPath({ repo, pr, gate, originHead, tmpRoot = "t
 export async function readCarriedHeads(file) {
   try {
     const record = JSON.parse(await readFile(file, "utf8"));
-    return Array.isArray(record?.carried) ? record : null;
+    return Array.isArray(record?.carried) ? { ...record, carried: record.carried.filter((e) => e && typeof e === "object") } : null;
   } catch {
     return null; // ponytail: absent or unreadable record means no carry (fail closed)
   }
@@ -33,15 +33,15 @@ export async function readCarriedHeads(file) {
 async function upsertCarriedHead(file, { gate, originHead, evidence }) {
   const record = (await readCarriedHeads(file)) ?? { gate, originHead, carried: [] };
   const entry = { headSha: evidence.newHead, decision: evidence.decision, evidence };
+  const existing = record.carried.find((e) => e.headSha === entry.headSha);
+  if (existing && JSON.stringify(existing.evidence) === JSON.stringify(evidence)) return;
   record.carried = [...record.carried.filter((e) => e.headSha !== entry.headSha), entry];
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  const tempPath = `${file}.tmp-${process.pid}-${Date.now()}`; // atomic: a concurrent reader never sees a truncated record
+  await writeFile(tempPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await rename(tempPath, file);
 }
 
-/**
- * @returns {Promise<object>} the marker, rewritten to the current head with `carriedFrom` when
- * the verdict carries, else the marker unchanged.
- */
 // The candidate shape under which carryGateMarker may carry (baseRef aside).
 export function isCarryCandidate(marker, currentHeadSha) {
   const origin = marker?.headSha;
@@ -49,6 +49,10 @@ export function isCarryCandidate(marker, currentHeadSha) {
     && FULL_SHA_RE.test(origin ?? "") && FULL_SHA_RE.test(currentHeadSha ?? "") && origin !== currentHeadSha;
 }
 
+/**
+ * @returns {Promise<object>} the marker, rewritten to the current head with `carriedFrom` when
+ * the verdict carries, else the marker unchanged.
+ */
 export async function carryGateMarker(marker, { gate, repo, pr, currentHeadSha, baseRef, repoRoot, record = false, runGit }) {
   const origin = marker?.headSha;
   if (!isCarryCandidate(marker, currentHeadSha) || !baseRef) return marker;

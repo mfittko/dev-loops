@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { initGitFixture, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
-import { resolveFixerDispositionInput, detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { carriedSourceHeadOf, resolveFixerDispositionInput, detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
@@ -4072,6 +4072,120 @@ test("resolveFixerDispositionInput reads the disposition at carriedSourceHead ac
     const malformed = await resolveFixerDispositionInput({ ...args, carriedSourceHead: SRC }, { repoRoot: tempDir });
     assert.ok(malformed.warning, "a malformed current-head log still warns");
     assert.ok(malformed.warning.includes(CUR), "the warning names the real head");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #2752 / GATE-EXEC-BASE-MERGE-VERDICT-CARRY: coordination-level behaviour on a git fixture.
+// ---------------------------------------------------------------------------
+async function runCarryFixture({ nonBaseCommit = false, ci = "SUCCESS", sourceHeadHandoff = false } = {}) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-coord-carry-"));
+  try {
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+    const git = (...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd: dir, env, encoding: "utf8" }).trim();
+    const put = async (f, c) => { await mkdir(path.dirname(path.join(dir, f)), { recursive: true }); await writeFile(path.join(dir, f), c); };
+    git("init", "-q", "-b", "main");
+    await put("base.txt", "base\n"); git("add", "-A"); git("commit", "-qm", "base");
+    git("checkout", "-qb", "pr");
+    await put("src/x.mjs", "x\n"); git("add", "-A"); git("commit", "-qm", "pr");
+    const headA = git("rev-parse", "HEAD");
+    if (nonBaseCommit) { await put("src/x.mjs", "changed\n"); git("add", "-A"); git("commit", "-qm", "scope change"); }
+    git("checkout", "-q", "main");
+    await put("docs/a.md", "changed\n"); git("add", "-A"); git("commit", "-qm", "main docs");
+    git("update-ref", "refs/remotes/origin/main", "main");
+    git("checkout", "-q", "pr"); git("merge", "-q", "--no-edit", "main");
+    const headB = git("rev-parse", "HEAD");
+    if (sourceHeadHandoff) {
+      const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
+      const file = path.join(dir, buildLogPath({ repo: "owner/repo", pr: 2819, gate: "fixer-disposition", headSha: headA, tmpRoot: "tmp" }));
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, `${JSON.stringify({ headSha: headA, dispositions: [{ threadId: "PRRT_X", fixingCommitSha: headA, disposition: "tackled" }] })}\n`);
+    }
+    const body = (gate, next) => [`Gate review: ${gate}`, `Reviewed head SHA: ${headA}`, "Verdict: clean", "Findings summary: no issues found", `Next action: ${next}`].join("\n");
+    const comments = [
+      { id: 1, body: body("draft_gate", "mark ready for review"), updated_at: "2026-05-29T21:00:00Z" },
+      { id: 2, body: body("pre_approval_gate", "await final human approval"), updated_at: "2026-05-29T22:00:00Z" },
+    ];
+    const prView = { number: 2819, state: "OPEN", isDraft: false, headRefOid: headB, baseRefName: "main", mergeStateStatus: "CLEAN", mergeable: "MERGEABLE", body: "", closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: ci }] };
+    const runChild = async (cmd, args) => {
+      const joined = args.join(" ");
+      if (cmd !== "gh") return { code: 0, stdout: "", stderr: "" };
+      let out = null;
+      if (joined.startsWith("pr view") && joined.includes("--json headRefOid")) out = { headRefOid: headB };
+      else if (joined.startsWith("pr view") && joined.includes("baseRefName") && !joined.includes("statusCheckRollup")) out = { baseRefName: "main" };
+      else if (joined.startsWith("pr view")) out = prView;
+      else if (joined.includes("requested_reviewers")) out = { users: [], teams: [] };
+      else if (joined.includes("graphql")) out = { data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } };
+      else if (joined.includes("/issues/") && joined.includes("comments")) out = [comments];
+      else if (joined.includes("/reviews")) out = [[]];
+      return { code: 0, stdout: out === null ? "" : JSON.stringify(out), stderr: "" };
+    };
+    const runtime = { env: runIdFreeEnv({ GH_TOKEN: "t", DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: dir, cwd: dir };
+    return { headA, headB, result: await detectPrGateCoordinationState({ repo: "owner/repo", pr: 2819 }, runtime) };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+const GATE_RUN_ACTIONS = [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE];
+
+test("coordination on a recorded base-only carry returns no gate-run action", async () => {
+  const { headA, headB, result } = await runCarryFixture();
+  assert.equal(result.ok, true);
+  assert.equal(result.preApprovalGate.currentHeadClean, true, JSON.stringify(result.preApprovalGate));
+  assert.equal(result.preApprovalGate.headSha, headA, "the summary keeps the origin head of the carried verdict");
+  assert.equal(result.currentHeadSha, headB);
+  assert.notEqual(headA, headB);
+  assert.ok(!GATE_RUN_ACTIONS.includes(result.nextAction), `unexpected gate run: ${result.nextAction}`);
+});
+
+test("coordination after a non-base commit re-dispatches a gate run", async () => {
+  const { result } = await runCarryFixture({ nonBaseCommit: true });
+  assert.equal(result.ok, true);
+  assert.notEqual(result.preApprovalGate.currentHeadClean, true, "a non-base commit invalidates the carry");
+});
+
+test("coordination with failing CI at the new head does not treat the carried verdict as merge-ready", async () => {
+  const { result } = await runCarryFixture({ ci: "FAILURE" });
+  assert.equal(result.ok, true);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, "red CI at the new head blocks");
+  assert.ok(!GATE_RUN_ACTIONS.includes(result.nextAction), `CI red must route to CI, not a gate run: ${result.nextAction}`);
+});
+
+test("coordination wires carriedSourceHead from gate evidence: a source-head disposition log is read on a carried head", async () => {
+  const wired = await runCarryFixture({ sourceHeadHandoff: true });
+  assert.ok(wired.result.fixerDispositionWarning, "the source-head log was read and found incomplete");
+  const absent = await runCarryFixture({});
+  assert.equal(absent.result.fixerDispositionWarning, undefined, "no log at either head means no disposition evidence");
+});
+
+test("carriedSourceHeadOf prefers a visible pre_approval marker, falls back to the draft marker, else null", () => {
+  const A = "a".repeat(40);
+  const B = "b".repeat(40);
+  assert.equal(carriedSourceHeadOf({ preApprovalGateMarker: { visible: true, carriedFrom: A }, draftGateMarker: { carriedFrom: B } }), A);
+  assert.equal(carriedSourceHeadOf({ preApprovalGateMarker: { visible: false, carriedFrom: A }, draftGateMarker: { carriedFrom: B } }), B);
+  assert.equal(carriedSourceHeadOf({ preApprovalGateMarker: { visible: true }, draftGateMarker: { carriedFrom: B } }), null);
+  assert.equal(carriedSourceHeadOf({}), null);
+  assert.equal(carriedSourceHeadOf(), null);
+});
+
+test("resolveFixerDispositionInput with no log at either head keys the unverified-handoff scan on currentHeadSha", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fixer-disposition-nolog-"));
+  const SRC = "a".repeat(40);
+  const CUR = "b".repeat(40);
+  try {
+    initGitFixture(tempDir);
+    const dir = path.join(tempDir, "tmp", "gate-fixer", "owner-repo", "pr-7", "f1-0123abcd");
+    await mkdir(dir, { recursive: true });
+    const args = { repo: "owner/repo", pr: 7, currentHeadSha: CUR, parsedThreads: { threads: [], comments: [] }, carriedSourceHead: SRC };
+    const handoff = (headSha) => `${JSON.stringify({ headSha, dispositions: [{ threadId: "PRRT_T", fixingCommitSha: headSha, disposition: "tackled" }] })}\n`;
+    await writeFile(path.join(dir, "fixer-disposition.json"), handoff(SRC));
+    assert.equal(await resolveFixerDispositionInput(args, { repoRoot: tempDir }), null, "a handoff for the source head is not the live head's");
+    await writeFile(path.join(dir, "fixer-disposition.json"), handoff(CUR));
+    const result = await resolveFixerDispositionInput(args, { repoRoot: tempDir });
+    assert.equal(result.complete, false);
+    assert.equal(result.incomplete[0].threadId, "PRRT_T");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

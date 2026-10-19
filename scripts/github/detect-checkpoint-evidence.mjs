@@ -881,7 +881,8 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // The act list is read independently of requireFanoutEvidence; `actList` is
   // only added when the current-head pre_approval_gate ledger exists.
   const paHead = preApprovalGateMarker?.headSha ?? currentHeadSha;
-  const actList = preApprovalGateMarker?.visible && paHead === currentHeadSha
+  // A carried marker (carriedFrom === its origin head) reads the act list at the origin head, so a carry never loosens the ADR 0089 check.
+  const actList = preApprovalGateMarker?.visible && (paHead === currentHeadSha || preApprovalGateMarker.carriedFrom === paHead)
     ? await readActListInAny(checkouts, buildLogPath({ repo, pr, gate: "pre_approval_gate", headSha: paHead, tmpRoot: "tmp" }), preApprovalGateMarker.executionMode)
     : null;
   const withActList = (enforcement) => (actList ? { ...enforcement, actList } : enforcement);
@@ -1127,7 +1128,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     const candidate = normalizeGateMarkerSummary(anyHeadSummary[gate]);
     const carried = await carryGateMarker(candidate, carryCtx(gate, isCarryCandidate(candidate, currentHeadSha) ? await fetchBaseRef() : null));
     // Fan-out keeps the origin-head marker for a carried gate so the ledger path stays at the origin head.
-    return carried.carriedFrom ? { marker: carried, fanoutMarker: candidate } : { marker: filtered, fanoutMarker: filtered };
+    return carried.carriedFrom ? { marker: carried, fanoutMarker: { ...candidate, carriedFrom: carried.carriedFrom } } : { marker: filtered, fanoutMarker: filtered };
   };
   const { marker: draftGateMarker, fanoutMarker: rawDraftGateMarker } = await resolveGateMarker("draft_gate");
   const { marker: preApprovalGateMarker, fanoutMarker: rawPreApprovalGateMarker } = await resolveGateMarker("pre_approval_gate");

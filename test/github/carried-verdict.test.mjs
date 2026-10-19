@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -103,4 +103,35 @@ test("buildPreMergeGateCheck passes with a carried marker and fails with an unca
   const carried = await carry(s, marker(origin), cur, { record: true });
   assert.equal(buildPreMergeGateCheck(evidence(carried), 0).ok, true);
   assert.equal(buildPreMergeGateCheck(evidence(marker(origin)), 0).ok, false);
+});
+
+test("malformed carried entries (null, string, number) fail closed to no carry without throwing; a well-formed entry still carries", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  await carry(s, marker(origin), cur, { record: true });
+  const file = recordFile(s, origin);
+  const good = JSON.parse(readFileSync(file, "utf8"));
+  for (const bad of [null, "string", 42]) {
+    writeFileSync(file, JSON.stringify({ ...good, carried: [bad] }));
+    assert.deepEqual((await readCarriedHeads(file)).carried, [], `${JSON.stringify(bad)} entry is dropped`);
+    const m = marker(origin);
+    assert.deepEqual(await carry(s, m, cur), m, `${JSON.stringify(bad)} entry means no carry`);
+    assert.equal((await carry(s, m, cur, { record: true })).carriedFrom, origin, "recording over a malformed entry still carries");
+  }
+  writeFileSync(file, JSON.stringify({ ...good, carried: [null, ...good.carried] }));
+  assert.equal((await carry(s, marker(origin), cur)).carriedFrom, origin, "a well-formed entry beside a malformed one carries");
+});
+
+test("re-recording an unchanged carry leaves the record file untouched and leaves no temp files", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  await carry(s, marker(origin), cur, { record: true });
+  const file = recordFile(s, origin);
+  writeFileSync(file, `${readFileSync(file, "utf8")}\n`); // sentinel: a rewrite would drop the extra newline
+  const before = readFileSync(file, "utf8");
+  await carry(s, marker(origin), cur, { record: true });
+  assert.equal(readFileSync(file, "utf8"), before);
+  assert.deepEqual(readdirSync(path.dirname(file)).filter((f) => f.includes(".tmp-")), []);
 });
