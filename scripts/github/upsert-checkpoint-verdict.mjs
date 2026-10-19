@@ -236,7 +236,12 @@ Optional:
                                             records the fixer commit + delta
                                             digest. Refused unless every act
                                             item is low/nit and the delta result
-                                            is fresh and locally_clear.
+                                            is fresh and locally_clear with no
+                                            new findings. Also needs --verdict
+                                            clean (or omitted), and refuses when
+                                            A has no draft_gate comment or that
+                                            comment is already clean or
+                                            converged.
   --findings-ledger <path>                  Path to this round's
                                             write-gate-findings-log.mjs ledger
                                             ({ repo, pr, gate, headSha, verdict,
@@ -2522,8 +2527,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // --findings-json can carry the same finding.
   let convergedMarker = null;
   const guardedActItems = (findings) => {
-    // A converged round takes its act items from A's ledger alone, so a caller cannot list a subset.
-    const items = listOpenActItems(convergedInput && preloadedFindingsLedger ? preloadedFindingsLedger.findings : findings);
+    // A converged round's act items are the union of A's ledger and the passed (judge-enriched) findings, so a caller cannot list a subset.
+    // Without a ledger the passed findings stand alone, and a durable ledger on disk refuses below.
+    const items = listOpenActItems(convergedInput && preloadedFindingsLedger ? [...(preloadedFindingsLedger.findings ?? []), ...findings] : findings);
     if (!convergedInput) return items;
     if (!preloadedFindingsLedger) {
       const postingGate = postTimeFanoutEnforcement?.gates?.find((gateResult) => gateResult.name === options.gate);
@@ -3201,7 +3207,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (convergedInput && (existing.verdict === "clean" || gateEvidence.strict?.converged || gateEvidence.marker?.converged || gateEvidence.marker?.convergedFromHeadSha)) {
     throw new Error(`--converged-json: the draft_gate comment at ${canonicalHeadSha} is already clean or converged; one convergence per round, post a full round instead.`);
   }
-  const warning =isReviewGate ? null : detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
+  const warning = isReviewGate ? null : detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
   // DURABLE-LEDGER FAIL-CLOSED REFUSAL: a requireFanoutEvidence fanout_fanin
   // verdict cannot be recorded until write-gate-findings-log.mjs's canonical
   // durable ledger (tmp/gate-findings/<slug>/pr-<n>/<gate>-<head>.json) for the

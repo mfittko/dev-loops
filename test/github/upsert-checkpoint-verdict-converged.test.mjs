@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 import { parseUpsertCheckpointVerdictCliArgs, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
+import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { startDeltaSequence } from "../../packages/core/src/loop/pre-push-delta-review.mjs";
 
 // GATE-EXEC-LOW-NIT-CONVERGENCE: an all-low/nit draft_gate round at head A converges after one fixer pass and a
@@ -206,7 +207,7 @@ test("a comment at A that is already clean or already converged is not converged
     const clean = EXISTING_BODY.replace("findings_present", "clean");
     assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { body: clean } })).error, /already clean or converged/);
     const converged = `${clean}\n**Converged:** fixer \`${FIX}\` delta \`sha256:${"c".repeat(64)}\``;
-    assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { body: converged } })).error, /already clean or converged|none is the latest/);
+    assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { body: converged } })).error, /already clean or converged/);
   }, { prefix: "dev-loops-converged-twice-" });
 });
 
@@ -239,4 +240,41 @@ test("a delta result carrying a new finding fails closed", async () => {
     input.deltaResult.newFindings = [{ severity: "low", summary: "unposted" }];
     assert.match((await post(tempDir, { findings, converged: input })).error, /deltaResult/);
   }, { prefix: "dev-loops-converged-newfinding-" });
+});
+
+test("a judge-enriched --findings-json medium act item over an all-low ledger requires a full round", async () => {
+  await withTempDir(async (tempDir) => {
+    const lows = [finding("low", 1)];
+    const findingsJson = path.join(tempDir, "findings.json");
+    await writeFile(findingsJson, JSON.stringify([...lows, finding("medium", 2)]), "utf8");
+    const { error, puts } = await post(tempDir, { findings: lows, converged: convergedInput(lows), extraArgs: ["--findings-json", findingsJson] });
+    assert.match(error, /needs a full round/);
+    assert.deepEqual(puts, []);
+  }, { prefix: "dev-loops-converged-enriched-" });
+});
+
+test("a converged post without --findings-ledger refuses while the round's durable ledger exists", async () => {
+  await withTempDir(async (tempDir) => {
+    const lows = [finding("low", 1)];
+    const findingsJson = path.join(tempDir, "findings.json");
+    await writeFile(findingsJson, JSON.stringify(lows), "utf8");
+    const root = path.join(tempDir, "root");
+    const ledgerPath = path.join(root, buildLogPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(ledgerPath), { recursive: true });
+    await writeFile(ledgerPath, JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, verdict: "clean", findings: lows }), "utf8");
+    await writeFile(path.join(root, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+    const converged = path.join(tempDir, "converged.json");
+    await writeFile(converged, JSON.stringify(convergedInput(lows)), "utf8");
+    const puts = [];
+    const args = [
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", A, "--findings-summary", "converged test",
+      "--findings-json", findingsJson, "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+      "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 1, question: 0, nit: 0 }), "--verdict", "clean", "--converged-json", converged,
+    ];
+    await assert.rejects(
+      upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild({ puts }) }),
+      /needs --findings-ledger/,
+    );
+    assert.deepEqual(puts, []);
+  }, { prefix: "dev-loops-converged-noledger-" });
 });

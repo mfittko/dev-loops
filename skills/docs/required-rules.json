@@ -393,7 +393,7 @@
     {
       "id": "GATE-EXEC-LOW-NIT-CONVERGENCE",
       "enforcement": "runtime",
-      "enforcementNote": "composeConvergedDraftGate (packages/core/src/loop/pre-push-delta-review.mjs) throws unless the gate is draft_gate, every act item is low or nit, and the delta result is valid, fresh, locally_clear and carries no new finding; upsert-checkpoint-verdict.mjs permits clean over act items only through it, takes the act items from the ledger at A, and refuses a PR head other than the fixer commit or a comment at A already clean or converged"
+      "enforcementNote": "composeConvergedDraftGate (packages/core/src/loop/pre-push-delta-review.mjs) throws unless the gate is draft_gate, every act item is low or nit, and the delta result is valid, fresh, locally_clear and carries no new finding; upsert-checkpoint-verdict.mjs permits clean over act items only through it, takes the act items from the union of the ledger at A and the --findings-json act items (--findings-json alone only when no ledger exists for the gate, else it refuses without --findings-ledger), and refuses a PR head other than the fixer commit or a comment at A already clean or converged"
     },
     {
       "id": "GATE-EXEC-NO-CWD-DEPENDENCE"
