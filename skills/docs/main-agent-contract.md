@@ -63,6 +63,10 @@ bar: `judge-pass.mjs` and `close-gate-findings.mjs` never create an issue for a 
 (see `GATE-EXEC-DEFERRAL-RECORD` in the
 [Gate review sub-loop contract](gate-review-sub-loop-contract.md)).
 
+## Generic Codex dispatch
+
+Generic `collaboration.spawn_agent` does not automatically load repository role definitions. For ordinary Codex developer, refiner (including artifact-only refiners), docs and coordinator dispatches, provide verified absolute paths to the applicable role definition and [Codex runtime setup](./copilot-loop-operations.md#codex-runtime-setup) in the task. Verify both files exist in the selected source/install before dispatch; require the child to read them before scoped artifact writes, any Git write or targeted verification. Preserve the mandatory initial startup/envelope and exact pull-first protocols; this is read delivery, not new role or mutation authority. Pull-pointer coordinators and fixers retain their exact emitted payloads and learn applicable setup after their bootstrap; never append generic setup to those payloads.
+
 <!-- pi-only -->
 > **Absolute read-only boundary (Pi).** The main agent must never mutate files tracked by the repository.
 > All tracked-file mutations flow through the `dev-loop` async subagent.

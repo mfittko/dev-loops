@@ -628,6 +628,10 @@
       "id": "OPS-NO-INLINE-INTERPRETER"
     },
     {
+      "id": "OPS-CODEX-RUNTIME-SETUP",
+      "enforcement": "doc"
+    },
+    {
       "id": "PLAN-SIZE-BAND",
       "enforcement": "runtime"
     },

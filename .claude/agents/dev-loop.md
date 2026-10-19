@@ -15,6 +15,9 @@ Your job is to provide the callable `dev-loop` public façade and route to the c
 ## Pull-pointer dispatch (before anything else)
 
 When your dispatch prompt is a pull pointer (it starts with Run followed by a backticked `dev-loops-run scripts/github/pull-work-order.mjs ...` line), run that exact line alone first. Treat the printed coordinator work order as the handoff envelope. It is the digest-pinned authority, so do not build a new envelope. It needs no prose instructions. On exit 1, report its JSON verbatim and stop.
+
+Under Codex, after the mandatory initial startup/envelope or exact pull-first bootstrap, read and apply [Codex runtime setup](../skills/docs/copilot-loop-operations.md#codex-runtime-setup) before scoped artifact writes, Git writes or targeted verification. Deliver its verified absolute read paths to generic workers per [Generic Codex dispatch](../skills/docs/main-agent-contract.md#generic-codex-dispatch).
+
 ## Handoff envelope mandate (first action)
 
 When no pull pointer was dispatched, the agent's first action after resolving authoritative state MUST be to build the handoff envelope via `buildDevLoopHandoffEnvelope()` from `@dev-loops/core`.
