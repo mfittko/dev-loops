@@ -21,9 +21,9 @@ Six requirements govern every slice of issue 2787.
 3. Findings outside the act list (delta residue, new findings on the thread route, CI failures) can enter a fixer order.
 4. Tooling produces the fixer report and the disposition. Agents never construct or hand-write either one.
 5. A full gate round on the live head is always the fallback authority. It replaces any skipped intermediate evidence. A carried or recovered disposition never satisfies a gate verdict.
-6. Every full-phase work order states numbered steps: push the candidate, confirm the remote head, wait for green CI, then `--construct`, then verify.
+6. Every full-phase work order states numbered steps: push the candidate, confirm the remote head, wait for the head's checks to settle green (a head with no check runs and no statuses passes), then `--construct`, then verify.
 
-Slice 1 implements requirements 4 and 6 and the red-CI exit. Every full-phase order (ACT, THREAD, completion) renders the numbered steps and the Edit/Write-only rule. `verify-fixer-disposition.mjs --construct` builds the THREAD report, and normal and `--check` modes accept only a report that its own `--construct` wrote. They refuse unless the head's checks are observed and settled green. The sidecar mark on a constructed report is a deterrent, not authentication. No shell-parsing hook is added (ADR 0107 and issue 2534 rationale).
+Slice 1 implements requirements 4 and 6 and the red-CI exit. Every full-phase order (ACT, THREAD, completion) renders the numbered steps and the Edit/Write-only rule. `verify-fixer-disposition.mjs --construct` builds the THREAD report, and normal and `--check` modes accept only a report that its own `--construct` wrote. For a plan that carries a source, they refuse unless the head's checks are settled green. A settled head with no check runs and no statuses passes. The sidecar mark on a constructed report is a deterrent, not authentication. No shell-parsing hook is added (ADR 0107 and issue 2534 rationale).
 
 ## Consequences
 
