@@ -67,6 +67,41 @@ bar: `judge-pass.mjs` and `close-gate-findings.mjs` never create an issue for a 
 
 Generic `collaboration.spawn_agent` does not automatically load repository role definitions. For ordinary Codex developer, refiner (including artifact-only refiners), docs and coordinator dispatches, provide verified absolute paths to the applicable role definition and [Codex runtime setup](./copilot-loop-operations.md#codex-runtime-setup) in the task. Verify both files exist in the selected source/install before dispatch; require the child to read them before scoped artifact writes, any Git write or targeted verification. Preserve the mandatory initial startup/envelope and exact pull-first protocols; this is read delivery, not new role or mutation authority. Pull-pointer coordinators and fixers retain their exact emitted payloads and learn applicable setup after their bootstrap; never append generic setup to those payloads.
 
+## Codex coordinator dispatch
+
+For resumed direct/queue entries, emit with `--harness codex` and dispatch the printed
+`dispatchPayload` unchanged through `collaboration.spawn_agent`. Its exact fields are
+`{task_name: "coordinator_<executionIdentity with hyphens replaced by underscores>",
+message: dispatchPrompt, fork_turns: "none"}`. The emitter validates the identity as
+`c<digits>-<8 lowercase hex>` and generates a fresh identity for each emission. There is
+no cwd argument; native spawn inherits the parent's shell location.
+
+Run the exact pointer first. The pulled order's emitter-owned `codexBootstrap` version 1
+provides the module-derived verified `toolchainRoot`, ordered `contracts` and `instructions`,
+and `cwd` emission facts (`processCwd`, `repositoryRoot`, `branch`). Each contract has its
+fixed repository-relative `path`, verified `absolutePath`, exact lowercase `sha256`, and
+`required: true`. In order, these pin `agents/dev-loop.agent.md`,
+`skills/docs/copilot-loop-operations.md` (including Codex runtime setup), and this baseline.
+Qualify `shasum` with `command -v shasum`, verify every contract with `shasum -a 256`, then
+fully read all three before scoped artifact writes, Git writes or targeted verification.
+Stop on missing/unreadable files, unsupported/malformed metadata, a hash mismatch or uncertainty;
+never substitute consumer-cwd role/setup files. Then resolve and read `handoff.requiredReads`
+in order from `toolchainRoot`; these relative reads do not have individual byte hashes.
+
+Check actual shell cwd, repository and branch independently. The recorded cwd describes
+emission only, not an instruction to move the shell. Verify `handoff.cwd` and branch authority,
+then use its valid isolated root explicitly as cwd for continuation. Invalid or conflicting
+handoff cwd remains a stop; bootstrap facts never authorize creating/acquiring a worktree.
+Preserve nextAction, stopRules, allowedFiles, outputRefs and authority. Record genuine native
+runtime provenance per [Codex runtime setup](copilot-loop-operations.md#codex-runtime-setup),
+without claiming Claude roles/hooks, and follow [Codex active joins](#codex-active-joins).
+
+This additive data is authenticated by the existing materialization hash; semantic fields
+participate in the shared canonical digest while absolute paths and `sha256` stay local-only.
+The coordinator renderer is unchanged so the inherited checkout can pull the same complete
+JSON. Pi/Claude payloads and orders retain their existing bytes. There is no caller-authored
+bootstrap override, new CLI option, permission authority or production-support claim.
+
 ## Codex active joins
 
 Under Codex, MAIN remains active after dispatch and uses bounded `collaboration.wait_agent` joins
@@ -176,7 +211,7 @@ is the fallback when the resolver inherits (the judge uses it to pin the strong 
 | Write to `packages/core/src/foo.mjs` | **BREACH** — must delegate to `dev-loop` |
 | `git status` | Allowed — read-only |
 | `git commit -m "..."` | **BREACH** — must delegate to `dev-loop` |
-| `subagent dev-loop` | Allowed — correct delegation. For resumed queue and direct entries, the orchestrator emits the coordinator work order with `scripts/loop/emit-coordinator-work-order.mjs --input <startup-output-path> --harness <claude or pi> --entry <queue or direct>`, where the input is the startup-output path the coordinator named in its hand-back, and dispatches the printed `dispatchPayload` unchanged. Initial entries dispatch per the Dev-loop startup rule until #2483 slice 5; never a prose brief (ADR 0106). The main agent never runs `loop startup` |
+| `subagent dev-loop` | Allowed — correct delegation. For resumed queue and direct entries, the orchestrator emits the coordinator work order with `scripts/loop/emit-coordinator-work-order.mjs --input <startup-output-path> --harness <claude or pi or codex> --entry <queue or direct>`, where the input is the startup-output path the coordinator named in its hand-back, and dispatches the printed `dispatchPayload` unchanged. Initial entries dispatch per the Dev-loop startup rule until #2483 slice 5; never a prose brief (ADR 0106). The main agent never runs `loop startup` |
 | `subagent fixer` | Allowed only when called from within `dev-loop`. Emit its work order with `scripts/loop/emit-fixer-work-order.mjs` and dispatch the printed `dispatchPayload` unchanged; never a prose brief (ADR 0107) |
 | Claude Code: the `dev-loop` coordinator writes `packages/core/src/foo.mjs` directly | **BREACH** when `DEVLOOPS_COORDINATOR_READONLY=1` is enforced — must delegate to a fresh worker subagent (`developer`/`fixer`/`quality`/`docs`) |
 | Claude Code: the `dev-loop` coordinator writes `tmp/gate-findings/...` (gate evidence) | Allowed — ephemeral/gitignored, not a tracked-file mutation |

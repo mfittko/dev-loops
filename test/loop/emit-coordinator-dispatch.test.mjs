@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { test } from "bun:test";
 import { runNode } from "../_helpers.mjs";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, pullReceiptPath, pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
 import { RULE_REFERENCES } from "../../packages/core/src/loop/coordinator-work-order.mjs";
-import "../../scripts/loop/emit-coordinator-work-order.mjs"; // registers the coordinator role
+import { buildCoordinatorDispatchPayload, renderCoordinatorWorkOrder } from "../../scripts/loop/emit-coordinator-work-order.mjs";
+import { workOrderDigest } from "../../packages/core/src/loop/work-order-digest.mjs";
 
 const script = path.resolve("scripts/loop/emit-coordinator-work-order.mjs");
 const resolverOutput = { ok: true, bundle: {
@@ -33,7 +35,7 @@ const emit = async ({ input, tmp, dir }, harness, entry, extra = []) => {
   return { result, out: JSON.parse(result.stdout) };
 };
 
-for (const harness of ["claude", "pi"]) {
+for (const harness of ["claude", "pi", "codex"]) {
   for (const entry of ["queue", "direct"]) {
     test(`C6a ${harness} ${entry} resumed dispatch carries only the pull pointer`, async () => {
       await withDirs(async (ctx) => {
@@ -45,7 +47,9 @@ for (const harness of ["claude", "pi"]) {
           assert.ok(Buffer.byteLength(out.dispatchPrompt) <= DISPATCH_POINTER_MAX_BYTES);
           assert.deepEqual(out.dispatchPayload, harness === "pi"
             ? { agent: "dev-loop", task: out.dispatchPrompt }
-            : { subagent_type: "dev-loops:dev-loop", description: "coordinator work order", prompt: out.dispatchPrompt });
+            : harness === "codex"
+              ? { task_name: `coordinator_${out.executionIdentity.replaceAll("-", "_")}`, message: out.dispatchPrompt, fork_turns: "none" }
+              : { subagent_type: "dev-loops:dev-loop", description: "coordinator work order", prompt: out.dispatchPrompt });
         }
         assert.match(first.workOrderRef, new RegExp(`^coordinator:o/r#42:${entry}:[0-9a-f]{12}$`));
         assert.match(first.executionIdentity, /^c\d+-[0-9a-f]{8}$/);
@@ -60,15 +64,111 @@ for (const harness of ["claude", "pi"]) {
   }
 }
 
-test("C6a codex and unknown harnesses refuse with unsupported_adapter and write nothing", async () => {
+test("C6a unknown and prototype harnesses refuse before input consumption and write nothing", async () => {
   await withDirs(async (ctx) => {
-    for (const harness of ["codex", "bogus"]) {
-      const { result, out } = await emit(ctx, harness, "queue");
+    for (const harness of ["bogus", "constructor", "__proto__", "toString"]) {
+      const { result, out } = await emit({ ...ctx, input: path.join(ctx.dir, "missing.json") }, harness, "queue");
       assert.equal(result.code, 1);
       assert.equal(out.ok, false);
       assert.equal(out.refusal, "unsupported_adapter");
     }
     assert.equal(existsSync(ctx.tmp), false);
+  });
+});
+
+test("Codex task identities validate exactly and deterministic rebuilds keep the same pointer", () => {
+  const input = { harness: "codex", executionIdentity: "c123-abcdef12", dispatchPrompt: "pointer" };
+  assert.deepEqual(buildCoordinatorDispatchPayload(input), { task_name: "coordinator_c123_abcdef12", message: "pointer", fork_turns: "none" });
+  assert.deepEqual(buildCoordinatorDispatchPayload(input), buildCoordinatorDispatchPayload(input));
+  for (const executionIdentity of [undefined, null, 123, "", "c1-ABCDEF12", "c1-abcdef12\n", " c1-abcdef12", "c1-abcdef12/extra", "c-abcdef12", "c1-abcdef1g"]) {
+    assert.throws(() => buildCoordinatorDispatchPayload({ ...input, executionIdentity }), /execution identity/);
+  }
+});
+
+test("Codex bootstrap pins emitting source bytes and keeps canonical authority and old renderer bytes", async () => {
+  await withDirs(async (ctx) => {
+    const codex = (await emit(ctx, "codex", "direct")).out;
+    assert.equal(codex.ok, true);
+    const plan = JSON.parse(await readFile(codex.planPath, "utf8"));
+    const plain = (await emit(ctx, "pi", "direct")).out;
+    const { codexBootstrap: bootstrap, ...order } = plan.workOrder;
+    assert.deepEqual(order, JSON.parse(await readFile(plain.planPath, "utf8")).workOrder);
+    assert.equal(workOrderDigest(plan.workOrder), codex.workOrderDigest);
+    assert.equal(bootstrap.version, 1);
+    assert.equal(bootstrap.toolchainRoot, path.resolve("."));
+    assert.deepEqual(bootstrap.contracts.map((contract) => contract.path), ["agents/dev-loop.agent.md", "skills/docs/copilot-loop-operations.md", "skills/docs/main-agent-contract.md"]);
+    for (const contract of bootstrap.contracts) {
+      assert.equal(contract.absolutePath, path.join(bootstrap.toolchainRoot, contract.path));
+      assert.equal(contract.required, true);
+      assert.equal(contract.sha256, createHash("sha256").update(await readFile(contract.absolutePath)).digest("hex"));
+    }
+    assert.equal(bootstrap.cwd.processCwd, await realpath(ctx.dir));
+    assert.equal(bootstrap.cwd.repositoryRoot, await realpath(ctx.dir));
+    assert.equal(typeof bootstrap.cwd.branch, "string");
+    assert.match(bootstrap.instructions.join("\n"), /shasum.*hash.*fully read.*requiredReads.*actual cwd.*stop/s);
+    // Main/base and candidate renderers must agree: native spawn inherits the parent's cwd.
+    const originalRenderer = (workOrder) => `# Coordinator work order (ADR 0106)\n\nTreat the handoff below as the complete envelope for ${workOrder.target.repo}. Follow its nextAction, stopRules, requiredReads and sanctionedCommands; ruleReferences name the rule owners.\n\n\`\`\`json\n${JSON.stringify(workOrder, null, 2)}\n\`\`\`\n`;
+    assert.equal(originalRenderer(plan.workOrder), renderCoordinatorWorkOrder(plan.workOrder));
+    assert.equal(await readFile(path.join(path.dirname(codex.planPath), "order.md"), "utf8"), originalRenderer(plan.workOrder));
+  });
+});
+
+test("Codex bootstrap refuses missing, empty, directory and redirected emitting contracts before writing", async () => {
+  await withDirs(async (ctx) => {
+    const toolchain = path.join(ctx.dir, "toolchain");
+    const loop = path.join(toolchain, "scripts/loop");
+    await mkdir(loop, { recursive: true });
+    await copyFile(script, path.join(loop, path.basename(script)));
+    for (const relative of ["scripts/_core-helpers.mjs", "scripts/lib", "scripts/github", "scripts/loop/_repo-root-resolver.mjs", "scripts/loop/build-handoff-envelope.mjs", "node_modules"]) {
+      await symlink(path.resolve(relative), path.join(toolchain, relative));
+    }
+    const args = ["--input", ctx.input, "--repo", "o/r", "--harness", "codex", "--entry", "direct"];
+    const contract = path.join(toolchain, "agents/dev-loop.agent.md");
+    await mkdir(path.dirname(contract), { recursive: true });
+    for (const state of ["missing", "empty", "directory", "symlink"]) {
+      if (state === "empty") await writeFile(contract, "");
+      if (state === "directory") await mkdir(contract);
+      if (state === "symlink") await symlink(path.resolve("agents/dev-loop.agent.md"), contract);
+      const result = await runNode(path.join(loop, path.basename(script)), args, { cwd: ctx.dir });
+      assert.equal(result.code, 1, state);
+      assert.match(JSON.parse(result.stdout).error, /ENOENT|empty|regular emitting-toolchain file/, state);
+      assert.equal(existsSync(ctx.tmp), false, state);
+      await rm(contract, { recursive: true, force: true });
+    }
+  });
+});
+
+test("Codex materialization authenticates local bootstrap hashes and rejects wrong execution", async () => {
+  await withDirs(async (ctx) => {
+    const out = (await emit(ctx, "codex", "queue")).out;
+    const pull = { ref: out.workOrderRef, digest: out.workOrderDigest, execution: out.executionIdentity, tmpRoots: [ctx.tmp], receiptTmpRoot: ctx.dir };
+    const receipt = await pullWorkOrder(pull);
+    assert.equal(JSON.parse(await readFile(receipt.receiptPath, "utf8")).role, "coordinator");
+    await assert.rejects(pullWorkOrder({ ...pull, execution: "c1-deadbeef" }), { refusal: "dispatch_identity_mismatch" });
+    const plan = JSON.parse(await readFile(out.planPath, "utf8"));
+    plan.workOrder.codexBootstrap.contracts[0].sha256 = "0".repeat(64);
+    assert.equal(workOrderDigest(plan.workOrder), out.workOrderDigest, "hash is local material");
+    await writeFile(out.planPath, JSON.stringify(plan));
+    await assert.rejects(pullWorkOrder(pull), { refusal: "local_materialization_integrity_failure" });
+  });
+});
+
+test("source-checkout Claude payload and Pi bytes stay exact with no Codex bootstrap", async () => {
+  const pointer = "unchanged pointer";
+  assert.deepEqual(buildCoordinatorDispatchPayload({ harness: "claude", dispatchPrompt: pointer, cwd: path.resolve(".") }), { subagent_type: "dev-loop", description: "coordinator work order", prompt: pointer });
+  assert.deepEqual(buildCoordinatorDispatchPayload({ harness: "pi", dispatchPrompt: pointer }), { agent: "dev-loop", task: pointer });
+});
+
+test("Codex success selectors and refusal silent semantics remain canonical", async () => {
+  await withDirs(async (ctx) => {
+    const fields = await runNode(script, ["--input", ctx.input, "--repo", "o/r", "--harness", "codex", "--entry", "direct", "--fields", "executionIdentity"], { cwd: ctx.dir });
+    assert.equal(fields.code, 0, fields.stderr);
+    assert.match(fields.stdout.trim(), /^c\d+-[0-9a-f]{8}$/);
+    const bad = await runNode(script, ["--input", ctx.input, "--repo", "o/r", "--harness", "codex", "--entry", "direct", "--fields", "dispatchPayload"], { cwd: ctx.dir });
+    assert.equal(bad.code, 2);
+    const refused = await runNode(script, ["--input", "missing", "--harness", "constructor", "--entry", "direct", "--silent"], { cwd: ctx.dir });
+    assert.equal(refused.code, 1);
+    assert.equal(refused.stdout, "");
   });
 });
 
@@ -129,9 +229,11 @@ test("C6a a plan that lost its workOrder refuses with the integrity refusal, not
   });
 });
 
-test("C6a the exact emitted pointer pulls its order with no --tmp-root added", async () => {
+test("C6a the exact Codex alias pointer pulls its order with no --tmp-root added", async () => {
   await withDirs(async (ctx) => {
-    const out = (await emit(ctx, "claude", "queue")).out;
+    const result = await runNode(path.resolve("cli/index.mjs"), ["loop", "coordinator-work-order", "--input", ctx.input, "--repo", "o/r", "--harness", "codex", "--entry", "queue"], { cwd: ctx.dir });
+    assert.equal(result.code, 0, result.stderr);
+    const out = JSON.parse(result.stdout);
     const command = /`dev-loops-run (scripts\/github\/pull-work-order\.mjs [^`]+)`/.exec(out.dispatchPrompt)[1].split(" ");
     assert.equal(command.includes("--tmp-root"), false);
     const pull = await runNode(path.resolve(command[0]), command.slice(1), { cwd: ctx.dir });
