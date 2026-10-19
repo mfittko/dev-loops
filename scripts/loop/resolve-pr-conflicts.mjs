@@ -50,9 +50,10 @@ const parseError = buildParseError(USAGE);
 
 const SAFE_RESOLVABLE_PATH = "CHANGELOG.md";
 
-// Identity for merge/resolve commits so auto-resolve works on a clean runner
-// (CI / consumer) where no ambient git user is configured. Per-command via -c
-// so we never mutate the repo's config.
+// Fallback identity for merge/resolve commits, applied only when the effective
+// `user.email` is empty (clean CI / consumer runner). An ambient identity is
+// kept: forcing the bot makes GitHub mark signed commits unverified (#2832).
+// Per-command via -c so we never mutate the repo's config.
 const BOT_IDENTITY = [
   "-c", "user.name=dev-loops[bot]",
   "-c", "user.email=dev-loops[bot]@users.noreply.github.com",
@@ -316,9 +317,12 @@ export async function resolvePrConflicts(options, { env = process.env, runVerifi
     throw new Error(`git fetch origin ${base} failed: ${fetch.stderr.trim() || `exit ${fetch.code}`}`);
   }
 
+  const userEmail = await run("git", ["config", "user.email"], { cwd, env });
+  const identity = userEmail.stdout.trim() ? [] : BOT_IDENTITY;
+
   // diff3 conflict style so conflict hunks carry the merge BASE — the additive
   // CHANGELOG resolver needs it to tell a true insertion from a modify/delete.
-  const merge = await run("git", [...BOT_IDENTITY, "-c", "merge.conflictStyle=diff3", "merge", "--no-edit", `origin/${base}`], { cwd, env });
+  const merge = await run("git", [...identity, "-c", "merge.conflictStyle=diff3", "merge", "--no-edit", `origin/${base}`], { cwd, env });
   if (merge.code === 0) {
     const result = { ok: true, action: "clean_merge", base, resolvedFiles: [], pushed: false };
     await afterResolve(result, options, { cwd, env, runVerification });
@@ -364,7 +368,7 @@ export async function resolvePrConflicts(options, { env = process.env, runVerifi
     await abortMerge({ cwd, env });
     throw new Error(`git add ${SAFE_RESOLVABLE_PATH} failed: ${add.stderr.trim() || `exit ${add.code}`}`);
   }
-  const commit = await run("git", [...BOT_IDENTITY, "commit", "--no-edit"], { cwd, env });
+  const commit = await run("git", [...identity, "commit", "--no-edit"], { cwd, env });
   if (commit.code !== 0) {
     await abortMerge({ cwd, env });
     throw new Error(`git commit (merge) failed: ${commit.stderr.trim() || `exit ${commit.code}`}`);

@@ -459,3 +459,49 @@ describe("resolvePrConflicts (real git)", () => {
     }
   });
 });
+
+describe("merge commit identity (#2832)", () => {
+  // No global/system config and no GIT_AUTHOR_*/GIT_COMMITTER_* overrides, so
+  // only the repo-local config decides the effective identity.
+  const isolatedEnv = () => {
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+    for (const key of ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"]) delete env[key];
+    return env;
+  };
+  const setup = () => setupDivergedRepo({
+    baseFile: "CHANGELOG.md",
+    baseContent: CHANGELOG_BASE,
+    oursContent: CHANGELOG_BASE.replace("- shared earlier entry (#1)", "- shared earlier entry (#1)\n- ours added (#100)"),
+    theirsContent: CHANGELOG_BASE.replace("- shared earlier entry (#1)", "- shared earlier entry (#1)\n- theirs added (#101)"),
+  });
+
+  test("keeps the ambient identity when user.email is configured", async () => {
+    const { tempDir, workDir } = await setup();
+    try {
+      git(workDir, ["config", "user.email", "dev@example.com"]);
+      git(workDir, ["config", "user.name", "Dev"]);
+      const result = await resolvePrConflicts(
+        { repoRoot: workDir, base: "main", verify: false, push: false },
+        { env: isolatedEnv() },
+      );
+      assert.equal(result.action, "resolved");
+      assert.equal(git(workDir, ["log", "-1", "--format=%ae"]).trim(), "dev@example.com");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("falls back to the bot identity when user.email is empty", async () => {
+    const { tempDir, workDir } = await setup();
+    try {
+      const result = await resolvePrConflicts(
+        { repoRoot: workDir, base: "main", verify: false, push: false },
+        { env: isolatedEnv() },
+      );
+      assert.equal(result.action, "resolved");
+      assert.equal(git(workDir, ["log", "-1", "--format=%ae"]).trim(), "dev-loops[bot]@users.noreply.github.com");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
