@@ -1038,6 +1038,75 @@ test("runner coordination claim succeeds from a native Pi async-runner env with 
   }
 });
 
+test("native Codex runner claims use the shared child identity and reject missing evidence", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "runner-codex-"));
+  try {
+    const id = "01a15519-285b-74b3-8f36-01e51619bba3";
+    const directory = path.join(root, "sessions/2026/10/19");
+    await mkdir(directory, { recursive: true });
+    const file = path.join(directory, `rollout-child-${id}.jsonl`);
+    await writeFile(file, `${JSON.stringify({ type: "session_meta", payload: { id, parent_thread_id: "parent", source: {
+      subagent: { thread_spawn: { parent_thread_id: "parent", depth: 1, agent_path: null, agent_role: null } },
+    } } })}\n`);
+    const env = { CODEX_HOME: root, CODEX_THREAD_ID: id, DEVLOOPS_RUN_ID: "inherited" };
+    const options = { command: "claim", repo: "owner/repo", pr: 17 };
+    const result = await runPrRunnerCoordination(options, { env, cwd: root });
+    assert.equal(result.ok, true);
+    assert.equal(result.activeRun.runId, `codex-thread-${id}`);
+    await rm(file);
+    assert.equal((await runPrRunnerCoordination(options, { env, cwd: root })).error, "run_id_required");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+for (const invalidation of ["missing", "malformed"]) {
+  test(`automatic ownership refuses ${invalidation} Codex metadata after a valid claim`, async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "runner-codex-auto-"));
+    try {
+      const id = "01a15519-285b-74b3-8f36-01e51619bba3";
+      const directory = path.join(root, "sessions/2026/10/19");
+      await mkdir(directory, { recursive: true });
+      const file = path.join(directory, `rollout-child-${id}.jsonl`);
+      await writeFile(file, `${JSON.stringify({ type: "session_meta", payload: { id, parent_thread_id: "parent", source: {
+        subagent: { thread_spawn: { parent_thread_id: "parent", depth: 1, agent_path: null, agent_role: null } },
+      } } })}\n`);
+      const env = { CODEX_HOME: root, CODEX_THREAD_ID: id, DEVLOOPS_RUN_ID: "inherited" };
+      const options = { repo: "owner/repo", pr: 17, cwd: root, env };
+      const claimed = await ensureAsyncRunnerOwnership(options);
+      assert.equal(claimed.ok, true);
+      assert.equal(claimed.activeRun.runId, `codex-thread-${id}`);
+      if (invalidation === "missing") await rm(file);
+      else await writeFile(file, "invalid metadata\n");
+
+      for (const policy of [{}, { claimIfMissing: false, requireExisting: true }]) {
+        const result = await ensureAsyncRunnerOwnership({ ...options, ...policy });
+        assert.equal(result.ok, false, "invalid evidence must never skip automatic ownership");
+        assert.equal(result.error, "run_id_required");
+      }
+      const inspected = await ensureAsyncRunnerOwnership({ ...options, claimIfMissing: false, requireExisting: false });
+      assert.equal(inspected.ok, true, "read-only inspection remains available without async evidence");
+      assert.equal(inspected.status, "skipped_no_async_run_id");
+      const loaded = await loadRunnerCoordinationState(options);
+      assert.equal(loaded.state.activeRun.runId, claimed.runId, "a refusal preserves the existing claim");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}
+
+test("automatic ownership preserves native Pi, Claude and nonasync context", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "runner-harnesses-"));
+  try {
+    for (const [env, runId] of [
+      [{ [NATIVE_PI_CHILD_MARKER]: "1", [NATIVE_PI_PARENT_SESSION_MARKER]: "parent", [NATIVE_PI_SESSION_MARKER]: "child" }, "pi-session-child"],
+      [{ CLAUDECODE: "1", DEVLOOPS_RUN_ID: "claude-run", CODEX_THREAD_ID: "inherited" }, "claude-run"],
+      [{}, null],
+    ]) {
+      const result = await ensureAsyncRunnerOwnership({ repo: "owner/repo", pr: 17, cwd: root, env });
+      assert.equal(result.ok, true);
+      assert.equal(result.runId, runId);
+      if (runId) await releaseRunnerOwnership({ repo: "owner/repo", pr: 17, cwd: root, runId });
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 // Sibling regression: runner coordination treats an EQUAL run id as an authorized refresh, not
 // a conflict, so two concurrent native Pi children of one parent session must NOT share an id —
 // otherwise the second silently takes over the first's lease on the same PR.

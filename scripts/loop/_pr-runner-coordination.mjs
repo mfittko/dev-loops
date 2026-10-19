@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { parseRepoSlugParts } from "@dev-loops/core/github/repo-slug";
-import { resolveRunId } from "@dev-loops/core/loop/run-context";
+import { resolveRunId, resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 import { WATCH_KINDS } from "@dev-loops/core/loop/watcher-exclusivity";
 import {
   loadStateFile as loadSharedStateFile,
@@ -842,6 +842,17 @@ export async function ensureAsyncRunnerOwnership({
 } = {}) {
   const runId = normalizeRunId(resolveRunId(env));
   if (runId === null) {
+    if ((claimIfMissing || requireExisting) && resolveRuntimeHarness(env) === "codex") {
+      return buildConflict({
+        error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED,
+        repo: normalizeRepoSlug(repo),
+        pr: normalizePr(pr),
+        runId: null,
+        activeRun: null,
+        filePath: null,
+        message: "Native Codex async context could not be verified for runner ownership.",
+      });
+    }
     return {
       ok: true,
       status: "skipped_no_async_run_id",

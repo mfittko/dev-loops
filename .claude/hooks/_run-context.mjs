@@ -24,13 +24,14 @@
  * falling back to the parent session when it is absent (same parent session -> same id),
  * rather than returning null and degrading run-id consumers (runner ownership, checkpoint verdicts).
  *
- * This module is pure except for the explicit file/IO helpers (writeRunContext/readRunContext),
- * which take an injectable `fs` and `root` for testability.
+ * Native Codex context uses bounded first-record metadata IO via resolveNativeCodexContext;
+ * CODEX_THREAD_ID is only a lookup key. Pi/Claude retain their existing marker precedence.
  */
 
 import crypto from "node:crypto";
 import fsDefault from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 /**
  * Env var names that carry the async-context run id, in resolution precedence order.
@@ -72,13 +73,13 @@ export const NATIVE_PI_ASYNC_MARKERS = Object.freeze([
 ]);
 
 /**
- * Every env marker that evidences a harness-managed async context — the run-id carriers first,
- * then the native Pi markers that carry no run id. Consumers that must build a deliberately
- * async-signal-free env (test helpers) strip this whole set by name.
+ * Context carriers and lookup keys to strip for an isolated environment. CODEX_THREAD_ID
+ * alone is not evidence; native Codex metadata must corroborate it.
  */
 export const ASYNC_CONTEXT_ENV_MARKERS = Object.freeze([
   ...RUN_ID_MARKERS,
   ...NATIVE_PI_ASYNC_MARKERS,
+  "CODEX_THREAD_ID",
 ]);
 
 /** State-file name (under `.pi/`, consistent with existing dev-loop checkpoint files). */
@@ -110,6 +111,72 @@ export function resolveRuntimeHarness(env = process.env) {
   if (isClaudeHarness(env)) return "claude";
   if (typeof env?.CODEX_THREAD_ID === "string" && env.CODEX_THREAD_ID.trim()) return "codex";
   return "pi";
+}
+
+/** Current native session header compatibility bridge; never returns instructions or history. */
+export function validateNativeCodexMetadata(header, threadId) {
+  const payload = header?.payload;
+  const spawn = payload?.source?.subagent?.thread_spawn;
+  const parent = payload?.parent_thread_id;
+  if (typeof threadId !== "string" || !threadId || header?.type !== "session_meta" || payload?.id !== threadId ||
+      typeof parent !== "string" || !parent.trim() || parent.trim() === threadId ||
+      spawn?.parent_thread_id !== parent || !Number.isSafeInteger(spawn?.depth) || spawn.depth < 1 ||
+      !(spawn.agent_role === null || typeof spawn.agent_role === "string") ||
+      !(spawn.agent_path === null || typeof spawn.agent_path === "string")) {
+    return { status: "rejected", reason: "Unsupported or mismatched native Codex child metadata (id, parent, source or depth)." };
+  }
+  return { status: "valid", reason: "Verified native Codex thread_spawn child.",
+    threadId, runId: `codex-thread-${threadId}`, parentThreadId: parent, depth: spawn.depth,
+    agentPath: spawn.agent_path, agentRole: spawn.agent_role };
+}
+
+/** Finite UUIDv7-date discovery and first-record-only IO; no recursive history scan or cache. */
+export function resolveNativeCodexContext({ env = process.env, fs = fsDefault } = {}) {
+  const reject = (reason) => ({ status: "rejected", reason });
+  const threadId = env?.CODEX_THREAD_ID;
+  if (env?.DEVLOOPS_DETACHED === "1") return reject("Detached execution is not a native Codex async child.");
+  if (typeof threadId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(threadId)) {
+    return reject("Native Codex context requires a supported UUIDv7 CODEX_THREAD_ID lookup key.");
+  }
+  const home = env.CODEX_HOME || (env.HOME ? path.join(env.HOME, ".codex") : path.join(os.homedir(), ".codex"));
+  const createdAt = Number.parseInt(threadId.slice(0, 13).replaceAll("-", ""), 16);
+  const matches = [];
+  try {
+    // Native filenames use local dates; adjacent UTC dates cover that boundary.
+    for (const offset of [-1, 0, 1]) {
+      const date = new Date(createdAt + offset * 86400000).toISOString().slice(0, 10);
+      const directory = path.join(home, "sessions", ...date.split("-"));
+      let dir;
+      try { dir = fs.opendirSync(directory); }
+      catch (error) { if (error.code === "ENOENT") continue; throw error; }
+      try {
+        let entry;
+        let count = 0;
+        while ((entry = dir.readSync()) !== null) {
+          if (++count > 4096) return reject("Native Codex discovery directory exceeds entry bound.");
+          if (entry.name.startsWith("rollout-") && entry.name.endsWith(`-${threadId}.jsonl`)) {
+            if (!entry.isFile()) return reject("Native Codex metadata is not a regular file.");
+            matches.push(path.join(directory, entry.name));
+            if (matches.length > 1) return reject("Native Codex metadata is ambiguous.");
+          }
+        }
+      } finally { dir.closeSync(); }
+    }
+    if (matches.length !== 1) return reject("Native Codex session metadata not found.");
+    const fd = fs.openSync(matches[0], "r");
+    try {
+      if (!fs.fstatSync(fd).isFile()) return reject("Native Codex metadata is not a regular file.");
+      const header = Buffer.alloc(128 * 1024);
+      // Read exactly through the first newline, without reading any transcript bytes.
+      for (let length = 0; length < header.length; length++) {
+        if (fs.readSync(fd, header, length, 1, null) !== 1) return reject("Native Codex metadata header is incomplete.");
+        if (header[length] === 10) return validateNativeCodexMetadata(JSON.parse(header.subarray(0, length).toString("utf8")), threadId);
+      }
+      return reject("Native Codex metadata header exceeds byte bound.");
+    } finally { fs.closeSync(fd); }
+  } catch {
+    return reject("Native Codex metadata is unreadable or malformed.");
+  }
 }
 
 /**
@@ -160,9 +227,10 @@ function resolveNativePiChildSessionId(env) {
 }
 
 /**
- * Resolve the active run id from the environment.
+ * Resolve the active run id; native Codex performs bounded metadata IO.
  *
- * A run-id carrier wins when present. With none present, a native Pi async context synthesizes
+ * Verified native Codex identity takes precedence over inherited carriers and fails closed.
+ * Outside Codex, a run-id carrier wins when present. With none present, a native Pi async context synthesizes
  * a stable id: the child's own session id when available, else the parent session id. No
  * async context at all still returns null.
  *
@@ -170,6 +238,10 @@ function resolveNativePiChildSessionId(env) {
  * @returns {string|null} The trimmed run id, or null when no async context is present.
  */
 export function resolveRunId(env = process.env) {
+  if (resolveRuntimeHarness(env) === "codex") {
+    const native = resolveNativeCodexContext({ env });
+    return native.status === "valid" ? native.runId : null;
+  }
   for (const marker of RUN_ID_MARKERS) {
     const value = env?.[marker];
     if (typeof value === "string" && value.trim().length > 0) {
@@ -281,6 +353,7 @@ export function ensureRunId({ env = process.env, root, mintedAt, fs = fsDefault 
   if (existing) {
     return { runId: existing, minted: false, statePath: null };
   }
+  if (resolveRuntimeHarness(env) === "codex") throw new Error("Cannot mint a run identity for unverified native Codex context.");
   const runId = mintRunId();
   let statePath = null;
   if (typeof root === "string" && root.length > 0) {

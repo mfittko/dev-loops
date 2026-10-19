@@ -711,6 +711,27 @@ test("outer-loop: proceeds when DEVLOOPS_RUN_ID is set (non-snapshot mode)", asy
   }
 });
 
+test("outer-loop resolves native Codex evidence before non-snapshot startup", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "outer-codex-"));
+  try {
+    const id = "01a15519-285b-74b3-8f36-01e51619bba3";
+    const directory = path.join(root, "sessions/2026/10/19");
+    await mkdir(directory, { recursive: true });
+    const file = path.join(directory, `rollout-child-${id}.jsonl`);
+    await writeFile(file, `${JSON.stringify({ type: "session_meta", payload: { id, parent_thread_id: "parent", source: {
+      subagent: { thread_spawn: { parent_thread_id: "parent", depth: 1, agent_path: null, agent_role: null } },
+    } } })}\n`);
+    const copilotInputPath = path.join(root, "copilot.json");
+    await writeJson(copilotInputPath, MINIMAL_COPILOT_SNAPSHOT);
+    const env = { ...await writeGitStub(root), ...await writeGhStub(root, { repo: "owner/repo", pr: 47 }),
+      CODEX_HOME: root, CODEX_THREAD_ID: id, CLAUDECODE: undefined, DEVLOOPS_RUN_ID: "inherited" };
+    const options = { repo: "owner/repo", pr: 47, copilotInputPath, checkpointDir: root };
+    assert.equal((await runOuterLoop(options, { env, gitCommand: path.join(root, "git") })).ok, true);
+    await rm(file);
+    assert.equal((await runOuterLoop(options, { env })).asyncStartContract, "rejected");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("outer-loop: maintainer-controlled asyncStartMode=allowed permits non-snapshot startup", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "outer-loop-async-start-"));
   try {

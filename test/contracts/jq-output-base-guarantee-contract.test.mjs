@@ -26,12 +26,13 @@
 // every command *uses* that shared contract.
 
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "bun:test";
 
-import { runNode } from "../_helpers.mjs";
+import { runNode, withTempDir } from "../_helpers.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const scriptsRoot = path.join(repoRoot, "scripts");
@@ -228,8 +229,8 @@ test("every EXCLUDED entry is still a real, currently-discovered file (no stale 
 describe("sync-item-status.mjs (the originally observed gap): --jq/--silent/invalid-filter map to the documented exit codes", () => {
   const scriptPath = path.join(scriptsRoot, "projects/sync-item-status.mjs");
   const argv = ["--repo", "owner/repo", "--item", "5", "--to-column", "Done"];
-  // No .devloops in repoRoot's cwd for this invocation -> syncBoardStatus
-  // fail-opens to a skipped result (best-effort contract), independent of gh.
+  // Empty child cwd skips board sync; the sentinel catches accidental gh calls
+  // that the best-effort result's ok flag would otherwise hide.
 
   test("--help documents the shared flags (closes the observed gap)", async () => {
     const { code, stdout } = await runNode(scriptPath, ["--help"]);
@@ -239,22 +240,46 @@ describe("sync-item-status.mjs (the originally observed gap): --jq/--silent/inva
   });
 
   test("--jq filters the result and exits 0", async () => {
-    const { code, stdout, stderr } = await runNode(scriptPath, [...argv, "--jq", ".ok"]);
-    assert.equal(code, 0, stderr);
-    assert.equal(stdout.trim(), "true");
+    await withTempDir(async (fixtureDir) => {
+      const cwd = path.join(fixtureDir, "cwd");
+      const marker = path.join(fixtureDir, "gh-called");
+      await mkdir(cwd);
+      await writeFile(path.join(fixtureDir, "gh"), '#!/bin/sh\n: > "$DEVLOOPS_GH_CALL_MARKER"\nexit 97\n', { mode: 0o755 });
+      const env = { ...process.env, PATH: `${fixtureDir}${path.delimiter}${process.env.PATH ?? ""}`, DEVLOOPS_GH_CALL_MARKER: marker };
+      const { code, stdout, stderr } = await runNode(scriptPath, [...argv, "--jq", ".ok"], { cwd, env });
+      assert.equal(code, 0, stderr);
+      assert.equal(stdout.trim(), "true");
+      assert.equal(existsSync(marker), false, "unconfigured board sync must not invoke gh");
+    });
   });
 
   test("--silent suppresses stdout and maps to exit code only", async () => {
-    const { code, stdout } = await runNode(scriptPath, [...argv, "--silent"]);
-    assert.equal(code, 0);
-    assert.equal(stdout, "");
+    await withTempDir(async (fixtureDir) => {
+      const cwd = path.join(fixtureDir, "cwd");
+      const marker = path.join(fixtureDir, "gh-called");
+      await mkdir(cwd);
+      await writeFile(path.join(fixtureDir, "gh"), '#!/bin/sh\n: > "$DEVLOOPS_GH_CALL_MARKER"\nexit 97\n', { mode: 0o755 });
+      const env = { ...process.env, PATH: `${fixtureDir}${path.delimiter}${process.env.PATH ?? ""}`, DEVLOOPS_GH_CALL_MARKER: marker };
+      const { code, stdout } = await runNode(scriptPath, [...argv, "--silent"], { cwd, env });
+      assert.equal(code, 0);
+      assert.equal(stdout, "");
+      assert.equal(existsSync(marker), false, "unconfigured board sync must not invoke gh");
+    });
   });
 
   test("an invalid --jq filter fails closed: stderr + exit 2", async () => {
-    const { code, stdout, stderr } = await runNode(scriptPath, [...argv, "--jq", "bogus!!"]);
-    assert.equal(code, 2);
-    assert.equal(stdout, "");
-    assert.match(stderr, /--jq/);
+    await withTempDir(async (fixtureDir) => {
+      const cwd = path.join(fixtureDir, "cwd");
+      const marker = path.join(fixtureDir, "gh-called");
+      await mkdir(cwd);
+      await writeFile(path.join(fixtureDir, "gh"), '#!/bin/sh\n: > "$DEVLOOPS_GH_CALL_MARKER"\nexit 97\n', { mode: 0o755 });
+      const env = { ...process.env, PATH: `${fixtureDir}${path.delimiter}${process.env.PATH ?? ""}`, DEVLOOPS_GH_CALL_MARKER: marker };
+      const { code, stdout, stderr } = await runNode(scriptPath, [...argv, "--jq", "bogus!!"], { cwd, env });
+      assert.equal(code, 2);
+      assert.equal(stdout, "");
+      assert.match(stderr, /--jq/);
+      assert.equal(existsSync(marker), false, "unconfigured board sync must not invoke gh");
+    });
   });
 });
 
