@@ -35,6 +35,7 @@ import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from ".
 import { flattenPaginatedSlurp, resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
+import { carryGateMarker } from "./_carried-verdict.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
@@ -1021,7 +1022,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
 // wrapper below strips them so no OTHER caller (e.g.
 // detect-pr-gate-coordination-state.mjs, which durably stores the whole
 // returned object) can re-expose them.
-async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd() } = {}) {
+async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd(), recordCarry = false } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({
     repo: options.repo,
     pr: options.pr,
@@ -1046,13 +1047,14 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     throw error;
   }
   const prPayload = await runGhJson(
-    ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"],
+    ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,baseRefName"],
     { env, ghCommand, runChild, restFallback: () => restFetchPrView(options.repo, options.pr, env) },
   );
   const commentsPayload = normalizeIssueCommentsPayload(await runGhJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`],
     { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(`repos/${options.repo}/issues/${options.pr}/comments?per_page=100`, env) },
   ));
+  const baseRefName = typeof prPayload?.baseRefName === "string" && prPayload.baseRefName.trim() ? prPayload.baseRefName.trim() : null;
   const currentHeadSha = typeof prPayload?.headRefOid === "string" && prPayload.headRefOid.trim().length > 0
     ? prPayload.headRefOid.trim()
     : null;
@@ -1106,8 +1108,12 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   const allComments = [...commentsPayload, ...prReviews];
   const commentSummary = summarizeGateReviewComments(allComments);
   const markerSummary = summarizeGateReviewCommentMarkers(allComments, { headSha: currentHeadSha });
-  const draftGateMarker = normalizeGateMarkerSummary(markerSummary.draft_gate);
-  const preApprovalGateMarker = normalizeGateMarkerSummary(markerSummary.pre_approval_gate);
+  // Fan-out enforcement keeps the uncarried markers so ledger paths stay at the origin head.
+  const rawDraftGateMarker = normalizeGateMarkerSummary(markerSummary.draft_gate);
+  const rawPreApprovalGateMarker = normalizeGateMarkerSummary(markerSummary.pre_approval_gate);
+  const carryCtx = (gate) => ({ gate, repo: options.repo, pr: options.pr, currentHeadSha, baseRef: baseRefName ? `origin/${baseRefName}` : null, repoRoot: resolveRepoRoot(cwd), record: recordCarry });
+  const draftGateMarker = await carryGateMarker(rawDraftGateMarker, carryCtx("draft_gate"));
+  const preApprovalGateMarker = await carryGateMarker(rawPreApprovalGateMarker, carryCtx("pre_approval_gate"));
   // A config load error throws config_load_failed: fan-out evidence
   // enforcement is never disabled by an unreadable config.
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(cwd) });
@@ -1141,8 +1147,8 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     repo: options.repo,
     pr: options.pr,
     currentHeadSha,
-    draftGateMarker,
-    preApprovalGateMarker,
+    draftGateMarker: rawDraftGateMarker,
+    preApprovalGateMarker: rawPreApprovalGateMarker,
     config,
     cwd,
     hasFullLabel,

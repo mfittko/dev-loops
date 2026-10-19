@@ -498,7 +498,7 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
         stdout: '{"headRefOid":"abc1234"}\n',
       },
       {
@@ -691,7 +691,7 @@ test(`detect-checkpoint-evidence keeps the real fan-out verdict when a newer app
     }
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
         stdout: '{"headRefOid":"abc1234"}\n',
       },
       {
@@ -772,7 +772,7 @@ test("detect-checkpoint-evidence --fields returns the named top-level scalars as
   try {
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: '{"headRefOid":"abc1234"}\n' },
       {
         assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
         stdout: `${JSON.stringify([
@@ -813,7 +813,7 @@ test("detect-checkpoint-evidence fails pre-merge check when only draft gate exis
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
         stdout: '{"headRefOid":"abc1234"}\n',
       },
       {
@@ -875,7 +875,7 @@ test("detect-checkpoint-evidence fails pre-merge check when only partial draft g
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
         stdout: '{"headRefOid":"abc1234"}\n',
       },
       {
@@ -927,7 +927,7 @@ test("detect-checkpoint-evidence always fails before merge when gate comments ar
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
         stdout: '{"headRefOid":"abc1234"}\n',
       },
       {
@@ -970,7 +970,7 @@ test("detect-checkpoint-evidence accepts an older clean draft transition with cu
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
         stdout: '{"headRefOid":"abc1234"}\n',
       },
       {
@@ -1039,7 +1039,7 @@ test("detect-checkpoint-evidence fails pre-merge check when pre-approval gate is
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
         stdout: '{"headRefOid":"feed99999999"}\n',
       },
       {
@@ -1106,7 +1106,7 @@ test("detect-checkpoint-evidence reports gh failures deterministically", async (
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
         stderr: "boom\n",
         exitCode: 1,
       },
@@ -1138,7 +1138,7 @@ test("detect-checkpoint-evidence fails pre-merge with unresolved review threads 
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
         stdout: '{"headRefOid":"abc1234"}\n',
       },
       {
@@ -1203,7 +1203,7 @@ test("detect-checkpoint-evidence fails pre-merge when graphql review-thread fetc
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
         stdout: '{"headRefOid":"abc1234"}\n',
       },
       {
@@ -3605,7 +3605,7 @@ test("detect-checkpoint-evidence fails pre-merge with unresolved human review th
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
         stdout: '{"headRefOid":"abc1234"}\n',
       },
       {
@@ -3680,7 +3680,7 @@ test("detect-checkpoint-evidence passes pre-merge when all human review threads 
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
         stdout: '{"headRefOid":"abc1234"}\n',
       },
       {
@@ -3773,7 +3773,7 @@ test("detect-checkpoint-evidence does not fail closed when async run has no owne
   try {
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
         stdout: '{"headRefOid":"abc1234"}\n',
       },
       {
@@ -3838,7 +3838,7 @@ test("detect-checkpoint-evidence finds gate comment posted as PR review (root ca
 
     const env = await writeGhStub(tempDir, [
       {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
         stdout: '{"headRefOid":"abc1234"}\n',
       },
       {
@@ -3903,7 +3903,7 @@ test("detect-checkpoint-evidence: a head-pinned APPROVED review followed by a la
   try {
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: '{"headRefOid":"abc1234"}\n' },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
         stdout: `${JSON.stringify([
@@ -3986,7 +3986,7 @@ test("detect-checkpoint-evidence: a reviews-read failure blocks an escalated siz
   try {
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const env = await writeGhStub(tempDir, [
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: '{"headRefOid":"abc1234"}\n' },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
         stdout: `${JSON.stringify([
@@ -4089,7 +4089,7 @@ test("detect-checkpoint-evidence: a `review`-gate verdict submitted as an APPROV
       html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-960",
     };
     const env = await writeGhStub(tempDir, [
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: '{"headRefOid":"abc1234"}\n' },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([approvedReviewGateComment]) + "\n" },
       { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) + "\n" },
@@ -4132,7 +4132,7 @@ test("detect-checkpoint-evidence: a posted gate-findings-review body can never w
       `> **must-fix** (\`security\`): the sentinel recorded for head ${headSha} is never verified`,
     ].join("\n");
     const env = await writeGhStub(tempDir, [
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `{"headRefOid":"${headSha}"}\n` },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: `{"headRefOid":"${headSha}"}\n` },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
@@ -4195,7 +4195,7 @@ test("detect-checkpoint-evidence: a genuine verdict comment whose findings summa
       ].join("\n"),
     });
     const env = await writeGhStub(tempDir, [
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: '{"headRefOid":"abc1234"}\n' },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
         stdout: `${JSON.stringify([
@@ -4237,7 +4237,7 @@ test("detect-checkpoint-evidence: a rendered deferred-summary comment can never 
       `| worth-fixing-now | pre_approval_gate | quotes head ${headSha} in its own text | — | 2 | — |`,
     ].join("\n");
     const env = await writeGhStub(tempDir, [
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `{"headRefOid":"${headSha}"}\n` },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: `{"headRefOid":"${headSha}"}\n` },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
         stdout: `${JSON.stringify([{ id: 55, body: deferredSummaryBody, updated_at: "2026-05-30T23:25:00Z" }])}\n`,
@@ -4293,7 +4293,7 @@ function gateMarkerComment({ gate, headSha, nextAction, executionMode, inlineRea
 function fanoutEvidenceGhEntries(executionMode, inlineReason = null) {
   return [
     {
-      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
       stdout: '{"headRefOid":"abc1234"}\n',
     },
     {

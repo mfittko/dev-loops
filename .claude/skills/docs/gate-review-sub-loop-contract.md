@@ -146,9 +146,11 @@ head. On a ready PR, the `pre_approval_gate` re-runs on the new head per
 <!-- rule: GATE-EXEC-BASE-MERGE-VERDICT-CARRY -->
 `GATE-EXEC-BASE-MERGE-VERDICT-CARRY`: A head advance that only integrated the base branch keeps
 the verdict posted at the previous head when `scripts/github/classify-base-merge-carry.mjs`
-records `carry_verdict`, but this takes effect only once `merge-pr` and gate coordination
-accept the evidence (issue 2752 slice 2). Until then every new head still runs the full gate
-round. A carried verdict also needs CI green at the new head. The carry needs the same mode and
+records `carry_verdict`, and `merge-pr` and gate coordination accept the evidence only from the
+carried-heads artifact (the origin head plus each carried head with its classification, written
+by gate coordination). A carried verdict is current only while CI is green at the new head. A
+scope change (any non-base commit after the clean verdict) still invalidates the carry and
+runs the full gate round. The carry needs the same mode and
 blob object id for every PR path at both heads (raw `git diff-tree` tree entries, no rendered diff),
 an empty intersection of the PR diff paths and the base delta
 paths, a base delta that touches no gate tooling or config, and no conflict-resolution hunks

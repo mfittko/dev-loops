@@ -826,7 +826,9 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
 // with no next action and no forbidden actions, so gate coordination and Copilot requests proceed.
 // The one fixer-disposition input: detect-pr-gate-coordination-state and request-copilot-review both read it here.
 export async function resolveFixerDispositionInput(args, runtime = {}) {
-  const result = await readFixerDispositionEvidence(args, runtime);
+  // A base-only merge carries the verdict, and so the disposition, from the source head.
+  const result = await readFixerDispositionEvidence(
+    args.carriedSourceHead ? { ...args, currentHeadSha: args.carriedSourceHead } : args, runtime);
   if (!result || result.complete) return result;
   const detail = result.incomplete.map((entry) => `thread ${entry.threadId}: ${entry.failedStep}`).join("; ");
   return {
@@ -1003,6 +1005,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     ...runtime,
     cwd: runtime.cwd ?? runtime.repoRoot,
     unresolvedGateThreadCount,
+    recordCarry: true,
   });
   // When draft gate was re-passed on a different head, use its timestamp
   // to reset the Copilot round count — only reviews after the re-pass count.
@@ -1137,7 +1140,10 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     : null;
   const postConvergenceReviewSuppressed = carried.carried;
   const fixerDisposition = await resolveFixerDispositionInput(
-    { repo: options.repo, pr: options.pr, currentHeadSha, parsedThreads },
+    {
+      repo: options.repo, pr: options.pr, currentHeadSha, parsedThreads,
+      carriedSourceHead: gateEvidence.preApprovalGateMarker?.carriedFrom ?? gateEvidence.draftGateMarker?.carriedFrom ?? null,
+    },
     runtime,
   );
   return {
