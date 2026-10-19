@@ -362,10 +362,20 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   if (options.construct && !completion) {
     // THREAD route: the clearing delta record bound to the pushed head decides each thread. An ordinary order's head is
     // the review baseline; a complete order's head is the pushed candidate, so its record is found by candidateHead.
-    const clears = (candidate) => candidate && DELTA_CLEARING_NEXT_STEPS.includes(candidate.nextStep) && candidate.candidateHead === options.headSha;
-    const record = [readGateDeltaRecord(receiptTmpRoot, order.headSha), ...(complete ? listGateDeltaRecords(receiptTmpRoot) : [])].find(clears);
+    // A record decides only when it clears the pushed head and its items cover the pinned thread IDs: an ACT-route or
+    // other-sequence record for the same candidate must not. Zero or several matches refuse (the directory read is sorted).
+    const pinned = source.threads.map(({ threadId }) => threadId);
+    const clears = (candidate) => candidate && DELTA_CLEARING_NEXT_STEPS.includes(candidate.nextStep) && candidate.candidateHead === options.headSha
+      && pinned.every((id) => (candidate.items ?? []).some((item) => item?.ref === id));
+    const candidates = [readGateDeltaRecord(receiptTmpRoot, order.headSha), ...(complete ? listGateDeltaRecords(receiptTmpRoot) : [])].filter(Boolean);
+    const matches = [...new Map(candidates.filter(clears).map((candidate) => [candidate.reviewBaselineHead, candidate])).values()]
+      .sort((x, y) => x.reviewBaselineHead.localeCompare(y.reviewBaselineHead));
+    if (matches.length > 1) {
+      throw new Error(`--construct found several clearing delta records (baselines ${matches.map((m) => m.reviewBaselineHead).join(", ")}) covering the pinned threads for the pushed head ${options.headSha}; refusing an ambiguous record`);
+    }
+    const [record] = matches;
     if (!record) {
-      throw new Error(`--construct needs a clearing delta record ${complete ? "" : `for baseline ${order.headSha} `}whose candidateHead is the pushed head ${options.headSha}; push the reviewed candidate first`);
+      throw new Error(`--construct needs a clearing delta record ${complete ? "" : `for baseline ${order.headSha} `}whose candidateHead is the pushed head ${options.headSha} and whose items cover the pinned threads; push the reviewed candidate first`);
     }
     const resolved = new Set((record.items ?? []).filter((item) => item?.status === "resolved").map((item) => item.ref));
     raw.dispositions = source.threads.map(({ threadId }) => ({ threadId, fixingCommitSha: options.headSha, disposition: resolved.has(threadId) ? "tackled" : "deferred" }));

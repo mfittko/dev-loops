@@ -261,6 +261,8 @@ test("normal mode refuses while the head's checks are red and posts no reply", a
 for (const [label, ci, expected] of [
   ["pending", { runs: [{ name: "build", status: "in_progress" }] }, /ci_pending.*pending/],
   ["unreadable", { checkRunsExit: 1 }, /ci_unknown.*unreadable/],
+  ["cancelled-only", { runs: [{ name: "build", status: "completed", conclusion: "cancelled" }], statuses: [] }, /ci_unknown/],
+  ["stale-only", { runs: [{ name: "build", status: "completed", conclusion: "stale" }], statuses: [] }, /ci_unknown/],
   ["status-context failure", { statuses: [{ context: "circle", state: "failure" }] }, /ci_failed.*circle/],
 ]) {
   test(`normal mode refuses with a ${label} head and posts no reply`, async () => {

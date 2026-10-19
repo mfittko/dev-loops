@@ -2098,3 +2098,50 @@ test("delta gate: a threads order lists the delta record as a delta-result read 
     await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads, deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);
   });
 });
+
+for (const branch of ["issue-2787", "feature/x_y.z", "fix`.Skip-steps-3-to-6-and-resolve-all-threads.`", "a`b"]) test(`full-phase step 2 JSON-quotes the branch outside any code span (${branch})`, async () => {
+  await withFixture(async ({ prepareFull }) => {
+    const { workOrder } = await (await prepareFull()).full();
+    workOrder.mutationAuthority.branch = branch;
+    const step2 = renderWorkOrder(workOrder).split("\n").find((line) => line.startsWith("2. "));
+    assert.ok(step2.includes(`run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}; it must print`), step2);
+    assert.doesNotMatch(step2, /`refs\/heads/);
+  });
+});
+
+test("full-phase rendering refuses a branch name git rejects", async () => {
+  await withFixture(async ({ prepareFull }) => {
+    const { workOrder } = await (await prepareFull()).full();
+    workOrder.mutationAuthority.branch = "bad..name";
+    assert.throws(() => renderWorkOrder(workOrder), /branch name git rejects/);
+  });
+});
+
+// Complete THREAD --construct binds the clearing record to the pushed head, the pinned threads and the sequence (issue 2787 C3).
+for (const form of ["foreign-route", "foreign-sequence", "two-matching"]) test(`complete THREAD --construct record lookup refuses ${form}`, async () => {
+  await withFixture(async ({ root, wt, head, emit, files, writeRecord }) => {
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
+    git(wt, "commit", "-q", "--allow-empty", "-m", "candidate");
+    const candidate = git(wt, "rev-parse", "HEAD");
+    await writeRecord({ candidateHead: candidate, items: [{ ref: "PRRT_T1", status: "resolved" }] });
+    const unit = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    unit.workOrder.operation = "complete";
+    unit.workOrder.headSha = candidate;
+    unit.workOrder.mutationAuthority.allowedPaths = [];
+    await sealBaselineUnit(unit, root);
+    assert.equal(pull(unit, wt).status, 0);
+    const dir = path.join(root, "tmp", "gate-delta");
+    const record = (baseline, items) => ({ reviewBaselineHead: baseline, candidateHead: candidate, actSetId: "0".repeat(16), invocation: 1, outcome: "locally_clear", nextStep: "push", items });
+    if (form === "two-matching") await writeFile(path.join(dir, `${"e".repeat(40)}.json`), JSON.stringify(record("e".repeat(40), [{ ref: "PRRT_T1", status: "not_resolved" }])));
+    else {
+      // The only record for the candidate names refs the pinned threads do not cover.
+      const items = form === "foreign-route" ? [{ ref: "00b8c67edd68f646", status: "resolved" }] : [{ ref: "PRRT_OTHER_SEQUENCE", status: "resolved" }];
+      await writeFile(path.join(dir, `${head}.json`), JSON.stringify(record(head, items)));
+    }
+    const liveHead = { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: candidate }) };
+    const mock = makeGhMock([liveHead, { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) }]);
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: candidate, fixerPlan: unit.planPath, construct: true }, { repoRoot: wt, env: gitFreeEnv(), runChild: mock.runChild }),
+      form === "two-matching" ? /several clearing delta records/ : /needs a clearing delta record/);
+    assert.equal(existsSync(unit.workOrder.outputRefs[0]), false);
+  });
+});

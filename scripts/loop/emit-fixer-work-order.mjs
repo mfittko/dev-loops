@@ -5,7 +5,7 @@
  * pull-work-order.mjs selects by the ref's `fixer:` prefix. Serializer, envelope,
  * reader and receipt stay in _work-order-protocol.mjs.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile, rename } from "node:fs/promises";
@@ -142,10 +142,12 @@ const EDIT_RULE = "Edit rule: write files only with the Edit and Write tools. Ne
 function fullPhaseSteps(workOrder, verifier, { push }) {
   const root = path.dirname(path.dirname(workOrder.executionRules.contract));
   const { repo, pr } = workOrder.target;
+  const { branch } = workOrder.mutationAuthority;
+  if (spawnSync("git", ["check-ref-format", "--branch", branch]).status !== 0) throw new Error(`refusing to render a branch name git rejects: ${JSON.stringify(branch)}`);
   const wait = `node ${shellQuote(path.join(root, "scripts/github/wait-pr-checks.mjs"))} --repo ${shellQuote(repo)} --pr ${pr} --timeout 900`;
   return `Do these steps in this order; none may be skipped or reordered:
 1. ${push}
-2. Confirm the remote head equals the candidate: \`git ls-remote origin ${shellQuote(`refs/heads/${workOrder.mutationAuthority.branch}`)}\` must print the pushed candidate SHA. If it does not, stop and report.${verifier.includes("<pushed-head-sha>") ? " Replace `<pushed-head-sha>` in steps 4 to 6 with the confirmed SHA." : ""}
+2. Confirm the remote head equals the candidate: run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}; it must print the pushed candidate SHA. If it does not, stop and report.${verifier.includes("<pushed-head-sha>") ? " Replace `<pushed-head-sha>` in steps 4 to 6 with the confirmed SHA." : ""}
 3. Run \`${wait}\` once. If it exits 2 (not settled), run it exactly once more. If CI is red (\`failure\`), resolve no thread, run no verifier step, and hand back \`ci_failed\` with the failing check names. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, resolve no thread, run no verifier step, and hand back \`ci_pending\` (\`ci_unknown\` when the checks cannot be read).
 4. Run \`${verifier} --construct\`. If it fails because the output exists, go to step 5. If step 5 refuses the report as hand-written, rm the outputRef and re-run step 4.
 5. Run \`${verifier}\`.
