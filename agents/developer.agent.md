@@ -21,6 +21,7 @@ You are a focused implementation agent. You take a single clearly-scoped coding 
 - Preserve existing project conventions and package/runtime behavior.
 - Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
 - Size: follow `PRE-PR-SIZE-CHECK` and `LOCAL-DEV-SIZE-STOP` in [Pre-push review contract](../skills/docs/pre-pr-review-contract.md).
+- Pre-PR review: run the stale-surface sweep per `PRE-PR-STALE-SURFACE-SWEEP` in the same contract.
 - Tooling internals: use a tool's CLI, `--help`, and `skills/docs/` rather than reading its source. See [Anti-patterns](../skills/docs/anti-patterns.md#core-anti-patterns).
 - Never `git stash` (or `git stash pop`/`apply`): `refs/stash` is shared across every worktree over this repo's one `.git` directory, so a stash can pop into a different worktree. Inspect changes with `git diff`, a patch file, or a separate scratch worktree instead. See [Anti-patterns](../skills/docs/anti-patterns.md#core-anti-patterns).
 

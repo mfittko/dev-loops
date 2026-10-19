@@ -211,20 +211,18 @@ test("DEV-LOOP-PROBE-TIMEOUT-CEILING pins the 600000 ms ceiling in the bounded w
   const marker = skill.indexOf("<!-- rule: DEV-LOOP-PROBE-TIMEOUT-CEILING -->");
   assert.ok(watch !== -1 && marker > watch && skill.indexOf("\n**", watch + 1) > marker, "expected the rule inside the bounded watch rule");
   const rule = collapse(passageWith(skill, "<!-- rule: DEV-LOOP-PROBE-TIMEOUT-CEILING -->"));
-  assert.match(rule, /`--timeout-ms` .*MUST stay below 600000 ms, the harness tool-call limit/);
-  assert.match(rule, /`wait-pr-checks\.mjs --timeout <seconds>` MUST stay below 600 seconds/);
-  assert.match(rule, /`probe-copilot-review\.mjs`, `wait-pr-checks\.mjs`, and `node <dev-loops-package-root>\/cli\/index\.mjs loop watch-ci` \/ `probe-ci-status\.mjs` all default to 1800 s, so every call MUST pass an explicit timeout below the limit/);
-  assert.match(rule, /`--timeout-ms` below 600000 for `probe-copilot-review\.mjs` and `watch-ci`, `--timeout` below 600 seconds for `wait-pr-checks\.mjs`/);
+  assert.match(rule, /`--timeout` on a Copilot or CI probe MUST stay below 600 seconds, the harness tool-call limit/);
+  assert.match(rule, /`probe-copilot-review\.mjs`, `wait-pr-checks\.mjs`, and `node <dev-loops-package-root>\/cli\/index\.mjs loop watch-ci` \/ `probe-ci-status\.mjs` all default to 1800 s, so every call MUST pass an explicit `--timeout` below 600 seconds/);
   // The owner rule's watch-ci example carries an explicit timeout below the limit.
   const followup = await readRepo("skills/copilot-pr-followup/SKILL.md");
   const waitTools = collapse(passageWith(followup, "<!-- rule: COPILOT-FOLLOWUP-WAIT-TOOLS -->"));
-  assert.match(waitTools, /`node <dev-loops-package-root>\/cli\/index\.mjs loop watch-ci --repo <owner\/name> --pr <number> --timeout-ms 540000`/);
+  assert.match(waitTools, /`node <dev-loops-package-root>\/cli\/index\.mjs loop watch-ci --repo <owner\/name> --pr <number> --timeout 540`/);
   assert.match(rule, /a longer wait loops in separate foreground calls/);
-  // Every `timeout <seconds>` wrapper in the watch rule stays below the 600 s limit.
+  // Every explicit `--timeout <seconds>` in the watch rule stays below the 600 s limit.
   const watchLine = skill.slice(watch, skill.indexOf("\n", watch));
-  const seconds = [...watchLine.matchAll(/`timeout (\d+) /g)].map((m) => Number(m[1]));
-  assert.ok(seconds.length > 0, "expected a timeout wrapper in the bounded watch rule");
-  for (const value of seconds) assert.ok(value < 600, `timeout ${value} must stay below the 600 s tool-call limit`);
+  const seconds = [...watchLine.matchAll(/--timeout (\d+)/g)].map((m) => Number(m[1]));
+  assert.ok(seconds.length > 0, "expected an explicit --timeout in the bounded watch rule");
+  for (const value of seconds) assert.ok(value < 600, `--timeout ${value} must stay below the 600 s tool-call limit`);
 });
 
 test("DEV-LOOP-RUNNER-STOP-CONDITIONS names all three conditions and the quote-and-do-not-retry rule", async () => {

@@ -1,6 +1,6 @@
 {
   "name": "@dev-loops/core",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -108,7 +108,8 @@
     "./loop/main-checkout-ff": "./src/loop/main-checkout-ff.mjs",
     "./loop/normalize": "./src/loop/normalize.mjs",
     "./loop/tracker-first-loop-state": "./src/loop/tracker-first-loop-state.mjs",
-    "./loop/work-order-digest": "./src/loop/work-order-digest.mjs"
+    "./loop/work-order-digest": "./src/loop/work-order-digest.mjs",
+    "./loop/coordinator-work-order": "./src/loop/coordinator-work-order.mjs"
   },
   "bin": {
     "dev-loops-log-bash-exit-1": "./bin/log-bash-exit-1.mjs",

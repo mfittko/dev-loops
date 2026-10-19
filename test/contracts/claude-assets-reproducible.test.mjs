@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 import os from "node:os";
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -317,4 +318,35 @@ test("plugin manifest version is a generated asset stamped from package.json (#1
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
+});
+
+test("generator --help exits 0 and unknown flags exit 1 without writing (#2569)", () => {
+  const status = () => spawnSync("git", ["status", "--porcelain"], { cwd: repoRoot, encoding: "utf8" }).stdout;
+  // mtimes catch byte-identical rewrites that git status cannot see.
+  const mtimes = () => {
+    const out = {};
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(p);
+        else out[p] = fs.statSync(p).mtimeMs;
+      }
+    };
+    walk(path.join(repoRoot, ".claude"));
+    return out;
+  };
+  const before = status();
+  const mtimesBefore = mtimes();
+  assert.ok(Object.keys(mtimesBefore).length > 0, "expected generated .claude files");
+  const run = (flag) => spawnSync(process.execPath, ["scripts/claude/generate-claude-assets.mjs", flag], { cwd: repoRoot, encoding: "utf8" });
+  for (const flag of ["--help", "-h"]) {
+    const help = run(flag);
+    assert.equal(help.status, 0);
+    assert.match(help.stdout, /Usage:/);
+  }
+  const bogus = run("--bogus");
+  assert.equal(bogus.status, 1);
+  assert.match(bogus.stderr, /Usage:/);
+  assert.equal(status(), before);
+  assert.deepEqual(mtimes(), mtimesBefore);
 });

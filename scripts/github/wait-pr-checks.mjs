@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parseNonNegativeInteger, parsePositiveInteger, parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
+import { resolveTimeoutMs } from "../lib/timeout-flag.mjs";
+import { parsePositiveInteger, parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import {
@@ -31,7 +32,9 @@ Required:
   --pr <number>           Pull request number
 Optional:
   --timeout <seconds>     Total wait budget (default ${DEFAULT_TIMEOUT_SECONDS}; 0 = single
-                          immediate check, no wait)
+                          immediate check, no wait; fractions allowed)
+  --timeout-ms <n>        Deprecated alias for --timeout (milliseconds); warns on
+                          stderr. Passing both flags fails closed.
   --poll <seconds>        Delay between polls (default ${DEFAULT_POLL_SECONDS})
 Not-yet-registered-check race guard:
   A freshly pushed head with zero registered checks does NOT settle green on
@@ -77,6 +80,7 @@ export function parseWaitPrChecksCliArgs(argv) {
       repo: { type: "string" },
       pr: { type: "string" },
       timeout: { type: "string" },
+      "timeout-ms": { type: "string" },
       poll: { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -91,6 +95,7 @@ export function parseWaitPrChecksCliArgs(argv) {
     timeoutMs: DEFAULT_TIMEOUT_SECONDS * 1000,
     pollIntervalMs: DEFAULT_POLL_SECONDS * 1000,
   };
+  const rawTimeout = {};
   for (const token of tokens) {
     if (token.kind === "positional") {
       throw parseError(`Unknown argument: ${token.value}`);
@@ -110,10 +115,8 @@ export function parseWaitPrChecksCliArgs(argv) {
       options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
-    if (token.name === "timeout") {
-      // Canonical-digits validation (shared /^\d+$/ primitives): rejects
-      // JS-coercible spellings like 1e3, 0x10, "1.0", or " 5 ".
-      options.timeoutMs = parseNonNegativeInteger(requireTokenValue(token, parseError), "--timeout", parseError) * 1000;
+    if (token.name === "timeout" || token.name === "timeout-ms") {
+      rawTimeout[token.name === "timeout" ? "timeout" : "timeoutMs"] = requireTokenValue(token, parseError);
       continue;
     }
     if (token.name === "poll") {
@@ -122,6 +125,11 @@ export function parseWaitPrChecksCliArgs(argv) {
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
+  }
+  try {
+    options.timeoutMs = resolveTimeoutMs(rawTimeout) ?? options.timeoutMs;
+  } catch (error) {
+    throw parseError(error instanceof Error ? error.message : String(error));
   }
   if (options.repo === undefined || options.pr === undefined) {
     throw parseError("Waiting on PR checks requires both --repo <owner/name> and --pr <number>");

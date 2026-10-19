@@ -83,6 +83,8 @@ test("failed full suite returns an unsuccessful public result and retains failur
     assert.equal(result.ok, false);
     assert.equal(result.status, "failed");
     assert.equal(result.artifact.allPassed, false);
+    assert.equal(result.allPassed, false);
+    assert.equal(result.allPassed, result.artifact.allPassed);
     assert.equal(result.artifact.suites[0].exitCode, 2);
     assert.deepEqual(JSON.parse(await readFile(path.join(repoRoot, result.artifactPath), "utf8")), result.artifact);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
@@ -682,4 +684,103 @@ test("defaultReadCi maps the gh view fields to headSha and rollup", async () => 
   assert.equal(calls[0].fields, "headRefOid,statusCheckRollup");
   assert.equal(calls[0].repo, "o/r");
   assert.equal(calls[0].pr, 7);
+});
+
+// Run draft_gate, optionally rewrite its artifact, then resolve pre_approval_gate.
+async function secondGate(rewrite, firstProfile = "full-repository", secondProfile = "full-repository", secondTitle = "feat: x") {
+  const readPrTitle = async () => "feat: x";
+  const { repoRoot, headSha } = await fixture();
+  try {
+    const suite = (profile) => profile === "targeted" ? ["--suite", "passing"] : [];
+    const first = await resolveValidation(parseResolveValidationArgs([...args(headSha, firstProfile), ...suite(firstProfile)]), { repoRoot, readPrTitle });
+    const file = path.join(repoRoot, first.artifactPath);
+    if (rewrite) await writeFile(file, JSON.stringify(rewrite(first.artifact)));
+    const second = await resolveValidation({ ...parseResolveValidationArgs([...args(headSha, secondProfile), ...suite(secondProfile)]), gate: "pre_approval_gate" }, { repoRoot, readPrTitle: async () => secondTitle });
+    return { first, second };
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+}
+
+test("an exact passing artifact from the other lifecycle gate is reused", async () => {
+  const { first, second } = await secondGate();
+  assert.equal(second.status, "complete");
+  assert.equal(second.artifact.reusedFrom, "draft_gate");
+  assert.equal(second.artifact.gate, "pre_approval_gate");
+  assert.deepEqual(second.artifact.suites, first.artifact.suites);
+});
+
+test("a prior artifact for another head is not reused", async () => {
+  const { second } = await secondGate((a) => ({ ...a, headSha: "0".repeat(40) }));
+  assert.equal(second.status, "complete");
+  assert.equal(second.artifact.reusedFrom, undefined);
+});
+
+test("a failed prior artifact is not reused and a real run happens", async () => {
+  const { first, second } = await secondGate((a) => ({ ...a, ok: false, allPassed: false }));
+  assert.equal(second.artifact.reusedFrom, undefined);
+  assert.notEqual(second.artifact.generatedAt, first.artifact.generatedAt);
+  assert.equal(second.status, "complete");
+});
+
+test("a prior artifact from a different profile is not reused", async () => {
+  const { second } = await secondGate((a) => ({ ...a, profile: "targeted" }));
+  assert.equal(second.status, "complete");
+  assert.equal(second.artifact.reusedFrom, undefined);
+});
+
+test("a prior artifact under a different PR title is not reused", async () => {
+  const { second } = await secondGate(null, "full-repository", "full-repository", "chore: x");
+  assert.equal(second.status, "complete");
+  assert.equal(second.artifact.reusedFrom, undefined);
+});
+
+test("a prior artifact without a prTitle is not reused", async () => {
+  const { second } = await secondGate(({ prTitle: _t, ...a }) => a);
+  assert.equal(second.artifact.reusedFrom, undefined);
+});
+
+test("reusing an artifact that already carries reusedFrom keeps the original gate", async () => {
+  const { second } = await secondGate((a) => ({ ...a, reusedFrom: "original_gate" }));
+  assert.equal(second.artifact.reusedFrom, "original_gate");
+  assert.equal(second.artifact.gate, "pre_approval_gate");
+});
+
+test("top-level allPassed matches the artifact, and --jq is validated before any suite runs", async () => {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha)], { cwd: repoRoot });
+    const result = JSON.parse(out.stdout);
+    assert.equal(result.allPassed, true);
+    assert.equal(result.allPassed, result.artifact.allPassed);
+    const ok = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha), "--jq", ".allPassed"], { cwd: repoRoot });
+    assert.equal(ok.stdout.trim(), "true", ok.stderr);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+  // The default `verify` suite stays classifiable; its script writes a marker file.
+  const markedFixture = async () => {
+    const f = await fixture();
+    const marker = path.join(f.repoRoot, "tmp", "marker.txt");
+    await writeFile(path.join(f.repoRoot, "scripts", "verify.mjs"), `import { mkdirSync, writeFileSync } from "node:fs"; mkdirSync(${JSON.stringify(path.dirname(marker))}, { recursive: true }); writeFileSync(${JSON.stringify(marker)}, "ran");`);
+    execFileSync("git", ["add", "scripts"], { cwd: f.repoRoot });
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "marker"], { cwd: f.repoRoot });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.repoRoot, encoding: "utf8" }).trim();
+    return { ...f, head, marker };
+  };
+  const control = await markedFixture();
+  try {
+    const ok = await runNode(CLI, ["gate", "resolve-validation", ...args(control.head), "--jq", ".allPassed"], { cwd: control.repoRoot });
+    assert.equal(ok.stdout.trim(), "true", ok.stderr);
+    assert.equal(await readFile(control.marker, "utf8"), "ran");
+  } finally { await rm(control.repoRoot, { recursive: true, force: true }); }
+  const marked = await markedFixture();
+  try {
+    const { marker, head } = marked;
+    const staleArtifact = path.join(marked.repoRoot, buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: head, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(staleArtifact), { recursive: true });
+    await writeFile(staleArtifact, JSON.stringify({ allPassed: true }));
+    const bad = await runNode(CLI, ["gate", "resolve-validation", ...args(head), "--jq", "{ok,allPassed}"], { cwd: marked.repoRoot });
+    assert.equal(bad.code, 2);
+    assert.ok(bad.stderr.includes("--jq (BASE-JQ-OUTPUT-GUARANTEE)"), bad.stderr);
+    assert.equal(bad.stdout, "");
+    await assert.rejects(readFile(marker, "utf8"));
+    await assert.rejects(readFile(staleArtifact, "utf8"), /ENOENT/);
+  } finally { await rm(marked.repoRoot, { recursive: true, force: true }); }
 });

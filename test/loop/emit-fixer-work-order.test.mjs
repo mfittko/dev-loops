@@ -8,6 +8,7 @@ import { cp, link, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "bun:test";
+import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../../scripts/github/_fixer-emission-evidence.mjs";
@@ -17,7 +18,7 @@ import { classifyValidationCommand } from "@dev-loops/core/loop/validation-class
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
-import { assertFixerDispatchPayload, buildFixerDispatchPayload, emitFixerWorkOrder, locateFixerUnit, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
+import { assertFixerDispatchPayload, buildFixerDispatchPayload, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
@@ -39,6 +40,16 @@ const gitFreeEnv = () => ({ ...runIdFreeEnv(), GIT_DIR: undefined, GIT_WORK_TREE
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitFreeEnv() }).trim();
 const refusal = (result) => (assert.equal(result.status, 1, result.stderr), JSON.parse(result.stdout).refusal);
 // The fixer runs the dispatch pointer's exact pull line; the Bash gate binds the grant to its agent_id.
+// Verdict reviews posted for `postedHead` in the real marker body format.
+const verdictReviews = (postedHead, gates) => gates.map((gate, id) => ({
+  id: id + 1, surface: "review", state: "COMMENTED", submitted_at: "2026-10-19T00:00:00Z", updated_at: "2026-10-19T00:00:00Z",
+  body: [`Gate review: ${gate}`, `Reviewed head SHA: ${postedHead}`, "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"),
+}));
+// A fetchVerdictMarkers seam fed by the real marker parser.
+const verdictPostedAt = (postedHead, gates = ["draft_gate", "pre_approval_gate"]) => async ({ headSha }) => summarizeGateReviewCommentMarkers(verdictReviews(postedHead, gates), { headSha });
+// A gh stub for the spawned CLI: PR view, an empty comment stream and a review stream carrying the posted verdicts.
+const ghStubScript = (head) => `#!/bin/sh\ncase "$*" in\n*/reviews*) printf '%s\\n' '${JSON.stringify([verdictReviews(head, ["draft_gate", "pre_approval_gate"])])}';;\n*/comments*) echo '[[]]';;\n*) printf '%s\\n' '${JSON.stringify({ headRefName: "issue-1", headRefOid: head })}';;\nesac\n`;
+
 const AGENT = "agent-a";
 const pullLine = (identity) => /`([^`]+)`/.exec(buildDispatchPointer(identity))[1];
 const pull = (unit, cwd, over = {}) => {
@@ -109,7 +120,7 @@ async function withFixture(fn) {
     const emitRaw = (over = {}) => emitFixerWorkOrder({
       repo: REPO, pr: PR, headSha: head, phase: "commit_only", actListFile: files.actList, gate: "draft_gate", cwd: wt,
       ...(over.actListFile === undefined && "actListFile" in over ? {} : { deltaResult: files.delta }),
-      fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }), executionIdentity: nextExecution(), ...over,
+      fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }), fetchVerdictMarkers: verdictPostedAt(head), executionIdentity: nextExecution(), ...over,
     });
     const emit = async (over = {}) => {
       const restore = await syncRecordItems(over);
@@ -551,6 +562,29 @@ test("F1: a delta result that does not belong to this act list and head refuses 
   });
 });
 
+test("verdict_not_posted: an act-list order refuses without a posted verdict for the gate at the head; a threads order is unaffected", async () => {
+  await withFixture(async ({ head, files, emit }) => {
+    const refuse = (over) => assert.rejects(emit(over), /verdict_not_posted[^]*dev-loops gate upsert-verdict[^]*--head-sha[^]*--gate (draft_gate|pre_approval_gate)/);
+    await refuse({ fetchVerdictMarkers: async () => summarizeGateReviewCommentMarkers([], { headSha: head }) });
+    // A verdict posted for another head is filtered out by the real marker parser.
+    await refuse({ fetchVerdictMarkers: async ({ headSha }) => verdictPostedAt("b".repeat(40))({ headSha }) });
+    // A verdict for the other gate does not satisfy this gate.
+    await refuse({ gate: "pre_approval_gate", fetchVerdictMarkers: verdictPostedAt(head, ["draft_gate"]) });
+    await refuse({ fetchVerdictMarkers: async () => { throw new Error("gh down"); } });
+    // A review whose body names only the gate and head (no verdict, summary or next action) is visible but incomplete.
+    const partial = [{ ...verdictReviews(head, ["draft_gate"])[0], body: `Gate review: draft_gate\nReviewed head SHA: ${head}` }];
+    await refuse({ fetchVerdictMarkers: async ({ headSha }) => summarizeGateReviewCommentMarkers(partial, { headSha }) });
+    // The default fetcher reads submitted reviews only: a complete issue-comment marker with no review refuses.
+    const complete = verdictReviews(head, ["draft_gate"])[0];
+    const runChild = async (_gh, args) => ({ code: 0, stderr: "", stdout: JSON.stringify(args.join(" ").includes("/issues/") ? [[{ ...complete, surface: "issue_comment" }]] : [[]]) });
+    await refuse({ fetchVerdictMarkers: ({ headSha }) => defaultFetchVerdictMarkers({ repo: REPO, pr: PR, headSha, runtime: { env: {}, ghCommand: "gh", runChild } }) });
+    assert.equal((await emit({ deltaResult: undefined, phase: "commit_only" })).workOrder.gate, "draft_gate");
+    await writeFile(files.threads, JSON.stringify(THREADS));
+    const neverCalled = async () => { throw new Error("threads source must not read verdicts"); };
+    assert.equal((await emit({ ...threadsOnly, phase: "commit_only", actListFile: undefined, threadsFile: files.threads, fetchVerdictMarkers: neverCalled })).workOrder.source, "threads");
+  });
+});
+
 const threadsOnly = { actListFile: undefined, gate: undefined, phase: "full" };
 const THREE = { ...THREADS, threads: ["T1", "T2", "T3"].map((threadId, i) => ({ ...THREADS.threads[0], threadId, commentId: i + 1 })) };
 
@@ -823,7 +857,7 @@ test("F1/F4: changing act list, threads, allowed paths, branch, phase or head ch
       await emit({ ...threadsOnly, threadsFile: files.threads }),
       await emit({ gate: "pre_approval_gate" }),
       await emit({ fetchPr: async () => ({ headRefName: "other", headRefOid: base.workOrder.headSha }) }),
-      await emit({ headSha: "b".repeat(40), phase: "commit_only", deltaResult: undefined, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }) }),
+      await emit({ headSha: "b".repeat(40), phase: "commit_only", deltaResult: undefined, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }), fetchVerdictMarkers: verdictPostedAt("b".repeat(40)) }),
       await emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads }),
     ];
     const widened = [...ACT, withFp({ ...ACT[0], summary: "second", line: 9 })];
@@ -882,7 +916,7 @@ test("F2: Claude, Pi and Codex initial, rebuilt and replacement payloads carry t
     await writeRecord({ items: [{ ref: ACT_REF, status: "resolved" }] });
     const bin = path.join(root, "tmp", "bin");
     await mkdir(bin, { recursive: true });
-    await writeFile(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ headRefName: "issue-1", headRefOid: head })}'\n`);
+    await writeFile(path.join(bin, "gh"), ghStubScript(head));
     chmodSync(path.join(bin, "gh"), 0o755);
     // Hermetic: a launched session's DEVLOOPS_AGENT_OVERRIDES must not flip the consumer-checkout agent type.
     const env = { ...runIdFreeEnv({ DEVLOOPS_AGENT_OVERRIDES: undefined }), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
@@ -1749,7 +1783,7 @@ for (const route of ["Historical main", "OLD authority", "complete"]) test(`${ro
     assert.equal(await readFile(path.join(oldRoot, "scripts/loop/emit-fixer-work-order.mjs"), "utf8"), execFileSync("git", ["-C", checkout, "show", `${historical}:scripts/loop/emit-fixer-work-order.mjs`], { encoding: "utf8", env: gitFreeEnv() }));
     const producer = await import(pathToFileURL(emitterPath).href);
     const emitter = (over = {}) => producer.emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, actListFile: files.actList, gate: "draft_gate", cwd: wt,
-      fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }), executionIdentity: nextExecution(), deltaResult: files.delta, ...over });
+      fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }), fetchVerdictMarkers: verdictPostedAt(head), executionIdentity: nextExecution(), deltaResult: files.delta, ...over });
     const f = await prepareFull({ emitter }), unit = await f.full();
     if (route === "complete") {
       unit.workOrder.operation = "complete";
@@ -1861,7 +1895,7 @@ test("regenerate: the rule is identical for the claude, pi and codex harness CLI
     await addGenerator(wt);
     const bin = path.join(root, "tmp", "bin");
     await mkdir(bin, { recursive: true });
-    await writeFile(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ headRefName: "issue-1", headRefOid: head })}'\n`);
+    await writeFile(path.join(bin, "gh"), ghStubScript(head));
     chmodSync(path.join(bin, "gh"), 0o755);
     const env = { ...runIdFreeEnv({ DEVLOOPS_AGENT_OVERRIDES: undefined }), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
     const rules = [];

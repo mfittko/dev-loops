@@ -295,6 +295,7 @@ export const SUBCOMMAND_ROUTES = {
   loop: {
     startup:        "scripts/loop/resolve-dev-loop-startup.mjs",
     "build-envelope": "scripts/loop/build-handoff-envelope.mjs",
+    "coordinator-work-order": "scripts/loop/emit-coordinator-work-order.mjs",
     outer:          "scripts/loop/outer-loop.mjs",
     "watch-cycle":  "scripts/loop/run-watch-cycle.mjs",
     "claude-launch": "scripts/loop/claude-launch.mjs",
@@ -413,6 +414,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
   loop: {
     startup: "Resolve dev-loop startup bundle",
     "build-envelope": "Build handoff envelope from startup output",
+    "coordinator-work-order": "Emit coordinator work order from startup output",
     outer: "Run outer-loop detection",
     "watch-cycle": "Run Copilot wait cycle",
     "claude-launch": "Start Claude Code with .devloops extraTools delivered to developer/fixer/refiner",
@@ -436,7 +438,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "visual-grill-capture": "Drive a headless browser to a described screen and capture it for loop-grill",
     "audit-session": "Audit Pi or Claude Code session transcripts to measure token efficiency and context snowballing",
     "pre-push-delta": "Build the delta-mode pre-push review input or check its result before an act-list or thread-route fix push",
-    "pre-pr-review": "Write the pre-PR review record for the current head (required by pr create)",
+    "pre-pr-review": "Write the pre-PR review record for the current head after the stale-surface sweep (required by pr create); --scan prints the sweep only",
     "spec-lint": "Lint an issue body offline against required-rules.json and docs/decisions",
   },
   pr: {

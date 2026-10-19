@@ -11,11 +11,11 @@ import { LOOP_DERIVED_CI_CHECK_NAMES, deriveLoopCiStatusFromRollup, partitionEnt
 
 import { parsePrNumber } from "../_cli-primitives.mjs";
 import { isDirectCliRun } from "../_core-helpers.mjs";
-import { normalizeGate, normalizeHeadSha } from "../github/_gate-names.mjs";
+import { LIFECYCLE_GATES, normalizeGate, normalizeHeadSha } from "../github/_gate-names.mjs";
 import { viewPr } from "../github/view-pr.mjs";
 import { buildValidationResultsPath } from "../github/write-gate-context.mjs";
-import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
-import { buildValidationArtifact, classifyPackageSuites, parseRunGateValidationCliArgs, readPackageScripts, runKillable, stripAnsi } from "./run-gate-validation.mjs";
+import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
+import { buildValidationArtifact, classifyPackageSuites, defaultReadPrTitle, parseRunGateValidationCliArgs, readPackageScripts, runKillable, stripAnsi } from "./run-gate-validation.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { DEVLOOPS_CONFIG_PATHS } from "./check-adr-tripwire.mjs";
 import { readDefaultBranchConfig } from "./standing-authorization.mjs";
@@ -135,7 +135,7 @@ function runDeclaredFullCommand(command, { repo, pr, gate, headSha, tmpRoot }, {
   });
 }
 
-export async function resolveValidation(options, { repoRoot = resolveRepoRoot(process.cwd()), env = process.env, readCi = defaultReadCi } = {}) {
+export async function resolveValidation(options, { repoRoot = resolveRepoRoot(process.cwd()), env = process.env, readCi = defaultReadCi, readPrTitle = defaultReadPrTitle } = {}) {
   const artifactPath = path.resolve(repoRoot, buildValidationResultsPath(options));
   // An incomplete outcome replaces any earlier same-head evidence with a typed
   // incomplete record, so the verdict writer sees that the round resolved its
@@ -146,7 +146,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
   const incomplete = async (reason, { writeArtifact = true } = {}) => {
     await rm(artifactPath, { force: true });
     if (!writeArtifact) {
-      return { ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason };
+      return { ok: false, status: "incomplete", allPassed: false, profile: options.profile, headSha: options.headSha, toolchain: null, reason };
     }
     const artifact = {
       ok: false, status: "incomplete", allPassed: false,
@@ -155,7 +155,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     };
     await mkdir(path.dirname(artifactPath), { recursive: true });
     await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
-    return { ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason, artifactPath: buildValidationResultsPath(options) };
+    return { ok: false, status: "incomplete", allPassed: false, profile: options.profile, headSha: options.headSha, toolchain: null, reason, artifactPath: buildValidationResultsPath(options) };
   };
   // An exception writes a typed artifact only when the head check confirmed
   // the requested head and a re-check at the throw still confirms it: a suite
@@ -210,7 +210,24 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
       if (options.profile === "targeted" && classification === "full-repository") return incomplete("targeted profile cannot run full-repository validation");
       if (options.profile === "targeted" && classification !== "targeted") return incomplete("targeted profile requires a validation suite");
       if (options.profile === "full-repository" && classification !== "full-repository") return incomplete("verify script is not classified as full-repository validation");
-      artifact = { ...await buildValidationArtifact(options, { repoRoot }), profile: options.profile, toolchain: pinned };
+      // Reuse another lifecycle gate's passing artifact for the same head, profile, toolchain and suites.
+      // The suites consume the PR title (DEVLOOPS_PR_TITLE), so the title is part of the match key; an unreadable title never reuses.
+      // ponytail: reused suites keep the source gate's outputPath log; a rerun of that gate at the same head may overwrite it.
+      const currentTitle = await Promise.resolve(readPrTitle({ repo: options.repo, pr: options.pr }, env)).then((t) => (typeof t === "string" && t.trim() !== "" ? t : null), () => null);
+      for (const gate of currentTitle !== null && LIFECYCLE_GATES.includes(options.gate) ? LIFECYCLE_GATES.filter((g) => g !== options.gate) : []) {
+        try {
+          const prior = JSON.parse(await readFile(path.resolve(repoRoot, buildValidationResultsPath({ ...options, gate })), "utf8"));
+          if (prior.ok === true && prior.allPassed === true
+            && prior.repo === options.repo && prior.pr === options.pr && String(prior.headSha).toLowerCase() === options.headSha
+            && prior.profile === options.profile && prior.toolchain === pinned && prior.prTitle === currentTitle
+            && JSON.stringify(prior.suites.map((s) => s.name)) === JSON.stringify(options.suites)
+            && prior.suites.every((s) => s.exitCode === 0)) {
+            artifact = { ...prior, gate: options.gate, generatedAt: new Date().toISOString(), reusedFrom: prior.reusedFrom ?? gate };
+            break;
+          }
+        } catch { /* An unreadable or malformed prior artifact is never reused. */ }
+      }
+      artifact ??= { ...await buildValidationArtifact(options, { repoRoot, readPrTitle }), profile: options.profile, toolchain: pinned };
     }
     const afterProblem = currentTreeProblem();
     if (afterProblem) return incomplete(`validation changed the worktree: ${afterProblem.reason}`, afterProblem);
@@ -219,7 +236,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     // HEAD can move between the check above and the write: re-check after it.
     const writtenProblem = currentTreeProblem();
     if (writtenProblem) return incomplete(`worktree moved during the artifact write: ${writtenProblem.reason}`, writtenProblem);
-    return { ok: artifact.allPassed, status: artifact.allPassed ? "complete" : "failed", profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath: buildValidationResultsPath(options), artifact };
+    return { ok: artifact.allPassed, status: artifact.allPassed ? "complete" : "failed", allPassed: artifact.allPassed, profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath: buildValidationResultsPath(options), artifact };
   } catch (error) {
     let stillConfirmed = false;
     try { stillConfirmed = headConfirmed && readHead() === options.headSha; } catch { /* An unconfirmable head writes no artifact. */ }
@@ -233,10 +250,11 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     options = parseResolveValidationArgs(argv);
     if (options.help) { process.stdout.write(`${USAGE}\n`); return; }
+    if (preflightJqFilter(options.jq) === 2) { await removeParseFailedArtifact(argv); process.exitCode = 2; return; }
     result = await resolveValidation(options);
   } catch (error) {
     if (!options) await removeParseFailedArtifact(argv);
-    result = { ok: false, status: "incomplete", profile: null, headSha: null, toolchain: null, reason: error instanceof Error ? error.message : String(error) };
+    result = { ok: false, status: "incomplete", allPassed: false, profile: null, headSha: null, toolchain: null, reason: error instanceof Error ? error.message : String(error) };
   }
   const emitted = emitResult(result, { jq: options?.jq, silent: options?.silent });
   process.exitCode = emitted === 2 ? 2 : result.ok ? 0 : 1;

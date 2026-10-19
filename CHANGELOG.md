@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.7
+
+### Added
+
+- `resolve-gate-dispatch` accepts `--judge-record`, `--labels`, `--head-sha` and emits `track` and `trackReason`; a judge record only lowers the track within risk floors (#2070)
+- Coordinator work order producer derives a byte-stable order from the resolved handoff envelope and always allows its changes fragment (#2483)
+- Plan, spec-lint and `pr create` split oversized work early: new `gates.size.planningBand.minLoc`, `size_split_required_before_pr` at `waiverLoc` (#2756)
+- Simulators show early-detection stages, defect routing, five catching-stage scenarios and where draft_gate findings are caught (#2806)
+- `loop pre-pr-review --scan` runs the stale-surface sweep and PR body versus issue check; the record writer refuses unaddressed hits (#2807)
+
+### Changed
+
+- resolve-validation reuses another gate's passing artifact, stamping `reusedFrom: <gate>`; only the package-suite path reuses (#2508)
+- Wait and probe tools take one flag, `--timeout <seconds>`; `--timeout-ms` is a deprecated alias and both flags together fail closed (#2755)
+- Skills no longer prescribe `timeout N` shell wrappers; the Bash gate denies them and `check-retro-tooling` sees through them (#2755)
+- `pr create --lightweight` now requires the pre-PR review record and refuses with `pre_pr_review_missing` when none covers the branch head; a same-named tag never counts (#2807)
+- `loop pre-pr-review` record mode requires `--body-file --issue` or `--no-linked-issue`, refuses an empty scan range and unaddressed stale-surface hits (`pre_pr_stale_surface_unaddressed`) (#2807)
+
+### Fixed
+
+- audit-session --latest finds Claude Code sessions, reports cache writes in the cache-hit ratio, counts Claude output once per message and orders null below numbers in --jq (#2436)
+- `emit-fixer-work-order` refuses an act-list work order with `verdict_not_posted` until the gate's verdict review at the head is posted on the PR (#2498)
+- `gate resolve-validation` now exposes top-level `allPassed` and refuses an unsupported `--jq` filter before running any suite (#2513)
+- ensure-worktree runs `bun install --frozen-lockfile` in a newly created worktree; gate depState reads the worktree's own install (#2535)
+- `generate-claude-assets.mjs` handles `--help`/`-h` and rejects unknown flags before it writes anything (#2569)
+- A fixer push marker no longer covers a push to a different, known branch, so a stacked branch is not refused by its base branch marker (#2787)
+- The PR body versus issue check reads AC and DoD named sub-headings under In scope or Non-goals on the issue side (#2807)
+- An incomplete fixer disposition now warns instead of blocking gate coordination and Copilot requests; merge gates are unchanged (#2817)
+- Bun test shards no longer fail with "Could not parse Bun test summary" when Bun 1.4.1 prints an expect() calls line; parse failures now show the output tail (#2825)
+
 ## 1.0.6
 
 ### Added

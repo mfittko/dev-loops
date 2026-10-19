@@ -8,6 +8,14 @@ import { runNodeWithPrePrRecord, writeGhStub as writeGhStubHelper, initSizeBudge
 
 import { buildCreatePrArgs, main as createPrMain, detectClosingKeyword, extractClosingIssueNumber, resolveBaseDefault } from "../../scripts/github/create-pr.mjs";
 import { resolveBaseBranch } from "@dev-loops/core/config";
+import { writePrePrReviewRecord } from "../../scripts/loop/_pre-pr-review-record.mjs";
+
+// Records a clean pre-PR review at `ref` (checks it out, writes, returns to the previous branch).
+function writeFeatureRecord(cwd, ref) {
+  runGitFixture(cwd, ["checkout", "-q", "--detach", ref]);
+  writePrePrReviewRecord({ cwd, verdict: "clean", disposition: "none" });
+  runGitFixture(cwd, ["checkout", "-q", "main"]);
+}
 
 // ADR-TRIPWIRE-EARLY-SURFACE appends one `{adrTripwire,sizeBudget}` JSON line after gh stdout.
 const withoutEarlySurface = (stdout) => stdout.split("\n").filter((line) => !line.startsWith("{\"adrTripwire\"")).join("\n");
@@ -1403,6 +1411,7 @@ test("create-pr preflight diffs the --head branch, not the cwd HEAD (LOCAL-COMME
     runGitFixture(tempDir, ["branch", "feature"]);
     runGitFixture(tempDir, ["checkout", "-q", "main"]);
     runGitFixture(tempDir, ["reset", "-q", "--hard", "origin/main"]);
+    writeFeatureRecord(tempDir, "feature");
     const { env, ghLogPath } = await writeGhStub(tempDir, []);
     const result = await runNode([
       "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
@@ -1427,6 +1436,7 @@ test("create-pr preflight diffs origin/<branch> for --head owner:feature when no
     runGitFixture(tempDir, ["update-ref", "refs/remotes/origin/feature", "HEAD"]);
     runGitFixture(tempDir, ["checkout", "-q", "main"]);
     runGitFixture(tempDir, ["reset", "-q", "--hard", "origin/main"]);
+    writeFeatureRecord(tempDir, "origin/feature");
     const { env, ghLogPath } = await writeGhStub(tempDir, []);
     const result = await runNode([
       "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "owner:feature",
@@ -1472,25 +1482,6 @@ test("create-pr early-surface receives the --head ref", async () => {
   }
 });
 
-test("create-pr refuses with head_unresolvable naming git fetch origin when --head resolves nowhere", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-comment-discipline-nohead-"));
-  try {
-    await initSizeBudgetFixtureRepo(tempDir, { headFiles: [{ path: "notes.txt", content: "x\n" }] });
-    const { env, ghLogPath } = await writeGhStub(tempDir, []);
-    const result = await runNode([
-      "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "no-such-branch",
-      "--title", "T", "--body", "no closing keyword", "--lightweight",
-    ], { env, cwd: tempDir, noRecord: true });
-    assert.equal(result.code, 1);
-    const payload = JSON.parse(result.stderr);
-    assert.equal(payload.code, "head_unresolvable");
-    assert.match(payload.error, /head_unresolvable: .*git fetch origin/u);
-    assert.deepEqual(await readGhCalls(ghLogPath), []);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
 test("create-pr preflight diffs the branch, not a same-named tag (LOCAL-COMMENT-DISCIPLINE)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-comment-discipline-tag-"));
   try {
@@ -1503,6 +1494,7 @@ test("create-pr preflight diffs the branch, not a same-named tag (LOCAL-COMMENT-
     runGitFixture(tempDir, ["update-ref", "refs/tags/feature", "origin/main"]);
     runGitFixture(tempDir, ["checkout", "-q", "main"]);
     runGitFixture(tempDir, ["reset", "-q", "--hard", "origin/main"]);
+    writeFeatureRecord(tempDir, "refs/heads/feature");
     const { env, ghLogPath } = await writeGhStub(tempDir, []);
     const result = await runNode([
       "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
@@ -1516,18 +1508,38 @@ test("create-pr preflight diffs the branch, not a same-named tag (LOCAL-COMMENT-
   }
 });
 
-test("create-pr refuses head_unresolvable when --head only matches a tag", async () => {
+test("create-pr refuses a tag-only --head with pre_pr_review_missing even when the tag commit has a record", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-comment-discipline-tagonly-"));
   try {
     await initSizeBudgetFixtureRepo(tempDir, { headFiles: [{ path: "notes.txt", content: "x\n" }] });
     runGitFixture(tempDir, ["update-ref", "refs/tags/feature", "HEAD"]);
+    writeFeatureRecord(tempDir, "refs/tags/feature");
     const { env, ghLogPath } = await writeGhStub(tempDir, []);
     const result = await runNode([
       "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
       "--title", "T", "--body", "no closing keyword", "--lightweight",
     ], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
-    assert.equal(JSON.parse(result.stderr).code, "head_unresolvable");
+    assert.equal(JSON.parse(result.stderr).code, "pre_pr_review_missing");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr refuses head_unresolvable when --head only matches a tag (defensive fallback, validator stubbed)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-head-unresolvable-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, { headFiles: [{ path: "notes.txt", content: "x\n" }] });
+    runGitFixture(tempDir, ["update-ref", "refs/tags/feature", "HEAD"]);
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    await assert.rejects(
+      createPrMain([
+        "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
+        "--title", "T", "--body", "no closing keyword", "--lightweight",
+      ], { cwd: tempDir, env, validatePrePrReview: async () => ({ ok: true }) }),
+      (err) => err.code === "head_unresolvable" && /git fetch origin/u.test(err.message),
+    );
     assert.deepEqual(await readGhCalls(ghLogPath), []);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -2138,6 +2150,7 @@ test("create-pr creates when the size cannot be evaluated (unknown does not refu
             cwd: tempDir,
             env,
             evaluatePrSizeBudget,
+            validatePrePrReview: async () => ({ ok: true }),
             evaluateEarlySurface: async () => ({}),
             runChild: async () => ({ code: 0, stdout: "", stderr: "" }),
           });
@@ -2168,4 +2181,48 @@ test("create-pr refuses with pre_pr_review_missing when --head does not resolve 
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+async function runLightweightWithFeatureBranch({ record }) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-lightweight-record-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, { headFiles: [{ path: "notes.txt", content: "x\n" }] });
+    runGitFixture(tempDir, ["branch", "feature"]);
+    if (record === "feature") writeFeatureRecord(tempDir, "feature");
+    if (record === "other") {
+      runGitFixture(tempDir, ["-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "later"]);
+      writeFeatureRecord(tempDir, "main");
+    }
+    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
+    const result = await runNode([
+      "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
+      "--title", "T", "--body", "no closing keyword", "--lightweight",
+    ], { env, cwd: tempDir, noRecord: true });
+    return { result, calls: await readGhCalls(ghLogPath) };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("create-pr --lightweight refuses with pre_pr_review_missing naming the writer when no record exists", async () => {
+  const { result, calls } = await runLightweightWithFeatureBranch({ record: "none" });
+  assert.equal(result.code, 1);
+  const payload = JSON.parse(result.stderr);
+  assert.equal(payload.code, "pre_pr_review_missing");
+  assert.match(payload.error, /loop pre-pr-review/u);
+  assert.deepEqual(calls, []);
+});
+
+test("create-pr --lightweight creates when a record covers the head", async () => {
+  const { result, calls } = await runLightweightWithFeatureBranch({ record: "feature" });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].slice(0, 2), ["pr", "create"]);
+});
+
+test("create-pr --lightweight refuses when the only record is for a different head", async () => {
+  const { result, calls } = await runLightweightWithFeatureBranch({ record: "other" });
+  assert.equal(result.code, 1);
+  assert.equal(JSON.parse(result.stderr).code, "pre_pr_review_missing");
+  assert.deepEqual(calls, []);
 });

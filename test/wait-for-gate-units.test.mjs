@@ -8,7 +8,7 @@ import { test } from "bun:test";
 import { pullReceiptPath } from "../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../cli/index.mjs";
 import { parseWaitArgs, waitForUnits } from "../scripts/loop/wait-for-gate-units.mjs";
-import { withTempDir } from "./_helpers.mjs";
+import { captureStderr, withTempDir } from "./_helpers.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/loop/wait-for-gate-units.mjs", import.meta.url));
 const HEAD = "a".repeat(40);
@@ -65,8 +65,13 @@ test("routes the gate subcommand to the script", () => {
 test("invalid input is rejected", async () => {
   assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--judge-plan", "b", "--tmp-root", "t"]), /exactly one/);
   assert.throws(() => parseWaitArgs(["--tmp-root", "t"]), /exactly one/);
-  assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "570001"]), /--timeout-ms/);
-  assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "0"]), /--timeout-ms/);
+  assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "571"]), /--timeout must be at most 570/);
+  assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout=-1"]), /--timeout must be/);
+  assert.throws(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "1", "--timeout-ms", "1000"]), /mutually exclusive/);
+  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "0"]).timeoutMs, 0);
+  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "0.1"]).timeoutMs, 100);
+  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout", "30"]).timeoutMs, 30000);
+  assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "570000"]).timeoutMs, 570000);
   assert.equal(parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t"]).timeoutMs, 540000);
   await withDir(async (root) => {
     const { planPath } = await seedPlan(root, [["g1", ["a"]]]);
@@ -305,4 +310,9 @@ test("a round retired while the unit checks are in flight is round_retired, not 
     await writer.close();
     assert.equal((await pending).outcome, "round_retired");
   });
+});
+
+test("wait-for-gate-units warns on stderr for deprecated --timeout-ms", () => {
+  const err = captureStderr(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "1500"]));
+  assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
 });

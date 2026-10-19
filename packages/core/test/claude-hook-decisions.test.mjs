@@ -1768,3 +1768,14 @@ test("decideBashGate denies hardened raw body-write forms in launcher-only wordi
     assert.equal(gate(command).decision, "allow", command);
   }
 });
+
+test("decideBashGate denies a timeout wrapper in front of a sanctioned command and names --timeout (issue 2755)", () => {
+  const gate = (command, agentType) => decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType });
+  for (const agentType of [null, "dev-loop"]) {
+    const denied = gate("timeout 300 dev-loops-run scripts/github/merge-pr.mjs --repo mfittko/dev-loops --pr 5", agentType);
+    assert.equal(denied.decision, "deny");
+    assert.match(denied.reason, /--timeout/);
+    assert.equal(gate("dev-loops-run scripts/github/wait-pr-checks.mjs --repo mfittko/dev-loops --pr 5 --timeout 300", agentType).decision, "allow");
+  }
+  assert.equal(decideBashGate({ command: "timeout 300 dev-loops-run scripts/github/merge-pr.mjs", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision, "allow");
+});
