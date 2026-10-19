@@ -23,7 +23,7 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
 async function writeGhStub(tempDir) {
   const { env } = await writeGhStubHelper(tempDir, [
     {
-      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
       stdout: '{"headRefOid":"abc1234"}\n',
     },
     {

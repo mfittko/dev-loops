@@ -35,7 +35,7 @@ import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from ".
 import { flattenPaginatedSlurp, resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
-import { carryGateMarker } from "./_carried-verdict.mjs";
+import { carryGateMarker, isCarryCandidate } from "./_carried-verdict.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
@@ -1047,14 +1047,13 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     throw error;
   }
   const prPayload = await runGhJson(
-    ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,baseRefName"],
+    ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"],
     { env, ghCommand, runChild, restFallback: () => restFetchPrView(options.repo, options.pr, env) },
   );
   const commentsPayload = normalizeIssueCommentsPayload(await runGhJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`],
     { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(`repos/${options.repo}/issues/${options.pr}/comments?per_page=100`, env) },
   ));
-  const baseRefName = typeof prPayload?.baseRefName === "string" && prPayload.baseRefName.trim() ? prPayload.baseRefName.trim() : null;
   const currentHeadSha = typeof prPayload?.headRefOid === "string" && prPayload.headRefOid.trim().length > 0
     ? prPayload.headRefOid.trim()
     : null;
@@ -1111,12 +1110,22 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   // The head-filtered summary hides markers at other heads, so the carry candidate is the latest
   // marker per gate from an unfiltered summary. Only an actual carry replaces the output marker.
   const anyHeadSummary = summarizeGateReviewCommentMarkers(allComments);
-  const carryCtx = (gate) => ({ gate, repo: options.repo, pr: options.pr, currentHeadSha, baseRef: baseRefName ? `origin/${baseRefName}` : null, repoRoot: resolveRepoRoot(cwd), record: recordCarry });
+  // baseRefName is fetched lazily, only for a clean contract-complete cross-head candidate,
+  // so non-carry flows make no extra gh call. A fetch failure means no carry (fail closed).
+  let baseRefPromise = null;
+  const fetchBaseRef = () => {
+    baseRefPromise ??= runGhJson(
+      ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "baseRefName"],
+      { env, ghCommand, runChild, restFallback: () => restFetchPrView(options.repo, options.pr, env) },
+    ).then((payload) => (typeof payload?.baseRefName === "string" && payload.baseRefName.trim() ? `origin/${payload.baseRefName.trim()}` : null), () => null);
+    return baseRefPromise;
+  };
+  const carryCtx = (gate, baseRef) => ({ gate, repo: options.repo, pr: options.pr, currentHeadSha, baseRef, repoRoot: resolveRepoRoot(cwd), record: recordCarry });
   const resolveGateMarker = async (gate) => {
     const filtered = normalizeGateMarkerSummary(markerSummary[gate]);
     if (filtered.visible) return { marker: filtered, fanoutMarker: filtered };
     const candidate = normalizeGateMarkerSummary(anyHeadSummary[gate]);
-    const carried = await carryGateMarker(candidate, carryCtx(gate));
+    const carried = await carryGateMarker(candidate, carryCtx(gate, isCarryCandidate(candidate, currentHeadSha) ? await fetchBaseRef() : null));
     // Fan-out keeps the origin-head marker for a carried gate so the ledger path stays at the origin head.
     return carried.carriedFrom ? { marker: carried, fanoutMarker: candidate } : { marker: filtered, fanoutMarker: filtered };
   };

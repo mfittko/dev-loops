@@ -42,7 +42,7 @@ test("#1585: an unresolved gate-authored thread carrying a finding marker fails 
 
   const marker = buildFindingMarker({ fp: "a".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 });
   const { env } = await writeGhStubHelper(tempDir, [
-    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: '{"headRefOid":"abc1234"}\n' },
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
     {
       assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
       stdout: JSON.stringify([
@@ -84,7 +84,7 @@ test("#1585: draftGateSatisfied stays true when the gate-authored thread is reso
 
   const marker = buildFindingMarker({ fp: "b".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 });
   const { env } = await writeGhStubHelper(tempDir, [
-    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: '{"headRefOid":"abc1234"}\n' },
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
     {
       assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
       stdout: JSON.stringify([
@@ -117,7 +117,7 @@ test("#1585: an unreadable thread-fetch state (-1) folds draftGateSatisfied to f
   await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
 
   const { env } = await writeGhStubHelper(tempDir, [
-    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: '{"headRefOid":"abc1234"}\n' },
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
     {
       assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
       stdout: JSON.stringify([
@@ -170,7 +170,7 @@ test("#2381: a foreign marker-quoting thread narrows the gate-authored count to 
     { id: "t1", isResolved: false, comments: { nodes: [{ databaseId: 9003, body: marker + "\n**nice-to-have** (`naming`): casing nit", author: { login: "someone-else" } }] } },
   ];
   const { env } = await writeGhStubHelper(tempDir, [
-    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: '{"headRefOid":"abc1234"}\n' },
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
     {
       assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
       stdout: JSON.stringify([
@@ -221,7 +221,7 @@ test("#2381: a login-resolution failure (after a marker-only candidate is found)
 
   const marker = buildFindingMarker({ fp: "e".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 });
   const { env } = await writeGhStubHelper(tempDir, [
-    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: '{"headRefOid":"abc1234"}\n' },
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
     {
       assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
       stdout: JSON.stringify([
@@ -272,7 +272,7 @@ test("#2381: a login-resolution failure (after a marker-only candidate is found)
 // the stub and fails the test.
 function stubMinimalCleanDraftGate(tempDir) {
   return writeGhStubHelper(tempDir, [
-    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: '{"headRefOid":"abc1234"}\n' },
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
     {
       assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
       stdout: JSON.stringify([

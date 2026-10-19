@@ -42,10 +42,16 @@ async function upsertCarriedHead(file, { gate, originHead, evidence }) {
  * @returns {Promise<object>} the marker, rewritten to the current head with `carriedFrom` when
  * the verdict carries, else the marker unchanged.
  */
+// The candidate shape under which carryGateMarker may carry (baseRef aside).
+export function isCarryCandidate(marker, currentHeadSha) {
+  const origin = marker?.headSha;
+  return Boolean(marker?.visible) && marker.verdict === "clean" && marker.contractComplete === true
+    && FULL_SHA_RE.test(origin ?? "") && FULL_SHA_RE.test(currentHeadSha ?? "") && origin !== currentHeadSha;
+}
+
 export async function carryGateMarker(marker, { gate, repo, pr, currentHeadSha, baseRef, repoRoot, record = false, runGit }) {
   const origin = marker?.headSha;
-  if (!marker?.visible || marker.verdict !== "clean" || marker.contractComplete !== true) return marker;
-  if (!FULL_SHA_RE.test(origin ?? "") || !FULL_SHA_RE.test(currentHeadSha ?? "") || origin === currentHeadSha || !baseRef) return marker;
+  if (!isCarryCandidate(marker, currentHeadSha) || !baseRef) return marker;
   const evidence = await computeBaseMergeCarry({ prevHead: origin, headSha: currentHeadSha, baseRef, repoRoot, ...(runGit ? { runGit } : {}) });
   if (evidence.decision !== "carry_verdict") return marker;
   const file = path.resolve(repoRoot, buildCarriedHeadsPath({ repo, pr, gate, originHead: origin, tmpRoot: resolveGateArtifactTmpRoot(repoRoot) }));

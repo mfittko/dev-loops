@@ -231,7 +231,7 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
         }),
       },
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "def56789abcdef" }),
       },
       {
@@ -369,7 +369,7 @@ test("detect-pr-gate-coordination-state --fields returns the named top-level sca
         }),
       },
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "def56789abcdef" }),
       },
       {
@@ -472,7 +472,7 @@ test("detect-pr-gate-coordination-state routes a ready PR with only unresolved g
         stdout: jsonLine({ login: "dev-loops-gate[bot]" }),
       },
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "def56789abcdef" }),
       },
       {
@@ -912,7 +912,7 @@ test("detect-pr-gate-coordination-state flags draft_gate_needed for non-draft PR
         stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
       },
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "def56789abcdef" }),
       },
       {
@@ -969,7 +969,7 @@ test("detect-pr-gate-coordination-state output equals a direct evaluatePrGateCoo
         stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
       },
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "def56789abcdef" }),
       },
       {
@@ -1090,7 +1090,7 @@ test("detect-pr-gate-coordination-state flags draft_gate_needed for converged no
         stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
       },
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "def56789abcdef" }),
       },
       {
@@ -1187,7 +1187,7 @@ test("detect-pr-gate-coordination-state flags draft_gate_needed when Copilot rou
         stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
       },
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "def56789abcdef" }),
       },
       {
@@ -1268,7 +1268,7 @@ test("detect-pr-gate-coordination-state routes a post-cap clean head to pre_appr
       },
       { assertArgs: ["api", "repos/owner/repo/pulls/266/requested_reviewers"], stdout: jsonLine({ users: [], teams: [] }) },
       { assertArgs: ["api", "graphql", "pr=266"], stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) },
-      { assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: jsonLine({ headRefOid: "def56789abcdef" }) },
+      { assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"], stdout: jsonLine({ headRefOid: "def56789abcdef" }) },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/266/comments?per_page=100"],
         stdout: jsonLine([[
@@ -1344,7 +1344,7 @@ test("detect-pr-gate-coordination-state allows pre_approval_gate (not an impossi
       },
       { assertArgs: ["api", "repos/owner/repo/pulls/266/requested_reviewers"], stdout: jsonLine({ users: [], teams: [] }) },
       { assertArgs: ["api", "graphql", "pr=266"], stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) },
-      { assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: jsonLine({ headRefOid: "def56789abcdef" }) },
+      { assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"], stdout: jsonLine({ headRefOid: "def56789abcdef" }) },
       {
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/266/comments?per_page=100"],
         stdout: jsonLine([[
@@ -1419,7 +1419,7 @@ function pathAGhEntries({ reviewBody, threadNodes = [], atCap = true }) {
     },
     { assertArgs: ["api", "repos/owner/repo/pulls/266/requested_reviewers"], stdout: jsonLine({ users: [], teams: [] }) },
     { assertArgs: ["api", "graphql", "pr=266"], stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: threadNodes } } } } }) },
-    { assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: jsonLine({ headRefOid: currentHead }) },
+    { assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"], stdout: jsonLine({ headRefOid: currentHead }) },
     {
       assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/266/comments?per_page=100"],
       stdout: jsonLine([[
@@ -1616,7 +1616,7 @@ test("detect-pr-gate-coordination-state auto-detects local-fix-without-reply (#4
         }),
       },
       {
-        assertArgs: ["pr", "view", "269", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "269", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "abababababababababababababababababababab" }),
       },
       {
@@ -1682,7 +1682,7 @@ test("detectPrGateCoordinationState tolerates missing local git binary and falls
         stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
       },
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "fedcba987654" }),
       },
       {
@@ -1734,7 +1734,7 @@ test("detect-pr-gate-coordination-state preserves non-conflict mergeStateStatus 
         stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
       },
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "fedcba987654" }),
       },
       {
@@ -1800,7 +1800,7 @@ test("detect-pr-gate-coordination-state surfaces conflict_resolution for conflic
         stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
       },
       {
-        assertArgs: ["pr", "view", "370", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "370", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "deadbeef1234" }),
       },
       {
@@ -1867,7 +1867,7 @@ test("pre-approval-gate-detector overrides to pre_approval_gate_needed when neve
         stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
       },
       {
-        assertArgs: ["pr", "view", "268", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "268", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "fedcba987654" }),
       },
       {
@@ -1953,7 +1953,7 @@ test("detect-pr-gate-coordination-state progresses past the removed retrospectiv
         stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
       },
       {
-        assertArgs: ["pr", "view", "271", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "271", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "abc9876543210" }),
       },
       {
@@ -2035,7 +2035,7 @@ test("detect-pr-gate-coordination-state fails closed when the PR head changes mi
         stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
       },
       {
-        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "bbbbbbb7654321" }),
       },
       {
@@ -2902,7 +2902,7 @@ test("detect-pr-gate-coordination-state resets Copilot round count when draft_ga
       },
       { assertArgs: ["api", "repos/owner/repo/pulls/266/requested_reviewers"], stdout: jsonLine({ users: [], teams: [] }) },
       { assertArgs: ["api", "graphql", "pr=266"], stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) },
-      { assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: jsonLine({ headRefOid: "def56789abcdef" }) },
+      { assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"], stdout: jsonLine({ headRefOid: "def56789abcdef" }) },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/266/comments?per_page=100"], stdout: jsonLine([[
         { id: 11, body: ["Gate review: draft_gate", "Reviewed head SHA: aaa1111111111111111111111111111111111111111", "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"), html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }
       ]]) },
@@ -2963,7 +2963,7 @@ test("detect-pr-gate-coordination-state does NOT reset round count when draft_ga
       },
       { assertArgs: ["api", "repos/owner/repo/pulls/266/requested_reviewers"], stdout: jsonLine({ users: [], teams: [] }) },
       { assertArgs: ["api", "graphql", "pr=266"], stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) },
-      { assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"], stdout: jsonLine({ headRefOid: "def56789abcdef" }) },
+      { assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"], stdout: jsonLine({ headRefOid: "def56789abcdef" }) },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/266/comments?per_page=100"], stdout: jsonLine([[
         { id: 11, body: ["Gate review: draft_gate", "Reviewed head SHA: def56789abcdef", "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"), html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }
       ]]) },
@@ -3485,7 +3485,7 @@ test("detect-pr-gate-coordination-state routes to pre_approval_gate when a linge
       },
       {
         // Head check (detectCheckpointEvidence)
-        assertArgs: ["pr", "view", "1584", "--repo", "owner/repo", "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", "1584", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "deadbeef12345678" }),
       },
       {
@@ -3629,7 +3629,7 @@ for (const [location, step] of [["main", "reply_missing"], ["linked", "reply_mis
         }),
       },
       {
-        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: HEAD_SHA }),
       },
       {
@@ -3728,7 +3728,7 @@ test("detect-pr-gate-coordination-state formats a legible reason (no raw null th
         stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
       },
       {
-        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: HEAD_SHA }),
       },
       {
@@ -3807,7 +3807,7 @@ test("detect-pr-gate-coordination-state fails closed (not silently absent) when 
         stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
       },
       {
-        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: HEAD_SHA }),
       },
       {
@@ -3877,7 +3877,7 @@ test("detect-pr-gate-coordination-state behaves exactly as before when no fixer-
         stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
       },
       {
-        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,baseRefName"],
+        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: HEAD_SHA }),
       },
       {
@@ -3957,7 +3957,7 @@ async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, 
         assertArgs: ["api", "graphql", `pr=${PR}`],
         stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } }] } } } } }),
       },
-      { assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,baseRefName"], stdout: jsonLine({ headRefOid: HEAD_SHA }) },
+      { assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid"], stdout: jsonLine({ headRefOid: HEAD_SHA }) },
       {
         assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/issues/${PR}/comments?per_page=100`],
         stdout: jsonLine([[{
