@@ -4079,6 +4079,7 @@ async function runCarriedPlanFixture({ planHead, carried = true, outputThreads =
     const runChild = async (cmd, args) => {
       const joined = args.join(" ");
       if (joined.startsWith("pr view") && joined.includes("headRefOid")) return { code: 0, stdout: JSON.stringify({ headRefOid: SRC }), stderr: "" };
+      if (joined.includes("/compare/")) return { code: 0, stdout: JSON.stringify({ status: "ahead" }), stderr: "" };
       if (joined.includes("graphql")) return { code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "fix", author: { login: "r", __typename: "User" } }] } }], pageInfo: { hasNextPage: false } } } } } }), stderr: "" };
       return { code: 0, stdout: "", stderr: "" };
     };
@@ -4103,6 +4104,9 @@ test("a carried head with a plan bound to the origin head, incomplete at the ori
 test("a non-carried head checks the plan at the real head as before", async () => {
   const result = await runCarriedPlanFixture({ carried: false });
   assert.ok(result.warning, "without a carry the plan head is checked at the real head");
+  const steps = JSON.stringify(result.incomplete ?? result.warning);
+  assert.ok(!steps.includes("cannot determine active fixer head containment"), steps);
+  assert.ok(steps.includes("claims head"), steps);
 });
 
 test("resolveFixerDispositionInput reads the disposition at carriedSourceHead across a base-only merge (#2752, PR 2819 shape)", async () => {
@@ -4165,10 +4169,11 @@ async function runCarryFixture({ nonBaseCommit = false, ci = "SUCCESS", sourceHe
       { id: 1, body: body("draft_gate", "mark ready for review"), updated_at: "2026-05-29T21:00:00Z" },
       { id: 2, body: body("pre_approval_gate", "await final human approval"), updated_at: "2026-05-29T22:00:00Z" },
     ];
-    const prView = { number: 2819, state: "OPEN", isDraft: false, headRefOid: headB, baseRefName: "main", mergeStateStatus: "CLEAN", mergeable: "MERGEABLE", body: "", closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: ci }] };
+    const prView = { number: 2819, state: "OPEN", isDraft: false, headRefOid: headB, baseRefName: "main", mergeStateStatus: "CLEAN", mergeable: "MERGEABLE", body: "", closingIssuesReferences: [], reviews: [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: headB }, submittedAt: "2026-05-29T23:00:00Z" }], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: ci }] };
     const runChild = async (cmd, args) => {
       const joined = args.join(" ");
       if (cmd !== "gh") return { code: 0, stdout: "", stderr: "" };
+      if (joined.includes("/timeline")) return { code: 0, stdout: "copilot-pull-request-reviewer[bot]\n", stderr: "" };
       let out = null;
       if (joined.startsWith("pr view") && joined.includes("--json headRefOid")) out = { headRefOid: headB };
       else if (joined.startsWith("pr view") && joined.includes("baseRefName") && !joined.includes("statusCheckRollup")) out = { baseRefName: "main" };
@@ -4201,8 +4206,7 @@ test("coordination after a non-base commit re-dispatches a gate run", async () =
   const { result } = await runCarryFixture({ nonBaseCommit: true });
   assert.equal(result.ok, true);
   assert.notEqual(result.preApprovalGate.currentHeadClean, true, "a non-base commit invalidates the carry");
-  // The fixture has no Copilot review yet, so the next action is the Copilot request that precedes the gate run; the carry must not route to merge.
-  assert.ok([...GATE_RUN_ACTIONS, PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW].includes(result.nextAction), `a non-base commit must not skip the review path: ${result.nextAction}`);
+  assert.ok(GATE_RUN_ACTIONS.includes(result.nextAction), `a non-base commit must re-dispatch a gate run: ${result.nextAction}`);
 });
 
 test("coordination with failing CI at the new head does not treat the carried verdict as merge-ready", async () => {
