@@ -1306,7 +1306,8 @@ new Delta or counter reset. ACT constructs only absent output; genuine existing 
 normal/check without clobbering. Existing empty-selector Write/Edit guards allow the exact
 output only. Codex managed permissions and supported Claude/Pi hooks retain their actual
 limits; this is not universal Bash enforcement. Ordinary emission remains `operation: fix`
-with unchanged marker behavior and ordinary renderer bytes. Main-checkout consumers must
+with unchanged marker behavior. Only the `commit_only` render keeps its renderer bytes. ADR 0166
+changed the ordinary full-phase render, so re-emit a full plan emitted before that change. Main-checkout consumers must
 ship this support before a later producer enables delivery-only reentry; these fixtures do
 not establish producer eligibility, new publication, runtime worker qualification or recovery.
 
@@ -1315,8 +1316,11 @@ input and the THREAD report from the threads source, the clearing delta record (
 is the pushed head) and the pushed head. Normal verification and `--check` accept only a report that
 `--construct` wrote (a sha256 mark beside the output). For a plan that has a source they also refuse
 unless the head's checks are settled green, with no reply: `ci_failed` (red checks), `ci_pending`
-(pending checks) or `ci_unknown` (unreadable checks or unsupported conclusions). A settled head with no
-check runs and no statuses passes. The fixer hands back the refusal code and resolves no thread.
+(pending checks) or `ci_unknown` (unreadable checks or unsupported conclusions). The guard judges only
+check runs listed in the PR `statusCheckRollup`, the set `wait-pr-checks` uses. A settled head with no
+check runs and no statuses passes. Normal mode, after the guard passes, also posts one residual-status
+reply on each deferred thread whose delta status is `not_resolved` or `cannot_verify` and leaves it open;
+re-entry posts no second reply. The fixer hands back the refusal code and resolves no thread.
 A complete THREAD order finds its clearing record by `candidateHead` equal to the pushed head, because
 its order head is already the candidate. Every full-phase order states the numbered steps: push, confirm
 the remote head, `wait-pr-checks` (run once, one retry on a not-settled exit, then hand back `ci_pending`

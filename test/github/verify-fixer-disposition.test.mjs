@@ -66,10 +66,21 @@ function liveHeadEntry(headRefOid = HEAD_SHA, statusCheckRollup = []) {
 }
 
 // Prepends the live-head read the verifier makes before any checkpoint write.
+// A residual-status reply on a deferred thread is answered outside the sequential entries and recorded in `residualPosts`.
 function runtime(entries, repoRoot, { live = true } = {}) {
-  const { runChild, calls } = makeGhMock(live ? [liveHeadEntry(), ...entries] : entries);
-  return { deps: { env: runIdFreeEnv(), ghCommand: "gh", runChild, repoRoot }, calls };
+  const { runChild: inner, calls } = makeGhMock(live ? [liveHeadEntry(), ...entries] : entries);
+  const residualPosts = [];
+  const runChild = async (cmd, args = [], env, stdin = "") => {
+    if (cmd === "gh" && args.includes("POST") && String(stdin).includes("Residual delta status:")) {
+      residualPosts.push({ args, body: JSON.parse(stdin).body });
+      return { code: 0, stderr: "", stdout: JSON.stringify({ id: 9, html_url: "https://example.com/9" }) };
+    }
+    return inner(cmd, args, env, stdin);
+  };
+  return { deps: { env: runIdFreeEnv(), ghCommand: "gh", runChild, repoRoot }, calls, residualPosts };
 }
+const nonResidual = (actions) => actions.filter((action) => action.step !== "residual_replied");
+const ghCount = (calls) => calls.filter((call) => call.command !== "git").length;
 
 const REF = `fixer:${REPO}#${PR}:${HEAD_SHA}:f1-0000abcd`;
 
@@ -927,7 +938,7 @@ test("a thread the applicable delta record marks not_resolved gets no Fixed repl
     assert.deepEqual(result.incomplete.map((entry) => [entry.threadId, entry.failedStep]), [["PRRT_T1", "delta_blocked"]]);
     assert.equal(result.incomplete[0].deltaStatus, "not_resolved");
     assert.equal(result.incomplete[0].deltaRecord, recordPath);
-    assert.deepEqual(result.actions, []);
+    assert.deepEqual(nonResidual(result.actions), []);
     assert.equal(calls.some((call) => call.args.includes("POST")), false, "no reply was posted");
   });
 });
@@ -995,7 +1006,7 @@ for (const [isResolved, reply, expected] of [[true, true, null], [false, false, 
         const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check: true }, deps);
         assert.equal(result.complete, !expected);
         assert.deepEqual(result.incomplete.map((entry) => entry.failedStep), expected ? [expected] : []);
-        assert.deepEqual(result.actions, []);
+        assert.deepEqual(nonResidual(result.actions), []);
         assert.equal(result.checkpointPath, null);
         assert.deepEqual(await snapshot(), before);
         assert.equal(existsSync(path.dirname(checkpoint)), existing, "check creates no checkpoint directory");
@@ -1013,7 +1024,7 @@ test("check CLI flag is explicit and Delta refusal survives check mode", async (
     const { deps, calls } = runtimeWithGit([unresolvedT1(), compareEntry(FIX_SHA, "ahead")], repoRoot, () => ({ code: 0, stdout: `${FIX_SHA}\n` }));
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check: true }, deps);
     assert.equal(result.incomplete[0].failedStep, "delta_blocked");
-    assert.deepEqual(result.actions, []);
+    assert.deepEqual(nonResidual(result.actions), []);
     assert.deepEqual(await checkpointFiles(repoRoot), []);
     assert.equal(hasPost(calls), false);
   });
@@ -1245,7 +1256,7 @@ test("a not_resolved delta record also blocks resolving a thread whose Fixed rep
     ], repoRoot, () => ({ code: 0, stdout: `${FIX_SHA}\n` }));
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
     assert.deepEqual(result.incomplete.map((entry) => [entry.failedStep, entry.deltaStatus]), [["delta_blocked", "not_resolved"]]);
-    assert.deepEqual(result.actions, []);
+    assert.deepEqual(nonResidual(result.actions), []);
     assert.equal(calls.some((call) => call.args.includes("graphql") && call.args.some((arg) => String(arg).includes("resolveReviewThread"))), false, "thread was not resolved");
   });
 });
@@ -2096,7 +2107,7 @@ for (const kind of ["resolved", "mixed", "repeated-mixed", "residual", "threadle
       const next = f.depsFor(f.dispositions.some((entry) => entry.disposition === "tackled") ? [compareEntry(f.fixing, "ahead", f.candidate)] : []);
       const verified = await verifyFixerDisposition({ ...options, construct: false, check }, next.deps);
       assert.equal(verified.complete, true);
-      assert.deepEqual(verified.actions, []);
+      assert.deepEqual(nonResidual(verified.actions), []);
       assert.equal(hasPost(next.calls), false);
     }
     const parsedThreads = parseReviewThreads(JSON.parse(threadsPayload(f.nodes)));
@@ -2268,16 +2279,16 @@ for (const check of [false, true]) for (const defect of [null, "missing", "noncl
         const expected = { missing: /delta clearing decision/, nonclearing: /delta clearing decision/, source: /authority.sourceDigest/, delta: /authority.deltaResultDigest/, bytes: /delta result differs from its sha256/, baseline: /pinned baseline/, membership: /not in the act set/, statuses: /delta clearing decision/, candidate: /actual pushed candidate/, invocation: /invocation-three/, tackled: /delta status and live thread disposition disagree/, resolved: /fixed status and a test/, resolvedForms: /fixed status and a test/, unaccounted: /returned site/, unbound: /delta status and live thread disposition disagree/, residualResolved: /delta status and live thread disposition disagree/, residualResolvedOmitted: /delta status and live thread disposition disagree/, legacy: /fixed status and a test/ };
         const before = await readFile(fixerPlan, "utf8");
         await assert.rejects(verify(), ["residualUnmarked", "residualForeign", "residualMissing"].includes(defect) ? /delta status and live thread disposition disagree/ : expected[defect]);
-        assert.equal(calls.length, defect === "tackled" || defect === "unbound" || resolvedResidual || defect === "residualMissing" ? 3 : 0, "authority fails before GitHub mutation or checkpoint");
+        assert.equal(ghCount(calls), defect === "tackled" || defect === "unbound" || resolvedResidual || defect === "residualMissing" ? 3 : 0, "authority fails before GitHub mutation or checkpoint");
         assert.deepEqual(await checkpointFiles(repoRoot), []);
         assert.equal(await readFile(fixerPlan, "utf8"), before);
       } else {
         const before = await readFile(fixerPlan, "utf8");
         const result = await verify();
         assert.equal(result.complete, true, "only tackled disposition completion; residual is still open");
-        assert.deepEqual(result.actions, []);
+        assert.deepEqual(nonResidual(result.actions), []);
         assert.equal(nodes[0].isResolved, false);
-        assert.equal(calls.length, 3);
+        assert.equal(ghCount(calls), 3);
         assert.equal(await readFile(fixerPlan, "utf8"), before);
         if (check) assert.deepEqual(await checkpointFiles(repoRoot), []);
       }
@@ -2305,13 +2316,13 @@ for (const check of [false, true]) for (const kind of ["threadless-mixed", "thre
       const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps);
       if (refuses) {
         await assert.rejects(verify(), live ? /delta status and live thread disposition disagree/ : /fixed status and a test/);
-        assert.equal(calls.length, live ? 3 : 0, "refuses before checkpoint or GitHub mutation");
+        assert.equal(ghCount(calls), live ? 3 : 0, "refuses before checkpoint or GitHub mutation");
         assert.deepEqual(await checkpointFiles(repoRoot), []);
       } else {
         const result = await verify();
         assert.equal(result.complete, true);
-        assert.deepEqual(result.actions, []);
-        assert.equal(calls.length, live && fixed ? 4 : 3);
+        assert.deepEqual(nonResidual(result.actions), []);
+        assert.equal(ghCount(calls), live && fixed ? 4 : 3);
         if (check) assert.deepEqual(await checkpointFiles(repoRoot), []);
       }
       assert.equal(await readFile(fixerPlan, "utf8"), before);
@@ -2354,13 +2365,13 @@ for (const check of [false, true]) for (const [kind, statuses, disposition, memb
       const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, check }, deps);
       if (["foreign", "unknown-hint", "mixed-tackled", "resolved-deferred", "resolved-residual", "incomplete-coverage"].includes(kind)) {
         await assert.rejects(verify(), kind === "incomplete-coverage" ? /returned site/ : /delta status and live thread disposition disagree/);
-        assert.equal(calls.length, kind === "incomplete-coverage" ? 0 : 3);
+        assert.equal(ghCount(calls), kind === "incomplete-coverage" ? 0 : 3);
         assert.deepEqual(await checkpointFiles(repoRoot), []);
       } else {
         const result = await verify();
         assert.equal(result.complete, true);
-        assert.deepEqual(result.actions, []);
-        assert.equal(calls.length, fixed ? 4 : 3);
+        assert.deepEqual(nonResidual(result.actions), []);
+        assert.equal(ghCount(calls), fixed ? 4 : 3);
         assert.equal((await checkpointFiles(repoRoot)).length, check ? 0 : 1);
       }
       assert.equal(hasPost(calls), false);
@@ -2395,7 +2406,7 @@ for (const check of [false, true]) for (const kind of ["resolved", "residual", "
       if (["resolved", "residual"].includes(kind)) {
         const result = await promise;
         assert.equal(result.complete, true);
-        assert.deepEqual(result.actions, []);
+        assert.deepEqual(nonResidual(result.actions), []);
         assert.equal((await checkpointFiles(repoRoot)).length, check ? 0 : 1);
         if (!check) {
           const checkpoint = JSON.parse(await readFile(path.resolve(repoRoot, result.checkpointPath), "utf8"));
@@ -2475,7 +2486,7 @@ for (const check of [false, true]) for (const kind of ["resolved", "resolved-def
       } else {
         const result = await verify();
         assert.equal(result.complete, true);
-        assert.deepEqual(result.actions, []);
+        assert.deepEqual(nonResidual(result.actions), []);
         assert.equal((await checkpointFiles(repoRoot)).length, check ? 0 : 1);
       }
       assert.equal(hasPost(calls), false);
@@ -2580,3 +2591,31 @@ for (const [name, nodes, isResolved] of [
     });
   });
 }
+
+// bounded_out THREAD full order: the verifier's normal mode posts one residual-status reply and leaves the thread open.
+test("bounded_out THREAD normal mode posts one residual reply on a not_resolved thread, leaves it open and posts nothing on re-entry", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root, { outcome: "bounded_out", nextStep: "push_to_gate", invocation: 3, items: [{ ref: "PRRT_T1", status: "not_resolved" }] });
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    assert.deepEqual(JSON.parse(await readFile(f.output, "utf8")).dispositions, [{ threadId: "PRRT_T1", fixingCommitSha: f.head, disposition: "deferred" }]);
+    const reviewer = { id: "c1", databaseId: 1, body: "please fix", author: { login: "reviewer", __typename: "User" } };
+    const withGit = (mock) => {
+      const inner = mock.deps.runChild;
+      mock.deps.runChild = async (cmd, args = [], ...rest) => (cmd === "git" ? (mock.calls.push({ command: cmd, args: [...args], stdinText: "" }), { code: 0, stderr: "", stdout: `${f.head}\n` }) : inner(cmd, args, ...rest));
+      return mock;
+    };
+    const first = withGit(f.runtimeFor([
+      threadsCallEntry([{ id: "PRRT_T1", isResolved: false, comments: { nodes: [reviewer] } }]), ...ciEntries(f.head),
+    ]));
+    const result = await verifyFixerDisposition(f.options, first.deps);
+    assert.deepEqual(result.actions, [{ threadId: "PRRT_T1", ok: true, step: "residual_replied" }]);
+    assert.equal(first.residualPosts.length, 1);
+    assert.ok(first.residualPosts[0].args.includes(`repos/${REPO}/pulls/${PR}/comments/1/replies`));
+    assert.equal(first.calls.some((call) => JSON.stringify(call.args).includes("resolveReviewThread")), false, "the thread stays open");
+    const residual = { id: "c2", databaseId: 2, body: "Residual delta status: not_resolved after the delta review.", author: { login: "bot", __typename: "User" } };
+    const again = withGit(f.runtimeFor([threadsCallEntry([{ id: "PRRT_T1", isResolved: false, comments: { nodes: [reviewer, residual] } }]), ...ciEntries(f.head)]));
+    const reentry = await verifyFixerDisposition(f.options, again.deps);
+    assert.deepEqual(nonResidual(reentry.actions), []);
+    assert.equal(again.residualPosts.length, 0, "no second residual reply");
+  });
+});

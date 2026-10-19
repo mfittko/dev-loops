@@ -38,7 +38,8 @@ import { observeHeadCiSignals } from "./observe-head-ci.mjs";
 import { normalizeHeadScopedCiContract } from "@dev-loops/core/loop/copilot-ci-status";
 
 // Provenance mark: the sha256 of the report bytes --construct wrote, kept beside the report.
-const constructMarkPath = (handoffPath) => `${handoffPath}.constructed`;
+const RESIDUAL_REPLY_MARKER = "Residual delta status:";
+const constructMarkPath =(handoffPath) => `${handoffPath}.constructed`;
 
 const USAGE = `Usage: verify-fixer-disposition.mjs --repo <owner/name> --pr <number> --head-sha <sha> --fixer-plan <path> [--tmp-root <path>]
 Enforce GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: verify every review thread a fixer
@@ -72,8 +73,13 @@ Optional:
                                and --check modes accept only a report this wrote, and
                                refuse when the plan has a source and the head's checks are not
                                settled green: ci_failed (red), ci_pending (pending),
-                               ci_unknown (unreadable or unsupported). A settled head with no
-                               checks at all passes. Hand back the code and resolve no thread.
+                               ci_unknown (unreadable or unsupported). The guard judges only
+                               check runs listed in the PR statusCheckRollup, the set
+                               wait-pr-checks uses. A settled head with no checks at all
+                               passes. Hand back the code and resolve no thread. Normal mode
+                               also posts one residual-status reply on each deferred thread
+                               whose delta status is not_resolved or cannot_verify and leaves
+                               it open.
   --check                     Read-only delivery and live-state check; never
                                write a checkpoint or reply/resolve a thread.
   --tmp-root <path>            Root tmp directory for the checkpoint and the pull
@@ -664,6 +670,36 @@ export async function verifyFixerDisposition(
   });
 
   const actions = [];
+  // A deferred thread the delta review left not_resolved or cannot_verify gets one residual-status reply and stays open.
+  // Shared by the ACT and THREAD routes; a live reply carrying the marker makes re-entry post nothing.
+  if (!options.check) {
+    const deferred = handoff.dispositions.filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.DEFERRED);
+    const openTargets = deferred.length > 0 ? planBatchReplyTargets(initialSnapshot, "all").matchedTargets : [];
+    for (const entry of deferred) {
+      const target = openTargets.find((candidate) => candidate.threadId === entry.threadId);
+      if (!target) continue;
+      const blocked = await findDeltaBlockedFixedReply(
+        [{ threadId: entry.threadId, body: "", commit: entry.fixingCommitSha }],
+        { repo: options.repo, pr: options.pr, parsed: initialSnapshot, tmpRoot: path.resolve(repoRoot, tmpRoot) },
+        runtime,
+      );
+      if (!blocked) continue;
+      if (initialSnapshot.comments.some((comment) => comment.threadId === entry.threadId && String(comment.body).includes(RESIDUAL_REPLY_MARKER))) continue;
+      try {
+        await replyAndMaybeResolve(
+          {
+            repo: options.repo, pr: options.pr, commentId: target.commentId, threadId: entry.threadId,
+            body: `${RESIDUAL_REPLY_MARKER} ${blocked.status} after the delta review of commit ${entry.fixingCommitSha}; this thread stays open for the next gate round.`,
+            resolve: false, validatedSnapshot: initialSnapshot,
+          },
+          runtime,
+        );
+        actions.push({ threadId: entry.threadId, ok: true, step: "residual_replied" });
+      } catch (error) {
+        actions.push({ threadId: entry.threadId, ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  }
   // Only progress steps that ARE authorized (commit contained) and that are
   // actually actionable via reply/resolve; commit_not_contained and
   // missing_from_handoff never trigger a mutation (Non-goals: a SHA alone, or
