@@ -47,3 +47,22 @@ test("Codex runtime setup has one owner and reaches generic roles before scoped 
   assert.match(generic, /initial startup\/envelope.*pull-first/);
   assert.match(generic, /before.*artifact.*Git write/);
 });
+
+test("Codex MAIN supervises native joins and reports blockers without claiming upstream wake repair", async () => {
+  const main = await readRepo("skills/docs/main-agent-contract.md");
+  const codex = main.slice(main.indexOf("## Codex active joins"), main.indexOf("## Codex fixer dispatch"));
+  for (const required of [
+    /MAIN remains active/,
+    /bounded `collaboration.wait_agent` joins/,
+    /immediately read and consolidate/,
+    /five minutes without meaningful progress/,
+    /native structured status and messages/,
+    /bounded sanctioned wait.*unknown progress/,
+    /artifact\/head.*last completed step.*exact reason.*preserved work.*owner.*next action/s,
+    /Pi-only.*detect-agent-stall.*not.*Codex liveness/s,
+    /does not fix.*Codex.*wake/,
+    /a9b0815167c27ab13719dd12d13b63e02b70d221/,
+    /installed binary/,
+  ]) assert.match(codex, required);
+  assert.match(await readRepo(setupPath), /main-agent-contract\.md#codex-active-joins/);
+});

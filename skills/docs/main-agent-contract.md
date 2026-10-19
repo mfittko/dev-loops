@@ -67,6 +67,28 @@ bar: `judge-pass.mjs` and `close-gate-findings.mjs` never create an issue for a 
 
 Generic `collaboration.spawn_agent` does not automatically load repository role definitions. For ordinary Codex developer, refiner (including artifact-only refiners), docs and coordinator dispatches, provide verified absolute paths to the applicable role definition and [Codex runtime setup](./copilot-loop-operations.md#codex-runtime-setup) in the task. Verify both files exist in the selected source/install before dispatch; require the child to read them before scoped artifact writes, any Git write or targeted verification. Preserve the mandatory initial startup/envelope and exact pull-first protocols; this is read delivery, not new role or mutation authority. Pull-pointer coordinators and fixers retain their exact emitted payloads and learn applicable setup after their bootstrap; never append generic setup to those payloads.
 
+## Codex active joins
+
+Under Codex, MAIN remains active after dispatch and uses bounded `collaboration.wait_agent` joins
+while authorized child work is outstanding. On completion or a blocker, immediately read and consolidate
+the child's handback into the next authorized dispatch or the user result. Do not end the parent turn
+solely because a child was spawned. Pi's dispatch-and-return posture below remains Pi-only; Claude's
+existing completion join is unchanged.
+
+After five minutes without meaningful progress, flag needs-attention and diagnose native structured status and messages
+before redispatch. Distinguish a bounded sanctioned wait from unknown progress; silence or an outstanding
+child alone proves neither progress nor a stall. Pi-only `detect-agent-stall` files are not evidence of
+Codex liveness. Report an immediate blocker with artifact/head, last completed step, exact reason,
+preserved work, owner and next action; keep committed work available for the next authorized actor.
+
+Active joining mitigates an upstream idle-parent wake limitation and costs wait time and tokens;
+it does not fix the Codex parent wake mechanism. Public source at commit
+[`a9b0815167c27ab13719dd12d13b63e02b70d221`](https://github.com/openai/codex/blob/a9b0815167c27ab13719dd12d13b63e02b70d221/codex-rs/core/src/agent/control/completion.rs) <!-- secret-scan:allow Verified public upstream commit reference; not a credential -->
+queues completion with `trigger_turn: false`; the corresponding
+[`session/handlers.rs`](https://github.com/openai/codex/blob/a9b0815167c27ab13719dd12d13b63e02b70d221/codex-rs/core/src/session/handlers.rs) <!-- secret-scan:allow Verified public upstream commit reference; not a credential -->
+requires `trigger_turn` or durable sleep to schedule pending work. This is source evidence, not proof
+of the installed binary. No watchdog, harness patch or durable-sleep experiment is authorized here.
+
 <!-- pi-only -->
 > **Absolute read-only boundary (Pi).** The main agent must never mutate files tracked by the repository.
 > All tracked-file mutations flow through the `dev-loop` async subagent.
