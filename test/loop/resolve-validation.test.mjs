@@ -83,6 +83,8 @@ test("failed full suite returns an unsuccessful public result and retains failur
     assert.equal(result.ok, false);
     assert.equal(result.status, "failed");
     assert.equal(result.artifact.allPassed, false);
+    assert.equal(result.allPassed, false);
+    assert.equal(result.allPassed, result.artifact.allPassed);
     assert.equal(result.artifact.suites[0].exitCode, 2);
     assert.deepEqual(JSON.parse(await readFile(path.join(repoRoot, result.artifactPath), "utf8")), result.artifact);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
@@ -761,6 +763,8 @@ test("top-level allPassed matches the artifact, and --jq is validated before any
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: marked.repoRoot, encoding: "utf8" }).trim();
     const bad = await runNode(CLI, ["gate", "resolve-validation", ...args(head), "--jq", "{ok,allPassed}"], { cwd: marked.repoRoot });
     assert.equal(bad.code, 2);
+    assert.ok(bad.stderr.includes("--jq (BASE-JQ-OUTPUT-GUARANTEE)"), bad.stderr);
+    assert.equal(bad.stdout, "");
     await assert.rejects(readFile(marker, "utf8"));
   } finally { await rm(marked.repoRoot, { recursive: true, force: true }); }
 });
