@@ -6,7 +6,7 @@
  * head that equals the recomputed one. The coordination path records (`record: true`);
  * merge-pr only reads, so it never accepts a carry nobody recorded.
  */
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-verdict-carry";
@@ -38,8 +38,13 @@ async function upsertCarriedHead(file, { gate, originHead, evidence }) {
   record.carried = [...record.carried.filter((e) => e.headSha !== entry.headSha), entry];
   await mkdir(path.dirname(file), { recursive: true });
   const tempPath = `${file}.tmp-${process.pid}-${Date.now()}`; // atomic: a concurrent reader never sees a truncated record
-  await writeFile(tempPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
-  await rename(tempPath, file);
+  try {
+    await writeFile(tempPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    await rename(tempPath, file);
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => {}); // best-effort: a failed rename must not leak the temp file
+    throw error;
+  }
 }
 
 // The candidate shape under which carryGateMarker may carry (baseRef aside).
@@ -59,7 +64,13 @@ export async function carryGateMarker(marker, { gate, repo, pr, currentHeadSha, 
   const evidence = await computeBaseMergeCarry({ prevHead: origin, headSha: currentHeadSha, baseRef, repoRoot, ...(runGit ? { runGit } : {}) });
   if (evidence.decision !== "carry_verdict") return marker;
   const file = path.resolve(repoRoot, buildCarriedHeadsPath({ repo, pr, gate, originHead: origin, tmpRoot: resolveGateArtifactTmpRoot(repoRoot) }));
-  if (record) await upsertCarriedHead(file, { gate, originHead: origin, evidence });
+  if (record) {
+    try {
+      await upsertCarriedHead(file, { gate, originHead: origin, evidence });
+    } catch {
+      return marker; // fail closed: an unwritable record costs one gate round, never a crashed detector
+    }
+  }
   const entry = (await readCarriedHeads(file))?.carried.find((e) => e.headSha === currentHeadSha);
   const valid = entry && validateBaseMergeCarryEvidence(entry.evidence, { expectedSourceHead: origin, expectedNewHead: currentHeadSha }).ok
     && JSON.stringify(entry.evidence) === JSON.stringify(evidence);

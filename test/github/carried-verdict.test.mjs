@@ -49,6 +49,17 @@ test("record:true carries a base-only merge to the current head and writes the r
   assert.equal((await carry(s, marker(origin), cur)).carriedFrom, origin, "merge-pr path reads the recorded carry");
 });
 
+test("a failing record write returns the uncarried marker and does not throw", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  const dir = path.dirname(recordFile(s, origin));
+  mkdirSync(path.dirname(dir), { recursive: true });
+  writeFileSync(dir, "not a directory"); // mkdir of the record dir fails with ENOTDIR
+  const m = marker(origin);
+  assert.deepEqual(await carry(s, m, cur, { record: true }), m);
+});
+
 test("record:false without a record does not carry", async () => {
   const s = setup();
   const origin = s.head();
