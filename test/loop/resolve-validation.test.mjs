@@ -741,3 +741,26 @@ test("reusing an artifact that already carries reusedFrom keeps the original gat
   assert.equal(second.artifact.reusedFrom, "original_gate");
   assert.equal(second.artifact.gate, "pre_approval_gate");
 });
+
+test("top-level allPassed matches the artifact, and --jq is validated before any suite runs", async () => {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    const out = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha)], { cwd: repoRoot });
+    const result = JSON.parse(out.stdout);
+    assert.equal(result.allPassed, true);
+    assert.equal(result.allPassed, result.artifact.allPassed);
+    const ok = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha), "--jq", ".allPassed"], { cwd: repoRoot });
+    assert.equal(ok.stdout.trim(), "true");
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+  const marked = await fixture({ verify: "bun scripts/marker.mjs" });
+  try {
+    const marker = path.join(marked.repoRoot, "marker.txt");
+    await writeFile(path.join(marked.repoRoot, "scripts", "marker.mjs"), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "ran");`);
+    execFileSync("git", ["add", "scripts"], { cwd: marked.repoRoot });
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "marker"], { cwd: marked.repoRoot });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: marked.repoRoot, encoding: "utf8" }).trim();
+    const bad = await runNode(CLI, ["gate", "resolve-validation", ...args(head), "--jq", "{ok,allPassed}"], { cwd: marked.repoRoot });
+    assert.equal(bad.code, 2);
+    await assert.rejects(readFile(marker, "utf8"));
+  } finally { await rm(marked.repoRoot, { recursive: true, force: true }); }
+});

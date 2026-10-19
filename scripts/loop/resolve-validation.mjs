@@ -14,7 +14,7 @@ import { isDirectCliRun } from "../_core-helpers.mjs";
 import { LIFECYCLE_GATES, normalizeGate, normalizeHeadSha } from "../github/_gate-names.mjs";
 import { viewPr } from "../github/view-pr.mjs";
 import { buildValidationResultsPath } from "../github/write-gate-context.mjs";
-import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { buildValidationArtifact, classifyPackageSuites, defaultReadPrTitle, parseRunGateValidationCliArgs, readPackageScripts, runKillable, stripAnsi } from "./run-gate-validation.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { DEVLOOPS_CONFIG_PATHS } from "./check-adr-tripwire.mjs";
@@ -146,7 +146,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
   const incomplete = async (reason, { writeArtifact = true } = {}) => {
     await rm(artifactPath, { force: true });
     if (!writeArtifact) {
-      return { ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason };
+      return { ok: false, status: "incomplete", allPassed: false, profile: options.profile, headSha: options.headSha, toolchain: null, reason };
     }
     const artifact = {
       ok: false, status: "incomplete", allPassed: false,
@@ -155,7 +155,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     };
     await mkdir(path.dirname(artifactPath), { recursive: true });
     await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
-    return { ok: false, status: "incomplete", profile: options.profile, headSha: options.headSha, toolchain: null, reason, artifactPath: buildValidationResultsPath(options) };
+    return { ok: false, status: "incomplete", allPassed: false, profile: options.profile, headSha: options.headSha, toolchain: null, reason, artifactPath: buildValidationResultsPath(options) };
   };
   // An exception writes a typed artifact only when the head check confirmed
   // the requested head and a re-check at the throw still confirms it: a suite
@@ -236,7 +236,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     // HEAD can move between the check above and the write: re-check after it.
     const writtenProblem = currentTreeProblem();
     if (writtenProblem) return incomplete(`worktree moved during the artifact write: ${writtenProblem.reason}`, writtenProblem);
-    return { ok: artifact.allPassed, status: artifact.allPassed ? "complete" : "failed", profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath: buildValidationResultsPath(options), artifact };
+    return { ok: artifact.allPassed, status: artifact.allPassed ? "complete" : "failed", allPassed: artifact.allPassed, profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath: buildValidationResultsPath(options), artifact };
   } catch (error) {
     let stillConfirmed = false;
     try { stillConfirmed = headConfirmed && readHead() === options.headSha; } catch { /* An unconfirmable head writes no artifact. */ }
@@ -250,10 +250,11 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     options = parseResolveValidationArgs(argv);
     if (options.help) { process.stdout.write(`${USAGE}\n`); return; }
+    if (preflightJqFilter(options.jq) === 2) { process.exitCode = 2; return; }
     result = await resolveValidation(options);
   } catch (error) {
     if (!options) await removeParseFailedArtifact(argv);
-    result = { ok: false, status: "incomplete", profile: null, headSha: null, toolchain: null, reason: error instanceof Error ? error.message : String(error) };
+    result = { ok: false, status: "incomplete", allPassed: false, profile: null, headSha: null, toolchain: null, reason: error instanceof Error ? error.message : String(error) };
   }
   const emitted = emitResult(result, { jq: options?.jq, silent: options?.silent });
   process.exitCode = emitted === 2 ? 2 : result.ok ? 0 : 1;
