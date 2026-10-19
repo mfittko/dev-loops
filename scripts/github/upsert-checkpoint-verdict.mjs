@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -28,7 +28,7 @@ import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { convertPrToDraft, markPrReady } from "./_draft-transition.mjs";
 import { listIssueComments, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
-import { buildLogPath, VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
+import { VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
 import {
   buildCommentableLineSet,
   buildNonLocatableFindingMarker,
@@ -229,7 +229,8 @@ Optional:
   --converged-json <path>                   draft_gate low/nit convergence
                                             (GATE-EXEC-LOW-NIT-CONVERGENCE):
                                             { fixerCommit, actList, deltaResult }.
-                                            Requires --gate draft_gate, with
+                                            Requires --gate draft_gate and
+                                            --findings-ledger, with
                                             --head-sha the reviewed head A and
                                             the PR head equal to fixerCommit.
                                             Updates A's comment to clean and
@@ -2507,9 +2508,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let canonicalHeadSha = options.headSha;
   let draftGateConfig = null;
   let preApprovalGateConfig = null;
-  // The post-time fan-out enforcement descriptor (buildFanoutEnforcement's
-  // result) captured from enforcePostTimeFanoutMode, so the durable-ledger
-  // refusal below reuses its already-computed per-gate ledgerExists/ledgerPath.
   let postTimeFanoutEnforcement = null;
   let preloadedFindingsLedger;
   // GATE-EXEC-LOW-NIT-CONVERGENCE: { fixerCommit, actList, deltaResult } from --converged-json; null otherwise.
@@ -2530,17 +2528,12 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let convergedMarker = null;
   const guardedActItems = async (findings) => {
     // A converged round's act items are the union of A's ledger and the passed (judge-enriched) findings, so a caller cannot list a subset.
-    // Without a ledger the passed findings stand alone, and a durable ledger on disk refuses below.
-    const items = listOpenActItems(convergedInput && preloadedFindingsLedger ? [...(preloadedFindingsLedger.findings ?? []), ...findings] : findings);
-    if (!convergedInput) return items;
-    if (!preloadedFindingsLedger) {
-      // Checked on disk directly: the fan-out enforcement descriptor is empty when gates.requireFanoutEvidence is off.
-      const ledgerPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: "tmp" });
-      for (const root of resolveLedgerCheckouts(repoRoot)) {
-        const found = await access(path.resolve(root, ledgerPath)).then(() => true, () => false);
-        if (found) throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs --findings-ledger: the ledger at ${ledgerPath} defines the round's act items.`);
-      }
+    // The ledger is required unconditionally; a missing or unreadable one already refused when it was loaded (naming the path and error).
+    if (convergedInput && !preloadedFindingsLedger) {
+      throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs --findings-ledger: the ledger at A defines the round's act items.`);
     }
+    const items = listOpenActItems(convergedInput ? [...(preloadedFindingsLedger.findings ?? []), ...findings] : findings);
+    if (!convergedInput) return items;
     const roundActItems = [...new Map(items.map((f) => [`${f.severity}|${typeof f.summary === "string" ? f.summary.trim() : f.summary}`, f])).values()];
     convergedMarker = composeConvergedDraftGate({ gate: options.gate, headSha: canonicalHeadSha, roundActItems, converged: convergedInput });
     return [];

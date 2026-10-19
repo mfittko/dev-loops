@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 import { parseUpsertCheckpointVerdictCliArgs, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
-import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { startDeltaSequence } from "../../packages/core/src/loop/pre-push-delta-review.mjs";
 
 // GATE-EXEC-LOW-NIT-CONVERGENCE: an all-low/nit draft_gate round at head A converges after one fixer pass and a
@@ -253,28 +252,45 @@ test("a judge-enriched --findings-json medium act item over an all-low ledger re
   }, { prefix: "dev-loops-converged-enriched-" });
 });
 
-for (const requireFanoutEvidence of [true, false]) test(`a converged post without --findings-ledger refuses while the round's durable ledger exists (requireFanoutEvidence ${requireFanoutEvidence})`, async () => {
+async function postWithoutLedger(tempDir, { ledgerArgs = [], devloops = "version: 1\n" } = {}) {
+  const lows = [finding("low", 1)];
+  const findingsJson = path.join(tempDir, "findings.json");
+  await writeFile(findingsJson, JSON.stringify(lows), "utf8");
+  const root = path.join(tempDir, "root");
+  await mkdir(root, { recursive: true });
+  await writeFile(path.join(root, ".devloops"), devloops, "utf8");
+  const converged = path.join(tempDir, "converged.json");
+  await writeFile(converged, JSON.stringify(convergedInput(lows)), "utf8");
+  const puts = [];
+  const args = [
+    "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", A, "--findings-summary", "converged test",
+    "--findings-json", findingsJson, "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
+    "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 1, question: 0, nit: 0 }), "--verdict", "clean", "--converged-json", converged,
+    ...ledgerArgs,
+  ];
+  let error;
+  try {
+    await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild({ puts }) });
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+  }
+  return { error, puts };
+}
+
+for (const requireFanoutEvidence of [true, false]) test(`a converged post without --findings-ledger is refused (requireFanoutEvidence ${requireFanoutEvidence})`, async () => {
   await withTempDir(async (tempDir) => {
-    const lows = [finding("low", 1)];
-    const findingsJson = path.join(tempDir, "findings.json");
-    await writeFile(findingsJson, JSON.stringify(lows), "utf8");
-    const root = path.join(tempDir, "root");
-    const ledgerPath = path.join(root, buildLogPath({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, tmpRoot: "tmp" }));
-    await mkdir(path.dirname(ledgerPath), { recursive: true });
-    await writeFile(ledgerPath, JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, verdict: "clean", findings: lows }), "utf8");
-    await writeFile(path.join(root, ".devloops"), `version: 1\ngates:\n  requireFanoutEvidence: ${requireFanoutEvidence}\n`, "utf8");
-    const converged = path.join(tempDir, "converged.json");
-    await writeFile(converged, JSON.stringify(convergedInput(lows)), "utf8");
-    const puts = [];
-    const args = [
-      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", A, "--findings-summary", "converged test",
-      "--findings-json", findingsJson, "--next-action", "mark ready for review", "--execution-mode", "fanout_fanin",
-      "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 1, question: 0, nit: 0 }), "--verdict", "clean", "--converged-json", converged,
-    ];
-    await assert.rejects(
-      upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild({ puts }) }),
-      /needs --findings-ledger/,
-    );
+    const { error, puts } = await postWithoutLedger(tempDir, { devloops: `version: 1\ngates:\n  requireFanoutEvidence: ${requireFanoutEvidence}\n` });
+    assert.match(error, /needs --findings-ledger/);
     assert.deepEqual(puts, []);
   }, { prefix: "dev-loops-converged-noledger-" });
+});
+
+test("a converged post whose --findings-ledger does not exist is refused naming the path and the error code", async () => {
+  await withTempDir(async (tempDir) => {
+    const missing = path.join(tempDir, "missing-ledger.json");
+    const { error, puts } = await postWithoutLedger(tempDir, { ledgerArgs: ["--findings-ledger", missing] });
+    assert.ok(error.includes(missing), error);
+    assert.match(error, /ENOENT/);
+    assert.deepEqual(puts, []);
+  }, { prefix: "dev-loops-converged-missingledger-" });
 });
