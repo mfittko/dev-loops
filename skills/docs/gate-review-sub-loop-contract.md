@@ -1297,7 +1297,8 @@ ACT or THREAD source with raw-byte and semantic authentication. ACT additionally
 unique required Delta/completion-input reads and both completion authorities; missing all
 optional markers cannot fall back to ordinary delivery. THREAD rejects ACT/completion-input
 mixing and every extra delivered ID before checkpoint or reply/resolution mutation, while
-retaining required pinned IDs and ignoring unrelated live threads. There is no THREAD constructor.
+retaining required pinned IDs and ignoring unrelated live threads. THREAD reports are built by the
+verifier's `--construct` from the pinned threads source and the clearing delta record (ADR 0165).
 The emitted task precedes generic guidance and immutable JSON identity evidence: preserve the
 branch/worktree/source-hash bootstrap, authorize only the exact own output and evidenced
 delivery/reply/resolution verification, and perform no source edit/test, stage, commit, push,
@@ -1312,9 +1313,15 @@ not establish producer eligibility, new publication, runtime worker qualificatio
 The `--construct` operation (ADR 0149, extended by ADR 0165) builds the ACT report from completion
 input and the THREAD report from the threads source, the clearing delta record (its `candidateHead`
 is the pushed head) and the pushed head. Normal verification and `--check` accept only a report that
-`--construct` wrote (a sha256 mark beside the output) and refuse while the head's checks are red
-(`ci_failed`, no reply). Every full-phase order states the numbered steps: push, confirm the remote
-head, `wait-pr-checks`, `--construct`, verify, `--check`, and the Edit/Write-only rule. The
+`--construct` wrote (a sha256 mark beside the output). For a plan that has a source they also refuse
+unless the head's checks are settled green, with no reply: `ci_failed` (red checks), `ci_pending`
+(pending checks) or `ci_unknown` (unreadable checks or unsupported conclusions). A settled head with no
+check runs and no statuses passes. The fixer hands back the refusal code and resolves no thread.
+A complete THREAD order finds its clearing record by `candidateHead` equal to the pushed head, because
+its order head is already the candidate. Every full-phase order states the numbered steps: push, confirm
+the remote head, `wait-pr-checks` (run once, one retry on a not-settled exit, then hand back `ci_pending`
+or `ci_unknown`), `--construct`, verify, `--check`, and the Edit/Write-only rule. A THREAD order pushes
+exactly the delta-reviewed candidate and makes no further commit. The
 operation is mutually exclusive with `--check`. It authenticates the current plan/digest, fixer identity/receipt/subject, canonical
 plan/output paths and after-pull timing before constructing that execution's report. Missing
 output is permitted; an existing pre-pull output refuses. No caller-selected output is accepted.

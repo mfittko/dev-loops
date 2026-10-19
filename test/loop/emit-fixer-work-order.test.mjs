@@ -1165,7 +1165,10 @@ function assertFullPhaseSteps(text, { push }) {
     assert.ok(match, `step ${marker} missing or out of order`);
     from += match.index + match[0].length;
   }
-  assert.match(text, /If CI is red, resolve no thread, run no verifier step, and hand back `ci_failed` with the failing check names/);
+  assert.match(text, /If CI is red \(`failure`\), resolve no thread, run no verifier step, and hand back `ci_failed` with the failing check names/);
+  assert.match(text, /If it exits 2 \(not settled\), run it exactly once more\./);
+  assert.match(text, /reports `stuck` or `changed`, or exits 1 with an error, resolve no thread, run no verifier step, and hand back `ci_pending` \(`ci_unknown` when the checks cannot be read\)/);
+  assert.doesNotMatch(text, /repeat while it reports/);
   assert.match(text, /Edit rule: write files only with the Edit and Write tools\. Never write a file through a Bash heredoc, redirect or `sed -i`, and never write `fixer-disposition\*\.json`/);
 }
 
@@ -1275,7 +1278,33 @@ for (const form of ["exact", "missing", "extra", "foreign", "mixed"]) test(`comp
   });
 });
 
-test("ordinary rendering matches the independent approved base renderer byte for byte", async () => {
+test("complete THREAD runs the emitted --construct, normal and --check against a record keyed by an earlier baseline", async () => {
+  await withFixture(async ({ root, wt, head, emit, files, writeRecord }) => {
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
+    // The delta review ran at baseline `head`; the reviewed candidate is a later commit, which is the complete order's head.
+    git(wt, "commit", "-q", "--allow-empty", "-m", "candidate");
+    const candidate = git(wt, "rev-parse", "HEAD");
+    await writeRecord({ candidateHead: candidate, items: [{ ref: "PRRT_T1", status: "resolved" }] });
+    const unit = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    unit.workOrder.operation = "complete";
+    unit.workOrder.headSha = candidate;
+    unit.workOrder.mutationAuthority.allowedPaths = [];
+    await sealBaselineUnit(unit, root);
+    assert.equal(pull(unit, wt).status, 0);
+    const options = { repo: REPO, pr: PR, headSha: candidate, fixerPlan: unit.planPath };
+    const liveHead = { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: candidate }) };
+    const threadsEntry = (nodes) => ({ assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) });
+    const run = (entries, over) => verifyFixerDisposition({ ...options, ...over }, { repoRoot: wt, env: gitFreeEnv(), runChild: makeGhMock(entries).runChild });
+    assert.equal((await run([liveHead, threadsEntry([])], { construct: true })).constructed, true);
+    assert.deepEqual(JSON.parse(await readFile(unit.workOrder.outputRefs[0], "utf8")).dispositions, [{ threadId: "PRRT_T1", fixingCommitSha: candidate, disposition: "tackled" }]);
+    const resolved = threadsEntry([{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${candidate}.`, author: { login: "bot", __typename: "User" } }] } }]);
+    for (const check of [false, true]) {
+      assert.equal((await run([liveHead, resolved, ...ciEntries(candidate), { assertArgs: ["api", `repos/${REPO}/compare/${candidate}...${candidate}`], stdout: '{"status":"identical"}' }], { check })).complete, true);
+    }
+  });
+});
+
+test("commit_only rendering matches the approved base renderer byte for byte and full differs only in the task region", async () => {
   const checkout = fileURLToPath(new URL("../../", import.meta.url));
   const source = execFileSync("git", ["-C", checkout, "show", "c1ce5892ecda03e0516d87b88c7d1d83bc379eae:scripts/loop/emit-fixer-work-order.mjs"], { encoding: "utf8", env: gitFreeEnv() });
   const start = source.indexOf("export function renderWorkOrder(");
@@ -1879,7 +1908,9 @@ test("issue 2787: a THREAD full order has the numbered steps, runs --construct a
     await writeRecord({ items: [{ ref: "PRRT_T1", status: "resolved" }] });
     const { promptPath } = await emit({ ...threadsOnly, threadsFile: files.threads });
     const text = await readFile(promptPath, "utf8");
-    assertFullPhaseSteps(text, { push: /1\. Push the committed candidate/ });
+    assertFullPhaseSteps(text, { push: /1\. Push exactly the delta-reviewed candidate/ });
+    assert.doesNotMatch(text, /Apply and commit/);
+    assert.match(text, /Make no further commit/);
     assert.match(text, /never write the disposition handoff yourself/);
     assert.match(text, /--head-sha <pushed-head-sha>/);
     assert.match(text, /If step 5 refuses the report as hand-written, rm the outputRef and re-run step 4\./);

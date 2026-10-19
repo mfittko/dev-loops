@@ -26,7 +26,7 @@ import {
   siteCoverageGaps,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { deltaCoverageBinding, isDeltaResultFresh, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
-import { DELTA_CLEARING_NEXT_STEPS, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
+import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
@@ -69,7 +69,10 @@ Optional:
                                source, the clearing delta record and the pushed head);
                                no checkpoint or GitHub mutation. Not --check. Normal
                                and --check modes accept only a report this wrote, and
-                               refuse (ci_failed) while the head's checks are red.
+                               refuse when the plan has a source and the head's checks are not
+                               settled green: ci_failed (red), ci_pending (pending),
+                               ci_unknown (unreadable or unsupported). A settled head with no
+                               checks at all passes. Hand back the code and resolve no thread.
   --check                     Read-only delivery and live-state check; never
                                write a checkpoint or reply/resolve a thread.
   --tmp-root <path>            Root tmp directory for the checkpoint and the pull
@@ -357,10 +360,12 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     }
   }
   if (options.construct && !completion) {
-    // THREAD route: the clearing delta record for the work order's baseline, bound to the pushed head, decides each thread.
-    const record = readGateDeltaRecord(receiptTmpRoot, order.headSha);
-    if (!record || !DELTA_CLEARING_NEXT_STEPS.includes(record.nextStep) || record.candidateHead !== options.headSha) {
-      throw new Error(`--construct needs a clearing delta record for baseline ${order.headSha} whose candidateHead is the pushed head ${options.headSha}; push the reviewed candidate first`);
+    // THREAD route: the clearing delta record bound to the pushed head decides each thread. An ordinary order's head is
+    // the review baseline; a complete order's head is the pushed candidate, so its record is found by candidateHead.
+    const clears = (candidate) => candidate && DELTA_CLEARING_NEXT_STEPS.includes(candidate.nextStep) && candidate.candidateHead === options.headSha;
+    const record = [readGateDeltaRecord(receiptTmpRoot, order.headSha), ...(complete ? listGateDeltaRecords(receiptTmpRoot) : [])].find(clears);
+    if (!record) {
+      throw new Error(`--construct needs a clearing delta record ${complete ? "" : `for baseline ${order.headSha} `}whose candidateHead is the pushed head ${options.headSha}; push the reviewed candidate first`);
     }
     const resolved = new Set((record.items ?? []).filter((item) => item?.status === "resolved").map((item) => item.ref));
     raw.dispositions = source.threads.map(({ threadId }) => ({ threadId, fixingCommitSha: options.headSha, disposition: resolved.has(threadId) ? "tackled" : "deferred" }));
@@ -615,7 +620,9 @@ export async function verifyFixerDisposition(
         commitStatus: ci.statuses.commitStatus,
         checkRunsUnsupportedCompleted: ci.checkRuns.fullSignal.unsupportedCompleted,
       }).overallStatus;
-    if (state !== "success") {
+    // A head with no check runs and no statuses at all is settled (wait-pr-checks settles it); anything else must be green.
+    const checkless = state === "none" && ci.checkRuns.rawCount === 0 && ci.statuses.rawCount === 0;
+    if (state !== "success" && !checkless) {
       const code = state === "pending" ? "ci_pending" : "ci_unknown";
       throw new Error(`${code}: checks at ${options.headSha} are ${state}, not settled green; resolve no thread, hand back ${code}`);
     }

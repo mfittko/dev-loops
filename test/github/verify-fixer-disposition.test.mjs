@@ -185,7 +185,7 @@ test("emitted and pulled THREAD full binds missing output without an execution d
 });
 
 // An emitted and pulled THREAD full plan whose pushed head is the baseline head (issue 2787 C3, C4).
-async function threadConstructFixture(root) {
+async function threadConstructFixture(root, recordOver) {
   root = await realpath(root);
   initGitFixture(root, { branch: "issue-1" });
   const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
@@ -193,11 +193,14 @@ async function threadConstructFixture(root) {
   const recordPath = path.join(tmpRoot, "gate-delta", `${head}.json`);
   await mkdir(path.dirname(recordPath), { recursive: true });
   await writeFile(threadsFile, JSON.stringify({ ok: true, repo: REPO, pr: PR, threads: [{ threadId: "PRRT_T1", isResolved: false }] }));
-  await writeFile(recordPath, JSON.stringify({ reviewBaselineHead: head, candidateHead: head, actSetId: "0".repeat(16),
-    invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "PRRT_T1", status: "resolved" }] }));
+  const record = { reviewBaselineHead: head, candidateHead: head, actSetId: "0".repeat(16),
+    invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "PRRT_T1", status: "resolved" }] };
+  await writeFile(recordPath, JSON.stringify(record));
   const plan = await emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", threadsFile, cwd: root,
     fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
   await pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: root, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
+  // A variant record replaces the clearing one after emission and pull, which need the clearing record.
+  if (recordOver) await (recordOver.missing ? rm(recordPath) : writeFile(recordPath, JSON.stringify({ ...record, ...recordOver })));
   const options = { repo: REPO, pr: PR, headSha: head, fixerPlan: plan.planPath };
   const live = liveHeadEntry(head);
   return { plan, options, head, output: plan.workOrder.outputRefs[0], root, runtimeFor: (entries) => runtime([live, ...entries], root, { live: false }) };
@@ -215,6 +218,22 @@ test("THREAD full --construct builds the report from the threads, the clearing r
     }
   });
 });
+
+for (const [label, over] of [
+  ["a missing record", { missing: true }],
+  ["a non-clearing nextStep", { nextStep: "fix_and_rereview" }],
+  ["a different candidateHead", { candidateHead: "d".repeat(40) }],
+]) {
+  test(`THREAD --construct refuses ${label} and writes no output or mark`, async () => {
+    await withRepoRoot(async (root) => {
+      const f = await threadConstructFixture(root, over);
+      const mock = f.runtimeFor([threadsCallEntry([])]);
+      await assert.rejects(verifyFixerDisposition({ ...f.options, construct: true }, mock.deps), /needs a clearing delta record/);
+      assert.equal(existsSync(f.output), false);
+      assert.equal(existsSync(`${f.output}.constructed`), false);
+    });
+  });
+}
 
 test("a hand-written fixer-disposition.json with valid content is refused and names --construct", async () => {
   await withRepoRoot(async (root) => {
@@ -243,7 +262,6 @@ for (const [label, ci, expected] of [
   ["pending", { runs: [{ name: "build", status: "in_progress" }] }, /ci_pending.*pending/],
   ["unreadable", { checkRunsExit: 1 }, /ci_unknown.*unreadable/],
   ["status-context failure", { statuses: [{ context: "circle", state: "failure" }] }, /ci_failed.*circle/],
-  ["no checks yet", { runs: [] }, /ci_unknown.*none/],
 ]) {
   test(`normal mode refuses with a ${label} head and posts no reply`, async () => {
     await withRepoRoot(async (root) => {
@@ -256,6 +274,17 @@ for (const [label, ci, expected] of [
     });
   });
 }
+
+test("a settled head with no check runs and no statuses is accepted", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    for (const check of [false, true]) {
+      const mock = f.runtimeFor([threadsCallEntry([{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }]), ...ciEntries(f.head, { runs: [] }), compareEntry(f.head, "identical", f.head)]);
+      assert.equal((await verifyFixerDisposition({ ...f.options, check }, mock.deps)).complete, true);
+    }
+  });
+});
 
 for (const defect of ["partialSubject", "subjectHead", "receipt", "prompt", "digest", "ref", "role", "target", "output", "directory", "danglingReport", "redirectedDirectory", "danglingDirectory", "notDirectory", "malformed", "prePull"]) {
   test(`active full binding withholds metadata for ${defect}`, async () => {
