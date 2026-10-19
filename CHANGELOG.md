@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.8-pre.1
+
+### Added
+
+- `emit-coordinator-work-order --input <resolver-output.json> --harness <claude or pi> --entry <queue or direct>` prints a compact pull-pointer dispatch payload (#2483)
+- The `c` coordinator execution identity prefix is recorded in ADR 0164, which amends ADR 0115 (#2483)
+- The `subagent dev-loop` contract row emits the coordinator work order for resumed queue and direct entries (#2483)
+
+### Fixed
+
+- resolve-pr-conflicts commits with the ambient git identity and falls back to the bot only when user.email is empty (#2832)
+
 ## 1.0.7
 
 ### Added
