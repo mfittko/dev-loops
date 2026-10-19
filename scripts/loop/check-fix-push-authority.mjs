@@ -5,7 +5,9 @@
  * `<local ref> <local sha> <remote ref> <remote sha>` lines on stdin. Exit 1 refuses the push while
  * a gate fix sequence is active for any pushed sha (the sha is the baseline or descends from it, and the PR
  * branch's remote ref has not advanced past the baseline) and the full work order has not granted the push;
- * exit 0 allows it. A parse error or git failure refuses (fail closed). With no ref lines the HEAD of
+ * exit 0 allows it. A marker that names a branch covers a push only when the known push target is
+ * refs/heads/<branch>; a branchless marker, or an unknown push target, keeps the ancestry rule (fail closed).
+ * A parse error or git failure refuses (fail closed). With no ref lines the HEAD of
  * the checkout is tested. Agent identity is unknown to git, so this check binds every pusher.
  */
 import { execFileSync } from "node:child_process";

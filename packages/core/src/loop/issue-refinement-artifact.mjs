@@ -309,7 +309,7 @@ export function parseMarkdownSections(body) {
  * Only called on an already-recognized AC/DoD section, so counting
  * plain bullets never affects prose sections.
  */
-function parseChecklistItems(sectionBody) {
+function parseChecklistItems(sectionBody, { anyMarker = false } = {}) {
   if (typeof sectionBody !== "string" || sectionBody.length === 0) {
     return [];
   }
@@ -348,7 +348,9 @@ function parseChecklistItems(sectionBody) {
     }
     // Top-level plain bullet: dash at column 0, space required (so `---`
     // horizontal rules and `-x` do not match; indented sub-bullets do not).
-    const bulletMatch = /^-\s+(.+?)\s*$/u.exec(line);
+    // `anyMarker` (the PR body versus issue comparison) also accepts indented
+    // `*`/`+`/numbered items, consistent with the checkbox grammar above.
+    const bulletMatch = (anyMarker ? /^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$/u : /^-\s+(.+?)\s*$/u).exec(line);
     if (bulletMatch) {
       const text = bulletMatch[1].trim();
       if (text.length > 0) {
@@ -368,8 +370,8 @@ function parseChecklistItems(sectionBody) {
  * that). Thin wrapper over `parseChecklistItems` so the text-only contract
  * stays byte-identical to its original shape.
  */
-export function extractChecklistItems(sectionBody) {
-  return parseChecklistItems(sectionBody).map((item) => item.text);
+export function extractChecklistItems(sectionBody, options) {
+  return parseChecklistItems(sectionBody, options).map((item) => item.text);
 }
 
 /**
@@ -1561,4 +1563,87 @@ export function summarizeRefinementGateCheck({ body = "", issueNumber = null } =
     blocking: !artifact.hasACs,
     reason: artifact.reason,
   };
+}
+
+/**
+ * Comparable items of a spec section body: each list item with its wrapped continuation lines joined.
+ * Prose paragraphs, rules and comments are not items. Fenced code is skipped. Empty checkbox placeholders yield no item.
+ */
+function extractComparableItems(body) {
+  const items = [];
+  let open = false;
+  let fence = null;
+  for (const line of body.split(/\r?\n/u)) {
+    const step = stepFence(fence, line);
+    fence = step.fence;
+    if (step.insideFence) continue;
+    if (line.trim() === "") {
+      open = false;
+      continue;
+    }
+    const marker = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+(.*)$/u.exec(line);
+    if (marker) {
+      items.push(marker[1].replace(/^\[[ xX]\]\s*/u, "").trim());
+      open = true;
+    } else if (open) {
+      items[items.length - 1] = `${items[items.length - 1]} ${line.replace(/^\s*(?:>\s*)*/u, "").trim()}`;
+    }
+  }
+  return items.filter((item) => item.length > 0);
+}
+
+const normalizeSpecItem =(text) =>
+  String(text).replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, "").replace(/^\[[ xX]\]\s*/u, "").replace(/\s+/gu, " ").trim().toLowerCase();
+
+/**
+ * Compare the PR body's In scope, Acceptance criteria, Definition of done and Non-goals items with the
+ * linked issue body. Returns stale-surface-shaped hits `{ kind: "pr-body", side, needle, file, line, site }`
+ * for every PR item the issue lacks and every issue item the PR lacks. `file` is `pr-body/<section-slug>`
+ * for a PR-side hit and `issue-body/<section-slug>` for an issue-side hit, so the two sides never share a
+ * site. `line` is the 1-based index in the list that holds the item, `site` is `file:line`. Issue AC and
+ * DoD come from the issue matrix; an issue without a valid matrix yields one `issue-body/issue-matrix` hit. Pure.
+ *
+ * @param {{ prBody?: string, issueBody?: string }} input
+ */
+export function diffPrBodyAgainstIssue({ prBody = "", issueBody = "" } = {}) {
+  const prSections = parseMarkdownSections(prBody);
+  const issueSections = parseMarkdownSections(issueBody);
+  const inScopePatterns = PR_BODY_SPEC_NARRATIVE_SECTIONS.in_scope.patterns;
+  const nonGoalPatterns = [...PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns, ...SPEC_SECTION_NAME_PATTERNS.nonGoals];
+  const families = [inScopePatterns, ACCEPTANCE_SECTION_PATTERNS, DOD_SECTION_PATTERNS, nonGoalPatterns];
+  // Flatten deeper sub-headings into the section, skipping sub-sections another family selected.
+  // The issue side reads only in-scope and non-goals from sections (AC/DoD come from the matrix), so only those families are skipped there.
+  const sectionItems = (sections, patterns, skipFamilies = families) => {
+    const index = findSpecSectionIndex(sections, patterns);
+    if (index === -1) return [];
+    const selected = new Set(skipFamilies.map((family) => findSpecSectionIndex(sections, family)).filter((i) => i !== -1));
+    selected.delete(index);
+    return extractComparableItems(flattenSectionDeep(sections, index, (i) => selected.has(i)));
+  };
+  const prList = (patterns) => sectionItems(prSections, patterns);
+  const issueList = (patterns) => sectionItems(issueSections, patterns, [inScopePatterns, nonGoalPatterns]);
+  const hits = [];
+  const compare = (slug, prItems, issueItems) => {
+    const add = (side, prefix, items, other) => {
+      const file = `${prefix}/${slug}`;
+      const known = new Set(other.map(normalizeSpecItem));
+      items.forEach((needle, index) => {
+        if (!known.has(normalizeSpecItem(needle))) hits.push({ kind: "pr-body", side, needle, file, line: index + 1, site: `${file}:${index + 1}` });
+      });
+    };
+    add("pr", "pr-body", prItems, issueItems);
+    add("issue", "issue-body", issueItems, prItems);
+  };
+  if (findSpecSectionIndex(issueSections, inScopePatterns) !== -1) {
+    compare("in-scope", prList(inScopePatterns), issueList(inScopePatterns));
+  }
+  try {
+    const { acChecklist, dodChecklist } = derivePrChecklistsFromIssueMatrix({ body: issueBody });
+    compare("acceptance-criteria", prList(ACCEPTANCE_SECTION_PATTERNS), acChecklist);
+    compare("definition-of-done", prList(DOD_SECTION_PATTERNS), dodChecklist);
+  } catch (error) {
+    hits.push({ kind: "pr-body", side: "issue", needle: error.message, file: "issue-body/issue-matrix", line: 0, site: "issue-body/issue-matrix" });
+  }
+  compare("non-goals", prList(nonGoalPatterns), issueList(nonGoalPatterns));
+  return hits;
 }

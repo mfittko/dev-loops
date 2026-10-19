@@ -30,7 +30,9 @@ import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } f
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../github/_fixer-emission-evidence.mjs";
 import { captureParsedReviewThreads } from "../github/_review-thread-mutations.mjs";
-import { resolveAuthenticatedLogin } from "../github/post-gate-findings.mjs";
+import { resolveAuthenticatedLogin, runGhJson } from "../github/post-gate-findings.mjs";
+import { normalizePrReviewsPayload, prReviewsApiArgs } from "../github/_gate-finding-surface.mjs";
+import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { selectActThreadBinding } from "../github/_fixer-act-thread-bindings.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 
@@ -44,6 +46,7 @@ check-pre-push-delta --result), and any non-clearing record for the head refuses
 --phase commit_only first. The mutation authority is
 the PR's own head branch (gh pr view headRefName) and the --allowed-path selectors
 (default "." = the whole repository). A PR head other than --head-sha refuses.
+An --act-list-file source also refuses with verdict_not_posted until the --gate verdict review for --head-sha is posted on the PR (GATE-EXEC-POST-BEFORE-FIX; post it with dev-loops gate upsert-verdict --findings-ledger).
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
 (default: the main checkout's tmp/; an explicit --tmp-root inside a linked worktree is refused) and prints
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath }.
@@ -97,6 +100,12 @@ function normalizeAllowedPath(raw) {
 async function defaultFetchPr({ repo, pr }) {
   const out = execFileSync("gh", ["pr", "view", String(pr), "--repo", repo, "--json", "headRefName,headRefOid"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   return JSON.parse(out);
+}
+
+// The posted verdict markers at `headSha`, keyed by gate: submitted reviews only (GATE-EXEC-POST-BEFORE-FIX); the head filter is summarizeGateReviewCommentMarkers's own.
+export async function defaultFetchVerdictMarkers({ repo, pr, headSha, runtime }) {
+  const reviews = normalizePrReviewsPayload(await runGhJson(prReviewsApiArgs(repo, pr), runtime));
+  return summarizeGateReviewCommentMarkers(reviews, { headSha });
 }
 
 const SKELETON_STATUS = "fixed|skipped";
@@ -240,7 +249,7 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidat
  */
 export async function emitFixerWorkOrder({
   repo, pr, headSha, phase, actListFile, gate, threadsFile, deltaResult, allowedPaths = [], cwd = process.cwd(), tmpRoot,
-  fetchPr = defaultFetchPr, executionIdentity = `f${Date.now()}-${randomBytes(4).toString("hex")}`,
+  fetchPr = defaultFetchPr, fetchVerdictMarkers = defaultFetchVerdictMarkers, executionIdentity = `f${Date.now()}-${randomBytes(4).toString("hex")}`,
   env = process.env, ghCommand = "gh", runChild,
 }) {
   if (!/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Refusal(`--head-sha must be a full 40- or 64-char lowercase SHA, got ${headSha}`);
@@ -288,6 +297,15 @@ export async function emitFixerWorkOrder({
   const prState = await fetchPr({ repo, pr });
   if (typeof prState?.headRefName !== "string" || !prState.headRefName) throw new Refusal(`PR ${repo}#${pr} reports no headRefName; mutation authority is missing`);
   if (String(prState.headRefOid ?? "").toLowerCase() !== headSha) throw new Refusal(`PR ${repo}#${pr} head is ${prState.headRefOid}, not --head-sha ${headSha}; conflicting authority, refresh and re-emit`);
+  // GATE-EXEC-POST-BEFORE-FIX: an act list is fixed only after its round's verdict review is on the PR at this head.
+  if (actListFile) {
+    const upsert = `dev-loops gate upsert-verdict --repo ${repo} --pr ${pr} --head-sha ${headSha} --gate ${gate} --findings-ledger <this round's findings ledger>`;
+    let markers;
+    try { markers = await fetchVerdictMarkers({ repo, pr, headSha, gate, runtime: { env, ghCommand, runChild } }); } catch (error) {
+      throw new Refusal(`verdict_not_posted: could not read the PR's posted verdicts (${error?.message ?? error}); post the ${gate} verdict review at ${headSha} before fixing: ${upsert}`);
+    }
+    if (!(markers?.[gate]?.visible && markers[gate].contractComplete === true)) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${headSha}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`);
+  }
 
   let completion, completionRead, candidateHead = headSha, recheckCandidate = () => {}, rejectOriginalRetirement = () => {};
   if (phase === "full" && actListFile) {

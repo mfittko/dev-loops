@@ -1158,7 +1158,7 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   const actPath = path.join(tmpRoot, "act.json"), deltaPath = path.join(tmpRoot, "delta.json"), logPath = path.join(tmpRoot, "findings.json");
   await writeFile(actPath, JSON.stringify(actList));
   const emit = (phase, extra = {}) => emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: baseline, phase, actListFile: actPath, gate: "draft_gate", cwd: repoRoot,
-    fetchPr: async () => ({ headRefName: "issue-1", headRefOid: baseline }), ...extra });
+    fetchPr: async () => ({ headRefName: "issue-1", headRefOid: baseline }), fetchVerdictMarkers: async () => ({ draft_gate: { visible: true, contractComplete: true } }), ...extra });
   const prior = await emit("commit_only");
   const pull = (plan) => pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: repoRoot, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
   await pull(prior);
