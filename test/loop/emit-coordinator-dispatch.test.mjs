@@ -100,7 +100,8 @@ test("Codex bootstrap pins emitting source bytes and keeps canonical authority a
     for (const contract of bootstrap.contracts) {
       assert.equal(contract.absolutePath, path.join(bootstrap.toolchainRoot, contract.path));
       assert.equal(contract.required, true);
-      assert.equal(contract.sha256, createHash("sha256").update(await readFile(contract.absolutePath)).digest("hex"));
+      assert.equal(contract.digest, createHash("sha256").update(await readFile(contract.absolutePath)).digest("hex"));
+      assert.equal(Object.hasOwn(contract, "sha256"), false);
     }
     assert.equal(bootstrap.cwd.processCwd, await realpath(ctx.dir));
     assert.equal(bootstrap.cwd.repositoryRoot, await realpath(ctx.dir));
@@ -153,7 +154,49 @@ test("Codex bootstrap refuses missing, empty, directory and redirected emitting 
   });
 });
 
-test("Codex materialization authenticates local bootstrap hashes and rejects wrong execution", async () => {
+test("Codex contract-only changes get a new reference and preserve the original materialization", async () => {
+  await withDirs(async (ctx) => {
+    const toolchain = path.join(ctx.dir, "toolchain");
+    const loop = path.join(toolchain, "scripts/loop");
+    await mkdir(loop, { recursive: true });
+    const isolatedScript = path.join(loop, path.basename(script));
+    await copyFile(script, isolatedScript);
+    for (const relative of ["scripts/_core-helpers.mjs", "scripts/lib", "scripts/github", "scripts/loop/_repo-root-resolver.mjs", "scripts/loop/build-handoff-envelope.mjs", "node_modules"]) {
+      await symlink(path.resolve(relative), path.join(toolchain, relative));
+    }
+    for (const relative of ["agents/dev-loop.agent.md", "skills/docs/copilot-loop-operations.md", "skills/docs/main-agent-contract.md"]) {
+      await mkdir(path.dirname(path.join(toolchain, relative)), { recursive: true });
+      await copyFile(path.resolve(relative), path.join(toolchain, relative));
+    }
+    const args = ["--input", ctx.input, "--repo", "o/r", "--harness", "codex", "--entry", "direct", "--tmp-root", ctx.tmp];
+    const firstResult = await runNode(isolatedScript, args, { cwd: ctx.dir });
+    assert.equal(firstResult.code, 0, firstResult.stderr);
+    const first = JSON.parse(firstResult.stdout);
+    const originalPlan = await readFile(first.planPath, "utf8");
+    const plan = JSON.parse(originalPlan);
+    const originalOrder = await readFile(plan.promptPath, "utf8");
+    const contract = plan.workOrder.codexBootstrap.contracts[0];
+    await writeFile(contract.absolutePath, `${await readFile(contract.absolutePath, "utf8")}\nChanged bootstrap contract.\n`);
+    const changedDigest = createHash("sha256").update(await readFile(contract.absolutePath)).digest("hex");
+    const secondResult = await runNode(isolatedScript, args, { cwd: ctx.dir });
+    assert.equal(secondResult.code, 0, secondResult.stderr);
+    const second = JSON.parse(secondResult.stdout);
+    assert.notEqual(second.workOrderDigest, first.workOrderDigest);
+    assert.notEqual(second.workOrderRef, first.workOrderRef);
+    assert.notEqual(second.planPath, first.planPath);
+    assert.equal(JSON.parse(await readFile(second.planPath, "utf8")).workOrder.codexBootstrap.contracts[0].digest, changedDigest);
+    assert.equal(await readFile(first.planPath, "utf8"), originalPlan);
+    assert.equal(await readFile(plan.promptPath, "utf8"), originalOrder);
+    assert.equal((await pullWorkOrder({ ref: first.workOrderRef, digest: first.workOrderDigest, execution: first.executionIdentity, tmpRoots: [ctx.tmp], receiptTmpRoot: ctx.dir })).workOrderText, originalOrder);
+    // Changing the materialized pin to bless different bytes cannot reuse the old semantic authority.
+    plan.workOrder.codexBootstrap.contracts[0].digest = changedDigest;
+    await writeFile(first.planPath, JSON.stringify(plan));
+    await writeFile(plan.promptPath, renderCoordinatorWorkOrder(plan.workOrder));
+    await assert.rejects(pullWorkOrder({ ref: first.workOrderRef, digest: first.workOrderDigest, execution: first.executionIdentity, tmpRoots: [ctx.tmp], receiptTmpRoot: ctx.dir }), { refusal: "semantic_identity_mismatch" });
+  });
+});
+
+test("Codex materialization authenticates bootstrap metadata and rejects wrong execution", async () => {
   await withDirs(async (ctx) => {
     const out = (await emit(ctx, "codex", "queue")).out;
     const pull = { ref: out.workOrderRef, digest: out.workOrderDigest, execution: out.executionIdentity, tmpRoots: [ctx.tmp], receiptTmpRoot: ctx.dir };
@@ -161,8 +204,8 @@ test("Codex materialization authenticates local bootstrap hashes and rejects wro
     assert.equal(JSON.parse(await readFile(receipt.receiptPath, "utf8")).role, "coordinator");
     await assert.rejects(pullWorkOrder({ ...pull, execution: "c1-deadbeef" }), { refusal: "dispatch_identity_mismatch" });
     const plan = JSON.parse(await readFile(out.planPath, "utf8"));
-    plan.workOrder.codexBootstrap.contracts[0].sha256 = "0".repeat(64);
-    assert.equal(workOrderDigest(plan.workOrder), out.workOrderDigest, "hash is local material");
+    plan.workOrder.codexBootstrap.contracts[0].absolutePath = path.join(ctx.dir, "different-contract.md");
+    assert.equal(workOrderDigest(plan.workOrder), out.workOrderDigest, "absolute path is local material");
     await writeFile(out.planPath, JSON.stringify(plan));
     await assert.rejects(pullWorkOrder(pull), { refusal: "local_materialization_integrity_failure" });
   });

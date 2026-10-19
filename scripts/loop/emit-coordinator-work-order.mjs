@@ -91,7 +91,7 @@ function codexBootstrap(cwd) {
     if (realpathSync(absolutePath) !== absolutePath || !statSync(absolutePath).isFile()) throw new Error(`Codex bootstrap contract is not a regular emitting-toolchain file: ${absolutePath}`);
     const bytes = readFileSync(absolutePath);
     if (!bytes.length) throw new Error(`Codex bootstrap contract is empty: ${absolutePath}`);
-    return { path: relativePath, absolutePath, sha256: createHash("sha256").update(bytes).digest("hex"), required: true };
+    return { path: relativePath, absolutePath, digest: createHash("sha256").update(bytes).digest("hex"), required: true };
   });
   const processCwd = realpathSync(cwd);
   const git = (...args) => execFileSync("git", ["-C", processCwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: gitEnvNoDirOverrides() }).trim();
@@ -100,7 +100,7 @@ function codexBootstrap(cwd) {
     version: 1, toolchainRoot: TOOLCHAIN_ROOT, contracts,
     instructions: [
       "Qualify shasum with command -v shasum before verification; stop if unavailable.",
-      "Verify every required contract's fixed relative/absolute path and exact lowercase sha256 hash with shasum -a 256; stop on missing, unreadable, malformed or mismatched metadata/bytes.",
+      "Verify every required contract's fixed relative/absolute path and authoritative digest (exact lowercase SHA-256 hash) with shasum -a 256; stop on missing, unreadable, malformed or mismatched metadata/bytes. digest is semantic authority; never substitute an excluded sha256 field.",
       "Then fully read all contracts in order (dev-loop role, Codex runtime setup, main-agent baseline) before scoped artifact writes, Git writes or targeted verification; this grants no Claude hooks or new authority.",
       "Resolve handoff.requiredReads in order relative to toolchainRoot and fully read them; these reads have no individual byte-hash claim.",
       "Check actual cwd and branch with git rev-parse --show-toplevel and git branch --show-current. cwd below records emission facts only; native dispatch has no cwd argument. Verify handoff.cwd and branch authority before continuation, use its valid isolated root as explicit cwd, and stop on invalid/conflicting/uncertain facts; never acquire a worktree from these facts.",

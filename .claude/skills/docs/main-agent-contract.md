@@ -79,10 +79,10 @@ no cwd argument; native spawn inherits the parent's shell location.
 Run the exact pointer first. The pulled order's emitter-owned `codexBootstrap` version 1
 provides the module-derived verified `toolchainRoot`, ordered `contracts` and `instructions`,
 and `cwd` emission facts (`processCwd`, `repositoryRoot`, `branch`). Each contract has its
-fixed repository-relative `path`, verified `absolutePath`, exact lowercase `sha256`, and
+fixed repository-relative `path`, verified `absolutePath`, authoritative lowercase SHA-256 `digest`, and
 `required: true`. In order, these pin `agents/dev-loop.agent.md`,
 `skills/docs/copilot-loop-operations.md` (including Codex runtime setup), and this baseline.
-Qualify `shasum` with `command -v shasum`, verify every contract with `shasum -a 256`, then
+Qualify `shasum` with `command -v shasum`, verify every contract against its `digest` with `shasum -a 256`, then
 fully read all three before scoped artifact writes, Git writes or targeted verification.
 Stop on missing/unreadable files, unsupported/malformed metadata, a hash mismatch or uncertainty;
 never substitute consumer-cwd role/setup files. Then resolve and read `handoff.requiredReads`
@@ -96,8 +96,11 @@ Preserve nextAction, stopRules, allowedFiles, outputRefs and authority. Record g
 runtime provenance per [Codex runtime setup](copilot-loop-operations.md#codex-runtime-setup),
 without claiming Claude roles/hooks, and follow [Codex active joins](#codex-active-joins).
 
-This additive data is authenticated by the existing materialization hash; semantic fields
-participate in the shared canonical digest while absolute paths and `sha256` stay local-only.
+This additive data is authenticated by the existing materialization hash; each contract's
+`digest` participates in the shared canonical digest while absolute paths stay local-only.
+Contract-byte changes therefore produce a new ref and preserve prior materializations.
+Verify bytes only against `digest`; the shared serializer excludes any `sha256` field, which
+must never substitute for this semantic pin.
 The coordinator renderer is unchanged so the inherited checkout can pull the same complete
 JSON. Pi/Claude payloads and orders retain their existing bytes. There is no caller-authored
 bootstrap override, new CLI option, permission authority or production-support claim.
