@@ -13,6 +13,21 @@ import { validateHandoffEnvelope } from "./handoff-envelope.mjs";
 
 const INPUT_KEYS = new Set(["envelope", "allowedFiles"]);
 
+// C9: the order names the rule owners (`<doc>#<RULE-ID>`) and carries no rule prose.
+// ADR numbers observed in a directory are candidates, revalidated at use (ADR-PATH-NUMBERING);
+// a guard failure stays a failure and is reported, never bypassed.
+const WORKTREE_DOC = "skills/docs/worktree-guidance.md";
+export const RULE_REFERENCES = {
+  operationalRules: [
+    `${WORKTREE_DOC}#WORKTREE-SCRIPT-LAUNCHER-CWD`,
+    `${WORKTREE_DOC}#WORKTREE-NONINTERACTIVE-FILE-OPS`,
+    "skills/docs/copilot-loop-operations.md#OPS-NO-INLINE-INTERPRETER",
+    "skills/docs/validation-policy.md#VALIDATE-TARGETED-FIRST",
+  ],
+  adrCandidateRevalidation: ["skills/docs/decision-record-contract.md#ADR-PATH-NUMBERING"],
+  guardFailure: { onFailure: "stop_and_report", rules: [`${WORKTREE_DOC}#WORKTREE-COMMIT-MSG-GUARD`, `${WORKTREE_DOC}#WORKTREE-DEFAULT-BRANCH-GUARD`, `${WORKTREE_DOC}#WORKTREE-WRONG-CHECKOUT-GUARD`] },
+};
+
 export class CoordinatorWorkOrderRefusal extends Error {}
 
 /** `changes/<n>-*.md`: n is the unit's issue number; the PR number only for a lightweight (specSource pr_body) unit. */
@@ -67,6 +82,7 @@ export function buildCoordinatorWorkOrder(input) {
     target: envelope.target,
     handoff: { ...handoff, gateState: semanticGateState },
     allowedFiles: [...new Set([...normalized, ownGlob])].sort(),
+    ruleReferences: RULE_REFERENCES,
   };
   return { workOrder, workOrderDigest: workOrderDigest(workOrder) };
 }
