@@ -32,6 +32,7 @@
  * computing a zero — see `substantiallyUnclassified` below.
  */
 import { execFileSync } from "node:child_process";
+import { anchorBaseRef } from "../lib/anchor-base-ref.mjs";
 import { parseArgs } from "node:util";
 
 import { analyzeDiff, classifyFile, matchesGlob } from "@dev-loops/core/analysis/diff-analyzer";
@@ -464,6 +465,7 @@ export function computeSizeBudget({
  * a run produces don't depend on the operator's local git config.
  */
 function captureSizeBudgetDiff({ base, head = "HEAD", repoRoot = process.cwd(), maxBuffer = 64 * 1024 * 1024 }) {
+  base = anchorBaseRef(base, { repoRoot });
   const range = `${base}...${head}`;
   // Shared byte-identical flag set (see captureDiffFromBase in
   // scripts/github/write-gate-context.mjs); this path keeps its own runGit stdio

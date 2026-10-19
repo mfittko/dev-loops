@@ -22,6 +22,95 @@ const withoutEarlySurface = (stdout) => stdout.split("\n").filter((line) => !lin
 const scriptPath = path.resolve("scripts/github/create-pr.mjs");
 const runNode = (args = [], options = {}) => runNodeWithPrePrRecord(scriptPath, args, options);
 
+test("create-pr checks changelog format and title before any GitHub write", async () => {
+  for (const length of [null, 201, 200]) {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "create-changelog-"));
+    try {
+      await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "docs/note.md", content: "note\n" },
+        ...(length === null ? [] : [{ path: "changes/note.md", content: `- ${"x".repeat(length - 7)} (#1)\n` }])] });
+      const base = runGitFixture(cwd, ["rev-parse", "origin/main"]).slice(0, 12);
+      const { env, ghLogPath } = await writeGhStub(cwd, [{}]);
+      const result = await runNode(["--base", "main", "--head", "feature", "--title", "fix(local): validate notes", "--body", "notes"], { cwd, env });
+      if (length === 200) assert.equal(result.code, 0, result.stderr);
+      else {
+        const refusal = JSON.parse(result.stderr);
+        assert.equal(refusal.code, "changelog_incomplete_before_pr");
+        assert.match(refusal.error, /^LIFECYCLE-CHANGELOG-COMPLETENESS/);
+        assert.ok(refusal.error.includes(base));
+        assert.deepEqual(await readGhCalls(ghLogPath), []);
+      }
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  }
+});
+
+test("create-pr honors chore title over fix commits and compares head OIDs", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "create-changelog-title-"));
+  try {
+    await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "docs/note.md", content: "note\n" }] });
+    runGitFixture(cwd, ["commit", "--amend", "-qm", "fix(docs): note"]);
+    const { env } = await writeGhStub(cwd, [{}]);
+    const result = await runNode(["--base", "main", "--head", "feature", "--title=chore(docs): note", "--body", "notes"], { cwd, env });
+    assert.equal(result.code, 0, result.stderr);
+    runGitFixture(cwd, ["branch", "different", "origin/main"]);
+    const code = await createPrMain(["--base", "main", "--head", "different", "-t", "fix(docs): note", "--body", "notes"], {
+      cwd, env, validatePrePrReview: async () => ({ ok: true }), evaluateEarlySurface: async () => ({}),
+    });
+    assert.equal(code, 0);
+    runGitFixture(cwd, ["branch", "same"]);
+    await assert.rejects(createPrMain(["--base", "main", "--head", "same", "-t", "fix(docs): note", "--body", "notes"], {
+      cwd, env, validatePrePrReview: async () => ({ ok: true }),
+    }), (err) => err.code === "changelog_incomplete_before_pr");
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("create-pr fetches only the base before size/changelog, and fails closed on fetch errors", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "create-base-fetch-"));
+  try {
+    await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "scripts/upstream.mjs", content: repeatedLinesContent(1600) },
+      { path: "changes/upstream.md", content: "- Record upstream changes (#1)\n" }] });
+    const stale = runGitFixture(cwd, ["rev-parse", "origin/main"]);
+    const fetched = runGitFixture(cwd, ["rev-parse", "HEAD"]);
+    const remote = path.join(cwd, "remote.git");
+    runGitFixture(cwd, ["clone", "-q", "--bare", cwd, remote]);
+    runGitFixture(cwd, ["remote", "add", "origin", remote]);
+    runGitFixture(cwd, ["checkout", "-qb", "feature"]);
+    await writeFile(path.join(cwd, "changes/feature.md"), "- Record the feature (#1)\n");
+    runGitFixture(cwd, ["add", "changes"]);
+    runGitFixture(cwd, ["commit", "-qm", "fix(local): feature"]);
+    const { env, fetchLog, ghLogPath } = await writeGhStub(cwd, [{}], { realFetch: true });
+    let sizeCalls = 0;
+    const runtime = { cwd, env, validatePrePrReview: async () => ({ ok: true }), evaluateEarlySurface: async () => ({}),
+      evaluatePrSizeBudget: async ({ base }) => {
+        sizeCalls++;
+        assert.equal(base, "origin/main");
+        assert.equal(runGitFixture(cwd, ["rev-parse", base]), fetched);
+        const { evaluatePrSizeBudget } = await import("../../scripts/loop/check-size-budget.mjs");
+        const result = await evaluatePrSizeBudget({ base, repoRoot: cwd });
+        assert.equal(result.wholeLogicLoc, 0);
+        return result;
+      } };
+    assert.notEqual(stale, fetched);
+    assert.equal(await createPrMain(["--base", "main", "--title", "fix(local): feature", "--body", "notes"], runtime), 0);
+    assert.equal(sizeCalls, 1);
+    assert.equal(await readFile(fetchLog, "utf8"), "fetch origin main\n");
+    runGitFixture(cwd, ["rm", "changes/feature.md"]);
+    runGitFixture(cwd, ["commit", "-qm", "fix(local): remove note"]);
+    await assert.rejects(createPrMain(["--base", "main", "--title", "fix(local): feature", "--body", "notes"], runtime), (err) => {
+      assert.equal(err.code, "changelog_incomplete_before_pr");
+      assert.ok(err.message.includes(fetched.slice(0, 12)), "changelog uses the fetched merge base, not the stale origin ref");
+      return true;
+    });
+    runGitFixture(cwd, ["remote", "set-url", "origin", path.join(cwd, "missing.git")]);
+    const before = (await readGhCalls(ghLogPath)).length;
+    await assert.rejects(createPrMain(["--base", "main", "--body", "notes"], runtime), (err) => {
+      assert.equal(err.code, "base_fetch_failed_before_pr");
+      assert.match(err.message, /main.*(?:fatal|repository)/s);
+      return true;
+    });
+    assert.equal((await readGhCalls(ghLogPath)).length, before);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
 // #2062: create-pr now injects `--base <resolveBaseBranch(config)>` whenever the
 // caller gives no explicit --base/-B. For CLI runs that omit --base and do not
 // set a cwd, the child inherits this process's cwd, so the injected base is what
@@ -30,11 +119,19 @@ const runNode = (args = [], options = {}) => runNodeWithPrePrRecord(scriptPath, 
 const INHERITED_BASE_DEFAULT = await resolveBaseDefault(process.cwd());
 
 async function writeGhStub(tempDir, entries, options = {}) {
-  return writeGhStubHelper(tempDir, entries, {
+  const stub = await writeGhStubHelper(tempDir, entries, {
     repeatLastOnOverflow: true,
     logCalls: true,
     ...options,
   });
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const gitBin = path.join(tempDir, "fetch-stub");
+  await mkdir(gitBin, { recursive: true });
+  const fetchLog = path.join(tempDir, "fetch.log");
+  const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+  await writeFile(path.join(gitBin, "git"), `#!/bin/sh\nif [ "$1" = fetch ]; then\n  printf '%s\\n' "$*" >> ${quote(fetchLog)}\n  ${options.realFetch ? ":" : "exit 0"}\nfi\nexec ${quote(realGit)} "$@"\n`);
+  await chmod(path.join(gitBin, "git"), 0o755);
+  return { ...stub, fetchLog, env: { ...stub.env, PATH: `${gitBin}${path.delimiter}${stub.env.PATH}` } };
 }
 
 async function readGhCalls(logPath) {
@@ -1568,6 +1665,7 @@ test("create-pr admits a diff whose issue-citing comment carries the comment-dis
     await initSizeBudgetFixtureRepo(tempDir, {
       headFiles: [
         { path: "scripts/sample.mjs", content: "// keep: load-bearing note comment-discipline:allow #2171\nexport const x = 1;\n" },
+        { path: "changes/comment.md", content: "- Exercise comment discipline (#1)\n" },
       ],
     });
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -1858,6 +1956,7 @@ test("create-pr fails closed when the resolvability probe errors for a reason ot
     await writeFile(gitStubPath, [
       "#!/usr/bin/env bun",
       'const argv = process.argv.slice(2);',
+      'if (argv[0] === "fetch") process.exit(0);',
       'if (argv[0] === "rev-parse" && argv[1] === "--is-inside-work-tree") {',
       '  process.stdout.write("true\\n");',
       "  process.exit(0);",
@@ -2054,7 +2153,7 @@ test("create-pr refuses --editor and --web even with an explicit --body", async 
 async function createPrEarlySurface(headFiles) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-early-surface-"));
   try {
-    await initSizeBudgetFixtureRepo(tempDir, { headFiles });
+    await initSizeBudgetFixtureRepo(tempDir, { headFiles: [...headFiles, { path: "changes/surface.md", content: "- Exercise early surface checks (#1)\n" }] });
     execFileSync("git", ["branch", "feature"], { cwd: tempDir });
     const { env } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
     const result = await runNode([
@@ -2096,7 +2195,7 @@ async function createPrAtWaiverLoc(waiverLoc, { branchLines = 300, harnessEnv = 
   try {
     await initSizeBudgetFixtureRepo(tempDir, {
       devloopsYaml: waiverLoc === null ? null : `version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 100\n        waiverLoc: ${waiverLoc}\n`,
-      headFiles: [{ path: "scripts/big.mjs", content: repeatedLinesContent(branchLines) }],
+      headFiles: [{ path: "scripts/big.mjs", content: repeatedLinesContent(branchLines) }, { path: "changes/size.md", content: "- Exercise size checks (#1)\n" }],
     });
     execFileSync("git", ["branch", "feature"], { cwd: tempDir });
     const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);

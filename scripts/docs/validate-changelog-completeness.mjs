@@ -187,8 +187,10 @@ export { createGitClient };
  * order, the degrade path, and exit codes), matching the sibling
  * validate-decision-records.mjs run({ root, git }) shape.
  */
-export async function main({ root, env = process.env, log = console, git = createGitClient(root) } = {}) {
-  const base = await resolveBaseRef(git, env).catch(() => null);
+export async function main({ root, base: explicitBase, env = process.env, log = console, git = createGitClient(root) } = {}) {
+  const base = explicitBase !== undefined
+    ? await git.mergeBase(explicitBase, "HEAD")
+    : await resolveBaseRef(git, env).catch(() => null);
   if (!base) {
     // Legitimate no-history case (shallow checkout, no origin): degrade with a
     // notice like the decision-record validator. PR CI fetches the base branch
@@ -272,7 +274,7 @@ export async function main({ root, env = process.env, log = console, git = creat
     }
   }
   if (errors.length > 0) {
-    log.error("CHANGELOG completeness check failed (issue #1864):");
+    log.error(`CHANGELOG completeness check failed (base ${base.slice(0, 12)}; issue #1864):`);
     for (const error of errors) log.error(`  - ${error}`);
     return 1;
   }

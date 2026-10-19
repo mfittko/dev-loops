@@ -22,6 +22,7 @@ import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { PRE_PR_REVIEW_MISSING, validatePrePrReview } from "../loop/_pre-pr-review-record.mjs";
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
 Canonical PR-creation wrapper around \`gh pr create\`. Every PR opened through this
 tool is ALWAYS a draft and is self-assigned by default. Never call raw \`gh pr create\`.
@@ -55,8 +56,8 @@ Behavior:
     has an open same-repo linked PR (FACADE-LINKED-PR-SINGLE-ARTIFACT), naming the prior
     PR; \`--allow-replacement-pr <prior>\` (consumed here, never forwarded to \`gh\`)
     records a deliberate replacement and lets the create through when <prior> matches the
-    detected open linked-PR number. This adds the first network call (a same-repo linked-PR
-    probe) to an otherwise-offline wrapper; when it cannot run (no \`--repo\`, or the GitHub
+    detected open linked-PR number. This same-repo linked-PR
+    probe follows the base fetch; when it cannot run (no \`--repo\`, or the GitHub
     API unavailable) the guard FAILS CLOSED on ambiguity rather than silently risking a
     duplicate.
   - \`--lightweight\` (consumed here in every form — bare or \`=true/1/false/0\`, last
@@ -75,6 +76,8 @@ Behavior:
   - forwards every other argument to \`gh pr create\` unchanged
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
   - refuses with \`size_split_required_before_pr\` before creating when the local \`origin/<base>...<head>\` whole-PR logic LOC is at or above the resolved default-tier \`waiverLoc\` (PRE-PR-SIZE-CHECK); no override flag; an unknown size does not refuse
+  - fetches only \`origin <base>\` before size and changelog checks; refuses with \`base_fetch_failed_before_pr\` on fetch failure
+  - refuses with \`changelog_incomplete_before_pr\` (LIFECYCLE-CHANGELOG-COMPLETENESS) after size checks against the fetched base when the selected head equals checkout HEAD; skips for an unresolved origin base or a different head; no override
   - after a successful create, prints one JSON line \`{"adrTripwire":...,"sizeBudget":...}\` (ADR-TRIPWIRE-EARLY-SURFACE);
     a block or unknown outcome is advisory and never refuses the already-created PR
 Examples:
@@ -92,6 +95,8 @@ Exit codes:
   N  same non-zero exit code returned by \`gh pr create\``.trim();
 const parseError = buildParseError(USAGE);
 const SIZE_SPLIT_REQUIRED_BEFORE_PR = "size_split_required_before_pr";
+const BASE_FETCH_FAILED_BEFORE_PR = "base_fetch_failed_before_pr";
+const CHANGELOG_INCOMPLETE_BEFORE_PR = "changelog_incomplete_before_pr";
 const READY_FLAG_PATTERN = /^--ready(?:$|=)/u;
 // Bare and inline-boolean forms, mirroring DRAFT_FLAG_PATTERN below: every
 // matching token is consumed (never forwarded to gh, which rejects unknown
@@ -627,6 +632,11 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     const bareBase = baseForDiff.trim().replace(/^origin\//u, "");
     const diffCwd = runtime.cwd ?? process.cwd();
     const diffEnv = runtime.env ?? process.env;
+    try {
+      execFileSync("git", ["fetch", "origin", bareBase], { cwd: diffCwd, env: diffEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      throw Object.assign(parseError(`${BASE_FETCH_FAILED_BEFORE_PR}: cannot fetch origin ${bareBase}: ${error.message}`), { code: BASE_FETCH_FAILED_BEFORE_PR });
+    }
     if (isResolvableRef(`origin/${bareBase}`, { cwd: diffCwd, env: diffEnv })) {
       const headFlagValue = getFlagValue(forwardedArgv, HEAD_FLAG_PATTERN);
       if (headFlagValue) {
@@ -664,6 +674,27 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
           { code: SIZE_SPLIT_REQUIRED_BEFORE_PR },
         );
       }
+      const oid = (ref) => execFileSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
+        cwd: diffCwd, env: diffEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+      if (oid(resolvedHead) === oid("HEAD")) {
+        const diagnostics = [];
+        const log = { log: (...args) => diagnostics.push(args.join(" ")), error: (...args) => diagnostics.push(args.join(" ")) };
+        const env = { ...diffEnv };
+        const title = getFlagValue(forwardedArgv, /^--title(?:$|=)|^-t$/u);
+        if (title === null) delete env.DEVLOOPS_PR_TITLE;
+        else env.DEVLOOPS_PR_TITLE = title;
+        let code;
+        try {
+          code = await validateChangelog({ root: resolveRepoRoot(diffCwd), base: `origin/${bareBase}`, env, log });
+        } catch (error) {
+          diagnostics.push(error.message);
+          code = 1;
+        }
+        if (code !== 0) {
+          throw Object.assign(parseError(`LIFECYCLE-CHANGELOG-COMPLETENESS: ${diagnostics.join("; ")}`), { code: CHANGELOG_INCOMPLETE_BEFORE_PR });
+        }
+      }
     }
   }
   // Issue-less lightweight: caller signals lightweight AND an explicit body
@@ -677,8 +708,8 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   // FACADE-LINKED-PR-SINGLE-ARTIFACT — refuse to open a second PR
   // against an issue that already has an open same-repo linked PR (the closing
   // keyword in the body names the tracker issue). Issue-less lightweight PRs
-  // carry no closing keyword and are exempt. This is the first network call in
-  // an otherwise-offline wrapper; the guard FAILS CLOSED on ambiguity (missing
+  // carry no closing keyword and are exempt. After the base fetch, the
+  // guard FAILS CLOSED on ambiguity (missing
   // --repo, or the GitHub API unavailable) rather than silently risking a
   // duplicate. A matching --allow-replacement-pr <prior> records the intent and
   // lets the replacement through.
@@ -743,9 +774,9 @@ if (isDirectCliRun(import.meta.url)) {
     const exitCode = await main();
     process.exitCode = exitCode;
   } catch (error) {
-    // Only the typed refusals listed below (pre-PR, head, size_split_required_before_pr) carry `code` in the envelope; formatCliError forwards it for config_load_failed alone.
+    // Preserve typed preflight refusals; formatCliError forwards config_load_failed alone.
     const envelope = JSON.parse(formatCliError(error));
-    if (error?.code === PRE_PR_REVIEW_MISSING || error?.code === HEAD_UNRESOLVABLE || error?.code === SIZE_SPLIT_REQUIRED_BEFORE_PR) envelope.code = error.code;
+    if ([PRE_PR_REVIEW_MISSING, HEAD_UNRESOLVABLE, SIZE_SPLIT_REQUIRED_BEFORE_PR, BASE_FETCH_FAILED_BEFORE_PR, CHANGELOG_INCOMPLETE_BEFORE_PR].includes(error?.code)) envelope.code = error.code;
     process.stderr.write(`${JSON.stringify(envelope)}\n`);
     process.exitCode = 1;
   }

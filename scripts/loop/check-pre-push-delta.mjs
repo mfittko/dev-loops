@@ -48,7 +48,8 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { writeGateDeltaRecord } from "./_gate-delta-record.mjs";
-import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
+import { main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
+import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--worktree <dir>]   (fixer handbackCheck run)
@@ -198,6 +199,14 @@ function gitIsAncestor(worktree, ancestor, descendant) {
   throw new Error(`git merge-base --is-ancestor failed in ${worktree}: ${out.stderr.trim()}`);
 }
 
+function gitChangedPaths(worktree, baseline, head) {
+  const out = spawnSync("git", ["diff", "--name-only", "-z", "--no-renames", "--no-relative", "--no-ext-diff", `${baseline}..${head}`], {
+    cwd: resolveRepoRoot(worktree), env: gitEnvNoDirOverrides(), encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+  });
+  if (out.status !== 0) throw new Error(`git diff changed paths failed: ${out.error?.message ?? out.stderr.trim()}`);
+  return out.stdout.split("\0").filter(Boolean);
+}
+
 // Tracked-file hits of the sentences and identifiers the delta range removed, grepped at the candidate head.
 // A git failure throws (fail closed), including a missing baseline or head object. The diff and grep
 // formats are pinned so operator git config (prefix, color, external diff, textconv, algorithm, renames, path quoting, submodules, diff.orderFile via -O/dev/null, relative paths via --no-relative, hunk merging via --inter-hunk-context=0) cannot blank the check.
@@ -287,7 +296,7 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
 
 export async function runCli(
   argv = process.argv.slice(2),
-  { revParse = gitRevParse, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, stdout = process.stdout, tmpRoot } = {},
+  { revParse = gitRevParse, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, stdout = process.stdout, tmpRoot } = {},
 ) {
   const options = parseCheckPrePushDeltaArgs(argv);
   if (options.help) {
@@ -354,6 +363,18 @@ export async function runCli(
       sequence, result, invocation: options.invocation, currentHead, siteCoverage, validationCoverage, coverageBinding,
       staleSurfaceHits: staleSurfaceTruncated ? [...staleSurfaceHits, staleSurfaceTruncatedHit()] : staleSurfaceHits,
     });
+    if (changedPaths(options.worktree, sequence.reviewBaselineHead, currentHead).some((file) => file.startsWith("changes/"))) {
+      const diagnostics = [];
+      const log = { log: (...args) => diagnostics.push(args.join(" ")), error: (...args) => diagnostics.push(args.join(" ")) };
+      let code;
+      try {
+        code = await changelog({ root: resolveRepoRoot(options.worktree), log });
+      } catch (error) {
+        diagnostics.push(error.message);
+        code = 1;
+      }
+      if (code !== 0) throw new Error(`LIFECYCLE-CHANGELOG-COMPLETENESS: ${diagnostics.join("; ")}`);
+    }
     // Local evidence for the emitter and the fixed-reply guard; never a gate verdict.
     writeGateDeltaRecord({
       tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree),
