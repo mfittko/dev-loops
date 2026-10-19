@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Coordinator work order adapter (issue 2483, slice 1). Derives the envelope from the
+ * Coordinator work order adapter (issue 2483, slices 1-2). Derives the envelope from the
  * startup resolver output through build-handoff-envelope.mjs and prints the coordinator
- * work order and its digest. It accepts no brief, summary file, overrides or payload JSON.
+ * work order and its digest. It accepts no brief, summary file, overrides or payload JSON. Compact dispatch applies to RESUMED queue and direct entries only; --input is the startup-output path the coordinator named in its hand-back.
  */
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";

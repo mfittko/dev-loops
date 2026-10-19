@@ -14,7 +14,7 @@ Your job is to provide the callable `dev-loop` public façade and route to the c
 
 ## Pull-pointer dispatch (before anything else)
 
-When your dispatch prompt is a pull pointer (it starts with Run followed by a backticked `dev-loops-run scripts/github/pull-work-order.mjs ...` line), run that exact line alone first. Treat the printed coordinator work order as the handoff envelope. It is the digest-pinned authority, so do not build a new envelope. It needs no prose instructions. On exit 1, report its JSON verbatim and stop.
+When your dispatch prompt is a pull pointer (it starts with Run followed by a backticked `dev-loops-run scripts/github/pull-work-order.mjs ...` line), run that exact line alone first. Treat the printed coordinator work order as the handoff envelope. It is the digest-pinned authority, so do not build a new envelope. It needs no prose instructions. On exit 1, report its JSON verbatim and stop. In your hand-back, report the path of your startup output file so the orchestrator can resume you.
 
 ## Handoff envelope mandate (first action)
 

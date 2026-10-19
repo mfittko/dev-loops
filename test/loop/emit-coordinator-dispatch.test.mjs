@@ -35,7 +35,7 @@ const emit = async ({ input, tmp, dir }, harness, entry, extra = []) => {
 
 for (const harness of ["claude", "pi"]) {
   for (const entry of ["queue", "direct"]) {
-    test(`C6a ${harness} ${entry} initial and resumed dispatch carry only the pull pointer`, async () => {
+    test(`C6a ${harness} ${entry} resumed dispatch carry only the pull pointer`, async () => {
       await withDirs(async (ctx) => {
         const first = (await emit(ctx, harness, entry)).out;
         const resumed = (await emit(ctx, harness, entry)).out;
@@ -138,4 +138,13 @@ test("C6a the exact emitted pointer pulls its order with no --tmp-root added", a
     assert.equal(pull.code, 0, pull.stderr);
     assert.equal(pull.stdout, await readFile(path.join(path.dirname(out.planPath), "order.md"), "utf8"));
   });
+});
+
+test("C6a the subagent dev-loop contract row pins resumed entries, the startup-output path and no loop startup", () => {
+  const row = readFileSync(path.resolve("skills/docs/main-agent-contract.md"), "utf8").split("\n").find((l) => l.startsWith("| `subagent dev-loop`"));
+  assert.ok(row, "row present");
+  assert.match(row, /resumed queue and direct entries/);
+  assert.match(row, /startup-output path/);
+  assert.match(row, /never runs `loop startup`/);
+  assert.doesNotMatch(row, /initial/);
 });
