@@ -190,7 +190,8 @@ fixer and owns the push. The sequence is:
    `not_resolved` and `cannot_verify` items, it replies with the residual delta
    status and leaves the thread unresolved. The fixer MUST NOT mark these
    residual threads `tackled`; its handoff disposition records them as
-   `deferred`. On the thread route the emitter attaches the head's delta record
+   `deferred`. In a full-phase order, the verifier's `--construct` step writes that
+   `deferred` entry and its normal step posts the residual reply. On the thread route the emitter attaches the head's delta record
    as a `delta-result` required read to the work order when a delta record exists for the head (always in the `full` phase; the
    `--delta-result` flag stays refused for thread sources), so this residual-thread
    rule applies to thread sources through that read.

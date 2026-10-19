@@ -330,6 +330,35 @@ test("a failing check run inside the PR rollup still refuses ci_failed and posts
   });
 });
 
+test("a rollup that lists a real check is not check-less when both commit APIs return zero", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+    const mock = f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { runs: [] })], [{ name: "build" }]);
+    await assert.rejects(verifyFixerDisposition(f.options, mock.deps), /ci_unknown/);
+    assert.equal(hasPost(mock.calls), false);
+  });
+});
+
+test("a hidden pending run beside a visible green run does not block replies on an open thread", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+    const done = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }, { id: "c2", databaseId: 2, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }];
+    const runs = [{ name: "build", status: "completed", conclusion: "success" }, { name: "codeql", status: "in_progress" }];
+    const mock = f.runtimeFor([
+      threadsCallEntry(open), ...ciEntries(f.head, { runs }), compareEntry(f.head, "identical", f.head),
+      { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/1/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_T1", isResolved: true } } } })}\n` },
+      threadsCallEntry(done),
+    ], [{ name: "build" }]);
+    assert.equal((await verifyFixerDisposition(f.options, mock.deps)).complete, true);
+    assert.equal(hasPost(mock.calls), true);
+  });
+});
+
 test("a settled head with no check runs and no statuses is accepted", async () => {
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);

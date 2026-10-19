@@ -28,6 +28,7 @@ import {
 import { deltaCoverageBinding, isDeltaResultFresh, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { LOOP_DERIVED_CI_CHECK_NAMES } from "@dev-loops/core/loop/copilot-ci-status";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { revalidateLegacyCompletion } from "./_legacy-fixer-revalidation.mjs";
@@ -637,7 +638,8 @@ export async function verifyFixerDisposition(
         checkRunsUnsupportedCompleted: ci.checkRuns.fullSignal.unsupportedCompleted,
       }).overallStatus;
     // A head with no check runs and no statuses besides the loop-derived gate-evidence is settled (wait-pr-checks settles it); anything else must be green.
-    const checkless = state === "none" && ci.checkRuns.nonLoopDerivedCount === 0 && ci.statuses.nonLoopDerivedCount === 0;
+    const checkless = state === "none" && ci.checkRuns.nonLoopDerivedCount === 0 && ci.statuses.nonLoopDerivedCount === 0
+      && prVisibleCheckNames.every((name) => LOOP_DERIVED_CI_CHECK_NAMES.includes(name));
     if (state !== "success" && !checkless) {
       const code = state === "pending" ? "ci_pending" : "ci_unknown";
       throw new Error(`${code}: checks at ${options.headSha} are ${state}, not settled green; resolve no thread, hand back ${code}`);
