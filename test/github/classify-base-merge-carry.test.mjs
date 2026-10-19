@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -84,6 +84,18 @@ test("git: base move touching a PR path is partial", async () => {
   assert.equal(ev.decision, "partial_carry", ev.reason);
 });
 
+test("git: base edit above the PR hunk shifts its line numbers and still classifies partial_carry", async () => {
+  const s = setup();
+  s.put("base.txt", `${LINES.slice(0, -7)}PR\n`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits bottom of base.txt");
+  const prev = s.head();
+  s.git("checkout", "-q", "main"); s.put("base.txt", `TOP1\nTOP2\n${LINES}`); s.git("add", "-A"); s.git("commit", "-qm", "main inserts at top");
+  s.git("checkout", "-q", "pr"); s.git("merge", "-q", "--no-edit", "main");
+  const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
+  assert.equal(ev.decision, "partial_carry", ev.reason);
+  assert.ok(ev.patchIdBefore);
+  assert.equal(ev.patchIdBefore, ev.patchIdAfter);
+});
+
 test("git: hostile ambient env and repo-local config never change the decision or patch ids", async () => {
   const s = setup();
   s.put("dä/blank.txt", "a\n\nb\n\nc\n"); s.git("add", "-A"); s.git("commit", "-qm", "blank file");
@@ -117,6 +129,17 @@ test("git: hostile ambient env and repo-local config never change the decision o
     try { return await computeBaseMergeCarry(args); } finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
   };
   for (const env of envRows) assert.deepEqual(await run(env), clean, JSON.stringify(env));
+  const attrsFile = path.join(home, "attrs");
+  writeFileSync(attrsFile, "* -diff\n");
+  const fileRows = [
+    [".git/info/attributes", () => writeFileSync(path.join(s.dir, ".git", "info", "attributes"), "* -diff\n"), () => rmSync(path.join(s.dir, ".git", "info", "attributes"), { force: true })],
+    ["core.attributesFile", () => s.git("config", "core.attributesFile", attrsFile), () => s.git("config", "--unset", "core.attributesFile")],
+    ["worktree .gitattributes", () => writeFileSync(path.join(s.dir, ".gitattributes"), "* -diff\n"), () => rmSync(path.join(s.dir, ".gitattributes"), { force: true })],
+  ];
+  for (const [name, set, unset] of fileRows) {
+    set();
+    try { assert.deepEqual(await run({}), clean, name); } finally { unset(); }
+  }
   for (const [k, v] of localRows) {
     s.git("config", k, v);
     try { assert.deepEqual(await run({}), clean, k); } finally { s.git("config", "--unset", k); }

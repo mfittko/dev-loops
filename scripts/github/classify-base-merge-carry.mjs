@@ -6,7 +6,8 @@
  * its inputs with git. Any git failure yields a durable `fallback_full` record.
  */
 import { spawnSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -49,7 +50,7 @@ async function patchId(runGit, repoRoot, diff) {
 }
 // Pin the diff shape (context, algorithm, hunk joining, prefixes, blank-context rendering, full index line); the pinned env drops global/system config and repo-local config is covered by the pinned -c knobs.
 const GIT_ISOLATION = ["-c", "color.ui=false", "-c", "core.pager=cat", "-c", "core.autocrlf=false", "-c", "core.quotePath=false", "-c", "diff.interHunkContext=0", "-c", "diff.orderFile=/dev/null", "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "-c", "diff.suppressBlankEmpty=false"];
-const DIFF_FLAGS = ["--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--src-prefix=a/", "--dst-prefix=b/", "--no-color", "--no-relative", "--no-renames", "-U3", "--diff-algorithm=myers", "--no-indent-heuristic", "--full-index"];
+const DIFF_FLAGS = ["--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--src-prefix=a/", "--dst-prefix=b/", "--no-color", "--no-relative", "--no-renames", "-U3", "--diff-algorithm=myers", "--no-indent-heuristic", "--full-index", "--text"];
 
 export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRoot, runGit = runPinnedGit }) {
   try {
@@ -65,8 +66,19 @@ export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRo
     // A merge commit's combined diff (--cc) is non-empty only when the merge hand-resolved something.
     // Check every merge commit on the PR branch line (--first-parent) in prevHead..headSha; merges that arrived from the base side are not the PR's own.
     let conflictResolutionHunks = false;
-    for (const merge of lines(await git(runGit, repoRoot, ["rev-list", "--merges", "--first-parent", `${prevHead}..${headSha}`]))) {
-      if ((await git(runGit, repoRoot, ["diff-tree", "--cc", "--no-ext-diff", "--no-color", "--format=", merge])).toString("utf8").trim() !== "") conflictResolutionHunks = true;
+    const merges = lines(await git(runGit, repoRoot, ["rev-list", "--merges", "--first-parent", `${prevHead}..${headSha}`]));
+    if (merges.length > 0) {
+      // --cc ignores --text for -diff/binary attributes, and .git/info/attributes cannot be switched off in the repo.
+      // Read the objects through a throwaway bare git dir (alternates) that has no attribute files.
+      const objects = (await git(runGit, repoRoot, ["rev-parse", "--path-format=absolute", "--git-path", "objects"])).toString("utf8").trim();
+      const bare = await mkdtemp(path.join(os.tmpdir(), "bmc-cc-"));
+      try {
+        await git(runGit, repoRoot, ["init", "-q", "--bare", bare]);
+        await writeFile(path.join(bare, "objects", "info", "alternates"), `${objects}\n`);
+        for (const merge of merges) {
+          if ((await git(runGit, repoRoot, ["--git-dir", bare, "-c", "core.attributesFile=/dev/null", "diff-tree", "--cc", "--no-ext-diff", "--no-color", "--text", "--format=", merge])).toString("utf8").trim() !== "") conflictResolutionHunks = true;
+        }
+      } finally { await rm(bare, { recursive: true, force: true }); }
     }
     return classifyBaseMergeCarry({
       sourceHead: prevHead, newHead: headSha, patchIdBefore: await patchId(runGit, repoRoot, diffA), patchIdAfter: await patchId(runGit, repoRoot, diffB),
