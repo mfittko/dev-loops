@@ -459,3 +459,87 @@ describe("resolvePrConflicts (real git)", () => {
     }
   });
 });
+
+describe("merge commit identity (#2832)", () => {
+  // No global/system config, no command-line config (GIT_CONFIG_PARAMETERS,
+  // GIT_CONFIG_COUNT/KEY_n/VALUE_n), and no GIT_AUTHOR_*/GIT_COMMITTER_*
+  // overrides, so only the repo-local config decides the effective identity.
+  const isolatedEnv = () => {
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+    for (const key of [
+      "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+      "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+    ]) delete env[key];
+    for (const key of Object.keys(env)) if (/^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(key)) delete env[key];
+    return env;
+  };
+  const setup = () => setupDivergedRepo({
+    baseFile: "CHANGELOG.md",
+    baseContent: CHANGELOG_BASE,
+    oursContent: CHANGELOG_BASE.replace("- shared earlier entry (#1)", "- shared earlier entry (#1)\n- ours added (#100)"),
+    theirsContent: CHANGELOG_BASE.replace("- shared earlier entry (#1)", "- shared earlier entry (#1)\n- theirs added (#101)"),
+  });
+
+  test("keeps the ambient identity when user.email is configured", async () => {
+    const { tempDir, workDir } = await setup();
+    try {
+      git(workDir, ["config", "user.email", "dev@example.com"]);
+      git(workDir, ["config", "user.name", "Dev"]);
+      const result = await resolvePrConflicts(
+        { repoRoot: workDir, base: "main", verify: false, push: false },
+        { env: isolatedEnv() },
+      );
+      assert.equal(result.action, "resolved");
+      assert.equal(
+        git(workDir, ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"]).trim(),
+        "Dev\ndev@example.com\nDev\ndev@example.com",
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("falls back to the bot identity when user.email is empty", async () => {
+    const { tempDir, workDir } = await setup();
+    try {
+      // An ambient user.name without user.email still gets the full bot pair.
+      git(workDir, ["config", "user.name", "Dev"]);
+      const result = await resolvePrConflicts(
+        { repoRoot: workDir, base: "main", verify: false, push: false },
+        { env: isolatedEnv() },
+      );
+      assert.equal(result.action, "resolved");
+      assert.equal(
+        git(workDir, ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"]).trim(),
+        "dev-loops[bot]\ndev-loops[bot]@users.noreply.github.com\ndev-loops[bot]\ndev-loops[bot]@users.noreply.github.com",
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps the ambient identity on a clean (non-conflicting) merge", async () => {
+    const base = "1\n2\n3\n4\n5\n6\n7\n8\n";
+    const { tempDir, workDir } = await setupDivergedRepo({
+      baseFile: "a.txt",
+      baseContent: base,
+      oursContent: base.replace("1\n", "ours\n"),
+      theirsContent: base.replace("8\n", "theirs\n"),
+    });
+    try {
+      git(workDir, ["config", "user.email", "dev@example.com"]);
+      git(workDir, ["config", "user.name", "Dev"]);
+      const result = await resolvePrConflicts(
+        { repoRoot: workDir, base: "main", verify: false, push: false },
+        { env: isolatedEnv() },
+      );
+      assert.equal(result.action, "clean_merge");
+      assert.equal(
+        git(workDir, ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"]).trim(),
+        "Dev\ndev@example.com\nDev\ndev@example.com",
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
