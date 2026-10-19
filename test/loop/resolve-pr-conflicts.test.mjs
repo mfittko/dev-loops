@@ -490,7 +490,10 @@ describe("merge commit identity (#2832)", () => {
         { env: isolatedEnv() },
       );
       assert.equal(result.action, "resolved");
-      assert.equal(git(workDir, ["log", "-1", "--format=%ae"]).trim(), "dev@example.com");
+      assert.equal(
+        git(workDir, ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"]).trim(),
+        "Dev\ndev@example.com\nDev\ndev@example.com",
+      );
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -499,12 +502,17 @@ describe("merge commit identity (#2832)", () => {
   test("falls back to the bot identity when user.email is empty", async () => {
     const { tempDir, workDir } = await setup();
     try {
+      // An ambient user.name without user.email still gets the full bot pair.
+      git(workDir, ["config", "user.name", "Dev"]);
       const result = await resolvePrConflicts(
         { repoRoot: workDir, base: "main", verify: false, push: false },
         { env: isolatedEnv() },
       );
       assert.equal(result.action, "resolved");
-      assert.equal(git(workDir, ["log", "-1", "--format=%ae"]).trim(), "dev-loops[bot]@users.noreply.github.com");
+      assert.equal(
+        git(workDir, ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"]).trim(),
+        "dev-loops[bot]\ndev-loops[bot]@users.noreply.github.com\ndev-loops[bot]\ndev-loops[bot]@users.noreply.github.com",
+      );
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -526,8 +534,10 @@ describe("merge commit identity (#2832)", () => {
         { env: isolatedEnv() },
       );
       assert.equal(result.action, "clean_merge");
-      assert.equal(git(workDir, ["log", "-1", "--format=%ae"]).trim(), "dev@example.com");
-      assert.equal(git(workDir, ["log", "-1", "--format=%ce"]).trim(), "dev@example.com");
+      assert.equal(
+        git(workDir, ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"]).trim(),
+        "Dev\ndev@example.com\nDev\ndev@example.com",
+      );
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
