@@ -108,3 +108,12 @@ test("a missing --input emits ok:false JSON on stdout and exits 1", async () => 
   assert.equal(result.code, 1);
   assert.equal(JSON.parse(result.stdout).ok, false);
 });
+
+test("coordinator help names Codex and malformed paired arguments retain failure JSON", async () => {
+  assert.match((await runNode(["--help"])).stdout, /claude\|pi\|codex/);
+  for (const args of [["--harness", "codex"], ["--entry", "direct"], ["--harness", "codex", "--entry", "bad"]]) {
+    const result = await runNode(["--input", "missing.json", ...args]);
+    assert.equal(result.code, 1);
+    assert.match(JSON.parse(result.stdout).error, /go together|entry must/);
+  }
+});
