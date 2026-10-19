@@ -301,6 +301,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "GATE-EXEC-BASE-MERGE-VERDICT-CARRY",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-EXEC-BLOCKING-ONLY-FIX"
     },
     {

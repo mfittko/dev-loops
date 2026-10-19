@@ -38,6 +38,7 @@
     "./loop/copilot-ci-status": "./src/loop/copilot-ci-status.mjs",
     "./loop/copilot-loop-iterations": "./src/loop/copilot-loop-iterations.mjs",
     "./loop/copilot-loop-state": "./src/loop/copilot-loop-state.mjs",
+    "./loop/base-merge-verdict-carry": "./src/loop/base-merge-verdict-carry.mjs",
     "./loop/finding-cluster": "./src/loop/finding-cluster.mjs",
     "./loop/fix-push-authority": "./src/loop/fix-push-authority.mjs",
     "./loop/fixer-disposition": "./src/loop/fixer-disposition.mjs",
