@@ -1108,12 +1108,20 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   const allComments = [...commentsPayload, ...prReviews];
   const commentSummary = summarizeGateReviewComments(allComments);
   const markerSummary = summarizeGateReviewCommentMarkers(allComments, { headSha: currentHeadSha });
-  // Fan-out enforcement keeps the uncarried markers so ledger paths stay at the origin head.
-  const rawDraftGateMarker = normalizeGateMarkerSummary(markerSummary.draft_gate);
-  const rawPreApprovalGateMarker = normalizeGateMarkerSummary(markerSummary.pre_approval_gate);
+  // The head-filtered summary hides markers at other heads, so the carry candidate is the latest
+  // marker per gate from an unfiltered summary. Only an actual carry replaces the output marker.
+  const anyHeadSummary = summarizeGateReviewCommentMarkers(allComments);
   const carryCtx = (gate) => ({ gate, repo: options.repo, pr: options.pr, currentHeadSha, baseRef: baseRefName ? `origin/${baseRefName}` : null, repoRoot: resolveRepoRoot(cwd), record: recordCarry });
-  const draftGateMarker = await carryGateMarker(rawDraftGateMarker, carryCtx("draft_gate"));
-  const preApprovalGateMarker = await carryGateMarker(rawPreApprovalGateMarker, carryCtx("pre_approval_gate"));
+  const resolveGateMarker = async (gate) => {
+    const filtered = normalizeGateMarkerSummary(markerSummary[gate]);
+    if (filtered.visible) return { marker: filtered, fanoutMarker: filtered };
+    const candidate = normalizeGateMarkerSummary(anyHeadSummary[gate]);
+    const carried = await carryGateMarker(candidate, carryCtx(gate));
+    // Fan-out keeps the origin-head marker for a carried gate so the ledger path stays at the origin head.
+    return carried.carriedFrom ? { marker: carried, fanoutMarker: candidate } : { marker: filtered, fanoutMarker: filtered };
+  };
+  const { marker: draftGateMarker, fanoutMarker: rawDraftGateMarker } = await resolveGateMarker("draft_gate");
+  const { marker: preApprovalGateMarker, fanoutMarker: rawPreApprovalGateMarker } = await resolveGateMarker("pre_approval_gate");
   // A config load error throws config_load_failed: fan-out evidence
   // enforcement is never disabled by an unreadable config.
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(cwd) });

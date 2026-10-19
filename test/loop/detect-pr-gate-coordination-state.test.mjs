@@ -4064,13 +4064,14 @@ test("resolveFixerDispositionInput reads the disposition at carriedSourceHead ac
       await writeFile(file, body, "utf8");
     };
     await write(SRC, `${JSON.stringify(normalizeFixerDispositionHandoff({ headSha: SRC, dispositions: [] }))}\n`);
-    await write(CUR, "{ not valid json");
     const args = { repo: REPO, pr: PR, currentHeadSha: CUR, parsedThreads: { threads: [], comments: [] } };
-    const uncarried = await resolveFixerDispositionInput(args, { repoRoot: tempDir });
-    assert.ok(uncarried.warning, "without the carried source head the current-head checkpoint is incomplete");
     const carried = await resolveFixerDispositionInput({ ...args, carriedSourceHead: SRC }, { repoRoot: tempDir });
-    assert.equal(carried.complete, true);
+    assert.equal(carried.complete, true, "an absent current-head log falls back to the source-head log");
     assert.equal(carried.warning, undefined);
+    await write(CUR, "{ not valid json");
+    const malformed = await resolveFixerDispositionInput({ ...args, carriedSourceHead: SRC }, { repoRoot: tempDir });
+    assert.ok(malformed.warning, "a malformed current-head log still warns");
+    assert.ok(malformed.warning.includes(CUR), "the warning names the real head");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

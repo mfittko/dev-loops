@@ -825,10 +825,13 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
 // ADR 0155: an incomplete disposition is advisory. It keeps its `incomplete` detail and adds a warning,
 // with no next action and no forbidden actions, so gate coordination and Copilot requests proceed.
 // The one fixer-disposition input: detect-pr-gate-coordination-state and request-copilot-review both read it here.
+// The origin head of a carried verdict, or null. The pre_approval marker wins; the draft marker counts only when pre_approval is not visible.
+export function carriedSourceHeadOf({ preApprovalGateMarker, draftGateMarker } = {}) {
+  return (preApprovalGateMarker?.visible ? preApprovalGateMarker.carriedFrom : draftGateMarker?.carriedFrom) ?? null;
+}
+
 export async function resolveFixerDispositionInput(args, runtime = {}) {
-  // A base-only merge carries the verdict, and so the disposition, from the source head.
-  const result = await readFixerDispositionEvidence(
-    args.carriedSourceHead ? { ...args, currentHeadSha: args.carriedSourceHead } : args, runtime);
+  const result = await readFixerDispositionEvidence(args, runtime);
   if (!result || result.complete) return result;
   const detail = result.incomplete.map((entry) => `thread ${entry.threadId}: ${entry.failedStep}`).join("; ");
   return {
@@ -839,7 +842,7 @@ export async function resolveFixerDispositionInput(args, runtime = {}) {
   };
 }
 
-async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedThreads }, runtime = {}) {
+async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedThreads, carriedSourceHead = null }, runtime = {}) {
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   // Same main-anchored default verify-fixer-disposition.mjs writes under.
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
@@ -884,34 +887,40 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
     return { complete: false, incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unverified_active_fixer: ${error instanceof Error ? error.message : String(error)}` }],
       ...(unchanged && error?.code === "FIXER_RESULT_MISSING" && error.activeFixer ? { activeFixer: error.activeFixer } : {}) };
   }
-  const logPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot });
-  // Main-anchored copy first, then a legacy checkpoint an in-flight PR wrote
-  // under a checkout's own tmp/ (the old cwd-relative default), so the
-  // boundary never fails open at upgrade time. Writes stay main-anchored.
-  const legacyLogPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot: "tmp" });
-  const candidates = [...new Set([
-    path.resolve(repoRoot, logPath),
-    ...resolveLedgerCheckouts(repoRoot).map((root) => path.resolve(root, legacyLogPath)),
-  ])];
-  let raw = null;
-  for (const candidate of candidates) {
-    try {
-      raw = await readFile(candidate, "utf8");
-      break;
-    } catch (error) {
-      // A genuine absence (no checkpoint was ever written) is the only case
-      // that behaves exactly as before — a PR with no checkpoint is unaffected
-      // by this boundary. Any OTHER read error (EACCES, EIO, transient FS
-      // error) must be reported incomplete instead of silently looking like "no
-      // checkpoint": route it through the same shape used below for a
-      // recorded-but-malformed checkpoint.
-      if (error?.code === "ENOENT") continue;
-      return {
-        complete: false,
-        incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unreadable_checkpoint: ${error instanceof Error ? error.message : String(error)}` }],
-      };
+  // Returns the log text, null when absent everywhere, or an incomplete result for an unreadable log.
+  const readLog = async (headSha) => {
+    const logPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha, tmpRoot });
+    // Main-anchored copy first, then a legacy checkpoint an in-flight PR wrote
+    // under a checkout's own tmp/ (the old cwd-relative default), so the
+    // boundary never fails open at upgrade time. Writes stay main-anchored.
+    const legacyLogPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha, tmpRoot: "tmp" });
+    const candidates = [...new Set([
+      path.resolve(repoRoot, logPath),
+      ...resolveLedgerCheckouts(repoRoot).map((root) => path.resolve(root, legacyLogPath)),
+    ])];
+    for (const candidate of candidates) {
+      try {
+        return await readFile(candidate, "utf8");
+      } catch (error) {
+        // A genuine absence (no checkpoint was ever written) is the only case
+        // that behaves exactly as before — a PR with no checkpoint is unaffected
+        // by this boundary. Any OTHER read error (EACCES, EIO, transient FS
+        // error) must be reported incomplete instead of silently looking like "no
+        // checkpoint": route it through the same shape used below for a
+        // recorded-but-malformed checkpoint.
+        if (error?.code === "ENOENT") continue;
+        return {
+          complete: false,
+          incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unreadable_checkpoint: ${error instanceof Error ? error.message : String(error)}` }],
+        };
+      }
     }
-  }
+    return null;
+  };
+  let raw = await readLog(currentHeadSha);
+  // A base-only merge carries the verdict: fall back to the log at the source head only when the current-head log is absent.
+  if (raw === null && carriedSourceHead) raw = await readLog(carriedSourceHead);
+  if (raw !== null && typeof raw !== "string") return raw;
   if (raw === null) return resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot });
   let handoff;
   try {
@@ -1142,7 +1151,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const fixerDisposition = await resolveFixerDispositionInput(
     {
       repo: options.repo, pr: options.pr, currentHeadSha, parsedThreads,
-      carriedSourceHead: gateEvidence.preApprovalGateMarker?.carriedFrom ?? gateEvidence.draftGateMarker?.carriedFrom ?? null,
+      carriedSourceHead: carriedSourceHeadOf(gateEvidence),
     },
     runtime,
   );
