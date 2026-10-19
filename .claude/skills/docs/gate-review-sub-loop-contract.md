@@ -1059,7 +1059,7 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   routing `GATE-EXEC-THREAD-DISPOSITION` owns, not by changing what the ledger verdict `clean`
   means. The posted review verdict composes the ledger verdict with the judge act list: it is
   `clean` only when the ledger verdict is `clean` and the judge act list is empty (ADR 0089; except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)). A
-  judge `act` therefore blocks `clean` at any round, inside or outside the medium fix window.
+  judge `act` therefore blocks `clean` at any round (except `GATE-EXEC-LOW-NIT-CONVERGENCE`), inside or outside the medium fix window.
   GATE-CLOSE is a third, stricter layer owned by `GATE-EXEC-THREAD-DISPOSITION` below: a clean
   verdict is NOT sufficient to close the gate, because every gate-authored review thread (any
   severity) must first be resolved. Widening the blocking

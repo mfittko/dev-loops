@@ -112,7 +112,9 @@ test("a fixer commit that touches a risk path cannot ride a converged inline mar
       draftGateMarker: { visible: true, headSha: scopeHead, ...(scopeHead === headB ? { convergedFromHeadSha: headA } : {}), executionMode: "inline_single_agent" },
       preApprovalGateMarker: { visible: false },
     })).gates.find((g) => g.name === "draft_gate");
-    assert.equal((await gateFor(headB)).scopeUnderThreshold, false);
+    const gateB = await gateFor(headB);
+    assert.equal(gateB.scopeUnderThreshold, false);
+    assert.ok(gateB.ledgerPath.includes(headA) && !gateB.ledgerPath.includes(headB), `ledger keyed on head A, got ${gateB.ledgerPath}`);
     assert.equal((await gateFor(headA)).scopeUnderThreshold, true);
   } finally {
     await rm(repo, { recursive: true, force: true });

@@ -355,7 +355,7 @@ Enforcement at write time and post time:
   and never revises `overallVerdict`.
 - `upsert-checkpoint-verdict.mjs` composes the ledger's `overallVerdict` with its open judge act
   items (ADR 0089) for the same head and gate (#1616), so a non-empty act list yields
-  `findings_present`. It derives the verdict by default (passing no `--verdict` is valid),
+  `findings_present` (except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168), for both ledger cases). It derives the verdict by default (passing no `--verdict` is valid),
   accepts a matching explicit value, and refuses a contradiction citing this rule. A ledger
   without `overallVerdict` still refuses an explicit `clean` while its act list is not empty, except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168).
 - The act list for a verdict post comes from judge-enriched data: the ledger written with

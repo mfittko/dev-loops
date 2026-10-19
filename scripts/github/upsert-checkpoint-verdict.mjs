@@ -5,7 +5,7 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitiz
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
-import { composeConvergedDraftGate } from "@dev-loops/core/loop/pre-push-delta-review";
+import { composeConvergedDraftGate, convergedActItemKey } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
 import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -2508,6 +2508,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let canonicalHeadSha = options.headSha;
   let draftGateConfig = null;
   let preApprovalGateConfig = null;
+  // The post-time fan-out enforcement descriptor (buildFanoutEnforcement's
+  // result) captured from enforcePostTimeFanoutMode, so the durable-ledger
+  // refusal below reuses its already-computed per-gate ledgerExists/ledgerPath.
   let postTimeFanoutEnforcement = null;
   let preloadedFindingsLedger;
   // GATE-EXEC-LOW-NIT-CONVERGENCE: { fixerCommit, actList, deltaResult } from --converged-json; null otherwise.
@@ -2523,7 +2526,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
   }
   // The ONLY path that lets a clean verdict stand over open act items: a validated low/nit convergence
-  // (composeConvergedDraftGate throws on anything else). Items dedupe by severity|summary: the ledger and
+  // (composeConvergedDraftGate throws on anything else). Items dedupe by severity|summary|files|line: the ledger and
   // --findings-json can carry the same finding.
   let convergedMarker = null;
   const guardedActItems = async (findings) => {
@@ -2534,7 +2537,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
     const items = listOpenActItems(convergedInput ? [...(preloadedFindingsLedger.findings ?? []), ...findings] : findings);
     if (!convergedInput) return items;
-    const roundActItems = [...new Map(items.map((f) => [`${f.severity}|${typeof f.summary === "string" ? f.summary.trim() : f.summary}`, f])).values()];
+    const roundActItems = [...new Map(items.map((f) => [convergedActItemKey(f), f])).values()];
     convergedMarker = composeConvergedDraftGate({ gate: options.gate, headSha: canonicalHeadSha, roundActItems, converged: convergedInput });
     return [];
   };

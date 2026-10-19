@@ -232,6 +232,16 @@ test("two same-summary low items converge and a low item does not match a nit on
   }, { prefix: "dev-loops-converged-keying-" });
 });
 
+test("same-summary low items at different files are distinct: an actList listing only one is refused", async () => {
+  await withTempDir(async (tempDir) => {
+    const a = { ...finding("low", 1), files: ["a.mjs"], line: 10 };
+    const b = { ...finding("low", 1), files: ["b.mjs"], line: 20 };
+    const { error, puts } = await post(tempDir, { findings: [a, b], converged: convergedInput([a]) });
+    assert.match(error, /same items as the posted act items/);
+    assert.deepEqual(puts, []);
+  }, { prefix: "dev-loops-converged-sites-" });
+});
+
 test("a delta result carrying a new finding fails closed", async () => {
   await withTempDir(async (tempDir) => {
     const findings = [finding("low", 1)];
