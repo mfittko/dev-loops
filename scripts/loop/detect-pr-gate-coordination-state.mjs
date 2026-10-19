@@ -822,11 +822,6 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
   return incomplete.length > 0 ? { complete: false, incomplete } : null;
 }
 
-// The origin head of a carried verdict, or null. The pre_approval marker wins; the draft marker counts only when pre_approval is not visible.
-export function carriedSourceHeadOf({ preApprovalGateMarker, draftGateMarker } = {}) {
-  return (preApprovalGateMarker?.visible ? preApprovalGateMarker.carriedFrom : draftGateMarker?.carriedFrom) ?? null;
-}
-
 // ADR 0155: an incomplete disposition is advisory. It keeps its `incomplete` detail and adds a warning,
 // with no next action and no forbidden actions, so gate coordination and Copilot requests proceed.
 // The one fixer-disposition input: detect-pr-gate-coordination-state and request-copilot-review both read it here.
@@ -842,7 +837,7 @@ export async function resolveFixerDispositionInput(args, runtime = {}) {
   };
 }
 
-async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedThreads, carriedSourceHead = null }, runtime = {}) {
+async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedThreads }, runtime = {}) {
   const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   // Same main-anchored default verify-fixer-disposition.mjs writes under.
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
@@ -866,18 +861,14 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
         if (order.role !== "fixer" || order.phase !== "full" || order.target?.repo !== repo || order.target?.pr !== pr || !order.headSha) {
           throw new Error("active fixer plan is not a full-phase fixer work order for this PR");
         }
-        // GATE-EXEC-BASE-MERGE-VERDICT-CARRY, active fixer plan at a carried head: at a carry_verdict head from origin head O
-        // (carriedSourceHead), a plan bound to O is checked at O, so a plan complete at O raises no unverified_active_fixer and
-        // one incomplete at O still warns. A plan bound to any other head, or any head without a carry, is checked at the real head.
-        const checkHead = carriedSourceHead && order.headSha === carriedSourceHead ? carriedSourceHead : currentHeadSha;
-        let applicable = order.headSha === checkHead;
+        let applicable = order.headSha === currentHeadSha;
         if (!applicable) {
           const relation = await isCommitContainedByHead({ repo, commitSha: order.headSha, headSha: currentHeadSha }, runtime);
           if (relation.retryable) throw new Error(`cannot determine active fixer head containment: ${relation.reason}`);
           applicable = relation.contained;
         }
         if (applicable) {
-          const checked = await verifyFixerDisposition({ repo, pr, headSha: checkHead, fixerPlan: planPath, check: true }, { ...runtime, repoRoot });
+          const checked = await verifyFixerDisposition({ repo, pr, headSha: currentHeadSha, fixerPlan: planPath, check: true }, { ...runtime, repoRoot });
           if (!checked.complete) {
             const unchanged = (await readFile(planPath)).equals(planBytes);
             return { complete: false, incomplete: checked.incomplete,
@@ -891,40 +882,34 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
     return { complete: false, incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unverified_active_fixer: ${error instanceof Error ? error.message : String(error)}` }],
       ...(unchanged && error?.code === "FIXER_RESULT_MISSING" && error.activeFixer ? { activeFixer: error.activeFixer } : {}) };
   }
-  // Returns the log text, null when absent everywhere, or an incomplete result for an unreadable log.
-  const readLog = async (headSha) => {
-    const logPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha, tmpRoot });
-    // Main-anchored copy first, then a legacy checkpoint an in-flight PR wrote
-    // under a checkout's own tmp/ (the old cwd-relative default), so the
-    // boundary never fails open at upgrade time. Writes stay main-anchored.
-    const legacyLogPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha, tmpRoot: "tmp" });
-    const candidates = [...new Set([
-      path.resolve(repoRoot, logPath),
-      ...resolveLedgerCheckouts(repoRoot).map((root) => path.resolve(root, legacyLogPath)),
-    ])];
-    for (const candidate of candidates) {
-      try {
-        return await readFile(candidate, "utf8");
-      } catch (error) {
-        // A genuine absence (no checkpoint was ever written) is the only case
-        // that behaves exactly as before — a PR with no checkpoint is unaffected
-        // by this boundary. Any OTHER read error (EACCES, EIO, transient FS
-        // error) must be reported incomplete instead of silently looking like "no
-        // checkpoint": route it through the same shape used below for a
-        // recorded-but-malformed checkpoint.
-        if (error?.code === "ENOENT") continue;
-        return {
-          complete: false,
-          incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unreadable_checkpoint: ${error instanceof Error ? error.message : String(error)}` }],
-        };
-      }
+  const logPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot });
+  // Main-anchored copy first, then a legacy checkpoint an in-flight PR wrote
+  // under a checkout's own tmp/ (the old cwd-relative default), so the
+  // boundary never fails open at upgrade time. Writes stay main-anchored.
+  const legacyLogPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot: "tmp" });
+  const candidates = [...new Set([
+    path.resolve(repoRoot, logPath),
+    ...resolveLedgerCheckouts(repoRoot).map((root) => path.resolve(root, legacyLogPath)),
+  ])];
+  let raw = null;
+  for (const candidate of candidates) {
+    try {
+      raw = await readFile(candidate, "utf8");
+      break;
+    } catch (error) {
+      // A genuine absence (no checkpoint was ever written) is the only case
+      // that behaves exactly as before — a PR with no checkpoint is unaffected
+      // by this boundary. Any OTHER read error (EACCES, EIO, transient FS
+      // error) must be reported incomplete instead of silently looking like "no
+      // checkpoint": route it through the same shape used below for a
+      // recorded-but-malformed checkpoint.
+      if (error?.code === "ENOENT") continue;
+      return {
+        complete: false,
+        incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unreadable_checkpoint: ${error instanceof Error ? error.message : String(error)}` }],
+      };
     }
-    return null;
-  };
-  let raw = await readLog(currentHeadSha);
-  // A base-only merge carries the verdict: fall back to the log at the source head only when the current-head log is absent.
-  if (raw === null && carriedSourceHead) raw = await readLog(carriedSourceHead);
-  if (raw !== null && typeof raw !== "string") return raw;
+  }
   if (raw === null) return resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot });
   let handoff;
   try {
@@ -1153,10 +1138,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     : null;
   const postConvergenceReviewSuppressed = carried.carried;
   const fixerDisposition = await resolveFixerDispositionInput(
-    {
-      repo: options.repo, pr: options.pr, currentHeadSha, parsedThreads,
-      carriedSourceHead: carriedSourceHeadOf(gateEvidence),
-    },
+    { repo: options.repo, pr: options.pr, currentHeadSha, parsedThreads },
     runtime,
   );
   return {

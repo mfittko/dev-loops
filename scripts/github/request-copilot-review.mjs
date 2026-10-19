@@ -14,8 +14,7 @@ import {
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { carriedSourceHeadOf, resolveFixerDispositionInput } from "../loop/detect-pr-gate-coordination-state.mjs";
-import { detectCheckpointEvidence } from "./detect-checkpoint-evidence.mjs";
+import { resolveFixerDispositionInput } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { fetchGateEvidenceComments } from "./_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -700,7 +699,6 @@ async function performRequest(
     runChild = defaultRunChild,
     delayImpl = delay,
     repoRoot = process.cwd(),
-    detectEvidence = detectCheckpointEvidence,
   } = {},
   advisory,
 ) {
@@ -739,20 +737,15 @@ async function performRequest(
     : null;
   // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: the same shared input the gate coordination detector reads.
   // Live thread reads are deferred until an applicable full plan or checkpoint needs evidence.
-  const resolveFixer = (carriedSourceHead) => resolveFixerDispositionInput(
-    {
-      repo: options.repo, pr: options.pr, currentHeadSha, carriedSourceHead,
-      parsedThreads: async () => parseReviewThreads(await fetchGithubReviewThreadsPayload(options, runtime)),
-    },
-    { ...runtime, repoRoot },
-  );
-  let fixerDisposition = currentHeadSha ? await resolveFixer(null) : null;
-  // GATE-EXEC-BASE-MERGE-VERDICT-CARRY: only a warning can be a carry artifact, so the read-only carry derivation
-  // (no recordCarry) runs lazily and non-warning paths make no extra call. A failed derivation keeps the warning.
-  if (fixerDisposition?.warning) {
-    const carriedSourceHead = await detectEvidence(options, { ...runtime, cwd: repoRoot }).then(carriedSourceHeadOf, () => null);
-    if (carriedSourceHead) fixerDisposition = await resolveFixer(carriedSourceHead);
-  }
+  const fixerDisposition = currentHeadSha
+    ? await resolveFixerDispositionInput(
+      {
+        repo: options.repo, pr: options.pr, currentHeadSha,
+        parsedThreads: async () => parseReviewThreads(await fetchGithubReviewThreadsPayload(options, runtime)),
+      },
+      { ...runtime, repoRoot },
+    )
+    : null;
   // ADR 0155: an incomplete disposition is advisory; the warning rides on the final result.
   if (fixerDisposition?.warning) advisory.fixerDispositionWarning = { warning: fixerDisposition.warning, incomplete: fixerDisposition.incomplete };
   if (currentHeadSha && !before.requested && !before.hasPendingReviewOnCurrentHead && !before.hasSubmittedReviewOnCurrentHead) {

@@ -17,12 +17,10 @@ Gate evidence consumes a carried verdict under these rules:
 - `detect-checkpoint-evidence` presents the latest cross-head clean marker at the current head, with the field `carriedFrom` set to the origin head, only when two conditions hold. First, `computeBaseMergeCarry` for origin head to current head returns `carry_verdict`. Second, the durable carried-heads record has an entry for the current head whose evidence passes `validateBaseMergeCarryEvidence` and equals the recomputed evidence. The record lives at `tmp/carried-heads/<repo>/pr-N/<gate>-<originHead>.carried-heads.json`, anchored at the main checkout.
 - The coordination path records the carried-heads entry. `merge-pr` reads the record and never writes it. `merge-pr` therefore never accepts an unrecorded carry.
 - Fan-out ledger evidence stays keyed at the origin head. The carry does not rewrite ledger entries.
-- A fixer disposition recorded at the source head is read as a fallback only when the current-head disposition log is absent.
 - CI green at the current head stays a merge precondition.
-- Active fixer plan at a carried head: at a head whose classification is `carry_verdict` from origin head O, the active-fixer-plan check evaluates the plan at O. A plan bound to O that is verified complete at O counts as complete at the carried head and raises no `unverified_active_fixer`. A plan bound to O that is incomplete at O still warns at the carried head (the advisory boundary is unchanged). A plan bound to any other head, or any head that is not `carry_verdict`, is checked exactly as before at the real head.
 
 Rejected: letting `merge-pr` record the carry itself. The merge step would then both create and accept its own evidence, so a carry that the coordination path never validated could pass the merge gate.
 
 ## Consequences
 
-A base-only merge that keeps the PR blobs unchanged dispatches no gate round. A stale, forged or unrecorded carry fails validation or recomputation and falls back to a full re-gate. The coordination path owns the carried-heads record, so a missing record costs one gate round and never a false pass.
+A base-only merge that keeps the PR blobs unchanged dispatches no gate round. A stale, forged or unrecorded carry fails validation or recomputation and falls back to a full re-gate. The coordination path owns the carried-heads record, so a missing record costs one gate round and never a false pass. Fixer-disposition completion on a carried head is out of this record and moves to issue 2787; a carried head keeps the advisory unverified_active_fixer behavior (ADR 0155).

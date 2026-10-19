@@ -64,6 +64,9 @@ Optional:
                               unjudged, or unreadable act list). Intended
                               for server-side/CI callers only; client-side callers
                               should omit this flag to keep full enforcement.
+Optional marker field: carriedFrom (the origin head of a carried verdict). A carried
+marker's headSha is the current head and differs from the comment summary's
+headSha; carriedFrom names the origin head the verdict was posted at.
 Output (stdout, JSON; always includes preMergeGateCheck):
   {
     "ok": true,

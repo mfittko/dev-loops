@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { initGitFixture, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
-import { carriedSourceHeadOf, resolveFixerDispositionInput, detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
@@ -4048,100 +4048,10 @@ for (const [name, handoffHead] of [["an abbreviated", "abc9988"], ["an upper-cas
   });
 }
 
-// GATE-EXEC-BASE-MERGE-VERDICT-CARRY: an active full-phase fixer plan bound to head O is checked at O on a carry_verdict head.
-async function runCarriedPlanFixture({ planHead, carried = true, outputThreads = false }) {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fixer-plan-carry-"));
-  const REPO = "owner/repo";
-  const PR = 2819;
-  const SRC = "a".repeat(40);
-  const CUR = "b".repeat(40);
-  try {
-    initGitFixture(tempDir);
-    const fixerDir = path.join(tempDir, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
-    await mkdir(path.join(fixerDir, "f1-0000abcd"), { recursive: true });
-    const output = path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json");
-    const source = path.join(fixerDir, "source.json");
-    const bytes = JSON.stringify({ threads: outputThreads ? [{ threadId: "PRRT_T1" }] : [] });
-    await writeFile(source, bytes);
-    const head = planHead ?? SRC;
-    const workOrder = { role: "fixer", phase: "full", target: { repo: REPO, pr: PR }, headSha: head, outputRefs: [output], requiredReads: [{ kind: "threads", path: source, sha256: createHash("sha256").update(bytes).digest("hex") }] };
-    workOrder.authority = { sourceDigest: sha256Hex(JSON.parse(bytes)).slice(7) };
-    const planPath = path.join(fixerDir, "fixer-emit-plan.json");
-    const plan = { workOrder, workOrderDigest: workOrderDigest(workOrder), workOrderRef: `fixer:${REPO}#${PR}:${head}:f1-0000abcd`, executionIdentity: "f1-0000abcd" };
-    await writeFile(planPath, JSON.stringify(plan));
-    const receipt = pullReceiptPath(path.join(tempDir, "tmp"), plan.workOrderRef);
-    await mkdir(path.dirname(receipt), { recursive: true });
-    await writeFile(receipt, JSON.stringify({ ...plan, role: "fixer", pulledAt: new Date().toISOString(), subject: { planPath } }));
-    await writeFile(output, JSON.stringify({ headSha: SRC, dispositions: [] }));
-    const checkpoint = path.join(tempDir, "tmp", "gate-findings", "owner-repo", `pr-${PR}`, `fixer-disposition-${SRC}.json`);
-    await mkdir(path.dirname(checkpoint), { recursive: true });
-    await writeFile(checkpoint, JSON.stringify({ headSha: SRC, dispositions: [] }));
-    const runChild = async (cmd, args) => {
-      const joined = args.join(" ");
-      if (joined.startsWith("pr view") && joined.includes("headRefOid")) return { code: 0, stdout: JSON.stringify({ headRefOid: SRC }), stderr: "" };
-      if (joined.includes("/compare/")) return { code: 0, stdout: JSON.stringify({ status: "ahead" }), stderr: "" };
-      if (joined.includes("graphql")) return { code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "fix", author: { login: "r", __typename: "User" } }] } }], pageInfo: { hasNextPage: false } } } } } }), stderr: "" };
-      return { code: 0, stdout: "", stderr: "" };
-    };
-    return await resolveFixerDispositionInput(
-      { repo: REPO, pr: PR, currentHeadSha: CUR, parsedThreads: { threads: [], comments: [] }, carriedSourceHead: carried ? SRC : null },
-      { repoRoot: tempDir, cwd: tempDir, ghCommand: "gh", runChild, env: runIdFreeEnv({ GH_TOKEN: "t", DEVLOOPS_RUN_ID: "" }) });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-}
-
-test("a carried head with a plan bound to the origin head, complete at the origin head, raises no unverified_active_fixer", async () => {
-  const result = await runCarriedPlanFixture({});
-  assert.ok(!result?.warning, JSON.stringify(result));
-});
-
-test("a carried head with a plan bound to the origin head, incomplete at the origin head, still warns", async () => {
-  const result = await runCarriedPlanFixture({ outputThreads: true });
-  assert.ok(result.warning, "an incomplete plan at the origin head warns");
-});
-
-test("a non-carried head checks the plan at the real head as before", async () => {
-  const result = await runCarriedPlanFixture({ carried: false });
-  assert.ok(result.warning, "without a carry the plan head is checked at the real head");
-  const steps = JSON.stringify(result.incomplete ?? result.warning);
-  assert.ok(!steps.includes("cannot determine active fixer head containment"), steps);
-  assert.ok(steps.includes("claims head"), steps);
-});
-
-test("resolveFixerDispositionInput reads the disposition at carriedSourceHead across a base-only merge (#2752, PR 2819 shape)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fixer-disposition-carry-"));
-  const REPO = "owner/repo";
-  const PR = 2819;
-  const SRC = "a".repeat(40);
-  const CUR = "b".repeat(40);
-  try {
-    initGitFixture(tempDir);
-    const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
-    const { normalizeFixerDispositionHandoff } = await import("@dev-loops/core/loop/fixer-disposition");
-    const write = async (headSha, body) => {
-      const file = path.join(tempDir, buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha, tmpRoot: "tmp" }));
-      await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, body, "utf8");
-    };
-    await write(SRC, `${JSON.stringify(normalizeFixerDispositionHandoff({ headSha: SRC, dispositions: [] }))}\n`);
-    const args = { repo: REPO, pr: PR, currentHeadSha: CUR, parsedThreads: { threads: [], comments: [] } };
-    const carried = await resolveFixerDispositionInput({ ...args, carriedSourceHead: SRC }, { repoRoot: tempDir });
-    assert.equal(carried.complete, true, "an absent current-head log falls back to the source-head log");
-    assert.equal(carried.warning, undefined);
-    await write(CUR, "{ not valid json");
-    const malformed = await resolveFixerDispositionInput({ ...args, carriedSourceHead: SRC }, { repoRoot: tempDir });
-    assert.ok(malformed.warning, "a malformed current-head log still warns");
-    assert.ok(malformed.warning.includes(CUR), "the warning names the real head");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
 // ---------------------------------------------------------------------------
 // #2752 / GATE-EXEC-BASE-MERGE-VERDICT-CARRY: coordination-level behaviour on a git fixture.
 // ---------------------------------------------------------------------------
-async function runCarryFixture({ nonBaseCommit = false, ci = "SUCCESS", sourceHeadHandoff = false } = {}) {
+async function runCarryFixture({ nonBaseCommit = false, ci = "SUCCESS" } = {}) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-coord-carry-"));
   try {
     const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_DIR: undefined, GIT_WORK_TREE: undefined };
@@ -4158,12 +4068,6 @@ async function runCarryFixture({ nonBaseCommit = false, ci = "SUCCESS", sourceHe
     git("update-ref", "refs/remotes/origin/main", "main");
     git("checkout", "-q", "pr"); git("merge", "-q", "--no-edit", "main");
     const headB = git("rev-parse", "HEAD");
-    if (sourceHeadHandoff) {
-      const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
-      const file = path.join(dir, buildLogPath({ repo: "owner/repo", pr: 2819, gate: "fixer-disposition", headSha: headA, tmpRoot: "tmp" }));
-      await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, `${JSON.stringify({ headSha: headA, dispositions: [{ threadId: "PRRT_X", fixingCommitSha: headA, disposition: "tackled" }] })}\n`);
-    }
     const body = (gate, next) => [`Gate review: ${gate}`, `Reviewed head SHA: ${headA}`, "Verdict: clean", "Findings summary: no issues found", `Next action: ${next}`].join("\n");
     const comments = [
       { id: 1, body: body("draft_gate", "mark ready for review"), updated_at: "2026-05-29T21:00:00Z" },
@@ -4214,42 +4118,4 @@ test("coordination with failing CI at the new head does not treat the carried ve
   assert.equal(result.ok, true);
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, "red CI at the new head blocks");
   assert.ok(!GATE_RUN_ACTIONS.includes(result.nextAction), `CI red must route to CI, not a gate run: ${result.nextAction}`);
-});
-
-test("coordination wires carriedSourceHead from gate evidence: a source-head disposition log is read on a carried head", async () => {
-  const wired = await runCarryFixture({ sourceHeadHandoff: true });
-  assert.ok(wired.result.fixerDispositionWarning, "the source-head log was read and found incomplete");
-  const absent = await runCarryFixture({});
-  assert.equal(absent.result.fixerDispositionWarning, undefined, "no log at either head means no disposition evidence");
-});
-
-test("carriedSourceHeadOf prefers a visible pre_approval marker, falls back to the draft marker, else null", () => {
-  const A = "a".repeat(40);
-  const B = "b".repeat(40);
-  assert.equal(carriedSourceHeadOf({ preApprovalGateMarker: { visible: true, carriedFrom: A }, draftGateMarker: { carriedFrom: B } }), A);
-  assert.equal(carriedSourceHeadOf({ preApprovalGateMarker: { visible: false, carriedFrom: A }, draftGateMarker: { carriedFrom: B } }), B);
-  assert.equal(carriedSourceHeadOf({ preApprovalGateMarker: { visible: true }, draftGateMarker: { carriedFrom: B } }), null);
-  assert.equal(carriedSourceHeadOf({}), null);
-  assert.equal(carriedSourceHeadOf(), null);
-});
-
-test("resolveFixerDispositionInput with no log at either head keys the unverified-handoff scan on currentHeadSha", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fixer-disposition-nolog-"));
-  const SRC = "a".repeat(40);
-  const CUR = "b".repeat(40);
-  try {
-    initGitFixture(tempDir);
-    const dir = path.join(tempDir, "tmp", "gate-fixer", "owner-repo", "pr-7", "f1-0123abcd");
-    await mkdir(dir, { recursive: true });
-    const args = { repo: "owner/repo", pr: 7, currentHeadSha: CUR, parsedThreads: { threads: [], comments: [] }, carriedSourceHead: SRC };
-    const handoff = (headSha) => `${JSON.stringify({ headSha, dispositions: [{ threadId: "PRRT_T", fixingCommitSha: headSha, disposition: "tackled" }] })}\n`;
-    await writeFile(path.join(dir, "fixer-disposition.json"), handoff(SRC));
-    assert.equal(await resolveFixerDispositionInput(args, { repoRoot: tempDir }), null, "a handoff for the source head is not the live head's");
-    await writeFile(path.join(dir, "fixer-disposition.json"), handoff(CUR));
-    const result = await resolveFixerDispositionInput(args, { repoRoot: tempDir });
-    assert.equal(result.complete, false);
-    assert.equal(result.incomplete[0].threadId, "PRRT_T");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 });
