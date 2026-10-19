@@ -603,8 +603,12 @@ export async function verifyFixerDisposition(
   const runtime = { env, ghCommand, runChild };
   const { handoff, actList, deltaStatuses, completion, constructedReport, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
-  const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
-  const liveHead = live.code === 0 ? (() => { try { return JSON.parse(live.stdout).headRefOid; } catch { return null; } })() : null;
+  const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,statusCheckRollup"], env);
+  const livePayload = live.code === 0 ? (() => { try { return JSON.parse(live.stdout); } catch { return null; } })() : null;
+  const liveHead = livePayload?.headRefOid ?? null;
+  // Same PR-visible filter as wait-pr-checks (probe-ci-status.mjs): runs outside the rollup never block step 5.
+  const prVisibleCheckNames = (Array.isArray(livePayload?.statusCheckRollup) ? livePayload.statusCheckRollup : [])
+    .map((entry) => entry?.name || entry?.context).filter((name) => typeof name === "string" && name.length > 0);
   if (liveHead !== options.headSha) {
     throw new Error(`--head-sha ${options.headSha} is not the live PR head ${liveHead ?? `(unreadable: ${(live.stderr || "").trim()})`}; refresh the PR state before verifying`);
   }
@@ -622,7 +626,7 @@ export async function verifyFixerDisposition(
   }
   if (source) {
     // A red head resolves nothing: the fixer hands back ci_failed with these check names.
-    const ci = await observeHeadCiSignals({ repo: options.repo, headSha: options.headSha }, runtime);
+    const ci = await observeHeadCiSignals({ repo: options.repo, headSha: options.headSha, prVisibleCheckNames }, runtime);
     const failed = [...(ci.checkRuns.visibleSignal?.failureDetails ?? []), ...ci.statuses.statusFailures.map((s) => s.name)];
     if (failed.length > 0) throw new Error(`ci_failed: checks are red at ${options.headSha} (${failed.join(", ")}); resolve no thread, hand back ci_failed with these check names`);
     // Fail closed: only an observed, settled-green head may resolve threads.

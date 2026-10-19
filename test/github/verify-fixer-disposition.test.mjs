@@ -61,8 +61,8 @@ async function withRepoRoot(fn) {
   }
 }
 
-function liveHeadEntry(headRefOid = HEAD_SHA) {
-  return { assertArgs: ["pr", "view", String(PR), "--json", "headRefOid"], stdout: `${JSON.stringify({ headRefOid })}\n` };
+function liveHeadEntry(headRefOid = HEAD_SHA, statusCheckRollup = []) {
+  return { assertArgs: ["pr", "view", String(PR), "--json", "headRefOid,statusCheckRollup"], stdout: `${JSON.stringify({ headRefOid, statusCheckRollup })}\n` };
 }
 
 // Prepends the live-head read the verifier makes before any checkpoint write.
@@ -202,8 +202,7 @@ async function threadConstructFixture(root, recordOver) {
   // A variant record replaces the clearing one after emission and pull, which need the clearing record.
   if (recordOver) await (recordOver.missing ? rm(recordPath) : writeFile(recordPath, JSON.stringify({ ...record, ...recordOver })));
   const options = { repo: REPO, pr: PR, headSha: head, fixerPlan: plan.planPath };
-  const live = liveHeadEntry(head);
-  return { plan, options, head, output: plan.workOrder.outputRefs[0], root, runtimeFor: (entries) => runtime([live, ...entries], root, { live: false }) };
+  return { plan, options, head, output: plan.workOrder.outputRefs[0], root, runtimeFor: (entries, rollup) => runtime([liveHeadEntry(head, rollup), ...entries], root, { live: false }) };
 }
 
 test("THREAD full --construct builds the report from the threads, the clearing record and the pushed head, then normal and --check pass", async () => {
@@ -307,6 +306,29 @@ for (const [label, ci, expected] of [
     });
   });
 }
+
+test("a failing check run outside the PR rollup is ignored like wait-pr-checks does", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }];
+    const runs = [{ name: "build", status: "completed", conclusion: "success" }, { name: "codeql", status: "completed", conclusion: "failure" }];
+    const mock = f.runtimeFor([threadsCallEntry(resolved), ...ciEntries(f.head, { runs }), compareEntry(f.head, "identical", f.head)], [{ name: "build" }]);
+    assert.equal((await verifyFixerDisposition(f.options, mock.deps)).complete, true);
+  });
+});
+
+test("a failing check run inside the PR rollup still refuses ci_failed and posts no reply", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+    const runs = [{ name: "build", status: "completed", conclusion: "success" }, { name: "codeql", status: "completed", conclusion: "failure" }];
+    const mock = f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { runs })], [{ name: "build" }, { name: "codeql" }]);
+    await assert.rejects(verifyFixerDisposition(f.options, mock.deps), /ci_failed.*codeql/);
+    assert.equal(hasPost(mock.calls), false);
+  });
+});
 
 test("a settled head with no check runs and no statuses is accepted", async () => {
   await withRepoRoot(async (root) => {

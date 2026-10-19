@@ -181,10 +181,11 @@ fixer and owns the push. The sequence is:
    head; the coordinator returns to step 2 without a fixer.
 4. On `nextStep: push` (`locally_clear`) or `nextStep: push_to_gate`
    (`bounded_out`), it emits a `full` work order with `--delta-result <result>`
-   and dispatches the fixer to push and reply to each gate thread with the
-   fixing commit. `verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <plan>` then checks
-   the handoff that fixer wrote to the work order's outputRef. On
-   `locally_clear`, the fixer resolves each thread. On `bounded_out`, the fixer
+   and dispatches the fixer to push the candidate and wait for CI. The fixer writes no handoff
+   and posts no reply. `verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <plan> --construct`
+   writes the handoff to the work order's outputRef, and the same command without `--construct` then replies to each
+   gate thread with the fixing commit and resolves it after CI settles. On
+   `locally_clear`, the verifier resolves each thread. On `bounded_out`, it
    resolves only the threads of act items with status `resolved`. For
    `not_resolved` and `cannot_verify` items, it replies with the residual delta
    status and leaves the thread unresolved. The fixer MUST NOT mark these
