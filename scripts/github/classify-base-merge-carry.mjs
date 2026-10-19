@@ -44,7 +44,7 @@ const lines = (s) => s.toString("utf8").split("\n").filter(Boolean);
 // Raw tree-entry read: diff-tree --raw compares tree entries only (blob/gitlink oids and modes), so attributes, textconv, diff drivers and diff rendering config never apply.
 // --no-abbrev gives full oids; --ignore-submodules=none keeps gitlink changes visible. Returns sorted `path\tmode\toid` (new side) entries.
 async function rawEntries(runGit, repoRoot, from, to) {
-  const out = (await git(runGit, repoRoot, ["diff-tree", "-r", "--raw", "--no-renames", "--no-abbrev", "--ignore-submodules=none", "-z", from, to])).toString("utf8").split("\0").filter(Boolean);
+  const out = (await git(runGit, repoRoot, ["diff-tree", "-r", "--raw", "--no-renames", "--no-abbrev", "--ignore-submodules=none", "-z", from, to])).toString("latin1").split("\0").filter(Boolean);
   const entries = [];
   for (let i = 0; i < out.length; i += 2) {
     const meta = out[i].match(/^:(\d{6}) (\d{6}) ([0-9a-f]+) ([0-9a-f]+) [A-Z]\d*$/);
@@ -53,18 +53,24 @@ async function rawEntries(runGit, repoRoot, from, to) {
   }
   return entries.sort();
 }
-const entryPath = (e) => e.slice(0, e.indexOf("\t"));
+const entryPath = (e) => e.split("\t").slice(0, -2).join("\t");
+// Path bytes are decoded as latin1 (one-to-one), so distinct non-UTF-8 paths stay distinct; the gate-tooling matcher only needs ASCII prefixes.
+// A criss-cross history has several merge bases; any ambiguity fails closed.
+async function singleMergeBase(runGit, repoRoot, baseRef, head) {
+  const bases = lines(await git(runGit, repoRoot, ["merge-base", "--all", baseRef, head]));
+  if (bases.length !== 1) throw new Error(`expected exactly one merge base, got ${bases.length}`);
+  return bases[0];
+}
 
 export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRoot, runGit = runPinnedGit }) {
   try {
     const anc = await runGit(["merge-base", "--is-ancestor", prevHead, headSha], { repoRoot });
     if (anc.code === 1) throw new Error("prev-head is not an ancestor of head-sha");
     if (anc.code !== 0) throw new Error(`git merge-base --is-ancestor failed: ${anc.stderr.trim()}`);
-    const mbA = (await git(runGit, repoRoot, ["merge-base", baseRef, prevHead])).toString("utf8").trim();
-    const mbB = (await git(runGit, repoRoot, ["merge-base", baseRef, headSha])).toString("utf8").trim();
+    const mbA = await singleMergeBase(runGit, repoRoot, baseRef, prevHead);
+    const mbB = await singleMergeBase(runGit, repoRoot, baseRef, headSha);
     const prBlobsBefore = await rawEntries(runGit, repoRoot, mbA, prevHead);
     const prBlobsAfter = await rawEntries(runGit, repoRoot, mbB, headSha);
-    const prDiffPaths = [...new Set([...prBlobsBefore, ...prBlobsAfter].map(entryPath))].sort();
     const baseDeltaPaths = (await rawEntries(runGit, repoRoot, mbA, mbB)).map(entryPath);
     // A merge commit's combined diff (--cc) is non-empty only when the merge hand-resolved something.
     // Check every merge commit on the PR branch line (--first-parent) in prevHead..headSha; merges that arrived from the base side are not the PR's own.
@@ -85,7 +91,7 @@ export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRo
     }
     return classifyBaseMergeCarry({
       sourceHead: prevHead, newHead: headSha, prBlobsBefore, prBlobsAfter,
-      prDiffPaths, baseDeltaPaths, conflictResolutionHunks,
+      baseDeltaPaths, conflictResolutionHunks,
     });
   } catch (error) {
     return classifyBaseMergeCarry({ sourceHead: prevHead, newHead: headSha, detectionError: error instanceof Error ? error.message : String(error) });

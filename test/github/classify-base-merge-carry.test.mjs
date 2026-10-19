@@ -11,7 +11,7 @@ import { buildBaseMergeCarryPath, computeBaseMergeCarry, main, runPinnedGit } fr
 const A = "a".repeat(40);
 const B = "b".repeat(40);
 const blob = `src/x.mjs\t100644\t${"1".repeat(40)}`;
-const ok = { sourceHead: A, newHead: B, prBlobsBefore: [blob], prBlobsAfter: [blob], prDiffPaths: ["src/x.mjs"], baseDeltaPaths: ["docs/y.md"] };
+const ok = { sourceHead: A, newHead: B, prBlobsBefore: [blob], prBlobsAfter: [blob], baseDeltaPaths: ["docs/y.md"] };
 
 test("pure: carry, full, fallback", () => {
   assert.equal(classifyBaseMergeCarry(ok).decision, "carry_verdict");
@@ -28,7 +28,7 @@ test("pure: carry, full, fallback", () => {
 
 test("pure: non-string or empty evidence values never carry", () => {
   for (const bad of [1, true, "", [1], [""], [true], "x"]) {
-    for (const field of ["prBlobsBefore", "prBlobsAfter", "prDiffPaths"]) {
+    for (const field of ["prBlobsBefore", "prBlobsAfter"]) {
       assert.equal(classifyBaseMergeCarry({ ...ok, [field]: bad }).decision, "fallback_full", `${field}=${JSON.stringify(bad)}`);
     }
   }
@@ -350,4 +350,39 @@ test("main: writes the keyed evidence artifact and refuses a short prev-head", a
   } finally { process.stderr.write = realErr; }
   assert.equal(process.exitCode, 1);
   process.exitCode = saved;
+});
+
+test("pure: a narrowed prDiffPaths input cannot turn a base-touched PR path into carry", () => {
+  const ev = classifyBaseMergeCarry({ ...ok, prDiffPaths: ["unrelated.md"], baseDeltaPaths: ["src/x.mjs"] });
+  assert.equal(ev.decision, "full_regate");
+  assert.deepEqual(ev.prDiffPaths, ["src/x.mjs"]);
+  assert.equal(validateBaseMergeCarryEvidence({ ...classifyBaseMergeCarry(ok), prDiffPaths: [] }).ok, false);
+});
+
+test("git: distinct non-UTF-8 PR paths with the same blob never collapse into a carry", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "bmc-"));
+  const run = (args, input) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd: dir, env: ENV, input });
+  run(["init", "-q", "-b", "main"]);
+  const hash = (c) => run(["hash-object", "-w", "--stdin"], c).toString().trim();
+  const [baseOid, x] = [hash("base\n"), hash("x\n")];
+  const tree = (...entries) => run(["mktree", "-z"], Buffer.concat(entries.map(([oid, name]) => Buffer.concat([Buffer.from(`100644 blob ${oid}\t`), name, Buffer.from([0])])))).toString().trim();
+  const commit = (t, ...parents) => run(["commit-tree", t, ...parents.flatMap((p) => ["-p", p]), "-m", "c"]).toString().trim();
+  const baseEntry = [baseOid, Buffer.from("base.txt")];
+  const m = commit(tree(baseEntry));
+  const a = commit(tree(baseEntry, [x, Buffer.from([0xff])]), m);
+  const b = commit(tree(baseEntry, [x, Buffer.from([0xfe])]), a);
+  run(["update-ref", "refs/heads/main", m]);
+  const ev = await computeBaseMergeCarry({ prevHead: a, headSha: b, baseRef: "main", repoRoot: dir });
+  assert.equal(ev.decision, "full_regate", ev.reason);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("git: more than one merge base (criss-cross) falls back to full", async () => {
+  const s = setup();
+  const runGit = async (args, o) => (args[0] === "merge-base" && args.includes("--all") ? { code: 0, stdout: Buffer.from(`${A}\n${B}\n`), stderr: "" } : runPinnedGit(args, o));
+  const prev = s.head();
+  s.put("src/y.mjs", "y\n"); s.git("add", "-A"); s.git("commit", "-qm", "more");
+  const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir, runGit });
+  assert.equal(ev.decision, "fallback_full");
+  assert.match(ev.reason, /merge base/);
 });

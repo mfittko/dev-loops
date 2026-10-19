@@ -39,19 +39,18 @@ const isFactList = (v) => Array.isArray(v) && v.length > 0 && isPathList(v);
  * @param {string} input.newHead     new head B
  * @param {string[]} input.prBlobsBefore sorted `path\tmode\toid` of the PR's own tree entries at A (merge-base A..A)
  * @param {string[]} input.prBlobsAfter  the same at B (merge-base B..B)
- * @param {string[]} input.prDiffPaths  paths in the PR's own diff (at A or B)
  * @param {string[]} input.baseDeltaPaths paths the base delta (merge-base A..B) touched
  * @param {boolean} [input.conflictResolutionHunks] true when the merge resolved conflicts
  * @param {string} [input.detectionError] set when computing any input failed
  */
 export function classifyBaseMergeCarry(input = {}) {
-  const { sourceHead, newHead, prBlobsBefore, prBlobsAfter, prDiffPaths, baseDeltaPaths, conflictResolutionHunks = false, detectionError } = input;
+  const { sourceHead, newHead, prBlobsBefore, prBlobsAfter, baseDeltaPaths, conflictResolutionHunks = false, detectionError } = input;
   const evidence = {
     sourceHead: sourceHead ?? null,
     newHead: newHead ?? null,
     prBlobsBefore: prBlobsBefore ?? null,
     prBlobsAfter: prBlobsAfter ?? null,
-    prDiffPaths: prDiffPaths ?? null,
+    prDiffPaths: null,
     baseDeltaPaths: baseDeltaPaths ?? null,
     conflictResolutionHunks: conflictResolutionHunks ?? null,
     pathIntersection: [],
@@ -66,10 +65,12 @@ export function classifyBaseMergeCarry(input = {}) {
     return done("fallback_full", "sourceHead/newHead must be distinct full SHAs");
   }
   if (!isFactList(prBlobsBefore) || !isFactList(prBlobsAfter)) return done("fallback_full", "blob facts missing or malformed");
-  if (!isFactList(prDiffPaths) || !isPathList(baseDeltaPaths) || typeof conflictResolutionHunks !== "boolean") {
+  if (!isPathList(baseDeltaPaths) || typeof conflictResolutionHunks !== "boolean") {
     return done("fallback_full", "malformed path lists");
   }
-  const prPaths = new Set(prDiffPaths);
+  // Derived from the blob facts, never trusted as an input: the PR paths at either head.
+  evidence.prDiffPaths = [...new Set([...prBlobsBefore, ...prBlobsAfter].map((e) => e.split("\t").slice(0, -2).join("\t")))].sort();
+  const prPaths = new Set(evidence.prDiffPaths);
   evidence.pathIntersection = [...new Set(baseDeltaPaths.filter((p) => prPaths.has(p)))].sort();
   evidence.gateToolingPaths = [...new Set(baseDeltaPaths.filter(isGateToolingPath))].sort();
 
@@ -100,7 +101,7 @@ export function validateBaseMergeCarryEvidence(evidence, { expectedSourceHead, e
   if (evidence.decision === "fallback_full") return { ok: true, reason: "" }; // never carries
   const re = classifyBaseMergeCarry(evidence);
   if (re.decision !== evidence.decision) return { ok: false, reason: `decision recomputes to ${re.decision}` };
-  for (const k of ["pathIntersection", "gateToolingPaths", "reason"]) {
+  for (const k of ["prDiffPaths", "pathIntersection", "gateToolingPaths", "reason"]) {
     if (JSON.stringify(re[k]) !== JSON.stringify(evidence[k])) return { ok: false, reason: `${k} does not match recomputed value` };
   }
   return { ok: true, reason: "" };
