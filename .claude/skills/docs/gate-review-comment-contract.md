@@ -338,7 +338,7 @@ with the fixed meaning below:
 
 | Verdict | Meaning |
 |---|---|
-| `clean` | No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain, and the judge act list is empty |
+| `clean` | No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain, and the judge act list is empty, except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) |
 | `findings_present` | The gate found issues at blocking severities, or the judge act list is not empty; fixes are required before the gate boundary can be crossed |
 | `blocked` | The gate could not complete or a hard blocker prevented a verdict |
 
@@ -357,7 +357,7 @@ Enforcement at write time and post time:
   items (ADR 0089) for the same head and gate (#1616), so a non-empty act list yields
   `findings_present`. It derives the verdict by default (passing no `--verdict` is valid),
   accepts a matching explicit value, and refuses a contradiction citing this rule. A ledger
-  without `overallVerdict` still refuses an explicit `clean` while its act list is not empty.
+  without `overallVerdict` still refuses an explicit `clean` while its act list is not empty, except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168).
 - The act list for a verdict post comes from judge-enriched data: the ledger written with
   `--judge-verdict`, or a judge-enriched `--findings-json` (its open act items also yield
   `findings_present` over a ledger). A durable log written before the judge pass carries no

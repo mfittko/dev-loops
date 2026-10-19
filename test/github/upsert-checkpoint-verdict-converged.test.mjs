@@ -66,13 +66,13 @@ function convergedInput(actList, overrides = {}) {
 }
 
 // Answers every gh call; the PR head is the fixer commit and the draft_gate review lives at A.
-function makeRunChild({ puts, existingReview = true, currentHead = FIX }) {
+function makeRunChild({ puts, existingReview = true, currentHead = FIX, body = EXISTING_BODY }) {
   const prJson = JSON.stringify({
     number: 17, state: "OPEN", isDraft: true, headRefOid: currentHead, body: DEFAULT_TEST_PR_BODY,
     closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
   }) + "\n";
   const reviews = existingReview
-    ? [{ id: 55, state: "COMMENTED", submitted_at: "2026-10-20T10:00:00Z", body: EXISTING_BODY, html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-55", user: { login: "gate-bot" }, commit_id: A }]
+    ? [{ id: 55, state: "COMMENTED", submitted_at: "2026-10-20T10:00:00Z", body, html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-55", user: { login: "gate-bot" }, commit_id: A }]
     : [];
   return async (cmd, args = [], _env, stdin = "") => {
     if (cmd === "git") return { code: 0, stdout: "", stderr: "" };
@@ -198,4 +198,45 @@ test("--converged-json is refused for any gate other than draft_gate and any ver
   assert.throws(() => parseUpsertCheckpointVerdictCliArgs([...base, "--gate", "pre_approval_gate", "--verdict", "clean"]), /--converged-json requires --gate draft_gate/);
   assert.throws(() => parseUpsertCheckpointVerdictCliArgs([...base, "--verdict", "clean"]), /--converged-json requires --gate draft_gate/);
   assert.throws(() => parseUpsertCheckpointVerdictCliArgs([...base, "--gate", "draft_gate", "--verdict", "findings_present"]), /--converged-json requires --gate draft_gate/);
+});
+
+test("a comment at A that is already clean or already converged is not converged again", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1)];
+    const clean = EXISTING_BODY.replace("findings_present", "clean");
+    assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { body: clean } })).error, /already clean or converged/);
+    const converged = `${clean}\n**Converged:** fixer \`${FIX}\` delta \`sha256:${"c".repeat(64)}\``;
+    assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { body: converged } })).error, /already clean or converged|none is the latest/);
+  }, { prefix: "dev-loops-converged-twice-" });
+});
+
+test("the act items come from the ledger at A: a caller cannot list a subset", async () => {
+  await withTempDir(async (tempDir) => {
+    const lows = [finding("low", 1)];
+    const findingsJson = path.join(tempDir, "findings.json");
+    await writeFile(findingsJson, JSON.stringify(lows), "utf8");
+    const { error, puts } = await post(tempDir, { findings: [finding("medium", 2), ...lows], converged: convergedInput(lows), extraArgs: ["--findings-json", findingsJson] });
+    assert.match(error, /needs a full round/);
+    assert.deepEqual(puts, []);
+  }, { prefix: "dev-loops-converged-subset-" });
+});
+
+test("two same-summary low items converge and a low item does not match a nit one", async () => {
+  await withTempDir(async (tempDir) => {
+    const twins = [finding("low", 1), finding("low", 1)];
+    const ok = await post(tempDir, { findings: twins, converged: convergedInput(twins) });
+    assert.equal(ok.error, undefined);
+    const low = [finding("low", 1)];
+    const asNit = [{ ...finding("low", 1), severity: "nit" }];
+    assert.match((await post(tempDir, { findings: low, converged: convergedInput(asNit) })).error, /same items as the posted act items/);
+  }, { prefix: "dev-loops-converged-keying-" });
+});
+
+test("a delta result carrying a new finding fails closed", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1)];
+    const input = convergedInput(findings);
+    input.deltaResult.newFindings = [{ severity: "low", summary: "unposted" }];
+    assert.match((await post(tempDir, { findings, converged: input })).error, /deltaResult/);
+  }, { prefix: "dev-loops-converged-newfinding-" });
 });

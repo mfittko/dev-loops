@@ -2522,8 +2522,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // --findings-json can carry the same finding.
   let convergedMarker = null;
   const guardedActItems = (findings) => {
-    const items = listOpenActItems(findings);
+    // A converged round takes its act items from A's ledger alone, so a caller cannot list a subset.
+    const items = listOpenActItems(convergedInput && preloadedFindingsLedger ? preloadedFindingsLedger.findings : findings);
     if (!convergedInput) return items;
+    if (!preloadedFindingsLedger) {
+      const postingGate = postTimeFanoutEnforcement?.gates?.find((gateResult) => gateResult.name === options.gate);
+      if (postingGate?.ledgerExists) throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs --findings-ledger: the ledger at ${postingGate.ledgerPath} defines the round's act items.`);
+    }
     const roundActItems = [...new Map(items.map((f) => [`${f.severity}|${typeof f.summary === "string" ? f.summary.trim() : f.summary}`, f])).values()];
     convergedMarker = composeConvergedDraftGate({ gate: options.gate, headSha: canonicalHeadSha, roundActItems, converged: convergedInput });
     return [];
@@ -3192,7 +3197,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (convergedInput && !existing) {
     throw new Error(`--converged-json updates the existing draft_gate comment at ${canonicalHeadSha}, but none is the latest draft_gate comment on ${options.repo}#${options.pr}; post a full round instead.`);
   }
-  const warning = isReviewGate ? null : detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
+  // One convergence per round at A: a comment already clean or already converged is never converged again.
+  if (convergedInput && (existing.verdict === "clean" || gateEvidence.strict?.converged || gateEvidence.marker?.converged || gateEvidence.marker?.convergedFromHeadSha)) {
+    throw new Error(`--converged-json: the draft_gate comment at ${canonicalHeadSha} is already clean or converged; one convergence per round, post a full round instead.`);
+  }
+  const warning =isReviewGate ? null : detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
   // DURABLE-LEDGER FAIL-CLOSED REFUSAL: a requireFanoutEvidence fanout_fanin
   // verdict cannot be recorded until write-gate-findings-log.mjs's canonical
   // durable ledger (tmp/gate-findings/<slug>/pr-<n>/<gate>-<head>.json) for the

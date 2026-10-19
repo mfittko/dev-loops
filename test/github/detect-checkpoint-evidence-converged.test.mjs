@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { EVIDENCE_STATE } from "../../scripts/github/detect-checkpoint-evidence.mjs";
-import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { execFileSync } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
+import { buildFanoutEnforcement, EVIDENCE_STATE } from "../../scripts/github/detect-checkpoint-evidence.mjs";
+import { initGitFixture, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
 // GATE-EXEC-LOW-NIT-CONVERGENCE: the server-side gate-evidence check (--skip-fanout-ledger-check) must pass a
 // converged PR from GitHub-visible state alone. The temp dir holds no ledger, context, plan or config, so every
@@ -87,4 +89,32 @@ test("without a converged marker the draft_gate at A is not the draft_gate marke
 test("a converged marker naming another fixer commit is not the draft_gate marker of the fixed head", async () => {
   const { payload } = await run([draftAtA(`fixer ${"e".repeat(40)} delta ${DIGEST}`), preApprovalAtFix()]);
   assert.equal(payload.draftGateMarker.visible, false);
+});
+
+// The light-mode scope re-derivation runs against the converged marker's own head B (the fixer commit), not the ledger head A.
+test("a fixer commit that touches a risk path cannot ride a converged inline marker", async () => {
+  const repo = await mkdtemp(path.join(os.tmpdir(), "dev-loops-converged-scope-"));
+  try {
+    initGitFixture(repo, { branch: "main" });
+    const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    git("checkout", "-q", "-b", "pr");
+    await mkdir(path.join(repo, "docs"), { recursive: true });
+    await writeFile(path.join(repo, "docs", "a.md"), "a\n", "utf8");
+    git("add", "."); git("commit", "-q", "-m", "A");
+    const headA = git("rev-parse", "HEAD");
+    await mkdir(path.join(repo, "scripts", "loop"), { recursive: true });
+    await writeFile(path.join(repo, "scripts", "loop", "check-size-budget.mjs"), "export {};\n", "utf8");
+    git("add", "."); git("commit", "-q", "-m", "B");
+    const headB = git("rev-parse", "HEAD");
+    const config = { gates: { requireFanoutEvidence: true, draft: { required: true }, preApproval: { required: false } }, localImplementation: { lightMode: { enabled: true } } };
+    const gateFor = async (scopeHead) => (await buildFanoutEnforcement({
+      repo: "owner/repo", pr: "17", currentHeadSha: headB, config, cwd: repo, baseRef: "main",
+      draftGateMarker: { visible: true, headSha: scopeHead, ...(scopeHead === headB ? { convergedFromHeadSha: headA } : {}), executionMode: "inline_single_agent" },
+      preApprovalGateMarker: { visible: false },
+    })).gates.find((g) => g.name === "draft_gate");
+    assert.equal((await gateFor(headB)).scopeUnderThreshold, false);
+    assert.equal((await gateFor(headA)).scopeUnderThreshold, true);
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
 });

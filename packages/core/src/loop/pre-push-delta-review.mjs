@@ -384,8 +384,9 @@ export function composeConvergedDraftGate({ gate, headSha, roundActItems, conver
   const fixerCommit = converged?.fixerCommit;
   if (!FULL_SHA_RE.test(fixerCommit ?? "") || fixerCommit === headSha) throw new Error("converged.fixerCommit must be a full sha different from the reviewed head");
   if (!isLowNitActList(roundActItems)) throw new Error("converged verdict requires a non-empty round act list of only low or nit items; a medium, high, question, unknown or mixed list needs a full round");
-  const summaries = (items) => items.map((item) => String(item?.summary).trim()).sort().join("\n");
-  if (!isLowNitActList(converged.actList) || summaries(converged.actList) !== summaries(/** @type {any[]} */ (roundActItems))) {
+  // Same keying as the caller's dedupe: the set of severity|summary keys, so a low item never matches a nit one.
+  const keys = (items) => [...new Set(items.map((item) => `${normalizeSeverity(item?.severity)}|${String(item?.summary).trim()}`))].sort().join("\n");
+  if (!isLowNitActList(converged.actList) || keys(converged.actList) !== keys(/** @type {any[]} */ (roundActItems))) {
     throw new Error("converged.actList must be the round's non-empty low/nit act list (same items as the posted act items)");
   }
   const result = converged.deltaResult;
@@ -393,6 +394,9 @@ export function composeConvergedDraftGate({ gate, headSha, roundActItems, conver
   if (errors.length > 0) throw new Error(`converged.deltaResult is invalid: ${errors.join("; ")}`);
   if (result.outcome !== "locally_clear") throw new Error("converged.deltaResult must be locally_clear");
   if (!isDeltaResultFresh(result, fixerCommit)) throw new Error("converged.deltaResult is stale: candidateHead is not the fixer commit");
+  // membershipOnly is enough: the act-set id and baseline A bind the result to this round, and pre_approval_gate reviews the final head in full.
+  // A converged round has no unposted new finding.
+  if (!Array.isArray(result.newFindings) || result.newFindings.length > 0) throw new Error("converged.deltaResult must carry no new findings");
   return { fixerCommit, deltaDigest: sha256Hex(result) };
 }
 
