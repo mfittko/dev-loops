@@ -20,12 +20,18 @@ test("Codex runtime setup has one owner and reaches generic roles before scoped 
     /staging, staged secret scan and commit as three separate tool invocations/,
     /failed stage permits no scan or commit/,
     /scanner hit or error stops/,
+    /Resolve the scanner from the verified selected source\/install toolchain/,
+    /for fixers, the emitting root/,
+    /verify `scripts\/security\/scan-staged-diff\.mjs` there/,
+    /`node <absolute-verified-scanner-path>` with the authorized mutation worktree as explicit cwd/,
+    /WORKTREE-SCRIPT-LAUNCHER-CWD.*worktree-guidance\.md#agent-shell-commands/,
     /ordinary command-input error or executed failing test is not automatically a permission\/classifier denial/i,
     /no subsequent read, verification or alternate-command attempt/,
     /actual collaboration parent\/child task identities.*CODEX_THREAD_ID/,
     /no native Claude role or Claude hook grant/,
     /never broadens.*branch, paths or phase/,
   ]) assert.match(setup, required);
+  assert.doesNotMatch(setup, /`node scripts\/security\/scan-staged-diff\.mjs`/, "consumer cwd must not select the scanner");
   const registry = JSON.parse(await readRepo("skills/docs/required-rules.json"));
   assert.ok(registry.requiredRules.some(({ id, enforcement }) => id === "OPS-CODEX-RUNTIME-SETUP" && enforcement === "doc"));
   for (const role of ["developer", "refiner", "dev-loop", "fixer"]) {
