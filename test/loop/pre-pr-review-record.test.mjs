@@ -65,6 +65,17 @@ test("a same-named tag never satisfies the record check; a record for the branch
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("with no head argument, a same-named tag at another commit still resolves the branch head", async () => {
+  const dir = fixtureRepo();
+  try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    git(dir, "update-ref", "refs/tags/feature", "HEAD");
+    commit(dir, "src/a.mjs", "export const a = 3;\n");
+    record(dir);
+    assert.equal((await validatePrePrReview({ cwd: dir })).ok, true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a record for an older head passes when later commits touch docs and tests only, and fails after a logic change", async () => {
   const dir = fixtureRepo();
   try {

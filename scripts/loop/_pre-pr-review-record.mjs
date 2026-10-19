@@ -61,7 +61,7 @@ export async function validatePrePrReview({ cwd = process.cwd(), head: wanted, b
   const missing = (detail) => ({ ok: false, code: PRE_PR_REVIEW_MISSING, detail: `${detail} (PRE-PR-BEFORE-FIRST-PUSH). Record the review with: ${RECORD_COMMAND}` });
   const resolve = (ref) => { try { return git(cwd, ["rev-parse", "--verify", `${ref}^{commit}`]); } catch { return null; } };
   let branch = wanted;
-  if (!branch) { try { branch = git(cwd, ["symbolic-ref", "--short", "HEAD"]); } catch { /* detached HEAD: compare HEAD only */ } }
+  if (!branch) { try { branch = git(cwd, ["symbolic-ref", "HEAD"]).replace(/^refs\/heads\//u, ""); } catch { /* detached HEAD: compare HEAD only */ } }
   const heads = (branch ? [resolve(`refs/heads/${branch}`), resolve(`refs/remotes/origin/${branch}`)] : [resolve("HEAD")]).filter(Boolean);
   if (!heads.length) return missing(`cannot resolve the branch head ${branch ?? "HEAD"} from git; run git fetch origin and retry`);
   if (new Set(heads).size > 1) return missing(`local ${branch} and origin/${branch} name different commits, so the PR content is not the reviewed local head`);
