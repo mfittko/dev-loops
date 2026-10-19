@@ -866,14 +866,18 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
         if (order.role !== "fixer" || order.phase !== "full" || order.target?.repo !== repo || order.target?.pr !== pr || !order.headSha) {
           throw new Error("active fixer plan is not a full-phase fixer work order for this PR");
         }
-        let applicable = order.headSha === currentHeadSha;
+        // GATE-EXEC-BASE-MERGE-VERDICT-CARRY, active fixer plan at a carried head: at a carry_verdict head from origin head O
+        // (carriedSourceHead), a plan bound to O is checked at O, so a plan complete at O raises no unverified_active_fixer and
+        // one incomplete at O still warns. A plan bound to any other head, or any head without a carry, is checked at the real head.
+        const checkHead = carriedSourceHead && order.headSha === carriedSourceHead ? carriedSourceHead : currentHeadSha;
+        let applicable = order.headSha === checkHead;
         if (!applicable) {
           const relation = await isCommitContainedByHead({ repo, commitSha: order.headSha, headSha: currentHeadSha }, runtime);
           if (relation.retryable) throw new Error(`cannot determine active fixer head containment: ${relation.reason}`);
           applicable = relation.contained;
         }
         if (applicable) {
-          const checked = await verifyFixerDisposition({ repo, pr, headSha: currentHeadSha, fixerPlan: planPath, check: true }, { ...runtime, repoRoot });
+          const checked = await verifyFixerDisposition({ repo, pr, headSha: checkHead, fixerPlan: planPath, check: true }, { ...runtime, repoRoot });
           if (!checked.complete) {
             const unchanged = (await readFile(planPath)).equals(planBytes);
             return { complete: false, incomplete: checked.incomplete,

@@ -4048,6 +4048,63 @@ for (const [name, handoffHead] of [["an abbreviated", "abc9988"], ["an upper-cas
   });
 }
 
+// GATE-EXEC-BASE-MERGE-VERDICT-CARRY: an active full-phase fixer plan bound to head O is checked at O on a carry_verdict head.
+async function runCarriedPlanFixture({ planHead, carried = true, outputThreads = false }) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fixer-plan-carry-"));
+  const REPO = "owner/repo";
+  const PR = 2819;
+  const SRC = "a".repeat(40);
+  const CUR = "b".repeat(40);
+  try {
+    initGitFixture(tempDir);
+    const fixerDir = path.join(tempDir, "tmp", "gate-fixer", "owner-repo", `pr-${PR}`);
+    await mkdir(path.join(fixerDir, "f1-0000abcd"), { recursive: true });
+    const output = path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json");
+    const source = path.join(fixerDir, "source.json");
+    const bytes = JSON.stringify({ threads: outputThreads ? [{ threadId: "PRRT_T1" }] : [] });
+    await writeFile(source, bytes);
+    const head = planHead ?? SRC;
+    const workOrder = { role: "fixer", phase: "full", target: { repo: REPO, pr: PR }, headSha: head, outputRefs: [output], requiredReads: [{ kind: "threads", path: source, sha256: createHash("sha256").update(bytes).digest("hex") }] };
+    workOrder.authority = { sourceDigest: sha256Hex(JSON.parse(bytes)).slice(7) };
+    const planPath = path.join(fixerDir, "fixer-emit-plan.json");
+    const plan = { workOrder, workOrderDigest: workOrderDigest(workOrder), workOrderRef: `fixer:${REPO}#${PR}:${head}:f1-0000abcd`, executionIdentity: "f1-0000abcd" };
+    await writeFile(planPath, JSON.stringify(plan));
+    const receipt = pullReceiptPath(path.join(tempDir, "tmp"), plan.workOrderRef);
+    await mkdir(path.dirname(receipt), { recursive: true });
+    await writeFile(receipt, JSON.stringify({ ...plan, role: "fixer", pulledAt: new Date().toISOString(), subject: { planPath } }));
+    await writeFile(output, JSON.stringify({ headSha: SRC, dispositions: [] }));
+    const checkpoint = path.join(tempDir, "tmp", "gate-findings", "owner-repo", `pr-${PR}`, `fixer-disposition-${SRC}.json`);
+    await mkdir(path.dirname(checkpoint), { recursive: true });
+    await writeFile(checkpoint, JSON.stringify({ headSha: SRC, dispositions: [] }));
+    const runChild = async (cmd, args) => {
+      const joined = args.join(" ");
+      if (joined.startsWith("pr view") && joined.includes("headRefOid")) return { code: 0, stdout: JSON.stringify({ headRefOid: SRC }), stderr: "" };
+      if (joined.includes("graphql")) return { code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "fix", author: { login: "r", __typename: "User" } }] } }], pageInfo: { hasNextPage: false } } } } } }), stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    return await resolveFixerDispositionInput(
+      { repo: REPO, pr: PR, currentHeadSha: CUR, parsedThreads: { threads: [], comments: [] }, carriedSourceHead: carried ? SRC : null },
+      { repoRoot: tempDir, cwd: tempDir, ghCommand: "gh", runChild, env: runIdFreeEnv({ GH_TOKEN: "t", DEVLOOPS_RUN_ID: "" }) });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("a carried head with a plan bound to the origin head, complete at the origin head, raises no unverified_active_fixer", async () => {
+  const result = await runCarriedPlanFixture({});
+  assert.ok(!result?.warning, JSON.stringify(result));
+});
+
+test("a carried head with a plan bound to the origin head, incomplete at the origin head, still warns", async () => {
+  const result = await runCarriedPlanFixture({ outputThreads: true });
+  assert.ok(result.warning, "an incomplete plan at the origin head warns");
+});
+
+test("a non-carried head checks the plan at the real head as before", async () => {
+  const result = await runCarriedPlanFixture({ carried: false });
+  assert.ok(result.warning, "without a carry the plan head is checked at the real head");
+});
+
 test("resolveFixerDispositionInput reads the disposition at carriedSourceHead across a base-only merge (#2752, PR 2819 shape)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fixer-disposition-carry-"));
   const REPO = "owner/repo";
@@ -4144,6 +4201,8 @@ test("coordination after a non-base commit re-dispatches a gate run", async () =
   const { result } = await runCarryFixture({ nonBaseCommit: true });
   assert.equal(result.ok, true);
   assert.notEqual(result.preApprovalGate.currentHeadClean, true, "a non-base commit invalidates the carry");
+  // The fixture has no Copilot review yet, so the next action is the Copilot request that precedes the gate run; the carry must not route to merge.
+  assert.ok([...GATE_RUN_ACTIONS, PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW].includes(result.nextAction), `a non-base commit must not skip the review path: ${result.nextAction}`);
 });
 
 test("coordination with failing CI at the new head does not treat the carried verdict as merge-ready", async () => {
