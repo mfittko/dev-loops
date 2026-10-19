@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
@@ -75,6 +75,16 @@ async function run(io, argv) {
 
 function io() {
   return { stdout: buffer(), stderr: buffer() };
+}
+
+async function expectPathRefusal(root, bad) {
+  const bodyFile = await writeBody(root, MATRIX);
+  const output = io();
+  const result = await run(output, ["--body-file", bodyFile, "--repo-root", root, "--paths", bad]);
+  assert.equal(result.code, 1, `${bad} must exit 1`);
+  assert.equal(result.stdout, "", `${bad} must print no brief`);
+  assert.equal(JSON.parse(result.stderr.trim()).ok, false);
+  assert.match(JSON.parse(result.stderr.trim()).error, /repo-relative path/u);
 }
 
 test("the brief carries the body's AC/DoD matrix rows and non-goals unchanged", async () => {
@@ -198,22 +208,56 @@ test("declared paths are resolved, de-duplicated and reported when missing", asy
     repoRoot: root,
     paths: ["scripts/loop/known.mjs", "scripts/loop/missing.mjs", "scripts/loop/known.mjs"],
   });
-  assert.deepEqual(brief.touchedPaths, ["scripts/loop/known.mjs"]);
+  // A declared path is a touched path even before it exists; unresolvedPaths is
+  // the additional not-found marker.
+  assert.deepEqual(brief.touchedPaths, ["scripts/loop/known.mjs", "scripts/loop/missing.mjs"]);
   assert.deepEqual(brief.unresolvedPaths, ["scripts/loop/missing.mjs"]);
 });
 
-test("an absolute or parent-relative --paths entry exits 1 and prints no brief", async () => {
+test("a declared but missing tripwire path still reaches adrTripwirePaths", async () => {
   const root = await fixtureRepo();
+  const brief = await buildImplementationBrief({
+    body: MATRIX,
+    repoRoot: root,
+    paths: ["skills/docs/new-thing-contract.md"],
+  });
+  assert.deepEqual(brief.touchedPaths, ["skills/docs/new-thing-contract.md"]);
+  assert.deepEqual(brief.unresolvedPaths, ["skills/docs/new-thing-contract.md"]);
+  assert.deepEqual(brief.adrTripwirePaths, ["skills/docs/new-thing-contract.md"]);
+});
+
+test("a repo-relative --paths entry stays accepted", async () => {
+  const root = await fixtureRepo({ files: { "src/a.mjs": "export const a = 1;\n" } });
   const bodyFile = await writeBody(root, MATRIX);
-  for (const bad of ["/etc/hosts", "../outside.mjs", "scripts/../../outside.mjs"]) {
-    const output = io();
-    const result = await run(output, ["--body-file", bodyFile, "--repo-root", root, "--paths", bad]);
-    assert.equal(result.code, 1, `${bad} must exit 1`);
-    assert.equal(result.stdout, "", `${bad} must print no brief`);
-    const error = JSON.parse(result.stderr.trim());
-    assert.equal(error.ok, false);
-    assert.match(error.error, /repo-relative path/u);
-  }
+  const output = io();
+  const result = await run(output, ["--body-file", bodyFile, "--repo-root", root, "--paths", "src/a.mjs"]);
+  assert.equal(result.code, 0);
+  assert.deepEqual(JSON.parse(result.stdout).touchedPaths, ["src/a.mjs"]);
+});
+
+test("a ./-prefixed --paths entry stays accepted", async () => {
+  const root = await fixtureRepo({ files: { "src/a.mjs": "export const a = 1;\n" } });
+  const bodyFile = await writeBody(root, MATRIX);
+  const output = io();
+  const result = await run(output, ["--body-file", bodyFile, "--repo-root", root, "--paths", "./src/a.mjs"]);
+  assert.equal(result.code, 0);
+  assert.deepEqual(JSON.parse(result.stdout).touchedPaths, ["src/a.mjs"]);
+});
+
+test("a POSIX-absolute --paths entry exits 1", async () => {
+  await expectPathRefusal(await fixtureRepo(), "/etc/passwd");
+});
+
+test("a Windows drive-letter --paths entry exits 1", async () => {
+  await expectPathRefusal(await fixtureRepo(), "C:\\tmp\\x");
+});
+
+test("a UNC --paths entry exits 1 instead of becoming repo-relative", async () => {
+  await expectPathRefusal(await fixtureRepo(), "\\\\server\\share\\x");
+});
+
+test("a parent-relative --paths entry exits 1", async () => {
+  await expectPathRefusal(await fixtureRepo(), "src/../etc/passwd");
 });
 
 test("--help documents the flags, the output shape and the exit codes", async () => {
@@ -240,6 +284,10 @@ test("an unregistered rule ID is absent and a missing registry is a finding, not
   });
   const cited = await buildImplementationBrief({ body: "Cites KNOWN-RULE-ID and MISSING-RULE-ID.", repoRoot: root });
   assert.deepEqual(cited.rules, [{ id: "KNOWN-RULE-ID", doc: "skills/docs/owner.md" }]);
+  // `loop spec-lint` reads the body through the same fence-stripping helper, so
+  // an ID that only appears inside a fenced example is not a citation.
+  const fencedBody = `${MATRIX}\n\`\`\`\nExample mentions KNOWN-RULE-ID.\n\`\`\`\n`;
+  assert.deepEqual((await buildImplementationBrief({ body: fencedBody, repoRoot: root })).rules, []);
 
   const absent = await fixtureRepo({ rules: null });
   const brief = await buildImplementationBrief({ body: "Cites KNOWN-RULE-ID.", repoRoot: absent });
@@ -250,6 +298,103 @@ test("an unregistered rule ID is absent and a missing registry is a finding, not
   const otherAbsent = await fixtureRepo({ rules: null });
   const second = await buildImplementationBrief({ body: "Cites KNOWN-RULE-ID.", repoRoot: otherAbsent });
   assert.equal(JSON.stringify(second), JSON.stringify(brief));
+});
+
+test("a rule marker in a declared touched doc is reported with its owning doc", async () => {
+  const root = await fixtureRepo({
+    files: { "skills/docs/touched-rules.md": "<!-- rule: KNOWN-RULE-ID -->\n`KNOWN-RULE-ID`: Touched doc.\n" },
+  });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["skills/docs/touched-rules.md"] });
+  assert.deepEqual(brief.rules, [{ id: "KNOWN-RULE-ID", doc: "skills/docs/touched-rules.md" }]);
+});
+
+test("a registered rule cited in a declared touched source file is reported", async () => {
+  const root = await fixtureRepo({
+    files: { "scripts/loop/consumer.mjs": "// Implements KNOWN-RULE-ID.\nexport const consumer = 1;\n" },
+  });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["scripts/loop/consumer.mjs"] });
+  assert.deepEqual(brief.rules, [{ id: "KNOWN-RULE-ID", doc: null }]);
+});
+
+test("an unregistered rule ID in a declared touched file stays absent", async () => {
+  const root = await fixtureRepo({
+    files: { "scripts/loop/consumer.mjs": "// Implements MISSING-RULE-ID.\nexport const consumer = 1;\n" },
+  });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["scripts/loop/consumer.mjs"] });
+  assert.deepEqual(brief.rules, []);
+});
+
+test("a fenced rule mention in a declared touched markdown file is not a citation", async () => {
+  const root = await fixtureRepo({
+    files: { "skills/docs/notes.md": "# Notes\n\n```\nExample mentions KNOWN-RULE-ID.\n```\n" },
+  });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["skills/docs/notes.md"] });
+  assert.deepEqual(brief.rules, []);
+});
+
+test("accepted-ADR attribution accepts a touched file named as a path token", async () => {
+  const root = await fixtureRepo({
+    decisions: { "0010-names-a-file.md": record({ title: "0010. Names a file", body: "Applies to src/a.mjs." }) },
+    files: { "src/a.mjs": "export const a = 1;\n" },
+  });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
+  assert.deepEqual(brief.adrs.map(({ number }) => number), ["0010"]);
+});
+
+test("accepted-ADR attribution accepts a declared directory named with its trailing slash", async () => {
+  const root = await fixtureRepo({
+    decisions: { "0010-names-a-directory.md": record({ title: "0010. Names a directory", body: "Covers scripts/ only." }) },
+    files: { "scripts/loop/thing.mjs": "export const thing = 1;\n" },
+  });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["scripts/"] });
+  assert.deepEqual(brief.adrs.map(({ number }) => number), ["0010"]);
+});
+
+test("accepted-ADR attribution rejects a record that only names a longer path", async () => {
+  const root = await fixtureRepo({
+    decisions: { "0010-longer-path.md": record({ title: "0010. Longer path", body: "Applies to src/a.mjs.bak only." }) },
+    files: { "src/a.mjs": "export const a = 1;\n" },
+  });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
+  assert.deepEqual(brief.adrs.map(({ number }) => number), []);
+});
+
+test("accepted-ADR attribution rejects a directory record that only names a sibling path", async () => {
+  const root = await fixtureRepo({
+    decisions: { "0010-other-dir.md": record({ title: "0010. Other dir", body: "Covers scriptsOther/ only." }) },
+    files: { "scripts/loop/thing.mjs": "export const thing = 1;\n" },
+  });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["scripts/"] });
+  assert.deepEqual(brief.adrs.map(({ number }) => number), []);
+});
+
+test("a sentence-final path citation keeps the path and drops the period", async () => {
+  const root = await fixtureRepo({ files: { "src/a.mjs": "export const a = 1;\n" } });
+  const brief = await buildImplementationBrief({ body: `${MATRIX}\nUpdate src/a.mjs. Done.\n`, repoRoot: root });
+  assert.deepEqual(brief.touchedPaths, ["src/a.mjs"]);
+  assert.deepEqual(brief.unresolvedPaths, []);
+});
+
+test("a root-level existing citation is claimed", async () => {
+  const root = await fixtureRepo({ files: { "AGENTS.md": "# Agents\n" } });
+  const brief = await buildImplementationBrief({ body: `${MATRIX}\nUpdate AGENTS.md next.\n`, repoRoot: root });
+  assert.deepEqual(brief.touchedPaths, ["AGENTS.md"]);
+});
+
+test("a URL's path segment is not claimed", async () => {
+  const root = await fixtureRepo({ files: { "a/b.mjs": "export const b = 1;\n" } });
+  const brief = await buildImplementationBrief({
+    body: `${MATRIX}\nSee https://example.com/a/b.mjs for details.\n`,
+    repoRoot: root,
+  });
+  assert.deepEqual(brief.touchedPaths, []);
+});
+
+test("a non-existent path citation is not claimed", async () => {
+  const root = await fixtureRepo({ files: { "src/present.mjs": "export const present = 1;\n" } });
+  const brief = await buildImplementationBrief({ body: `${MATRIX}\nUpdate src/missing.mjs next.\n`, repoRoot: root });
+  assert.deepEqual(brief.touchedPaths, []);
+  assert.deepEqual(brief.unresolvedPaths, []);
 });
 
 test("a declared path whose real target leaves the repository is refused", async () => {
@@ -326,10 +471,38 @@ test("cli/index.mjs registers and describes the implementation-brief verb", asyn
   assert.match(described.stdout, /implementation-brief\s+Print the canonical review expectations/u);
 });
 
+const GATE_JUDGE_REVIEW_MODULE_RE = /(?:gate|emit|dispatch|verify|judge|review)/iu;
+// The developer agent is the brief's ONE intended consumer (its own test below);
+// every other agent definition must stay a non-consumer.
+const BRIEF_CONSUMER_AGENTS = new Set(["developer.agent.md"]);
+
+async function collectSurface(dir, accept) {
+  const entries = await readdir(dir, { withFileTypes: true }).catch((error) => {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  });
+  return entries
+    .filter((entry) => entry.isFile() && accept(entry.name))
+    .map((entry) => path.join(dir, entry.name))
+    .sort();
+}
+
 test("no gate, judge or reviewer surface consumes the brief", async () => {
+  // Scan the whole gate/judge/reviewer surface instead of a hand-picked list, so
+  // a brief import wired into any OTHER gate, emit, verify or judge module fails
+  // this suite too.
+  const surfaces = [
+    ...(await collectSurface(path.join(repoRoot, "scripts", "github"), (name) => name.endsWith(".mjs") && GATE_JUDGE_REVIEW_MODULE_RE.test(name))),
+    ...(await collectSurface(path.join(repoRoot, "scripts", "loop"), (name) => /^judge.*\.mjs$/u.test(name))),
+    ...(await collectSurface(path.join(repoRoot, "agents"), (name) => name.endsWith(".agent.md") && !BRIEF_CONSUMER_AGENTS.has(name))),
+  ];
+  assert.ok(surfaces.length > 0, "the scan must find the gate/judge/reviewer surface");
   for (const relPath of ["scripts/github/write-gate-context.mjs", "scripts/loop/judge-pass.mjs", "agents/review.agent.md"]) {
-    const content = await readFile(path.join(repoRoot, relPath), "utf8");
-    assert.ok(!content.includes("implementation-brief"), `${relPath} must not consume the brief`);
+    assert.ok(surfaces.includes(path.join(repoRoot, relPath)), `the scan must cover ${relPath}`);
+  }
+  for (const file of surfaces) {
+    const content = await readFile(file, "utf8");
+    assert.ok(!content.includes("implementation-brief"), `${path.relative(repoRoot, file)} must not consume the brief`);
   }
 });
 

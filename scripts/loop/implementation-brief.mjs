@@ -29,7 +29,7 @@ import {
   extractRuleDefinitions,
 } from "../docs/validate-rule-ownership.mjs";
 import { CONTRACT_DOC_RE, DEVLOOPS_CONFIG_PATHS, GATE_CONFIG_PATH } from "./check-adr-tripwire.mjs";
-import { citedAdrNumbers, indexDecisionRecords, loadKnownRuleIds } from "./spec-lint.mjs";
+import { citedAdrNumbers, indexDecisionRecords, loadKnownRuleIds, stripFencedCode } from "./spec-lint.mjs";
 
 const USAGE = `Usage: dev-loops loop implementation-brief --body-file <path> [--paths <p,...>] [--repo-root <path>]
 
@@ -48,25 +48,37 @@ Output (stdout, JSON):
     "requiredReads": ["skills/docs/structural-quality.md", "changes/README.md"],
     "findings": [{ "kind", "reason" }] }
 
-Every list is sorted and de-duplicated. "matrix" is null and "findings" carries
-missing_ac_dod_matrix when the body holds no usable AC/DoD matrix; the exit code
-stays 0 because a missing matrix is a spec finding, not a tool failure.
+"touchedPaths", "unresolvedPaths", "adrTripwirePaths", the rule IDs and the ADRs
+are sorted and de-duplicated; "nonGoals" keeps body order (duplicates included),
+"findings" keeps emission order, and "requiredReads" is the fixed pair above.
+"matrix" is null and "findings" carries missing_ac_dod_matrix when the body holds
+no usable AC/DoD matrix; the exit code stays 0 because a missing matrix is a spec
+finding, not a tool failure.
 "adrTripwirePaths" are the touched paths the ADR tripwire would treat as
 decision-shaped.
 
 ${JQ_OUTPUT_USAGE}
 
 Exit codes: 0 brief produced (with or without findings); 1 usage error, a missing
---body-file, or a --paths entry that is absolute or holds a ".." segment;
-2 malformed skills/docs/required-rules.json, an unreadable body file, or another
-runtime error.`;
+--body-file, a --paths entry that is absolute (POSIX, drive-letter or UNC) or
+holds a ".." segment, a --repo-root that is not an existing directory, or a
+--paths entry whose real target resolves outside --repo-root; 2 malformed
+skills/docs/required-rules.json, an unreadable body file, or another runtime
+error.`;
 
 const REQUIRED_READS = Object.freeze(["skills/docs/structural-quality.md", "changes/README.md"]);
 const ADR_NEED_UNSTATED = "unstated";
-// Repo-relative path citation: at least one directory segment, no URL scheme, no
-// whitespace. Segments are validated again before a token is used as a path.
-const PATH_CANDIDATE_RE = /(?<![\w./-])((?:\.\/)?(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+)(?![\w/-])/gu;
+// Repo-relative path citation: a multi-segment path, or a root-level single
+// segment that carries a dot (`AGENTS.md`, `package.json`, `.devloops`). A token
+// never ends on a dot, so a sentence-final citation keeps its path and drops the
+// period, and the trailing lookahead keeps a URL's path segment out. Segments
+// are validated again before a token is used as a path.
+const PATH_CANDIDATE_RE = new RegExp(
+  `(?<![\\w./-])((?:\\.\\/)?(?:[A-Za-z0-9._-]+\\/)+[A-Za-z0-9._-]*[A-Za-z0-9_-]|(?:\\.\\/)?[A-Za-z0-9._-]*\\.[A-Za-z0-9._-]*[A-Za-z0-9_-])(?![\\w/-])`,
+  "gu",
+);
 const PATH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/u;
+const MARKDOWN_FILE_RE = /\.(?:md|mdx)$/iu;
 const NON_GOALS_HEADING_RE = /^non-?\s?goals?$/iu;
 const BULLET_RE = /^\s*[-*+]\s+(.*\S)\s*$/u;
 const RECORD_TITLE_RE = /^#\s+(?:\d{4,}\.\s*)?(.*\S)\s*$/mu;
@@ -86,12 +98,22 @@ function sortedUnique(values) {
  * than an unresolved path.
  */
 function normalizeDeclaredPath(raw) {
-  const value = String(raw).trim();
-  if (value === "") return null;
-  const segments = value.replace(/\\/gu, "/").split("/");
-  if (value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value) || segments.includes("..")) {
+  const shown = String(raw).trim();
+  const value = shown.replace(/\\/gu, "/");
+  if (shown === "") return null;
+  // Absolute forms are rejected AFTER backslash normalization: a UNC path
+  // (\\server\share\x -> //server/share/x) would otherwise be rewritten into a
+  // silent repo-relative path instead of the documented usage error.
+  if (value.startsWith("/") || /^[A-Za-z]:\//u.test(value)) {
     throw Object.assign(
-      new Error(`--paths entry must be a repo-relative path without ".." segments: ${value}`),
+      new Error(`--paths entry must be a repo-relative path without ".." segments: ${shown}`),
+      { exitCode: 1 },
+    );
+  }
+  const segments = value.split("/");
+  if (segments.includes("..")) {
+    throw Object.assign(
+      new Error(`--paths entry must be a repo-relative path without ".." segments: ${shown}`),
       { exitCode: 1 },
     );
   }
@@ -160,6 +182,20 @@ function nonGoalsFromBody(body) {
 const matchesAdrTripwire = (relPath) =>
   CONTRACT_DOC_RE.test(relPath) || relPath === GATE_CONFIG_PATH || DEVLOOPS_CONFIG_PATH_SET.has(relPath);
 
+const PATH_TOKEN_ESCAPE_RE = /[.*+?^${}()|[\]\\]/gu;
+
+/**
+ * Whether a record's text NAMES a touched path as a path token. An unbounded
+ * `text.includes(relPath)` also claims a record that merely mentions a longer
+ * path (`src/a.mjs.bak` for a touched `src/a.mjs`), so both edges are bounded,
+ * and a directory only counts when the text spells it with its trailing slash.
+ */
+function namesTouchedPath(text, relPath, kind) {
+  const token = kind === "directory" ? `${relPath}/` : relPath;
+  const escaped = token.replace(PATH_TOKEN_ESCAPE_RE, "\\$&");
+  return new RegExp(`(?<![\\w/.-])${escaped}(?![\\w/-])(?!\\.[\\w/-])`, "u").test(text);
+}
+
 /**
  * Build the brief for one spec body. All inputs are files: `paths` is the
  * declared touch set (`--paths`), `repoRoot` is the only checkout reference, so
@@ -203,7 +239,11 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
     const found = await pathKind(root, rootReal, candidate);
     if (found?.inside) resolved.set(candidate, found.kind);
   }
-  const touchedPaths = sortedUnique([...resolved.keys()]);
+  // A declared path is a touched path whether or not it exists yet: the spec's
+  // touch set is `--paths` plus existing body citations, so a planned new file
+  // must still reach the rule/ADR/tripwire projection. `unresolvedPaths` stays
+  // the additional not-found marker.
+  const touchedPaths = sortedUnique([...declared, ...resolved.keys()]);
 
   // A missing matrix is a spec finding, not a tool failure: the exit code stays 0.
   const detection = detectAcDodMatrix(body);
@@ -217,7 +257,10 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
   if (registry.skipped) findings.push({ kind: "missing_rule_registry", reason: "no skills/docs/required-rules.json under --repo-root" });
   const citedRuleIds = new Set();
   if (!registry.skipped) {
-    for (const [token] of body.matchAll(RULE_ID_SHAPE_RE)) {
+    // The brief and `loop spec-lint` must agree on what counts as a citation:
+    // both read prose through the SAME fence-stripping helper, so an ID that
+    // only appears inside a fenced example is not reported as cited.
+    for (const [token] of stripFencedCode(body).matchAll(RULE_ID_SHAPE_RE)) {
       if (registry.ids.has(token)) citedRuleIds.add(token);
     }
     for (const [relPath, kind] of resolved) {
@@ -227,7 +270,8 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
       for (const definition of extractRuleDefinitions(content, relPath)) {
         if (registry.ids.has(definition.id)) citedRuleIds.add(definition.id);
       }
-      for (const [token] of content.matchAll(RULE_ID_SHAPE_RE)) {
+      const prose = MARKDOWN_FILE_RE.test(relPath) ? stripFencedCode(content) : content;
+      for (const [token] of prose.matchAll(RULE_ID_SHAPE_RE)) {
         if (registry.ids.has(token)) citedRuleIds.add(token);
       }
     }
@@ -245,7 +289,7 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
       if (record.state !== "accepted") continue;
       const text = await readTextOrNull(path.join(root, "docs", "decisions", record.file));
       if (text == null) continue;
-      if (touchedPaths.some((relPath) => text.includes(relPath))) adrNumbers.add(record.id);
+      if (touchedPaths.some((relPath) => namesTouchedPath(text, relPath, resolved.get(relPath) ?? null))) adrNumbers.add(record.id);
     }
   }
   const titles = new Map();

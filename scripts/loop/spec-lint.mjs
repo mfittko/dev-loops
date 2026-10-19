@@ -59,7 +59,7 @@ function isMissing(error) {
   return error?.code === "ENOENT" || error?.code === "ENOTDIR";
 }
 
-function stripFencedCode(body) {
+export function stripFencedCode(body) {
   // A fence closes only on a bare run of its own character at least as long as the opener.
   let fence = null;
   return body.split(/\r?\n/).filter((line) => {
