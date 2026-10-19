@@ -752,15 +752,27 @@ test("top-level allPassed matches the artifact, and --jq is validated before any
     assert.equal(result.allPassed, true);
     assert.equal(result.allPassed, result.artifact.allPassed);
     const ok = await runNode(CLI, ["gate", "resolve-validation", ...args(headSha), "--jq", ".allPassed"], { cwd: repoRoot });
-    assert.equal(ok.stdout.trim(), "true");
+    assert.equal(ok.stdout.trim(), "true", ok.stderr);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
-  const marked = await fixture({ verify: "bun scripts/marker.mjs" });
+  // The default `verify` suite stays classifiable; its script writes a marker file.
+  const markedFixture = async () => {
+    const f = await fixture();
+    const marker = path.join(f.repoRoot, "tmp", "marker.txt");
+    await writeFile(path.join(f.repoRoot, "scripts", "verify.mjs"), `import { mkdirSync, writeFileSync } from "node:fs"; mkdirSync(${JSON.stringify(path.dirname(marker))}, { recursive: true }); writeFileSync(${JSON.stringify(marker)}, "ran");`);
+    execFileSync("git", ["add", "scripts"], { cwd: f.repoRoot });
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "marker"], { cwd: f.repoRoot });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.repoRoot, encoding: "utf8" }).trim();
+    return { ...f, head, marker };
+  };
+  const control = await markedFixture();
   try {
-    const marker = path.join(marked.repoRoot, "marker.txt");
-    await writeFile(path.join(marked.repoRoot, "scripts", "marker.mjs"), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "ran");`);
-    execFileSync("git", ["add", "scripts"], { cwd: marked.repoRoot });
-    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "marker"], { cwd: marked.repoRoot });
-    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: marked.repoRoot, encoding: "utf8" }).trim();
+    const ok = await runNode(CLI, ["gate", "resolve-validation", ...args(control.head), "--jq", ".allPassed"], { cwd: control.repoRoot });
+    assert.equal(ok.stdout.trim(), "true", ok.stderr);
+    assert.equal(await readFile(control.marker, "utf8"), "ran");
+  } finally { await rm(control.repoRoot, { recursive: true, force: true }); }
+  const marked = await markedFixture();
+  try {
+    const { marker, head } = marked;
     const staleArtifact = path.join(marked.repoRoot, buildValidationResultsPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: head, tmpRoot: "tmp" }));
     await mkdir(path.dirname(staleArtifact), { recursive: true });
     await writeFile(staleArtifact, JSON.stringify({ allPassed: true }));
