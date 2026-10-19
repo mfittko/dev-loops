@@ -145,7 +145,7 @@ head. On a ready PR, the `pre_approval_gate` re-runs on the new head per
 
 <!-- rule: GATE-EXEC-BASE-MERGE-VERDICT-CARRY -->
 `GATE-EXEC-BASE-MERGE-VERDICT-CARRY`: A head advance that only integrated the base branch keeps
-the verdict posted at the previous head when `scripts/github/classify-base-merge-carry.mjs`
+the verdict posted at the origin head (the head of the latest clean verdict) when `scripts/github/classify-base-merge-carry.mjs`
 records `carry_verdict`, and `merge-pr` and gate coordination accept the evidence only from the
 carried-heads artifact (the origin head plus each carried head with its classification, written
 by gate coordination). A carried verdict is current only while CI is green at the new head. A
@@ -164,7 +164,7 @@ is validated by `validateBaseMergeCarryEvidence`, which recomputes the decision 
 derived field and can bind the record to the expected heads; a malformed or internally
 inconsistent record is a full re-gate. The validator never re-derives blob facts or paths from
 git, so a consumer re-runs `computeBaseMergeCarry` for the bound heads and compares before
-trusting the recorded facts. ADR 0156 records this rule.
+trusting the recorded facts. Active fixer plan at a carried head: at a head whose classification is `carry_verdict` from origin head O, the active-fixer-plan check evaluates the plan at O. A plan bound to O that is verified complete at O counts as complete at the carried head and raises no `unverified_active_fixer`. A plan bound to O that is incomplete at O still warns at the carried head (the advisory boundary is unchanged). A plan bound to any other head, or any head that is not `carry_verdict`, is checked exactly as before at the real head. ADR 0156 records this rule.
 
 ### Phase 1 — Preamble: context-builder
 

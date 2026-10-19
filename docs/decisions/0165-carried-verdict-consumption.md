@@ -19,6 +19,7 @@ Gate evidence consumes a carried verdict under these rules:
 - Fan-out ledger evidence stays keyed at the origin head. The carry does not rewrite ledger entries.
 - A fixer disposition recorded at the source head is read as a fallback only when the current-head disposition log is absent.
 - CI green at the current head stays a merge precondition.
+- Active fixer plan at a carried head: at a head whose classification is `carry_verdict` from origin head O, the active-fixer-plan check evaluates the plan at O. A plan bound to O that is verified complete at O counts as complete at the carried head and raises no `unverified_active_fixer`. A plan bound to O that is incomplete at O still warns at the carried head (the advisory boundary is unchanged). A plan bound to any other head, or any head that is not `carry_verdict`, is checked exactly as before at the real head.
 
 Rejected: letting `merge-pr` record the carry itself. The merge step would then both create and accept its own evidence, so a carry that the coordination path never validated could pass the merge gate.
 
