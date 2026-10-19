@@ -3,6 +3,13 @@ import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
 const setupPath = "skills/docs/copilot-loop-operations.md";
 const setupLink = "../skills/docs/copilot-loop-operations.md#codex-runtime-setup";
 
+test("Codex coordinator learns verified role and runtime setup after the unchanged pull pointer", async () => {
+  const main = await readRepo("skills/docs/main-agent-contract.md");
+  const coordinator = main.slice(main.indexOf("## Codex coordinator dispatch"), main.indexOf("## Codex active joins"));
+  for (const text of [/codexBootstrap/, /task_name/, /fork_turns/, /unchanged/, /shasum/, /sha256/, /requiredReads/, /actual.*cwd/, /stop/, /no cwd/]) assert.match(coordinator, text);
+  assert.match(await readRepo("agents/dev-loop.agent.md"), /codexBootstrap/);
+});
+
 test("Codex runtime setup has one owner and reaches generic roles before scoped work", async () => {
   const operations = await readRepo(setupPath);
   const setup = operations.slice(operations.indexOf("## Codex runtime setup"));

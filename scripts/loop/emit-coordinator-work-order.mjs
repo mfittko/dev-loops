@@ -4,27 +4,32 @@
  * startup resolver output through build-handoff-envelope.mjs and prints the coordinator
  * work order and its digest. It accepts no brief, summary file, overrides or payload JSON. Compact dispatch applies to RESUMED queue and direct entries only; --input is the startup-output path the coordinator reported in its hand-back.
  */
-import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
 import { buildCoordinatorWorkOrder } from "@dev-loops/core/loop/coordinator-work-order";
+import { workOrderDigest as digestWorkOrder } from "@dev-loops/core/loop/work-order-digest";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, executionIndexPath, materializationHash, registerWorkOrderRole, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
-import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { buildHandoffEnvelopeCli } from "./build-handoff-envelope.mjs";
 
-const USAGE = `Usage: emit-coordinator-work-order.mjs --input <startup-output path> [--repo <owner/name>] [--allowed-file <path>]... [--harness <claude|pi> --entry <queue|direct> [--tmp-root <path>]]
+const USAGE = `Usage: emit-coordinator-work-order.mjs --input <startup-output path> [--repo <owner/name>] [--allowed-file <path>]... [--harness <claude|pi|codex> --entry <queue|direct> [--tmp-root <path>]]
 Derives the coordinator work order from the resolved handoff envelope. The allowed-file list
 always includes changes/<issue>-*.md (the PR number for a unit without an issue).
 With --harness and --entry it also materializes the order under <tmp-root>/coordinator-work-orders/
 (default: the main checkout's tmp/) and prints {ok,workOrderRef,workOrderDigest,executionIdentity,
 dispatchPrompt,dispatchPayload,planPath}. Dispatch dispatchPayload unchanged. A changed order has a new
 digest and ref; a resume re-emits the same ref under a fresh execution identity. Any other harness refuses.
+Codex emits {task_name,message,fork_turns:"none"}; after the exact pull, verify/read codexBootstrap
+contracts from the emitting toolchain before scoped work. Native dispatch has no cwd argument.
 ${JQ_OUTPUT_USAGE}
 Stdout: {ok:true,workOrder,workOrderDigest} on success, {ok:false,refusal?,error} on failure (refusal is unsupported_adapter or invalid_entry for a refused emit) (nothing under --silent).
 A failure ignores --fields and --jq.
@@ -33,6 +38,7 @@ Exit codes: 0 emitted, 1 refused or runtime failure, 2 invalid --jq/--fields usa
 // ref = coordinator:<owner/repo>#<issueOrPr>:<entry>:<12 hex of the digest>; executionIdentity = c<emit ms>-<8 hex>.
 const COORDINATOR_REF_RE = /^coordinator:([^/\s#]+\/[^/\s#]+)#(\d+):(queue|direct):([0-9a-f]{12})$/;
 const ENTRIES = ["queue", "direct"];
+const TOOLCHAIN_ROOT = realpathSync(fileURLToPath(new URL("../../", import.meta.url)));
 
 const unitDir = (tmpRoot, repo, n, entry, hex) => path.join(tmpRoot, "coordinator-work-orders", repoSlugFor(repo), String(n), `${entry}-${hex}`);
 
@@ -61,11 +67,47 @@ export function claudeDevLoopAgentType(cwd = process.cwd(), env = process.env) {
 const DISPATCH_ADAPTERS = {
   claude: (prompt, cwd) => ({ subagent_type: claudeDevLoopAgentType(cwd), description: "coordinator work order", prompt }),
   pi: (prompt) => ({ agent: "dev-loop", task: prompt }),
+  codex: (message, _cwd, executionIdentity) => {
+    if (typeof executionIdentity !== "string" || !/^c\d+-[0-9a-f]{8}$/.test(executionIdentity) || /\s/.test(executionIdentity)) {
+      throw new WorkOrderRefusal("invalid_execution_identity", "Codex coordinator execution identity must match c<digits>-<8 lowercase hex>");
+    }
+    return { task_name: `coordinator_${executionIdentity.replaceAll("-", "_")}`, message, fork_turns: "none" };
+  },
 };
 
-export function buildCoordinatorDispatchPayload({ harness, dispatchPrompt, cwd }) {
+function dispatchAdapter(harness) {
   if (!Object.hasOwn(DISPATCH_ADAPTERS, harness)) throw new WorkOrderRefusal("unsupported_adapter", `harness ${JSON.stringify(harness)} has no coordinator dispatch adapter; supported: ${Object.keys(DISPATCH_ADAPTERS).join(", ")}`);
-  return DISPATCH_ADAPTERS[harness](dispatchPrompt, cwd);
+  return DISPATCH_ADAPTERS[harness];
+}
+
+export function buildCoordinatorDispatchPayload({ harness, dispatchPrompt, cwd, executionIdentity }) {
+  return dispatchAdapter(harness)(dispatchPrompt, cwd, executionIdentity);
+}
+
+// Emitter-owned data keeps the renderer compatible with a native child's inherited checkout.
+function codexBootstrap(cwd) {
+  const contracts = ["agents/dev-loop.agent.md", "skills/docs/copilot-loop-operations.md", "skills/docs/main-agent-contract.md"].map((relativePath) => {
+    const absolutePath = path.join(TOOLCHAIN_ROOT, relativePath);
+    if (realpathSync(absolutePath) !== absolutePath || !statSync(absolutePath).isFile()) throw new Error(`Codex bootstrap contract is not a regular emitting-toolchain file: ${absolutePath}`);
+    const bytes = readFileSync(absolutePath);
+    if (!bytes.length) throw new Error(`Codex bootstrap contract is empty: ${absolutePath}`);
+    return { path: relativePath, absolutePath, digest: createHash("sha256").update(bytes).digest("hex"), required: true };
+  });
+  const processCwd = realpathSync(cwd);
+  const git = (...args) => execFileSync("git", ["-C", processCwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: gitEnvNoDirOverrides() }).trim();
+  const repositoryRoot = realpathSync(git("rev-parse", "--show-toplevel"));
+  return {
+    version: 1, toolchainRoot: TOOLCHAIN_ROOT, contracts,
+    instructions: [
+      "Qualify shasum with command -v shasum before verification; stop if unavailable.",
+      "Verify every required contract's fixed relative/absolute path and authoritative digest (exact lowercase SHA-256 hash) with shasum -a 256; stop on missing, unreadable, malformed or mismatched metadata/bytes. digest is semantic authority; never substitute an excluded sha256 field.",
+      "Then fully read all contracts in order (dev-loop role, Codex runtime setup, main-agent baseline) before scoped artifact writes, Git writes or targeted verification; this grants no Claude hooks or new authority.",
+      "Resolve handoff.requiredReads in order relative to toolchainRoot and fully read them; these reads have no individual byte-hash claim.",
+      "Check actual cwd and branch with git rev-parse --show-toplevel and git branch --show-current. cwd below records emission facts only; native dispatch has no cwd argument. Verify handoff.cwd and branch authority before continuation, use its valid isolated root as explicit cwd, and stop on invalid/conflicting/uncertain facts; never acquire a worktree from these facts.",
+      "Preserve handoff.nextAction, stopRules, allowedFiles, outputRefs and authority; record actual parent/child identities and CODEX_THREAD_ID or absence per Codex runtime setup. Report a precise blocker and stop when setup cannot be verified.",
+    ],
+    cwd: { processCwd, repositoryRoot, branch: git("branch", "--show-current") },
+  };
 }
 
 /** Materialize one coordinator order under `tmpRoot` and index a fresh execution identity for it. */
@@ -153,11 +195,14 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       return fail("--input is required", USAGE);
     }
     if (Boolean(values.harness) !== Boolean(values.entry)) return fail("--harness and --entry go together", USAGE);
-    if (values.harness) buildCoordinatorDispatchPayload({ harness: values.harness, dispatchPrompt: "", cwd }); // refuse an unknown harness before emitting
+    if (values.harness) dispatchAdapter(values.harness); // refuse before input consumption or materialization
+    if (values.entry && !ENTRIES.includes(values.entry)) throw new WorkOrderRefusal("invalid_entry", `--entry must be one of ${ENTRIES.join(", ")}, got ${values.entry}`);
     const envelope = await buildHandoffEnvelopeCli({ inputPath: values.input, repo: values.repo });
-    const { workOrder, workOrderDigest } = buildCoordinatorWorkOrder({
+    const built = buildCoordinatorWorkOrder({
       envelope, allowedFiles: values["allowed-file"] ?? [],
     });
+    const workOrder = values.harness === "codex" ? { ...built.workOrder, codexBootstrap: codexBootstrap(cwd) } : built.workOrder;
+    const workOrderDigest = values.harness === "codex" ? digestWorkOrder(workOrder) : built.workOrderDigest;
     const out = { ok: true, workOrder, workOrderDigest };
     if (values.harness) {
       let tmpRoot = resolveGateArtifactTmpRoot(cwd);
@@ -170,7 +215,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       }
       const unit = await materializeCoordinatorWorkOrder({ workOrder, workOrderDigest, entry: values.entry, tmpRoot });
       const { workOrderRef, executionIdentity, dispatchPrompt, planPath } = unit;
-      return emitResult({ ok: true, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload: buildCoordinatorDispatchPayload({ harness: values.harness, dispatchPrompt, cwd }), planPath },
+      return emitResult({ ok: true, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload: buildCoordinatorDispatchPayload({ harness: values.harness, dispatchPrompt, cwd, executionIdentity }), planPath },
         { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr });
     }
     return emitResult(out, { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr });
