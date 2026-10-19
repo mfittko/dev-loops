@@ -50,6 +50,21 @@ test("a record for the current head passes", async () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a same-named tag never satisfies the record check; a record for the branch head does", async () => {
+  const dir = fixtureRepo();
+  try {
+    git(dir, "checkout", "-q", "-b", "feature");
+    record(dir);
+    git(dir, "update-ref", "refs/tags/feature", "HEAD");
+    commit(dir, "src/a.mjs", "export const a = 3;\n");
+    const result = await validatePrePrReview({ cwd: dir, head: "feature" });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "pre_pr_review_missing");
+    record(dir);
+    assert.equal((await validatePrePrReview({ cwd: dir, head: "feature" })).ok, true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a record for an older head passes when later commits touch docs and tests only, and fails after a logic change", async () => {
   const dir = fixtureRepo();
   try {

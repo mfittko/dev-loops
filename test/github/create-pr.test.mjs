@@ -1494,7 +1494,7 @@ test("create-pr preflight diffs the branch, not a same-named tag (LOCAL-COMMENT-
     runGitFixture(tempDir, ["update-ref", "refs/tags/feature", "origin/main"]);
     runGitFixture(tempDir, ["checkout", "-q", "main"]);
     runGitFixture(tempDir, ["reset", "-q", "--hard", "origin/main"]);
-    writeFeatureRecord(tempDir, "refs/tags/feature");
+    writeFeatureRecord(tempDir, "refs/heads/feature");
     const { env, ghLogPath } = await writeGhStub(tempDir, []);
     const result = await runNode([
       "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
@@ -1508,7 +1508,7 @@ test("create-pr preflight diffs the branch, not a same-named tag (LOCAL-COMMENT-
   }
 });
 
-test("create-pr refuses head_unresolvable when --head only matches a tag", async () => {
+test("create-pr refuses a tag-only --head with pre_pr_review_missing even when the tag commit has a record", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-comment-discipline-tagonly-"));
   try {
     await initSizeBudgetFixtureRepo(tempDir, { headFiles: [{ path: "notes.txt", content: "x\n" }] });
@@ -1520,7 +1520,26 @@ test("create-pr refuses head_unresolvable when --head only matches a tag", async
       "--title", "T", "--body", "no closing keyword", "--lightweight",
     ], { env, cwd: tempDir, noRecord: true });
     assert.equal(result.code, 1);
-    assert.equal(JSON.parse(result.stderr).code, "head_unresolvable");
+    assert.equal(JSON.parse(result.stderr).code, "pre_pr_review_missing");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr refuses head_unresolvable when --head only matches a tag (defensive fallback, validator stubbed)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-head-unresolvable-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, { headFiles: [{ path: "notes.txt", content: "x\n" }] });
+    runGitFixture(tempDir, ["update-ref", "refs/tags/feature", "HEAD"]);
+    const { env, ghLogPath } = await writeGhStub(tempDir, []);
+    await assert.rejects(
+      createPrMain([
+        "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
+        "--title", "T", "--body", "no closing keyword", "--lightweight",
+      ], { cwd: tempDir, env, validatePrePrReview: async () => ({ ok: true }) }),
+      (err) => err.code === "head_unresolvable",
+    );
     assert.deepEqual(await readGhCalls(ghLogPath), []);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
