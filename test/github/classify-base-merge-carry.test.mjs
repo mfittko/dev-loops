@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { classifyBaseMergeCarry, validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-verdict-carry";
-import { buildBaseMergeCarryPath, computeBaseMergeCarry, main } from "../../scripts/github/classify-base-merge-carry.mjs";
+import { buildBaseMergeCarryPath, computeBaseMergeCarry, main, runPinnedGit } from "../../scripts/github/classify-base-merge-carry.mjs";
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
@@ -84,32 +84,58 @@ test("git: base move touching a PR path is partial", async () => {
   assert.equal(ev.decision, "partial_carry", ev.reason);
 });
 
-test("git: ambient GIT_DIFF_OPTS does not change the decision or patch ids", async () => {
+test("git: hostile ambient env and repo-local config never change the decision or patch ids", async () => {
   const s = setup();
-  s.put("base.txt", `PR\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits top of base.txt");
-  const prev = s.head();
-  s.git("checkout", "-q", "main"); s.put("base.txt", `${LINES.slice(0, -7)}MAIN\n`); s.git("add", "-A"); s.git("commit", "-qm", "main edits bottom");
-  s.git("checkout", "-q", "pr"); s.git("merge", "-q", "--no-edit", "main");
-  const args = { prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir };
-  const clean = await computeBaseMergeCarry(args);
-  const saved = process.env.GIT_DIFF_OPTS;
-  process.env.GIT_DIFF_OPTS = "-u0";
-  try { assert.deepEqual(await computeBaseMergeCarry(args), clean); } finally { if (saved === undefined) delete process.env.GIT_DIFF_OPTS; else process.env.GIT_DIFF_OPTS = saved; }
-});
-
-test("git: ambient GIT_ATTR_SOURCE with a -diff attribute does not change the decision or patch ids", async () => {
-  const s = setup();
-  s.put("base.txt", `PR\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits top of base.txt");
+  s.put("dä/blank.txt", "a\n\nb\n\nc\n"); s.git("add", "-A"); s.git("commit", "-qm", "blank file");
+  s.put("base.txt", `PR\n${LINES.slice(6)}`); s.put("dä/blank.txt", "a\n\nB\n\nc\n"); s.git("add", "-A"); s.git("commit", "-qm", "pr edits");
   const prev = s.head();
   s.git("checkout", "-q", "main"); s.put("base.txt", `${LINES.slice(0, -7)}MAIN\n`); s.git("add", "-A"); s.git("commit", "-qm", "main edits bottom");
   s.git("checkout", "-q", "pr"); s.git("merge", "-q", "--no-edit", "main");
   s.git("checkout", "-qb", "attrs"); s.put(".gitattributes", "* -diff\n"); s.git("add", "-A"); s.git("commit", "-qm", "attrs");
   s.git("checkout", "-q", "pr");
+  const cfg = path.join(s.dir, "..", `${path.basename(s.dir)}.gitconfig`);
+  writeFileSync(cfg, "[core]\n\tabbrev = 7\n[diff]\n\tsuppressBlankEmpty = true\n\talgorithm = histogram\n\tinterHunkContext = 10\n[color]\n\tui = always\n");
+  const elsewhere = mkdtempSync(path.join(os.tmpdir(), "bmc-else-"));
   const args = { prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir };
   const clean = await computeBaseMergeCarry(args);
-  const saved = process.env.GIT_ATTR_SOURCE;
-  process.env.GIT_ATTR_SOURCE = "attrs";
-  try { assert.deepEqual(await computeBaseMergeCarry(args), clean); } finally { if (saved === undefined) delete process.env.GIT_ATTR_SOURCE; else process.env.GIT_ATTR_SOURCE = saved; }
+  assert.ok(clean.patchIdAfter);
+  const envRows = [
+    { GIT_DIFF_OPTS: "--unified=0" }, { GIT_EXTERNAL_DIFF: "false" }, { GIT_ATTR_SOURCE: "attrs" },
+    { GIT_CONFIG_PARAMETERS: "'diff.noprefix=true'" }, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "diff.noprefix", GIT_CONFIG_VALUE_0: "true" },
+    { GIT_CONFIG_GLOBAL: cfg }, { HOME: path.dirname(cfg), XDG_CONFIG_HOME: path.dirname(cfg) },
+    { GIT_DIR: path.join(elsewhere, ".git"), GIT_WORK_TREE: elsewhere }, { LANG: "de_DE.ISO-8859-1", LC_ALL: "tr_TR.UTF-8" },
+  ];
+  const localRows = [["diff.noprefix", "true"], ["diff.mnemonicPrefix", "true"], ["core.quotePath", "true"], ["diff.suppressBlankEmpty", "true"]];
+  const run = async (env) => {
+    const saved = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, env);
+    try { return await computeBaseMergeCarry(args); } finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+  };
+  for (const env of envRows) assert.deepEqual(await run(env), clean, JSON.stringify(env));
+  for (const [k, v] of localRows) {
+    s.git("config", k, v);
+    try { assert.deepEqual(await run({}), clean, k); } finally { s.git("config", "--unset", k); }
+  }
+});
+
+test("git: Latin-1 content change is not masked by utf8 decoding", async () => {
+  const s = setup();
+  s.put("f.txt", Buffer.from("caf\xE9\n", "latin1")); s.git("add", "-A"); s.git("commit", "-qm", "latin1 e-acute");
+  const prev = s.head();
+  s.put("f.txt", Buffer.from("caf\xE8\n", "latin1")); s.git("add", "-A"); s.git("commit", "-qm", "latin1 e-grave");
+  const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
+  assert.notEqual(ev.patchIdBefore, ev.patchIdAfter);
+  assert.equal(ev.decision, "full_regate");
+});
+
+test("git: a failing patch-id step falls back to full", async () => {
+  const s = setup();
+  const runGit = async (args, o) => (args[0] === "patch-id" ? { code: 1, stdout: Buffer.alloc(0), stderr: "boom" } : runPinnedGit(args, o));
+  const prev = s.head();
+  s.put("src/y.mjs", "y\n"); s.git("add", "-A"); s.git("commit", "-qm", "more");
+  const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir, runGit });
+  assert.equal(ev.decision, "fallback_full");
+  assert.match(ev.reason, /patch-id/);
 });
 
 test("git: PR patch changed forces full re-gate", async () => {

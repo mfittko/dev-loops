@@ -13,10 +13,8 @@ import { parseArgs } from "node:util";
 import { classifyBaseMergeCarry } from "@dev-loops/core/loop/base-merge-verdict-carry";
 
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { runGitCommand } from "../lib/git-delta.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
-import { gitEnvWithoutDirOverrides } from "./write-gate-context.mjs";
 import { buildGateArtifactPath } from "./_gate-artifact-paths.mjs";
 
 const USAGE = `Usage: classify-base-merge-carry.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --prev-head <full sha> --head-sha <full sha> --base-ref <ref, e.g. origin/main> [--tmp-root <path>]
@@ -26,40 +24,40 @@ export function buildBaseMergeCarryPath({ repo, pr, gate, headSha, tmpRoot = "tm
   return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, dir: "base-merge-carry", suffix: ".base-merge-carry.json" });
 }
 
-// --verbatim keeps whitespace significant: an indentation-only change must change the id.
-// --verbatim implies the stable mode (git rejects it together with --stable); repoRoot and env pin the id against ambient cwd and GIT_DIR.
-// ISOLATED_ENV also strips the diff-shaping (GIT_DIFF_OPTS, GIT_EXTERNAL_DIFF, GIT_ATTR_SOURCE) and config-injecting (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT, GIT_CONFIG_KEY_n, GIT_CONFIG_VALUE_n) variables, which would override the pinned diff flags.
-const ISOLATED_ENV = () => {
-  const env = { ...gitEnvWithoutDirOverrides(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
-  for (const k of Object.keys(env)) if (/^GIT_(DIFF_OPTS|EXTERNAL_DIFF|ATTR_SOURCE|CONFIG_PARAMETERS|CONFIG_COUNT|CONFIG_KEY_\d+|CONFIG_VALUE_\d+)$/.test(k)) delete env[k];
-  return env;
-};
-
-function stablePatchId(diffText, repoRoot) {
-  const r = spawnSync("git", ["patch-id", "--verbatim"], { input: diffText, encoding: "utf8", cwd: repoRoot, env: ISOLATED_ENV() });
-  if (r.error || r.status !== 0) throw new Error(`git patch-id failed: ${r.error?.message ?? r.stderr}`);
-  return r.stdout.split(/\s+/)[0] || "";
+// Pinned raw-byte git runner: the child env is built ONLY from this allowlist, so no ambient GIT_*, HOME, XDG_* or LANG reaches git.
+// stdout stays a Buffer (diff bytes are never decoded); stderr is a string; optional `input` Buffer goes to stdin.
+export function runPinnedGit(args, { repoRoot, input } = {}) {
+  const env = { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_ATTR_NOSYSTEM: "1", LC_ALL: "C" };
+  const r = spawnSync("git", args, { cwd: repoRoot, env, input, maxBuffer: 1 << 30 });
+  if (r.error) throw r.error;
+  return Promise.resolve({ code: r.status, stdout: r.stdout, stderr: r.stderr.toString("utf8") });
 }
 
-async function git(runGit, repoRoot, args) {
-  const r = await runGit(args, { repoRoot, env: ISOLATED_ENV() });
+async function git(runGit, repoRoot, args, opts = {}) {
+  const r = await runGit(args, { repoRoot, ...opts });
   if (r.code !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr.trim()}`);
   return r.stdout;
 }
 
-const lines = (s) => s.split("\n").filter(Boolean);
-const nulLines = (s) => s.split("\0").filter(Boolean);
-// Pin the diff shape (context, algorithm, hunk joining, prefixes, blank-context rendering, full index line) and drop global/system config via ISOLATED_ENV; repo-local config is covered by the pinned -c knobs.
+const lines = (s) => s.toString("utf8").split("\n").filter(Boolean);
+const nulLines = (b) => b.toString("utf8").split("\0").filter(Boolean);
+// --verbatim keeps whitespace significant: an indentation-only change must change the id.
+async function patchId(runGit, repoRoot, diff) {
+  const id = (await git(runGit, repoRoot, ["patch-id", "--verbatim"], { input: diff })).toString("utf8").split(/\s+/)[0];
+  if (!id) throw new Error("git patch-id returned an empty id");
+  return id;
+}
+// Pin the diff shape (context, algorithm, hunk joining, prefixes, blank-context rendering, full index line); the pinned env drops global/system config and repo-local config is covered by the pinned -c knobs.
 const GIT_ISOLATION = ["-c", "color.ui=false", "-c", "core.pager=cat", "-c", "core.autocrlf=false", "-c", "core.quotePath=false", "-c", "diff.interHunkContext=0", "-c", "diff.orderFile=/dev/null", "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "-c", "diff.suppressBlankEmpty=false"];
 const DIFF_FLAGS = ["--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--src-prefix=a/", "--dst-prefix=b/", "--no-color", "--no-relative", "--no-renames", "-U3", "--diff-algorithm=myers", "--no-indent-heuristic", "--full-index"];
 
-export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRoot, runGit = runGitCommand, patchId = (d) => stablePatchId(d, repoRoot) }) {
+export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRoot, runGit = runPinnedGit }) {
   try {
     const anc = await runGit(["merge-base", "--is-ancestor", prevHead, headSha], { repoRoot });
     if (anc.code === 1) throw new Error("prev-head is not an ancestor of head-sha");
     if (anc.code !== 0) throw new Error(`git merge-base --is-ancestor failed: ${anc.stderr.trim()}`);
-    const mbA = (await git(runGit, repoRoot, ["merge-base", baseRef, prevHead])).trim();
-    const mbB = (await git(runGit, repoRoot, ["merge-base", baseRef, headSha])).trim();
+    const mbA = (await git(runGit, repoRoot, ["merge-base", baseRef, prevHead])).toString("utf8").trim();
+    const mbB = (await git(runGit, repoRoot, ["merge-base", baseRef, headSha])).toString("utf8").trim();
     const diffA = await git(runGit, repoRoot, [...GIT_ISOLATION, "diff", ...DIFF_FLAGS, mbA, prevHead]);
     const diffB = await git(runGit, repoRoot, [...GIT_ISOLATION, "diff", ...DIFF_FLAGS, mbB, headSha]);
     const prDiffPaths = nulLines(await git(runGit, repoRoot, [...GIT_ISOLATION, "diff", ...DIFF_FLAGS, "--name-only", "-z", mbB, headSha]));
@@ -68,10 +66,10 @@ export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRo
     // Check every merge commit on the PR branch line (--first-parent) in prevHead..headSha; merges that arrived from the base side are not the PR's own.
     let conflictResolutionHunks = false;
     for (const merge of lines(await git(runGit, repoRoot, ["rev-list", "--merges", "--first-parent", `${prevHead}..${headSha}`]))) {
-      if ((await git(runGit, repoRoot, ["diff-tree", "--cc", "--no-ext-diff", "--no-color", "--format=", merge])).trim() !== "") conflictResolutionHunks = true;
+      if ((await git(runGit, repoRoot, ["diff-tree", "--cc", "--no-ext-diff", "--no-color", "--format=", merge])).toString("utf8").trim() !== "") conflictResolutionHunks = true;
     }
     return classifyBaseMergeCarry({
-      sourceHead: prevHead, newHead: headSha, patchIdBefore: patchId(diffA), patchIdAfter: patchId(diffB),
+      sourceHead: prevHead, newHead: headSha, patchIdBefore: await patchId(runGit, repoRoot, diffA), patchIdAfter: await patchId(runGit, repoRoot, diffB),
       prDiffPaths, baseDeltaPaths, conflictResolutionHunks,
     });
   } catch (error) {
@@ -79,7 +77,7 @@ export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRo
   }
 }
 
-export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), runGit = runGitCommand } = {}) {
+export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), runGit = runPinnedGit } = {}) {
   try {
     const { values } = parseArgs({
       args: argv,
