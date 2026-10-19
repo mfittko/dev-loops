@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Coordinator work order adapter (issue 2483, slices 1-2). Derives the envelope from the
+ * Coordinator work order adapter. Derives the envelope from the
  * startup resolver output through build-handoff-envelope.mjs and prints the coordinator
- * work order and its digest. It accepts no brief, summary file, overrides or payload JSON. Compact dispatch applies to RESUMED queue and direct entries only; --input is the startup-output path the coordinator named in its hand-back.
+ * work order and its digest. It accepts no brief, summary file, overrides or payload JSON. Compact dispatch applies to RESUMED queue and direct entries only; --input is the startup-output path the coordinator reported in its hand-back.
  */
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -18,7 +18,7 @@ import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { buildHandoffEnvelopeCli } from "./build-handoff-envelope.mjs";
 
-const USAGE = `Usage: emit-coordinator-work-order.mjs --input <resolver-output.json> [--repo <owner/name>] [--allowed-file <path>]... [--harness <claude|pi> --entry <queue|direct> [--tmp-root <path>]]
+const USAGE = `Usage: emit-coordinator-work-order.mjs --input <startup-output path> [--repo <owner/name>] [--allowed-file <path>]... [--harness <claude|pi> --entry <queue|direct> [--tmp-root <path>]]
 Derives the coordinator work order from the resolved handoff envelope. The allowed-file list
 always includes changes/<issue>-*.md (the PR number for a unit without an issue).
 With --harness and --entry it also materializes the order under <tmp-root>/coordinator-work-orders/
