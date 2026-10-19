@@ -232,14 +232,33 @@ test("two same-summary low items converge and a low item does not match a nit on
   }, { prefix: "dev-loops-converged-keying-" });
 });
 
-test("same-summary low items at different files are distinct: an actList listing only one is refused", async () => {
+test("same-summary low items at different files must both be in the delta list", async () => {
   await withTempDir(async (tempDir) => {
     const a = { ...finding("low", 1), files: ["a.mjs"], line: 10 };
     const b = { ...finding("low", 1), files: ["b.mjs"], line: 20 };
-    const { error, puts } = await post(tempDir, { findings: [a, b], converged: convergedInput([a]) });
+    const refused = await post(tempDir, { findings: [a, b], converged: convergedInput([a]) });
+    assert.match(refused.error, /same items as the posted act items/);
+    assert.deepEqual(refused.puts, []);
+    assert.equal((await post(tempDir, { findings: [a, b], converged: convergedInput([a, b]) })).error, undefined);
+  }, { prefix: "dev-loops-converged-sites-" });
+});
+
+test("the ledger and --findings-json carrying the same low item, with and without files and line, converge", async () => {
+  await withTempDir(async (tempDir) => {
+    const withSite = { ...finding("low", 1), files: ["a.mjs"], line: 10 };
+    const findingsJson = path.join(tempDir, "findings.json");
+    await writeFile(findingsJson, JSON.stringify([finding("low", 1)]), "utf8");
+    const { error } = await post(tempDir, { findings: [withSite], converged: convergedInput([withSite]), extraArgs: ["--findings-json", findingsJson] });
+    assert.equal(error, undefined);
+  }, { prefix: "dev-loops-converged-union-" });
+});
+
+test("one extra unresolved copy of a same-summary item refuses convergence", async () => {
+  await withTempDir(async (tempDir) => {
+    const { error, puts } = await post(tempDir, { findings: [finding("low", 1), finding("low", 1)], converged: convergedInput([finding("low", 1)]) });
     assert.match(error, /same items as the posted act items/);
     assert.deepEqual(puts, []);
-  }, { prefix: "dev-loops-converged-sites-" });
+  }, { prefix: "dev-loops-converged-extra-" });
 });
 
 test("a delta result carrying a new finding fails closed", async () => {

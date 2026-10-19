@@ -2526,7 +2526,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
   }
   // The ONLY path that lets a clean verdict stand over open act items: a validated low/nit convergence
-  // (composeConvergedDraftGate throws on anything else). Items dedupe by severity|summary|files|line: the ledger and
+  // (composeConvergedDraftGate throws on anything else). Items compare by severity and trimmed summary as a multiset: the ledger and
   // --findings-json can carry the same finding.
   let convergedMarker = null;
   const guardedActItems = async (findings) => {
@@ -2537,7 +2537,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
     const items = listOpenActItems(convergedInput ? [...(preloadedFindingsLedger.findings ?? []), ...findings] : findings);
     if (!convergedInput) return items;
-    const roundActItems = [...new Map(items.map((f) => [convergedActItemKey(f), f])).values()];
+    // Multiset per key: the larger of the ledger's and the passed findings' counts (callers may re-pass ledger objects, dropped by identity).
+    const ledgerFindings = preloadedFindingsLedger.findings ?? [];
+    const group = (list) => list.reduce((m, f) => m.set(convergedActItemKey(f), [...(m.get(convergedActItemKey(f)) ?? []), f]), new Map());
+    const fromLedger = group(listOpenActItems(ledgerFindings));
+    const fromPassed = group(listOpenActItems(findings.filter((f) => !ledgerFindings.includes(f))));
+    const roundActItems = [...new Set([...fromLedger.keys(), ...fromPassed.keys()])]
+      .flatMap((k) => ((fromLedger.get(k)?.length ?? 0) >= (fromPassed.get(k)?.length ?? 0) ? fromLedger.get(k) : fromPassed.get(k)));
     convergedMarker = composeConvergedDraftGate({ gate: options.gate, headSha: canonicalHeadSha, roundActItems, converged: convergedInput });
     return [];
   };
