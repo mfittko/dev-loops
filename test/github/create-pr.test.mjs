@@ -1538,7 +1538,7 @@ test("create-pr refuses head_unresolvable when --head only matches a tag (defens
         "--repo", "owner/repo", "--assignee", "@me", "--base", "main", "--head", "feature",
         "--title", "T", "--body", "no closing keyword", "--lightweight",
       ], { cwd: tempDir, env, validatePrePrReview: async () => ({ ok: true }) }),
-      (err) => err.code === "head_unresolvable",
+      (err) => err.code === "head_unresolvable" && /git fetch origin/u.test(err.message),
     );
     assert.deepEqual(await readGhCalls(ghLogPath), []);
   } finally {
