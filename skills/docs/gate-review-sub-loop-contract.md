@@ -928,7 +928,7 @@ the target's number (a PR number is a valid deferral target; a PR target gets no
 link nor a follow-up draft, only its `fingerprint` and rationale (the one-line audit entry).
 Re-running `judge-pass` for the same round reads the target's existing comments first and does
 not append a fingerprint the target already lists. A thread whose finding the judge disposes
-`act` is never defer-closed; it stays open until the fixing commit's reply or a
+`act` is never defer-closed; it stays open until the fixer's reply with the fixing commit or a
 decline reason is posted and the thread is resolved (see `GATE-EXEC-THREAD-DISPOSITION`).
 
 <!-- rule: GATE-EXEC-JUDGE-AUTHORITY-SPLIT -->
