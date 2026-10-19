@@ -184,6 +184,79 @@ test("emitted and pulled THREAD full binds missing output without an execution d
   });
 });
 
+// An emitted and pulled THREAD full plan whose pushed head is the baseline head (issue 2787 C3, C4).
+async function threadConstructFixture(root) {
+  root = await realpath(root);
+  initGitFixture(root, { branch: "issue-1" });
+  const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+  const tmpRoot = path.join(root, "tmp"), threadsFile = path.join(tmpRoot, "threads.json");
+  const recordPath = path.join(tmpRoot, "gate-delta", `${head}.json`);
+  await mkdir(path.dirname(recordPath), { recursive: true });
+  await writeFile(threadsFile, JSON.stringify({ ok: true, repo: REPO, pr: PR, threads: [{ threadId: "PRRT_T1", isResolved: false }] }));
+  await writeFile(recordPath, JSON.stringify({ reviewBaselineHead: head, candidateHead: head, actSetId: "0".repeat(16),
+    invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "PRRT_T1", status: "resolved" }] }));
+  const plan = await emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", threadsFile, cwd: root,
+    fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
+  await pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: root, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
+  const options = { repo: REPO, pr: PR, headSha: head, fixerPlan: plan.planPath };
+  const live = liveHeadEntry(head);
+  return { plan, options, head, output: plan.workOrder.outputRefs[0], root, runtimeFor: (entries) => runtime([live, ...entries], root, { live: false }) };
+}
+
+test("THREAD full --construct builds the report from the threads, the clearing record and the pushed head, then normal and --check pass", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    const constructed = await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    assert.equal(constructed.constructed, true);
+    assert.deepEqual(JSON.parse(await readFile(f.output, "utf8")), { headSha: f.head, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: f.head, disposition: "tackled" }] });
+    for (const check of [false, true]) {
+      const mock = f.runtimeFor([threadsCallEntry([{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }]), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]);
+      assert.equal((await verifyFixerDisposition({ ...f.options, check }, mock.deps)).complete, true);
+    }
+  });
+});
+
+test("a hand-written fixer-disposition.json with valid content is refused and names --construct", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    await mkdir(path.dirname(f.output), { recursive: true });
+    await writeFile(f.output, JSON.stringify({ headSha: f.head, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: f.head, disposition: "tackled" }] }));
+    const mock = f.runtimeFor([]);
+    await assert.rejects(verifyFixerDisposition(f.options, mock.deps), /not written by this verifier's --construct/);
+    assert.equal(mock.calls.length, 0);
+  });
+});
+
+test("normal mode refuses while the head's checks are red and posts no reply", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+    const mock = f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]);
+    await assert.rejects(verifyFixerDisposition(f.options, mock.deps), /ci_failed.*lint/);
+    assert.equal(hasPost(mock.calls), false);
+    assert.deepEqual(await checkpointFiles(root), []);
+  });
+});
+
+for (const [label, ci, expected] of [
+  ["pending", { runs: [{ name: "build", status: "in_progress" }] }, /ci_pending.*pending/],
+  ["unreadable", { checkRunsExit: 1 }, /ci_unknown.*unreadable/],
+  ["status-context failure", { statuses: [{ context: "circle", state: "failure" }] }, /ci_failed.*circle/],
+  ["no checks yet", { runs: [] }, /ci_unknown.*none/],
+]) {
+  test(`normal mode refuses with a ${label} head and posts no reply`, async () => {
+    await withRepoRoot(async (root) => {
+      const f = await threadConstructFixture(root);
+      await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+      const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+      const mock = f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, ci)]);
+      await assert.rejects(verifyFixerDisposition(f.options, mock.deps), expected);
+      assert.equal(hasPost(mock.calls), false);
+    });
+  });
+}
+
 for (const defect of ["partialSubject", "subjectHead", "receipt", "prompt", "digest", "ref", "role", "target", "output", "directory", "danglingReport", "redirectedDirectory", "danglingDirectory", "notDirectory", "malformed", "prePull"]) {
   test(`active full binding withholds metadata for ${defect}`, async () => {
     await withRepoRoot(async (root) => {
@@ -1086,6 +1159,13 @@ const ACT_FP = fingerprintFinding({ severity: "medium", summary: "s", judgeDispo
 const ACT_MARKER = `<!-- dev-loops:finding ${ACT_FP} severity=medium angle=correctness round=1 -->`;
 const ACT_LIST = [{ fingerprint: ACT_FP, severity: "medium", summary: "s", judgeDisposition: "act" }];
 const userEntry = { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "gate" })}\n` };
+// Head CI reads (check-runs, then statuses) the verifier makes before it writes, replies or resolves.
+const ciEntries = (head, { failing, runs, statuses = [], checkRunsExit = 0 } = {}) => [
+  { assertArgs: ["api", `repos/${REPO}/commits/${head}/check-runs?per_page=100`], exitCode: checkRunsExit, stdout: JSON.stringify({ check_runs: runs ?? [failing ? { name: failing, status: "completed", conclusion: "failure" } : { name: "build", status: "completed", conclusion: "success" }] }) },
+  { assertArgs: ["api", `repos/${REPO}/commits/${head}/status?per_page=100`], stdout: JSON.stringify({ statuses }) },
+];
+// A report as the verifier's own --construct leaves it: the bytes plus the sha256 mark beside them.
+const writeMarked = async (file, text) => { await writeFile(file, text); await writeFile(`${file}.constructed`, sha256Hex(text)); };
 const gateComment = (id, databaseId, body = `${ACT_MARKER}\n**Problem:** s`, login = "gate") => ({ id, databaseId, body, author: { login, __typename: "User" } });
 const actThread = (id, comments, isResolved = false) => ({ id, isResolved, comments: { nodes: comments } });
 
@@ -1204,7 +1284,7 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   await pull(plan);
   const fixerPlan = plan.planPath, sourceRead = plan.workOrder.requiredReads.find((read) => read.kind === "completion-input"), sourcePath = sourceRead.path;
   const source = JSON.parse(await readFile(sourcePath));
-  const depsFor = (extra = []) => runtime([compareEntry(baseline, "ahead", candidate), compareEntry(fixing, "ahead", candidate), liveHeadEntry(candidate), threadsCallEntry(nodes), userEntry, ...extra], repoRoot, { live: false });
+  const depsFor = (extra = []) => runtime([compareEntry(baseline, "ahead", candidate), compareEntry(fixing, "ahead", candidate), liveHeadEntry(candidate), threadsCallEntry(nodes), userEntry, ...ciEntries(candidate), ...extra], repoRoot, { live: false });
   assert.equal((await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: candidate, fixerPlan, construct: true }, depsFor().deps)).constructed, true);
   // Negative tests may reseal a corruption only after a genuine baseline was constructed.
   const seal = async () => {
@@ -1217,7 +1297,7 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
     await writeFile(fixerPlan, JSON.stringify(plan));
     const receiptPath = pullReceiptPath(tmpRoot, plan.workOrderRef), receipt = JSON.parse(await readFile(receiptPath));
     await writeFile(receiptPath, JSON.stringify({ ...receipt, workOrderDigest: plan.workOrderDigest }));
-    await writeFile(plan.workOrder.outputRefs[0], JSON.stringify({ headSha: candidate, dispositions, siteCoverage }));
+    await writeMarked(plan.workOrder.outputRefs[0], JSON.stringify({ headSha: candidate, dispositions, siteCoverage }));
   };
   return { fixerPlan, plan, source, sourceRead, sourcePath, originPath, baseline, fixing, candidate, nodes, dispositions, seal, depsFor };
 }
@@ -1309,11 +1389,11 @@ async function legacyCompletionFixture(repoRoot, kind = "resolved", settings = {
     plan.workOrderDigest = workOrderDigest(plan.workOrder);
     await writeFile(fixerPlan, JSON.stringify(plan));
     await writeFile(pullReceiptPath(path.join(repoRoot, "tmp"), plan.workOrderRef), JSON.stringify({ role: "fixer", workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity, subject: { repo: REPO, pr: PR, branch: "issue-1", headSha: candidate, phase: "full", planPath: fixerPlan } }));
-    await writeFile(plan.workOrder.outputRefs[0], JSON.stringify({ headSha: candidate, dispositions, siteCoverage }));
+    await writeMarked(plan.workOrder.outputRefs[0], JSON.stringify({ headSha: candidate, dispositions, siteCoverage }));
   };
   await seal();
   const nodes = threadBindings.map(({ threadId, fingerprints }, index) => actThread(threadId, [gateComment(`c${index}`, index + 1, fingerprints.map((fp) => `<!-- dev-loops:finding ${fp} severity=medium angle=correctness round=1 -->`).join("\n") + `\nFixed in commit ${fixing}.`)], dispositions[index].disposition === "tackled"));
-  const depsFor = (extra = []) => runtime([compareEntry(baseline, "ahead", candidate), compareEntry(fixing, "ahead", candidate), liveHeadEntry(candidate), threadsCallEntry(nodes), userEntry, ...extra], repoRoot, { live: false });
+  const depsFor = (extra = []) => runtime([compareEntry(baseline, "ahead", candidate), compareEntry(fixing, "ahead", candidate), liveHeadEntry(candidate), threadsCallEntry(nodes), userEntry, ...ciEntries(candidate), ...extra], repoRoot, { live: false });
   return { fixerPlan, plan, source, sourceRead, sourcePath, originPath, baseline, fixing, nodes, dispositions, seal, depsFor };
 }
 
@@ -1844,7 +1924,7 @@ for (const check of [false, true]) for (const defect of ["partial", "coverage", 
       sites: raw.siteCoverage[0].sites.map((site) => ({ ...site, test: "invented test" })),
     });
     if (defect === "fixing") raw.dispositions[0].fixingCommitSha = FIX_SHA;
-    await writeFile(output, JSON.stringify(raw));
+    await writeMarked(output, JSON.stringify(raw));
     if (defect === "bytes") await writeFile(f.sourcePath, `${await readFile(f.sourcePath, "utf8")} `);
     if (defect === "origin") await rm(f.originPath);
     if (defect === "delta") await rm(path.join(repoRoot, "tmp", "gate-delta", `${f.baseline}.json`));
@@ -1864,7 +1944,7 @@ for (const check of [false, true]) test(`typed completion accepts scalar fingerp
     const output = f.plan.workOrder.outputRefs[0];
     const raw = JSON.parse(await readFile(output, "utf8"));
     raw.dispositions[1].fingerprint = ACT_FP;
-    await writeFile(output, JSON.stringify(raw));
+    await writeMarked(output, JSON.stringify(raw));
     const mock = f.depsFor([compareEntry(f.fixing, "identical", f.candidate)]);
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan, check }, mock.deps);
     assert.equal(result.complete, true);

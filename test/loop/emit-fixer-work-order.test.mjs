@@ -1136,7 +1136,7 @@ test("F4: a conflicting rewrite under the same reference is refused", async () =
   });
 });
 
-async function sealBaselineUnit(unit, root) {
+async function sealBaselineUnit(unit, root, render = renderWorkOrder) {
   unit.executionIdentity = nextExecution();
   unit.promptPath = path.join(path.dirname(unit.planPath), "work-orders", `${unit.executionIdentity}.md`);
   unit.workOrder.outputRefs = [path.join(path.dirname(unit.planPath), unit.executionIdentity, "fixer-disposition.json")];
@@ -1145,11 +1145,28 @@ async function sealBaselineUnit(unit, root) {
   }
   unit.workOrderRef = `fixer:${REPO}#${PR}:${unit.workOrder.headSha}:${unit.executionIdentity}`;
   unit.workOrderDigest = workOrderDigest(unit.workOrder);
-  const text = renderWorkOrder(unit.workOrder);
+  const text = render(unit.workOrder);
   unit.materializationHash = materializationHash(text);
   await writeFile(unit.promptPath, text);
   await writeFile(unit.planPath, JSON.stringify(unit));
   await writeExecutionIndex(path.join(root, "tmp"), unit);
+}
+
+// A report as the verifier's own --construct leaves it: the bytes plus the sha256 mark beside them.
+const ciEntries = (head) => [{ assertArgs: ["api", `repos/${REPO}/commits/${head}/check-runs?per_page=100`], stdout: "{\"check_runs\":[{\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"success\"}]}" }, { assertArgs: ["api", `repos/${REPO}/commits/${head}/status?per_page=100`], stdout: "{\"statuses\":[]}" }];
+const writeMarked = async (file, text) => { await writeFile(file, text); await writeFile(`${file}.constructed`, sha256Hex(text)); };
+// Issue 2787 C1/C2/C4: the six numbered steps in order, the red-CI hand-back and the Edit/Write-only rule.
+function assertFullPhaseSteps(text, { push }) {
+  const markers = [push, /2\. Confirm the remote head equals the candidate/, /3\. Run `[^`]*wait-pr-checks\.mjs[^`]* --timeout \d+`/,
+    /4\. Run `[^`]*verify-fixer-disposition\.mjs[^`]* --construct`/, /5\. Run `[^`]*verify-fixer-disposition\.mjs[^`]*`\./, /6\. Run `[^`]* --check`/];
+  let from = 0;
+  for (const marker of markers) {
+    const match = marker.exec(text.slice(from));
+    assert.ok(match, `step ${marker} missing or out of order`);
+    from += match.index + match[0].length;
+  }
+  assert.match(text, /If CI is red, resolve no thread, run no verifier step, and hand back `ci_failed` with the failing check names/);
+  assert.match(text, /Edit rule: write files only with the Edit and Write tools\. Never write a file through a Bash heredoc, redirect or `sed -i`, and never write `fixer-disposition\*\.json`/);
 }
 
 for (const source of ["act-list", "threads"]) test(`complete ${source} pulls delivery-only prose and an empty source grant`, async () => {
@@ -1170,13 +1187,7 @@ for (const source of ["act-list", "threads"]) test(`complete ${source} pulls del
     assert.doesNotMatch(active, /Run staging|Validation:|Regenerate:|Apply and commit|Push only/);
     assert.equal(active.includes(unit.workOrder.executionRules.mutation), false);
     assert.match(active, /--check/);
-    if (source === "act-list") {
-      assert.match(active, /does not exist.*--construct/s);
-      assert.match(active, /already exists.*never.*reconstruct/s);
-    } else {
-      assert.doesNotMatch(active, /--construct/);
-      assert.match(active, /exactly.*thread IDs/s);
-    }
+    assertFullPhaseSteps(active, { push: /1\. Do not push/ });
     assert.ok(result.stdout.endsWith(`${JSON.stringify(unit.workOrder, null, 2)}\n\x60\x60\x60\n`));
     assert.equal(hook(wt, unit.workOrder.outputRefs[0]), "allow");
     assert.equal(hook(wt, path.join(wt, "src/a.mjs")), "deny");
@@ -1244,11 +1255,12 @@ for (const form of ["exact", "missing", "extra", "foreign", "mixed"]) test(`comp
     }
     const ids = form === "missing" ? [] : form === "foreign" ? ["PRRT_FOREIGN"] : form === "extra" ? ["PRRT_T1", "PRRT_EXTRA"] : ["PRRT_T1"];
     await mkdir(path.dirname(unit.workOrder.outputRefs[0]), { recursive: true });
-    await writeFile(unit.workOrder.outputRefs[0], JSON.stringify({ headSha: head, dispositions: ids.map((threadId) => ({ threadId, fixingCommitSha: head, disposition: "tackled" })) }));
+    await writeMarked(unit.workOrder.outputRefs[0], JSON.stringify({ headSha: head, dispositions: ids.map((threadId) => ({ threadId, fixingCommitSha: head, disposition: "tackled" })) }));
     const nodes = ["PRRT_T1", "PRRT_UNRELATED"].map((id, index) => ({ id, isResolved: id === "PRRT_T1", comments: { nodes: [{ id: `c${index}`, databaseId: index + 1, body: id === "PRRT_T1" ? `Fixed in commit ${head}.` : "unrelated", author: { login: "bot", __typename: "User" } }] } }));
     const mock = () => makeGhMock([
       { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: head }) },
       { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) },
+      ...ciEntries(head),
       { assertArgs: ["api", `repos/${REPO}/compare/${head}...${head}`], stdout: '{"status":"identical"}' },
     ]);
     const options = { repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath };
@@ -1271,11 +1283,16 @@ test("ordinary rendering matches the independent approved base renderer byte for
   const { runInNewContext } = await import("node:vm");
   const baseline = runInNewContext(`(${source.slice(start, end).replace("export function", "function")})`, { path, PLAN_FILE: "fixer-emit-plan.json", renderRequiredReadLine: (await import("../../scripts/github/write-gate-context.mjs")).renderRequiredReadLine });
   await withFixture(async ({ emit, prepareFull }) => {
-    for (const unit of [await emit(), await (await prepareFull()).full()]) {
-      assert.equal(renderWorkOrder(unit.workOrder), baseline(unit.workOrder));
+    const [commitOnly, full] = [await emit(), await (await prepareFull()).full()];
+    for (const unit of [commitOnly, full]) {
       delete unit.workOrder.operation;
-      assert.equal(renderWorkOrder(unit.workOrder), baseline(unit.workOrder));
+      assert.equal(renderWorkOrder(unit.workOrder) === baseline(unit.workOrder), unit === commitOnly);
     }
+    // The full-phase task is the only region that differs: the numbered steps and the edit rule (issue 2787 C1, C4).
+    const split = (text) => [text.slice(0, text.indexOf("\n") + 1), text.slice(text.indexOf("\nWhen a `delta-result` read")), text.slice(text.indexOf("\n") + 1, text.indexOf("\nWhen a `delta-result` read"))];
+    const [head, tail, task] = split(renderWorkOrder(full.workOrder)), [baseHead, baseTail] = split(baseline(full.workOrder));
+    assert.deepEqual([head, tail], [baseHead, baseTail]);
+    assertFullPhaseSteps(task, { push: /1\. Push only the reviewed committed candidate/ });
   });
 });
 
@@ -1528,7 +1545,7 @@ test("F7: ordinary emission, pull, construct and verify preserve delivery and re
     const runtime = () => ({ env: runIdFreeEnv(), repoRoot: wt, runChild: makeGhMock([comparison(head), comparison(f.fixing),
       { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: candidate }) },
       { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) },
-      { assertArgs: ["api", "user"], stdout: '{"login":"bot"}' }]).runChild });
+      { assertArgs: ["api", "user"], stdout: '{"login":"bot"}' }, ...ciEntries(candidate)]).runChild });
     const options = { repo: REPO, pr: PR, headSha: candidate, fixerPlan: unit.planPath };
     await verifyFixerDisposition({ ...options, construct: true }, runtime());
     const result = await verifyFixerDisposition(options, runtime());
@@ -1581,7 +1598,7 @@ for (const check of [false, true]) for (const form of ["unchanged", "empty", "al
       await writeFile(unit.planPath, JSON.stringify(plan));
       const output = unit.workOrder.outputRefs[0];
       await mkdir(path.dirname(output), { recursive: true });
-      await writeFile(output, JSON.stringify({ headSha: head, dispositions: form === "unchanged" ? [{ threadId: "PRRT_SOURCE", fixingCommitSha: head, disposition: "tackled" }] : [] }));
+      await writeMarked(output, JSON.stringify({ headSha: head, dispositions: form === "unchanged" ? [{ threadId: "PRRT_SOURCE", fixingCommitSha: head, disposition: "tackled" }] : [] }));
       const nodes = [
         { id: "PRRT_SOURCE", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${head}.`, author: { login: "bot", __typename: "User" } }] } },
         { id: "UNRELATED", isResolved: false, comments: { nodes: [{ id: "c2", databaseId: 2, body: "unrelated", author: { login: "bot", __typename: "User" } }] } },
@@ -1589,13 +1606,14 @@ for (const check of [false, true]) for (const form of ["unchanged", "empty", "al
       const { runChild, calls } = makeGhMock([
         { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: head }) },
         { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) },
+        ...ciEntries(head),
         { assertArgs: ["api", `repos/${REPO}/compare/${head}...${head}`], stdout: '{"status":"identical"}' },
       ]);
       const verify = () => verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath, check }, { env: runIdFreeEnv(), runChild, repoRoot: wt });
       if (form === "unchanged") {
         const result = await verify();
         assert.equal(result.complete, true, "canonical key order and unrelated live threads preserve narrow source membership");
-        assert.equal(calls.length, 3);
+        assert.equal(calls.length, 5);
       } else {
         await assert.rejects(verify(), /threads.*sourceDigest/);
         assert.equal(calls.length, 0, "tampered sources refuse before any GitHub action");
@@ -1672,7 +1690,7 @@ for (const route of ["THREAD", "ACT", "HISTORICAL_CONSTRUCT", "LEGACY", "AUTHORI
     if (route.startsWith("AUTHORITY")) {
       unit.workOrder.authority.reviewBaselineHead = head;
       delete unit.workOrder.authority.sourceDigest;
-      await sealBaselineUnit(unit, root);
+      await sealBaselineUnit(unit, root, oldEmitter.renderWorkOrder);
       const currentPull = pull(unit, wt);
       if (route === "AUTHORITY_PULL") {
         assert.equal(currentPull.status, 1, "current canonical pull refuses unauthenticated authority");
@@ -1736,13 +1754,13 @@ for (const route of ["THREAD", "ACT", "HISTORICAL_CONSTRUCT", "LEGACY", "AUTHORI
     await mkdir(path.dirname(unit.workOrder.outputRefs[0]), { recursive: true });
     const dispositions = [{ threadId: "PRRT_OLD", fixingCommitSha: candidate, disposition: "tackled", ...(isAct ? { fingerprint: ACT_REF, returnedSites: [], noSitesReason: "no remaining matches" } : {}) }];
     if (isAct) dispositions.push({ threadId: "PRRT_WARNING", fingerprint: warning.fingerprint, fixingCommitSha: candidate, disposition: "deferred", returnedSites: ["--warning"], sites: [{ site: "--warning", kind: "input_form", status: "skipped", reason: "unverified at invocation three" }] });
-    if (!construct) await writeFile(unit.workOrder.outputRefs[0], JSON.stringify({ headSha: candidate, dispositions }));
+    if (!construct) await writeMarked(unit.workOrder.outputRefs[0], JSON.stringify({ headSha: candidate, dispositions }));
     const nodes = [{ id: "PRRT_OLD", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${candidate}.`, author: { login: "bot", __typename: "User" } }] } }];
     if (isAct) nodes[0].comments.nodes[0].body += `\n<!-- dev-loops:finding ${ACT_REF} severity=high angle=correctness round=1 -->`;
     const parsedThreads = { threads: [{ id: "PRRT_OLD", isResolved: true }], comments: [{ threadId: "PRRT_OLD", body: `Fixed in commit ${candidate}.` }] };
     if (isAct && !legacy) nodes.push({ id: "PRRT_WARNING", isResolved: false, comments: { nodes: [{ id: "c2", databaseId: 2, body: `<!-- dev-loops:finding ${warning.fingerprint} severity=low angle=correctness round=1 -->`, author: { login: "bot", __typename: "User" } }] } });
     const comparison = (sha) => ({ assertArgs: ["api", `repos/${REPO}/compare/${sha}...${candidate}`], stdout: JSON.stringify({ status: sha === candidate ? "identical" : "ahead" }) });
-    const entries = (constructing = false) => [...construct ? [comparison(head), comparison(candidate)] : [], { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: candidate }) }, { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) }, ...(isAct ? [{ assertArgs: ["api", "user"], stdout: '{"login":"bot"}' }] : []), ...constructing ? [] : [comparison(candidate)]];
+    const entries = (constructing = false) => [...construct ? [comparison(head), comparison(candidate)] : [], { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: candidate }) }, { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) }, ...(isAct ? [{ assertArgs: ["api", "user"], stdout: '{"login":"bot"}' }] : []), ...constructing ? [] : [...ciEntries(candidate), comparison(candidate)]];
     const featureVerifierPath = path.join(wt, "scripts/github/verify-fixer-disposition.mjs");
     assert.equal(await readFile(featureVerifierPath, "utf8"), await readFile(path.join(checkout, "scripts/github/verify-fixer-disposition.mjs"), "utf8"));
     const featureVerifier = await import(pathToFileURL(featureVerifierPath).href);
@@ -1815,10 +1833,10 @@ for (const route of ["Historical main", "OLD authority", "complete"]) test(`${ro
     assert.equal(pulled.stdout, await readFile(unit.promptPath, "utf8"));
     const bin = path.join(root, "tmp/bin");
     await mkdir(bin);
-    await writeFile(path.join(bin, "gh"), `#!/bin/sh\ncase "$1 $2" in\n'pr view') printf '%s\\n' '${JSON.stringify({ headRefOid: f.candidate })}';;\n'api graphql') printf '%s\\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}';;\n'api user') printf '%s\\n' '{"login":"bot"}';;\napi*) printf '%s\\n' '{"status":"ahead"}';;\n*) exit 1;;\nesac\n`);
+    await writeFile(path.join(bin, "gh"), `#!/bin/sh\ncase "$1 $2" in\n'pr view') printf '%s\\n' '${JSON.stringify({ headRefOid: f.candidate })}';;\n'api graphql') printf '%s\\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}';;\n'api user') printf '%s\\n' '{"login":"bot"}';;\n"api repos/"*/check-runs*) printf '%s\\n' '{"check_runs":[{"name":"build","status":"completed","conclusion":"success"}]}';;\n"api repos/"*/status*) printf '%s\\n' '{"statuses":[]}';;\napi*) printf '%s\\n' '{"status":"ahead"}';;\n*) exit 1;;\nesac\n`);
     chmodSync(path.join(bin, "gh"), 0o755);
     const commands = [...pulled.stdout.split("## Required reads")[0].matchAll(/`(node [^`]+)`/g)].map((match) => match[1]).filter((command) => command.includes("scripts/github/verify-fixer-disposition.mjs"));
-    assert.equal(commands.length, route === "complete" ? 3 : 2);
+    assert.equal(commands.length, 3);
     for (const command of commands) {
       assert.ok(command.startsWith("node '"));
       const out = spawnSync("sh", ["-c", command], { cwd: wt, encoding: "utf8", env: { ...env, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
@@ -1855,19 +1873,24 @@ test("F8: the work order routes validation through the canonical policy and carr
   });
 });
 
-test("F1: a legacy full render says a threadless act item gets no disposition handoff entry", async () => {
-  await withFixture(async ({ emit }) => {
-    const unit = await emit();
-    const text = renderWorkOrder({ ...unit.workOrder, phase: "full" });
-    assert.match(text, /threadless act item gets no disposition handoff entry/);
-    assert.match(text, /siteCoverage: \[\{ fingerprint, returnedSites, sites, ruleCitations\?, noSitesReason\? \}\]/);
+test("issue 2787: a THREAD full order has the numbered steps, runs --construct and asks for no hand-written handoff", async () => {
+  await withFixture(async ({ emit, files, writeRecord }) => {
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
+    await writeRecord({ items: [{ ref: "PRRT_T1", status: "resolved" }] });
+    const { promptPath } = await emit({ ...threadsOnly, threadsFile: files.threads });
+    const text = await readFile(promptPath, "utf8");
+    assertFullPhaseSteps(text, { push: /1\. Push the committed candidate/ });
+    assert.match(text, /never write the disposition handoff yourself/);
+    assert.match(text, /--head-sha <pushed-head-sha>/);
+    assert.match(text, /If step 5 refuses the report as hand-written, rm the outputRef and re-run step 4\./);
+    assert.match(text, /Replace `<pushed-head-sha>` in steps 4 to 6 with the confirmed SHA\./);
+    assert.match(text, /rm of a refused hand-written report is the one allowed delete\./);
   });
 });
 
-test("F1: the full-phase work order tells the fixer to pass --disposition fixed with the full 40-character fixing SHA", async () => {
-  await withFixture(async ({ emit, files }) => {
-    const { promptPath } = await emit({ ...threadsOnly, threadsFile: files.threads });
-    assert.match(await readFile(promptPath, "utf8"), /--disposition fixed.*full 40-character SHA of the fixing commit/);
+test("issue 2787: the ordinary commit_only render carries neither the numbered steps nor the edit rule", async () => {
+  await withFixture(async ({ emit }) => {
+    assert.doesNotMatch(renderWorkOrder((await emit()).workOrder), /Edit rule|wait-pr-checks/);
   });
 });
 

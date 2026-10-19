@@ -1309,8 +1309,13 @@ with unchanged marker behavior and ordinary renderer bytes. Main-checkout consum
 ship this support before a later producer enables delivery-only reentry; these fixtures do
 not establish producer eligibility, new publication, runtime worker qualification or recovery.
 
-The optional `--construct` operation (ADR 0149) is ACT/full only and mutually exclusive with
-`--check`. It authenticates the current plan/digest, fixer identity/receipt/subject, canonical
+The `--construct` operation (ADR 0149, extended by ADR 0165) builds the ACT report from completion
+input and the THREAD report from the threads source, the clearing delta record (its `candidateHead`
+is the pushed head) and the pushed head. Normal verification and `--check` accept only a report that
+`--construct` wrote (a sha256 mark beside the output) and refuse while the head's checks are red
+(`ci_failed`, no reply). Every full-phase order states the numbered steps: push, confirm the remote
+head, `wait-pr-checks`, `--construct`, verify, `--check`, and the Edit/Write-only rule. The
+operation is mutually exclusive with `--check`. It authenticates the current plan/digest, fixer identity/receipt/subject, canonical
 plan/output paths and after-pull timing before constructing that execution's report. Missing
 output is permitted; an existing pre-pull output refuses. No caller-selected output is accepted.
 Any `completion-input` read or either completion authority field activates the same strict
