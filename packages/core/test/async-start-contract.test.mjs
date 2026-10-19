@@ -19,6 +19,18 @@ import {
 // validateAsyncStartContext: rejection (no markers present)
 // ---------------------------------------------------------------------------
 
+test("Codex requires explicit native evidence without relaxing required or borrowing markers", () => {
+  const env = { CODEX_THREAD_ID: "child", DEVLOOPS_RUN_ID: "stale", PI_SUBAGENT_CHILD: "1", PI_SUBAGENT_PARENT_SESSION: "old" };
+  assert.equal(resolveEffectiveAsyncStartMode("required", env), "required");
+  assert.equal(validateAsyncStartContext({ env }).status, "rejected");
+  const nativeCodexContext = { status: "valid", threadId: "child", parentThreadId: "parent", depth: 2 };
+  assert.equal(validateAsyncStartContext({ env, nativeCodexContext }).status, "valid");
+  assert.equal(validateAsyncStartContext({ env: { ...env, DEVLOOPS_DETACHED: "1" }, nativeCodexContext }).status, "rejected");
+  assert.equal(validateAsyncStartContext({ env, nativeCodexContext: { ...nativeCodexContext, threadId: "other" } }).status, "rejected");
+  assert.equal(validateAsyncStartContext({ env, nativeCodexContext, asyncStartMode: "typo" }).status, "rejected");
+  assert.equal(validateAsyncStartContext({ env, isSnapshotMode: true }).status, "snapshot_mode");
+});
+
 test("validateAsyncStartContext: rejects when no context markers are present", () => {
   const result = validateAsyncStartContext({ env: {} });
   assert.equal(result.status, ASYNC_START_STATUS.REJECTED);

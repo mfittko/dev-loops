@@ -896,6 +896,29 @@ test("buildResolveDevLoopStartupResult allows async-required strategy with DEVLO
   assert.equal(result.selectedStrategy, "copilot_pr_followup");
 });
 
+test("PR lifecycle startup consumes native Codex metadata", async () => {
+  await withTempDir(async (root) => {
+    const id = "01a15519-285b-74b3-8f36-01e51619bba3";
+    const directory = path.join(root, "sessions/2026/10/19");
+    mkdirSync(directory, { recursive: true });
+    const file = path.join(directory, `rollout-child-${id}.jsonl`);
+    writeFileSync(file, `${JSON.stringify({ type: "session_meta", payload: { id, parent_thread_id: "parent", source: {
+      subagent: { thread_spawn: { parent_thread_id: "parent", depth: 2, agent_path: null, agent_role: null } },
+    } } })}\n`);
+    const input = { currentState: { target: { kind: "issue", issue: 89, linkedPr: 92 }, ownership: "copilot",
+      nextActor: "copilot", status: "active", authorization: "needs_confirmation" }, artifactState: "open",
+      issueLinkageResolution: "resolved_linked_pr", loopState: "unresolved_feedback_present" };
+    const env = { CODEX_HOME: root, CODEX_THREAD_ID: id, DEVLOOPS_RUN_ID: "inherited" };
+    const result = buildResolveDevLoopStartupResult(input, { env, cwd: root });
+    assert.equal(result.ok, true);
+    assert.equal(result.selectedStrategy, "copilot_pr_followup");
+    rmSync(file);
+    const rejected = buildResolveDevLoopStartupResult(input, { env, cwd: root });
+    assert.equal(rejected.asyncStartContract, "rejected");
+    assert.match(rejected.error, /not found/);
+  });
+});
+
 test("buildResolveDevLoopStartupResult allows async-required strategy when asyncStartMode=allowed", () => {
   const result = buildResolveDevLoopStartupResult(
     {

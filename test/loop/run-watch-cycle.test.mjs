@@ -2,7 +2,7 @@ import { afterAll, beforeAll, test } from "bun:test";
 import { runIdFreeEnv, runNode as runNodeHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -920,6 +920,45 @@ function copilotWatchHandoffWithHead(head) {
     loopDisposition: "pending",
     terminal: false,
     watchArgs: { repo: "owner/repo", pr: 17, pollIntervalMs: 60_000, timeoutMs: 1_800_000 },
+  });
+}
+
+for (const invalidation of ["missing", "malformed"]) {
+  test(`watcher-exclusivity refuses ${invalidation} Codex metadata after a valid watch`, async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "watch-codex-"));
+    try {
+      const id = "01a15519-285b-74b3-8f36-01e51619bba3";
+      const directory = path.join(root, "sessions/2026/10/19");
+      await mkdir(directory, { recursive: true });
+      const file = path.join(directory, `rollout-child-${id}.jsonl`);
+      await writeFile(file, `${JSON.stringify({ type: "session_meta", payload: { id, parent_thread_id: "parent", source: {
+        subagent: { thread_spawn: { parent_thread_id: "parent", depth: 1, agent_path: null, agent_role: null } },
+      } } })}\n`);
+      let claims = 0;
+      let watches = 0;
+      const context = {
+        env: { CODEX_HOME: root, CODEX_THREAD_ID: id, DEVLOOPS_RUN_ID: "inherited" },
+        runHandoffImpl: copilotWatchHandoffWithHead("abc123"),
+        recordWatchClaimImpl: async ({ runId, head, waitKind }) => {
+          claims++;
+          assert.equal(runId, `codex-thread-${id}`);
+          return { ok: true, watch: { head, waitKind, updatedAt: new Date().toISOString() } };
+        },
+        watchCopilotReviewImpl: async () => {
+          watches++;
+          return { ok: true, status: "idle", attempts: 1, newComments: [], newReviews: [], newIssueComments: [] };
+        },
+      };
+      await runWatchCycle({ repo: "owner/repo", pr: 17 }, context);
+      assert.equal(watches, 1);
+      if (invalidation === "missing") await rm(file);
+      else await writeFile(file, "invalid metadata\n");
+      const result = await runWatchCycle({ repo: "owner/repo", pr: 17 }, context);
+      assert.equal(watches, 1, "invalid context must never start a watcher without a lease");
+      assert.equal(claims, 1, "invalid context must never claim with an inherited identity");
+      assert.equal(result.watcherExclusivity.blocked, true);
+      assert.equal(result.watcherExclusivity.reason, "unverified_codex_context");
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 }
 

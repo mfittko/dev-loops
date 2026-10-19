@@ -24,7 +24,108 @@ import {
   ensureRunId,
   isClaudeHarness,
   CLAUDE_HARNESS_MARKER,
+  validateNativeCodexMetadata,
+  resolveNativeCodexContext,
 } from "../src/loop/run-context.mjs";
+
+const codexId = "01a15519-285b-74b3-8f36-01e51619bba3";
+function codexMetadata(id = codexId) {
+  return { type: "session_meta", payload: { id, parent_thread_id: "parent", source: {
+    subagent: { thread_spawn: { parent_thread_id: "parent", depth: 2, agent_path: "/root/child", agent_role: null } },
+  }, base_instructions: { text: "private instructions" } } };
+}
+function codexFixture() {
+  const root = makeTempRoot();
+  const dir = path.join(root, "sessions", "2026", "10", "19");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `rollout-2026-10-19T18-57-54-${codexId}.jsonl`);
+  fs.writeFileSync(file, `${JSON.stringify(codexMetadata())}\nSECRET TRANSCRIPT`);
+  return { root, dir, file, env: { CODEX_HOME: root, CODEX_THREAD_ID: codexId } };
+}
+
+test("native Codex metadata validates child origin and returns only identity", () => {
+  const result = validateNativeCodexMetadata(codexMetadata(), codexId);
+  assert.equal(result.status, "valid");
+  assert.equal(result.depth, 2);
+  assert.equal(result.agentRole, null);
+  assert.doesNotMatch(JSON.stringify(result), /private instructions|base_instructions/);
+  assert.equal(validateNativeCodexMetadata(null, codexId).status, "rejected");
+  assert.equal(validateNativeCodexMetadata(codexMetadata(), undefined).status, "rejected");
+  for (const mutate of [
+    (p) => { p.id = "other"; },
+    (p) => { p.source = "cli"; },
+    (p) => { p.source = { subagent: "review" }; },
+    (p) => { p.parent_thread_id = "different"; },
+    (p) => { p.parent_thread_id = codexId; p.source.subagent.thread_spawn.parent_thread_id = codexId; },
+    (p) => { p.source.subagent.thread_spawn.depth = 0; },
+    (p) => { p.source.subagent.thread_spawn.depth = 1.5; },
+    (p) => { delete p.parent_thread_id; },
+  ]) {
+    const metadata = codexMetadata();
+    mutate(metadata.payload);
+    assert.equal(validateNativeCodexMetadata(metadata, codexId).status, "rejected");
+  }
+});
+
+test("native Codex discovery is bounded, header-only and rejects uncertain IO", () => {
+  const { env, file, dir } = codexFixture();
+  assert.equal(resolveNativeCodexContext({ env }).status, "valid");
+  let bytes = 0;
+  const trackedFs = { ...fs, readSync(...args) { const count = fs.readSync(...args); bytes += count; return count; } };
+  assert.equal(resolveNativeCodexContext({ env, fs: trackedFs }).status, "valid");
+  assert.equal(bytes, fs.readFileSync(file).indexOf(10) + 1);
+  const oversizedMetadata = codexMetadata();
+  oversizedMetadata.payload.base_instructions.text = "x".repeat(128 * 1024);
+  const oversizedHeader = `${JSON.stringify(oversizedMetadata)}\n`;
+  assert.ok(Buffer.from(oversizedHeader).indexOf(10) > 128 * 1024);
+  fs.writeFileSync(file, oversizedHeader);
+  bytes = 0;
+  const oversizedResult = resolveNativeCodexContext({ env, fs: trackedFs });
+  assert.equal(oversizedResult.status, "rejected");
+  assert.match(oversizedResult.reason, /exceeds byte bound/);
+  assert.ok(bytes <= 128 * 1024);
+  fs.copyFileSync(file, path.join(dir, `rollout-duplicate-${codexId}.jsonl`));
+  assert.match(resolveNativeCodexContext({ env }).reason, /ambiguous/i);
+  fs.unlinkSync(path.join(dir, `rollout-duplicate-${codexId}.jsonl`));
+  for (const content of ["not json\n", "{}\n", "x".repeat(128 * 1024 + 1), JSON.stringify(codexMetadata())]) {
+    fs.writeFileSync(file, content);
+    assert.equal(resolveNativeCodexContext({ env }).status, "rejected");
+  }
+  assert.equal(resolveNativeCodexContext({ env, fs: { ...fs, openSync() { throw new Error("unreadable"); } } }).status, "rejected");
+  assert.equal(resolveNativeCodexContext({ env, fs: { ...fs, opendirSync() { throw new Error("unreadable"); } } }).status, "rejected");
+  fs.unlinkSync(file);
+  assert.match(resolveNativeCodexContext({ env }).reason, /not found/i);
+  assert.equal(resolveNativeCodexContext({ env: { CODEX_THREAD_ID: "unknown" } }).status, "rejected");
+});
+
+test("native Codex discovery admits adjacent local dates and stops at its entry bound", () => {
+  const { env, file, root } = codexFixture();
+  const adjacent = path.join(root, "sessions/2026/10/20");
+  fs.mkdirSync(adjacent, { recursive: true });
+  fs.renameSync(file, path.join(adjacent, path.basename(file)));
+  assert.equal(resolveNativeCodexContext({ env }).status, "valid");
+  let reads = 0;
+  const boundedFs = { ...fs, opendirSync() { return {
+    readSync() { reads++; return { name: "unrelated" }; }, closeSync() {},
+  }; } };
+  assert.match(resolveNativeCodexContext({ env, fs: boundedFs }).reason, /entry bound/);
+  assert.equal(reads, 4097);
+});
+
+test("native Codex run identity is stable, sibling distinct, and never borrows or mints", () => {
+  const { env, file, dir, root } = codexFixture();
+  const inherited = { ...env, DEVLOOPS_RUN_ID: "stale", PI_SUBAGENT_CHILD: "1", PI_SUBAGENT_PARENT_SESSION: "old" };
+  assert.equal(resolveRunId(inherited), `codex-thread-${codexId}`);
+  assert.equal(resolveRunId(inherited), `codex-thread-${codexId}`);
+  const sibling = codexId.replace(/a3$/, "a4");
+  fs.writeFileSync(path.join(dir, `rollout-sibling-${sibling}.jsonl`), `${JSON.stringify(codexMetadata(sibling))}\n`);
+  assert.equal(resolveRunId({ ...env, CODEX_THREAD_ID: sibling }), `codex-thread-${sibling}`);
+  assert.equal(resolveRunId({ ...inherited, DEVLOOPS_DETACHED: "1" }), null);
+  fs.unlinkSync(file);
+  assert.equal(resolveRunId(inherited), null);
+  assert.throws(() => ensureRunId({ env: inherited, root }), /Codex/);
+  assert.equal(fs.existsSync(runContextPath(root)), false);
+});
 
 // Track temp dirs and clean them up after the suite so CI does not accumulate /tmp entries.
 const tempRoots = [];
@@ -90,7 +191,7 @@ test("NATIVE_PI_ASYNC_MARKERS names the three native markers and stays out of RU
     NATIVE_PI_PARENT_SESSION_MARKER,
     NATIVE_PI_RUNNER_MARKER,
   ]);
-  assert.deepEqual(ASYNC_CONTEXT_ENV_MARKERS, [...RUN_ID_MARKERS, ...NATIVE_PI_ASYNC_MARKERS]);
+  assert.deepEqual(ASYNC_CONTEXT_ENV_MARKERS, [...RUN_ID_MARKERS, ...NATIVE_PI_ASYNC_MARKERS, "CODEX_THREAD_ID"]);
   // The native markers carry no run id — folding them into RUN_ID_MARKERS would make
   // resolveRunId return the child flag ("1") as if it were an id.
   for (const marker of NATIVE_PI_ASYNC_MARKERS) {

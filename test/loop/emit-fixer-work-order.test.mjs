@@ -507,12 +507,19 @@ test("F1: bootstrap teaches permitted reads and immediate denial stop before ver
     const canonical = await readFile("agents/fixer.agent.md", "utf8");
     const generated = await readFile(".claude/agents/fixer.md", "utf8");
     const setup = (body) => body.slice(body.indexOf("## Codex after-pull setup"), body.indexOf("## Authorized remediation sites"));
+    const operations = await readFile("skills/docs/copilot-loop-operations.md", "utf8");
     for (const delivery of [rule, setup(canonical)]) {
+      assert.match(delivery, /OPS-CODEX-RUNTIME-SETUP/);
+      assert.match(delivery, /after.*(?:pinned|verified).*read/i);
+      assert.doesNotMatch(delivery, /sandbox_permissions/);
+    }
+    for (const delivery of [operations.slice(operations.indexOf("## Codex runtime setup"))]) {
       assert.match(delivery, /Under Codex only, before an authorized Git write to protected shared Git metadata, use `tools\.exec_command`/);
       assert.match(delivery, /`tools\.exec_command` with `sandbox_permissions: "require_escalated"` and a factual `justification` up front when the actual managed environment requires it/);
       assert.match(delivery, /do not probe with a write expected to be denied/);
       assert.match(delivery, /configured targeted suites needing shared Git metadata or local sockets/);
-      assert.match(delivery, /subject to normal approval review and never broadens the pulled branch, paths or phase/);
+      assert.match(delivery, /subject to normal approval review/);
+      assert.match(delivery, /never broadens.*branch, paths or phase/);
       assert.match(delivery, /staging, staged secret scan and commit as three separate tool invocations; inspect each native exit before the next/);
       assert.match(delivery, /A failed stage permits no scan or commit; a scanner hit or error stops the actor/);
       assert.match(delivery, /ordinary command-input error or executed failing test is not automatically a permission\/classifier denial/);
@@ -522,7 +529,7 @@ test("F1: bootstrap teaches permitted reads and immediate denial stop before ver
     assert.doesNotMatch(canonical, /Before staging or committing, run/);
     assert.match(setup(canonical), /stops this actor immediately/);
     assert.match(setup(canonical), /If tool output is truncated, read bounded ranges separately and do not proceed until every required read is complete/);
-    assert.match(setup(canonical), /actual collaboration parent\/child task identities.*`CODEX_THREAD_ID`/);
+    assert.match(operations, /actual collaboration parent\/child task identities.*`CODEX_THREAD_ID`/);
     assert.equal(setup(generated), setup(canonical), "generated setup must retain the safe bootstrap");
   });
 });
@@ -531,9 +538,19 @@ test("F1: older authority contracts cannot replace the emitting toolchain's pinn
   await withFixture(async ({ root, wt, emit }) => {
     await mkdir(path.join(wt, "agents"));
     await writeFile(path.join(wt, "agents/fixer.agent.md"), "older authority contract\n");
+    await mkdir(path.join(wt, "skills/docs"), { recursive: true });
+    await writeFile(path.join(wt, "skills/docs/copilot-loop-operations.md"), "stale target setup\n");
     const unit = await emit();
     assert.equal(unit.workOrder.executionRules.contract, path.resolve("agents/fixer.agent.md"));
     const toolchainRoot = path.dirname(path.dirname(unit.workOrder.executionRules.contract));
+    const operationsPin = unit.workOrder.contracts.find(({ path }) => path === "skills/docs/copilot-loop-operations.md");
+    assert.ok(operationsPin, "runtime setup must be a pinned contract, not a transitive link");
+    const operationsPath = path.join(toolchainRoot, operationsPin.path);
+    const operationsBytes = await readFile(operationsPath);
+    assert.equal(operationsPin.digest, createHash("sha256").update(operationsBytes).digest("hex"));
+    assert.notEqual(operationsPin.digest, createHash("sha256").update(await readFile(path.join(wt, operationsPin.path))).digest("hex"));
+    const staleContracts = unit.workOrder.contracts.map((pin) => pin === operationsPin ? { ...pin, digest: "0".repeat(64) } : pin);
+    assert.notEqual(workOrderDigest({ ...unit.workOrder, contracts: staleContracts }), unit.workOrderDigest, "stale emitting setup pins cannot preserve the pulled semantic identity");
     for (const contract of unit.workOrder.contracts) {
       assert.ok(!path.isAbsolute(contract.path), "contract filenames remain semantic");
       const digest = execFileSync("shasum", ["-a", "256", path.join(toolchainRoot, contract.path)], { encoding: "utf8" }).split(/\s/)[0];

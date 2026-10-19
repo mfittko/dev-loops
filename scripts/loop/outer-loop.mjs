@@ -25,6 +25,7 @@ import {
   resolveEffectiveAsyncStartMode,
 } from "@dev-loops/core/loop/async-start-contract";
 import { loadDevLoopConfig, resolveConductorModel, resolveAutonomyStopAt, resolveWorkflowConfig } from "@dev-loops/core/config";
+import { resolveNativeCodexContext, resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const USAGE = `Usage: outer-loop.mjs --repo <owner/name> --pr <number>
@@ -304,7 +305,9 @@ export async function runOuterLoop(options, { env = process.env, ghCommand = "gh
     : resolveWorkflowConfig(devLoopConfig, "asyncStartMode");
   // Relaxed to "allowed" under the Claude harness (Pi async-start contract does not apply).
   const asyncStartMode = resolveEffectiveAsyncStartMode(configuredAsyncStartMode, env);
-  const asyncStartValidation = validateAsyncStartContext({ env, isSnapshotMode, asyncStartMode });
+  const nativeCodexContext = !isSnapshotMode && resolveRuntimeHarness(env) === "codex"
+    ? resolveNativeCodexContext({ env }) : null;
+  const asyncStartValidation = validateAsyncStartContext({ env, isSnapshotMode, asyncStartMode, nativeCodexContext });
   if (asyncStartValidation.status === ASYNC_START_STATUS.REJECTED) {
     return buildAsyncStartRejection(asyncStartValidation);
   }

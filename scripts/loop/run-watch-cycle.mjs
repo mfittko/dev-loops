@@ -13,7 +13,7 @@ import { detectCopilotSessionActivity } from "./detect-copilot-session-activity.
 import { ensureAsyncRunnerOwnership, recordWatchClaim as defaultRecordWatchClaim } from "./_pr-runner-coordination.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
-import { isClaudeHarness, resolveRunId } from "@dev-loops/core/loop/run-context";
+import { isClaudeHarness, resolveRunId, resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 import { assertNoOverlappingObserver, resolveWatchOwnership } from "@dev-loops/core/loop/watcher-exclusivity";
 import { buildExecutionUnitRecord } from "@dev-loops/core/loop/execution-record";
 import { parseArgs } from "node:util";
@@ -332,6 +332,9 @@ async function gateWatcherExclusivity(
 ) {
   const runId = resolveRunId(env);
   if (runId === null) {
+    if (resolveRuntimeHarness(env) === "codex") {
+      return { engaged: true, ok: false, reason: "unverified_codex_context", target: `${repo}#${pr}`, waitKind };
+    }
     return { engaged: false, ok: true, reason: "no_lease_single_runner" };
   }
   const target = `${repo}#${pr}`;

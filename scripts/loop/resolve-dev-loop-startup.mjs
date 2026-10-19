@@ -9,6 +9,7 @@ import {
   resolveCheckpointStateFromArtifact,
 } from "@dev-loops/core/loop/public-dev-loop-routing";
 import { CHECKPOINT_FILE, resolveCheckpointRepoRoot } from "./checkpoint-contract.mjs";
+import { resolveNativeCodexContext, resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { execFileSync } from "node:child_process";
@@ -1406,7 +1407,9 @@ export function buildResolveDevLoopStartupResult(input, {
     // The configured async-start mode is relaxed to "allowed" under the Claude
     // harness, where the Pi async-subagent start contract does not apply.
     const effectiveAsyncStartMode = resolveEffectiveAsyncStartMode(asyncStartMode, effectiveEnv);
-    const validation = validateAsyncStartContext({ env: effectiveEnv, asyncStartMode: effectiveAsyncStartMode });
+    const nativeCodexContext = resolveRuntimeHarness(effectiveEnv) === "codex"
+      ? resolveNativeCodexContext({ env: effectiveEnv }) : null;
+    const validation = validateAsyncStartContext({ env: effectiveEnv, asyncStartMode: effectiveAsyncStartMode, nativeCodexContext });
     if (validation.status === ASYNC_START_STATUS.REJECTED) {
       return { ...buildAsyncStartRejection(validation), pendingRetrospectives };
     }

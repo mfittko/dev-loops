@@ -31,6 +31,7 @@ import {
   RUN_ID_MARKERS,
   isClaudeHarness,
   isNativePiAsyncContext,
+  resolveRuntimeHarness,
 } from "./run-context.mjs";
 
 // ---------------------------------------------------------------------------
@@ -110,12 +111,14 @@ export function resolveEffectiveAsyncStartMode(configuredMode, env = process.env
  * @param {Record<string, string|undefined>} [params.env] - Environment variables to inspect.
  * @param {boolean} [params.isSnapshotMode] - True when running in snapshot/test input mode.
  * @param {"required"|"allowed"} [params.asyncStartMode] - Settings-driven async-start mode.
+ * @param {object|null} [params.nativeCodexContext] - Explicit identity evidence resolved by the caller; no IO here.
  * @returns {{ status: string, reason: string, detectedMarker: string|null }}
  */
 export function validateAsyncStartContext({
   env = process.env,
   isSnapshotMode = false,
   asyncStartMode = ASYNC_START_MODE.REQUIRED,
+  nativeCodexContext = null,
 } = {}) {
   // Snapshot/test mode implicitly skips — no real async ownership needed
   if (isSnapshotMode) {
@@ -136,6 +139,17 @@ export function validateAsyncStartContext({
         `Unrecognized workflow.asyncStartMode value ${JSON.stringify(asyncStartMode)}. ` +
         `Expected ${ASYNC_START_MODE.REQUIRED} or ${ASYNC_START_MODE.ALLOWED}.`,
       detectedMarker: null,
+    };
+  }
+
+  if (resolveRuntimeHarness(env) === "codex") {
+    const valid = env.DEVLOOPS_DETACHED !== "1" && nativeCodexContext?.status === "valid" &&
+      nativeCodexContext.threadId === env.CODEX_THREAD_ID;
+    return {
+      status: valid ? ASYNC_START_STATUS.VALID : ASYNC_START_STATUS.REJECTED,
+      reason: valid ? "Async context verified via native Codex thread_spawn metadata." :
+        `Native Codex async context rejected: ${env.DEVLOOPS_DETACHED === "1" ? "detached execution" : nativeCodexContext?.reason ?? "verified native child metadata required; CODEX_THREAD_ID alone is not evidence"}.`,
+      detectedMarker: valid ? "CODEX_THREAD_ID" : null,
     };
   }
 
