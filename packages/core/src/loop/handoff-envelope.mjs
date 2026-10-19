@@ -16,6 +16,7 @@
 
 import {
   DEV_LOOP_TARGET_KIND,
+  DEV_LOOP_ISSUE_LINKAGE_RESOLUTION,
   INTERNAL_DEV_LOOP_STRATEGY,
 } from "./public-dev-loop-routing-contract.mjs";
 import { normalizeRepoSlug } from "../github/repo-slug.mjs";
@@ -448,9 +449,12 @@ function deriveCwd(bundle, options = {}) {
   const kind = normalizeTargetKind(artifact.kind);
 
   if (root) {
-    // issue/pr go through the single source of truth (resolveWorktreePath); other
-    // slug kinds (local_branch/local_phase) still use the namespace + slug.
-    if (kind === DEV_LOOP_TARGET_KIND.ISSUE && Number.isInteger(artifact.issue) && artifact.issue > 0) {
+    // Tracker-local routing synthesizes a phase without changing issue acquisition identity.
+    const trackerLocalIssue = kind === DEV_LOOP_TARGET_KIND.LOCAL_PHASE
+      && bundle.selectedStrategy === INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION
+      && bundle.issueLinkageResolution === DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.RESOLVED_NO_OPEN_PR
+      && artifact.phase === `issue-${artifact.issue}`;
+    if ((kind === DEV_LOOP_TARGET_KIND.ISSUE || trackerLocalIssue) && Number.isInteger(artifact.issue) && artifact.issue > 0) {
       return resolveWorktreePath({ repoRoot: root, kind: "issue", number: artifact.issue });
     }
     if (kind === DEV_LOOP_TARGET_KIND.PR && Number.isInteger(artifact.pr) && artifact.pr > 0) {
