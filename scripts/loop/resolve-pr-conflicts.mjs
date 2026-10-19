@@ -52,7 +52,7 @@ const SAFE_RESOLVABLE_PATH = "CHANGELOG.md";
 
 // Fallback identity for merge/resolve commits, applied only when the effective
 // `user.email` is empty (clean CI / consumer runner). An ambient identity is
-// kept: forcing the bot makes GitHub mark signed commits unverified (#2832).
+// kept: forcing the bot makes GitHub mark signed commits unverified.
 // Per-command via -c so we never mutate the repo's config.
 const BOT_IDENTITY = [
   "-c", "user.name=dev-loops[bot]",
