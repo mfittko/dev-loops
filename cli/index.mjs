@@ -414,7 +414,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
   loop: {
     startup: "Resolve dev-loop startup bundle",
     "build-envelope": "Build handoff envelope from startup output",
-    "coordinator-work-order": "Emit coordinator work order from startup output",
+    "coordinator-work-order": "Emit coordinator work order from startup output (Claude, Pi, Codex)",
     outer: "Run outer-loop detection",
     "watch-cycle": "Run Copilot wait cycle",
     "claude-launch": "Start Claude Code with .devloops extraTools delivered to developer/fixer/refiner",

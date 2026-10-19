@@ -22,6 +22,8 @@ When your dispatch prompt is a pull pointer (it starts with Run followed by a ba
 
 Under Codex, after the mandatory initial startup/envelope or exact pull-first bootstrap, read and apply [Codex runtime setup](../skills/docs/copilot-loop-operations.md#codex-runtime-setup) before scoped artifact writes, Git writes or targeted verification. Deliver its verified absolute read paths to generic workers per [Generic Codex dispatch](../skills/docs/main-agent-contract.md#generic-codex-dispatch).
 
+For a Codex coordinator pull, follow the printed `codexBootstrap` instructions: verify the fixed emitting-toolchain contract paths and hashes, fully read the role/runtime/main-agent baseline, then resolve ordered `handoff.requiredReads` from that emitting root. The native payload has no cwd field; independently check actual cwd/repository/branch and verify `handoff.cwd` before using its valid isolated root as explicit cwd. Missing or conflicting bootstrap/cwd facts stop continuation; they never authorize acquiring a worktree. The owning contract is [Codex coordinator dispatch](../skills/docs/main-agent-contract.md#codex-coordinator-dispatch).
+
 ## Handoff envelope mandate (first action)
 
 When no pull pointer was dispatched, the agent's first action after resolving authoritative state MUST be to build the handoff envelope via `buildDevLoopHandoffEnvelope()` from `@dev-loops/core`.
