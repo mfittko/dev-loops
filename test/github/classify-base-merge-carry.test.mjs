@@ -94,7 +94,12 @@ test("git: hostile ambient env and repo-local config never change the decision o
   s.git("checkout", "-qb", "attrs"); s.put(".gitattributes", "* -diff\n"); s.git("add", "-A"); s.git("commit", "-qm", "attrs");
   s.git("checkout", "-q", "pr");
   const cfg = path.join(s.dir, "..", `${path.basename(s.dir)}.gitconfig`);
-  writeFileSync(cfg, "[core]\n\tabbrev = 7\n[diff]\n\tsuppressBlankEmpty = true\n\talgorithm = histogram\n\tinterHunkContext = 10\n[color]\n\tui = always\n");
+  const hostile = "[core]\n\tabbrev = 7\n[diff]\n\tsuppressBlankEmpty = true\n\talgorithm = histogram\n\tinterHunkContext = 10\n[color]\n\tui = always\n";
+  writeFileSync(cfg, hostile);
+  const home = mkdtempSync(path.join(os.tmpdir(), "bmc-home-"));
+  mkdirSync(path.join(home, "git"));
+  writeFileSync(path.join(home, ".gitconfig"), hostile);
+  writeFileSync(path.join(home, "git", "config"), hostile);
   const elsewhere = mkdtempSync(path.join(os.tmpdir(), "bmc-else-"));
   const args = { prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir };
   const clean = await computeBaseMergeCarry(args);
@@ -102,7 +107,7 @@ test("git: hostile ambient env and repo-local config never change the decision o
   const envRows = [
     { GIT_DIFF_OPTS: "--unified=0" }, { GIT_EXTERNAL_DIFF: "false" }, { GIT_ATTR_SOURCE: "attrs" },
     { GIT_CONFIG_PARAMETERS: "'diff.noprefix=true'" }, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "diff.noprefix", GIT_CONFIG_VALUE_0: "true" },
-    { GIT_CONFIG_GLOBAL: cfg }, { HOME: path.dirname(cfg), XDG_CONFIG_HOME: path.dirname(cfg) },
+    { GIT_CONFIG_GLOBAL: cfg }, { HOME: home, XDG_CONFIG_HOME: home },
     { GIT_DIR: path.join(elsewhere, ".git"), GIT_WORK_TREE: elsewhere }, { LANG: "de_DE.ISO-8859-1", LC_ALL: "tr_TR.UTF-8" },
   ];
   const localRows = [["diff.noprefix", "true"], ["diff.mnemonicPrefix", "true"], ["core.quotePath", "true"], ["diff.suppressBlankEmpty", "true"]];
