@@ -1095,7 +1095,7 @@ test("automatic ownership preserves native Pi, Claude and nonasync context", asy
   const root = await mkdtemp(path.join(os.tmpdir(), "runner-harnesses-"));
   try {
     for (const [env, runId] of [
-      [{ PI_SUBAGENT_CHILD: "1", PI_SUBAGENT_PARENT_SESSION: "parent", PI_SESSION_ID: "child" }, "pi-session-child"],
+      [{ [NATIVE_PI_CHILD_MARKER]: "1", [NATIVE_PI_PARENT_SESSION_MARKER]: "parent", [NATIVE_PI_SESSION_MARKER]: "child" }, "pi-session-child"],
       [{ CLAUDECODE: "1", DEVLOOPS_RUN_ID: "claude-run", CODEX_THREAD_ID: "inherited" }, "claude-run"],
       [{}, null],
     ]) {
