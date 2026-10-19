@@ -26,10 +26,10 @@ export function buildBaseMergeCarryPath({ repo, pr, gate, headSha, tmpRoot = "tm
 }
 
 // Pinned raw-byte git runner: the child env is built ONLY from this allowlist, so no ambient GIT_*, HOME, XDG_* or LANG reaches git.
-// stdout stays a Buffer (diff bytes are never decoded); stderr is a string; optional `input` Buffer goes to stdin.
-export function runPinnedGit(args, { repoRoot, input } = {}) {
+// stdout stays a Buffer; stderr is a string.
+export function runPinnedGit(args, { repoRoot } = {}) {
   const env = { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_ATTR_NOSYSTEM: "1", LC_ALL: "C" };
-  const r = spawnSync("git", args, { cwd: repoRoot, env, input, maxBuffer: 1 << 30 });
+  const r = spawnSync("git", args, { cwd: repoRoot, env, maxBuffer: 1 << 30 });
   if (r.error) throw r.error;
   return Promise.resolve({ code: r.status, stdout: r.stdout, stderr: r.stderr.toString("utf8") });
 }
@@ -41,16 +41,19 @@ async function git(runGit, repoRoot, args, opts = {}) {
 }
 
 const lines = (s) => s.toString("utf8").split("\n").filter(Boolean);
-const nulLines = (b) => b.toString("utf8").split("\0").filter(Boolean);
-// --verbatim keeps whitespace significant: an indentation-only change must change the id.
-async function patchId(runGit, repoRoot, diff) {
-  const id = (await git(runGit, repoRoot, ["patch-id", "--verbatim"], { input: diff })).toString("utf8").split(/\s+/)[0];
-  if (!id) throw new Error("git patch-id returned an empty id");
-  return id;
+// Raw tree-entry read: diff-tree --raw compares tree entries only (blob/gitlink oids and modes), so attributes, textconv, diff drivers and diff rendering config never apply.
+// --no-abbrev gives full oids; --ignore-submodules=none keeps gitlink changes visible. Returns sorted `path\tmode\toid` (new side) entries.
+async function rawEntries(runGit, repoRoot, from, to) {
+  const out = (await git(runGit, repoRoot, ["diff-tree", "-r", "--raw", "--no-renames", "--no-abbrev", "--ignore-submodules=none", "-z", from, to])).toString("utf8").split("\0").filter(Boolean);
+  const entries = [];
+  for (let i = 0; i < out.length; i += 2) {
+    const meta = out[i].match(/^:(\d{6}) (\d{6}) ([0-9a-f]+) ([0-9a-f]+) [A-Z]\d*$/);
+    if (!meta || out[i + 1] === undefined) throw new Error("unparseable git diff-tree --raw output");
+    entries.push(`${out[i + 1]}\t${meta[2]}\t${meta[4]}`);
+  }
+  return entries.sort();
 }
-// Pin the diff shape (context, algorithm, hunk joining, prefixes, blank-context rendering, full index line); the pinned env drops global/system config and repo-local config is covered by the pinned -c knobs.
-const GIT_ISOLATION = ["-c", "color.ui=false", "-c", "core.pager=cat", "-c", "core.autocrlf=false", "-c", "core.quotePath=false", "-c", "diff.interHunkContext=0", "-c", "diff.orderFile=/dev/null", "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "-c", "diff.suppressBlankEmpty=false"];
-const DIFF_FLAGS = ["--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--src-prefix=a/", "--dst-prefix=b/", "--no-color", "--no-relative", "--no-renames", "-U3", "--diff-algorithm=myers", "--no-indent-heuristic", "--full-index", "--text"];
+const entryPath = (e) => e.slice(0, e.indexOf("\t"));
 
 export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRoot, runGit = runPinnedGit }) {
   try {
@@ -59,16 +62,16 @@ export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRo
     if (anc.code !== 0) throw new Error(`git merge-base --is-ancestor failed: ${anc.stderr.trim()}`);
     const mbA = (await git(runGit, repoRoot, ["merge-base", baseRef, prevHead])).toString("utf8").trim();
     const mbB = (await git(runGit, repoRoot, ["merge-base", baseRef, headSha])).toString("utf8").trim();
-    const diffA = await git(runGit, repoRoot, [...GIT_ISOLATION, "diff", ...DIFF_FLAGS, mbA, prevHead]);
-    const diffB = await git(runGit, repoRoot, [...GIT_ISOLATION, "diff", ...DIFF_FLAGS, mbB, headSha]);
-    const prDiffPaths = nulLines(await git(runGit, repoRoot, [...GIT_ISOLATION, "diff", ...DIFF_FLAGS, "--name-only", "-z", mbB, headSha]));
-    const baseDeltaPaths = nulLines(await git(runGit, repoRoot, [...GIT_ISOLATION, "diff", ...DIFF_FLAGS, "--name-only", "-z", mbA, mbB]));
+    const prBlobsBefore = await rawEntries(runGit, repoRoot, mbA, prevHead);
+    const prBlobsAfter = await rawEntries(runGit, repoRoot, mbB, headSha);
+    const prDiffPaths = [...new Set([...prBlobsBefore, ...prBlobsAfter].map(entryPath))].sort();
+    const baseDeltaPaths = (await rawEntries(runGit, repoRoot, mbA, mbB)).map(entryPath);
     // A merge commit's combined diff (--cc) is non-empty only when the merge hand-resolved something.
     // Check every merge commit on the PR branch line (--first-parent) in prevHead..headSha; merges that arrived from the base side are not the PR's own.
     let conflictResolutionHunks = false;
     const merges = lines(await git(runGit, repoRoot, ["rev-list", "--merges", "--first-parent", `${prevHead}..${headSha}`]));
     if (merges.length > 0) {
-      // --cc ignores --text for -diff/binary attributes, and .git/info/attributes cannot be switched off in the repo.
+      // --cc honors -diff/binary attributes, and .git/info/attributes cannot be switched off in the repo.
       // Read the objects through a throwaway bare git dir (alternates) that has no attribute files.
       const objects = (await git(runGit, repoRoot, ["rev-parse", "--path-format=absolute", "--git-path", "objects"])).toString("utf8").trim();
       const bare = await mkdtemp(path.join(os.tmpdir(), "bmc-cc-"));
@@ -76,12 +79,12 @@ export async function computeBaseMergeCarry({ prevHead, headSha, baseRef, repoRo
         await git(runGit, repoRoot, ["init", "-q", "--bare", bare]);
         await writeFile(path.join(bare, "objects", "info", "alternates"), `${objects}\n`);
         for (const merge of merges) {
-          if ((await git(runGit, repoRoot, ["--git-dir", bare, "-c", "core.attributesFile=/dev/null", "diff-tree", "--cc", "--no-ext-diff", "--no-color", "--text", "--format=", merge])).toString("utf8").trim() !== "") conflictResolutionHunks = true;
+          if ((await git(runGit, repoRoot, ["--git-dir", bare, "-c", "core.attributesFile=/dev/null", "diff-tree", "--cc", "--no-ext-diff", "--no-color", "--format=", merge])).toString("utf8").trim() !== "") conflictResolutionHunks = true;
         }
       } finally { await rm(bare, { recursive: true, force: true }); }
     }
     return classifyBaseMergeCarry({
-      sourceHead: prevHead, newHead: headSha, patchIdBefore: await patchId(runGit, repoRoot, diffA), patchIdAfter: await patchId(runGit, repoRoot, diffB),
+      sourceHead: prevHead, newHead: headSha, prBlobsBefore, prBlobsAfter,
       prDiffPaths, baseDeltaPaths, conflictResolutionHunks,
     });
   } catch (error) {

@@ -148,17 +148,19 @@ head. On a ready PR, the `pre_approval_gate` re-runs on the new head per
 the verdict posted at the previous head when `scripts/github/classify-base-merge-carry.mjs`
 records `carry_verdict`, but this takes effect only once `merge-pr` and gate coordination
 accept the evidence (issue 2752 slice 2). Until then every new head still runs the full gate
-round. A carried verdict also needs CI green at the new head. The carry needs an identical
-whitespace-sensitive patch id of the PR diff (`git patch-id --verbatim`), an empty intersection of the PR diff paths and the base delta
+round. A carried verdict also needs CI green at the new head. The carry needs the same mode and
+blob object id for every PR path at both heads (raw `git diff-tree` tree entries, no rendered diff),
+an empty intersection of the PR diff paths and the base delta
 paths, a base delta that touches no gate tooling or config, and no conflict-resolution hunks
-in any merge commit on the PR branch line (first-parent) between the two heads. `partial_carry` defers to
-`GATE-EXEC-ANGLE-CARRY-FORWARD`. `full_regate` and `fallback_full` (any detection failure,
+in any merge commit on the PR branch line (first-parent) between the two heads. Any base change to a
+PR path, including a same-file line shift, is a full re-gate (partial carry is a later slice).
+`full_regate` and `fallback_full` (any detection failure,
 including a previous head that is not an ancestor of the new head) require the full round. The
-evidence record (source head, new head, both patch ids, the PR diff paths, the base delta
+evidence record (source head, new head, the PR blob lists at both heads, the PR diff paths, the base delta
 paths, the conflict-resolution flag, path intersection, gate tooling paths, decision, reason)
 is validated by `validateBaseMergeCarryEvidence`, which recomputes the decision and every
 derived field and can bind the record to the expected heads; a malformed or internally
-inconsistent record is a full re-gate. The validator never re-derives patch ids or paths from
+inconsistent record is a full re-gate. The validator never re-derives blob facts or paths from
 git, so a consumer re-runs `computeBaseMergeCarry` for the bound heads and compares before
 trusting the recorded facts. ADR 0156 records this rule.
 

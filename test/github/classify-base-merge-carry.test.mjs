@@ -10,24 +10,36 @@ import { buildBaseMergeCarryPath, computeBaseMergeCarry, main, runPinnedGit } fr
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
-const ok = { sourceHead: A, newHead: B, patchIdBefore: "p1", patchIdAfter: "p1", prDiffPaths: ["src/x.mjs"], baseDeltaPaths: ["docs/y.md"] };
+const blob = `src/x.mjs\t100644\t${"1".repeat(40)}`;
+const ok = { sourceHead: A, newHead: B, prBlobsBefore: [blob], prBlobsAfter: [blob], prDiffPaths: ["src/x.mjs"], baseDeltaPaths: ["docs/y.md"] };
 
-test("pure: carry, partial, full, fallback", () => {
+test("pure: carry, full, fallback", () => {
   assert.equal(classifyBaseMergeCarry(ok).decision, "carry_verdict");
-  assert.equal(classifyBaseMergeCarry({ ...ok, baseDeltaPaths: ["src/x.mjs"] }).decision, "partial_carry");
+  assert.equal(classifyBaseMergeCarry({ ...ok, baseDeltaPaths: ["src/x.mjs"] }).decision, "full_regate");
   assert.equal(classifyBaseMergeCarry({ ...ok, baseDeltaPaths: [".devloops"] }).decision, "full_regate");
   assert.equal(classifyBaseMergeCarry({ ...ok, baseDeltaPaths: ["skills/docs/gate-review-sub-loop-contract.md"] }).decision, "full_regate");
-  assert.equal(classifyBaseMergeCarry({ ...ok, patchIdAfter: "p2" }).decision, "full_regate");
+  assert.equal(classifyBaseMergeCarry({ ...ok, prBlobsAfter: [`src/x.mjs\t100644\t${"2".repeat(40)}`] }).decision, "full_regate");
+  assert.equal(classifyBaseMergeCarry({ ...ok, prBlobsAfter: [`src/x.mjs\t100755\t${"1".repeat(40)}`] }).decision, "full_regate");
   assert.equal(classifyBaseMergeCarry({ ...ok, conflictResolutionHunks: true }).decision, "full_regate");
   assert.equal(classifyBaseMergeCarry({ ...ok, detectionError: "boom" }).decision, "fallback_full");
-  assert.equal(classifyBaseMergeCarry({ ...ok, patchIdBefore: "" }).decision, "fallback_full");
+  assert.equal(classifyBaseMergeCarry({ ...ok, prBlobsBefore: [] }).decision, "fallback_full");
   assert.equal(classifyBaseMergeCarry({ ...ok, newHead: A }).decision, "fallback_full");
+});
+
+test("pure: non-string or empty evidence values never carry", () => {
+  for (const bad of [1, true, "", [1], [""], [true], "x"]) {
+    for (const field of ["prBlobsBefore", "prBlobsAfter", "prDiffPaths"]) {
+      assert.equal(classifyBaseMergeCarry({ ...ok, [field]: bad }).decision, "fallback_full", `${field}=${JSON.stringify(bad)}`);
+    }
+  }
+  const forged = { ...classifyBaseMergeCarry(ok), prBlobsBefore: [1], prBlobsAfter: [1] };
+  assert.equal(validateBaseMergeCarryEvidence(forged).ok, false);
 });
 
 test("validator: accepts genuine evidence and rejects tampering", () => {
   const ev = classifyBaseMergeCarry(ok);
   assert.equal(validateBaseMergeCarryEvidence(ev).ok, true);
-  assert.equal(validateBaseMergeCarryEvidence({ ...ev, patchIdAfter: "p2" }).ok, false);
+  assert.equal(validateBaseMergeCarryEvidence({ ...ev, prBlobsAfter: [`src/x.mjs\t100644\t${"2".repeat(40)}`] }).ok, false);
   assert.equal(validateBaseMergeCarryEvidence({ ...ev, pathIntersection: ["src/x.mjs"] }).ok, false);
   assert.equal(validateBaseMergeCarryEvidence({ ...ev, decision: "bogus" }).ok, false);
   const { reason, ...rest } = ev;
@@ -63,7 +75,7 @@ function advance(s, file) {
 test("git: unrelated base move carries", async () => {
   const ev = await advance(setup(), "docs/other.md");
   assert.equal(ev.decision, "carry_verdict", ev.reason);
-  assert.equal(ev.patchIdBefore, ev.patchIdAfter);
+  assert.deepEqual(ev.prBlobsBefore, ev.prBlobsAfter);
 });
 
 test("git: .devloops base move forces full re-gate", async () => {
@@ -72,7 +84,7 @@ test("git: .devloops base move forces full re-gate", async () => {
   assert.deepEqual(ev.gateToolingPaths, [".devloops"]);
 });
 
-test("git: base move touching a PR path is partial", async () => {
+test("git: base move touching a PR path forces full re-gate", async () => {
   const s = setup();
   s.put("base.txt", `PR\n${LINES.slice(6)}`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits top of base.txt");
   const prev = s.head();
@@ -81,22 +93,21 @@ test("git: base move touching a PR path is partial", async () => {
   // distant hunks merge cleanly; the base delta still touches a PR path
   s.git("merge", "-q", "--no-edit", "main");
   const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
-  assert.equal(ev.decision, "partial_carry", ev.reason);
+  assert.equal(ev.decision, "full_regate", ev.reason);
 });
 
-test("git: base edit above the PR hunk shifts its line numbers and still classifies partial_carry", async () => {
+test("git: base edit above the PR hunk (same file, line shift) forces full re-gate", async () => {
   const s = setup();
   s.put("base.txt", `${LINES.slice(0, -7)}PR\n`); s.git("add", "-A"); s.git("commit", "-qm", "pr edits bottom of base.txt");
   const prev = s.head();
   s.git("checkout", "-q", "main"); s.put("base.txt", `TOP1\nTOP2\n${LINES}`); s.git("add", "-A"); s.git("commit", "-qm", "main inserts at top");
   s.git("checkout", "-q", "pr"); s.git("merge", "-q", "--no-edit", "main");
   const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
-  assert.equal(ev.decision, "partial_carry", ev.reason);
-  assert.ok(ev.patchIdBefore);
-  assert.equal(ev.patchIdBefore, ev.patchIdAfter);
+  assert.equal(ev.decision, "full_regate", ev.reason);
+  assert.deepEqual(ev.pathIntersection, ["base.txt"]);
 });
 
-test("git: hostile ambient env and repo-local config never change the decision or patch ids", async () => {
+test("git: hostile ambient env and repo-local config never change the evidence", async () => {
   const s = setup();
   s.put("dä/blank.txt", "a\n\nb\n\nc\n"); s.git("add", "-A"); s.git("commit", "-qm", "blank file");
   s.put("base.txt", `PR\n${LINES.slice(6)}`); s.put("dä/blank.txt", "a\n\nB\n\nc\n"); s.git("add", "-A"); s.git("commit", "-qm", "pr edits");
@@ -115,14 +126,14 @@ test("git: hostile ambient env and repo-local config never change the decision o
   const elsewhere = mkdtempSync(path.join(os.tmpdir(), "bmc-else-"));
   const args = { prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir };
   const clean = await computeBaseMergeCarry(args);
-  assert.ok(clean.patchIdAfter);
+  assert.ok(clean.prBlobsAfter.length > 0);
   const envRows = [
     { GIT_DIFF_OPTS: "--unified=0" }, { GIT_EXTERNAL_DIFF: "false" }, { GIT_ATTR_SOURCE: "attrs" },
     { GIT_CONFIG_PARAMETERS: "'diff.noprefix=true'" }, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "diff.noprefix", GIT_CONFIG_VALUE_0: "true" },
     { GIT_CONFIG_GLOBAL: cfg }, { HOME: home, XDG_CONFIG_HOME: home },
     { GIT_DIR: path.join(elsewhere, ".git"), GIT_WORK_TREE: elsewhere }, { LANG: "de_DE.ISO-8859-1", LC_ALL: "tr_TR.UTF-8" },
   ];
-  const localRows = [["diff.noprefix", "true"], ["diff.mnemonicPrefix", "true"], ["core.quotePath", "true"], ["diff.suppressBlankEmpty", "true"]];
+  const localRows = [["diff.noprefix", "true"], ["diff.mnemonicPrefix", "true"], ["core.quotePath", "true"], ["diff.suppressBlankEmpty", "true"], ["core.abbrev", "7"], ["diff.submodule", "log"], ["diff.ignoreSubmodules", "all"]];
   const run = async (env) => {
     const saved = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
     Object.assign(process.env, env);
@@ -152,18 +163,46 @@ test("git: Latin-1 content change is not masked by utf8 decoding", async () => {
   const prev = s.head();
   s.put("f.txt", Buffer.from("caf\xE8\n", "latin1")); s.git("add", "-A"); s.git("commit", "-qm", "latin1 e-grave");
   const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
-  assert.notEqual(ev.patchIdBefore, ev.patchIdAfter);
+  assert.notDeepEqual(ev.prBlobsBefore, ev.prBlobsAfter);
   assert.equal(ev.decision, "full_regate");
 });
 
-test("git: a failing patch-id step falls back to full", async () => {
+test("git: binary NUL content change forces full re-gate", async () => {
   const s = setup();
-  const runGit = async (args, o) => (args[0] === "patch-id" ? { code: 1, stdout: Buffer.alloc(0), stderr: "boom" } : runPinnedGit(args, o));
+  s.put("bin.dat", Buffer.from([0, 1, 2, 3])); s.git("add", "-A"); s.git("commit", "-qm", "bin");
+  const prev = s.head();
+  s.put("bin.dat", Buffer.from([0, 9, 2, 3])); s.git("add", "-A"); s.git("commit", "-qm", "bin edit");
+  const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir });
+  assert.equal(ev.decision, "full_regate");
+});
+
+test("git: submodule commit change forces full re-gate, even with diff.submodule=log", async () => {
+  const s = setup();
+  const sub = mkdtempSync(path.join(os.tmpdir(), "bmc-sub-"));
+  const sg = (...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd: sub, env: ENV, encoding: "utf8" }).trim();
+  sg("init", "-q", "-b", "main"); writeFileSync(path.join(sub, "f"), "1\n"); sg("add", "-A"); sg("commit", "-qm", "s1");
+  const c1 = sg("rev-parse", "HEAD");
+  writeFileSync(path.join(sub, "f"), "2\n"); sg("add", "-A"); sg("commit", "-qm", "s2");
+  const c2 = sg("rev-parse", "HEAD");
+  // gitlinks via update-index: no submodule checkout or file transport needed
+  s.git("update-index", "--add", "--cacheinfo", `160000,${c1},sm`); s.git("commit", "-qm", "gitlink 1");
+  const prev = s.head();
+  s.git("update-index", "--cacheinfo", `160000,${c2},sm`); s.git("commit", "-qm", "gitlink 2");
+  const args = { prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir };
+  const plain = await computeBaseMergeCarry(args);
+  assert.equal(plain.decision, "full_regate", plain.reason);
+  s.git("config", "diff.submodule", "log");
+  assert.deepEqual(await computeBaseMergeCarry(args), plain);
+});
+
+test("git: a failing diff-tree step falls back to full", async () => {
+  const s = setup();
+  const runGit = async (args, o) => (args[0] === "diff-tree" ? { code: 1, stdout: Buffer.alloc(0), stderr: "boom" } : runPinnedGit(args, o));
   const prev = s.head();
   s.put("src/y.mjs", "y\n"); s.git("add", "-A"); s.git("commit", "-qm", "more");
   const ev = await computeBaseMergeCarry({ prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir, runGit });
   assert.equal(ev.decision, "fallback_full");
-  assert.match(ev.reason, /patch-id/);
+  assert.match(ev.reason, /diff-tree/);
 });
 
 test("git: PR patch changed forces full re-gate", async () => {
@@ -234,15 +273,16 @@ test("gate tooling covers agent mirrors and lockfiles", () => {
 });
 
 test("validator: rejects forged records and head mismatch", () => {
-  const partial = classifyBaseMergeCarry({ ...ok, baseDeltaPaths: ["src/x.mjs"] });
-  assert.equal(validateBaseMergeCarryEvidence(partial).ok, true);
+  const overlap = classifyBaseMergeCarry({ ...ok, baseDeltaPaths: ["src/x.mjs"] });
+  assert.equal(overlap.decision, "full_regate");
+  assert.equal(validateBaseMergeCarryEvidence(overlap).ok, true);
   // decision flipped to carry_verdict with the intersection emptied
-  assert.equal(validateBaseMergeCarryEvidence({ ...partial, decision: "carry_verdict", pathIntersection: [] }).ok, false);
+  assert.equal(validateBaseMergeCarryEvidence({ ...overlap, decision: "carry_verdict", pathIntersection: [] }).ok, false);
   const ev = classifyBaseMergeCarry(ok);
   assert.equal(validateBaseMergeCarryEvidence(ev, { expectedSourceHead: A, expectedNewHead: B }).ok, true);
   assert.equal(validateBaseMergeCarryEvidence(ev, { expectedNewHead: A }).ok, false);
   assert.equal(validateBaseMergeCarryEvidence(ev, { expectedSourceHead: B }).ok, false);
-  assert.equal(validateBaseMergeCarryEvidence({ ...partial, patchIdAfter: "p2" }).ok, false);
+  assert.equal(validateBaseMergeCarryEvidence({ ...ev, prBlobsAfter: [`src/x.mjs\t100644\t${"2".repeat(40)}`] }).ok, false);
 });
 
 test("gate tooling matcher rejects look-alike non-tooling paths", () => {
@@ -310,19 +350,4 @@ test("main: writes the keyed evidence artifact and refuses a short prev-head", a
   } finally { process.stderr.write = realErr; }
   assert.equal(process.exitCode, 1);
   process.exitCode = saved;
-});
-
-test("git: patch ids ignore repo-local core.abbrev and diff.suppressBlankEmpty", async () => {
-  const s = setup();
-  s.put("blank.txt", "a\n\nb\n"); s.put("bin.dat", Buffer.from([0, 1, 2, 3]));
-  s.git("add", "-A"); s.git("commit", "-qm", "files");
-  const prev = s.head();
-  s.put("blank.txt", "a\n\nc\n"); s.put("bin.dat", Buffer.from([0, 9, 2, 3]));
-  s.git("add", "-A"); s.git("commit", "-qm", "edit");
-  const args = { prevHead: prev, headSha: s.head(), baseRef: "main", repoRoot: s.dir };
-  const plain = await computeBaseMergeCarry(args);
-  s.git("config", "core.abbrev", "12"); s.git("config", "diff.suppressBlankEmpty", "true");
-  const configured = await computeBaseMergeCarry(args);
-  assert.ok(plain.patchIdAfter);
-  assert.equal(configured.patchIdAfter, plain.patchIdAfter);
 });
