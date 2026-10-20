@@ -282,3 +282,13 @@ test("session_start renders .pi/agents in a fresh dev-loops-shaped clone", () =>
     assert.deepEqual(await launch(root, { agent: "quality" }), { block: false });
     assert.doesNotMatch(fs.readFileSync(path.join(dir, "quality.agent.md"), "utf8"), /tools:.*\b(search|execute)\b/);
   }));
+
+test("session_start leaves a consumer root with its own agents/ without .pi/agents", () =>
+  withHome(async (root) => {
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "some-consumer" }));
+    writeAt(path.join(root, "agents", "x.agent.md"), "---\nname: x\ntools: read\n---\nbody\n");
+    const events = new Map();
+    extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
+    await events.get("session_start")({}, { cwd: root, getSessionId: () => "s" });
+    assert.equal(fs.existsSync(path.join(root, ".pi", "agents")), false);
+  }));

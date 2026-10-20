@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 import {
   provisionWorktree,
@@ -506,6 +507,30 @@ test("provisionWorktree: a worktree without agents/ gets no .pi/agents", async (
     const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
     assert.ok(!res.actions.some((a) => a.entry === ".pi/agents"));
     assert.ok(!existsSync(path.join(fx.worktreePath, ".pi", "agents")));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provisionWorktree: a tracked .pi/agents symlink is left untouched and recorded as a skip", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    const wt = fx.worktreePath;
+    writeFileSync(path.join(wt, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    mkdirSync(path.join(wt, "agents"));
+    writeFileSync(path.join(wt, "agents", "x.agent.md"), "---\nname: x\ndescription: x\ntools: read\n---\nbody\n");
+    mkdirSync(path.join(wt, ".pi"));
+    symlinkSync("../agents", path.join(wt, ".pi", "agents"));
+    const git = (...args) => execFileSync("git", ["-C", wt, ...args], { stdio: "pipe" });
+    git("init", "-q");
+    git("add", "-A");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+    const res = await provisionWorktree({ worktreePath: wt, repoRoot: fx.repoRoot });
+    const act = res.actions.find((a) => a.entry === ".pi/agents");
+    assert.equal(act.mode, "skip");
+    assert.match(act.reason, /\.pi\/agents/);
+    assert.equal(readlinkSync(path.join(wt, ".pi", "agents")), "../agents");
+    assert.equal(git("status", "--porcelain").toString().replace(/.*node_modules.*\n?/g, ""), "");
   } finally {
     fx.cleanup();
   }
