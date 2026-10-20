@@ -68,13 +68,12 @@ error.`;
 
 const REQUIRED_READS = Object.freeze(["skills/docs/structural-quality.md", "changes/README.md"]);
 const ADR_NEED_UNSTATED = "unstated";
-// Repo-relative path citation: a multi-segment path, or a root-level single
-// segment that carries a dot (`AGENTS.md`, `package.json`, `.devloops`). A token
-// never ends on a dot, so a sentence-final citation keeps its path and drops the
-// period, and the trailing lookahead keeps a URL's path segment out. Segments
-// are validated again before a token is used as a path.
+// Repo-relative path citation, including extensionless root entries (LICENSE).
+// A token never ends on a dot, so sentence punctuation stays out. Colon/slash
+// boundaries exclude URL schemes and their path segments. Every candidate still
+// requires existence and containment before it is claimed.
 const PATH_CANDIDATE_RE = new RegExp(
-  `(?<![\\w./-])((?:\\.\\/)?(?:[A-Za-z0-9._-]+\\/)+[A-Za-z0-9._-]*[A-Za-z0-9_-]|(?:\\.\\/)?[A-Za-z0-9._-]*\\.[A-Za-z0-9._-]*[A-Za-z0-9_-])(?![\\w/-])`,
+  `(?<![\\w./:-])((?:\\.\\/)?(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]*[A-Za-z0-9_-])(?![\\w/:-])`,
   "gu",
 );
 const PATH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/u;
@@ -193,7 +192,19 @@ const PATH_TOKEN_ESCAPE_RE = /[.*+?^${}()|[\]\\]/gu;
 function namesTouchedPath(text, relPath, kind) {
   const token = kind === "directory" ? `${relPath}/` : relPath;
   const escaped = token.replace(PATH_TOKEN_ESCAPE_RE, "\\$&");
-  return new RegExp(`(?<![\\w/.-])${escaped}(?![\\w/-])(?!\\.[\\w/-])`, "u").test(text);
+  if (new RegExp(`(?<![\\w/.-])${escaped}(?![\\w/-])(?!\\.[\\w/-])`, "u").test(text)) return true;
+
+  // Markdown destinations name files relative to the ADR (docs/decisions), not
+  // the repository root. Resolve them rather than loosening the token boundary:
+  // ../src/a.mjs and ../../src/a.mjs.bak must not claim src/a.mjs.
+  for (const [, angled, plain] of text.matchAll(/\]\(\s*(?:<([^<>\n]+)>|([^\s)]+))(?:\s+["'][^"'\n]*["'])?\s*\)/gu)) {
+    const destination = (angled ?? plain).split(/[?#]/u)[0];
+    if (!destination || /^(?:[A-Za-z][A-Za-z0-9+.-]*:|\/)/u.test(destination)) continue;
+    if (kind === "directory" && !destination.endsWith("/")) continue;
+    const normalized = path.posix.normalize(path.posix.join("docs/decisions", destination));
+    if (normalized.replace(/\/$/u, "") === relPath) return true;
+  }
+  return false;
 }
 
 /**

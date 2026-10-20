@@ -368,6 +368,43 @@ test("accepted-ADR attribution rejects a directory record that only names a sibl
   assert.deepEqual(brief.adrs.map(({ number }) => number), []);
 });
 
+test("accepted-ADR attribution resolves relative Markdown destinations from the ADR directory", async () => {
+  const root = await fixtureRepo({
+    decisions: {
+      "0052-relative-link.md": record({
+        title: "0052. Relative link",
+        body: "Enforces [the contract](../../skills/docs/decision-record-contract.md).",
+      }),
+      "0053-relative-directory.md": record({
+        title: "0053. Relative directory",
+        body: "Covers [scripts](../../scripts/).",
+      }),
+    },
+    files: { "skills/docs/decision-record-contract.md": "# Contract\n", "scripts/example.mjs": "// Example\n" },
+  });
+  const brief = await buildImplementationBrief({
+    body: MATRIX,
+    repoRoot: root,
+    paths: ["skills/docs/decision-record-contract.md", "scripts/"],
+  });
+  assert.deepEqual(brief.adrs.map(({ number }) => number), ["0052", "0053"]);
+});
+
+test("ADR-relative links must resolve to the exact touched path, not a suffix or external URL", async () => {
+  const root = await fixtureRepo({
+    decisions: {
+      "0010-wrong-base.md": record({ title: "0010. Wrong base", body: "See [file](../src/a.mjs)." }),
+      "0011-longer-path.md": record({ title: "0011. Longer path", body: "See [file](../../src/a.mjs.bak)." }),
+      "0012-external.md": record({ title: "0012. External", body: "See [file](https://example.com/src/a.mjs)." }),
+      "0013-outside.md": record({ title: "0013. Outside", body: "See [file](../../../src/a.mjs)." }),
+      "0014-sibling.md": record({ title: "0014. Sibling", body: "See [directory](../../scriptsOther/)." }),
+    },
+    files: { "src/a.mjs": "// A\n", "scripts/example.mjs": "// Example\n" },
+  });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs", "scripts/"] });
+  assert.deepEqual(brief.adrs, []);
+});
+
 test("a sentence-final path citation keeps the path and drops the period", async () => {
   const root = await fixtureRepo({ files: { "src/a.mjs": "export const a = 1;\n" } });
   const brief = await buildImplementationBrief({ body: `${MATRIX}\nUpdate src/a.mjs. Done.\n`, repoRoot: root });
@@ -381,10 +418,32 @@ test("a root-level existing citation is claimed", async () => {
   assert.deepEqual(brief.touchedPaths, ["AGENTS.md"]);
 });
 
+test("an existing extensionless root citation is claimed, including ./ and sentence punctuation", async () => {
+  const root = await fixtureRepo({ files: { LICENSE: "License text\n" } });
+  for (const citation of ["LICENSE", "./LICENSE"]) {
+    const brief = await buildImplementationBrief({ body: `${MATRIX}\nUpdate ${citation}.\n`, repoRoot: root });
+    assert.deepEqual(brief.touchedPaths, ["LICENSE"]);
+  }
+});
+
+test("extensionless candidates still require existence and containment, and exclude URL schemes", async () => {
+  const root = await fixtureRepo({ files: { https: "Not a citation\n" } });
+  const outside = await fixtureRepo({ files: { LICENSE: "Outside license\n" } });
+  await symlink(path.join(outside, "LICENSE"), path.join(root, "LICENSE"));
+  const brief = await buildImplementationBrief({
+    body: `${MATRIX}\nUpdate MISSING and LICENSE. See https://example.com/LICENSE.\n`,
+    repoRoot: root,
+  });
+  assert.deepEqual(brief.touchedPaths, []);
+  assert.deepEqual(brief.unresolvedPaths, []);
+});
+
 test("a URL's path segment is not claimed", async () => {
   const root = await fixtureRepo({ files: { "a/b.mjs": "export const b = 1;\n" } });
   const brief = await buildImplementationBrief({
-    body: `${MATRIX}\nSee https://example.com/a/b.mjs for details.\n`,
+    // Avoid MATRIX's standalone "A", which names the fixture's a/ directory
+    // on case-insensitive filesystems once extensionless citations are allowed.
+    body: "See https://example.com/a/b.mjs for details.\n",
     repoRoot: root,
   });
   assert.deepEqual(brief.touchedPaths, []);
@@ -493,11 +552,17 @@ test("no gate, judge or reviewer surface consumes the brief", async () => {
   // this suite too.
   const surfaces = [
     ...(await collectSurface(path.join(repoRoot, "scripts", "github"), (name) => name.endsWith(".mjs") && GATE_JUDGE_REVIEW_MODULE_RE.test(name))),
-    ...(await collectSurface(path.join(repoRoot, "scripts", "loop"), (name) => /^judge.*\.mjs$/u.test(name))),
+    ...(await collectSurface(path.join(repoRoot, "scripts", "loop"), (name) => name.endsWith(".mjs") && GATE_JUDGE_REVIEW_MODULE_RE.test(name))),
     ...(await collectSurface(path.join(repoRoot, "agents"), (name) => name.endsWith(".agent.md") && !BRIEF_CONSUMER_AGENTS.has(name))),
   ];
   assert.ok(surfaces.length > 0, "the scan must find the gate/judge/reviewer surface");
-  for (const relPath of ["scripts/github/write-gate-context.mjs", "scripts/loop/judge-pass.mjs", "agents/review.agent.md"]) {
+  for (const relPath of [
+    "scripts/github/write-gate-context.mjs",
+    "scripts/loop/judge-pass.mjs",
+    "scripts/loop/emit-judge-work-order.mjs",
+    "scripts/loop/resolve-gate-dispatch.mjs",
+    "agents/review.agent.md",
+  ]) {
     assert.ok(surfaces.includes(path.join(repoRoot, relPath)), `the scan must cover ${relPath}`);
   }
   for (const file of surfaces) {
