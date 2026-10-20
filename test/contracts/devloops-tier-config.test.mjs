@@ -84,8 +84,7 @@ test("this repo's .devloops resolves the regular tier to sonnet and the strong r
     );
   }
   assert.equal(config.models.tiers.high.pi, "openai-codex/gpt-6.1-sol", "the strong tier's Pi model must be the Codex model, never the free model");
-  // `judge` has no built-in tier (it pins `opus` on Claude via `claudeModel` frontmatter), so it is not asserted here.
-  for (const role of ["review", "refiner", "pre-push-reviewer"]) {
+  for (const role of ["review", "refiner", "judge", "pre-push-reviewer"]) {
     assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "opus", `${role} on claude`);
     assert.equal(resolveRoleModel(config, { role, harness: "pi" }), "openai-codex/gpt-6.1-sol", `${role} on pi`);
   }

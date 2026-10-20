@@ -213,6 +213,7 @@ models:
       pi: openai-codex/gpt-6.1-sol
   roleTiers:
     pre-push-reviewer: pre-pr-strong
+    judge: high
     developer: low
     fixer: low
 
