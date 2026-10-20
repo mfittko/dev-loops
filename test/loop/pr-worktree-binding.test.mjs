@@ -175,6 +175,32 @@ async function refused(f, refusal) {
   assert.equal(existsSync(path.join(f.main, "tmp/worktrees/dev-loops/pr-2848")), false);
 }
 
+for (const kind of ["PR", " pr "]) {
+  test(`normalized PR kind ${JSON.stringify(kind)} binds the verified checkout`, async () => {
+    await fixture(async (f) => {
+      f.resolved.bundle.activeArtifact.kind = kind;
+      await writeFile(f.input, JSON.stringify(f.resolved));
+      const built = await f.build();
+      assert.equal(built.code, 0, built.stderr);
+      assert.equal(JSON.parse(built.stdout).cwd, f.checkout);
+      const emitted = await f.emit();
+      assert.equal(emitted.code, 0, emitted.stderr);
+      const plan = JSON.parse(await readFile(JSON.parse(emitted.stdout).planPath, "utf8"));
+      assert.equal(plan.workOrder.handoff.cwd, f.checkout);
+      assert.equal(existsSync(path.join(f.main, "tmp/worktrees/dev-loops/pr-2848")), false);
+    });
+  });
+
+  test(`normalized PR kind ${JSON.stringify(kind)} refuses a missing association`, async () => {
+    await fixture(async (f) => {
+      f.resolved.bundle.activeArtifact.kind = kind;
+      await writeFile(f.input, JSON.stringify(f.resolved));
+      runGitFixture(f.main, ["worktree", "remove", "--force", f.checkout]);
+      await refused(f, "pr_worktree_not_found");
+    });
+  });
+}
+
 for (const [label, changes] of [
   ["fork", { headRepositoryOwner: { login: "foreign" } }],
   ["wrong PR", { number: 999 }],
@@ -245,6 +271,15 @@ process.stdout.write(execFileSync(${JSON.stringify(realGit)}, args, { stdio: ['i
   f.env.TEST_WORKTREE_LIST = listing;
   f.env.TEST_WORKTREE_FAIL = fail ? "1" : "0";
 }
+
+test("a linked caller binds despite an unrelated missing registration before it", async () => {
+  await fixture(async (f) => {
+    await gitListing(f, `worktree ${f.main}\nHEAD ${f.pr.headRefOid}\nbranch refs/heads/main\n\nworktree ${path.join(f.temp, "missing")}\nHEAD ${f.pr.headRefOid}\nbranch refs/heads/unrelated\n\nworktree ${f.checkout}\nHEAD ${f.pr.headRefOid}\nbranch refs/heads/issue-2588\n`);
+    const built = await f.build({ cwd: f.checkout });
+    assert.equal(built.code, 0, built.stderr);
+    assert.equal(JSON.parse(built.stdout).cwd, f.checkout);
+  });
+});
 
 test("duplicate PR branch registrations refuse before materialization", async () => {
   await fixture(async (f) => {

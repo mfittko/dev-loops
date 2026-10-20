@@ -60,8 +60,9 @@ const parseError = buildParseError(USAGE);
 
 async function resolvePrWorktree(bundle, repoRoot, repoSlug) {
   const artifact = bundle?.activeArtifact ?? bundle?.canonicalState?.target;
+  const kind = typeof artifact?.kind === "string" ? artifact.kind.trim().toLowerCase() : null;
   // Terminal reconciliation needs no checkout; other target kinds retain their acquisition paths.
-  if (artifact?.kind !== "pr" || bundle?.routeKind === "needs_reconcile") return undefined;
+  if (kind !== "pr" || bundle?.routeKind === "needs_reconcile") return undefined;
   const refuse = (refusal, message) => { throw Object.assign(new Error(message), { refusal }); };
   try {
     const prNumber = artifact.pr;
@@ -103,7 +104,14 @@ async function resolvePrWorktree(bundle, repoRoot, repoSlug) {
       refuse("pr_worktree_verification_failed", "Git did not return valid registered worktrees");
     }
     const main = canonical(entries[0].path);
-    if (!entries.some((entry) => canonical(entry.path) === anchor)) {
+    if (!entries.some((entry) => {
+      try { return canonical(entry.path) === anchor; } catch (error) {
+        // Unrelated stale registrations cannot prevent finding the verified caller.
+        if (entry.branch !== `refs/heads/${branch}`
+          && ["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(error?.code)) return false;
+        throw error;
+      }
+    })) {
       refuse("pr_worktree_verification_failed", "Current checkout is absent from Git's worktree registrations");
     }
     const candidates = entries.slice(1).filter((entry) => entry.branch === `refs/heads/${branch}`);
