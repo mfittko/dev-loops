@@ -345,6 +345,8 @@ test("DESIGN-SIMPLEST-FIRST is registered, owned by structural-quality, and cite
   for (const file of ["skills/loop-grill/SKILL.md", "agents/refiner.agent.md"]) {
     assert.match(await read(file), /`## Simplest design` section[\s\S]{0,300}minimal approach[\s\S]{0,100}rejected[\s\S]{0,200}cost comparison/, file);
   }
+  assert.match(await read("agents/refiner.agent.md"), /`## Simplest design` section per issue and per slice/);
+  assert.match(await read("skills/loop-grill/SKILL.md"), /The synthesized body and every slice also carry a `## Simplest design` section/);
   assert.match(await read("skills/loop-grill/SKILL.md"), /`simplest_design_missing`[\s\S]{0,120}grill or a re-grill[\s\S]{0,200}`size_forecast_\*` findings only/);
   assert.match(await read("skills/loop-grill/SKILL.md"), /`simplest_design_missing` is also not disposable[\s\S]{0,80}only by writing/);
   assert.match(await read("skills/loop-grill/SKILL.md"), /`size_forecast_malformed` or `simplest_design_missing` finding blocks `grill-clean`/);
