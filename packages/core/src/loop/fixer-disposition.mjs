@@ -91,7 +91,7 @@ function normalizeSiteCoverage(entry, label, ruleIds) {
   const disposed = new Set(sites.map((s) => s.site));
   if (disposed.size !== sites.length) {
     const dup = sites.find((s, i) => sites.findIndex((o) => o.site === s.site) !== i);
-    throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: ${label} records site ${dup.site} more than once`);
+    throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: ${label} records site ${JSON.stringify(dup.site)} more than once`);
   }
   const returnedSites = returned.map((site) => {
     if (typeof site === "string" && sites.some((s) => s.kind === "input_form" && s.site === site)) return site;
@@ -174,7 +174,7 @@ export function siteCoverageGaps(actItems, siteCoverage, residualRefs = new Set(
 
 /** The recorded skip reason for a site of an act item, or null. */
 export function recordedSkipReason(siteCoverage, fingerprint, site) {
-  const found = (siteCoverage ?? []).find((record) => record.fingerprint === fingerprint)?.sites?.find((s) => s.site === site && s.status === SITE_STATUS.SKIPPED);
+  const found = (siteCoverage ?? []).find((record) => record.fingerprint === fingerprint)?.sites?.find((s) => (s.kind === "input_form" ? s.site === site : s.site === site.trim()) && s.status === SITE_STATUS.SKIPPED);
   return found?.reason ?? null;
 }
 
