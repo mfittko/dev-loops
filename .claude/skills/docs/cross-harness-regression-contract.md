@@ -69,6 +69,10 @@ The default container image keeps its `pi-subagents` pin (`Dockerfile` `PI_SUBAG
 
 A read-only child loads the whole extension, so the extension keeps its mutation-capable post-merge hooks (`tool_result`, `user_bash`, `agent_end`) inert in any read-only session — a restricted role or the unresolved fail-closed role. `isMergeCapableCommand` splits shell segments without quote awareness, so a reviewer's allowed read form such as `grep '; gh pr merge 42 ;' README.md` would otherwise be misread as a merge and queue post-merge updates, main-checkout sync and cleanup even though no merge ran. The `tool_call` gate already denies a read-only session any real merge, so those hooks have nothing legitimate to do there. `test/extension-pi-readonly-role-gate.test.mjs` pins the inert hooks.
 
+## Project agent set on Pi
+
+`.pi/agents` is an untracked, gitignored directory (decision record 0173, amending the layout convention from issues 1606 and 1655). `provision-worktree.mjs` renders the Pi-valid copies of `agents/*.agent.md` into it on worktree create and reuse. The `tool_call` handler refuses a `subagent` launch with `agent_set_not_rendered` when a loaded agent still lists `search` or `execute`. Never restore a symlink at `.pi/agents`. The sources keep the neutral vocabulary and the Claude assets are unchanged.
+
 ## Non-goals
 
 - No new or expanded CI matrix: `bun run verify` (which CI runs on every pull request) already covers `test:assets`, `test:extension`, `test:scripts`, `test:core`, `test:docs`, and `test:dev-loop`. Only `bun run smoke:headless` stays manual/local-only.
