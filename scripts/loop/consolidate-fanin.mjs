@@ -226,7 +226,8 @@ Optional:
                                  angle-first prompt fails this mechanically. A round with no such
                                  records is never newly blocked (progressive/optional capture), except at a
                                  head whose gate round was retired with archived dispatch records
-                                 (GATE-EXEC-ROUND-RETIREMENT).
+                                 (GATE-EXEC-ROUND-RETIREMENT) and except the --emit-plan
+                                 records-floor (a plan with a fresh unit needs this gate's dispatch records).
   --cache-telemetry <path>       The optional before/after cache-telemetry evidence artifact
                                  (<gate>-<headSha>.cache-telemetry.json) as JSON.
                                  When given, the fan-in validates it via enforceCacheTelemetryEvidence
@@ -253,7 +254,9 @@ Optional:
                                  infer success from path existence. REQUIRES --gate and
                                  --head-sha (the round the plan's key is verified against).
                                  Also fails closed when the plan has a fresh unit and the head has
-                                 zero dispatch-prompt records. The plan is never a findings source.
+                                 zero dispatch-prompt records of --gate. The plan is never a findings source.
+                                 The keyed fan-in ledger is written under --tmp-root, which MUST be the
+                                 root the plan was emitted under; it is removed at the start of every run.
                                  The ledger gains a "provenance" object ({ distinctReviewers, perAngle })
                                  derived from the head-stamped artifacts, the plan units
                                  and --carry-forward-plan, and the same ledger is also written to the
@@ -263,6 +266,8 @@ Optional:
                                  records read by the briefing-prefix verification (default:
                                  process.cwd()/tmp). Sentinels are read directly from this directory
                                  (not a tmp/ subdirectory of it); per-gate records from <tmpRoot>/gate-context/**.
+                                 With --emit-plan, the keyed fan-in ledger is written here, so this MUST be
+                                 the root the plan was emitted under.
   --spec-authority <path>        JSON { specDigest, headSha, contentDigest, checkedCriteria }
                                  (issue 2008 / ADR 0061 AC1). When supplied, stamps the
                                  --ledger-out { overallVerdict, findings } object with the pinned
@@ -455,8 +460,17 @@ function normalizeHeadShaValue(value) {
 // caller cannot bypass the check. Unreadable/invalid-JSON/missing-key errors
 // all carry the "cannot verify emit-plan key" prefix; a mismatch carries the
 // "is stamped for ... but this round consolidates ..." family the
-// --cache-telemetry guard uses. A guard only: nothing from the plan flows
-// into any output.
+// --cache-telemetry guard uses. The plan units feed the ledger provenance and
+// plan.repo/plan.pr key the fan-in ledger path; nothing else flows from it.
+
+// Count the dispatch-prompt records of ONE gate at a head (the other gate's
+// same-head records stay live and are not counted).
+async function countGateDispatchRecords(tmpRoot, gate, headSha) {
+  if (typeof gate !== "string") return 0;
+  const prefix = `checkpoint-dispatch-prompt-${gateScopePrefix(gate.trim().toLowerCase())}`;
+  return (await readdir(tmpRoot).catch(() => [])).filter((n) => n.startsWith(prefix) && n.endsWith(`-${headSha}.json`)).length;
+}
+
 async function verifyEmitPlanKey(planPath, { repo, pr, gate, headSha, carriedAngles, carryForwardPlan, resolvedAngles }) {
   // The round's --gate must be a canonical supported gate (string membership in
   // VALID_GATES, no String() coercion) BEFORE any compare: a direct
@@ -1016,6 +1030,9 @@ export async function consolidateGateFanin(options) {
   let emitPlan;
   if (options.emitPlan !== undefined) {
     emitPlan = await verifyEmitPlanKey(options.emitPlan, options);
+    // Clear any stale keyed fan-in ledger first, so a refused run leaves no
+    // keyed file behind (as emit-fanout-dispatch.mjs does for its plan).
+    await rm(buildGateFaninLedgerPath({ repo: emitPlan.repo, pr: emitPlan.pr, gate: options.gate.trim().toLowerCase(), headSha: options.headSha, tmpRoot: options.tmpRoot ?? path.join(process.cwd(), "tmp") }), { force: true });
     // The guard already proved this is a canonical string gate. Normalize it
     // for downstream guarded consumers without changing the omission
     // programmatic path, whose legacy pass-through behavior is preserved.
@@ -1187,14 +1204,11 @@ export async function consolidateGateFanin(options) {
     // mismatched delivered prompt, or an emitted unit that is not inline-aligned).
     // A round with no dispatch-prompt records at all is never newly blocked —
     // progressive/optional capture — except at a head whose gate round was retired
-    // with archived dispatch records (GATE-EXEC-ROUND-RETIREMENT).
+    // with archived dispatch records (GATE-EXEC-ROUND-RETIREMENT) and except the
+    // --emit-plan records-floor below (a plan with a fresh unit needs this gate's records).
     const layoutVerdict = await verifyDispatchPromptLayoutForHead(tmpRoot, options.headSha);
     if (layoutVerdict.recordCount > 0 && !layoutVerdict.verified) {
       throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT dispatch-prompt layout verification failed for head ${options.headSha} (${layoutVerdict.recordCount} dispatch-prompt record(s)): ${layoutVerdict.reason} — the fan-in refuses to consolidate a round whose reviewer prompt did not bind to the sanctioned emitter's emitted unit. Re-run the sanctioned emitter (emit-fanout-dispatch.mjs) for the whole round, re-dispatch every unit's compact dispatchPrompt, then re-consolidate.`);
-    }
-    // Records-floor: a plan with fresh units must leave dispatch-prompt records at this head.
-    if (emitPlan !== undefined && Array.isArray(emitPlan.units) && emitPlan.units.length > 0 && layoutVerdict.recordCount === 0) {
-      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: --emit-plan has ${emitPlan.units.length} fresh unit(s) but head ${options.headSha} has zero dispatch-prompt records, so the layout check would pass vacuously; re-dispatch every unit's compact dispatchPrompt via the sanctioned emitter, then re-consolidate (fail-closed)`);
     }
     // The emitter writes a dispatch-prompt record per unit, so records on disk mark
     // a fan-out round; it must pass --emit-plan so every unit's pull receipt is checked
@@ -1205,10 +1219,15 @@ export async function consolidateGateFanin(options) {
     const retired = await readRetiredDispatchExecutions(tmpRoot, gate, options.headSha);
     if (retired.count > 0) {
       // Fresh records are counted for the retired gate only: the other gate's same-head records stay live.
-      const fresh = gate === undefined ? 0 : (await readdir(tmpRoot).catch(() => [])).filter((n) => n.startsWith(`checkpoint-dispatch-prompt-${gateScopePrefix(gate)}`) && n.endsWith(`-${options.headSha}.json`)).length;
+      const fresh = gate === undefined ? 0 : await countGateDispatchRecords(tmpRoot, gate, options.headSha);
       if (emitPlan === undefined || fresh === 0) throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: head ${options.headSha} was retired with archived dispatch records, so fan-in needs --gate, a fresh --emit-plan and fresh dispatch records for that gate (fail-closed)`);
       const stale = (emitPlan.units ?? []).find((u) => retired.identities.has(u.executionIdentity));
       if (stale) throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: unit ${stale.scope} reuses execution ${stale.executionIdentity} from a retired round's archived dispatch records; re-dispatch it (fail-closed)`);
+    }
+    // Records-floor (after the retired-head checks, which carry their own message):
+    // a plan with fresh units must leave this gate's dispatch-prompt records at this head.
+    if (emitPlan !== undefined && Array.isArray(emitPlan.units) && emitPlan.units.length > 0 && (await countGateDispatchRecords(tmpRoot, options.gate, options.headSha)) === 0) {
+      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: --emit-plan has ${emitPlan.units.length} fresh unit(s) but head ${options.headSha} has zero dispatch-prompt records, so the layout check would pass vacuously; re-dispatch every unit's compact dispatchPrompt via the sanctioned emitter, then re-consolidate (fail-closed)`);
     }
   }
 

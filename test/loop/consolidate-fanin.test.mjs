@@ -4736,6 +4736,26 @@ test("#2526 records-floor: a fresh-unit plan with zero dispatch-prompt records f
   });
 });
 
+test("#2526 records-floor: only the other gate's dispatch-prompt record at the head still fails closed, and a stale keyed ledger is removed", async () => {
+  const units = [unitOf(["scope"], null, "r1-u0")];
+  await withProvenanceRound({ units, fanout: "    mode: per-angle" }, async ({ root, base, ledgerOut }) => {
+    await rm(dispatchPromptLayoutRecordPath(root, "draft-gate-u0", PROV_HEAD));
+    // A record exists at the head, but for the other gate only.
+    await writeEmitPlanLayoutRecord(root, { scope: "pre-approval-gate-u0", angles: ["scope"] }, "pre_approval_gate", PROV_HEAD);
+    const keyed = buildGateFaninLedgerPath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, tmpRoot: root });
+    await mkdir(path.dirname(keyed), { recursive: true });
+    await writeFile(keyed, "stale", "utf8");
+    const out = path.join(root, "out", "findings.json");
+    await assert.rejects(
+      () => consolidateGateFanin({ ...base, out, ledgerOut }),
+      /GATE-EXEC-FANOUT-DISPATCH-EMIT: --emit-plan has 1 fresh unit\(s\) .* zero dispatch-prompt records/,
+    );
+    assert.equal(existsSync(out), false);
+    assert.equal(existsSync(ledgerOut), false);
+    assert.equal(existsSync(keyed), false);
+  });
+});
+
 test("#2526 records-floor: a zero-unit carried-only plan still consolidates and carries provenance", async () => {
   await withTempDir(async (root) => {
     const gate = "draft_gate";
