@@ -3,7 +3,8 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import os from "node:os";
 import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
-import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
+import { execFileSync } from "node:child_process";
+import { DEFAULT_TEST_PR_BODY, initGitFixture, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 import { parseUpsertCheckpointVerdictCliArgs, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { startDeltaSequence } from "../../packages/core/src/loop/pre-push-delta-review.mjs";
 
@@ -11,8 +12,8 @@ import { startDeltaSequence } from "../../packages/core/src/loop/pre-push-delta-
 // clean delta review. The comment at A is updated to clean with the Converged field while the PR head is the
 // fixer commit. Everything else keeps today's refusal.
 
-const A = "a".repeat(40);
-const FIX = "b".repeat(40);
+let A = "a".repeat(40);
+let FIX = "b".repeat(40);
 
 let gitStubDir = null;
 let originalPath = null;
@@ -37,7 +38,7 @@ after(async () => {
 
 const finding = (severity, n = 1) => ({ severity, angle: "correctness", summary: `${severity} finding ${n}`, judgeDisposition: "act", judgeRationale: "test rationale" });
 
-const EXISTING_BODY = [
+const existingBody = () => [
   "### Gate review: `draft_gate`",
   "",
   `**Reviewed head SHA:** \`${A}\``,
@@ -66,7 +67,7 @@ function convergedInput(actList, overrides = {}) {
 }
 
 // Answers every gh call; the PR head is the fixer commit and the draft_gate review lives at A.
-function makeRunChild({ puts, existingReview = true, currentHead = FIX, body = EXISTING_BODY }) {
+function makeRunChild({ puts, existingReview = true, currentHead = FIX, body = existingBody() }) {
   const prJson = JSON.stringify({
     number: 17, state: "OPEN", isDraft: true, headRefOid: currentHead, body: DEFAULT_TEST_PR_BODY,
     closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
@@ -89,6 +90,7 @@ function makeRunChild({ puts, existingReview = true, currentHead = FIX, body = E
     if (a.includes("issues/17/comments")) return { code: 0, stdout: "[]\n", stderr: "" };
     if (a.includes("pulls/17/reviews")) return { code: 0, stdout: `${JSON.stringify(reviews)}\n`, stderr: "" };
     if (a.includes("pulls/17/files")) return { code: 0, stdout: "[]\n", stderr: "" };
+    if (a.includes("baseRefOid,labels")) return { code: 0, stdout: '{"baseRefOid":"main","labels":[]}\n', stderr: "" };
     if (a.includes("--json") && a.includes("headRefOid") && !a.includes("state") && !a.includes("statusCheckRollup")) return { code: 0, stdout: JSON.stringify({ headRefOid: currentHead }) + "\n", stderr: "" };
     if (a.includes("--json") && a.includes("files") && !a.includes("statusCheckRollup")) return { code: 0, stdout: "src/db.mjs\n", stderr: "" };
     if (a.includes("--json")) return { code: 0, stdout: prJson, stderr: "" };
@@ -203,7 +205,7 @@ test("--converged-json is refused for any gate other than draft_gate and any ver
 test("a comment at A that is already clean or already converged is not converged again", async () => {
   await withTempDir(async (tempDir) => {
     const findings = [finding("low", 1)];
-    const clean = EXISTING_BODY.replace("findings_present", "clean");
+    const clean = existingBody().replace("findings_present", "clean");
     assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { body: clean } })).error, /already clean or converged/);
     const converged = `${clean}\n**Converged:** fixer \`${FIX}\` delta \`sha256:${"c".repeat(64)}\``;
     assert.match((await post(tempDir, { findings, converged: convergedInput(findings), runChildOptions: { body: converged } })).error, /already clean or converged/);
@@ -322,4 +324,36 @@ test("a converged post whose --findings-ledger does not exist is refused naming 
     assert.match(error, /ENOENT/);
     assert.deepEqual(puts, []);
   }, { prefix: "dev-loops-converged-missingledger-" });
+});
+
+// Post-time fan-out enforcement checks the candidate marker at the fixer commit B (convergedFromHeadSha A), not at A.
+test("an inline converged post is refused when A qualifies for inline review but the fixer commit B adds a risk path", async () => {
+  const gitRepo = await mkdtemp(path.join(os.tmpdir(), "dev-loops-converged-postscope-"));
+  const saved = { A, FIX, repoRoot, path: process.env.PATH };
+  try {
+    process.env.PATH = originalPath;
+    initGitFixture(gitRepo, { branch: "main" });
+    const git = (...args) => execFileSync("git", args, { cwd: gitRepo, encoding: "utf8" }).trim();
+    git("checkout", "-q", "-b", "pr");
+    await mkdir(path.join(gitRepo, "docs"), { recursive: true });
+    await writeFile(path.join(gitRepo, "docs", "a.md"), "a\n", "utf8");
+    git("add", "."); git("commit", "-q", "-m", "A");
+    const headA = git("rev-parse", "HEAD");
+    await mkdir(path.join(gitRepo, "scripts", "loop"), { recursive: true });
+    await writeFile(path.join(gitRepo, "scripts", "loop", "check-size-budget.mjs"), "export {};\n", "utf8");
+    git("add", "."); git("commit", "-q", "-m", "B");
+    const headB = git("rev-parse", "HEAD");
+    await writeFile(path.join(gitRepo, ".devloops"), await readFile(path.resolve(".devloops"), "utf8"), "utf8");
+    A = headA; FIX = headB; repoRoot = gitRepo;
+    await withTempDir(async (tempDir) => {
+      const findings = [finding("low", 1)];
+      const { error, puts } = await post(tempDir, { findings, converged: convergedInput(findings) });
+      assert.match(error, /Cannot post a inline_single_agent verdict/);
+      assert.deepEqual(puts, []);
+    }, { prefix: "dev-loops-converged-postscope-tmp-" });
+  } finally {
+    ({ A, FIX, repoRoot } = saved);
+    process.env.PATH = saved.path;
+    await rm(gitRepo, { recursive: true, force: true });
+  }
 });

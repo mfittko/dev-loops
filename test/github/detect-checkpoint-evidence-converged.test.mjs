@@ -24,7 +24,7 @@ const gateComment = ({ id, gate, head, converged, at }) => ({
     `Gate review: ${gate}`,
     `Reviewed head SHA: ${head}`,
     "Verdict: clean",
-    ...(converged ? [`Converged: ${converged}`] : []),
+    ...(converged != null ? [`Converged: ${converged}`] : []),
     "Execution mode: fanout_fanin",
     "Findings summary: no issues found",
     `Next action: ${gate === "draft_gate" ? "mark ready for review" : "await final human approval"}`,
@@ -74,7 +74,7 @@ test("a converged PR without a clean current-head pre_approval_gate still fails"
 });
 
 test("a malformed converged marker fails closed", async () => {
-  for (const converged of [`fixer ${FIX} delta sha256:short`, `fixer ${FIX}`, "nonsense"]) {
+  for (const converged of [`fixer ${FIX} delta sha256:short`, `fixer ${FIX}`, "nonsense", "", "   "]) {
     const { code, payload } = await run([draftAtA(converged), preApprovalAtFix()]);
     assert.equal(code, 1, converged);
     assert.ok(payload.preMergeGateCheck.failures.some((f) => /malformed Converged marker/.test(f)), converged);

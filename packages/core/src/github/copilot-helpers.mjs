@@ -499,7 +499,7 @@ function parseGateReviewCommentFields(body) {
       continue;
     }
 
-    match = line.match(/^(?:[-*]\s*)?converged\s*:\s*(.+)$/iu);
+    match = line.match(/^(?:[-*]\s*)?converged\s*:\s*(.*)$/iu);
     if (match) {
       fields.converged ??= normalizeGateConverged(match[1]);
       continue;

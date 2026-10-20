@@ -41,6 +41,8 @@ describe("Converged marker field", () => {
       `fixer \`bbbbbbb\` delta \`${DIGEST}\``,
       `fixer \`${FIX}\``,
       "yes",
+      "",
+      "   ",
     ]) {
       assert.deepEqual(parseGateReviewCommentBody(commentBody({ converged })).converged, { malformed: true }, converged);
     }

@@ -1988,7 +1988,7 @@ export function buildCoordinationEvaluatorInput({
 // acceptance predicate (buildFanoutEnforcement + evaluateInlineFanoutMode) so
 // the two boundaries can never drift apart. Throws when the candidate does
 // not qualify; resolves silently otherwise.
-async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inlineReason, headSha, config }, { env, ghCommand, repoRoot, runChild }) {
+async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inlineReason, headSha, convergedFixerCommit = null, config }, { env, ghCommand, repoRoot, runChild }) {
   let hasFullLabel = false;
   let baseRef = null;
   // Light-mode facts only matter for an inline candidate under active
@@ -2017,12 +2017,21 @@ async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inline
   // (buildFanoutEnforcement only reads .visible/.executionMode/.inlineReason/
   // .headSha off it). The other gate is marked invisible so only the gate
   // actually being posted is evaluated this call.
-  const candidateMarker = { visible: true, executionMode, inlineReason: inlineReason ?? null, headSha };
+  // A converged post (GATE-EXEC-LOW-NIT-CONVERGENCE) is shaped like the posted marker: headSha is the fixer commit B,
+  // convergedFromHeadSha the reviewed head A whose ledger backs it, so scope and risk are judged at B.
+  const markerHeadSha = convergedFixerCommit ?? headSha;
+  const candidateMarker = {
+    visible: true,
+    executionMode,
+    inlineReason: inlineReason ?? null,
+    headSha: markerHeadSha,
+    ...(convergedFixerCommit ? { convergedFromHeadSha: headSha } : {}),
+  };
   const inactiveMarker = { visible: false };
   const fanoutEnforcement = await buildFanoutEnforcement({
     repo,
     pr,
-    currentHeadSha: headSha,
+    currentHeadSha: markerHeadSha,
     draftGateMarker: gate === "draft_gate" ? candidateMarker : inactiveMarker,
     preApprovalGateMarker: gate === "pre_approval_gate" ? candidateMarker : inactiveMarker,
     config,
@@ -2698,6 +2707,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
         inlineReason: options.inlineReason,
         headSha: canonicalHeadSha,
+        convergedFixerCommit: convergedInput?.fixerCommit ?? null,
         config,
       },
       { env, ghCommand, repoRoot, runChild },
