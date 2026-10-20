@@ -1006,6 +1006,9 @@
       "id": "VALIDATE-COVERAGE-THRESHOLD"
     },
     {
+      "id": "VALIDATE-LOCAL-RECORD-PRODUCER"
+    },
+    {
       "id": "VALIDATE-TARGETED-FIRST"
     },
     {
