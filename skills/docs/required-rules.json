@@ -157,6 +157,10 @@
       "id": "COPILOT-STATE-WATCH-PERSISTENCE"
     },
     {
+      "id": "DESIGN-SIMPLEST-FIRST",
+      "enforcement": "doc"
+    },
+    {
       "id": "DEV-LOOP-PROBE-TIMEOUT-CEILING",
       "enforcement": "doc"
     },

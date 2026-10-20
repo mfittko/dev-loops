@@ -148,6 +148,8 @@ Synthesize the answers into the body as the authoritative **`## AC / DoD matrix`
 - This makes re-runs idempotent — no accumulated noise, no duplicate sections.
 - If parsing a section boundary fails, **abort with an error** rather than silently truncating.
 
+The synthesized body and every slice also carry a `## Simplest design` section (`DESIGN-SIMPLEST-FIRST` in [Structural quality](../docs/structural-quality.md)) that names the minimal approach, the rejected heavier alternatives with the reason for each, and a cost comparison of the slice against the cost of the problem. Spec-lint reports `simplest_design_missing` as a gap when the grill or a re-grill runs. The zero-iteration `grill_clean` exit checks `size_forecast_*` findings only, so an existing grilled body is not refused retroactively before its next grill.
+
 The synthesized body also carries a `## Size forecast` section with one `- forecast: slice=<id> wloc=<n> files=<path>,<path>` line per slice. Write the forecast and record the split and merge assessments at the record site `PLAN-SIZE-BAND` in [Local planning](../docs/local-planning.md#size-estimate-refinement) names for the surface (the results comment on tracker-first and PR-body targets; `sizeEstimate` `oversizeJustification` and `mergeAssessment` in a local-planning plan file).
 
 The synthesized sections carry no rationale scaffolding: do NOT write a `## Grill findings` section and do NOT embed the raw Q&A table in the body (`GRILL-SUBLOOP-NO-EMBED-SYNTHESIS`). The full rewrite below defines the complete content the locked body keeps.

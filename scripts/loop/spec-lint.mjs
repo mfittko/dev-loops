@@ -42,7 +42,8 @@ size_forecast_missing, size_forecast_malformed, size_forecast_split_required (PL
 "- forecast: slice=<id> wloc=<n> files=<path>,<path>" line per slice under "## Size forecast";
 a line at or above the resolved default-tier waiverLoc must be split, not disposed;
 a list item that starts with the word "forecast" or contains "wloc=" and does not parse is
-size_forecast_malformed, also not disposable; non-list lines are never claimed).
+size_forecast_malformed, also not disposable; non-list lines are never claimed),
+simplest_design_missing (DESIGN-SIMPLEST-FIRST; a body with a "## Size forecast" section and no "## Simplest design" section).
 ADR citation forms: "ADR NNNN", "ADR-<digits>" and docs/decisions/NNNN-*.md links.
 
 ${JQ_OUTPUT_USAGE}
@@ -235,6 +236,13 @@ export function lintSizeForecast(body, { waiverLoc }) {
   ];
 }
 
+/** DESIGN-SIMPLEST-FIRST: a grilled body (one with `## Size forecast`) needs a `## Simplest design` section. */
+export function lintSimplestDesign(body) {
+  const stripped = stripFencedCode(body);
+  if (extractSection(stripped, "Size forecast") === null || extractSection(stripped, "Simplest design") !== null) return [];
+  return [{ kind: "simplest_design_missing", id: "simplest-design", detail: { reason: "no `## Simplest design` section (minimal approach, rejected alternatives, cost comparison)" } }];
+}
+
 export async function lintSpec({ body, repoRoot }) {
   const rootStat = await stat(repoRoot).catch((error) => {
     if (isMissing(error)) return null;
@@ -253,6 +261,7 @@ export async function lintSpec({ body, repoRoot }) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot });
   findings.push(...lintSizeForecast(body, resolveSizeBounds(config)));
   checks.sizeForecast = { status: "ran" };
+  findings.push(...lintSimplestDesign(body));
   const decisionsDir = path.join(repoRoot, "docs", "decisions");
   const records = await indexDecisionRecords(decisionsDir);
   if (records) {

@@ -96,6 +96,8 @@ Each decision pins `specDigest`, `headSha`, `contentDigest`, and the complete `c
 ## What you must NOT do
 
 - **You do not soften `must-fix` on correctness grounds.** A real defect stays a real defect. You decide *where* it is fixed (this PR or a follow-up), not *whether* it is real. The fixer retains reproduction-based rejection; you do not override a finding's severity.
+- **You rate speculative surface under `DESIGN-SIMPLEST-FIRST`** in [Structural quality](../skills/docs/structural-quality.md): an input, flag, branch or abstraction with no AC row behind it is at least `medium`.
+- **You calibrate severity on code whose behavior is correct.** A documentation-lag finding or a test-coverage gap is at most `low`, unless an AC or DoD row names that document or that test. A coverage gap that hides a fail-open path stays `medium`.
 - **You do not replace the severity-based disposition.** The severity-derived `disposition` (accepted-for-fix/deferred/needs-answer) stays intact; your `judgeDisposition` (act/defer/reject) is the relevance axis on top of it, not a replacement.
 - **You do not fix.** You have no `edit` tool and you write only your verdict artifact.
 - **You do not change reviewer fresh-context isolation.** Reviewers stay scoped to their dispatched angle group, read-only over the repository, and fresh-context by design.
