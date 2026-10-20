@@ -15,16 +15,23 @@
  *   npx dev-loops@<version> loop build-envelope --input resolver-output.json
  */
 import { readFile } from "node:fs/promises";
-import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { detectRepoSlug, normalizeRepoSlug } from "@dev-loops/core/github/repo-slug";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
-import { buildDevLoopHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
+import { buildDevLoopHandoffEnvelope, CANONICAL_SPEC_SOURCE } from "@dev-loops/core/loop/handoff-envelope";
+import { REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
 import { ConfigLoadFailedError, loadDevLoopConfigStrict } from "@dev-loops/core/config";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { SANCTIONED_COMMANDS } from "./sanctioned-commands.mjs";
+import { gitEnvNoDirOverrides, listWorktreeEntries } from "./_repo-root-resolver.mjs";
+import { classifyWorktreeIsolation } from "@dev-loops/core/loop/worktree-guard";
+import { viewPr } from "../github/view-pr.mjs";
+import { loadRefinementArtifact } from "./detect-pr-gate-coordination-state.mjs";
 
 const USAGE = `Usage: build-handoff-envelope.mjs --input <path>
 Build a deterministic handoff envelope from startup resolver output and settings.
@@ -50,6 +57,75 @@ Exit codes:
   2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
+
+async function resolvePrWorktree(bundle, repoRoot, repoSlug) {
+  const artifact = bundle?.activeArtifact ?? bundle?.canonicalState?.target;
+  // Terminal reconciliation needs no checkout; other target kinds retain their acquisition paths.
+  if (artifact?.kind !== "pr" || bundle?.routeKind === "needs_reconcile") return undefined;
+  const refuse = (refusal, message) => { throw Object.assign(new Error(message), { refusal }); };
+  try {
+    const prNumber = artifact.pr;
+    if (!Number.isInteger(prNumber) || prNumber < 1) {
+      refuse("pr_worktree_identity_mismatch", "PR worktree binding requires one positive PR number");
+    }
+    const repo = normalizeRepoSlug(repoSlug);
+    const localRepo = detectRepoSlug(repoRoot);
+    if (!localRepo || normalizeRepoSlug(localRepo) !== repo) {
+      refuse("pr_worktree_repository_mismatch", "PR repository does not match this checkout's origin");
+    }
+    const { pr } = await viewPr({ repo, pr: prNumber,
+      fields: "number,url,headRefName,headRefOid,headRepository,headRepositoryOwner,body,isDraft,state,mergedAt,closingIssuesReferences" });
+    const headRepo = `${pr.headRepositoryOwner?.login}/${pr.headRepository?.name}`;
+    const branch = pr.headRefName;
+    if (pr.number !== prNumber || typeof pr.url !== "string"
+      || pr.url.toLowerCase() !== `https://github.com/${repo}/pull/${prNumber}`
+      || headRepo.toLowerCase() !== repo || typeof branch !== "string" || !branch
+      || /[\x00-\x1f\x7f]/u.test(branch) || !/^[a-f0-9]{40}$/iu.test(pr.headRefOid ?? "")) {
+      refuse("pr_worktree_identity_mismatch", "Live PR, repository and head branch facts do not agree");
+    }
+    const gitOptions = { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      env: gitEnvNoDirOverrides(), timeout: 10000, maxBuffer: 1024 * 1024 };
+    const git = (cwd, ...args) => execFileSync("git", args, { ...gitOptions, cwd }).trim();
+    try { git(repoRoot, "check-ref-format", `refs/heads/${branch}`); } catch {
+      refuse("pr_worktree_identity_mismatch", "Live PR head branch is not a valid Git ref");
+    }
+    const canonical = (value) => {
+      if (typeof value !== "string" || !path.isAbsolute(value) || /[\x00-\x1f\x7f]/u.test(value)) {
+        refuse("pr_worktree_verification_failed", "PR worktree metadata contains an unsupported path");
+      }
+      return realpathSync(value);
+    };
+    const anchor = canonical(git(repoRoot, "rev-parse", "--show-toplevel"));
+    const common = canonical(git(repoRoot, "rev-parse", "--path-format=absolute", "--git-common-dir"));
+    const entries = listWorktreeEntries(repoRoot, gitOptions);
+    if (!entries.length || entries.some((entry) => !path.isAbsolute(entry.path)
+      || !/^[a-f0-9]{40}$/iu.test(entry.head ?? ""))) {
+      refuse("pr_worktree_verification_failed", "Git did not return valid registered worktrees");
+    }
+    const main = canonical(entries[0].path);
+    if (!entries.some((entry) => canonical(entry.path) === anchor)) {
+      refuse("pr_worktree_verification_failed", "Current checkout is absent from Git's worktree registrations");
+    }
+    const candidates = entries.slice(1).filter((entry) => entry.branch === `refs/heads/${branch}`);
+    if (!candidates.length) refuse("pr_worktree_not_found", "No registered linked checkout matches the live PR branch");
+    if (candidates.length !== 1) refuse("pr_worktree_ambiguous", "Multiple registered checkouts match the live PR branch");
+    const checkout = canonical(candidates[0].path);
+    if (checkout === main || canonical(git(checkout, "rev-parse", "--show-toplevel")) !== checkout
+      || git(checkout, "symbolic-ref", "HEAD") !== `refs/heads/${branch}`
+      || canonical(git(checkout, "rev-parse", "--path-format=absolute", "--git-common-dir")) !== common
+      || normalizeRepoSlug(detectRepoSlug(checkout)) !== repo) {
+      refuse("pr_worktree_verification_failed", "Registered PR checkout root, branch or repository changed");
+    }
+    const isolation = classifyWorktreeIsolation({ cwd: checkout, mainWorktreePath: main,
+      allWorktreePaths: entries.map((entry) => entry.path) });
+    if (!isolation.ok) refuse("pr_worktree_not_isolated", `PR checkout failed worktree isolation: ${isolation.detail}`);
+    // Association follows the branch; existing action checks own local versus pushed HEAD authority.
+    return { worktreeCwd: checkout, pr, repo };
+  } catch (error) {
+    if (error?.refusal) throw error;
+    refuse("pr_worktree_verification_failed", `Cannot verify the existing PR checkout: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 
 function parseFlagJson(raw, flagName, parseErrorFn) {
   try {
@@ -124,7 +200,7 @@ export function parseBuildHandoffEnvelopeCliArgs(argv) {
 
 export async function buildHandoffEnvelopeCli(
   options,
-  { adapter = createPiAdapter() } = {},
+  { adapter = createPiAdapter({ env: gitEnvNoDirOverrides() }) } = {},
 ) {
   // Resolve repo root via the adapter so envelope construction stays harness-agnostic.
   const cwd = adapter.getCwd();
@@ -173,13 +249,27 @@ export async function buildHandoffEnvelopeCli(
     envelopeOptions.overrides = parseFlagJson(options.overrides, "--overrides", parseError);
   }
 
-  const envelope = buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState, envelopeOptions);
+  const bundle = resolverOutput?.bundle ?? resolverOutput;
+  const binding = await resolvePrWorktree(bundle, repoRoot, repoSlug);
+  envelopeOptions.worktreeCwd = binding?.worktreeCwd;
+  let verifiedResolverOutput = resolverOutput;
+  if (binding && resolverOutput?.canonicalSpecSource == null && bundle?.canonicalSpecSource == null) {
+    const { pr, repo } = binding;
+    const refinement = await loadRefinementArtifact({ repo, prData: pr,
+      prDraft: pr.isDraft === true, prClosed: pr.state === "CLOSED", prMerged: Boolean(pr.mergedAt) });
+    // These enums have different domains; only the owning validator's PR-body result maps across.
+    if (refinement.status === "present" && refinement.specSource === REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY
+      && refinement.finding === null) {
+      verifiedResolverOutput = { ...resolverOutput, canonicalSpecSource: CANONICAL_SPEC_SOURCE.PR_BODY };
+    }
+  }
+  const envelope = buildDevLoopHandoffEnvelope(verifiedResolverOutput, settings, gateState, envelopeOptions);
   return envelope;
 }
 
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, stderr = process.stderr, adapter = createPiAdapter() } = {},
+  { stdout = process.stdout, stderr = process.stderr, adapter = createPiAdapter({ env: gitEnvNoDirOverrides() }) } = {},
 ) {
   let options;
   try {
@@ -199,7 +289,9 @@ export async function runCli(
     const envelope = await buildHandoffEnvelopeCli(options, { adapter });
     process.exitCode = emitResult(envelope, { jq: options.jq, silent: options.silent, stdout, stderr });
   } catch (err) {
-    const msg = formatCliError(err);
+    const msg = err?.refusal
+      ? JSON.stringify({ ok: false, refusal: err.refusal, error: err.message })
+      : formatCliError(err);
     stderr.write(`${msg}\n`);
     process.exitCode = 1;
   }
