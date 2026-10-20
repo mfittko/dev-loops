@@ -236,7 +236,7 @@ export function buildNamedUiStateArtifactPaths({ outputDir, sliceId, stateName, 
 export async function defaultRunAxe(page, worktree = process.cwd(), importFallback = () => import('@axe-core/playwright')) {
   let mod;
   try {
-    mod = createRequire(path.join(worktree, 'package.json'))('@axe-core/playwright');
+    mod = createRequire(path.resolve(worktree, 'package.json'))('@axe-core/playwright');
   } catch {
     try {
       mod = await importFallback();
@@ -381,5 +381,6 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   };
 
   await writeFile(paths.statePath, `${JSON.stringify(stateArtifact, null, 2)}\n`, 'utf8');
-  return paths;
+  const axeReason = axeResults?.skipped ? axeResults.reason : undefined;
+  return axeReason ? { ...paths, axeSkipReason: axeReason } : paths;
 }

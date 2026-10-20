@@ -679,6 +679,16 @@ test("makeRunStep: forwards repoRoot so axe resolves @axe-core/playwright from t
   assert.deepEqual(JSON.parse(readFileSync(outcome.axePath, "utf8")), { violations: [{ id: "from-worktree" }] });
 });
 
+test("makeRunStep: logs one stated line the first time axe is skipped and returns axeSkipReason (AC4)", async () => {
+  const logs = [];
+  const runStep = makeRunStep({ page: fakeDrivePage(), outputDir: tempDir(), repoRoot: tempDir(), log: (m) => logs.push(m) });
+  const first = await runStep({ appUrl: "http://app", flow: { name: "checkout" }, step: { name: "a", action: "goto" }, index: 0 });
+  await runStep({ appUrl: "http://app", flow: { name: "checkout" }, step: { name: "b", action: "goto" }, index: 1 });
+  assert.match(first.axeSkipReason, /^axe: /);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /^axe skipped: axe: /);
+});
+
 test("makeRunStep: a declared step viewport resizes the page and slugs the capture into a distinct directory (same state name, different viewport)", async () => {
   const outputDir = tempDir();
   const resized = [];

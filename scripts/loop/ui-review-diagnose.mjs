@@ -43,7 +43,8 @@ Output (stdout, JSON):
   { "ok": bool, "pr": {number,headRefName,headSha,baseRefName,state},
     "findings": [ { severity, kind, message, exception:{type,message}, source:{file,line}|null,
                     anchor:{path,line,side}|null, anchorable, nonAnchorableReason, evidence } ],
-    "counts": { total, anchorable, nonAnchorable } }
+    "counts": { total, anchorable, nonAnchorable },
+    "states": [ { flow, step, screenshotPath } ] }
 
 ${JQ_OUTPUT_USAGE}`.trim();
 

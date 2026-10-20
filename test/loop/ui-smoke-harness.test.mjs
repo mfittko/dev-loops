@@ -670,3 +670,19 @@ test('launchWebkit returns the browser and always launches headless', async () =
   // Strict stub: an unexpected extra launch call would fail this.
   assert.deepEqual(launched, [{ headless: true }]);
 });
+
+// AC3 input form: a relative worktree path must still resolve from the worktree.
+test('defaultRunAxe resolves @axe-core/playwright from a relative worktree path', async () => {
+  const wt = await mkdtemp(path.join(process.cwd(), 'tmp-ui-axe-rel-'));
+  try {
+    const pkgDir = path.join(wt, 'node_modules', '@axe-core', 'playwright');
+    await mkdir(pkgDir, { recursive: true });
+    await writeFile(path.join(wt, 'package.json'), '{"name":"fixture"}');
+    await writeFile(path.join(pkgDir, 'package.json'), '{"name":"@axe-core/playwright","main":"index.js"}');
+    await writeFile(path.join(pkgDir, 'index.js'), 'class AxeBuilder { async analyze() { return { violations: [{ id: "relative" }] }; } }\nmodule.exports = { default: AxeBuilder };');
+    const noFallback = async () => { throw new Error('not found'); };
+    assert.deepEqual(await defaultRunAxe({}, path.relative(process.cwd(), wt), noFallback), { violations: [{ id: 'relative' }] });
+  } finally {
+    await rm(wt, { recursive: true, force: true });
+  }
+});

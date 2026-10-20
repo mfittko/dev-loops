@@ -57,7 +57,7 @@ drive your app.
    wins) when the lock differs from the primary checkout's or the worktree has no
    `node_modules`, runs pending dev-DB migrations, then boots the app and polls an
    HTTP readiness probe. Boot stdout and stderr go to
-   `<tmpdir>/dev-loops-ui-review-pr-<n>-XXXX/boot.log`. If the boot process exits before
+   `<tmpdir>/dev-loops-ui-review-pr-<n>-XXXXXX/boot.log`. If the boot process exits before
    the app is ready, the stage stops at once with a `boot-exited` finding that
    carries the exit code and the last log lines.
 2. **Auth + drive** — launches one headless WebKit context, authenticates

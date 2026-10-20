@@ -13,7 +13,7 @@ The `ui_review` route provisions a worktree, boots the project, drives flows and
 ## Decision
 
 - Provision derives the frozen install from the lockfile present. The first match in this order wins: `bun.lock`, `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`. Provision also installs when the worktree has no `node_modules`.
-- Boot output goes to `<tmpdir>/dev-loops-ui-review-pr-<n>-XXXX/boot.log`. The readiness poll stops at once when the boot process exits, including exit code 0, and reports the exit code and the output tail. `uiReview.run.command` therefore must stay in the foreground.
+- Boot output goes to `<tmpdir>/dev-loops-ui-review-pr-<n>-XXXXXX/boot.log`. The readiness poll stops at once when the boot process exits, including exit code 0, and reports the exit code and the output tail. `uiReview.run.command` therefore must stay in the foreground.
 - `axe.json` holds either the axe results or `{skipped:true, reason}`. It is never a silent null. `@axe-core/playwright` resolves from the reviewed worktree first, then from the dev-loops install.
 - The report embeds one screenshot per named state, within the existing data-URI size cap.
 
