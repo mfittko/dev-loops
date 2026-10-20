@@ -59,15 +59,20 @@ test("this repo's .devloops resolves the pre-push-reviewer to Opus on Claude and
 });
 
 // Regular vs. strong split: routine roles run on the regular tier (sonnet on
-// Claude, inherit on Pi); review, refiner, the pre-push reviewer and every
-// gate angle stay on opus.
+// Claude; on Pi the regular tier carries the operator's free model); review,
+// refiner, the pre-push reviewer and every gate angle stay on opus.
 test("this repo's .devloops resolves the regular tier to sonnet and the strong roles to opus", async () => {
   const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
   assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
 
+  // The regular tier's Pi model is an operator opt-in for the free
+  // Ollama-hosted model; the Claude side of the same tier stays on sonnet.
+  const piLow = config.models.tiers.low.pi;
+  assert.equal(typeof piLow, "string", "the regular tier must carry a Pi model id");
+  assert.ok(piLow.length > 0, "the regular tier's Pi model id must be non-empty");
   for (const role of ["developer", "fixer", "docs", "quality"]) {
     assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "sonnet", `${role} on claude`);
-    assert.equal(resolveRoleModel(config, { role, harness: "pi" }), null, `${role} on pi`);
+    assert.equal(resolveRoleModel(config, { role, harness: "pi" }), piLow, `${role} on pi`);
   }
   for (const role of ["review", "refiner", "pre-push-reviewer"]) {
     assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "opus", `${role} on claude`);
