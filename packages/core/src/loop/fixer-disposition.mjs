@@ -75,10 +75,10 @@ function normalizeSiteCoverage(entry, label, ruleIds) {
     const verbatim = site?.kind === "input_form" && typeof site.site === "string";
     if (!site || typeof site !== "object" || !(verbatim || isNonEmptyString(site.site))) throw new Error(`${label} sites[${i}] needs a site`);
     const status = typeof site.status === "string" ? site.status.trim().toLowerCase() : "";
-    if (!Object.values(SITE_STATUS).includes(status)) throw new Error(`${label} site ${site.site} has status ${JSON.stringify(site.status)}, expected fixed or skipped`);
-    if (status === SITE_STATUS.SKIPPED && !isNonEmptyString(site.reason)) throw new Error(`${label} skipped site ${site.site} records no skip reason`);
+    if (!Object.values(SITE_STATUS).includes(status)) throw new Error(`${label} site ${JSON.stringify(site.site)} has status ${JSON.stringify(site.status)}, expected fixed or skipped`);
+    if (status === SITE_STATUS.SKIPPED && !isNonEmptyString(site.reason)) throw new Error(`${label} skipped site ${JSON.stringify(site.site)} records no skip reason`);
     if (status === SITE_STATUS.FIXED && site.kind === "input_form" && !isNonEmptyString(site.test)) {
-      throw new Error(`${label} fixed input form ${site.site} names no test`);
+      throw new Error(`${label} fixed input form ${JSON.stringify(site.site)} names no test`);
     }
     return {
       site: verbatim ? site.site : site.site.trim(),

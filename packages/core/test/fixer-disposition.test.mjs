@@ -372,6 +372,13 @@ test("normalizeFixerDispositionHandoff refuses an unedited FILL: noSitesReason",
   );
 });
 
+test("normalizeFixerDispositionHandoff keeps empty and padded input_form sites verbatim", () => {
+  const sites = ["", " 12 "].map((site) => ({ site, kind: "input_form", status: "fixed", test: "form test" }));
+  const handoff = normalizeFixerDispositionHandoff({ headSha: SHA, siteCoverage: [{ fingerprint: "fp", returnedSites: ["", " 12 "], sites }] });
+  assert.deepEqual(handoff.siteCoverage[0].sites.map((s) => s.site), ["", " 12 "]);
+  assert.deepEqual(handoff.siteCoverage[0].returnedSites, ["", " 12 "]);
+});
+
 test("normalizeFixerDispositionHandoff refuses a count-valued returnedSites and quotes the expected shape", () => {
   assert.throws(
     () => normalizeFixerDispositionHandoff({ headSha: SHA, siteCoverage: [{ fingerprint: "fp", returnedSites: 3, sites: 3 }] }),
