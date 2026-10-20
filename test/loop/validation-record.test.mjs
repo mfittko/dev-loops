@@ -123,6 +123,11 @@ test("a dirty worktree is incomplete", () => withFixture({}, async (repoRoot) =>
   await assertIncomplete(repoRoot, headSha, /clean worktree/);
 }));
 
+test("a suite that modifies a tracked file is incomplete", () => withFixture({}, async (repoRoot) => {
+  const headSha = await commit(repoRoot, { "docs/a.md": "# a\n", "scripts/verify.mjs": `import { appendFileSync } from "node:fs";\nappendFileSync("docs/a.md", "changed\\n");\n${TITLE_CHECK}` });
+  await assertIncomplete(repoRoot, headSha, /validation changed the worktree/);
+}));
+
 test("--jq filters the JSON output", () => withFixture({}, async (repoRoot) => {
   await commit(repoRoot, { "docs/a.md": "# a\n" });
   const out = await run(repoRoot, "b".repeat(40), ["--jq", ".status"]);
