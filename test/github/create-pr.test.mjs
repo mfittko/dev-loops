@@ -2221,13 +2221,13 @@ test("create-pr refuses with size_split_required_before_pr at and above waiverLo
   }
 });
 
-test("create-pr creates when the branch is below the resolved waiverLoc, with no override needed", async () => {
-  for (const waiverLoc of [301, 1500, null]) {
+for (const waiverLoc of [301, 1500, null]) {
+  test(`create-pr creates when the branch is below the resolved waiverLoc ${waiverLoc ?? "default"}, with no override needed`, async () => {
     const { result, ghCalls } = await createPrAtWaiverLoc(waiverLoc);
     assert.equal(result.code, 0, result.stderr);
     assert.equal(ghCalls.length, 1);
-  }
-});
+  });
+}
 
 test("create-pr creates when the size cannot be evaluated (unknown does not refuse)", async () => {
   for (const result of [() => { throw new Error("no ref"); }, () => null]) {
