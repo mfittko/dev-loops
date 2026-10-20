@@ -15,7 +15,7 @@
  * check-adr-tripwire. A second parser for any of those surfaces would be
  * authority drift.
  */
-import { readFile, realpath, stat } from "node:fs/promises";
+import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -54,22 +54,39 @@ are sorted and de-duplicated; "nonGoals" keeps body order (duplicates included),
 "matrix" is null and "findings" carries missing_ac_dod_matrix when the body holds
 no usable AC/DoD matrix; the exit code stays 0 because a missing matrix is a spec
 finding, not a tool failure.
-"adrTripwirePaths" are the touched paths the ADR tripwire would treat as
-decision-shaped.
+"touchedPaths" is the --paths set plus every existing repo-relative path the
+body cites, so a tripwire-shaped path the spec only mentions is still reported.
+"unresolvedPaths" is the declared subset that does not resolve; a declared path
+that does not resolve yet is in BOTH lists, because the touch set is the declared
+set plus existing body citations and a planned new file has to reach the rule,
+ADR and tripwire projection too.
+A body citation needs a path-shape signal - an explicit "./" prefix, a slash or a
+file extension - so ordinary prose ("the docs directory") is not claimed, and its
+on-disk entry names must match case-exactly, so two checkouts of one tree agree.
+"adrTripwirePaths" is the PATH-BASED ADR-tripwire candidate set: the touched
+paths whose shape matches the tripwire constants (a skills/docs/*-contract.md
+doc, packages/core/src/config/extension-defaults.yaml, a .devloops* config
+source). The tripwire's content-based triggers - a rule-modality (MUST/SHOULD/MAY)
+reversal in a touched skills/docs markdown file, an unresolvable rule or devloops
+scan, a standing-authorizations change and commit-msg-guard loosening - are NOT
+projected here; the tripwire evaluates those against the diff.
+"nonGoals" joins a wrapped continuation line into its item and accepts numbered
+list markers. "findings" carries missing_decision_records when the checkout has
+no docs/decisions directory and missing_adr_record for a cited ADR with no record.
 
 ${JQ_OUTPUT_USAGE}
 
 Exit codes: 0 brief produced (with or without findings); 1 usage error, a missing
---body-file, a --paths entry that is absolute (POSIX, drive-letter or UNC) or
-holds a ".." segment, a --repo-root that is not an existing directory, or a
---paths entry whose real target resolves outside --repo-root; 2 malformed
-skills/docs/required-rules.json, an unreadable body file, or another runtime
-error.`;
+--body-file, a --paths entry that is absolute (POSIX, drive-letter or UNC), holds
+a ".." segment, carries a file:line[:col] suffix or normalizes to an empty path,
+a --repo-root that is not an existing directory, or a --paths entry whose real
+target resolves outside --repo-root; 2 malformed skills/docs/required-rules.json,
+an unreadable body file, or another runtime error.`;
 
 const REQUIRED_READS = Object.freeze(["skills/docs/structural-quality.md", "changes/README.md"]);
 const ADR_NEED_UNSTATED = "unstated";
-// Repo-relative path citation, including extensionless root entries (LICENSE).
-// A token never ends on a dot, so sentence punctuation stays out. Leading
+// Repo-relative path citation, including an ./-prefixed extensionless entry
+// (./LICENSE). A token never ends on a dot, so sentence punctuation stays out. Leading
 // colon/slash boundaries exclude URL path segments; a trailing colon only
 // excludes a URL scheme when followed by a slash, not prose or file:line cites.
 // Every candidate still requires existence and containment before it is claimed.
@@ -80,7 +97,10 @@ const PATH_CANDIDATE_RE = new RegExp(
 const PATH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/u;
 const MARKDOWN_FILE_RE = /\.(?:md|mdx)$/iu;
 const NON_GOALS_HEADING_RE = /^non-?\s?goals?$/iu;
-const BULLET_RE = /^\s*[-*+]\s+(.*\S)\s*$/u;
+const BULLET_RE = /^\s*(?:[-*+]|\d+[.)])\s+(.*\S)\s*$/u;
+// A `file:line[:col]` citation is not a path; the body reader accepts that form
+// for paths it resolves, while a declared path has to name the file itself.
+const FILE_LINE_SUFFIX_RE = /:\d+(?::\d+)?$/u;
 const RECORD_TITLE_RE = /^#\s+(?:\d{4,}\.\s*)?(.*\S)\s*$/mu;
 const DEVLOOPS_CONFIG_PATH_SET = new Set(DEVLOOPS_CONFIG_PATHS);
 
@@ -100,7 +120,6 @@ function sortedUnique(values) {
 function normalizeDeclaredPath(raw) {
   const shown = String(raw).trim();
   const value = shown.replace(/\\/gu, "/");
-  if (shown === "") return null;
   // Absolute forms are rejected AFTER backslash normalization: a UNC path
   // (\\server\share\x -> //server/share/x) would otherwise be rewritten into a
   // silent repo-relative path instead of the documented usage error.
@@ -117,17 +136,43 @@ function normalizeDeclaredPath(raw) {
       { exitCode: 1 },
     );
   }
+  if (FILE_LINE_SUFFIX_RE.test(value)) {
+    throw Object.assign(
+      new Error(`--paths entry must be a repo-relative path without ".." segments or a file:line citation: ${shown}`),
+      { exitCode: 1 },
+    );
+  }
   const normalized = segments.filter((segment) => segment !== "" && segment !== ".").join("/");
-  return normalized === "" ? null : normalized;
+  // A path that normalizes to nothing names no file, so it is a usage error
+  // rather than a silently dropped input the caller never sees again.
+  if (normalized === "") {
+    throw Object.assign(
+      new Error(`--paths entry must be a repo-relative path that names a path inside the repository: ${shown}`),
+      { exitCode: 1 },
+    );
+  }
+  return normalized;
 }
 
-/** Path citations in the body: a token is claimed only when it is a plausible
- * repo-relative path and it actually resolves under `--repo-root`. */
+/** A file extension is one of the three path-shape signals, next to a slash and
+ * an explicit `./` prefix. */
+const EXTENSION_RE = /\.[A-Za-z0-9]+$/u;
+
+/** Path citations in the body. A bare extensionless token is ordinary prose
+ * ("docs", "test", "suite") far more often than it is a path, so a token needs
+ * a path-shape signal before it is even a candidate; it is then claimed only when
+ * it resolves under `--repo-root` with exactly those on-disk entry names. */
 function citedPathCandidates(body) {
-  return [...body.matchAll(PATH_CANDIDATE_RE)]
-    .map(([raw]) => raw.replace(/^\.\//u, ""))
-    .filter((token) => !token.includes(":"))
-    .filter((token) => token.split("/").every((segment) => PATH_SEGMENT_RE.test(segment) && segment !== "." && segment !== ".."));
+  const candidates = new Set();
+  for (const [raw] of body.matchAll(PATH_CANDIDATE_RE)) {
+    const explicit = raw.startsWith("./");
+    const token = explicit ? raw.slice(2) : raw;
+    if (token.includes(":")) continue;
+    if (!explicit && !token.includes("/") && !EXTENSION_RE.test(token)) continue;
+    if (!token.split("/").every((segment) => PATH_SEGMENT_RE.test(segment) && segment !== "." && segment !== "..")) continue;
+    candidates.add(token);
+  }
+  return [...candidates];
 }
 
 /**
@@ -150,6 +195,26 @@ async function pathKind(repoRoot, rootReal, relPath) {
   if (real === null) return null;
   const inside = real === rootReal || real.startsWith(rootReal + path.sep);
   return { kind: info.isDirectory() ? "directory" : "file", inside };
+}
+
+/**
+ * Whether every segment of `relPath` matches its on-disk entry name exactly.
+ * `stat` resolves case-insensitively on a case-insensitive volume, so without
+ * this check the host filesystem decides which body tokens enter `touchedPaths`
+ * and the same body and tree stop producing byte-identical output across a macOS
+ * and a Linux checkout root.
+ */
+async function entryNamesMatch(repoRoot, relPath) {
+  let dir = repoRoot;
+  for (const segment of relPath.split("/")) {
+    const names = await readdir(dir).catch((error) => {
+      if (isMissing(error)) return null;
+      throw error;
+    });
+    if (!names || !names.includes(segment)) return false;
+    dir = path.join(dir, segment);
+  }
+  return true;
 }
 
 async function readTextOrNull(file) {
@@ -176,7 +241,19 @@ async function ruleOwnerIndex(repoRoot) {
 function nonGoalsFromBody(body) {
   const section = parseMarkdownSections(body).find((entry) => NON_GOALS_HEADING_RE.test(entry.name));
   if (!section) return [];
-  return section.bodyLines.map((line) => BULLET_RE.exec(line)?.[1]).filter((item) => typeof item === "string");
+  const items = [];
+  for (const line of section.bodyLines) {
+    if (line.trim() === "") continue;
+    const bullet = BULLET_RE.exec(line);
+    if (bullet) {
+      items.push(bullet[1]);
+      continue;
+    }
+    // A wrapped non-goal continues the item above it (Markdown lazy
+    // continuation), so a multi-line bullet is not truncated to its first line.
+    if (items.length > 0) items[items.length - 1] += ` ${line.trim()}`;
+  }
+  return items;
 }
 
 const matchesAdrTripwire = (relPath) =>
@@ -249,7 +326,9 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
   for (const candidate of citedPathCandidates(body)) {
     if (resolved.has(candidate) || unresolved.includes(candidate)) continue;
     const found = await pathKind(root, rootReal, candidate);
-    if (found?.inside) resolved.set(candidate, found.kind);
+    if (!found?.inside) continue;
+    if (!(await entryNamesMatch(root, candidate))) continue;
+    resolved.set(candidate, found.kind);
   }
   // A declared path is a touched path whether or not it exists yet: the spec's
   // touch set is `--paths` plus existing body citations, so a planned new file
@@ -303,6 +382,10 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
       if (text == null) continue;
       if (touchedPaths.some((relPath) => namesTouchedPath(text, relPath, resolved.get(relPath) ?? null))) adrNumbers.add(record.id);
     }
+  } else {
+    // No record index resolves no citation at all, so the empty ADR list is
+    // reported instead of looking like a spec that cites no decision.
+    findings.push({ kind: "missing_decision_records", reason: "no docs/decisions directory under --repo-root" });
   }
   const titles = new Map();
   const recordRef = async (id) => {
@@ -319,7 +402,13 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
   for (const id of [...adrNumbers].sort(byNumber)) {
     const record = records?.get(id);
     const ref = await recordRef(id);
-    if (!ref) continue;
+    if (!ref) {
+      // A cited ADR with no record would otherwise vanish with exit 0: the
+      // developer sees no decision context and no sign that the citation failed
+      // to resolve, which `loop spec-lint` reports as unknown_adr.
+      if (records) findings.push({ kind: "missing_adr_record", reason: `no docs/decisions/${id}-*.md record for cited ADR ${id}` });
+      continue;
+    }
     const amendedBy = [];
     for (const amender of [...record.amendedBy].sort(byNumber)) {
       const amendment = await recordRef(amender);
