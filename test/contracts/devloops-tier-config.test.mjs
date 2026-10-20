@@ -83,19 +83,19 @@ test("this repo's .devloops resolves the regular tier to sonnet and the strong r
       `${role} on pi`,
     );
   }
+  assert.equal(config.models.tiers.high.pi, "openai-codex/gpt-6.1-sol", "the strong tier's Pi model must be the Codex model, never the free model");
+  // `judge` has no built-in tier (it pins `opus` on Claude via `claudeModel` frontmatter), so it is not asserted here.
   for (const role of ["review", "refiner", "pre-push-reviewer"]) {
     assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "opus", `${role} on claude`);
-    // `high` sets no Pi model, so Pi review roles inherit the conductor model.
-    if (role !== "pre-push-reviewer") assert.equal(resolveRoleModel(config, { role, harness: "pi" }), null, `${role} on pi inherits`);
+    assert.equal(resolveRoleModel(config, { role, harness: "pi" }), "openai-codex/gpt-6.1-sol", `${role} on pi`);
   }
-  assert.equal(resolveRoleModel(config, { role: "pre-push-reviewer", harness: "pi" }), "openai-codex/gpt-6.1-sol");
 
   for (const gate of GATE_KEYS) {
     const { pool } = resolveGateAngleContract(config, gate);
     assert.ok(Array.isArray(pool) && pool.length > 0, `gates.${gate} must resolve a non-empty angle pool`);
     for (const angle of pool) {
       assert.equal(resolveRoleModel(config, { role: angle, harness: "claude", kind: "angle" }), "opus", `${gate} angle ${angle} on claude`);
-      assert.equal(resolveRoleModel(config, { role: angle, harness: "pi", kind: "angle" }), null, `${gate} angle ${angle} on pi inherits`);
+      assert.equal(resolveRoleModel(config, { role: angle, harness: "pi", kind: "angle" }), "openai-codex/gpt-6.1-sol", `${gate} angle ${angle} on pi`);
     }
   }
 });
