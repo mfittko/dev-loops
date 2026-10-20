@@ -636,7 +636,7 @@ export async function verifyFixerDisposition(
   if (options.construct) {
     await mkdir(path.dirname(handoffPath), { recursive: true });
     const text = `${JSON.stringify(constructedReport, null, 2)}\n`;
-    let report, marker, temporary, markerIdentity, published = false;
+    let report, marker, temporary;
     try {
       const existing = await lstat(handoffPath).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
       if (existing) throw Object.assign(new Error(`EEXIST: report already exists at ${handoffPath}`), { code: "EEXIST" });
@@ -647,24 +647,15 @@ export async function verifyFixerDisposition(
       await report.close();
       report = null;
       marker = await open(constructMarkPath(handoffPath), "wx");
-      markerIdentity = await marker.stat();
       await marker.writeFile(sha256Hex(text), "utf8");
       await marker.close();
       marker = null;
       // Publish exclusively only after both files close; cleanup is never admission authority.
       await link(pending, handoffPath);
-      published = true;
     } catch (cause) {
       throw Object.assign(new Error(`Fixer construction failed: ${cause.message}`, { cause }), { code: "FIXER_CONSTRUCTION_FAILED" });
     } finally {
       await Promise.allSettled([report, marker].filter(Boolean).map((file) => file.close()));
-      // Recover caught failures only; never remove a pre-existing or replaced marker.
-      if (!published && markerIdentity) {
-        const current = await lstat(constructMarkPath(handoffPath)).catch(() => null);
-        if (current?.dev === markerIdentity.dev && current.ino === markerIdentity.ino) {
-          await rm(constructMarkPath(handoffPath)).catch(() => {});
-        }
-      }
       if (temporary) await rm(temporary, { recursive: true, force: true }).catch(() => {});
     }
     return { ok: true, constructed: true, outputRef: handoffPath };
