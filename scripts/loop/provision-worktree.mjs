@@ -29,7 +29,6 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
-import { renderProjectAgents } from "../../extension/sync-packaged-agents.ts";
 import { loadDevLoopConfig, resolveWorktreeConfig } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -316,11 +315,14 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
     });
   }
 
-  // #2865: `.pi/agents` is untracked; render the Pi-valid agent set here so every
-  // checkout gets it deterministically. Fail-soft like the other steps.
+  // #2865: `.pi/agents` is untracked; render the Pi-valid agent set from the worktree's own
+  // agents/ sources (consumer worktrees have none). Lazy import: a packaged install cannot load .ts.
   try {
-    renderProjectAgents(dst);
-    actions.push({ entry: ".pi/agents", mode: "render", dest: path.join(dst, ".pi", "agents") });
+    if (await pathExists(path.join(dst, "agents"))) {
+      const { renderProjectAgents } = await import("../../extension/sync-packaged-agents.ts");
+      renderProjectAgents(dst, path.join(dst, "agents"));
+      actions.push({ entry: ".pi/agents", mode: "render", dest: path.join(dst, ".pi", "agents") });
+    }
   } catch (err) {
     logWarn(`pi agent render failed, skipping: ${(err && err.message) ? err.message : String(err)}`);
   }

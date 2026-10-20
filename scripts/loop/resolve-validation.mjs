@@ -169,7 +169,8 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
       const actualHead = readHead();
       headConfirmed = actualHead === options.headSha;
       if (!headConfirmed) return { reason: `worktree HEAD ${actualHead} differs from requested head`, writeArtifact: false };
-      const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim();
+      // .pi/agents is generated at provision time (decision record 0173), not a tree change.
+      const dirty = execFileSync("git", ["status", "--porcelain", "--", ".", ":(exclude).pi/agents"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim();
       return dirty ? { reason: "validation requires a clean worktree at the requested head", writeArtifact: true } : null;
     };
     const beforeProblem = currentTreeProblem();

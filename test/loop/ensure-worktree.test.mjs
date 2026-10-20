@@ -1455,7 +1455,9 @@ test("ensure: provisioning renders .pi/agents as a real Pi-valid dir and keeps t
   const repo = makeRepo();
   try {
     writeFileSync(path.join(repo.root, ".gitignore"), ".pi/agents/\n");
-    repo.git("add", ".gitignore");
+    mkdirSync(path.join(repo.root, "agents"));
+    writeFileSync(path.join(repo.root, "agents", "quality.agent.md"), "---\nname: quality\ndescription: q\ntools: read, search, execute, bash\n---\nbody\n");
+    repo.git("add", ".gitignore", "agents");
     repo.git("commit", "-q", "-m", "ignore agents");
     repo.git("fetch", "-q", "origin");
     for (const pass of ["create", "reuse"]) {

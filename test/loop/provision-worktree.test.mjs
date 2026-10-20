@@ -209,8 +209,8 @@ test("provision: config with errors yields zero config-driven actions (fail-clos
       { loadConfig },
     );
     assert.equal(res.ok, true);
-    // Only the unconditional self-link and the .pi/agents render (#2865) remain.
-    assert.deepEqual(res.actions.map((a) => a.entry), ["node_modules/@dev-loops/core", ".pi/agents"]);
+    // Only the unconditional self-link remains (no agents/ sources in the fixture).
+    assert.deepEqual(res.actions.map((a) => a.entry), ["node_modules/@dev-loops/core"]);
     assert.equal(res.summary.copied, 0);
     assert.equal(res.summary.linked, 0);
     assert.ok(res.summary.warnings >= 1, "one WARN about the invalid config");
@@ -449,5 +449,32 @@ test("provision: does not reject normal entries when the main checkout lives und
     assert.equal(readFileSync(path.join(worktreePath, "config/app.yml"), "utf8"), "key: value\n");
   } finally {
     rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// #2865: the .pi/agents render runs only when the worktree has its own agents/ sources.
+test("provisionWorktree: renders .pi/agents from the worktree's agents/ sources", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    mkdirSync(path.join(fx.worktreePath, "agents"));
+    writeFileSync(path.join(fx.worktreePath, "agents", "x.agent.md"), "---\nname: x\ndescription: x\ntools: read, search, execute, bash\n---\nbody\n");
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    assert.ok(res.actions.some((a) => a.entry === ".pi/agents" && a.mode === "render"));
+    const tools = readFileSync(path.join(fx.worktreePath, ".pi", "agents", "x.agent.md"), "utf8").match(/^tools: (.+)$/m)[1].split(",").map((t) => t.trim());
+    for (const t of ["grep", "find", "ls", "bash"]) assert.ok(tools.includes(t), t);
+    for (const t of ["search", "execute"]) assert.ok(!tools.includes(t), `no ${t}`);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provisionWorktree: a worktree without agents/ gets no .pi/agents", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    assert.ok(!res.actions.some((a) => a.entry === ".pi/agents"));
+    assert.ok(!existsSync(path.join(fx.worktreePath, ".pi", "agents")));
+  } finally {
+    fx.cleanup();
   }
 });

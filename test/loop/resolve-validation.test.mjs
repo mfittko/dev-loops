@@ -373,6 +373,20 @@ test("dirty worktree cannot claim validation at the committed head", async () =>
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
+test("an untracked .pi/agents directory does not make the tree dirty, another untracked file does", async () => {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    await mkdir(path.join(repoRoot, ".pi", "agents"), { recursive: true });
+    await writeFile(path.join(repoRoot, ".pi", "agents", "x.agent.md"), "x\n");
+    const ok = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot });
+    assert.doesNotMatch(ok.reason ?? "", /clean worktree/);
+    await writeFile(path.join(repoRoot, "stray.txt"), "x\n");
+    const dirty = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot });
+    assert.equal(dirty.status, "incomplete");
+    assert.match(dirty.reason, /clean worktree/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
 test("suite changes to tracked files leave typed incomplete evidence and no complete artifact", async () => {
   const { repoRoot } = await fixture();
   try {
