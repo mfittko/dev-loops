@@ -83,7 +83,9 @@ function updateFieldResponse() {
 async function withTempDir(fn) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-board-"));
   try {
-    initGitFixture(tempDir, { branch: "main", remote: tempDir });
+    initGitFixture(tempDir, { branch: "main", remote: tempDir, commit: null });
+    runGitFixture(tempDir, ["config", "commit.gpgsign", "false"]);
+    runGitFixture(tempDir, ["commit", "-q", "--allow-empty", "-m", "init"]);
     runGitFixture(tempDir, ["branch", "feature"]);
     await fn(tempDir);
   } finally {
