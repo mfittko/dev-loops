@@ -278,7 +278,7 @@ for (const defect of ["directorySymlink", "outputSymlink", "notDirectory"]) test
   });
 });
 
-for (const cleanupFails of [false, true]) for (const [failed, operation] of [["report", "writeFile"], ["report", "close"], ["marker", "writeFile"], ["marker", "close"], ["report", "link"]]) test(`construction ${failed} ${operation} failure ${cleanupFails ? "cannot become delivery evidence even when cleanup fails" : "cleans its own marker and permits retry"}`, async () => {
+for (const cleanupFails of [false, true]) for (const [failed, operation] of [["report", "writeFile"], ["report", "close"], ["marker", "writeFile"], ["marker", "close"], ["report", "link"]]) test(`construction ${failed} ${operation} failure ${cleanupFails ? "cannot become delivery evidence even when cleanup fails" : "leaves no marker and permits retry"}`, async () => {
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);
     const source = await readFile(new URL("../../scripts/github/verify-fixer-disposition.mjs", import.meta.url), "utf8");
@@ -336,7 +336,7 @@ for (const foreign of ["report", "marker"]) test(`construction publication failu
     assert.equal(await readFile(foreign === "report" ? f.output : `${f.output}.constructed`, "utf8"), "foreign bytes");
     if (foreign === "report") assert.equal(existsSync(`${f.output}.constructed`), false);
     else assert.equal(existsSync(f.output), false);
-    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true }, f.runtimeFor([]).deps));
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true }, f.runtimeFor([]).deps), foreign === "marker" ? /result_missing/ : /is not valid JSON/);
   });
 });
 
