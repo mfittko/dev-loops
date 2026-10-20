@@ -1806,13 +1806,23 @@ test("--pr assigned to the viewer proceeds", async () => {
 test("#2456: --pr on an existing draft PR routes into draft_gate instead of the pr_draft stop", async () => {
   await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "--allow-empty", "-m", "init"], { cwd: tempDir, stdio: "ignore" });
+    const checkout = path.join(tempDir, "tmp", "worktrees", "issue-2456");
+    execFileSync("git", ["worktree", "add", "--quiet", "-b", "issue-2456", checkout], { cwd: tempDir, stdio: "ignore" });
+    const prData = {
+      number: 740, url: "https://github.com/mfittko/dev-loops/pull/740",
+      headRefName: "issue-2456", headRefOid: execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim(),
+      headRepository: { name: "dev-loops" }, headRepositoryOwner: { login: "mfittko" },
+      state: "OPEN", isDraft: true, mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "",
+    };
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "740"],
         assertArgContains: ["isDraft"],
-        stdout: JSON.stringify({ state: "OPEN", isDraft: true, mergedAt: null, assignees: [{ login: "test-viewer" }], closingIssuesReferences: [], body: "" }),
+        stdout: JSON.stringify(prData),
       },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+      { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify(prData) },
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "740"], {
       cwd: tempDir,
@@ -1830,9 +1840,12 @@ test("#2456: --pr on an existing draft PR routes into draft_gate instead of the 
     // the draft-start nextAction and must not be a stop (reconcile) envelope.
     const startupPath = path.join(tempDir, "startup.json");
     await writeFile(startupPath, result.stdout);
-    const envelopeResult = await runNodeHelper(path.resolve("scripts/loop/build-handoff-envelope.mjs"), ["--input", startupPath, "--repo", "mfittko/dev-loops"], { cwd: tempDir });
+    const envelopeResult = await runNodeHelper(path.resolve("scripts/loop/build-handoff-envelope.mjs"), ["--input", startupPath, "--repo", "mfittko/dev-loops"], {
+      cwd: tempDir, env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+    });
     assert.equal(envelopeResult.code, 0, envelopeResult.stderr);
     const envelope = JSON.parse(envelopeResult.stdout);
+    assert.equal(envelope.cwd, realpathSync(checkout));
     assert.equal(envelope.nextAction, parsed.draftStart.nextAction);
     assert.equal(Object.hasOwn(envelope, "routeKind"), false);
     assert.equal(Object.hasOwn(envelope, "selectedStrategy"), false);
@@ -3612,6 +3625,8 @@ test("startup → build-envelope CLI end-to-end: a direct-only newer commit does
   try {
     const { initialSha } = await initLocalOriginRepo(tempDir);
     const directSha = pushAnotherCommit(tempDir, "chore(release): v1.0.2-pre.0");
+    const checkout = path.join(tempDir, "tmp", "worktrees", "issue-9007");
+    execFileSync("git", ["worktree", "add", "--quiet", "-b", "issue-9007", checkout], { cwd: tempDir, stdio: "ignore" });
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\nworkflow:\n  requireRetrospective: true\n", "utf8");
     await mkdir(path.join(tempDir, ".pi"), { recursive: true });
     await writeFile(
@@ -3625,19 +3640,24 @@ test("startup → build-envelope CLI end-to-end: a direct-only newer commit does
       }, null, 2)}\n`,
       "utf8",
     );
+    const prData = {
+      number: 9007, url: "https://github.com/mfittko/dev-loops/pull/9007",
+      headRefName: "issue-9007", headRefOid: directSha,
+      headRepository: { name: "dev-loops" }, headRepositoryOwner: { login: "mfittko" },
+      state: "OPEN",
+      mergedAt: null,
+      mergeCommit: null,
+      assignees: [],
+      closingIssuesReferences: [],
+      body: "",
+    };
     const ghStub = await writeGhStubHelper(tempDir, [
       {
         assertArgs: ["pr", "view", "9007"],
-        stdout: JSON.stringify({
-          state: "OPEN",
-          mergedAt: null,
-          mergeCommit: null,
-          assignees: [],
-          closingIssuesReferences: [],
-          body: "",
-        }),
+        stdout: JSON.stringify(prData),
       },
       { assertArgs: ["api", "graphql", `oid=${directSha}`], stdout: graphCommitAssociations() },
+      { assertArgs: ["pr", "view", "9007"], stdout: JSON.stringify(prData) },
     ], { matchMode: "claims" });
     const cliPath = path.resolve("cli/index.mjs");
     const result = await runNodeHelper(cliPath, ["loop", "startup", "--pr", "9007"], {
@@ -3659,6 +3679,7 @@ test("startup → build-envelope CLI end-to-end: a direct-only newer commit does
     ], { cwd: tempDir, env: { ...ghStub.env, ...resolverTestEnv() } });
     assert.equal(envelopeResult.code, 0, envelopeResult.stderr);
     const envelope = JSON.parse(envelopeResult.stdout.trim());
+    assert.equal(envelope.cwd, realpathSync(checkout));
     assert.equal(envelope.nextAction, parsed.bundle.nextAction);
     assert.equal(envelope.currentGate, "draft");
     assert.equal(envelope.routeKind, undefined);
