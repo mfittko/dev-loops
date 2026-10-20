@@ -303,7 +303,16 @@ export function checkAgentSetRendered(
     if (bad.length > 0) offenders.push(`${file} (${bad.join(", ")})`);
   }
   if (offenders.length === 0) return null;
-  const remedy = isDevLoopsAgentsCheckout(projectRoot)
+  let isSymlink = false;
+  try {
+    isSymlink = fs.lstatSync(dir).isSymbolicLink();
+  } catch {
+    // absent or unreadable: keep the default remedy
+  }
+  const devLoops = isDevLoopsAgentsCheckout(projectRoot);
+  const remedy = devLoops && isSymlink
+    ? `\`${dir}\` is a symlink to the raw agent sources and provisioning skips it. Rebase or merge the branch onto main first (this untracks \`.pi/agents\`), then run \`dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>\`. Never restore a \`.pi/agents\` symlink to the raw agent sources.`
+    : devLoops
     ? `Render the project set: in a worktree run \`dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>\`; in the main checkout restart the Pi session (the session-start sync re-renders \`${dir}\`). Never restore a \`.pi/agents\` symlink to the raw agent sources.`
     : "Re-render with the packaged-agent sync, or replace the named file with its rendered copy.";
   return `agent_set_not_rendered: the rendered agent set carries non-Pi tool names or unreadable files: ${offenders.join("; ")}. ${remedy}`;

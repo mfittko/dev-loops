@@ -25,6 +25,18 @@ function launch(cwd, input = { agent: "quality" }) {
   return events.get("tool_call")({ toolName: "subagent", input }, { cwd });
 }
 
+async function withHome(fn) {
+  const prev = process.env.HOME;
+  const home = tmpProject();
+  process.env.HOME = home;
+  try {
+    return await fn();
+  } finally {
+    process.env.HOME = prev;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
 async function withProject(fn) {
   const root = tmpProject();
   try {
@@ -139,7 +151,7 @@ test("session_start syncs the resolved project root", () =>
     fs.mkdirSync(sub, { recursive: true });
     const events = new Map();
     extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
-    await events.get("session_start")({}, { cwd: sub, getSessionId: () => "s" });
+    await withHome(() => events.get("session_start")({}, { cwd: sub, getSessionId: () => "s" }));
     assert.deepEqual(await launch(sub), { block: false });
     assert.equal(fs.existsSync(path.join(sub, ".pi")), false);
   }));
@@ -150,7 +162,7 @@ test("session_start renders .pi/agents in a fresh dev-loops-shaped clone", () =>
     writeAt(path.join(root, "agents", "quality.agent.md"), "---\nname: quality\ntools: read, search, execute, bash\n---\nbody\n");
     const events = new Map();
     extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
-    await events.get("session_start")({}, { cwd: root, getSessionId: () => "s" });
+    await withHome(() => events.get("session_start")({}, { cwd: root, getSessionId: () => "s" }));
     const dir = path.join(root, ".pi", "agents");
     assert.equal(fs.lstatSync(dir).isDirectory(), true);
     assert.deepEqual(await launch(root), { block: false });
@@ -163,8 +175,20 @@ test("session_start leaves a consumer root with its own agents/ without .pi/agen
     writeAt(path.join(root, "agents", "x.agent.md"), "---\nname: x\ntools: read\n---\nbody\n");
     const events = new Map();
     extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
-    await events.get("session_start")({}, { cwd: root, getSessionId: () => "s" });
+    await withHome(() => events.get("session_start")({}, { cwd: root, getSessionId: () => "s" }));
     assert.equal(fs.existsSync(path.join(root, ".pi", "agents")), false);
+  }));
+
+test("a tracked .pi/agents symlink refusal names the rebase step, the path and the tokens", () =>
+  withProject(async (root) => {
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    writeAt(path.join(root, "agents", "quality.agent.md"), RAW);
+    fs.mkdirSync(path.join(root, ".pi"));
+    fs.symlinkSync("../agents", path.join(root, ".pi", "agents"));
+    const { checkAgentSetRendered } = await import("../extension/sync-packaged-agents.ts");
+    const reason = checkAgentSetRendered(root, path.join(root, "agents"));
+    assert.match(reason, /Rebase or merge the branch onto main first/);
+    assert.match(reason, /quality\.agent\.md \(search, execute\)/);
   }));
 
 test("a raw global copy is never checked", () =>

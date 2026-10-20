@@ -346,7 +346,7 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
   try {
     if (await isDevLoopsCheckout()) {
       if (trackedPiAgents()) {
-        actions.push({ entry: ".pi/agents", mode: "skip", reason: "pi-agents-tracked: .pi/agents is tracked in the worktree index" });
+        actions.push({ entry: ".pi/agents", mode: "skip", reason: "pi-agents-tracked: .pi/agents is tracked in the worktree index; rebase or merge onto main first, then provision again" });
       } else {
         const { renderProjectAgents } = await import("../../extension/sync-packaged-agents.ts");
         renderProjectAgents(dst, path.join(dst, "agents"));
