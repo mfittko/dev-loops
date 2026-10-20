@@ -218,6 +218,13 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
   if (!log || typeof log !== "object") {
     throw new Error("prior gate findings-log not found or unreadable — cannot carry forward (fail-closed)");
   }
+  // Refusal precedence (#2895 AC2): an unknown --rerun-angle name is refused before the
+  // eligibility refusal below, so no fallback plan is written for a typo.
+  const knownAngles = Array.isArray(log.provenance?.perAngle) ? log.provenance.perAngle.map((a) => a?.angle) : [];
+  const unknownRerun = rerunAngles.filter((a) => !knownAngles.includes(a));
+  if (unknownRerun.length > 0) {
+    throw Object.assign(new Error(`--rerun-angle names no angle in the prior findings-log: ${unknownRerun.join(", ")}`), { code: "unknown_rerun_angle" });
+  }
   if (log.verdict !== "clean" && log.verdict !== "findings_present") {
     // This is the ONE genuine carry-forward ELIGIBILITY refusal: a readable,
     // well-formed prior log whose verdict simply is not carry-eligible. Its
@@ -330,11 +337,6 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
     const [angle] = matches;
     if (!priorFindingsByAngle.has(angle)) priorFindingsByAngle.set(angle, []);
     priorFindingsByAngle.get(angle).push(finding);
-  }
-
-  const unknownRerun = rerunAngles.filter((a) => !prevAngles.includes(a));
-  if (unknownRerun.length > 0) {
-    throw Object.assign(new Error(`--rerun-angle names no angle in the prior findings-log: ${unknownRerun.join(", ")}`), { code: "unknown_rerun_angle" });
   }
 
   if (incrementalFiles.some(isDevLoopConfigSourcePath)) {
@@ -570,7 +572,11 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
         // Best-effort only — the original refusal below is authoritative.
       }
     }
-    process.stderr.write(`${formatCliError(error)}\n`);
+    // The shared formatter drops the typed code; keep it for the unknown-angle refusal (#2895 AC2).
+    const rendered = error instanceof Error && error.code === "unknown_rerun_angle"
+      ? JSON.stringify({ ...JSON.parse(formatCliError(error)), code: error.code })
+      : formatCliError(error);
+    process.stderr.write(`${rendered}\n`);
     process.exitCode = 1;
   }
 }

@@ -652,6 +652,9 @@ test("--rerun-angle forces the named angle to re-run (operator_rerun), carries t
     assert.throws(() => buildCarryForwardPlan({ log: cleanLog, changedFiles: [], rerunAngles: ["nope"] }), { code: "unknown_rerun_angle" });
     const refused = await runMainRaw([...argv, "--rerun-angle", "nope"], { repoRoot });
     assert.equal(refused.exitCode, 1);
+    const refusedErr = JSON.parse(refused.stderr);
+    assert.equal(refusedErr.code, "unknown_rerun_angle");
+    assert.match(refusedErr.error, /nope/);
     await assert.rejects(readFile(planPath, "utf8"), { code: "ENOENT" });
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -1369,6 +1372,13 @@ test("buildCarryForwardPlan: a named ambiguous-finding angle gets operator_rerun
     rerunAngles: ["coverage"],
   });
   assert.equal(plan.mustRerun.find((m) => m.angle === "coverage").reason, "operator_rerun");
+});
+
+test("buildCarryForwardPlan: an unknown rerun name is refused before the ineligible-verdict refusal", () => {
+  assert.throws(
+    () => buildCarryForwardPlan({ log: { ...cleanLog, verdict: "blocked" }, changedFiles: [], rerunAngles: ["nope"] }),
+    (error) => error.code === "unknown_rerun_angle" && error.carryForwardRefusal !== true,
+  );
 });
 
 test("buildCarryForwardPlan: duplicate rerun names are idempotent; case mismatch is refused", () => {
