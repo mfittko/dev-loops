@@ -320,8 +320,22 @@ test("simplest design: a Size forecast body without the section gives simplest_d
 test("only cli/index.mjs wires spec-lint; no other shipped file imports or invokes it", () => {
   const files = execFileSync("git", ["ls-files", "scripts", "packages", "cli"], { cwd: repoRoot, encoding: "utf8" })
     .split("\n").filter((f) => /\.mjs$/u.test(f) && !f.includes("node_modules") && !/\.test\.mjs$/u.test(f) && f !== "cli/index.mjs" && f !== "scripts/loop/spec-lint.mjs");
-  const offenders = files.filter((f) => /spec-lint\.mjs|lintSpec\b/u.test(readFileSync(path.join(repoRoot, f), "utf8")));
+  // Also match a quoted "spec-lint" argv token (runCli / execFile / spawn), not just the path and the symbol.
+  const consumer = /spec-lint\.mjs|lintSpec\b|["'`]spec-lint["'`]/u;
+  const offenders = files.filter((f) => consumer.test(readFileSync(path.join(repoRoot, f), "utf8")));
   assert.deepEqual(offenders, []);
+  for (const form of ['import { lintSpec } from "../loop/spec-lint.mjs";', "lintSpec(x)", 'runCli(["loop", "spec-lint", "--body-file", p])', "execFile('dev-loops', ['loop', 'spec-lint'])"]) {
+    assert.match(form, consumer, form);
+  }
+  assert.doesNotMatch("// the grill (refine-plan-file, spec-lint) reads it", consumer);
+});
+
+test("lintSpec reports simplest_design_missing for a Size forecast body without the section, and none with it", async () => {
+  const root = await fixtureRepo();
+  const forecast = "## Size forecast\n\n- forecast: slice=1 wloc=10 files=a.mjs";
+  const kinds = async (body) => (await lintSpec({ body, repoRoot: root })).findings.map((f) => f.kind);
+  assert.deepEqual(await kinds(forecast), ["simplest_design_missing"]);
+  assert.deepEqual(await kinds(`${forecast}\n\n## Simplest design\n\nMinimal approach.`), []);
 });
 
 test("DESIGN-SIMPLEST-FIRST is registered, owned by structural-quality, and cited by the grill, refiner and four agents", async () => {
