@@ -396,6 +396,8 @@ test("recordedSkipReason matches an input_form site verbatim and never borrows a
   assert.equal(recordedSkipReason(trimmedOnly, "fp", " 12 "), null);
   const location = [{ fingerprint: "fp", sites: [skipped("src/a.mjs")] }];
   assert.equal(recordedSkipReason(location, "fp", " src/a.mjs "), 'reason "src/a.mjs"');
+  const both = [{ fingerprint: "fp", sites: [skipped("12"), skipped(" 12 ", "input_form")] }];
+  assert.equal(recordedSkipReason(both, "fp", " 12 "), 'reason " 12 "');
 });
 
 test("normalizeFixerDispositionHandoff keeps the empty-site relaxation confined to input_form", () => {
