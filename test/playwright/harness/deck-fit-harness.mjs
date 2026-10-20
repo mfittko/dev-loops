@@ -249,6 +249,9 @@ export function defineDeckSuite({
           // Frame each capture on the in-view section, not the whole scroll
           // document, so the designer-review loop sees one state per artifact.
           fullPage: false,
+          // The whole deck is axe-checked once above; re-running axe per slide
+          // (43 on finding-the-flow) exceeds the test timeout now that it resolves.
+          ...(evidenceAssertions && { runAxe: async () => ({ skipped: true, reason: "axe: asserted once for the whole deck" }) }),
           metadata: {
             fixture: deckName,
             route: `#${id}`,
