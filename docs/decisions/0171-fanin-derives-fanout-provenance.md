@@ -11,7 +11,7 @@ A `fanout_fanin` ledger write requires `provenance`. The fan-in wrote no provena
 ## Decision
 
 - With `--emit-plan`, `consolidate-fanin.mjs` derives `provenance` from the head-stamped per-angle artifacts, the emit-plan units and the carry-forward plan. A fresh angle takes its unit's `executionIdentity` as `dispatchId` and the unit's `group` (no `group` key for a singleton). An angle without a head-stamped artifact gets no fresh entry. A carried angle records `carriedFromHead`, `carriedVerdict` and the prior identity from the carry-forward plan.
-- The fan-in also writes the same ledger to a keyed path, `<gate>-<headSha>.fanin-ledger.json`, beside the emit plan. It removes a stale keyed file once the emit-plan key is verified, before any later refusal or write; a run refused by the plan-key guard leaves a prior keyed file in place.
+- The fan-in also writes the same ledger to a keyed path, `<gate>-<headSha>.fanin-ledger.json`, beside the emit plan. It removes a stale keyed file once the emit-plan key is verified and the path is the canonical emit-plan path, before any later refusal or write; a run refused by either guard leaves a prior keyed file in place.
 - The fan-in fails closed when the plan has a fresh unit and the head has zero dispatch-prompt records for the plan's gate.
 - The ledger writer stops accepting caller-built provenance in a later slice of the same issue. This record covers the fan-in side only.
 

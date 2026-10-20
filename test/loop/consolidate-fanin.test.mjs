@@ -4693,7 +4693,7 @@ test("deriveFaninProvenance: a planned angle without a head-stamped fresh artifa
 
 // Builds a complete fan-out round on disk (artifacts, plan, receipts, one dispatch record) and a
 // repo root whose .devloops fixes the angle contract so write-gate-findings-log.mjs can validate it.
-async function withProvenanceRound({ units, fanout, extra = {}, planExtra = {} }, fn) {
+async function withProvenanceRound({ units, fanout }, fn) {
   await withTempDir(async (root) => {
     const gate = "draft_gate";
     await writeFile(path.join(root, ".devloops"), `version: 1\ngates:\n  draft:\n    angles:\n      - scope\n      - coverage\n      - name: pr-description\n        mandatory: true\n      - name: holistic\n        enabled: false\n  fanout:\n${fanout}\n`, "utf8");
@@ -4708,8 +4708,8 @@ async function withProvenanceRound({ units, fanout, extra = {}, planExtra = {} }
       for (const angle of unit.angles) await writeFile(path.join(dir, `${angle}.json`), JSON.stringify(fresh(angle)), "utf8");
     }
     await writeEmitPlanLayoutRecord(root, planUnits[0], gate, PROV_HEAD);
-    const planPath = await writeEmitPlan(root, { ok: true, gate, headSha: PROV_HEAD, repo: "owner/repo", pr: 42, count: planUnits.length, units: planUnits, ...planExtra });
-    const base = { findingsDir: dir, emitPlan: planPath, gate, headSha: PROV_HEAD, tmpRoot: root, receiptTmpRoot: root, repoRoot: root, ...extra };
+    const planPath = await writeEmitPlan(root, { ok: true, gate, headSha: PROV_HEAD, repo: "owner/repo", pr: 42, count: planUnits.length, units: planUnits });
+    const base = { findingsDir: dir, emitPlan: planPath, gate, headSha: PROV_HEAD, tmpRoot: root, receiptTmpRoot: root, repoRoot: root };
     await fn({ root, base, ledgerOut: path.join(root, "out", "ledger.json") });
   });
 }
@@ -4838,11 +4838,11 @@ test("#2526: zero-unit carried-only derived provenance (full identity) is accept
 
 // #2526 review fixes: the keyed fan-in ledger is bound to the verified plan location,
 // and a keyed (durable) ledger target lifts the over-budget --ledger-out requirement.
-async function zeroUnitCarriedPlan(root, { planRoot = root, planPr = 42 } = {}) {
+async function zeroUnitCarriedPlan(root) {
   const gate = "draft_gate";
   const entry = { angle: "coverage", carriedFromHead: PRIOR_HEAD, reviewer: "rev-x", prevVerdict: "clean", reason: "unchanged" };
-  const plan = { ok: true, gate, headSha: PROV_HEAD, repo: "owner/repo", pr: planPr, pending: true, count: 0, units: [], carried: [entry] };
-  const planPath = buildGateEmitPlanPath({ repo: "owner/repo", pr: 42, gate, headSha: PROV_HEAD, tmpRoot: planRoot });
+  const plan = { ok: true, gate, headSha: PROV_HEAD, repo: "owner/repo", pr: 42, pending: true, count: 0, units: [], carried: [entry] };
+  const planPath = buildGateEmitPlanPath({ repo: "owner/repo", pr: 42, gate, headSha: PROV_HEAD, tmpRoot: root });
   await mkdir(path.dirname(planPath), { recursive: true });
   await writeFile(planPath, JSON.stringify(plan), "utf8");
   const dir = path.join(root, "findings");

@@ -258,7 +258,7 @@ Optional:
                                  The keyed fan-in ledger is written under --tmp-root; the run refuses (exit 1,
                                  no write) unless --emit-plan is the canonical emit-plan path for that root,
                                  so pass the --tmp-root the plan was emitted under. A round over the render
-                                 budget needs --ledger-out only without --emit-plan (the keyed ledger is durable). A stale keyed file is removed once the emit-plan key is verified, before any later refusal or write.
+                                 budget needs --ledger-out only without --emit-plan (the keyed ledger is durable). A stale keyed file is removed once the emit-plan key is verified and the path is the canonical emit-plan path, before any later refusal or write; a run refused by either guard leaves a prior keyed file in place.
                                  The ledger gains a "provenance" object ({ distinctReviewers, perAngle })
                                  derived from the head-stamped artifacts, the plan units
                                  and --carry-forward-plan, and the same ledger is also written to the
@@ -1046,9 +1046,10 @@ export async function consolidateGateFanin(options) {
     if (path.resolve(options.emitPlan) !== canonicalPlanPath) {
       throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: --emit-plan ${path.resolve(options.emitPlan)} is not the canonical emit-plan path ${canonicalPlanPath} for --tmp-root ${path.resolve(keyedTmpRoot)}; pass the --tmp-root the plan was emitted under (fail-closed)`);
     }
-    // Clear any stale keyed fan-in ledger once the plan key is verified (the
-    // keyed path is unknown before). A run refused by the plan-key guard leaves
-    // a prior keyed file in place; any later refusal leaves none behind.
+    // Clear any stale keyed fan-in ledger once the plan key is verified and the
+    // canonical emit-plan path check passes (the keyed path is unknown before). A run
+    // refused by either guard leaves a prior keyed file in place; any later refusal
+    // leaves none behind.
     await rm(buildGateFaninLedgerPath({ repo: emitPlan.repo, pr: emitPlan.pr, gate: keyedGate, headSha: options.headSha, tmpRoot: keyedTmpRoot }), { force: true });
     // The guard already proved this is a canonical string gate. Normalize it
     // for downstream guarded consumers without changing the omission
