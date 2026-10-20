@@ -9,7 +9,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "bun:test";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
-import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
+import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
+import { startDeltaSequence, toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../../scripts/github/_fixer-emission-evidence.mjs";
 import { decideFixerWriteGuard } from "../../.claude/hooks/_hook-decisions.mjs";
@@ -18,7 +19,7 @@ import { classifyValidationCommand } from "@dev-loops/core/loop/validation-class
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
-import { assertFixerDispatchPayload, buildFixerDispatchPayload, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
+import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
@@ -2043,4 +2044,19 @@ test("delta gate: a threads order lists the delta record as a delta-result read 
     }
     await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads, deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);
   });
+});
+
+test("matcher forms flow verbatim from the act list through the skeleton to the site coverage gaps", () => {
+  const forms = ["", " 12 ", "abc"];
+  const act = [withFp({ severity: "high", angle: "correctness", summary: "matcher", file: "src/m.mjs", line: 1, judgeDisposition: "act", siteQuery: "q", defectKind: "matcher", acceptedForms: ["1"], rejectedForms: forms })];
+  const skeleton = buildSiteCoverageSkeleton(act);
+  assert.deepEqual(skeleton[0].sites.slice(1).map((s) => s.site), forms);
+  const gaps = (sites) => siteCoverageGaps(toDeltaActItems(act), normalizeFixerDispositionHandoff({ headSha: "a".repeat(40), dispositions: [], siteCoverage: [{ ...skeleton[0], returnedSites: [], noSitesReason: "none", sites }] }).siteCoverage);
+  // The skeleton's unfilled statuses are skipped-with-reason placeholders here; a fix is "fixed" plus a test.
+  const sites = skeleton[0].sites.map((s) => ({ ...s, status: "skipped", reason: "pending" }));
+  assert.equal(gaps(sites).length, 4);
+  for (const [i, site] of skeleton[0].sites.entries()) {
+    sites[i] = { ...site, status: "fixed", test: "t.mjs" };
+    assert.equal(gaps(sites).length, 3 - i);
+  }
 });

@@ -1726,6 +1726,13 @@ test("judge-pass recurrence: a matcher decision carries its accepted and rejecte
   assert.deepEqual([first.acceptedForms, first.rejectedForms], [["a"], ["r"]]);
 });
 
+test("judge-pass recurrence: matcher rejected forms reach the act list verbatim", async () => {
+  for (const rejectedForms of [["", "abc"], [" 12 "]]) {
+    const { payload } = await recurrenceCase({ decisionExtra: { defectKind: "matcher", acceptedForms: ["1"], rejectedForms } });
+    assert.deepEqual(payload.act[0].rejectedForms, rejectedForms);
+  }
+});
+
 test("judge-pass recurrence: a doc_lag decision carries its stated surfaces to the act list", async () => {
   const { tmpDir, payload } = await recurrenceCase({ decisionExtra: { defectKind: "doc_lag", statedSurfaces: ["PR body"] } });
   assert.deepEqual(payload.act[0].statedSurfaces, ["PR body"]);

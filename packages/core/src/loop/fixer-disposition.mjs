@@ -71,7 +71,9 @@ function normalizeSiteCoverage(entry, label, ruleIds) {
     throw new Error(`${label} sites and returnedSites must be arrays, not counts; expected returnedSites: ["<site>", ...] and sites: [{ "site": "<site>", "status": "fixed"|"skipped", "reason": "<required for skipped>" }, ...]`);
   }
   const sites = rawSites.map((site, i) => {
-    if (!site || typeof site !== "object" || !isNonEmptyString(site.site)) throw new Error(`${label} sites[${i}] needs a site`);
+    // An input form is an input, so "" and " 12 " are kept verbatim; other sites are locations.
+    const verbatim = site?.kind === "input_form" && typeof site.site === "string";
+    if (!site || typeof site !== "object" || !(verbatim || isNonEmptyString(site.site))) throw new Error(`${label} sites[${i}] needs a site`);
     const status = typeof site.status === "string" ? site.status.trim().toLowerCase() : "";
     if (!Object.values(SITE_STATUS).includes(status)) throw new Error(`${label} site ${site.site} has status ${JSON.stringify(site.status)}, expected fixed or skipped`);
     if (status === SITE_STATUS.SKIPPED && !isNonEmptyString(site.reason)) throw new Error(`${label} skipped site ${site.site} records no skip reason`);
@@ -79,7 +81,7 @@ function normalizeSiteCoverage(entry, label, ruleIds) {
       throw new Error(`${label} fixed input form ${site.site} names no test`);
     }
     return {
-      site: site.site.trim(),
+      site: verbatim ? site.site : site.site.trim(),
       status,
       ...(isNonEmptyString(site.reason) ? { reason: site.reason.trim() } : {}),
       ...(site.kind === "input_form" ? { kind: "input_form" } : {}),
@@ -92,6 +94,7 @@ function normalizeSiteCoverage(entry, label, ruleIds) {
     throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: ${label} records site ${dup.site} more than once`);
   }
   const returnedSites = returned.map((site) => {
+    if (typeof site === "string" && sites.some((s) => s.kind === "input_form" && s.site === site)) return site;
     if (!isNonEmptyString(site)) throw new Error(`${label} returnedSites entries must be non-empty strings`);
     if (!disposed.has(site.trim())) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: ${label} leaves returned site ${site.trim()} neither fixed nor skipped with a reason`);
     return site.trim();

@@ -126,7 +126,7 @@ test("check-judge-decision and the ledger writer agree on matcher rejectedForms"
       decision(1, "valid_compliant", { authorizedRemediation: "fix it", defectClass: "c", siteQuery: "q", defectKind: "matcher", acceptedForms: ["1"], rejectedForms }),
     ],
   });
-  for (const [rejectedForms, ok] of [[["", "abc"], true], [[], false]]) {
+  for (const [rejectedForms, ok] of [[["", "abc"], true], [[" 12 "], true], [[], false], [["a", 5], false]]) {
     await withCase({ siblingVerdict: matcher(rejectedForms) }, async ({ run, tmpDir }) => {
       const out = [];
       const saved = process.exitCode;
