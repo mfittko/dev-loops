@@ -167,6 +167,15 @@ export function syncProjectAgentsDir(projectRoot: string, sourceRoot: string) {
   }
 }
 
+/** A dev-loops checkout: `package.json` names `dev-loops` and an `agents/` directory exists (same guard as `provision-worktree.mjs`). */
+export function isDevLoopsAgentsCheckout(dir: string): boolean {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).name === "dev-loops" && fs.statSync(path.join(dir, "agents")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Provision-time render: ensure `<projectRoot>/.pi/agents` is a REAL
  * directory of Pi-valid rendered copies, creating it when absent. Unlike
@@ -292,6 +301,8 @@ export function findProjectRoot(cwd: string, home: string | null = process.env.H
  * allowed (consumer repos resolve from the rendered `~/.agents/`). For each requested role without a
  * project copy, only the definition Pi would load (first of the global roots holding the role) is
  * checked, so a raw package copy shadowed by a rendered higher-precedence copy is allowed.
+ * `scope` comes from `agentScope` (read from `options` or the top level): `project` skips the global
+ * check, `user` skips the project set and checks only the first global copy Pi loads.
  */
 export function checkAgentSetRendered(
   cwd: string,
@@ -336,7 +347,7 @@ export function checkAgentSetRendered(
     projectOffenders.length > 0 &&
       `Render the project set: in a worktree run \`dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>\`; in the main checkout restart the Pi session (the session-start sync re-renders \`${dir}\`). Never restore a \`.pi/agents\` symlink to the raw agent sources.`,
     globalOffenders.length > 0 &&
-      "Remove or reinstall the named global copy (re-run the packaged-agent sync for `~/.agents`), or launch with `options.agentScope: \"project\"` to skip the global check.",
+      "Remove or reinstall the named global copy (re-run the packaged-agent sync for `~/.agents`), or launch with `agentScope: \"project\"` to skip the global check.",
   ].filter(Boolean);
   return (
     `agent_set_not_rendered: the loaded agent set carries non-Pi tool names: ${[...projectOffenders, ...globalOffenders].join("; ")}. ` +

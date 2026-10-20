@@ -32,7 +32,7 @@ const WIDGET_KEY = 'dev-loops.setup';
 // builtins at session-start sync time (#1583); the pure transform + IO live in
 // a dedicated module so they stay testable offline. Import for local use AND
 // re-export so tests can reach the same binding the session_start handler calls.
-import { checkAgentSetRendered, findProjectRoot, syncPackagedAgents } from './sync-packaged-agents.ts';
+import { checkAgentSetRendered, findProjectRoot, isDevLoopsAgentsCheckout, renderProjectAgents, syncPackagedAgents } from './sync-packaged-agents.ts';
 export { syncPackagedAgents };
 import { DEV_LOOPS_ROLES, decidePiToolCall, isReadOnlyPiRole, resolvePiRole, stripPluginNamespace } from './readonly-role-gate.ts';
 
@@ -63,7 +63,10 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
   adapter.on('session_start', async (_event, ctx) => {
     postMergeUpdateHook.onSessionStart();
     try {
-      syncPackagedAgents({ projectRoot: ctx.cwd ? findProjectRoot(ctx.cwd) : undefined });
+      const projectRoot = ctx.cwd ? findProjectRoot(ctx.cwd) : undefined;
+      syncPackagedAgents({ projectRoot });
+      // A fresh dev-loops clone has no `.pi/agents`; render it from the checkout's own agents/ (decision record 0173).
+      if (projectRoot && isDevLoopsAgentsCheckout(projectRoot)) renderProjectAgents(projectRoot, path.join(projectRoot, 'agents'));
     } catch {
       // Best-effort agent sync — do not break session start
     }

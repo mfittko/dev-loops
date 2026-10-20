@@ -269,3 +269,16 @@ test("a cwd that names a file does not throw in the project-root walk", () =>
     assert.doesNotThrow(() => findProjectRoot(path.join(file, "child")));
     assert.deepEqual(await launch(root, { agent: "quality", cwd: file }), { block: false });
   }));
+
+test("session_start renders .pi/agents in a fresh dev-loops-shaped clone", () =>
+  withHome(async (root) => {
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    writeAt(path.join(root, "agents", "quality.agent.md"), "---\nname: quality\ntools: read, search, execute, bash\n---\nbody\n");
+    const events = new Map();
+    extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
+    await events.get("session_start")({}, { cwd: root, getSessionId: () => "s" });
+    const dir = path.join(root, ".pi", "agents");
+    assert.equal(fs.lstatSync(dir).isDirectory(), true);
+    assert.deepEqual(await launch(root, { agent: "quality" }), { block: false });
+    assert.doesNotMatch(fs.readFileSync(path.join(dir, "quality.agent.md"), "utf8"), /tools:.*\b(search|execute)\b/);
+  }));

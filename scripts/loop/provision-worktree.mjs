@@ -21,6 +21,10 @@
  * of the branch's. Stale/broken links are replaced; a real file/dir
  * already occupying the slot is left alone (dest-conflict, never clobbered).
  *
+ * In a dev-loops checkout (package.json names `dev-loops`, `agents/` exists) it also
+ * renders the Pi-valid `.pi/agents` set from that checkout's own `agents/` (action
+ * `mode: "render"`), independent of .devloops.
+ *
  * Prints a JSON summary of actions to stdout. Never throws on a per-entry
  * problem; exits 0 unless its own arguments are invalid.
  */
@@ -35,14 +39,15 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 const USAGE = `Usage:
   provision-worktree.mjs --worktree-path <p> --repo-root <p>
 Provision a worktree with gitignored files/dirs from the main checkout,
-driven by .devloops worktree.entries (mode: copy/link).
+driven by .devloops worktree.entries (mode: copy/link). A dev-loops checkout also
+gets its .pi/agents set rendered from its own agents/ (mode: render).
 Required:
   --worktree-path <p>   Absolute path to the target worktree.
   --repo-root <p>       Absolute path to the main checkout (source of files).
 Optional:
   -h, --help            Show this help.
 Output (stdout, JSON):
-  { "ok": true, "actions": [ { "mode": "copy"|"link"|"skip"|"reject", ... } ],
+  { "ok": true, "actions": [ { "mode": "copy"|"link"|"skip"|"reject"|"render", ... } ],
     "summary": { "copied": n, "linked": n, "skipped": n, "rejected": n,
                  "warnings": n } }
 
