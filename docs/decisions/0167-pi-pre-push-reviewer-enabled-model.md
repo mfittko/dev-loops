@@ -10,7 +10,7 @@ Proposed
 
 ## Decision
 
-Amend the Pi model choice in [ADR 0079](./0079-pre-pr-review-phase.md) under the config-resolved policy of [ADR 0031](./0031-harness-aware-model-tier-policy.md): set this repo's `.devloops` `models.tiers.pre-pr-strong.pi` to `openai-codex/gpt-6.1-sol`. Keep the explicit tier pin, the `pre-push-reviewer` role mapping and the Claude `opus` value unchanged.
+Set the Pi value under the per-harness opt-in policy of [ADR 0079](./0079-pre-pr-review-phase.md) and the config-resolved policy of [ADR 0031](./0031-harness-aware-model-tier-policy.md), replacing the unrecorded `openai-codex/gpt-6-sol` pin: set this repo's `.devloops` `models.tiers.pre-pr-strong.pi` to `openai-codex/gpt-6.1-sol`. Keep the explicit tier pin, the `pre-push-reviewer` role mapping and the Claude `opus` value unchanged.
 
 Reject retaining the unavailable id or removing the Pi override to inherit an arbitrary session model. Neither preserves an explicit, usable reviewer choice.
 

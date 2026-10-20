@@ -34,7 +34,7 @@ function assertSupportedTools(tools, file) {
   }
 }
 
-test("canonical agent tools are child-safe and retain Claude capabilities", () => {
+test("canonical agent tools are in the supported set and match the Claude mirror", () => {
   const agents = fs.readdirSync(new URL("agents/", repoRoot))
     .filter((file) => file.endsWith(".agent.md")).sort();
   assert.ok(agents.length > 0);
