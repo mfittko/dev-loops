@@ -10,7 +10,7 @@ const PACKAGED_AGENTS_ROOT = new URL("../agents/", import.meta.url);
  * Pi resolves project role agents from here with precedence over the global
  * `~/.agents/` (#1606): when a repo symlinks `.pi/agents` -> the package source
  * (the dev-loops repo dogfooding convention), the dispatch reads the raw neutral
- * templates and Pi strict-rejects `search`/`execute`. The project-local sync
+ * templates and Pi strict-rejects `search`. The project-local sync
  * replaces that symlink with a real directory of Pi-valid copies.
  */
 const PROJECT_AGENTS_SUBPATH = path.join(".pi", "agents");
@@ -121,7 +121,7 @@ function writeSyncedAgents(sourceRoot: string, destDir: string) {
  * `.pi/agents -> ../agents`, dogfooding the package source), the Pi `subagent`
  * tool resolves project role agents from here with precedence over the global
  * `~/.agents/`, so the dispatch reads the raw neutral templates and Pi
- * strict-rejects `search`/`execute`. The sync replaces the symlink with a REAL
+ * strict-rejects `search`. The sync replaces the symlink with a REAL
  * directory of Pi-valid rendered copies — it does NOT write through the symlink
  * (writing through would overwrite the neutral source and break Claude asset
  * generation; the source retains mapped `search` and uses `bash` for execution).
