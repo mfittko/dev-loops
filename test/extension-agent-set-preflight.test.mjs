@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import extension from "../extension/index.ts";
-import { renderProjectAgents } from "../extension/sync-packaged-agents.ts";
+import { findProjectRoot, renderProjectAgents } from "../extension/sync-packaged-agents.ts";
 
 const repoRoot = path.resolve(new URL("../", import.meta.url).pathname);
 
@@ -209,4 +209,33 @@ test("a spaced namespaced name is normalized and a non-array tasks value does no
     writeAt(path.join(home, ".agents", "quality.agent.md"), RAW);
     assert.equal((await launch(root, { agent: "dev-loops: quality" })).block, true);
     assert.deepEqual(await launch(root, { tasks: "quality", chain: { agent: "quality" } }), { block: false });
+  }));
+
+test("the project-root walk stops at the home directory", () => {
+  const home = tmpProject();
+  try {
+    fs.mkdirSync(path.join(home, ".pi"));
+    const cwd = path.join(home, "work", "proj");
+    fs.mkdirSync(cwd, { recursive: true });
+    assert.equal(findProjectRoot(cwd, home), cwd);
+    fs.mkdirSync(path.join(home, "work", ".pi"));
+    assert.equal(findProjectRoot(cwd, home), path.join(home, "work"));
+    assert.equal(findProjectRoot(home, home), home);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("the project remedy names the resolved project root and session_start syncs that root", () =>
+  withHome(async (root, home) => {
+    writeAt(path.join(root, ".pi", "agents", "quality.agent.md"), RAW);
+    const sub = path.join(root, "packages", "core");
+    fs.mkdirSync(sub, { recursive: true });
+    const res = await launch(sub, { agent: "quality" });
+    assert.ok(res.reason.includes(path.join(root, ".pi", "agents")));
+    const events = new Map();
+    extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
+    await events.get("session_start")({}, { cwd: sub, getSessionId: () => "s" });
+    assert.deepEqual(await launch(sub, { agent: "quality" }), { block: false });
+    assert.equal(fs.existsSync(path.join(sub, ".pi")), false);
   }));

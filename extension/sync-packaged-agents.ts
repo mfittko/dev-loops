@@ -259,11 +259,21 @@ function globalAgentRoots(home: string): string[] {
 
 /**
  * The project root Pi resolves for a cwd: the nearest ancestor (cwd included) holding a `.pi` or
- * `.agents` directory, else the cwd itself. `.git` does not stop the walk.
+ * `.agents` directory, else the cwd itself. `.git` does not stop the walk. The walk stops at the
+ * home directory (`~/.pi` and `~/.agents` are user configuration, never an implicit project).
  */
-export function findProjectRoot(cwd: string): string {
+export function findProjectRoot(cwd: string, home: string | null = process.env.HOME || os.homedir()): string {
   const isDir = (p: string) => fs.statSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
+  const real = (p: string) => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return p;
+    }
+  };
+  const homeReal = home ? real(home) : null;
   for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    if (homeReal && real(dir) === homeReal) return path.resolve(cwd);
     if (isDir(path.join(dir, ".pi")) || isDir(path.join(dir, ".agents"))) return dir;
     if (path.dirname(dir) === dir) return path.resolve(cwd);
   }
@@ -295,7 +305,8 @@ export function checkAgentSetRendered(
     if (bad.length > 0) into.push(`${file} (${bad.join(", ")})`);
     return true;
   };
-  const dir = path.join(findProjectRoot(cwd), PROJECT_AGENTS_SUBPATH);
+  const projectRoot = findProjectRoot(cwd, home);
+  const dir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
   let projectFiles: string[] = [];
   try {
     projectFiles = fs.readdirSync(dir).filter((n) => n.endsWith(".agent.md")).sort();
@@ -316,7 +327,7 @@ export function checkAgentSetRendered(
   if (projectOffenders.length + globalOffenders.length === 0) return null;
   const remedies = [
     projectOffenders.length > 0 &&
-      "Render the project set: in a worktree run `dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>`; in the main checkout restart the Pi session so the session-start sync re-renders it. Never restore a `.pi/agents` symlink to the raw agent sources.",
+      `Render the project set: in a worktree run \`dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>\`; in the main checkout restart the Pi session (the session-start sync re-renders \`${dir}\`). Never restore a \`.pi/agents\` symlink to the raw agent sources.`,
     globalOffenders.length > 0 &&
       "Remove or reinstall the named global copy (re-run the packaged-agent sync for `~/.agents`), or launch with `options.agentScope: \"project\"` to skip the global check.",
   ].filter(Boolean);
