@@ -90,7 +90,7 @@ this skill dispatches the `review` agents directly.
    and mis-records the round), and
    `--provenance <json>` so the
    same keyed plan also guards that caller-supplied reviewer provenance
-   corresponds to the emitted units; the plan remains a guard, never a findings
+   corresponds to the emitted units; for `write-gate-findings-log.mjs` the plan remains a guard, never a findings
    or provenance source. Then `node
    scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo> --pr <n>
    --gate review --head-sha <sha> --findings-ledger <path> --next-action "none
