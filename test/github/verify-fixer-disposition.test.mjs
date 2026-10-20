@@ -255,6 +255,7 @@ for (const route of ["THREAD", "ACT"]) for (const existing of ["report", "marker
     assert.equal(await readFile(saved, "utf8"), "existing bytes");
     if (existing === "directory") assert.ok((await lstat(target)).isDirectory());
     else assert.equal(await readFile(target, "utf8"), "existing bytes");
+    if (existing === "report") assert.equal(existsSync(`${output}.constructed`), false);
     if (existing !== "report") await assert.rejects(verifyFixerDisposition({ ...options, check: true }, deps));
   });
 });
@@ -277,7 +278,7 @@ for (const defect of ["directorySymlink", "outputSymlink", "notDirectory"]) test
   });
 });
 
-for (const failed of ["report", "marker"]) test(`construction ${failed} write failure cannot become delivery evidence`, async () => {
+for (const [failed, operation] of [["report", "writeFile"], ["report", "close"], ["marker", "writeFile"], ["marker", "close"], ["report", "link"]]) test(`construction ${failed} ${operation} failure cannot become delivery evidence even when cleanup fails`, async () => {
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);
     const source = await readFile(new URL("../../scripts/github/verify-fixer-disposition.mjs", import.meta.url), "utf8");
@@ -285,17 +286,25 @@ for (const failed of ["report", "marker"]) test(`construction ${failed} write fa
     const end = source.indexOf("\n  if (source) {", start);
     assert.ok(start >= 0 && end > start);
     await assert.rejects(runInNewContext(`(async () => { ${source.slice(start, end)} })()`, {
-      options: { construct: true }, path, mkdir, handoffPath: f.output, constructMarkPath: (file) => `${file}.constructed`, sha256Hex,
-      constructedReport: { headSha: f.head, dispositions: [] },
+      options: { construct: true }, path, mkdir, mkdtemp, lstat, handoffPath: f.output, constructMarkPath: (file) => `${file}.constructed`, sha256Hex,
+      link: async (...args) => {
+        if (operation === "link") throw Object.assign(new Error("injected publication failure"), { code: "EIO" });
+        await link(...args);
+      },
+      rm: async () => { throw new Error("injected cleanup failure"); },
+      constructedReport: { headSha: f.head, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: f.head, disposition: "tackled" }] },
       open: async (file, flags) => {
         const handle = await open(file, flags);
-        return { truncate: (...args) => handle.truncate(...args), close: () => handle.close(), writeFile: async (...args) => {
-          await handle.writeFile(...args);
-          if (file.endsWith(".constructed") === (failed === "marker")) throw Object.assign(new Error("injected output failure"), { code: "EIO" });
-        } };
+        const invoke = async (method, args) => {
+          await handle[method](...args);
+          if (file.endsWith(".constructed") === (failed === "marker") && method === operation) throw Object.assign(new Error("injected output failure"), { code: "EIO" });
+          if (file.endsWith(".constructed") === (failed === "marker") && method === "close" && operation === "writeFile") throw new Error("injected secondary close failure");
+        };
+        return { truncate: async () => { throw new Error("injected cleanup failure"); }, close: () => invoke("close", []), writeFile: (...args) => invoke("writeFile", args) };
       },
     }), (error) => error.code === "FIXER_CONSTRUCTION_FAILED" && error.cause.code === "EIO");
-    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true }, f.runtimeFor([]).deps));
+    assert.equal(existsSync(f.output), false);
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true }, f.runtimeFor([]).deps), /result_missing/);
   });
 });
 

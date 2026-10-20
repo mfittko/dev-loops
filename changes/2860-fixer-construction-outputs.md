@@ -1,3 +1,3 @@
 ### Fixed
 
-- Apply canonical output checks to ACT and THREAD fixer construction, reserve reports and markers exclusively, and invalidate partial construction after a write failure (#2860)
+- Apply canonical output checks to ACT and THREAD fixer construction, create reports and markers exclusively, and publish reports only after writes and closes succeed (#2860)

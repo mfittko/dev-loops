@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { lstat, mkdir, open, readFile, realpath, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -636,18 +636,27 @@ export async function verifyFixerDisposition(
   if (options.construct) {
     await mkdir(path.dirname(handoffPath), { recursive: true });
     const text = `${JSON.stringify(constructedReport, null, 2)}\n`;
-    let report, marker;
+    let report, marker, temporary;
     try {
-      report = await open(handoffPath, "wx");
-      marker = await open(constructMarkPath(handoffPath), "wx");
+      const existing = await lstat(handoffPath).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+      if (existing) throw Object.assign(new Error(`EEXIST: report already exists at ${handoffPath}`), { code: "EEXIST" });
+      temporary = await mkdtemp(path.join(path.dirname(handoffPath), ".fixer-construction-"));
+      const pending = path.join(temporary, "report.json");
+      report = await open(pending, "wx");
       await report.writeFile(text, "utf8");
+      await report.close();
+      report = null;
+      marker = await open(constructMarkPath(handoffPath), "wx");
       await marker.writeFile(sha256Hex(text), "utf8");
+      await marker.close();
+      marker = null;
+      // Publish exclusively only after both files close; cleanup is never admission authority.
+      await link(pending, handoffPath);
     } catch (cause) {
-      // Handles invalidate only this attempt's files, even if their paths were moved.
-      await Promise.allSettled([report, marker].filter(Boolean).map((file) => file.truncate(0)));
       throw Object.assign(new Error(`Fixer construction failed: ${cause.message}`, { cause }), { code: "FIXER_CONSTRUCTION_FAILED" });
     } finally {
       await Promise.allSettled([report, marker].filter(Boolean).map((file) => file.close()));
+      if (temporary) await rm(temporary, { recursive: true, force: true }).catch(() => {});
     }
     return { ok: true, constructed: true, outputRef: handoffPath };
   }
