@@ -130,12 +130,25 @@ function loadLiveHeadSha(pr, repo, cwd) {
 export function loadScreenshot(findings, caps) {
   const withEvidence = findings.find((f) => f?.evidence?.screenshotPath);
   const p = withEvidence?.evidence?.screenshotPath;
-  if (!p) return null;
+  return p ? loadScreenshotFile(p, caps, "evidence") : null;
+}
+
+/** Load one named-state screenshot per entry (same size cap); failures push a cap, never throw. */
+export function loadStateScreenshots(states, caps) {
+  return (Array.isArray(states) ? states : [])
+    .map((s) => {
+      const shot = typeof s?.screenshotPath === "string" ? loadScreenshotFile(s.screenshotPath, caps, "state") : null;
+      return shot ? { flow: s.flow ?? null, step: s.step ?? null, ...shot } : null;
+    })
+    .filter(Boolean);
+}
+
+function loadScreenshotFile(p, caps, label) {
   let size;
   try {
     size = statSync(p).size;
   } catch {
-    caps.push(`artifact: evidence screenshot not readable, omitted: ${p}`);
+    caps.push(`artifact: ${label} screenshot not readable, omitted: ${p}`);
     return null;
   }
   const mime = MIME_BY_EXT[path.extname(p).toLowerCase()] ?? "image/png";
@@ -144,11 +157,17 @@ export function loadScreenshot(findings, caps) {
   // dataUri.length = prefixLen + 4*ceil(size/3) <= ARTIFACT_MAX_SCREENSHOT_BYTES.
   const maxRawBytes = 3 * Math.floor((ARTIFACT_MAX_SCREENSHOT_BYTES - prefixLen) / 4);
   if (size > maxRawBytes) {
-    caps.push(`artifact: screenshot omitted (${size} raw bytes exceed the ${ARTIFACT_MAX_SCREENSHOT_BYTES}-byte data-URI cap): ${p}`);
+    caps.push(`artifact: ${label} screenshot omitted (${size} raw bytes exceed the ${ARTIFACT_MAX_SCREENSHOT_BYTES}-byte data-URI cap): ${p}`);
     return null;
   }
-  const dataUri = `data:${mime};base64,${readFileSync(p).toString("base64")}`;
-  return { path: p, dataUri };
+  let bytes;
+  try {
+    bytes = readFileSync(p);
+  } catch {
+    caps.push(`artifact: ${label} screenshot not readable, omitted: ${p}`);
+    return null;
+  }
+  return { path: p, dataUri: `data:${mime};base64,${bytes.toString("base64")}` };
 }
 
 /** Post the head-pinned PENDING review via the shared poster and return its
@@ -223,6 +242,7 @@ export async function runCli(
     counts,
     pr: { number: options.pr, headSha: diagnosedHeadSha },
     screenshot,
+    states: loadStateScreenshots(diagnose.states, caps),
     generatedAt: new Date().toISOString(),
   });
   caps.push(...artifactCaps);

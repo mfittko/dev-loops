@@ -2,7 +2,7 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 
 import {
   buildNamedUiStateArtifactPaths,
@@ -14,7 +14,7 @@ import {
   PLAYWRIGHT_MISSING_MESSAGE,
   WEBKIT_MISSING_MESSAGE,
 } from '../playwright/harness/webkit-smoke-harness.mjs';
-import { STOP_REASON_MAX_CHARS, toStopReason } from '../../scripts/loop/ui-review-capture.mjs';
+import { STOP_REASON_MAX_CHARS, defaultRunAxe, toStopReason } from '../../scripts/loop/ui-review-capture.mjs';
 
 test('normalizeUiStateSegment collapses UI state names into stable path segments', () => {
   assert.equal(normalizeUiStateSegment(' Current PR / Dashboard '), 'current-pr-dashboard');
@@ -325,7 +325,7 @@ test('captureNamedUiState emits snapshot.json as JSON null when the accessibilit
   }
 });
 
-test('captureNamedUiState emits axe.json as JSON null when axe cannot run', async () => {
+test('captureNamedUiState emits axe.json with a stated skip when axe cannot run', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-harness-axe-null-'));
 
   try {
@@ -340,13 +340,17 @@ test('captureNamedUiState emits axe.json as JSON null when axe cannot run', asyn
       sliceId: 'inspect-run-viewer',
       stateName: 'No axe run',
     });
-    assert.equal(await readFile(artifact.axePath, 'utf8'), 'null\n');
+    // Never a bare null: axe.json states why (resolved-but-throwing against the
+    // mock page, or unresolvable) so the review does not read as "axe found nothing".
+    const axe = JSON.parse(await readFile(artifact.axePath, 'utf8'));
+    assert.equal(axe.skipped, true);
+    assert.match(axe.reason, /^axe: /);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 });
 
-test('captureNamedUiState emits axe.json as JSON null when the injected runner throws', async () => {
+test('captureNamedUiState emits axe.json with a stated skip when the injected runner throws', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-smoke-harness-axe-throw-'));
 
   try {
@@ -357,9 +361,71 @@ test('captureNamedUiState emits axe.json as JSON null when the injected runner t
       stateName: 'Throwing axe runner',
       runAxe: async () => { throw new Error('axe unsupported'); },
     });
-    assert.equal(await readFile(artifact.axePath, 'utf8'), 'null\n');
+    assert.deepEqual(JSON.parse(await readFile(artifact.axePath, 'utf8')), { skipped: true, reason: 'axe: runner failed: axe unsupported' });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('captureNamedUiState passes repoRoot to an injected runAxe', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-axe-root-'));
+  try {
+    let seen;
+    await captureNamedUiState({
+      page: { async screenshot() {} },
+      outputDir: tempDir,
+      sliceId: 'inspect-run-viewer',
+      stateName: 'Axe root',
+      repoRoot: '/some/worktree',
+      runAxe: async (_page, root) => { seen = root; return { violations: [] }; },
+    });
+    assert.equal(seen, '/some/worktree');
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// AC3: @axe-core/playwright installed only in the reviewed worktree (a global
+// dev-loops install has no copy) is resolved from <worktree>/package.json.
+test('defaultRunAxe resolves @axe-core/playwright from the reviewed worktree', async () => {
+  const wt = await mkdtemp(path.join(os.tmpdir(), 'ui-axe-wt-'));
+  try {
+    const pkgDir = path.join(wt, 'node_modules', '@axe-core', 'playwright');
+    await mkdir(pkgDir, { recursive: true });
+    await writeFile(path.join(wt, 'package.json'), '{"name":"fixture"}');
+    await writeFile(path.join(pkgDir, 'package.json'), '{"name":"@axe-core/playwright","main":"index.js"}');
+    await writeFile(path.join(pkgDir, 'index.js'), 'class AxeBuilder { constructor(o) { this.page = o.page; } async analyze() { return { violations: [{ id: "from-worktree" }] }; } }\nmodule.exports = { default: AxeBuilder };');
+    const result = await defaultRunAxe({}, wt);
+    assert.deepEqual(result, { violations: [{ id: 'from-worktree' }] });
+  } finally {
+    await rm(wt, { recursive: true, force: true });
+  }
+});
+
+// AC4: a resolved-but-throwing analyze states its reason.
+test('defaultRunAxe states the reason when a resolved analyze throws', async () => {
+  const wt = await mkdtemp(path.join(os.tmpdir(), 'ui-axe-throw-'));
+  try {
+    const pkgDir = path.join(wt, 'node_modules', '@axe-core', 'playwright');
+    await mkdir(pkgDir, { recursive: true });
+    await writeFile(path.join(wt, 'package.json'), '{"name":"fixture"}');
+    await writeFile(path.join(pkgDir, 'package.json'), '{"name":"@axe-core/playwright","main":"index.js"}');
+    await writeFile(path.join(pkgDir, 'index.js'), 'class AxeBuilder { async analyze() { throw new Error("page closed"); } }\nmodule.exports = { default: AxeBuilder };');
+    assert.deepEqual(await defaultRunAxe({}, wt), { skipped: true, reason: 'axe: analyze failed: page closed' });
+  } finally {
+    await rm(wt, { recursive: true, force: true });
+  }
+});
+
+// AC4: when the package is resolvable nowhere, the skip says so (never null).
+test('defaultRunAxe states a skip when @axe-core/playwright resolves nowhere', async () => {
+  const wt = await mkdtemp(path.join(os.tmpdir(), 'ui-axe-none-'));
+  try {
+    await writeFile(path.join(wt, 'package.json'), '{"name":"fixture"}');
+    const noFallback = async () => { throw new Error('not found'); };
+    assert.deepEqual(await defaultRunAxe({}, wt, noFallback), { skipped: true, reason: `axe: @axe-core/playwright not resolvable from ${wt} or dev-loops` });
+  } finally {
+    await rm(wt, { recursive: true, force: true });
   }
 });
 
@@ -603,4 +669,20 @@ test('launchWebkit returns the browser and always launches headless', async () =
   assert.deepEqual(await launchWebkit({ importPlaywright }), { id: 'browser' });
   // Strict stub: an unexpected extra launch call would fail this.
   assert.deepEqual(launched, [{ headless: true }]);
+});
+
+// AC3 input form: a relative worktree path must still resolve from the worktree.
+test('defaultRunAxe resolves @axe-core/playwright from a relative worktree path', async () => {
+  const wt = await mkdtemp(path.join(process.cwd(), 'tmp-ui-axe-rel-'));
+  try {
+    const pkgDir = path.join(wt, 'node_modules', '@axe-core', 'playwright');
+    await mkdir(pkgDir, { recursive: true });
+    await writeFile(path.join(wt, 'package.json'), '{"name":"fixture"}');
+    await writeFile(path.join(pkgDir, 'package.json'), '{"name":"@axe-core/playwright","main":"index.js"}');
+    await writeFile(path.join(pkgDir, 'index.js'), 'class AxeBuilder { async analyze() { return { violations: [{ id: "relative" }] }; } }\nmodule.exports = { default: AxeBuilder };');
+    const noFallback = async () => { throw new Error('not found'); };
+    assert.deepEqual(await defaultRunAxe({}, path.relative(process.cwd(), wt), noFallback), { violations: [{ id: 'relative' }] });
+  } finally {
+    await rm(wt, { recursive: true, force: true });
+  }
 });

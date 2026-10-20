@@ -31,6 +31,7 @@ Under Codex, read and apply [Codex runtime setup](../skills/docs/copilot-loop-op
 - Prefer KISS: choose the simplest implementation that fully satisfies the task.
 - Apply SRP: keep functions, modules, and edits narrowly focused on one reason to change.
 - Apply YAGNI: do not add speculative abstractions, extension points, or configuration that the current task does not require.
+- Follow `DESIGN-SIMPLEST-FIRST` in [Structural quality](../skills/docs/structural-quality.md): remove any input, flag, branch or abstraction with no AC row before the first push.
 - Apply DRY carefully: remove duplication when it meaningfully improves maintainability, but do not force premature abstractions across unrelated code paths.
 - Favor explicit code over clever code. Optimize for readability and debuggability first.
 - Preserve existing behavior unless the task explicitly changes it. For refactors, keep surface-area changes small and well-tested.
