@@ -38,9 +38,15 @@ test("every configured tier angle is inside its gate's resolved angle pool", asy
 
 // Pre-PR review phase (issue #2305): the reviewer model is config-resolved and
 // harness-agnostic — never hardcoded. THIS repo opts the Claude-Code harness's
-// pre-push-reviewer role into Opus 5.5 and the Pi harness into the Codex child model.
+// pre-push-reviewer role into Opus 5.5 and the Pi harness into the review tier.
 // Pins the real merged .devloops so the opt-in cannot silently drift.
-test("this repo's .devloops resolves the pre-push-reviewer to Opus on Claude and the Codex child model on Pi (issue #2305)", async () => {
+//
+// The concrete Pi model id is the OPERATOR's choice, not the repo's: it is read
+// from the tier the config under test declares, never pinned as a literal, so
+// switching the model needs a `.devloops` edit only. The repo owns the tier
+// STRUCTURE — which role maps to which tier, and which harness key carries a
+// concrete model — and that structure is asserted against literals below.
+test("this repo's .devloops resolves the pre-push-reviewer to Opus on Claude and to the review tier's Pi model (issue #2305)", async () => {
   const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
   assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
 
@@ -49,44 +55,103 @@ test("this repo's .devloops resolves the pre-push-reviewer to Opus on Claude and
     "opus",
     "Claude-Code harness pre-push-reviewer must resolve to the Opus model token via .devloops",
   );
+  // Structure: the pre-push reviewer runs on its own strong tier, and that tier
+  // carries a concrete Pi model. A wrong role->tier mapping, a missing tier or
+  // a missing harness key fails here; a different model id does not.
+  assert.equal(
+    config.models.roleTiers["pre-push-reviewer"],
+    "pre-pr-strong",
+    "the pre-push-reviewer role must map to the pre-pr-strong tier",
+  );
+  assert.equal(
+    config.models.roleTiers["pre-PR-reviewer"],
+    undefined,
+    "the rename leaves no alias: the old role key is gone from the repo config",
+  );
+  const prePrStrongPi = config.models.tiers["pre-pr-strong"]?.pi;
+  assert.ok(
+    typeof prePrStrongPi === "string" && prePrStrongPi.length > 0,
+    "the pre-pr-strong tier must carry a concrete Pi model id in .devloops",
+  );
+  assert.ok(
+    prePrStrongPi.includes("/") && !/^(sonnet|opus|haiku|fable)$/i.test(prePrStrongPi),
+    `the pre-pr-strong tier's Pi model must be a concrete provider-qualified id, got ${prePrStrongPi}`,
+  );
   assert.equal(
     resolveRoleModel(config, { role: "pre-push-reviewer", harness: "pi" }),
-    "openai-codex/gpt-6.1-sol",
-    "Pi harness pre-push-reviewer must resolve to the configured Codex child model",
+    prePrStrongPi,
+    "Pi harness pre-push-reviewer must resolve to the pre-pr-strong tier's configured Pi model",
   );
-  // The rename leaves no alias: the old role key is gone from the repo config.
-  assert.equal(config.models.roleTiers["pre-PR-reviewer"], undefined);
 });
 
 // Regular vs. strong split: routine roles run on the regular tier (sonnet on
-// Claude; on Pi the regular tier carries the operator's free model); review,
+// Claude; on Pi the regular tier carries the operator's cheap model); review,
 // refiner, the pre-push reviewer and every gate angle stay on opus.
 test("this repo's .devloops resolves the regular tier to sonnet and the strong roles to opus", async () => {
   const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
   assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
 
-  // The regular tier's Pi model is an operator opt-in for the free
-  // Ollama-hosted model; the Claude side of the same tier stays on sonnet.
-  // The id is pinned rather than read back from the config under test, so a
-  // wrong or paid model id in `.devloops` fails here instead of passing by
-  // self-consistency.
+  // The STRUCTURE is the repo's invariant and is asserted against literals:
+  // which role maps to which tier, and which harness key carries a concrete
+  // model. The concrete Pi model ids are the operator's choice, so they are
+  // read from the tier the config under test declares — a model switch needs a
+  // `.devloops` edit only, while a wrong tier mapping, a wrong role mapping or
+  // a missing harness key still fails here.
   assert.equal(
-    config.models.tiers.low.pi,
-    "ollama-cloud/minimax-m3.1-flash",
-    "the regular tier's Pi model must stay the operator's free Ollama-hosted model",
+    config.models.roleTiers.developer,
+    "low",
+    "the developer role must map to the regular tier",
   );
+  assert.equal(
+    config.models.roleTiers.fixer,
+    "low",
+    "the fixer role must map to the regular tier",
+  );
+  assert.equal(
+    config.models.roleTiers.judge,
+    "high",
+    "the judge role must map to the strong tier",
+  );
+  const lowPi = config.models.tiers.low?.pi;
+  const highPi = config.models.tiers.high?.pi;
+  assert.ok(
+    typeof lowPi === "string" && lowPi.length > 0,
+    "the regular tier must carry a concrete Pi model id in .devloops",
+  );
+  assert.ok(
+    typeof highPi === "string" && highPi.length > 0,
+    "the strong tier must carry a concrete Pi model id in .devloops",
+  );
+  // Non-vacuity: the review tier must be a DISTINCT model from the cheap tier
+  // the reviewers check, and a real provider-qualified id rather than a Claude
+  // token or a built-in fallback. A config with no Pi opt-in at all (both ids
+  // null, or the review tier reusing the cheap model) fails here instead of
+  // passing by reading the expected value back out of the config under test.
+  assert.notEqual(
+    highPi,
+    lowPi,
+    "the strong tier's Pi model must be the review model, never the cheap tier's model",
+  );
+  assert.ok(
+    !/^(sonnet|opus|haiku|fable)$/i.test(highPi),
+    `the strong tier's Pi model must be a concrete provider-qualified id, not a Claude token (got ${highPi})`,
+  );
+  assert.ok(
+    highPi.includes("/"),
+    `the strong tier's Pi model must be a provider-qualified id, got ${highPi}`,
+  );
+
   for (const role of ["developer", "fixer", "docs", "quality"]) {
     assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "sonnet", `${role} on claude`);
     assert.equal(
       resolveRoleModel(config, { role, harness: "pi" }),
-      "ollama-cloud/minimax-m3.1-flash",
+      lowPi,
       `${role} on pi`,
     );
   }
-  assert.equal(config.models.tiers.high.pi, "openai-codex/gpt-6.1-sol", "the strong tier's Pi model must be the Codex model, never the free model");
-  for (const role of ["review", "refiner", "judge", "pre-push-reviewer"]) {
+  for (const role of ["review", "refiner", "judge"]) {
     assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "opus", `${role} on claude`);
-    assert.equal(resolveRoleModel(config, { role, harness: "pi" }), "openai-codex/gpt-6.1-sol", `${role} on pi`);
+    assert.equal(resolveRoleModel(config, { role, harness: "pi" }), highPi, `${role} on pi`);
   }
 
   for (const gate of GATE_KEYS) {
@@ -94,7 +159,7 @@ test("this repo's .devloops resolves the regular tier to sonnet and the strong r
     assert.ok(Array.isArray(pool) && pool.length > 0, `gates.${gate} must resolve a non-empty angle pool`);
     for (const angle of pool) {
       assert.equal(resolveRoleModel(config, { role: angle, harness: "claude", kind: "angle" }), "opus", `${gate} angle ${angle} on claude`);
-      assert.equal(resolveRoleModel(config, { role: angle, harness: "pi", kind: "angle" }), "openai-codex/gpt-6.1-sol", `${gate} angle ${angle} on pi`);
+      assert.equal(resolveRoleModel(config, { role: angle, harness: "pi", kind: "angle" }), highPi, `${gate} angle ${angle} on pi`);
     }
   }
 });

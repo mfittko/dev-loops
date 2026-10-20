@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Superseded by [0175](0175-tier-policy-shape-owned-by-the-repo-not-the-model-id.md) — 2026-10-21
 
 ## Context
 
