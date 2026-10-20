@@ -772,6 +772,23 @@ export async function mergePr(options, runtime = {}) {
     throw error;
   }
 
+  // Read-only check first, so a refusal happens before any PR-body write.
+  const baseReason = resolveBaseNotIntegratedRefusal({
+    options,
+    baseRefName: typeof prView?.baseRefName === "string" ? prView.baseRefName.trim() : "",
+    headSha: currentHeadSha,
+    repoRoot: resolveRepoRoot(cwd),
+    fetchPrHead, detectOriginSlug, isAncestor,
+  });
+  if (baseReason !== null) {
+    const error = new Error(`Merge preconditions not satisfied: base_not_integrated (${baseReason})`);
+    error.mergePrFailure = {
+      ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
+      mergeClass: verdict.mergeClass, failures: [{ precondition: "base_not_integrated", reason: baseReason }],
+    };
+    throw error;
+  }
+
   // Runs after the other preconditions pass: a re-issue writes the PR body.
   const adrReason = await resolveAdrTripwireRefusal({
     options,
@@ -786,22 +803,6 @@ export async function mergePr(options, runtime = {}) {
     error.mergePrFailure = {
       ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
       mergeClass: verdict.mergeClass, failures: [{ precondition: "adr_tripwire", reason: adrReason }],
-    };
-    throw error;
-  }
-
-  const baseReason = resolveBaseNotIntegratedRefusal({
-    options,
-    baseRefName: typeof prView?.baseRefName === "string" ? prView.baseRefName.trim() : "",
-    headSha: currentHeadSha,
-    repoRoot: resolveRepoRoot(cwd),
-    fetchPrHead, detectOriginSlug, isAncestor,
-  });
-  if (baseReason !== null) {
-    const error = new Error(`Merge preconditions not satisfied: base_not_integrated (${baseReason})`);
-    error.mergePrFailure = {
-      ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
-      mergeClass: verdict.mergeClass, failures: [{ precondition: "base_not_integrated", reason: baseReason }],
     };
     throw error;
   }

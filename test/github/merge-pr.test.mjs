@@ -162,7 +162,7 @@ test("adr_tripwire fails closed when the evaluator throws or the head fetch fail
   for (const key of ["evaluateAdrTripwire", "fetchPrHead"]) {
     const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
     runtime[key] = () => { throw new Error("git exploded"); };
-    await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*git exploded/);
+    await assert.rejects(() => mergePr(baseOptions(), runtime), /(adr_tripwire|base_not_integrated) \(.*(unevaluable|could not verify).*git exploded/);
     assert.equal(mergeCalls(calls).length, 0);
   }
 });
@@ -196,17 +196,17 @@ test("adr_tripwire evaluates origin/<base> at the PR head after fetching it", as
 
 test("adr_tripwire refuses as unevaluable when the PR base branch is unreadable", async () => {
   const { runtime, calls } = makeRuntime({ prView: { baseRefName: "" } });
-  await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*base branch is unreadable/);
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /base_not_integrated \(.*base branch is unreadable/);
   assert.equal(mergeCalls(calls).length, 0);
 });
 
-test("adr_tripwire refuses as unevaluable when the checkout origin is not --repo or unreadable", async () => {
+test("base_not_integrated refuses when the checkout origin is not --repo or unreadable", async () => {
   for (const slug of ["someone/fork", null]) {
     const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
     runtime.detectOriginSlug = () => slug;
     let fetched = false;
     runtime.fetchPrHead = () => { fetched = true; };
-    await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*checkout origin/);
+    await assert.rejects(() => mergePr(baseOptions(), runtime), /base_not_integrated \(.*checkout origin/);
     assert.equal(fetched, false);
     assert.equal(mergeCalls(calls).length, 0);
   }
@@ -1237,10 +1237,7 @@ test("base_not_integrated shapes mergePrFailure like the other refusals", async 
 test("base_not_integrated fails closed when the fetch or the ancestry check throws", async () => {
   for (const key of ["fetchPrHead", "isAncestor"]) {
     const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
-    let n = 0;
-    const original = runtime[key];
-    // The ADR tripwire also calls fetchPrHead; let its call pass, fail the next.
-    runtime[key] = (...args) => { n += 1; if (key === "fetchPrHead" && n === 1) return original(...args); throw new Error("git exploded"); };
+    runtime[key] = () => { throw new Error("git exploded"); };
     await assert.rejects(() => mergePr(baseOptions(), runtime), /base_not_integrated \(could not verify.*git exploded/);
     assert.equal(mergeCalls(calls).length, 0);
   }
@@ -1248,8 +1245,7 @@ test("base_not_integrated fails closed when the fetch or the ancestry check thro
 
 test("base_not_integrated fails closed when the checkout origin stops matching --repo", async () => {
   const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
-  let n = 0;
-  runtime.detectOriginSlug = () => (++n === 1 ? "mfittko/dev-loops" : "someone/fork");
+  runtime.detectOriginSlug = () => "someone/fork";
   await assert.rejects(() => mergePr(baseOptions(), runtime), /base_not_integrated \(could not verify.*checkout origin/);
   assert.equal(mergeCalls(calls).length, 0);
 });
@@ -1268,6 +1264,7 @@ test("defaultIsAncestor answers true, false, and throws on a bad ref in a real r
   git("commit", "-q", "-m", "two");
   const side = git("rev-parse", "HEAD");
   assert.equal(defaultIsAncestor({ base: first, head: side, repoRoot: dir }), true);
+  assert.equal(defaultIsAncestor({ base: side, head: side, repoRoot: dir }), true);
   assert.equal(defaultIsAncestor({ base: side, head: first, repoRoot: dir }), false);
   assert.throws(() => defaultIsAncestor({ base: "no-such-ref", head: side, repoRoot: dir }));
 });
