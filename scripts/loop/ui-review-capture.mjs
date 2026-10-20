@@ -245,7 +245,7 @@ export async function defaultRunAxe(page, worktree = process.cwd(), importFallba
     }
   }
   try {
-    const AxeBuilder = mod.default ?? mod.AxeBuilder ?? mod;
+    const AxeBuilder = mod.default ?? mod;
     return (await new AxeBuilder({ page }).analyze()) ?? { skipped: true, reason: 'axe: analyze returned no results' };
   } catch (error) {
     return { skipped: true, reason: `axe: analyze failed: ${error?.message ?? error}` };

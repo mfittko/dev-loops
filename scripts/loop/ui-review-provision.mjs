@@ -3,7 +3,8 @@
  * CLI wrapper for the ui_review provision+boot orchestrator.
  *
  * Provisions an isolated worktree for a PR head (create-or-reuse + provision),
- * installs only the dependency-lock delta, runs pending dev-DB migrations
+ * runs a lockfile-matched frozen install on a dependency-lock delta or a
+ * missing node_modules, then runs pending dev-DB migrations
  * (destructive ones fail closed pending ack), boots the branch's app via the
  * project's declared run recipe, and waits on an HTTP readiness probe.
  *
