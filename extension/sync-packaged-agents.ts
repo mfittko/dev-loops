@@ -124,7 +124,7 @@ function writeSyncedAgents(sourceRoot: string, destDir: string) {
  * strict-rejects `search`/`execute`. The sync replaces the symlink with a REAL
  * directory of Pi-valid rendered copies — it does NOT write through the symlink
  * (writing through would overwrite the neutral source and break Claude asset
- * generation; the source must keep `search`/`execute` per #1086).
+ * generation; the source retains mapped `search` and uses `bash` for execution).
  *
  * When `.pi/agents` is already a real directory, its packaged-agent files are
  * refreshed in place (same overwrite semantics as the global `~/.agents/` sync).
@@ -169,7 +169,8 @@ export function syncProjectAgentsDir(projectRoot: string, sourceRoot: string) {
 /**
  * Sync the canonical packaged agents into `~/.agents/`, rewriting the `tools:`
  * frontmatter to Pi-valid builtin names (#1583). The source `agents/*.agent.md`
- * files stay harness-neutral (role agents keep `search`/`execute`; the dev-loop
+ * files stay harness-neutral (role agents retain mapped `search` and use `bash`
+ * for execution; the dev-loop
  * entrypoint drops `agent`/`todo` per #1604); only the rendered copies are
  * remapped. Best-effort: callers swallow errors so a sync failure never breaks
  * session start.
