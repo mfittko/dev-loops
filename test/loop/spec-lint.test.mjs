@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -312,6 +314,14 @@ test("simplest design: a Size forecast body without the section gives simplest_d
   assert.deepEqual(lintSimplestDesign(`## Simplest design\n\nx\n\n${forecast}`), []);
   assert.deepEqual(lintSimplestDesign(`${forecast}\n\n\`\`\`\n## Simplest design\n\`\`\``).map((f) => f.kind), ["simplest_design_missing"]);
   assert.deepEqual(lintSimplestDesign("## Objective\n\nNo forecast here."), []);
+  assert.deepEqual(lintSimplestDesign(`${forecast}\n\n## Simplest design\n\n`).map((f) => f.kind), ["simplest_design_missing"]);
+});
+
+test("only cli/index.mjs wires spec-lint; no other shipped file imports or invokes it", () => {
+  const files = execFileSync("git", ["ls-files", "scripts", "packages", "cli"], { cwd: repoRoot, encoding: "utf8" })
+    .split("\n").filter((f) => /\.mjs$/u.test(f) && !f.includes("node_modules") && !/\.test\.mjs$/u.test(f) && f !== "cli/index.mjs" && f !== "scripts/loop/spec-lint.mjs");
+  const offenders = files.filter((f) => /spec-lint\.mjs|lintSpec\b/u.test(readFileSync(path.join(repoRoot, f), "utf8")));
+  assert.deepEqual(offenders, []);
 });
 
 test("DESIGN-SIMPLEST-FIRST is registered, owned by structural-quality, and cited by the grill, refiner and four agents", async () => {
@@ -322,6 +332,8 @@ test("DESIGN-SIMPLEST-FIRST is registered, owned by structural-quality, and cite
     assert.match(await read(file), /`## Simplest design` section[\s\S]{0,300}minimal approach[\s\S]{0,100}rejected[\s\S]{0,200}cost comparison/, file);
   }
   assert.match(await read("skills/loop-grill/SKILL.md"), /`simplest_design_missing`[\s\S]{0,120}grill or a re-grill[\s\S]{0,200}`size_forecast_\*` findings only/);
+  assert.match(await read("skills/loop-grill/SKILL.md"), /`simplest_design_missing` is also not disposable[\s\S]{0,80}only by writing/);
+  assert.match(await read("skills/loop-grill/SKILL.md"), /`size_forecast_malformed` or `simplest_design_missing` finding blocks `grill-clean`/);
   for (const file of ["developer", "fixer", "review", "judge"]) {
     assert.match(await read(`agents/${file}.agent.md`), /DESIGN-SIMPLEST-FIRST/, file);
   }

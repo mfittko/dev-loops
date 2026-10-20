@@ -239,7 +239,7 @@ export function lintSizeForecast(body, { waiverLoc }) {
 /** DESIGN-SIMPLEST-FIRST: a grilled body (one with `## Size forecast`) needs a `## Simplest design` section. */
 export function lintSimplestDesign(body) {
   const stripped = stripFencedCode(body);
-  if (extractSection(stripped, "Size forecast") === null || extractSection(stripped, "Simplest design") !== null) return [];
+  if (extractSection(stripped, "Size forecast") === null || extractSection(stripped, "Simplest design")?.trim()) return [];
   return [{ kind: "simplest_design_missing", id: "simplest-design", detail: { reason: "no `## Simplest design` section (minimal approach, rejected alternatives, cost comparison)" } }];
 }
 
