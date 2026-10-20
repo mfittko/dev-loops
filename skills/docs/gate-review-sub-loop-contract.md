@@ -164,6 +164,9 @@ inconsistent record is a full re-gate. The validator never re-derives blob facts
 git, so a consumer re-runs `computeBaseMergeCarry` for the bound heads and compares before
 trusting the recorded facts. ADR 0156 records this rule.
 
+<!-- rule: GATE-EXEC-LOW-NIT-CONVERGENCE -->
+`GATE-EXEC-LOW-NIT-CONVERGENCE`: A `draft_gate` round at head A whose open judge act items are ALL `low` or `nit` (a non-empty list) converges after one `commit_only` fixer pass and a fresh, valid `locally_clear` pre-push delta review of the fixer commit (`PRE-PUSH-DELTA-NOT-GATE-EVIDENCE`). No further full `draft_gate` round runs. The poster updates the `draft_gate` comment at A to `clean` with `upsert-checkpoint-verdict.mjs --converged-json` and records `**Converged:** fixer <sha> delta sha256:<digest>` (the fixer commit and the digest of the clean delta result). The round converges once: one pre-push delta sequence from A, bound by the delta result baseline A and `candidateHead` = the fixer commit. `composeConvergedDraftGate` (`packages/core/src/loop/pre-push-delta-review.mjs`) refuses a non-`draft_gate` gate, an empty act list, a `medium`, `high`, `question` or unknown severity, a mixed list, an act list that differs from the round's (compared by severity and summary as a multiset with counts), a delta result that is invalid, not `locally_clear`, stale or carries a new finding. The membership-only delta check is sufficient: the act-set id and baseline A bind the result to this round, and `pre_approval_gate` reviews the final head in full. `upsert-checkpoint-verdict.mjs` requires `--findings-ledger` and takes the round's act items from the union of the ledger at A and the `--findings-json` act items (it refuses without the ledger, and a missing or unreadable ledger refuses naming the path and error), refuses a PR head other than the fixer commit, and refuses a comment at A that is already `clean` or already converged. Any refusal keeps the full round. `detect-checkpoint-evidence.mjs` re-derives the light-mode scope, risk-path and size floors for an inline marker against the marker's own head (the fixer commit). The rule takes no round count and no cap. Gate coordination reads the marker as the `draft_gate` marker of the fixer commit (`summarizeGateReviewCommentMarkers`) and returns `mark_ready_for_review`, then the mandatory `pre_approval_gate`. The `pre_approval_gate` stays a full review of the final head, and `merge-pr.mjs` is unchanged: the marker is not merge evidence. ADR 0168 records this rule.
+
 ### Phase 1 — Preamble: context-builder
 
 Before fanning out reviewers, run a preamble pass that produces review handoff context
@@ -729,7 +732,7 @@ Consolidation:
   `overallVerdict`. The posted review verdict composes it with the judge act list (ADR 0089,
   `GATE-COMMENT-VERDICT-VALUES`):
   - `clean`: no findings with a severity in the gate's `blockCleanOnFindingSeverities` list
-    remain, and the judge act list is empty
+    remain, and the judge act list is empty (except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168))
   - `findings_present`: one or more findings with a blocking severity remain, or the judge act
     list is not empty
   - `blocked`: the gate could not complete or a hard blocker prevented a verdict
@@ -928,8 +931,8 @@ the target's number (a PR number is a valid deferral target; a PR target gets no
 link nor a follow-up draft, only its `fingerprint` and rationale (the one-line audit entry).
 Re-running `judge-pass` for the same round reads the target's existing comments first and does
 not append a fingerprint the target already lists. A thread whose finding the judge disposes
-`act` is never defer-closed; it stays open until the fixer replies with the fixing commit or a
-decline reason and resolves it (see `GATE-EXEC-THREAD-DISPOSITION`).
+`act` is never defer-closed; it stays open until the fixer's reply with the fixing commit or a
+decline reason is posted and the thread is resolved (see `GATE-EXEC-THREAD-DISPOSITION`).
 
 <!-- rule: GATE-EXEC-JUDGE-AUTHORITY-SPLIT -->
 `GATE-EXEC-JUDGE-AUTHORITY-SPLIT`: The judge owns **relevance** (is this finding for this
@@ -1055,8 +1058,8 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   medium THREAD still forces another fix round, but through the unresolved-feedback
   routing `GATE-EXEC-THREAD-DISPOSITION` owns, not by changing what the ledger verdict `clean`
   means. The posted review verdict composes the ledger verdict with the judge act list: it is
-  `clean` only when the ledger verdict is `clean` and the judge act list is empty (ADR 0089). A
-  judge `act` therefore blocks `clean` at any round, inside or outside the medium fix window.
+  `clean` only when the ledger verdict is `clean` and the judge act list is empty (ADR 0089; except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)). A
+  judge `act` therefore blocks `clean` at any round (except `GATE-EXEC-LOW-NIT-CONVERGENCE`), inside or outside the medium fix window.
   GATE-CLOSE is a third, stricter layer owned by `GATE-EXEC-THREAD-DISPOSITION` below: a clean
   verdict is NOT sufficient to close the gate, because every gate-authored review thread (any
   severity) must first be resolved. Widening the blocking
@@ -1067,11 +1070,11 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
 
 After applying fixes and advancing the head SHA:
 
-- <!-- rule: GATE-EXEC-REGATE-MANDATORY --> `GATE-EXEC-REGATE-MANDATORY`: **Re-gate is mandatory:** a new head SHA MUST always trigger a fresh full-chain gate pass; the gate MUST NOT be skipped because a previous head was clean, except where `GATE-EXEC-BASE-MERGE-VERDICT-CARRY` carries a verdict across a base-only merge (ADR 0156); that carry takes effect only once `merge-pr` and gate coordination accept the evidence (issue 2752 slice 2), and until then every new head is re-gated. The `draft_gate` one-time skip is a narrow exemption from this rule that only applies after the PR has left draft ([GATE-COMMENT-DRAFT-REQUIREMENTS](./gate-review-comment-contract.md#draft-gate-draft_gate-comment-requirements)); while the PR is still draft, every new head is re-gated per this rule. A `draft_gate` never re-runs on a non-draft PR whose draft gate is already satisfied: `write-gate-context.mjs` refuses it before any reviewer work, and a new ready head instead takes a Copilot re-request when it answers Copilot findings, and a current-head `pre_approval_gate`.
-- rerun the sub-loop from Phase 1 (context-builder preamble for the new head SHA)
-- continue the fix-then-retry cycle until the posted review verdict is `clean`
+- <!-- rule: GATE-EXEC-REGATE-MANDATORY --> `GATE-EXEC-REGATE-MANDATORY`: **Re-gate is mandatory:** a new head SHA MUST always trigger a fresh full-chain gate pass; the gate MUST NOT be skipped because a previous head was clean, except where `GATE-EXEC-BASE-MERGE-VERDICT-CARRY` carries a verdict across a base-only merge (ADR 0156); that carry takes effect only once `merge-pr` and gate coordination accept the evidence (issue 2752 slice 2), and until then every new head is re-gated; and except `GATE-EXEC-LOW-NIT-CONVERGENCE`, where an all-low/nit `draft_gate` round converges after one fixer pass and a clean pre-push delta review without a second full `draft_gate` round (ADR 0168; the `pre_approval_gate` still reviews the final head in full). The `draft_gate` one-time skip is a narrow exemption from this rule that only applies after the PR has left draft ([GATE-COMMENT-DRAFT-REQUIREMENTS](./gate-review-comment-contract.md#draft-gate-draft_gate-comment-requirements)); while the PR is still draft, every new head is re-gated per this rule. A `draft_gate` never re-runs on a non-draft PR whose draft gate is already satisfied: `write-gate-context.mjs` refuses it before any reviewer work, and a new ready head instead takes a Copilot re-request when it answers Copilot findings, and a current-head `pre_approval_gate`.
+- rerun the sub-loop from Phase 1 (context-builder preamble for the new head SHA), except where `GATE-EXEC-LOW-NIT-CONVERGENCE` converges an all-low/nit `draft_gate` round via `upsert-checkpoint-verdict.mjs --converged-json`
+- continue the fix-then-retry cycle until the posted review verdict is `clean` (or converged per `GATE-EXEC-LOW-NIT-CONVERGENCE`)
 - on retry, re-invoke every reviewer whose review surface the new head's delta touched (including any angle whose prior finding attribution is ambiguous) and every mandatory / always-run angle; the context-builder and consolidation always run fresh. Other angles are carried forward per [GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed), on that rule's proof and never on guesswork (a carried `findings_present` angle brings its open findings forward and the round still blocks on them)
-- a clean pass means all gate-specific review angles pass, no findings with a severity in `blockCleanOnFindingSeverities` remain, and the judge act list is empty (ADR 0089): the posted review verdict composes the ledger's severity `overallVerdict` with the act list
+- a clean pass means all gate-specific review angles pass, no findings with a severity in `blockCleanOnFindingSeverities` remain, and the judge act list is empty (ADR 0089; except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)): the posted review verdict composes the ledger's severity `overallVerdict` with the act list
 
 #### Angle carry-forward (fail-closed) {#angle-carry-forward-fail-closed}
 
@@ -1129,7 +1132,7 @@ Each gate chain exits when one of these conditions is met:
 
 | Condition | Result |
 |---|---|
-| Posted review verdict is `clean` (no findings at any blocking severity, and the judge act list is empty per ADR 0089) | Gate passes; proceed to next boundary |
+| Posted review verdict is `clean` (no findings at any blocking severity, and the judge act list is empty per ADR 0089, except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)) | Gate passes; proceed to next boundary |
 | `pre_approval_gate` checkpoint `blocked` composed from a deterministic AC/DoD blocker over a completed review ledger (the comment records a **Review verdict** and **Gate blockers**) | Resolve each remaining blocker per [acceptance-criteria-verification.md step 5](acceptance-criteria-verification.md), which says when the writer ticks automatically and when the operator ticks with the CLI; then rerun the gate (the writer's next action is "rerun gate") |
 | `blocked` verdict from the review/fan-in itself (gate could not complete) | Stop; escalate to operator |
 | Maximum retry cycles exhausted without reaching `clean` | Stop; escalate to operator |
@@ -1287,7 +1290,7 @@ Incomplete warns, never blocks detector/Copilot progression, and grants no compl
 
 Untackled, deferred, rejected, foreign-authored and newly arrived threads keep their existing judgment path; this boundary never auto-resolves outside the tackled set.
 
-`scripts/github/verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <fixer-emit-plan.json>` reads the handoff from the work order's outputRef and refuses without a matching fixer pull receipt, when the handoff predates the pull, or when the handoff head is not the observed head. It also fails, naming the thread id, when a work order's judge-act item carries the fingerprint of an open inline gate thread and the handoff has no disposition entry for that thread (an act item with an open inline gate thread is never threadless; only a thread whose root comment is authored by the gate login counts, every such thread needs its own entry, and a refused handoff writes no checkpoint). It records `tmp/gate-findings/<repo-slug>/pr-<N>/fixer-disposition-<headSha>.json`, captures live state, checks containment, and only after containment passes posts the evidenced reply and resolves (resolving without reposting when a matching reply exists). Live checks precede writes, so restart, rate limit, timeout and reply-success/resolve-failure re-entry cannot duplicate replies.
+`scripts/github/verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <fixer-emit-plan.json>` reads the handoff from the work order's outputRef (written by its own `--construct` in a full-phase order) and refuses without a matching fixer pull receipt, when the handoff predates the pull, or when the handoff head is not the observed head. It also fails, naming the thread id, when a work order's judge-act item carries the fingerprint of an open inline gate thread and the handoff has no disposition entry for that thread (an act item with an open inline gate thread is never threadless; only a thread whose root comment is authored by the gate login counts, every such thread needs its own entry, and a refused handoff writes no checkpoint). It records `tmp/gate-findings/<repo-slug>/pr-<N>/fixer-disposition-<headSha>.json`, captures live state, checks containment, and only after containment passes posts the evidenced reply and resolves (resolving without reposting when a matching reply exists). Live checks precede writes, so restart, rate limit, timeout and reply-success/resolve-failure re-entry cannot duplicate replies.
 
 Adding `--check` runs the same current-protocol plan/digest, role/target/execution, receipt/path, after-pull output, source integrity, current-head/contained-order-head, coverage, authenticated ACT-thread and containment checks, including live reply/resolution and `delta_blocked` evaluation. It writes no report or checkpoint and posts no reply or resolution. A THREAD unit validates its digest-bound source hash and requires dispositions for its own pinned thread IDs only; it adds no ACT query or all-history requirement. An authentic threadless ACT unit with complete required coverage may have an empty dispositions array. The default mutating verification remains the completion path after populated construction; legacy deliveries retain their existing coverage requirements.
 
@@ -1297,7 +1300,8 @@ ACT or THREAD source with raw-byte and semantic authentication. ACT additionally
 unique required Delta/completion-input reads and both completion authorities; missing all
 optional markers cannot fall back to ordinary delivery. THREAD rejects ACT/completion-input
 mixing and every extra delivered ID before checkpoint or reply/resolution mutation, while
-retaining required pinned IDs and ignoring unrelated live threads. There is no THREAD constructor.
+retaining required pinned IDs and ignoring unrelated live threads. THREAD reports are built by the
+verifier's `--construct` from the pinned threads source and the clearing delta record (ADR 0166).
 The emitted task precedes generic guidance and immutable JSON identity evidence: preserve the
 branch/worktree/source-hash bootstrap, authorize only the exact own output and evidenced
 delivery/reply/resolution verification, and perform no source edit/test, stage, commit, push,
@@ -1305,12 +1309,28 @@ new Delta or counter reset. ACT constructs only absent output; genuine existing 
 normal/check without clobbering. Existing empty-selector Write/Edit guards allow the exact
 output only. Codex managed permissions and supported Claude/Pi hooks retain their actual
 limits; this is not universal Bash enforcement. Ordinary emission remains `operation: fix`
-with unchanged marker behavior and ordinary renderer bytes. Main-checkout consumers must
+with unchanged marker behavior. Only the `commit_only` render keeps its renderer bytes. ADR 0166
+changed the ordinary full-phase render, so re-emit a full plan emitted before that change. Main-checkout consumers must
 ship this support before a later producer enables delivery-only reentry; these fixtures do
 not establish producer eligibility, new publication, runtime worker qualification or recovery.
 
-The optional `--construct` operation (ADR 0149) is ACT/full only and mutually exclusive with
-`--check`. It authenticates the current plan/digest, fixer identity/receipt/subject, canonical
+The `--construct` operation (ADR 0149, extended by ADR 0166) builds the ACT report from completion
+input and the THREAD report from the threads source, the clearing delta record (its `candidateHead`
+is the pushed head) and the pushed head. Normal verification and `--check` accept only a report that
+`--construct` wrote (a sha256 mark beside the output). For a plan that has a source they also refuse
+unless the head's checks are settled green, with no reply: `ci_failed` (red checks), `ci_pending`
+(pending checks) or `ci_unknown` (unreadable checks or unsupported conclusions). The guard judges only
+check runs listed in the PR `statusCheckRollup`, the set `wait-pr-checks` uses. A settled head with no
+check runs and no statuses passes. Normal mode, after the guard passes, also posts one residual-status
+reply on each deferred thread whose delta status is `not_resolved` or `cannot_verify` and leaves it open;
+re-entry posts no second reply. The fixer hands back the refusal code and resolves no thread.
+A complete THREAD order finds its clearing record by `candidateHead` equal to the pushed head, because
+its order head is already the candidate. The matching record must also cover every pinned thread ID,
+and zero or several matching records refuse with a named reason. Every full-phase order states the numbered steps: push, confirm
+the remote head, `wait-pr-checks` (run once, one retry on a not-settled exit, then hand back `ci_pending`
+or `ci_unknown`), `--construct`, verify, `--check`, and the Edit/Write-only rule. A THREAD order pushes
+exactly the delta-reviewed candidate and makes no further commit. The
+operation is mutually exclusive with `--check`. It authenticates the current plan/digest, fixer identity/receipt/subject, canonical
 plan/output paths and after-pull timing before constructing that execution's report. Missing
 output is permitted; an existing pre-pull output refuses. No caller-selected output is accepted.
 Any `completion-input` read or either completion authority field activates the same strict

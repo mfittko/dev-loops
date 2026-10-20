@@ -391,6 +391,11 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-EXEC-LOW-NIT-CONVERGENCE",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by composeConvergedDraftGate (packages/core/src/loop/pre-push-delta-review.mjs) and upsert-checkpoint-verdict.mjs --converged-json; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+    },
+    {
       "id": "GATE-EXEC-NO-CWD-DEPENDENCE"
     },
     {

@@ -2849,7 +2849,7 @@ for (const [active, failure, opts] of [["missing", /result_missing/], ["empty", 
     await withFixerHandoff(async (repoRoot) => {
       const headRefOid = "a".repeat(40);
       const extra = active === "omitted ACT" ? [
-        { assertArgs: ["pr", "view", "17", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid }) },
+        { assertArgs: ["pr", "view", "17", "--json", "headRefOid,statusCheckRollup"], stdout: JSON.stringify({ headRefOid, statusCheckRollup: [] }) },
         { assertArgs: GRAPHQL_ARGS, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_ACT", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "<!-- dev-loops:finding 0123456789abcdef -->", author: { login: "gate", __typename: "User" } }] } }] } } } } }) },
         { assertArgs: ["api", "user"], stdout: '{"login":"gate"}' },
       ] : [];

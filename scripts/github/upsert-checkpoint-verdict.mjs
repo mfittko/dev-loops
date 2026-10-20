@@ -5,6 +5,7 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitiz
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
+import { composeConvergedDraftGate, convergedActItemKey } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
 import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
@@ -225,6 +226,25 @@ Required:
                                             not blocking".
   --next-action <text>
 Optional:
+  --converged-json <path>                   draft_gate low/nit convergence
+                                            (GATE-EXEC-LOW-NIT-CONVERGENCE):
+                                            { fixerCommit, actList, deltaResult }.
+                                            Requires --gate draft_gate and
+                                            --findings-ledger, with
+                                            --head-sha the reviewed head A and
+                                            the PR head equal to fixerCommit.
+                                            Updates A's comment to clean and
+                                            records the fixer commit + delta
+                                            digest. Refused unless every act
+                                            item is low/nit and the delta result
+                                            is fresh and locally_clear with no
+                                            new findings. Also needs --verdict
+                                            clean (or omitted when
+                                            --findings-ledger carries an
+                                            overallVerdict), and refuses when
+                                            A has no draft_gate comment or that
+                                            comment is already clean or
+                                            converged.
   --findings-ledger <path>                  Path to this round's
                                             write-gate-findings-log.mjs ledger
                                             ({ repo, pr, gate, headSha, verdict,
@@ -645,6 +665,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       "findings-file": { type: "string" },
       "findings-json": { type: "string" },
       "findings-ledger": { type: "string" },
+      "converged-json": { type: "string" },
       "next-action": { type: "string" },
       "findings-severity-counts": { type: "string" },
       "execution-mode": { type: "string" },
@@ -675,6 +696,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     findingsFile: undefined,
     findingsJson: undefined,
     findingsLedger: undefined,
+    convergedJson: undefined,
     nextAction: undefined,
     findingsSeverityCounts: undefined,
     executionMode: undefined,
@@ -767,6 +789,14 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
         throw parseError("--findings-ledger must be a non-empty path");
       }
       options.findingsLedger = rawPath;
+      continue;
+    }
+    if (token.name === "converged-json") {
+      const rawPath = requireTokenValue(token, parseError).trim();
+      if (rawPath.length === 0) {
+        throw parseError("--converged-json must be a non-empty path");
+      }
+      options.convergedJson = rawPath;
       continue;
     }
     if (token.name === "next-action") {
@@ -888,6 +918,9 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   }
   if (missing.length > 0) {
     throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict (or --findings-ledger carrying the consolidator's overallVerdict), --findings-summary (or --findings-file or --findings-json), and --next-action");
+  }
+  if (options.convergedJson && (options.gate !== "draft_gate" || !["clean", undefined].includes(options.verdict))) {
+    throw parseError("--converged-json requires --gate draft_gate and --verdict clean (or omitted)");
   }
   // Contract (skills/copilot-pr-followup/SKILL.md): inline runs MUST pass
   // --inline-reason. Inline is the default mode, so a complete call that resolves
@@ -1540,7 +1573,7 @@ function renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, 
 // `nonLocatableFindings` also drives an invisible fingerprint+disposition
 // marker per finding, load-bearing for GATE-EXEC-FINDING-THREADS's
 // cross-round suppression/deferral tracking.
-export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, pr }) {
+export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, converged, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, pr }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1562,6 +1595,8 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     ...(reviewVerdict ? [`**Review verdict:** ${reviewVerdict}`] : []),
     ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockerCounts(gateBlockers)}`] : []),
     ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),
+    // GATE-EXEC-LOW-NIT-CONVERGENCE: rendered only for a validated converged draft_gate post.
+    ...(gate === "draft_gate" && verdict === "clean" && converged ? [`**Converged:** fixer \`${converged.fixerCommit}\` delta \`${converged.deltaDigest}\``] : []),
   );
   // Renderer-only lines: only the renderer reads them, so they sit in an HTML comment, one
   // field per line at column 0 so the line-based field parser still reads them.
@@ -1953,7 +1988,7 @@ export function buildCoordinationEvaluatorInput({
 // acceptance predicate (buildFanoutEnforcement + evaluateInlineFanoutMode) so
 // the two boundaries can never drift apart. Throws when the candidate does
 // not qualify; resolves silently otherwise.
-async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inlineReason, headSha, config }, { env, ghCommand, repoRoot, runChild }) {
+async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inlineReason, headSha, convergedFixerCommit = null, config }, { env, ghCommand, repoRoot, runChild }) {
   let hasFullLabel = false;
   let baseRef = null;
   // Light-mode facts only matter for an inline candidate under active
@@ -1982,12 +2017,21 @@ async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inline
   // (buildFanoutEnforcement only reads .visible/.executionMode/.inlineReason/
   // .headSha off it). The other gate is marked invisible so only the gate
   // actually being posted is evaluated this call.
-  const candidateMarker = { visible: true, executionMode, inlineReason: inlineReason ?? null, headSha };
+  // A converged post (GATE-EXEC-LOW-NIT-CONVERGENCE) is shaped like the posted marker: headSha is the fixer commit B,
+  // convergedFromHeadSha the reviewed head A whose ledger backs it, so scope and risk are judged at B.
+  const markerHeadSha = convergedFixerCommit ?? headSha;
+  const candidateMarker = {
+    visible: true,
+    executionMode,
+    inlineReason: inlineReason ?? null,
+    headSha: markerHeadSha,
+    ...(convergedFixerCommit ? { convergedFromHeadSha: headSha } : {}),
+  };
   const inactiveMarker = { visible: false };
   const fanoutEnforcement = await buildFanoutEnforcement({
     repo,
     pr,
-    currentHeadSha: headSha,
+    currentHeadSha: markerHeadSha,
     draftGateMarker: gate === "draft_gate" ? candidateMarker : inactiveMarker,
     preApprovalGateMarker: gate === "pre_approval_gate" ? candidateMarker : inactiveMarker,
     config,
@@ -2478,13 +2522,55 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // refusal below reuses its already-computed per-gate ledgerExists/ledgerPath.
   let postTimeFanoutEnforcement = null;
   let preloadedFindingsLedger;
+  // GATE-EXEC-LOW-NIT-CONVERGENCE: { fixerCommit, actList, deltaResult } from --converged-json; null otherwise.
+  let convergedInput = null;
+  if (options.convergedJson) {
+    try {
+      convergedInput = parseJsonText(await readFile(options.convergedJson, "utf8"));
+    } catch (err) {
+      throw new Error(`Cannot read --converged-json "${options.convergedJson}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (convergedInput === null || typeof convergedInput !== "object" || Array.isArray(convergedInput)) {
+      throw new Error(`--converged-json "${options.convergedJson}" must be a JSON object { fixerCommit, actList, deltaResult }`);
+    }
+  }
+  // The ONLY path that lets a clean verdict stand over open act items: a validated low/nit convergence
+  // (composeConvergedDraftGate throws on anything else). Items compare by severity and trimmed summary as a multiset: the ledger and
+  // --findings-json can carry the same finding.
+  let convergedMarker = null;
+  const guardedActItems = async (findings) => {
+    // A converged round's act items are the union of A's ledger and the passed (judge-enriched) findings, so a caller cannot list a subset.
+    // The ledger is required unconditionally; a missing or unreadable one already refused when it was loaded (naming the path and error).
+    if (convergedInput && !preloadedFindingsLedger) {
+      throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs --findings-ledger: the ledger at A defines the round's act items.`);
+    }
+    const items = listOpenActItems(convergedInput ? [...(preloadedFindingsLedger.findings ?? []), ...findings] : findings);
+    if (!convergedInput) return items;
+    // Multiset per key: the larger of the ledger's and the passed findings' counts (callers may re-pass ledger objects, dropped by identity).
+    const ledgerFindings = preloadedFindingsLedger.findings ?? [];
+    const group = (list) => list.reduce((m, f) => m.set(convergedActItemKey(f), [...(m.get(convergedActItemKey(f)) ?? []), f]), new Map());
+    const fromLedger = group(listOpenActItems(ledgerFindings));
+    const fromPassed = group(listOpenActItems(findings.filter((f) => !ledgerFindings.includes(f))));
+    const roundActItems = [...new Set([...fromLedger.keys(), ...fromPassed.keys()])]
+      .flatMap((k) => ((fromLedger.get(k)?.length ?? 0) >= (fromPassed.get(k)?.length ?? 0) ? fromLedger.get(k) : fromPassed.get(k)));
+    convergedMarker = composeConvergedDraftGate({ gate: options.gate, headSha: canonicalHeadSha, roundActItems, converged: convergedInput });
+    return [];
+  };
   if (!isReviewGate) {
     // Thread the light-dispatch signal so the context interpreter and the
     // maxCopilotRounds resolution below use the same composed lightweight cap
     // — the two must never disagree at the cap boundary.
     coordinationContext = await loadPrGateCoordinationContext({ repo: options.repo, pr: options.pr, lightweight: options.lightweight === true }, gh);
     evidence = coordinationContext.gateEvidence;
-    canonicalHeadSha = resolveRequestedHeadSha(options.headSha, evidence.currentHeadSha);
+    // A converged post updates the comment at the reviewed head A while the PR head is the fixer commit.
+    if (convergedInput) {
+      if (convergedInput.fixerCommit !== evidence.currentHeadSha) {
+        throw new Error(`--converged-json fixerCommit ${JSON.stringify(convergedInput.fixerCommit)} is not the current PR head ${evidence.currentHeadSha}; refuse to record convergence for a stale or foreign head.`);
+      }
+      canonicalHeadSha = options.headSha;
+    } else {
+      canonicalHeadSha = resolveRequestedHeadSha(options.headSha, evidence.currentHeadSha);
+    }
     draftGateConfig = resolveGateConfig(config, "draft");
     preApprovalGateConfig = resolveGateConfig(config, "preApproval");
     const maxCopilotRounds = options.lightweight === true
@@ -2621,6 +2707,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
         inlineReason: options.inlineReason,
         headSha: canonicalHeadSha,
+        convergedFixerCommit: convergedInput?.fixerCommit ?? null,
         config,
       },
       { env, ghCommand, repoRoot, runChild },
@@ -2788,7 +2875,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
     const actItems = listOpenActItems(flatFindings);
     enrichedActItems = actItems;
-    if (options.verdict === "clean" && actItems.length > 0) {
+    if (options.verdict === "clean" && (await guardedActItems(actItems)).length > 0) {
       throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
     }
   }
@@ -2816,7 +2903,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let checkpointComposition = null;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
-    const ledgerVerdict = composeReviewVerdict(preloadedFindingsLedger.overallVerdict, [...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]);
+    const ledgerVerdict = composeReviewVerdict(preloadedFindingsLedger.overallVerdict, await guardedActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]));
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
     const gateBlockers = collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact);
@@ -2857,10 +2944,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     throw new Error(
       `--verdict is required for ${options.gate} @ ${canonicalHeadSha}${options.findingsLedger ? `: --findings-ledger "${options.findingsLedger}" carries no overallVerdict to derive it from` : ""}. Pass --verdict, or supply a --findings-ledger written from a consolidate-fanin --ledger-out that carries overallVerdict.`,
     );
-  } else if (options.verdict === "clean" && listOpenActItems([...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems]).length > 0) {
+  } else if (options.verdict === "clean" && (await guardedActItems([...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems])).length > 0) {
     // ADR 0089: a ledger without overallVerdict still carries its judge act list.
     const actItems = listOpenActItems([...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems]);
     throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-ledger "${options.findingsLedger}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
+  }
+  if (convergedInput && (convergedMarker === null || options.verdict !== "clean")) {
+    throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs a clean composed verdict over a validated low/nit act list (got verdict ${JSON.stringify(options.verdict)}); post a full round instead.`);
   }
   if (
     options.verdict === "clean"
@@ -3128,6 +3218,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // new-inline correction fails closed, --new-round forces a fresh round).
   const gateEvidence = isReviewGate ? { strict: null, marker: null } : selectGateEvidence(evidence, options.gate);
   const existing = isReviewGate ? null : summarizeExistingComment({ ...gateEvidence, headSha: canonicalHeadSha });
+  if (convergedInput && !existing) {
+    throw new Error(`--converged-json updates the existing draft_gate comment at ${canonicalHeadSha}, but none is the latest draft_gate comment on ${options.repo}#${options.pr}; post a full round instead.`);
+  }
+  // One convergence per round at A: a comment already clean or already converged is never converged again.
+  if (convergedInput && (existing.verdict === "clean" || gateEvidence.strict?.converged || gateEvidence.marker?.converged || gateEvidence.marker?.convergedFromHeadSha)) {
+    throw new Error(`--converged-json: the draft_gate comment at ${canonicalHeadSha} is already clean or converged; one convergence per round, post a full round instead.`);
+  }
   const warning = isReviewGate ? null : detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
   // DURABLE-LEDGER FAIL-CLOSED REFUSAL: a requireFanoutEvidence fanout_fanin
   // verdict cannot be recorded until write-gate-findings-log.mjs's canonical
@@ -3260,6 +3357,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const desiredBody = renderGateReviewCommentBody({
     ...options,
     headSha: canonicalHeadSha,
+    converged: convergedMarker,
     findingsSummary: effectiveFindingsSummary,
     structuredFindings,
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,

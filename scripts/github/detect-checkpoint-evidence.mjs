@@ -268,6 +268,7 @@ function normalizeGateSummary(summary) {
     visible: true,
     surface: normalizeVerdictSurface(summary.surface),
     headSha: summary.headSha,
+    ...(summary.converged ? { converged: summary.converged } : {}),
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,
     nextAction: summary.nextAction,
@@ -308,6 +309,7 @@ function normalizeGateMarkerSummary(summary) {
     visible: true,
     surface: normalizeVerdictSurface(summary.surface),
     headSha: summary.headSha,
+    ...(summary.convergedFromHeadSha ? { convergedFromHeadSha: summary.convergedFromHeadSha } : {}),
     verdict: summary.verdict,
     findingsSummary: summary.findingsSummary,
     nextAction: summary.nextAction,
@@ -388,6 +390,8 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
   const warnings = [];
   if (!(evidence.draftGate.visible && evidence.draftGate.verdict === "clean")) {
     failures.push("missing visible clean draft_gate comment");
+  } else if (evidence.draftGate.converged?.malformed) {
+    failures.push("draft_gate comment carries a malformed Converged marker (expected `fixer <sha> delta sha256:<digest>`)");
   }
   const preApproval = evidence.preApprovalGateMarker;
   const preApprovalEstablished =
@@ -941,7 +945,10 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   ].filter((spec) => spec.required && spec.marker.visible);
   const gates = [];
   for (const spec of gateSpecs) {
-    const headSha = spec.marker.headSha ?? currentHeadSha;
+    // A converged draft_gate marker maps to the fixed head; its ledger is the reviewed head's (GATE-EXEC-LOW-NIT-CONVERGENCE).
+    const headSha = spec.marker.convergedFromHeadSha ?? spec.marker.headSha ?? currentHeadSha;
+    // The light-mode scope re-derivation runs against the marker's own head (the fixer commit for a converged marker), never the ledger head A.
+    const scopeHeadSha = spec.marker.headSha ?? currentHeadSha;
     // Relative on purpose: writeGateFindingsLog anchors the ledger at the MAIN
     // worktree tmp, and the ledgerExistsInAny / readLedgerProvenanceInAny
     // scans below resolve this relative path against EVERY enumerated checkout
@@ -964,17 +971,17 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
     // fails closed regardless of what it claims.
     let scopeUnderThreshold = false;
     if (lightMode && !hasFullLabel && baseRef && spec.marker.executionMode === "inline_single_agent") {
-      const scope = detectMergeBaseScope({ base: baseRef, head: headSha, cwd: repoRoot });
+      const scope = detectMergeBaseScope({ base: baseRef, head: scopeHeadSha, cwd: repoRoot });
       const sizeCapOk = scope.ok === true && isEligibleForLightMode(scope, lightThreshold);
       let riskPathOk = false;
       if (sizeCapOk) {
-        const changedFilesResult = detectMergeBaseChangedFiles({ base: baseRef, head: headSha, cwd: repoRoot });
+        const changedFilesResult = detectMergeBaseChangedFiles({ base: baseRef, head: scopeHeadSha, cwd: repoRoot });
         riskPathOk = changedFilesResult.ok === true && !touchesRiskPath(changedFilesResult.files, lightThreshold.riskPaths);
       }
       let sizeOutcomeOk = false;
       if (riskPathOk) {
         try {
-          const sizeOutcome = await evaluatePrSizeBudget({ base: baseRef, head: headSha, repoRoot });
+          const sizeOutcome = await evaluatePrSizeBudget({ base: baseRef, head: scopeHeadSha, repoRoot });
           sizeOutcomeOk = isSizeOutcomeT1Clean(sizeOutcome);
         } catch {
           sizeOutcomeOk = false; // fails CLOSED on a size-budget computation error

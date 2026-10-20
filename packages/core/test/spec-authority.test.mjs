@@ -190,6 +190,16 @@ describe("whole-spec judge disposition", () => {
       assert.deepEqual(out.rejectedForms, ["prose mention"]);
     });
 
+    test("input forms stay verbatim: empty string allowed, no trim", () => {
+      const out = validate({ defectKind: "matcher", acceptedForms: [" 1 ", "2"], rejectedForms: ["", "abc"] });
+      assert.deepEqual(out.rejectedForms, ["", "abc"]);
+      assert.deepEqual(out.acceptedForms, [" 1 ", "2"]);
+      assert.deepEqual(validate({ defectKind: "matcher", acceptedForms: ["1"], rejectedForms: [" 12 "] }).rejectedForms, [" 12 "]);
+      assert.throws(() => validate({ defectKind: "matcher", acceptedForms: ["1"], rejectedForms: [] }), /rejectedForms/);
+      assert.throws(() => validate({ defectKind: "matcher", acceptedForms: ["1"], rejectedForms: ["a", 5] }), /rejectedForms/);
+      assert.throws(() => validate({ defectKind: "matcher", acceptedForms: [], rejectedForms: ["a"] }), /acceptedForms/);
+    });
+
     test("doc lag lists every stated surface of the changed rule", () => {
       assert.throws(() => validate({ defectKind: "doc_lag" }), /statedSurfaces/);
       const out = validate({ defectKind: "doc_lag", statedSurfaces: ["PR body scope", "changes fragment", "JSDoc", "hook header", "doc comment"] });
