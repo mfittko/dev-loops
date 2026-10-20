@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { FileConfigSchema, resolveValidationConfig } from "../src/config/config.mjs";
 import { resolveTargetedValidation } from "../src/loop/validation-classify.mjs";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { parse as parseYaml } from "yaml";
 
 const parse = (validation) => FileConfigSchema.safeParse({ version: 1, validation });
 const rails = [{ match: "spec/models/**", surface: "models", commands: ["bundle exec rspec {path}"] }];
@@ -30,6 +32,11 @@ test("schema rejects a malformed map, a malformed command and unknown keys", () 
 test("validation resolves to ci-only when unset", () => {
   assert.deepEqual(resolveValidationConfig({ version: 1 }), { mode: "ci-only", fullCommand: null, paths: [] });
   assert.equal(resolveValidationConfig({ version: 1, validation: { mode: "local", fullCommand: "cargo test" } }).fullCommand, "cargo test");
+});
+
+test("the repository config resolves validation mode to ci-only", () => {
+  const text = readFileSync(new URL("../../../.devloops", import.meta.url), "utf8");
+  assert.equal(resolveValidationConfig(parseYaml(text)).mode, "ci-only");
 });
 
 test("a consumer map selects its command; unmapped, mixed and unsafe paths need full validation", () => {
