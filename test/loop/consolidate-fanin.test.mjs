@@ -4866,10 +4866,13 @@ test("#2526 keyed ledger binding: a fresh-unit plan under another tmp root is re
 });
 
 test("#2526 keyed ledger binding: a plan whose repo/pr map to another pr directory than its location is refused", async () => {
-  await withTempDir(async (root) => {
-    const { options, keyed } = await zeroUnitCarriedPlan(root, { planPr: 43 });
-    await assert.rejects(() => consolidateGateFanin(options), /matching --repo and --pr round identities|not the canonical emit-plan path/);
-    assert.equal(existsSync(keyed(root)), false);
+  const units = [unitOf(["scope"], null, "r1-u0")];
+  await withProvenanceRound({ units, fanout: "    mode: per-angle" }, async ({ base, ledgerOut }) => {
+    // Re-stamp the plan as pr 43 in place: the file stays in the pr-42 directory.
+    const plan = JSON.parse(await readFile(base.emitPlan, "utf8"));
+    await writeFile(base.emitPlan, JSON.stringify({ ...plan, pr: 43 }), "utf8");
+    await assert.rejects(() => consolidateGateFanin({ ...base, ledgerOut }), /not the canonical emit-plan path/);
+    assert.equal(existsSync(ledgerOut), false);
   });
 });
 

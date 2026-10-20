@@ -650,7 +650,7 @@ plan is not a findings source. With it, the ledger gains a `provenance` derived
 from the head-stamped artifacts, the plan units and `--carry-forward-plan`; the
 same ledger is also written to the keyed `<gate>-<headSha>.fanin-ledger.json`
 (`buildGateFaninLedgerPath`) under `--tmp-root` (the root the plan was emitted under; a stale keyed file is removed once the emit-plan key is verified, before any later refusal or write; a run refused by the plan-key guard leaves a prior keyed file in place), and a plan with a fresh unit but zero dispatch-prompt
-records of its gate at the head FAILS CLOSED. The gate-context bundle's
+records of its gate at the head FAILS CLOSED. Fan-in refuses (exit 1, no write) an `--emit-plan` that is not the canonical emit-plan path (`buildGateEmitPlanPath`) for the resolved `--tmp-root`, and a verified `--emit-plan` lifts the over-budget `--ledger-out` requirement because the keyed ledger is the durable record. The gate-context bundle's
 `fanout.groups` stays authoritative. The plan names the freshly dispatched
 units whose pull receipts fan-in requires. On the sanctioned fan-out
 path, pass the same keyed plan to the later `write-gate-findings-log.mjs` call
