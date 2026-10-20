@@ -646,7 +646,11 @@ emit-plan key" / "is stamped for ... but this round consolidates ...") before an
 `--out`/`--ledger-out` write. A rejected invocation writes no new output and
 preserves pre-existing caller-owned files at those paths; callers MUST honor the
 non-zero exit and MUST NOT infer success from path existence. The
-plan is not a findings or provenance source. The gate-context bundle's
+plan is not a findings source. With it, the ledger gains a `provenance` derived
+from the head-stamped artifacts, the plan units and `--carry-forward-plan`; the
+same ledger is also written to the keyed `<gate>-<headSha>.fanin-ledger.json`
+(`buildGateFaninLedgerPath`), and a plan with a fresh unit but zero dispatch-prompt
+records at the head FAILS CLOSED. The gate-context bundle's
 `fanout.groups` stays authoritative. The plan names the freshly dispatched
 units whose pull receipts fan-in requires. On the sanctioned fan-out
 path, pass the same keyed plan to the later `write-gate-findings-log.mjs` call

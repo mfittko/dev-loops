@@ -46,6 +46,7 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { GATE_NAMES, gateScopePrefix } from "../github/_gate-names.mjs";
+import { buildGateFaninLedgerPath } from "../github/write-gate-context.mjs";
 import { lintFillerPhrases } from "../github/_gate-finding-text.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, validateCarryForwardPlanEntries, validateCarryForwardPlanShape, validateZeroUnitCarryProof } from "../github/_carried-angles.mjs";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -56,7 +57,7 @@ import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-pro
 import { resolveGateArtifactTmpRoot, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, countDistinctReviewers, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { clusterFindings } from "@dev-loops/core/loop/finding-cluster";
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
@@ -250,9 +251,14 @@ Optional:
                                  writes no new output and preserves pre-existing caller-owned files
                                  at those paths; callers MUST honor the non-zero exit and MUST NOT
                                  infer success from path existence. REQUIRES --gate and
-                                 --head-sha (the round the plan's key is verified against). A guard
-                                 only: the plan is never a findings or provenance source — the
-                                 gate-context bundle's fanout.groups stays authoritative.
+                                 --head-sha (the round the plan's key is verified against).
+                                 Also fails closed when the plan has a fresh unit and the head has
+                                 zero dispatch-prompt records. The plan is never a findings source.
+                                 The ledger gains a "provenance" object ({ distinctReviewers, perAngle })
+                                 derived from the head-stamped artifacts, the plan units
+                                 and --carry-forward-plan, and the same ledger is also written to the
+                                 keyed <gate>-<headSha>.fanin-ledger.json (buildGateFaninLedgerPath)
+                                 under --tmp-root, with or without --ledger-out.
   --tmp-root <path>              The tmp/ directory holding the reviewer sentinels and per-gate briefing-prefix
                                  records read by the briefing-prefix verification (default:
                                  process.cwd()/tmp). Sentinels are read directly from this directory
@@ -506,6 +512,35 @@ async function verifyEmitPlanKey(planPath, { repo, pr, gate, headSha, carriedAng
     }
   }
   return plan;
+}
+
+// Fan-out provenance for the --emit-plan ledger, derived from head-stamped
+// artifacts, plan units and the carry-forward plan; never caller-built. A fresh
+// angle without a stamped artifact gets no entry; a singleton unit (group null)
+// records no `group` key.
+export function deriveFaninProvenance(rawArtifacts, emitPlan, headSha, carryForwardPlan) {
+  const isCarried = (a) => typeof a.carriedFromHead === "string";
+  const fresh = new Set(rawArtifacts
+    .filter((a) => !isCarried(a) && normalizeHeadShaValue(a.headSha) === headSha)
+    .map((a) => a.angle.trim()));
+  const perAngle = [];
+  for (const unit of Array.isArray(emitPlan.units) ? emitPlan.units : []) {
+    const group = typeof unit.group === "string" ? unit.group.trim() : "";
+    for (const angle of unit.angles ?? []) {
+      if (fresh.has(angle)) perAngle.push({ angle, dispatchId: unit.executionIdentity, ...(group ? { group } : {}) });
+    }
+  }
+  const planByAngle = new Map((Array.isArray(carryForwardPlan) ? carryForwardPlan : []).map((e) => [e.angle.trim(), e]));
+  for (const a of rawArtifacts.filter(isCarried)) {
+    const angle = a.angle.trim();
+    const prior = planByAngle.get(angle) ?? {};
+    const identity = {};
+    for (const key of ["reviewer", "dispatchId", "model"]) {
+      if (typeof prior[key] === "string" && prior[key].trim()) identity[key] = prior[key].trim();
+    }
+    perAngle.push({ angle, ...identity, carriedFromHead: a.carriedFromHead, carriedVerdict: a.verdict.trim() });
+  }
+  return { distinctReviewers: countDistinctReviewers(perAngle), perAngle };
 }
 
 // Pull transport delivery evidence (ADR 0106): every freshly dispatched unit needs
@@ -1157,6 +1192,10 @@ export async function consolidateGateFanin(options) {
     if (layoutVerdict.recordCount > 0 && !layoutVerdict.verified) {
       throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT dispatch-prompt layout verification failed for head ${options.headSha} (${layoutVerdict.recordCount} dispatch-prompt record(s)): ${layoutVerdict.reason} — the fan-in refuses to consolidate a round whose reviewer prompt did not bind to the sanctioned emitter's emitted unit. Re-run the sanctioned emitter (emit-fanout-dispatch.mjs) for the whole round, re-dispatch every unit's compact dispatchPrompt, then re-consolidate.`);
     }
+    // Records-floor: a plan with fresh units must leave dispatch-prompt records at this head.
+    if (emitPlan !== undefined && Array.isArray(emitPlan.units) && emitPlan.units.length > 0 && layoutVerdict.recordCount === 0) {
+      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: --emit-plan has ${emitPlan.units.length} fresh unit(s) but head ${options.headSha} has zero dispatch-prompt records, so the layout check would pass vacuously; re-dispatch every unit's compact dispatchPrompt via the sanctioned emitter, then re-consolidate (fail-closed)`);
+    }
     // The emitter writes a dispatch-prompt record per unit, so records on disk mark
     // a fan-out round; it must pass --emit-plan so every unit's pull receipt is checked
     // (ADR 0106). Disk evidence, never a conductor-typed flag, decides this.
@@ -1483,8 +1522,7 @@ export async function consolidateGateFanin(options) {
   // rethrows any non-length-bound error. "findings" is final at this point
   // (the blocked-verdict guard above already ran), so writing here is the
   // latest point that still precedes every remaining throw in this function.
-  if (options.ledgerOut !== undefined) {
-    await mkdir(path.dirname(options.ledgerOut), { recursive: true });
+  if (options.ledgerOut !== undefined || emitPlan !== undefined) {
     // Write `{ overallVerdict, findings }` rather than a bare array so the
     // consolidator's computed verdict flows downstream to the durable ledger
     // (write-gate-findings-log.mjs, via `--findings-file`) without an
@@ -1513,8 +1551,19 @@ export async function consolidateGateFanin(options) {
       .flatMap((a) => a.verifiedItems.map((item) => item.trim())))];
     const ledgerWrapper = { overallVerdict: consolidated.verdict, findings };
     if (verifiedItems.length > 0) ledgerWrapper.verifiedItems = verifiedItems;
+    if (emitPlan !== undefined) ledgerWrapper.provenance = deriveFaninProvenance(rawArtifacts, emitPlan, options.headSha, options.carryForwardPlan);
     const ledgerRecord = stampOptionalSpecAuthority(ledgerWrapper, specAuthorityIdentity);
-    await writeFile(options.ledgerOut, `${JSON.stringify(ledgerRecord, null, 2)}\n`, "utf8");
+    const ledgerText = `${JSON.stringify(ledgerRecord, null, 2)}\n`;
+    const ledgerTargets = [];
+    if (options.ledgerOut !== undefined) ledgerTargets.push(options.ledgerOut);
+    // The keyed fan-in ledger: byte-identical to --ledger-out, at the plan's round key.
+    if (emitPlan !== undefined) {
+      ledgerTargets.push(buildGateFaninLedgerPath({ repo: emitPlan.repo, pr: emitPlan.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot ?? path.join(process.cwd(), "tmp") }));
+    }
+    for (const target of ledgerTargets) {
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, ledgerText, "utf8");
+    }
   }
 
   const findingsJson = rawArtifacts.map((a) => {
