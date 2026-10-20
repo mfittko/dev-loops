@@ -49,7 +49,7 @@ test("validation commands have one shared classification", () => {
   for (const [command, expected] of cases) assert.equal(classifyValidationCommand(command), expected, command);
 });
 
-test("changed surfaces select existing checks and unknown or mixed changes fail closed", () => {
+test("changed surfaces select existing checks and unknown changes fail closed", () => {
   const cases = [
     [["packages/core/src/loop/validation-classify.mjs"], ["bun run assets:check", "bun run test:core"], ["assets:check", "test:core"]],
     [["packages/core/src/loop/run-context.mjs"], ["bun run assets:check", "bun run test:core"], ["assets:check", "test:core"]],
@@ -63,6 +63,7 @@ test("changed surfaces select existing checks and unknown or mixed changes fail 
     [["skills/loop-grill/SKILL.md", "skills/docs/validation-contract.md"], ["bun run test:doc-guard", "bun run test:docs"], ["test:doc-guard", "test:docs"]],
     [[".github/workflows/ci.yml"], ["bun run test:workflows"], ["test:workflows"]],
     [["extension/index.ts"], ["bun run test:extension"], ["test:extension"]],
+    [["packages/core/src/x.mjs", "extension/index.ts"], ["bun run assets:check", "bun run test:core", "bun run test:extension"], ["assets:check", "test:core", "test:extension"]],
     [[".claude/agents/judge.md"], ["bun run assets:check", "bun run test:assets"], ["assets:check", "test:assets"]],
     [["scripts/loop/inspect-run-viewer/client.mjs"], ["bun run test:playwright:viewer"], ["test:playwright:viewer"]],
     [["scripts/loop/inspect-run-viewer.mjs"], ["bun run test:playwright:viewer"], ["test:playwright:viewer"]],
@@ -72,13 +73,36 @@ test("changed surfaces select existing checks and unknown or mixed changes fail 
     [["test/playwright/how-decided-article.spec.mjs"], ["bun run test:playwright:how-decided-article"], ["test:playwright:how-decided-article"]],
   ];
   for (const [paths, commands, gateSuites] of cases) assert.deepEqual(resolveTargetedValidation(paths), { profile: "targeted", commands, gateSuites }, paths.join(","));
-  for (const paths of [[], ["mystery.bin"], ["docs/articles/new-page.html"], ["test/playwright/ui-review-drive.spec.mjs"], ["skills/loop-grill/references/SKILL.md"], ["skills/loop-grill/notes.md"], ["packages/core/src/x.mjs", "extension/index.ts"], ["packages/core/test/a;touch pwn.test.mjs"], ["test/loop/a;touch pwn.test.mjs"]]) {
+  for (const paths of [[], ["mystery.bin"], ["docs/articles/new-page.html"], ["test/playwright/ui-review-drive.spec.mjs"], ["skills/loop-grill/references/SKILL.md"], ["skills/loop-grill/notes.md"], ["packages/core/test/a;touch pwn.test.mjs"], ["test/loop/a;touch pwn.test.mjs"]]) {
     assert.deepEqual(resolveTargetedValidation(paths), { profile: "full-repository", commands: [], gateSuites: [] });
   }
   const paths = ["packages/core/src/loop/validation-classify.mjs", "packages/core/test/foo.test.mjs"];
   const expected = { profile: "targeted", commands: ["bun run assets:check", "bun run test:core", "bun scripts/run-bun-test.mjs packages/core/test/foo.test.mjs"], gateSuites: ["assets:check", "test:core"] };
   assert.deepEqual(resolveTargetedValidation(paths), expected);
   assert.deepEqual(resolveTargetedValidation(paths.toReversed()), expected);
+});
+
+test("mixed core and docs checks form a sorted unique union independent of path order", () => {
+  const paths = ["packages/core/src/loop/validation-classify.mjs", "skills/docs/validation-contract.md", "packages/core/src/loop/validation-classify.mjs"];
+  const expected = {
+    profile: "targeted",
+    commands: ["bun run assets:check", "bun run test:core", "bun run test:doc-guard", "bun run test:docs"],
+    gateSuites: ["assets:check", "test:core", "test:doc-guard", "test:docs"],
+  };
+  assert.deepEqual(resolveTargetedValidation(paths), expected);
+  assert.deepEqual(resolveTargetedValidation(paths.toReversed()), expected);
+});
+
+test("a mapped path mixed with an unmapped path still needs full validation", () => {
+  assert.deepEqual(resolveTargetedValidation(["packages/core/src/loop/validation-classify.mjs", "mystery.bin"]), { profile: "full-repository", commands: [], gateSuites: [] });
+});
+
+test("a mapped path mixed with an empty-command unregistered-ui path still needs full validation", () => {
+  assert.deepEqual(resolveTargetedValidation(["packages/core/src/loop/validation-classify.mjs", "docs/articles/new-page.html"]), { profile: "full-repository", commands: [], gateSuites: [] });
+});
+
+test("a mapped path mixed with an unsafe -rpwn templated path still needs full validation", () => {
+  assert.deepEqual(resolveTargetedValidation(["packages/core/src/loop/validation-classify.mjs", "packages/core/test/-rpwn.test.mjs"]), { profile: "full-repository", commands: [], gateSuites: [] });
 });
 
 test("readValidationPaths probes the .devloops family and parses .json as JSON", async () => {
