@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { main, enqueueBoardItem, enqueueIssuelessLightweightPr } from "../../scripts/github/create-pr.mjs";
-import { runNodeWithPrePrRecord, writeGhStub } from "../_helpers.mjs";
+import { initGitFixture, runGitFixture, runNodeWithPrePrRecord, writeGhStub } from "../_helpers.mjs";
 
 // ADR-TRIPWIRE-EARLY-SURFACE appends one `{adrTripwire,sizeBudget}` JSON line after gh stdout.
 const withoutEarlySurface = (stdout) => stdout.split("\n").filter((line) => !line.startsWith("{\"adrTripwire\"")).join("\n");
@@ -83,6 +83,8 @@ function updateFieldResponse() {
 async function withTempDir(fn) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-board-"));
   try {
+    initGitFixture(tempDir, { branch: "main", remote: tempDir });
+    runGitFixture(tempDir, ["branch", "feature"]);
     await fn(tempDir);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -90,7 +92,7 @@ async function withTempDir(fn) {
 }
 
 async function writeDevloopsProjectNumber(tempDir, projectNumber) {
-  await writeFile(path.join(tempDir, ".devloops"), `tracker:\n  board:\n    number: ${projectNumber}\n`, "utf8");
+  await writeFile(path.join(tempDir, ".devloops"), `version: 1\ntracker:\n  board:\n    number: ${projectNumber}\n`, "utf8");
 }
 
 // --- enqueueIssuelessLightweightPr unit tests (AC1, AC3, AC4) ---
