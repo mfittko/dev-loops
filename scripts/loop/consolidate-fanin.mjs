@@ -288,8 +288,8 @@ Output (stdout, JSON):
   --ledger-out together (e.g. --jq '.severityCounts') both writes every consumer artifact and reports
   verdict/severityCounts/where-they-landed on stdout, with no second invocation ever needed to
   re-extract a different shape or rediscover a path the caller itself just passed in.
-  A "carriedFromHead" field appears ONLY on an entry --carried-angles upserted (the prior head SHA it
-  was carried from, taken from --carry-forward-plan) — every freshly reviewed angle's entry omits it,
+  A "carriedFromHead" field appears ONLY on an angle --carried-angles declares (an upserted entry, or an existing
+  artifact whose own headSha is not the current head; the prior head SHA it was carried from, taken from --carry-forward-plan) — every freshly reviewed angle's entry omits it,
   so a consumer can distinguish a carried verdict from a fresh review without reading the ledger's
   provenance. upsert-checkpoint-verdict.mjs's renderer ignores unrecognized per-angle fields, so this
   never affects the rendered gate comment.
@@ -1423,7 +1423,8 @@ export async function consolidateGateFanin(options) {
         // A declared carried angle that already has a prior-head artifact keeps that artifact's
         // findings, but its provenance comes from the validated carry proof, never a fresh stamp.
         const existing = rawArtifacts.find((a) => a.angle.trim() === trimmedAngle && typeof a.carriedFromHead !== "string");
-        if (existing) existing.carriedFromHead = planEntry.carriedFromHead;
+        // An artifact already stamped with the current head is a fresh review, never relabeled carried.
+        if (existing && (options.headSha === undefined || normalizeHeadShaValue(existing.headSha) !== options.headSha)) existing.carriedFromHead = planEntry.carriedFromHead;
         continue;
       }
       seenCarriedNames.add(trimmedAngle);
@@ -1693,7 +1694,7 @@ export async function consolidateGateFanin(options) {
     for (const target of ledgerTargets) {
       const ledgerStat = outStat && await stat(target).catch(() => null);
       if (ledgerStat && outStat.dev === ledgerStat.dev && outStat.ino === ledgerStat.ino) {
-        throw new Error(`GATE-EXEC-OUT-LEDGER-ALIAS: --out ${JSON.stringify(options.out)} and ledger target ${JSON.stringify(target)} resolve to the same file on disk`);
+        throw new Error(`--out ${JSON.stringify(options.out)} and ledger target ${JSON.stringify(target)} resolve to the same file on disk (--out resolves to a ledger target)`);
       }
     }
   }

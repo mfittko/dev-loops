@@ -3507,6 +3507,29 @@ test("consolidateGateFanin exempts a declared carried-forward angle from the hea
   });
 });
 
+test("consolidateGateFanin stamps carriedFromHead on an existing carried artifact only when its headSha is not the current head", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      {
+        "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A },
+        "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_B },
+      },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          headSha: HEAD_A,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["coverage", "scope"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage", "scope"], { carriedFromHead: HEAD_B })).carried,
+        });
+        assert.equal(result.angles.find((x) => x.angle === "coverage").carriedFromHead, HEAD_B);
+        assert.equal(result.angles.find((x) => x.angle === "scope").carriedFromHead, undefined);
+      },
+    );
+  });
+});
+
 test("consolidateGateFanin without --head-sha keeps the pre-stamp behavior for unstamped artifacts", async () => {
   await withFindingsDir(
     { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
@@ -4930,7 +4953,7 @@ test("#2526: --out aliasing the keyed ledger is refused without overwriting it (
         await writeFile(keyedPath, "x", "utf8");
         await symlink(keyedPath, out);
       }
-      await assert.rejects(() => consolidateGateFanin({ ...options, out }), /GATE-EXEC-OUT-LEDGER-ALIAS/);
+      await assert.rejects(() => consolidateGateFanin({ ...options, out }), /--out resolves to a ledger target/);
       assert.equal(JSON.parse(await readFile(keyedPath, "utf8")).overallVerdict, "clean");
     }
   });
@@ -4941,7 +4964,7 @@ test("#2526: a withheld over-budget round with --out at the keyed ledger is refu
     const { options, keyed } = await zeroUnitCarriedPlan(root);
     const files = wideAngleFiles({ angleCount: 25, findingsPerAngle: 30 });
     for (const [name, body] of Object.entries(files)) await writeFile(path.join(options.findingsDir, name), JSON.stringify({ ...body, headSha: PROV_HEAD }), "utf8");
-    await assert.rejects(() => consolidateGateFanin({ ...options, out: keyed(root) }), /GATE-EXEC-OUT-LEDGER-ALIAS/);
+    await assert.rejects(() => consolidateGateFanin({ ...options, out: keyed(root) }), /--out resolves to a ledger target/);
     assert.equal(JSON.parse(await readFile(keyed(root), "utf8")).findings.length, 25 * 30);
   });
 });
