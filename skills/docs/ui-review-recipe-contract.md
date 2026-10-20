@@ -57,7 +57,7 @@ drive your app.
    wins) when the lock differs from the primary checkout's or the worktree has no
    `node_modules`, runs pending dev-DB migrations, then boots the app and polls an
    HTTP readiness probe. Boot stdout and stderr go to
-   `<tmpdir>/dev-loops-ui-review-pr-<n>/boot.log`. If the boot process exits before
+   `<tmpdir>/dev-loops-ui-review-pr-<n>-XXXX/boot.log`. If the boot process exits before
    the app is ready, the stage stops at once with a `boot-exited` finding that
    carries the exit code and the last log lines.
 2. **Auth + drive** — launches one headless WebKit context, authenticates
@@ -118,7 +118,9 @@ worktree:
 
 ## `uiReview.run` — boot recipe (required to boot)
 
-- `uiReview.run.command` — shell command that starts the app.
+- `uiReview.run.command` — shell command that starts the app. It must stay in
+  the foreground. An exit before readiness, including exit code 0, stops the
+  stage with `boot-exited`.
 - `uiReview.run.readyUrl` — an `http(s)` URL an HTTP probe polls until the app
   answers (never a fixed sleep).
 - `uiReview.run.readyTimeoutMs` — probe budget in ms (default `60000`).

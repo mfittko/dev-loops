@@ -627,6 +627,7 @@ test("bootApp: real spawn writes stdout+stderr to boot.log and reports the exit"
   tempRoots.push(dir);
   const boot = await bootApp({ recipe: { command: "echo boom; echo err >&2; exit 3" }, runCwd: dir, pr: 990000 + (process.pid % 1000) });
   tempRoots.push(path.dirname(boot.logFile));
+  assert.match(path.basename(path.dirname(boot.logFile)), /^dev-loops-ui-review-pr-\d+-.+/);
   for (let i = 0; i < 100 && !boot.exited(); i += 1) await new Promise((r) => setTimeout(r, 50));
   assert.equal(boot.exited().code, 3);
   assert.match(boot.logTail(), /boom/);
@@ -634,4 +635,19 @@ test("bootApp: real spawn writes stdout+stderr to boot.log and reports the exit"
   assert.equal(tailLines(path.join(dir, "missing.log")), "");
   writeFileSync(path.join(dir, "n.log"), "a\nb\nc\nd\n");
   assert.equal(tailLines(path.join(dir, "n.log"), 2), "c\nd");
+  writeFileSync(path.join(dir, "nonl.log"), "a\nb\nc");
+  assert.equal(tailLines(path.join(dir, "nonl.log"), 2), "b\nc");
+});
+
+test("boot-exited: an exit that lands after the last failed probe is reported, not boot-timeout", async () => {
+  let probes = 0;
+  let checks = 0;
+  // In-loop checks follow each probe 1:1; only the post-loop re-check sees the exit.
+  const { seams } = baseSeams(makeFixture(RECIPE_YAML), {
+    probe: async () => { probes += 1; return false; },
+    bootApp: async () => ({ pid: 1, detail: "s", exited: () => (++checks > probes ? { code: 0, signal: null } : null) }),
+  });
+  const r = await provisionAndBoot({ repoRoot: "/main", pr: 1 }, seams);
+  assert.ok(r.findings.some((x) => x.kind === "boot-exited"));
+  assert.ok(!r.findings.some((x) => x.kind === "boot-timeout"));
 });

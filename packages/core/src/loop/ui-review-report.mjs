@@ -256,6 +256,7 @@ export function buildArtifactHtml({ findings = [], counts = {}, pr = {}, screens
   const stateImgs = [];
   for (const s of Array.isArray(states) ? states : []) {
     if (typeof s?.dataUri !== "string") continue;
+    if (screenshot && s.path === screenshot.path) continue; // already shown as reproduced evidence
     if (s.dataUri.length > ARTIFACT_MAX_SCREENSHOT_BYTES) {
       caps.push(`artifact: state screenshot omitted (${s.dataUri.length} bytes > ${ARTIFACT_MAX_SCREENSHOT_BYTES} cap): ${s.path ?? "unknown"}`);
       continue;

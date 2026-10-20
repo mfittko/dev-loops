@@ -284,6 +284,9 @@ export async function provisionAndBoot(
     await delay(intervalMs);
   }
 
+  // A late exit (after the last probe, before the deadline break) is still an exit.
+  if (!ready && !exitInfo) exitInfo = boot.exited?.() ?? null;
+
   const bootResult = { pid: boot.pid ?? null, ready, attempts, readyUrl: recipe.readyUrl, timeoutMs, intervalMs };
   if (boot.logFile) bootResult.logFile = boot.logFile;
   if (!ready && exitInfo) {

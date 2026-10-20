@@ -41,7 +41,7 @@ Provision an isolated worktree for the PR head and boot the branch's app via
 checkout, runs the frozen install for the present lockfile (`bun.lock`,
 `pnpm-lock.yaml`, `package-lock.json` or `yarn.lock`) when the lock differs or the
 worktree has no `node_modules`, runs pending dev-DB migrations,
-boots the app (output in `boot.log` under the system temp dir) and polls an HTTP
+boots the app (output in `<tmpdir>/dev-loops-ui-review-pr-<n>-XXXX/boot.log`) and polls an HTTP
 readiness probe. It fails closed to a stated stop
 reason on: a primary-checkout target, a missing run recipe, a run-recipe `cwd`
 that resolves outside the provisioned worktree, a destructive migration lacking

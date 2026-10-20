@@ -12,7 +12,7 @@
  * orchestrator (packages/core/src/loop/ui-review-provision.mjs).
  */
 import { execFileSync, spawn } from "node:child_process";
-import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import { tmpdir } from "node:os";
@@ -238,7 +238,7 @@ function applyMigrations({ recipe, runCwd }) {
 
 /** Last `n` lines of a log file ("" when unreadable). */
 export function tailLines(file, n = 20) {
-  return (readOrNull(file) ?? "").split("\n").slice(-n - 1).join("\n").trim();
+  return (readOrNull(file) ?? "").trimEnd().split("\n").slice(-n).join("\n");
 }
 
 /**
@@ -246,12 +246,15 @@ export function tailLines(file, n = 20) {
  * stdout+stderr go to boot.log; `exited()` reports the exit once it happened.
  */
 export function bootApp({ recipe, runCwd, pr }) {
-  const dir = path.join(tmpdir(), `dev-loops-ui-review-pr-${pr}`);
-  mkdirSync(dir, { recursive: true });
+  const dir = mkdtempSync(path.join(tmpdir(), `dev-loops-ui-review-pr-${pr}-`));
   const logFile = path.join(dir, "boot.log");
   const fd = openSync(logFile, "w");
-  const child = spawn(recipe.command, { cwd: runCwd, shell: true, detached: true, stdio: ["ignore", fd, fd] });
-  closeSync(fd);
+  let child;
+  try {
+    child = spawn(recipe.command, { cwd: runCwd, shell: true, detached: true, stdio: ["ignore", fd, fd] });
+  } finally {
+    closeSync(fd);
+  }
   let exit = null;
   child.on("exit", (code, signal) => {
     exit = { code, signal };

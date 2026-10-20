@@ -101,7 +101,7 @@ The current reusable harness emits `state.json` with this minimum reviewer-facin
 
 ### `axe.json` contract
 
-`axe.json` holds the raw [axe-core](https://github.com/dequelabs/axe-core) results that `@axe-core/playwright` produces against the live page: an object with `violations`/`passes`/`incomplete`/`inapplicable`. The body is JSON `null` when axe could not run: the page context is unavailable, the runner is absent in the browser build, or the optional `@axe-core/playwright` peer dependency is not installed.
+`axe.json` holds the raw [axe-core](https://github.com/dequelabs/axe-core) results that `@axe-core/playwright` produces against the live page: an object with `violations`/`passes`/`incomplete`/`inapplicable`. When axe cannot run, the body is `{ "skipped": true, "reason": "axe: ..." }` and the reason states why. The harness writes this object when the runner is not resolvable (from the reviewed worktree or dev-loops), the runner throws, or axe returns no results.
 
 Computable accessibility facts (color contrast, missing accessible names or roles, and similar) are asserted from `axe.json`, never judged from pixels. A reviewer maps each axe violation's `impact` to a finding severity with this fixed mapping:
 

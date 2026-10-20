@@ -367,6 +367,24 @@ test('captureNamedUiState emits axe.json with a stated skip when the injected ru
   }
 });
 
+test('captureNamedUiState passes repoRoot to an injected runAxe', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'ui-axe-root-'));
+  try {
+    let seen;
+    await captureNamedUiState({
+      page: { async screenshot() {} },
+      outputDir: tempDir,
+      sliceId: 'inspect-run-viewer',
+      stateName: 'Axe root',
+      repoRoot: '/some/worktree',
+      runAxe: async (_page, root) => { seen = root; return { violations: [] }; },
+    });
+    assert.equal(seen, '/some/worktree');
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 // AC3: @axe-core/playwright installed only in the reviewed worktree (a global
 // dev-loops install has no copy) is resolved from <worktree>/package.json.
 test('defaultRunAxe resolves @axe-core/playwright from the reviewed worktree', async () => {

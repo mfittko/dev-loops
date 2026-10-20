@@ -390,6 +390,45 @@ test("named states: 0-finding HTML has one labeled img per state; unreadable and
   assert.ok(over.caps.some((c) => /state screenshot omitted/.test(c)));
 });
 
+test("buildArtifactHtml: a state whose screenshot is the evidence screenshot is not inlined twice", () => {
+  const dataUri = "data:image/png;base64,AAAA";
+  const { html } = buildArtifactHtml({
+    findings: [], pr: {},
+    screenshot: { path: "/s/a.png", dataUri },
+    states: [{ flow: "f", step: "a", path: "/s/a.png", dataUri }, { flow: "f", step: "b", path: "/s/b.png", dataUri }],
+  });
+  assert.equal((html.match(/<img /g) ?? []).length, 2);
+});
+
+test("loadScreenshot/loadStateScreenshots: cap messages name evidence vs state", () => {
+  const caps = [];
+  loadScreenshot([{ evidence: { screenshotPath: "/nope/e.png" } }], caps);
+  loadStateScreenshots([{ flow: "f", step: "s", screenshotPath: "/nope/s.png" }], caps);
+  assert.match(caps[0], /evidence screenshot not readable/);
+  assert.match(caps[1], /state screenshot not readable/);
+});
+
+test("runCli: a 0-finding diagnose with two states writes two <img under Named states", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "ui-review-runcli-states-"));
+  const png = (n) => { const p = path.join(dir, n); writeFileSync(p, Buffer.alloc(10)); return p; };
+  const diagPath = path.join(dir, "diagnose.json");
+  writeFileSync(diagPath, JSON.stringify({
+    pr: { headSha: HEAD_SHA },
+    counts: { total: 0, anchorable: 0, nonAnchorable: 0 },
+    findings: [],
+    states: [{ flow: "home", step: "load", screenshotPath: png("a.png") }, { flow: "cart", step: "open", screenshotPath: png("b.png") }],
+  }));
+  const htmlPath = path.join(dir, "report.html");
+  const sink = { write: () => true };
+  await runCli(
+    ["--pr", "42", "--repo", "o/n", "--diagnose-result", diagPath, "--html-output", htmlPath],
+    { stdout: sink, stderr: sink, env: {}, run: makeGhMock([{ stdout: "https://gist.github.com/o/abc123\n" }]).runChild, loadLiveHead: () => null, postReview: () => ({ reviewId: 1, reviewUrl: "u", commitSha: HEAD_SHA }) },
+  );
+  const html = readFileSync(htmlPath, "utf8");
+  assert.match(html, /Named states/);
+  assert.equal((html.match(/<img /g) ?? []).length, 2);
+});
+
 test("loadScreenshot: raw-file cap agrees with the data-URI budget (no read-then-drop)", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "ui-review-shot-"));
   const prefixLen = "data:image/png;base64,".length;

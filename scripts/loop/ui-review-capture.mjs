@@ -306,7 +306,7 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
 
   // Computed a11y facts: axe-core results next to the pixels/tree. Best-effort
   // for the same reason as the snapshot (see defaultRunAxe); either way a
-  // deterministic JSON payload (raw axe results, or null) is emitted, never skipped.
+  // deterministic JSON payload (raw axe results, or a { skipped, reason } object) is emitted.
   let axeResults;
   try {
     axeResults = (await runAxe(page, repoRoot)) ?? { skipped: true, reason: 'axe: runner returned no results' };
