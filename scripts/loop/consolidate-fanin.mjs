@@ -7,7 +7,7 @@
  * "findingsJson"/--out is the NESTED per-angle shape (one section per source
  * artifact, clean angles included with an empty findings array); the stdout
  * "findings" result is the FLAT per-finding bare array, and --ledger-out
- * writes that same flat array wrapped as { overallVerdict, findings, verifiedItems? }.
+ * writes that same flat array wrapped as { overallVerdict, findings, verifiedItems?, provenance? } (provenance only with --emit-plan).
  *
  * Per-angle findings artifact shape (one *.json file per angle in --findings-dir):
  *   {
@@ -107,7 +107,7 @@ Optional:
                                  --ledger-out is unaffected either way. A withheld round FAILS
                                  CLOSED (exit 1) when --ledger-out was not also given — a degraded
                                  round otherwise has no durable record of its findings anywhere.
-  --ledger-out <path>            Write the { overallVerdict, findings } wrapper to this path as
+  --ledger-out <path>            Write the { overallVerdict, findings, provenance? } wrapper (provenance? is present only with --emit-plan) to this path as
                                  JSON — overallVerdict is this CLI's computed verdict (the same
                                  value reported on stdout), findings is the flat per-finding shape
                                  (the exact --findings-file input write-gate-findings-log.mjs and
@@ -256,7 +256,7 @@ Optional:
                                  Also fails closed when the plan has a fresh unit and the head has
                                  zero dispatch-prompt records of --gate. The plan is never a findings source.
                                  The keyed fan-in ledger is written under --tmp-root, which MUST be the
-                                 root the plan was emitted under; it is removed at the start of every run.
+                                 root the plan was emitted under; a stale keyed file is removed once the emit-plan key is verified, before any later refusal or write.
                                  The ledger gains a "provenance" object ({ distinctReviewers, perAngle })
                                  derived from the head-stamped artifacts, the plan units
                                  and --carry-forward-plan, and the same ledger is also written to the
@@ -544,7 +544,11 @@ export function deriveFaninProvenance(rawArtifacts, emitPlan, headSha, carryForw
       if (fresh.has(angle)) perAngle.push({ angle, dispatchId: unit.executionIdentity, ...(group ? { group } : {}) });
     }
   }
-  const planByAngle = new Map((Array.isArray(carryForwardPlan) ? carryForwardPlan : []).map((e) => [e.angle.trim(), e]));
+  // First-wins, matching the consolidator's planByName selection for the minted artifact.
+  const planByAngle = new Map();
+  for (const e of Array.isArray(carryForwardPlan) ? carryForwardPlan : []) {
+    if (!planByAngle.has(e.angle.trim())) planByAngle.set(e.angle.trim(), e);
+  }
   for (const a of rawArtifacts.filter(isCarried)) {
     const angle = a.angle.trim();
     const prior = planByAngle.get(angle) ?? {};
@@ -1030,8 +1034,9 @@ export async function consolidateGateFanin(options) {
   let emitPlan;
   if (options.emitPlan !== undefined) {
     emitPlan = await verifyEmitPlanKey(options.emitPlan, options);
-    // Clear any stale keyed fan-in ledger first, so a refused run leaves no
-    // keyed file behind (as emit-fanout-dispatch.mjs does for its plan).
+    // Clear any stale keyed fan-in ledger once the plan key is verified (the
+    // keyed path is unknown before). A run refused by the plan-key guard leaves
+    // a prior keyed file in place; any later refusal leaves none behind.
     await rm(buildGateFaninLedgerPath({ repo: emitPlan.repo, pr: emitPlan.pr, gate: options.gate.trim().toLowerCase(), headSha: options.headSha, tmpRoot: options.tmpRoot ?? path.join(process.cwd(), "tmp") }), { force: true });
     // The guard already proved this is a canonical string gate. Normalize it
     // for downstream guarded consumers without changing the omission

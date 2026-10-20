@@ -4645,6 +4645,13 @@ test("deriveFaninProvenance: a carried angle records the prior reviewer identity
   assert.equal(p.distinctReviewers, 2);
 });
 
+test("deriveFaninProvenance: duplicate carried angles pair identity from the first plan entry, like the minted artifact", () => {
+  const carried = { angle: "coverage", verdict: "clean", findings: [], carriedFromHead: PRIOR_HEAD };
+  const plan = [{ angle: "coverage", carriedFromHead: PRIOR_HEAD, reviewer: "r1" }, { angle: "coverage", carriedFromHead: PROV_HEAD, reviewer: "r2" }];
+  const p = deriveFaninProvenance([carried], { units: [] }, PROV_HEAD, plan);
+  assert.deepEqual(p.perAngle, [{ angle: "coverage", reviewer: "r1", carriedFromHead: PRIOR_HEAD, carriedVerdict: "clean" }]);
+});
+
 test("deriveFaninProvenance: a planned angle without a head-stamped fresh artifact gets no fresh entry", () => {
   const unit = unitOf(["scope", "coverage", "docs"], "g", "e0");
   const artifacts = [fresh("scope"), fresh("coverage", PRIOR_HEAD), { angle: "docs", verdict: "clean", findings: [] }];
@@ -4770,5 +4777,30 @@ test("#2526 records-floor: a zero-unit carried-only plan still consolidates and 
     assert.equal(result.ok, true);
     const keyed = JSON.parse(await readFile(buildGateFaninLedgerPath({ repo: "owner/repo", pr: 42, gate, headSha: PROV_HEAD, tmpRoot: root }), "utf8"));
     assert.deepEqual(keyed.provenance.perAngle, [{ angle: "coverage", reviewer: "rev-x", carriedFromHead: PRIOR_HEAD, carriedVerdict: "clean" }]);
+  });
+});
+
+test("#2526: zero-unit carried-only derived provenance (full identity) is accepted by the writer", async () => {
+  await withTempDir(async (root) => {
+    await writeFile(path.join(root, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - coverage\n      - name: pr-description\n        enabled: false\n      - name: holistic\n        enabled: false\n", "utf8");
+    const gate = "draft_gate";
+    const dir = path.join(root, "findings");
+    await mkdir(dir, { recursive: true });
+    const entry = { angle: "coverage", carriedFromHead: PRIOR_HEAD, reviewer: "rev-x", prevVerdict: "clean", reason: "unchanged" };
+    const planEntries = ["coverage"].map((angle) => ({ ...entry, angle, model: "m1", dispatchId: "d1" }));
+    const planPath = await writeEmitPlan(root, { ok: true, gate, headSha: PROV_HEAD, repo: "owner/repo", pr: 42, pending: true, count: 0, units: [], carried: planEntries });
+    const ledgerOut = path.join(root, "out", "ledger.json");
+    const result = await consolidateGateFanin({
+      findingsDir: dir, emitPlan: planPath, gate, headSha: PROV_HEAD, tmpRoot: root, receiptTmpRoot: root, repoRoot: root,
+      repo: "owner/repo", pr: "42", carriedAngles: ["coverage"], carryForwardPlan: planEntries, resolvedAngles: ["coverage"], ledgerOut,
+    });
+    assert.equal(result.ok, true);
+    const ledger = JSON.parse(await readFile(ledgerOut, "utf8"));
+    assert.deepEqual(ledger.provenance.perAngle.map((e) => [e.angle, e.reviewer, e.model, e.dispatchId]), planEntries.map((e) => [e.angle, "rev-x", "m1", "d1"]));
+    const written = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate, headSha: PROV_HEAD, verdict: ledger.overallVerdict, executionMode: "fanout_fanin",
+      findingsFile: ledgerOut, emitPlan: planPath, tmpRoot: path.join(root, "ledgers"),
+    }, { repoRoot: root });
+    assert.equal(written.ok, true);
   });
 });
