@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -299,6 +299,17 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   const optionalCompletion = complete && order.source === "act-list" || completionReads.length > 0 || Object.hasOwn(order.authority ?? {}, "completionInputDigest")
     || Object.hasOwn(order.authority ?? {}, "completionInputBytesDigest");
   let completion = null;
+  if (optionalCompletion || options.construct) {
+    const executionDir = path.join(await realpath(path.dirname(planPath)), plan.executionIdentity);
+    const symlinks = await Promise.all([path.dirname(handoffPath), handoffPath].map(async (file) => {
+      const info = await lstat(file).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+      return info && (info.isSymbolicLink() || file === path.dirname(handoffPath) && !info.isDirectory());
+    }));
+    if (symlinks.some(Boolean) || path.normalize(realpathNearestExisting(path.dirname(handoffPath))) !== executionDir
+      || path.normalize(realpathNearestExisting(handoffPath)) !== path.join(executionDir, "fixer-disposition.json")) {
+      throw new Error("completion output or execution directory redirects outside its canonical execution path");
+    }
+  }
   if (optionalCompletion) {
     const read = completionReads[0];
     if (completionReads.length !== 1 || read.required !== true || typeof read.path !== "string"
@@ -317,12 +328,6 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       || normalizeFullHeadSha(completion.fixingCommitSha) !== completion.fixingCommitSha
       || !Array.isArray(completion.siteCoverage) || !Array.isArray(completion.threadBindings)) {
       throw new Error("completion input requires the actual full candidate/fixing heads, coverage and thread bindings");
-    }
-    const executionDir = path.join(await real(path.dirname(planPath)), plan.executionIdentity);
-    const symlinks = await Promise.all([path.dirname(handoffPath), handoffPath].map((file) => lstat(file).then((info) => info.isSymbolicLink(), () => false)));
-    if (symlinks.some(Boolean) || path.normalize(realpathNearestExisting(path.dirname(handoffPath))) !== executionDir
-      || path.normalize(realpathNearestExisting(handoffPath)) !== path.join(executionDir, "fixer-disposition.json")) {
-      throw new Error("completion output or execution directory redirects outside its canonical execution path");
     }
     const subject = receipt.receipt.subject;
     if (!/^f\d+-[a-f0-9]{8}$/.test(plan.executionIdentity) || plan.workOrderRef !== `fixer:${options.repo}#${options.pr}:${order.headSha}:${plan.executionIdentity}`
@@ -631,8 +636,19 @@ export async function verifyFixerDisposition(
   if (options.construct) {
     await mkdir(path.dirname(handoffPath), { recursive: true });
     const text = `${JSON.stringify(constructedReport, null, 2)}\n`;
-    await writeFile(handoffPath, text, { encoding: "utf8", flag: "wx" });
-    await writeFile(constructMarkPath(handoffPath), sha256Hex(text), "utf8");
+    let report, marker;
+    try {
+      report = await open(handoffPath, "wx");
+      marker = await open(constructMarkPath(handoffPath), "wx");
+      await report.writeFile(text, "utf8");
+      await marker.writeFile(sha256Hex(text), "utf8");
+    } catch (cause) {
+      // Handles invalidate only this attempt's files, even if their paths were moved.
+      await Promise.allSettled([report, marker].filter(Boolean).map((file) => file.truncate(0)));
+      throw Object.assign(new Error(`Fixer construction failed: ${cause.message}`, { cause }), { code: "FIXER_CONSTRUCTION_FAILED" });
+    } finally {
+      await Promise.allSettled([report, marker].filter(Boolean).map((file) => file.close()));
+    }
     return { ok: true, constructed: true, outputRef: handoffPath };
   }
   if (source) {

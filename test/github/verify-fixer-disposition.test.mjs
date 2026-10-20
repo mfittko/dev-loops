@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { link, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -234,6 +234,68 @@ test("THREAD full --construct builds the report from the threads, the clearing r
       const mock = f.runtimeFor([threadsCallEntry([{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }]), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]);
       assert.equal((await verifyFixerDisposition({ ...f.options, check }, mock.deps)).complete, true);
     }
+  });
+});
+
+for (const route of ["THREAD", "ACT"]) for (const existing of ["report", "marker", "directory", "symlink"]) test(`${route} construction preserves existing ${existing} entries`, async () => {
+  await withRepoRoot(async (root) => {
+    const f = route === "THREAD" ? await threadConstructFixture(root) : await completionFixture(root);
+    const output = f.output ?? f.plan.workOrder.outputRefs[0];
+    if (route === "ACT") { await rm(output); await rm(`${output}.constructed`); }
+    await mkdir(path.dirname(output), { recursive: true });
+    const target = existing === "report" ? output : `${output}.constructed`;
+    const saved = path.join(root, "saved");
+    await writeFile(saved, "existing bytes");
+    if (existing === "directory") await mkdir(target);
+    else if (existing === "symlink") await symlink(saved, target);
+    else await writeFile(target, "existing bytes");
+    const options = f.options ?? { repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan };
+    const deps = route === "THREAD" ? f.runtimeFor([threadsCallEntry([])]).deps : f.depsFor().deps;
+    await assert.rejects(verifyFixerDisposition({ ...options, construct: true }, deps), /EEXIST/);
+    assert.equal(await readFile(saved, "utf8"), "existing bytes");
+    if (existing === "directory") assert.ok((await lstat(target)).isDirectory());
+    else assert.equal(await readFile(target, "utf8"), "existing bytes");
+    if (existing !== "report") await assert.rejects(verifyFixerDisposition({ ...options, check: true }, deps));
+  });
+});
+
+for (const defect of ["directorySymlink", "outputSymlink", "notDirectory"]) test(`THREAD construction refuses ${defect} before output writes`, async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    const saved = path.join(root, "saved");
+    await mkdir(saved);
+    await writeFile(path.join(saved, "fixer-disposition.json"), "existing bytes");
+    if (defect === "directorySymlink") await symlink(saved, path.dirname(f.output), "dir");
+    else {
+      await mkdir(path.dirname(f.output));
+      if (defect === "outputSymlink") await symlink(path.join(saved, "fixer-disposition.json"), f.output);
+      else { await rm(path.dirname(f.output), { recursive: true }); await writeFile(path.dirname(f.output), "existing bytes"); }
+    }
+    await assert.rejects(verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([]).deps), /canonical execution path|ENOTDIR/);
+    assert.equal(await readFile(path.join(saved, "fixer-disposition.json"), "utf8"), "existing bytes");
+    assert.equal(existsSync(`${f.output}.constructed`), false);
+  });
+});
+
+for (const failed of ["report", "marker"]) test(`construction ${failed} write failure cannot become delivery evidence`, async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    const source = await readFile(new URL("../../scripts/github/verify-fixer-disposition.mjs", import.meta.url), "utf8");
+    const start = source.indexOf("  if (options.construct) {\n    await mkdir");
+    const end = source.indexOf("\n  if (source) {", start);
+    assert.ok(start >= 0 && end > start);
+    await assert.rejects(runInNewContext(`(async () => { ${source.slice(start, end)} })()`, {
+      options: { construct: true }, path, mkdir, handoffPath: f.output, constructMarkPath: (file) => `${file}.constructed`, sha256Hex,
+      constructedReport: { headSha: f.head, dispositions: [] },
+      open: async (file, flags) => {
+        const handle = await open(file, flags);
+        return { truncate: (...args) => handle.truncate(...args), close: () => handle.close(), writeFile: async (...args) => {
+          await handle.writeFile(...args);
+          if (file.endsWith(".constructed") === (failed === "marker")) throw Object.assign(new Error("injected output failure"), { code: "EIO" });
+        } };
+      },
+    }), (error) => error.code === "FIXER_CONSTRUCTION_FAILED" && error.cause.code === "EIO");
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true }, f.runtimeFor([]).deps));
   });
 });
 
@@ -1731,6 +1793,7 @@ test("explicit legacy completion requalifies unchanged evidence with inherited g
     f.git("config", "grep.column", "true");
     const options = { repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan };
     await rm(f.plan.workOrder.outputRefs[0]);
+    await rm(`${f.plan.workOrder.outputRefs[0]}.constructed`);
     assert.equal((await verifyFixerDisposition({ ...options, construct: true }, f.depsFor().deps)).constructed, true);
     for (const check of [false, true]) {
       const mock = f.depsFor([compareEntry(f.candidate, "identical", f.candidate)]);
@@ -1818,7 +1881,7 @@ for (const mode of ["construct", "normal", "check"]) for (const retiredIdentity 
     }
     const options = { repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan, construct: mode === "construct", check: mode === "check" };
     const report = f.plan.workOrder.outputRefs[0];
-    if (mode === "construct") await rm(report);
+    if (mode === "construct") { await rm(report); await rm(`${report}.constructed`); }
     const before = existsSync(report) ? await readFile(report, "utf8") : null;
     const mock = f.depsFor([compareEntry(f.candidate, "identical", f.candidate)]);
     if (retiredIdentity) {
@@ -2005,8 +2068,8 @@ test("typed completion CLI rejects construct/check together", () => {
 
 test("typed completion path guard accepts canonical Windows paths with helper-normalized separators", async () => {
   const source = await readFile(new URL("../../scripts/github/verify-fixer-disposition.mjs", import.meta.url), "utf8");
-  const start = source.indexOf("    const executionDir = path.join(await real(path.dirname(planPath)), plan.executionIdentity);");
-  const end = source.indexOf("    const subject =", start);
+  const start = source.indexOf("    const executionDir = path.join(await realpath(path.dirname(planPath)), plan.executionIdentity);");
+  const end = source.indexOf("\n  }\n  if (optionalCompletion)", start);
   assert.ok(start >= 0 && end > start);
   const planPath = "C:\\repo\\tmp\\gate-fixer\\owner-repo\\pr-1975\\fixer-emit-plan.json";
   const executionIdentity = "f1-0000abcd";
@@ -2015,11 +2078,19 @@ test("typed completion path guard accepts canonical Windows paths with helper-no
   await runInNewContext(`(async () => { ${source.slice(start, end)} })()`, {
     path: path.win32, planPath, plan: { executionIdentity },
     handoffPath: path.win32.join(path.win32.dirname(planPath), executionIdentity, "fixer-disposition.json"),
-    real: async (file) => file,
-    lstat: async () => ({ isSymbolicLink: () => false }),
+    realpath: async (file) => file,
+    lstat: async () => ({ isSymbolicLink: () => false, isDirectory: () => true }),
     realpathNearestExisting: (file) => { normalized.push(file); return path.win32.normalize(file).replaceAll("\\", "/"); },
   });
   assert.deepEqual(normalized, [path.win32.join(path.win32.dirname(planPath), executionIdentity), path.win32.join(path.win32.dirname(planPath), executionIdentity, "fixer-disposition.json")]);
+  for (const code of ["EACCES", "ENOTDIR", "EIO"]) {
+    await assert.rejects(runInNewContext(`(async () => { ${source.slice(start, end)} })()`, {
+      path, planPath: "/repo/plan.json", plan: { executionIdentity }, handoffPath: `/repo/${executionIdentity}/fixer-disposition.json`,
+      realpath: async (file) => file,
+      lstat: async () => { throw Object.assign(new Error("uncertain output location"), { code }); },
+      realpathNearestExisting: () => assert.fail("uncertain locations must not fall back to lexical paths"),
+    }), (error) => error.code === code);
+  }
 });
 
 for (const existing of ["output", "origin", "source", "late-origin"]) test(`typed completion refuses existing ${existing} without clobbering evidence`, async () => {
@@ -2114,6 +2185,7 @@ for (const kind of ["resolved", "mixed", "repeated-mixed", "residual", "threadle
   await withRepoRoot(async (repoRoot) => {
     const f = await completionFixture(repoRoot, kind);
     await rm(f.plan.workOrder.outputRefs[0]);
+    await rm(`${f.plan.workOrder.outputRefs[0]}.constructed`);
     const options = { repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan, construct: true };
     const mock = f.depsFor();
     const constructed = await verifyFixerDisposition(options, mock.deps);
