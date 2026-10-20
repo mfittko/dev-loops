@@ -113,6 +113,13 @@ test("a non-goals list written with numbered markers is read instead of dropped"
   assert.deepEqual(brief.nonGoals, ["No gate credit.", "No reuse map."]);
 });
 
+test("a standalone paragraph after the non-goals list is not absorbed into the last item", async () => {
+  const root = await fixtureRepo();
+  const body = `${MATRIX}\n## Non-goals\n\n- No gate credit.\n\nImplementation notes are tracked separately.\n`;
+  const brief = await buildImplementationBrief({ body, repoRoot: root });
+  assert.deepEqual(brief.nonGoals, ["No gate credit."]);
+});
+
 test("a body without a matrix yields matrix null, a missing_ac_dod_matrix finding and exit 0", async () => {
   const root = await fixtureRepo();
   const body = "## Problem\n\nProse only.\n";
@@ -621,9 +628,23 @@ test("the same inputs produce byte-identical output across two checkout roots", 
 const NETWORK_MODULES = new Set(["node:dgram", "node:dns", "node:http", "node:http2", "node:https", "node:net", "node:tls"]);
 const IMPORT_SPECIFIER_RE = /(?:\bimport\b|\bexport\b)[^"'`;]*?\bfrom\s*["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|\bimport\s*["']([^"']+)["']/gsu;
 
-/** Every module reachable from `entry` through relative imports, plus every
- * import specifier the graph names. */
+/** Resolve a local workspace-package specifier through the package's own exports
+ * map, so a reachable dependency is walked instead of treated as an opaque bare
+ * import. */
+function workspaceExportTarget(specifier, exportsMap) {
+  if (!specifier.startsWith("@dev-loops/core")) return null;
+  const key = `.${specifier.slice("@dev-loops/core".length)}`;
+  const entry = exportsMap[key];
+  const target = typeof entry === "string" ? entry : entry?.import ?? entry?.default;
+  if (typeof target !== "string" || !target.startsWith("./")) return null;
+  return path.join(repoRoot, "packages", "core", target);
+}
+
+/** Every module reachable from `entry` through relative imports and through the
+ * local `@dev-loops/core` package exports, plus every import specifier the graph
+ * names. */
 async function importGraph(entry) {
+  const { exports: coreExports } = JSON.parse(await readFile(path.join(repoRoot, "packages", "core", "package.json"), "utf8"));
   const seen = new Set();
   const specifiers = new Set();
   const queue = [entry];
@@ -631,14 +652,22 @@ async function importGraph(entry) {
     const file = queue.shift();
     if (seen.has(file)) continue;
     seen.add(file);
-    const source = await readFile(file, "utf8");
+    // A `import("./types.js")` JSDoc type reference names no runtime module, so
+    // an unreadable target is skipped; the positive assertions below keep the
+    // walk honest about the modules it must reach.
+    const source = await readFile(file, "utf8").catch((error) => {
+      if (error?.code === "ENOENT") return null;
+      throw error;
+    });
+    if (source === null) continue;
     for (const match of source.matchAll(IMPORT_SPECIFIER_RE)) {
       const specifier = match[1] ?? match[2] ?? match[3];
       if (!specifier) continue;
       specifiers.add(specifier);
-      if (!specifier.startsWith(".")) continue;
-      const target = path.resolve(path.dirname(file), specifier);
-      if (/\.m?js$/u.test(target)) queue.push(target);
+      const target = specifier.startsWith(".")
+        ? path.resolve(path.dirname(file), specifier)
+        : workspaceExportTarget(specifier, coreExports);
+      if (target && /\.m?js$/u.test(target)) queue.push(target);
     }
   }
   return { modules: [...seen].sort(), specifiers: [...specifiers].sort() };
@@ -650,6 +679,12 @@ test("the brief's import graph reaches no network module, so its offline claim i
   assert.ok(
     graph.modules.includes(path.join(repoRoot, "scripts", "lib", "jq-output.mjs")),
     "the walk must reach a transitive relative module",
+  );
+  // The brief imports @dev-loops/core subpaths, so an un-followed workspace
+  // package would leave their transitive imports outside the guard.
+  assert.ok(
+    graph.modules.includes(path.join(repoRoot, "packages", "core", "src", "loop", "issue-refinement-artifact.mjs")),
+    "the walk must reach a package-resolved transitive module",
   );
   assert.deepEqual(graph.specifiers.filter((specifier) => NETWORK_MODULES.has(specifier)), []);
 });

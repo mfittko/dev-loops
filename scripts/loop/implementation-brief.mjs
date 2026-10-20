@@ -242,16 +242,24 @@ function nonGoalsFromBody(body) {
   const section = parseMarkdownSections(body).find((entry) => NON_GOALS_HEADING_RE.test(entry.name));
   if (!section) return [];
   const items = [];
+  // Markdown lazy continuation: the line right under a bullet, with no blank
+  // line between them, still belongs to that item's paragraph. A blank line
+  // ends the paragraph, so a following unindented line is standalone prose and
+  // must not be absorbed into the last non-goal.
+  let insideItemParagraph = false;
   for (const line of section.bodyLines) {
-    if (line.trim() === "") continue;
+    if (line.trim() === "") {
+      insideItemParagraph = false;
+      continue;
+    }
     const bullet = BULLET_RE.exec(line);
     if (bullet) {
       items.push(bullet[1]);
+      insideItemParagraph = true;
       continue;
     }
-    // A wrapped non-goal continues the item above it (Markdown lazy
-    // continuation), so a multi-line bullet is not truncated to its first line.
-    if (items.length > 0) items[items.length - 1] += ` ${line.trim()}`;
+    if (items.length === 0 || !(insideItemParagraph || /^\s+\S/u.test(line))) continue;
+    items[items.length - 1] += ` ${line.trim()}`;
   }
   return items;
 }
