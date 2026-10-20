@@ -214,3 +214,12 @@ test("usage offers no background option and rejects out-of-range or unknown argu
     assert.equal(out.code, 2, bad.join(" "));
   }
 });
+
+test("full profile when one changed path has a rule without gateSuites", () => withFixture({
+  files: { ".devloops": `${DEVLOOPS}    - match: "src/**"\n      surface: src\n      commands: ["node --test {path}"]\n` },
+}, async (repoRoot) => {
+  const headSha = await commit(repoRoot, { "docs/a.md": "# a\n", "src/x.test.mjs": "\n" });
+  const out = await run(repoRoot, headSha);
+  assert.equal(out.code, 0, out.stdout + out.stderr);
+  assert.deepEqual(JSON.parse(out.stdout).requestedSuites, ["verify"]);
+}));

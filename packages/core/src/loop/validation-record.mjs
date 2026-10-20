@@ -48,7 +48,8 @@ export function parseValidationRecord(value, { repo, headSha }) {
     }
   }
   const requested = new Set(value.requestedSuites);
-  if (requested.size !== value.requestedSuites.length || value.suites.length !== requested.size || !value.suites.every((suite) => requested.has(suite.name))) return refuse("suites must match requestedSuites");
+  const named = new Set(value.suites.map((suite) => suite.name));
+  if (requested.size !== value.requestedSuites.length || named.size !== value.suites.length || named.size !== requested.size || !value.suites.every((suite) => requested.has(suite.name))) return refuse("suites must match requestedSuites");
   if (value.allPassed !== value.suites.every((suite) => suite.exitCode === 0)) return refuse("allPassed disagrees with the suite exit codes");
   if (value.depState !== undefined && (value.depState === null || typeof value.depState !== "object" || Array.isArray(value.depState))) return refuse("depState must be an object");
   return { ok: true, record: value };

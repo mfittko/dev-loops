@@ -101,3 +101,10 @@ test("each missing field is refused", () => {
     assert.equal(parseValidationRecord(value, ID).ok, false, `suite ${field}`);
   }
 });
+
+test("duplicate suite results cannot stand in for a missing requested suite", () => {
+  const value = record();
+  value.requestedSuites = ["test:docs", "test:core"];
+  value.suites = [value.suites[0], { ...value.suites[0] }];
+  assert.match(parseValidationRecord(value, ID).reason, /requestedSuites/);
+});

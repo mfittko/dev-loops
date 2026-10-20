@@ -106,7 +106,7 @@ export async function produceValidationRecord(options, { repoRoot = resolveRepoR
     const scripts = await readPackageScripts(repoRoot);
     let profile = "full-repository";
     let suites = ["verify"];
-    if (selected.profile === "targeted" && selected.gateSuites.length > 0 && classifyPackageSuites(selected.gateSuites, scripts) === "targeted") {
+    if (selected.profile === "targeted" && selected.gateSuites.length > 0 && paths.every((p) => resolveTargetedValidation([p], base.validation.paths ?? []).gateSuites.length > 0) && classifyPackageSuites(selected.gateSuites, scripts) === "targeted") {
       profile = "targeted";
       suites = selected.gateSuites;
     } else if (classifyPackageSuites(suites, scripts) !== "full-repository") {
