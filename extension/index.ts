@@ -34,7 +34,7 @@ const WIDGET_KEY = 'dev-loops.setup';
 // re-export so tests can reach the same binding the session_start handler calls.
 import { checkAgentSetRendered, findProjectRoot, isDevLoopsAgentsCheckout, renderProjectAgents, syncPackagedAgents } from './sync-packaged-agents.ts';
 export { syncPackagedAgents };
-import { DEV_LOOPS_ROLES, decidePiToolCall, isReadOnlyPiRole, resolvePiRole, stripPluginNamespace } from './readonly-role-gate.ts';
+import { decidePiToolCall, isReadOnlyPiRole, resolvePiRole } from './readonly-role-gate.ts';
 
 // The calling session's own role for one handler call: resolved from its system prompt, with the
 // session id scoping the untagged native-async-child fail-closed row (readonly-role-gate.ts).
@@ -87,25 +87,12 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
   adapter.on('tool_call', (event, ctx) => {
     const { toolName, input } = event as { toolName?: string; input?: { command?: unknown } };
     if (toolName === 'subagent' && ctx.cwd) {
-      // refuse a child launch when the loaded agent set carries raw non-Pi tools. pi-subagents
-      // takes agent/tasks/chain/agentScope at the top level or inside `options`, and a
-      // chain step may be `{ parallel: [...] }`.
-      type Step = { agent?: unknown; parallel?: unknown };
-      type Sub = { agent?: unknown; tasks?: unknown; chain?: unknown; agentScope?: unknown; cwd?: unknown; options?: Sub };
+      // refuse a child launch when a rendered dev-loops agent file carries raw non-Pi tools;
+      // the launch cwd may sit at the top level or inside `options`.
+      type Sub = { cwd?: unknown; options?: Sub };
       const sub = (input ?? {}) as Sub;
-      const opts: Sub = sub.options && typeof sub.options === 'object' ? sub.options : {};
-      const steps = (v: unknown): Step[] =>
-        (Array.isArray(v) ? v : []).flatMap((s: Step) => (s && typeof s === 'object' ? [s, ...steps(s.parallel)] : []));
-      const requested = [sub.agent, opts.agent, ...[sub.tasks, opts.tasks, sub.chain, opts.chain].flatMap(steps).map((s) => s.agent)]
-        .filter((a): a is string => typeof a === 'string')
-        .map((a) => stripPluginNamespace(a).trim());
-      const roles = DEV_LOOPS_ROLES.filter((role) => requested.includes(role));
-      const scope = opts.agentScope ?? sub.agentScope;
-      const launchCwd = [opts.cwd, sub.cwd].find((c): c is string => typeof c === 'string' && c.length > 0);
-      const reason = checkAgentSetRendered(launchCwd ? path.resolve(ctx.cwd, launchCwd) : ctx.cwd, {
-        roles,
-        scope: scope === 'project' || scope === 'user' ? scope : undefined,
-      });
+      const launchCwd = [sub.options?.cwd, sub.cwd].find((c): c is string => typeof c === 'string' && c.length > 0);
+      const reason = checkAgentSetRendered(launchCwd ? path.resolve(ctx.cwd, launchCwd) : ctx.cwd);
       if (reason) return { block: true, reason };
     }
     return decidePiToolCall({ toolName, input, agentType: resolveSessionRole(ctx) });

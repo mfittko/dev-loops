@@ -239,33 +239,6 @@ export function syncPackagedAgents({
 /** Neutral source tokens that are not Pi tool names. */
 const NON_PI_TOOLS = ["search", "execute"];
 
-function subdirs(dir: string): string[] {
-  try {
-    return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => path.join(dir, e.name));
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Bounded global directories where Pi may discover dev-loops agent definitions, in Pi load
- * precedence order: user roots first, then the installed package roots. The package roots hold the
- * raw neutral sources by design (decision record 0173), so a role is checked there only when no
- * higher-precedence copy exists.
- */
-function globalAgentRoots(home: string): string[] {
-  const piAgent = path.join(home, ".pi", "agent");
-  const gitRoots = subdirs(path.join(piAgent, "git"))
-    .flatMap(subdirs)
-    .map((d) => path.join(d, "dev-loops", "agents"));
-  return [
-    path.join(home, ".agents"),
-    path.join(piAgent, "agents"),
-    path.join(piAgent, "npm", "node_modules", "dev-loops", "agents"),
-    ...gitRoots,
-  ];
-}
-
 /**
  * The project root Pi resolves for a cwd: the nearest ancestor (cwd included) holding a `.pi` or
  * `.agents` directory, else the cwd itself. `.git` does not stop the walk. The walk stops at the
@@ -295,62 +268,39 @@ export function findProjectRoot(cwd: string, home: string | null = process.env.H
 }
 
 /**
- * Preflight: inspect the loaded project agent set (`.pi/agents` of the project root that contains
- * `cwd`, real directory or symlink) and return a typed `agent_set_not_rendered` reason when any
- * `*.agent.md` still declares a raw `search`/`execute` tool, else null. An absent directory is
- * allowed (consumer repos resolve from the rendered `~/.agents/`). For each requested role without a
- * project copy, only the definition Pi would load (first of the global roots holding the role) is
- * checked, so a raw package copy shadowed by a rendered higher-precedence copy is allowed.
- * `scope` comes from `agentScope` (read from `options` or the top level): `project` skips the global
- * check, `user` skips the project set and checks only the first global copy Pi loads.
+ * Preflight: refuse a launch when a file the dev-loops render writes into `.pi/agents` still
+ * declares a raw `search`/`execute` tool. Only the `*.agent.md` names found in the packaged agents
+ * source directory are inspected; any other project agent file is never read. Returns the typed
+ * `agent_set_not_rendered` reason, else null (an absent directory or a rendered set passes).
  */
 export function checkAgentSetRendered(
   cwd: string,
-  { roles = [], home = process.env.HOME || os.homedir(), scope }: { roles?: readonly string[]; home?: string | null; scope?: "project" | "user" } = {},
+  sourceRoot: string = fileURLToPath(PACKAGED_AGENTS_ROOT),
 ): string | null {
-  const projectOffenders: string[] = [];
-  const globalOffenders: string[] = [];
-  const check = (file: string, into: string[]) => {
+  const projectRoot = findProjectRoot(cwd);
+  const dir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
+  let names: string[];
+  try {
+    names = fs.readdirSync(sourceRoot).filter((n) => n.endsWith(".agent.md")).sort();
+  } catch {
+    return null;
+  }
+  const offenders: string[] = [];
+  for (const name of names) {
+    const file = path.join(dir, name);
     let raw: string;
     try {
       raw = fs.readFileSync(file, "utf8");
     } catch {
-      return false;
+      continue;
     }
     const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1].match(TOOLS_LINE_RE);
     const bad = parseToolList(match?.[1] ?? "").filter((tool) => NON_PI_TOOLS.includes(tool));
-    if (bad.length > 0) into.push(`${file} (${bad.join(", ")})`);
-    return true;
-  };
-  const projectRoot = findProjectRoot(cwd, home);
-  const dir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
-  let projectFiles: string[] = [];
-  try {
-    if (scope === "user") throw new Error("user scope loads no project agents");
-    projectFiles = fs.readdirSync(dir).filter((n) => n.endsWith(".agent.md")).sort();
-  } catch {
-    // Absent project directory is allowed.
+    if (bad.length > 0) offenders.push(`${file} (${bad.join(", ")})`);
   }
-  for (const name of projectFiles) check(path.join(dir, name), projectOffenders);
-  // Pi also discovers global copies that load when the project has no copy of the role (decision record 0173).
-  if (home && scope !== "project") {
-    const roots = globalAgentRoots(home);
-    for (const role of roles) {
-      if (projectFiles.includes(`${role}.agent.md`)) continue;
-      for (const root of roots) {
-        if (check(path.join(root, `${role}.agent.md`), globalOffenders)) break;
-      }
-    }
-  }
-  if (projectOffenders.length + globalOffenders.length === 0) return null;
-  const remedies = [
-    projectOffenders.length > 0 &&
-      `Render the project set: in a worktree run \`dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>\`; in the main checkout restart the Pi session (the session-start sync re-renders \`${dir}\`). Never restore a \`.pi/agents\` symlink to the raw agent sources.`,
-    globalOffenders.length > 0 &&
-      "Remove or reinstall the named global copy (re-run the packaged-agent sync for `~/.agents`), or launch with `agentScope: \"project\"` to skip the global check.",
-  ].filter(Boolean);
-  return (
-    `agent_set_not_rendered: the loaded agent set carries non-Pi tool names: ${[...projectOffenders, ...globalOffenders].join("; ")}. ` +
-    remedies.join(" ")
-  );
+  if (offenders.length === 0) return null;
+  const remedy = isDevLoopsAgentsCheckout(projectRoot)
+    ? `Render the project set: in a worktree run \`dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>\`; in the main checkout restart the Pi session (the session-start sync re-renders \`${dir}\`). Never restore a \`.pi/agents\` symlink to the raw agent sources.`
+    : "Re-render with the packaged-agent sync, or replace the named file with its rendered copy.";
+  return `agent_set_not_rendered: the rendered agent set carries non-Pi tool names: ${offenders.join("; ")}. ${remedy}`;
 }
