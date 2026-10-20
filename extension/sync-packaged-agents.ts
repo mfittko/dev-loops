@@ -10,7 +10,7 @@ const PACKAGED_AGENTS_ROOT = new URL("../agents/", import.meta.url);
  * Pi resolves project role agents from here with precedence over the global
  * `~/.agents/` (#1606): when a repo symlinks `.pi/agents` -> the package source
  * (the dev-loops repo dogfooding convention), the dispatch reads the raw neutral
- * templates and Pi strict-rejects `search`/`execute`. The project-local sync
+ * templates and Pi strict-rejects `search`. The project-local sync
  * replaces that symlink with a real directory of Pi-valid copies.
  */
 const PROJECT_AGENTS_SUBPATH = path.join(".pi", "agents");
@@ -121,10 +121,10 @@ function writeSyncedAgents(sourceRoot: string, destDir: string) {
  * `.pi/agents -> ../agents`, dogfooding the package source), the Pi `subagent`
  * tool resolves project role agents from here with precedence over the global
  * `~/.agents/`, so the dispatch reads the raw neutral templates and Pi
- * strict-rejects `search`/`execute`. The sync replaces the symlink with a REAL
+ * strict-rejects `search`. The sync replaces the symlink with a REAL
  * directory of Pi-valid rendered copies — it does NOT write through the symlink
  * (writing through would overwrite the neutral source and break Claude asset
- * generation; the source must keep `search`/`execute` per #1086).
+ * generation; the source retains mapped `search` and uses `bash` for execution).
  *
  * When `.pi/agents` is already a real directory, its packaged-agent files are
  * refreshed in place (same overwrite semantics as the global `~/.agents/` sync).
@@ -169,7 +169,8 @@ export function syncProjectAgentsDir(projectRoot: string, sourceRoot: string) {
 /**
  * Sync the canonical packaged agents into `~/.agents/`, rewriting the `tools:`
  * frontmatter to Pi-valid builtin names (#1583). The source `agents/*.agent.md`
- * files stay harness-neutral (role agents keep `search`/`execute`; the dev-loop
+ * files stay harness-neutral (role agents retain mapped `search` and use `bash`
+ * for execution; the dev-loop
  * entrypoint drops `agent`/`todo` per #1604); only the rendered copies are
  * remapped. Best-effort: callers swallow errors so a sync failure never breaks
  * session start.
