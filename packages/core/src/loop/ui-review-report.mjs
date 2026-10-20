@@ -230,10 +230,10 @@ const ARTIFACT_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src dat
  * are applied here and returned in `caps` so the CLI can log them — never a
  * silent truncation.
  *
- * @param {{findings?: object[], counts?: object, pr?: object, screenshot?: {path:string,dataUri:string}|null, generatedAt?: string}} input
+ * @param {{findings?: object[], counts?: object, pr?: object, screenshot?: {path:string,dataUri:string}|null, states?: {flow:string|null,step:string|null,path:string,dataUri:string}[], generatedAt?: string}} input
  * @returns {{html: string, caps: string[]}}
  */
-export function buildArtifactHtml({ findings = [], counts = {}, pr = {}, screenshot = null, generatedAt } = {}) {
+export function buildArtifactHtml({ findings = [], counts = {}, pr = {}, screenshot = null, states = [], generatedAt } = {}) {
   const caps = [];
   const list = Array.isArray(findings) ? findings : [];
 
@@ -251,6 +251,19 @@ export function buildArtifactHtml({ findings = [], counts = {}, pr = {}, screens
       screenshotHtml = `<h2>Reproduced evidence</h2><img alt="reproduced state" src="${escapeHtml(screenshot.dataUri)}" />`;
     }
   }
+
+  // One labeled image per named state, shown whether or not the state has a finding.
+  const stateImgs = [];
+  for (const s of Array.isArray(states) ? states : []) {
+    if (typeof s?.dataUri !== "string") continue;
+    if (s.dataUri.length > ARTIFACT_MAX_SCREENSHOT_BYTES) {
+      caps.push(`artifact: state screenshot omitted (${s.dataUri.length} bytes > ${ARTIFACT_MAX_SCREENSHOT_BYTES} cap): ${s.path ?? "unknown"}`);
+      continue;
+    }
+    const label = [s.flow, s.step].filter((p) => p !== null && p !== undefined).join(" / ") || "state";
+    stateImgs.push(`<figure><figcaption>${escapeHtml(label)}</figcaption><img alt="${escapeHtml(label)}" src="${escapeHtml(s.dataUri)}" /></figure>`);
+  }
+  const statesHtml = stateImgs.length > 0 ? `<h2>Named states</h2>${stateImgs.join("")}` : "";
 
   const findingsHtml = shown.map((f) => {
     const blocking = isBlockingFinding(f);
@@ -279,6 +292,7 @@ export function buildArtifactHtml({ findings = [], counts = {}, pr = {}, screens
     `<div class="meta">head ${escapeHtml(pr?.headSha ?? "?")} · ${escapeHtml(total)} finding(s) · ${escapeHtml(counts?.anchorable ?? 0)} anchorable · generated ${escapeHtml(generatedAt ?? "")}</div>`,
     findingsHtml,
     screenshotHtml,
+    statesHtml,
     "</body></html>",
   ].join("");
 

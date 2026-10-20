@@ -14,7 +14,7 @@ import {
 } from "@dev-loops/core/loop/ui-review-report";
 import { buildDraftReviewPayload } from "@dev-loops/core/loop/reviewer-loop-state";
 import { containsBareCopilotSummon } from "@dev-loops/core/github/copilot-helpers";
-import { parseUiReviewReportCliArgs, loadScreenshot, publishGist, runCli } from "../../scripts/loop/ui-review-report.mjs";
+import { parseUiReviewReportCliArgs, loadScreenshot, loadStateScreenshots, publishGist, runCli } from "../../scripts/loop/ui-review-report.mjs";
 import { makeGhMock } from "../_helpers.mjs";
 
 const HEAD_SHA = "a".repeat(40);
@@ -357,6 +357,37 @@ test("CLI: parses required args, submit-authorized and dry-run default off", () 
   assert.equal(opts.submitAuthorized, false);
   assert.equal(opts.dryRun, false);
   assert.throws(() => parseUiReviewReportCliArgs(["--diagnose-result", "d.json", "--html-output", "o.html"]), /Missing required --pr/);
+});
+
+test("named states: 0-finding HTML has one labeled img per state; unreadable and oversize states get a stated cap (#2855)", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "ui-review-states-"));
+  const prefixLen = "data:image/png;base64,".length;
+  const maxRawBytes = 3 * Math.floor((ARTIFACT_MAX_SCREENSHOT_BYTES - prefixLen) / 4);
+  const mk = (name, bytes) => {
+    const p = path.join(dir, name);
+    writeFileSync(p, Buffer.alloc(bytes));
+    return p;
+  };
+  const caps = [];
+  const states = loadStateScreenshots([
+    { flow: "home", step: "<load>", screenshotPath: mk("a.png", 10) },
+    { flow: "cart", step: "open", screenshotPath: mk("b.png", 10) },
+    { flow: "big", step: "x", screenshotPath: mk("big.png", maxRawBytes + 1) },
+    { flow: "gone", step: "y", screenshotPath: path.join(dir, "missing.png") },
+    { flow: "nopath", step: "z" },
+  ], caps);
+  assert.equal(states.length, 2);
+  assert.equal(caps.length, 2);
+  assert.ok(caps.some((c) => /omitted/.test(c) && /big\.png/.test(c)));
+  assert.ok(caps.some((c) => /not readable/.test(c) && /missing\.png/.test(c)));
+  const { html } = buildArtifactHtml({ findings: [], counts: { total: 0 }, pr: { number: 1, headSha: HEAD_SHA }, states, generatedAt: "t" });
+  assert.equal((html.match(/<img /g) ?? []).length, 2);
+  assert.match(html, /Named states/);
+  assert.match(html, /home \/ &lt;load&gt;/);
+  // Defense in depth: buildArtifactHtml re-applies the cap to an oversize inline state.
+  const over = buildArtifactHtml({ findings: [], pr: {}, states: [{ flow: "f", step: "s", path: "/p", dataUri: "x".repeat(ARTIFACT_MAX_SCREENSHOT_BYTES + 1) }] });
+  assert.equal((over.html.match(/<img /g) ?? []).length, 0);
+  assert.ok(over.caps.some((c) => /state screenshot omitted/.test(c)));
 });
 
 test("loadScreenshot: raw-file cap agrees with the data-URI budget (no read-then-drop)", () => {

@@ -7,7 +7,8 @@
  *
  *   1. create-or-reuse the PR worktree (fetch before) and provision it
  *   2. refuse to operate in the primary checkout (worktree guard)
- *   3. install ONLY the dependency-lock delta vs. the primary checkout
+ *   3. install ONLY the dependency-lock delta vs. the primary checkout (or a
+ *      full frozen install when the worktree has no node_modules)
  *   4. run pending dev-DB migrations; a destructive one stops for explicit ack
  *   5. resolve a per-project run recipe (no app is ever guessed)
  *   6. boot the app and poll an HTTP readiness probe (never a fixed sleep)
@@ -46,7 +47,9 @@ const MUST_FIX = "must-fix";
  * @param {(worktreePath:string)=>Promise<object|null>} seams.resolveRunRecipe
  * @param {(a:{worktreePath:string,recipe:object,runCwd:string})=>Promise<{pending:string[],destructive:string[],detail:string}>} seams.inspectMigrations — MUST run in `runCwd` (the guard-validated absolute cwd), never re-derive it
  * @param {(a:{worktreePath:string,recipe:object,runCwd:string})=>Promise<{ok:boolean,applied:number,detail:string}>} seams.applyMigrations — MUST run in `runCwd`
- * @param {(a:{worktreePath:string,recipe:object,runCwd:string})=>Promise<{pid:number|null,detail:string}>} seams.bootApp — MUST run in `runCwd`
+ * @param {(a:{worktreePath:string,recipe:object,runCwd:string,pr:number})=>Promise<{pid:number|null,detail:string,logFile?:string,exited?:()=>({code:number|null,signal:string|null}|null),logTail?:()=>string}>} seams.bootApp — MUST run in `runCwd`.
+ *   Optional `exited()`/`logTail()`/`logFile`: when `exited()` returns a value after a
+ *   failed probe, the poll stops at once with a `boot-exited` finding (exit code/signal + log tail).
  * @param {(url:string)=>Promise<boolean>} seams.probe
  * @param {(ms:number)=>Promise<false> & {clear?:()=>void}} [seams.probeTimeout] -
  *   Per-attempt cap: resolves false once `ms` elapses, so a hung probe can't
@@ -239,7 +242,7 @@ export async function provisionAndBoot(
   }
 
   // 6. Boot the app, then poll the readiness probe against an explicit deadline.
-  const boot = await bootApp({ worktreePath, recipe, runCwd });
+  const boot = await bootApp({ worktreePath, recipe, runCwd, pr });
   record(`app booting (pid ${boot.pid ?? "n/a"}): ${boot.detail}`);
 
   const timeoutMs = recipe.readyTimeoutMs;
@@ -247,6 +250,7 @@ export async function provisionAndBoot(
   const deadline = now() + timeoutMs;
   let ready = false;
   let attempts = 0;
+  let exitInfo = null;
   // Bounded poll (never a fixed sleep): probe, then wait one interval, until the
   // deadline. The injected clock/delay make the timeout deterministic in tests.
   while (now() <= deadline) {
@@ -269,11 +273,41 @@ export async function provisionAndBoot(
       ready = true;
       break;
     }
+    // Early exit: a boot process that already died can never become ready, so
+    // stop now with its exit status and output tail instead of waiting out the deadline.
+    const exit = boot.exited?.();
+    if (exit) {
+      exitInfo = exit;
+      break;
+    }
     if (now() + intervalMs > deadline) break; // would overshoot the deadline
     await delay(intervalMs);
   }
 
   const bootResult = { pid: boot.pid ?? null, ready, attempts, readyUrl: recipe.readyUrl, timeoutMs, intervalMs };
+  if (boot.logFile) bootResult.logFile = boot.logFile;
+  if (!ready && exitInfo) {
+    const code = exitInfo.code ?? null;
+    const signal = exitInfo.signal ?? null;
+    const tail = boot.logTail?.() ?? "";
+    bootResult.exitCode = code;
+    bootResult.exitSignal = signal;
+    const how = code !== null ? `code ${code}` : `signal ${signal}`;
+    record(`boot process exited early (${how}) after ${attempts} probe attempt(s)`);
+    return stop(
+      `boot command exited early (${how}) before the app became ready`,
+      {
+        kind: "boot-exited",
+        severity: MUST_FIX,
+        message: `boot command exited (${how}) before ${recipe.readyUrl} became ready${boot.logFile ? `; log: ${boot.logFile}` : ""}\n${tail}`.trimEnd(),
+        exitCode: code,
+        exitSignal: signal,
+        logFile: boot.logFile ?? null,
+        logTail: tail,
+      },
+      { worktreePath, depInstall, migrations, boot: bootResult },
+    );
+  }
   if (!ready) {
     record(`boot timeout: not ready after ${timeoutMs}ms (${attempts} probe attempt(s)) at ${recipe.readyUrl}`);
     return stop(

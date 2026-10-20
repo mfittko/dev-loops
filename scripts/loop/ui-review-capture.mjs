@@ -10,6 +10,7 @@
  * alongside its own fixture-server helpers; the stage-envelope helpers
  * (`toStopReason`, `STOP_REASON_MAX_CHARS`) are imported from here directly.
  */
+import { createRequire } from "node:module";
 import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 
@@ -228,17 +229,26 @@ export function buildNamedUiStateArtifactPaths({ outputDir, sliceId, stateName, 
 }
 
 // Run axe-core against the live page via @axe-core/playwright, best-effort.
-// The import is dynamic (and try/catch-wrapped) on purpose: axe only runs
-// against a real Playwright page, so mock-page smokes/tests and browser builds
-// where axe can't load degrade to a deterministic JSON null rather than throwing
-// — mirroring the snapshot.json best-effort policy. Real UI smokes install
-// @axe-core/playwright and get populated results.
-async function defaultRunAxe(page) {
+// The package is resolved from the reviewed worktree first (a globally installed
+// dev-loops has no @axe-core/playwright next to it), then from dev-loops itself.
+// Any failure yields a STATED skip object ({ skipped, reason }) written into
+// axe.json — never a silent null — so the run output says why axe had nothing.
+export async function defaultRunAxe(page, worktree = process.cwd(), importFallback = () => import('@axe-core/playwright')) {
+  let mod;
   try {
-    const { default: AxeBuilder } = await import('@axe-core/playwright');
-    return (await new AxeBuilder({ page }).analyze()) ?? null;
+    mod = createRequire(path.join(worktree, 'package.json'))('@axe-core/playwright');
   } catch {
-    return null;
+    try {
+      mod = await importFallback();
+    } catch {
+      return { skipped: true, reason: `axe: @axe-core/playwright not resolvable from ${worktree} or dev-loops` };
+    }
+  }
+  try {
+    const AxeBuilder = mod.default ?? mod.AxeBuilder ?? mod;
+    return (await new AxeBuilder({ page }).analyze()) ?? { skipped: true, reason: 'axe: analyze returned no results' };
+  } catch (error) {
+    return { skipped: true, reason: `axe: analyze failed: ${error?.message ?? error}` };
   }
 }
 
@@ -253,7 +263,7 @@ function defaultCaptureConsole() {
   return null;
 }
 
-export async function captureNamedUiState({ page, testInfo, sliceId, stateName, viewport, interactionState, metadata = {}, fullPage = true, outputDir, runAxe = defaultRunAxe, captureConsole = defaultCaptureConsole } = {}) {
+export async function captureNamedUiState({ page, testInfo, sliceId, stateName, viewport, interactionState, metadata = {}, fullPage = true, outputDir, runAxe = defaultRunAxe, repoRoot = process.cwd(), captureConsole = defaultCaptureConsole } = {}) {
   const resolvedOutputDir = outputDir ?? testInfo?.project?.outputDir ?? testInfo?.config?.outputDir ?? testInfo?.outputDir;
   const paths = buildNamedUiStateArtifactPaths({
     outputDir: resolvedOutputDir,
@@ -297,11 +307,11 @@ export async function captureNamedUiState({ page, testInfo, sliceId, stateName, 
   // Computed a11y facts: axe-core results next to the pixels/tree. Best-effort
   // for the same reason as the snapshot (see defaultRunAxe); either way a
   // deterministic JSON payload (raw axe results, or null) is emitted, never skipped.
-  let axeResults = null;
+  let axeResults;
   try {
-    axeResults = (await runAxe(page)) ?? null;
-  } catch {
-    axeResults = null;
+    axeResults = (await runAxe(page, repoRoot)) ?? { skipped: true, reason: 'axe: runner returned no results' };
+  } catch (error) {
+    axeResults = { skipped: true, reason: `axe: runner failed: ${error?.message ?? error}` };
   }
   await writeFile(paths.axePath, `${JSON.stringify(axeResults, null, 2)}\n`, 'utf8');
 

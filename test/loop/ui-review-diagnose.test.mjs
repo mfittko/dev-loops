@@ -341,3 +341,18 @@ test("LOOP_INFO_SCRIPT resolves to the real sibling loop-info script (the CLI no
   assert.ok(LOOP_INFO_SCRIPT.endsWith("scripts/loop/info.mjs"), LOOP_INFO_SCRIPT);
   assert.ok(existsSync(LOOP_INFO_SCRIPT), `loop-info script must exist at ${LOOP_INFO_SCRIPT}`);
 });
+
+test("diagnoseFailures: passes one state per capture with a screenshot, with 0 failures too (#2855)", () => {
+  const captures = [
+    { flow: "home", step: "load", screenshotPath: "/o/a.png", statePath: "/o/a.json" },
+    { flow: "home", step: "no-shot", screenshotPath: null },
+    { flow: "cart", step: "open", screenshotPath: "/o/b.png" },
+  ];
+  const { ok, states } = diagnoseFailures({ failures: [], captures, diffOutput: "" });
+  assert.equal(ok, true);
+  assert.deepEqual(states, [
+    { flow: "home", step: "load", screenshotPath: "/o/a.png" },
+    { flow: "cart", step: "open", screenshotPath: "/o/b.png" },
+  ]);
+  assert.deepEqual(diagnoseFailures({}).states, []);
+});

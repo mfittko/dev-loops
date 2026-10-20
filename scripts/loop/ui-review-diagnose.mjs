@@ -142,14 +142,14 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   const pr = loadPrInfo(options.pr, repo, cwd);
   const diffOutput = loadPrDiff(options.pr, repo, cwd);
 
-  const { findings, counts } = diagnoseFailures({
+  const { findings, counts, states } = diagnoseFailures({
     failures: Array.isArray(drive.failures) ? drive.failures : [],
     captures: Array.isArray(drive.captures) ? drive.captures : [],
     diffOutput,
   });
 
   // ok reflects a clean review (no findings), consistent with the drive stage.
-  const result = { ok: counts.total === 0, pr, findings, counts };
+  const result = { ok: counts.total === 0, pr, findings, counts, states };
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: result.ok });
 }
 

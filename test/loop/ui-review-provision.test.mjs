@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { provisionAndBoot } from "@dev-loops/core/loop/ui-review-provision";
 import { loadDevLoopConfig, resolveUiReviewRunRecipe, DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN } from "@dev-loops/core/config";
-import { parseUiReviewProvisionCliArgs, ensureOwnNodeModules, inspectMigrations, assertNotPrimary, ensureWorktreeNoInstall } from "../../scripts/loop/ui-review-provision.mjs";
+import { parseUiReviewProvisionCliArgs, ensureOwnNodeModules, inspectMigrations, assertNotPrimary, ensureWorktreeNoInstall, detectLockfile, detectDepDelta, installDeps, bootApp, tailLines } from "../../scripts/loop/ui-review-provision.mjs";
 import { parseMainWorktreePath } from "@dev-loops/core/loop/worktree-guard";
 import { execFileSync } from "node:child_process";
 
@@ -532,4 +532,106 @@ test("ensureWorktreeNoInstall skips the install in ensureWorktree", async () => 
   });
   assert.deepEqual(seen.opts.installDeps(), { ran: false, ok: true });
   assert.deepEqual(result, { path: "/w", created: true, reused: false });
+});
+
+// ---- #2855 gap 1: lockfile-aware install + boot log/early exit ----
+
+function lockFixture(files, { nodeModules = true } = {}) {
+  const dir = mkdtempSync(path.join(tmpdir(), "ui-lock-"));
+  tempRoots.push(dir);
+  for (const f of files) writeFileSync(path.join(dir, f), "lock\n");
+  if (nodeModules) mkdirSync(path.join(dir, "node_modules"));
+  return dir;
+}
+
+test("detectLockfile: picks bun/pnpm/npm/yarn; unknown lockfile and none yield null; first in table wins", () => {
+  for (const lock of ["bun.lock", "pnpm-lock.yaml", "package-lock.json", "yarn.lock"]) {
+    assert.equal(detectLockfile(lockFixture([lock]))?.lock, lock);
+  }
+  assert.equal(detectLockfile(lockFixture(["Gemfile.lock"])), null);
+  assert.equal(detectLockfile(lockFixture([])), null);
+  assert.equal(detectLockfile(lockFixture(["yarn.lock", "pnpm-lock.yaml"]))?.lock, "pnpm-lock.yaml");
+});
+
+test("detectDepDelta: fresh pnpm worktree without node_modules reports a delta even with identical locks", async () => {
+  const primary = lockFixture(["pnpm-lock.yaml"]);
+  const wt = lockFixture(["pnpm-lock.yaml"], { nodeModules: false });
+  const d = await detectDepDelta({ repoRoot: primary, worktreePath: wt });
+  assert.equal(d.changed, true);
+  assert.match(d.detail, /no node_modules/);
+});
+
+test("detectDepDelta: identical lock with node_modules is unchanged; differing lock is changed; no lockfile is stated", async () => {
+  const primary = lockFixture(["package-lock.json"]);
+  assert.equal((await detectDepDelta({ repoRoot: primary, worktreePath: lockFixture(["package-lock.json"]) })).changed, false);
+  const wt = lockFixture([]);
+  writeFileSync(path.join(wt, "package-lock.json"), "different\n");
+  assert.equal((await detectDepDelta({ repoRoot: primary, worktreePath: wt })).changed, true);
+  const none = await detectDepDelta({ repoRoot: primary, worktreePath: lockFixture([]) });
+  assert.equal(none.changed, false);
+  assert.match(none.detail, /no supported lockfile/);
+});
+
+test("installDeps: runs the frozen install matching the lockfile (injected exec, no real install)", async () => {
+  const expected = {
+    "bun.lock": [`${process.env.BUN_BIN || "bun"}`, ["install", "--frozen-lockfile"]],
+    "pnpm-lock.yaml": ["pnpm", ["install", "--frozen-lockfile"]],
+    "package-lock.json": ["npm", ["ci"]],
+    "yarn.lock": ["yarn", ["install", "--frozen-lockfile"]],
+  };
+  for (const [lock, [bin, args]] of Object.entries(expected)) {
+    const calls = [];
+    const wt = lockFixture([lock]);
+    const r = await installDeps({ worktreePath: wt }, (b, a, o) => calls.push([b, a, o.cwd]));
+    assert.equal(r.ok, true);
+    assert.deepEqual(calls, [[bin, args, wt]]);
+  }
+  const noLock = await installDeps({ worktreePath: lockFixture([]) }, () => assert.fail("must not exec"));
+  assert.equal(noLock.ok, false);
+  const failing = await installDeps({ worktreePath: lockFixture(["yarn.lock"]) }, () => { throw Object.assign(new Error("x"), { stderr: "boom" }); });
+  assert.deepEqual(failing, { ok: false, detail: "boom" });
+});
+
+test("boot-exited: an already-exited boot stops on the first poll with code, log tail and log path (not the timeout)", async () => {
+  const root = makeFixture(RECIPE_YAML);
+  let probes = 0;
+  const { seams } = baseSeams(root, {
+    probe: async () => { probes += 1; return false; },
+    bootApp: async ({ pr }) => ({ pid: 1, detail: "spawned", logFile: `/tmp/boot-${pr}.log`, exited: () => ({ code: 3, signal: null }), logTail: () => "sh: next: command not found" }),
+  });
+  const result = await provisionAndBoot({ repoRoot: "/main", pr: 9 }, seams);
+  assert.equal(result.stopped, true);
+  assert.equal(probes, 1);
+  assert.match(result.stopReason, /exited early \(code 3\)/);
+  const f = result.findings.find((x) => x.kind === "boot-exited");
+  assert.equal(f.severity, "must-fix");
+  assert.equal(f.exitCode, 3);
+  assert.match(f.message, /command not found/);
+  assert.match(f.message, /boot-9\.log/);
+  assert.equal(result.boot.exitCode, 3);
+  assert.equal(result.boot.logFile, "/tmp/boot-9.log");
+  assert.ok(!result.findings.some((x) => x.kind === "boot-timeout"));
+});
+
+test("boot-exited: a signal exit is reported; a still-running boot keeps polling to the timeout", async () => {
+  const sig = baseSeams(makeFixture(RECIPE_YAML), { bootApp: async () => ({ pid: 1, detail: "s", exited: () => ({ code: null, signal: "SIGKILL" }) }) });
+  const r1 = await provisionAndBoot({ repoRoot: "/main", pr: 1 }, sig.seams);
+  assert.match(r1.stopReason, /signal SIGKILL/);
+  const running = baseSeams(makeFixture(RECIPE_YAML), { bootApp: async () => ({ pid: 1, detail: "s", exited: () => null }) });
+  const r2 = await provisionAndBoot({ repoRoot: "/main", pr: 1 }, running.seams);
+  assert.ok(r2.findings.some((x) => x.kind === "boot-timeout"));
+});
+
+test("bootApp: real spawn writes stdout+stderr to boot.log and reports the exit", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "ui-boot-"));
+  tempRoots.push(dir);
+  const boot = await bootApp({ recipe: { command: "echo boom; echo err >&2; exit 3" }, runCwd: dir, pr: 990000 + (process.pid % 1000) });
+  tempRoots.push(path.dirname(boot.logFile));
+  for (let i = 0; i < 100 && !boot.exited(); i += 1) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(boot.exited().code, 3);
+  assert.match(boot.logTail(), /boom/);
+  assert.match(boot.logTail(), /err/);
+  assert.equal(tailLines(path.join(dir, "missing.log")), "");
+  writeFileSync(path.join(dir, "n.log"), "a\nb\nc\nd\n");
+  assert.equal(tailLines(path.join(dir, "n.log"), 2), "c\nd");
 });
