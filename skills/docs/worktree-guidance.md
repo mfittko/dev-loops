@@ -18,6 +18,17 @@ recomputable from the issue/PR number alone. `resolveWorktreePath({ repoRoot, ki
 number })` in `packages/core/src/loop/handoff-envelope.mjs` is the sole resolver for
 create, provision, and cleanup.
 
+This acquisition naming rule does not rename an existing PR checkout. Handoff
+binding verifies the live PR's repository/head branch against registered isolated
+checkouts, so an existing `issue-<number>` checkout can remain the PR's cwd.
+It carries PR-body authority only when the existing refinement owner validates
+the same live PR payload; the directory name supplies no spec authority.
+The `ui_review` strategy retains its provisioning owner instead: it creates or
+reuses the canonical PR checkout, checks isolation and detaches at the PR head.
+Its handoff does not require an existing branch checkout before provisioning or
+on detached resume.
+See [Workflow Handoff — Derivation Contract](./workflow-handoff-contract.md#authoritative-sources).
+
 - The `dev-loops/` namespace marks loop-owned worktrees, so cleanup never
   touches a hand-made `tmp/worktrees/my-experiment`.
 - Do not use ad hoc locations such as `tmp/copilot-loop/`, repo-root
@@ -107,6 +118,7 @@ worktree:
 - **Fail-soft:** a missing source or an empty glob logs one warning and continues
   — provisioning never aborts init. Idempotent on worktree reuse.
 - **Opt-in:** empty/absent by default; no baked-in file list.
+- In a dev-loops checkout (`package.json` name `dev-loops` plus `agents/`), provisioning also renders `.pi/agents` from the worktree's own `agents/` and reports a `mode: "render"` action that the summary does not count. It skips the render, with a `mode: "skip"` action, when the branch still tracks `.pi/agents` (decision record 0173).
 - **Not for `node_modules`:** `ensure-worktree` installs them in a newly created worktree via `bun install --frozen-lockfile` (`WORKTREE-DEPS-ISOLATED`).
 
 Run manually with:

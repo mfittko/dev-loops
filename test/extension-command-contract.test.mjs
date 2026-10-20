@@ -150,7 +150,7 @@ test("session_start syncs the project-local .pi/agents (symlink replaced with Pi
   const previousHome = process.env.HOME;
   const tempHome = await mkdtemp(path.join(os.tmpdir(), "dev-loops-session-project-"));
   process.env.HOME = tempHome;
-  // A project root with a .pi/agents -> ../agents symlink (the dev-loops repo convention).
+  // A project root with a .pi/agents -> ../agents symlink (the legacy layout).
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-session-project-cwd-"));
   const projectAgentsDir = path.join(projectRoot, ".pi", "agents");
   await mkdir(path.join(projectRoot, ".pi"), { recursive: true });
@@ -190,7 +190,10 @@ test("session_start syncs the project-local .pi/agents (symlink replaced with Pi
     // The neutral source the symlink pointed at is untouched (no write-through).
     const sourceFixer = await readFile(path.join(sourceAgentsDir, "fixer.agent.md"), "utf8");
     assert.ok(sourceFixer.includes("search"), "source fixer must still keep neutral `search`");
-    assert.ok(sourceFixer.includes("execute"), "source fixer must still keep neutral `execute`");
+    const sourceTools = (sourceFixer.match(/^tools:\s*(.*)$/m)?.[1] ?? "").split(/[\s,]+/).filter(Boolean);
+    assert.ok(sourceTools.includes("search"), "source fixer must keep `search` in its tools line");
+    assert.ok(sourceTools.includes("bash"), "source fixer must keep `bash` in its tools line");
+    assert.equal(sourceTools.includes("execute"), false, "source fixer must not declare `execute`");
   } finally {
     if (previousHome === undefined) {
       delete process.env.HOME;

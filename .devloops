@@ -182,16 +182,20 @@ localImplementation:
 # cost. The token is a member of the Claude Code Agent-tool `model` enum
 # (sonnet|opus|haiku|fable); a full model id is rejected at dispatch. The pin is
 # explicit so a session started on another model cannot change the reviewer.
-# The tier sets `claude` to `opus` and `pi` to openai-codex/gpt-6-sol — a
+# The tier sets `claude` to `opus` and `pi` to openai-codex/gpt-6.1-sol — a
 # native OpenAI-Codex child model served by pi's own openai-codex (Codex
 # Responses) provider. The model is never hardcoded in phase prose/tooling — it
 # is resolved via resolveRoleModel(config, { role: "pre-push-reviewer", harness }).
 #
 # Regular vs. strong split: the regular tier (`low`) runs the routine roles
-# (developer, fixer, docs, quality) on Claude's `sonnet` family token. It sets
-# no Pi model, so those roles inherit the conductor's model on Pi. The strong
-# tier (`high`) keeps review, refiner and every gate angle on `opus`.
-# `pre-pr-strong` stays the pre-push reviewer's tier, with its own Pi model.
+# (developer, fixer, docs, quality) on Claude's `sonnet` family token. On Pi it
+# carries the operator's free Ollama-hosted model, so those roles get a
+# deliberate cheap-model choice there instead of inheriting the conductor's
+# model. The strong tier (`high`) keeps review, judge, refiner and every gate
+# angle on `opus` on Claude. `pre-pr-strong` stays the pre-push reviewer's tier.
+# Pi pins: low = ollama-cloud/minimax-m3.1-flash; high and pre-pr-strong =
+# openai-codex/gpt-6.1-sol. The reviewers check the cheap model's output, so
+# the review tiers never use the free model.
 # On Claude the agents' `model:` frontmatter is baked from the built-in policy
 # (the judge pins `opus` through `claudeModel` in its canonical frontmatter).
 # The orchestrator's dispatch-time model parameter selects `sonnet` for the
@@ -200,13 +204,16 @@ models:
   tiers:
     low:
       claude: sonnet
+      pi: ollama-cloud/minimax-m3.1-flash
     high:
       claude: opus
+      pi: openai-codex/gpt-6.1-sol
     pre-pr-strong:
       claude: opus
-      pi: openai-codex/gpt-6-sol
+      pi: openai-codex/gpt-6.1-sol
   roleTiers:
     pre-push-reviewer: pre-pr-strong
+    judge: high
     developer: low
     fixer: low
 
@@ -248,12 +255,12 @@ standingAuthorizations:
     expires: 2027-01-03
     reason: Queue drain; waive contract-doc tripwires that record no new decision
 
-# Gate validation (ADR 0137, amends ADR 0105). This repo keeps local full
-# validation; consumers default to ci-only. `paths` is this repo's targeted
+# Gate validation (ADR 0137, amends ADR 0105). This repo uses the ci producer
+# (ADR 0137 as amended by ADR 0172). `paths` is this repo's targeted
 # worker map for resolveTargetedValidation: first match wins per path, then
 # union checks; an empty command list pins matching paths to full validation.
 validation:
-  mode: local
+  mode: ci-only
   paths:
     - { match: ["skills/docs/**", "skills/*/SKILL.md"], surface: docs, commands: ["bun run test:docs", "bun run test:doc-guard", "bun scripts/run-bun-test.mjs --referencing {path}"] }
     - { match: "changes/*.md", surface: changeset, commands: ["bun run test:docs"] }

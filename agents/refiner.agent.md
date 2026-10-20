@@ -1,7 +1,7 @@
 ---
 name: "refiner"
 description: "Use for refining one approved implementation phase at a time into a complete, testable plan with acceptance criteria, definition of done, risks, non-goals, unresolved questions, and RFC escalation notes. Keywords: refiner, phase refinement, acceptance criteria, definition of done, RFC escalation, merged plan."
-tools: read, search, execute, bash, edit, write
+tools: read, search, bash, edit, write
 argument-hint: "Active phase doc or rough plan, phase boundary, known constraints, and any prior planning artifacts to refine."
 systemPromptMode: append
 inheritProjectContext: true
@@ -41,6 +41,7 @@ For the active phase, require and produce:
 - include every explicit acceptance criterion, definition-of-done item, and non-goal; do not skip items
 - <!-- rule: REFINER-DOD-PROPOSED-SUBSECTION --> `REFINER-DOD-PROPOSED-SUBSECTION`: if no explicit definition of done exists, add a `Proposed DoD` subsection before the matrix
 - a size forecast per slice that follows `PLAN-SIZE-BAND` in [Local planning](../skills/docs/local-planning.md#size-estimate-refinement), including its `## Size forecast` section and the split and merge assessments
+- a `## Simplest design` section per issue and per slice that follows `DESIGN-SIMPLEST-FIRST` in [Structural quality](../skills/docs/structural-quality.md): the minimal approach, the rejected alternatives with reasons, and a cost comparison of the slice against the cost of the problem
 - explicit risks, watchpoints, and unresolved questions
 - validation steps and tests to write first
 - durable decisions that SHOULD be preserved in the phase doc

@@ -164,6 +164,9 @@ inconsistent record is a full re-gate. The validator never re-derives blob facts
 git, so a consumer re-runs `computeBaseMergeCarry` for the bound heads and compares before
 trusting the recorded facts. ADR 0156 records this rule.
 
+<!-- rule: GATE-EXEC-LOW-NIT-CONVERGENCE -->
+`GATE-EXEC-LOW-NIT-CONVERGENCE`: A `draft_gate` round at head A whose open judge act items are ALL `low` or `nit` (a non-empty list) converges after one `commit_only` fixer pass and a fresh, valid `locally_clear` pre-push delta review of the fixer commit (`PRE-PUSH-DELTA-NOT-GATE-EVIDENCE`). No further full `draft_gate` round runs. The poster updates the `draft_gate` comment at A to `clean` with `upsert-checkpoint-verdict.mjs --converged-json` and records `**Converged:** fixer <sha> delta sha256:<digest>` (the fixer commit and the digest of the clean delta result). The round converges once: one pre-push delta sequence from A, bound by the delta result baseline A and `candidateHead` = the fixer commit. `composeConvergedDraftGate` (`packages/core/src/loop/pre-push-delta-review.mjs`) refuses a non-`draft_gate` gate, an empty act list, a `medium`, `high`, `question` or unknown severity, a mixed list, an act list that differs from the round's (compared by severity and summary as a multiset with counts), a delta result that is invalid, not `locally_clear`, stale or carries a new finding. The membership-only delta check is sufficient: the act-set id and baseline A bind the result to this round, and `pre_approval_gate` reviews the final head in full. `upsert-checkpoint-verdict.mjs` requires `--findings-ledger` and takes the round's act items from the union of the ledger at A and the `--findings-json` act items (it refuses without the ledger, and a missing or unreadable ledger refuses naming the path and error), refuses a PR head other than the fixer commit, and refuses a comment at A that is already `clean` or already converged. Any refusal keeps the full round. `detect-checkpoint-evidence.mjs` re-derives the light-mode scope, risk-path and size floors for an inline marker against the marker's own head (the fixer commit). The rule takes no round count and no cap. Gate coordination reads the marker as the `draft_gate` marker of the fixer commit (`summarizeGateReviewCommentMarkers`) and returns `mark_ready_for_review`, then the mandatory `pre_approval_gate`. The `pre_approval_gate` stays a full review of the final head, and `merge-pr.mjs` is unchanged: the marker is not merge evidence. ADR 0168 records this rule.
+
 ### Phase 1 — Preamble: context-builder
 
 Before fanning out reviewers, run a preamble pass that produces review handoff context
@@ -459,7 +462,7 @@ Missing/malformed `prefixPath` or leading bytes, missing `promptContentHash`, a 
 
 **Three identities, one honest boundary.** The layout check binds recorded-layout identity to generated-file identity. The pull receipt binds delivered-task identity: `pull-work-order.mjs` writes it only after the reviewer's supplied reference matched the canonical emitted unit, and fan-in requires a matching receipt (execution, unit, digest) for every freshly dispatched unit. A missing or mismatched receipt fails closed; a receipt without the unit's result artifacts is an interrupted reviewer, never complete. Carried-only units need no receipt; their carry proof stays the authority. The remaining boundary holds for evidence reads: the sentinel proves each hashed required read still matches its recorded bytes before the reviewer starts, not that the reviewer read it in full. The per-harness delivery limitations above and `GATE-EXEC-FANOUT-DISPATCH-EMIT` still apply.
 
-Zero dispatch-prompt records do not themselves fail this check: capture remains progressive/optional for non-composer callers, including legacy offline rounds, except at a head whose gate round was retired with archived dispatch records (`GATE-EXEC-ROUND-RETIREMENT`). This does not waive the records-floor below. Recovery requires re-emitting and actually redispatching compliant prompts before reconsolidating; regenerating files cannot certify old delivery. For unchanged prefix bytes, use the same-head retry guard below. For changed bytes, follow `GATE-EXEC-ROUND-RETIREMENT`: retire before rebuilding, then redispatch. Preserve the original review history and audit records.
+Zero dispatch-prompt records do not themselves fail this check: capture remains progressive/optional for non-composer callers, including legacy offline rounds, except at a head whose gate round was retired with archived dispatch records (`GATE-EXEC-ROUND-RETIREMENT`) or an `--emit-plan` with a fresh unit and zero dispatch-prompt records for its gate at the head (refused, `GATE-EXEC-FANOUT-DISPATCH-EMIT`). This does not waive the records-floor below. Recovery requires re-emitting and actually redispatching compliant prompts before reconsolidating; regenerating files cannot certify old delivery. For unchanged prefix bytes, use the same-head retry guard below. For changed bytes, follow `GATE-EXEC-ROUND-RETIREMENT`: retire before rebuilding, then redispatch. Preserve the original review history and audit records.
 
 **Records-floor.** A coordinator round that records ZERO dispatch/briefing evidence for a gate that DID dispatch units is closed mechanically: the Phase-1 request-plan artifact (`tmp/gate-context/**/<gate>-<headSha>.dispatch-plan.json`, written by `write-gate-context.mjs`) is the AUTHORITY for whether the round dispatched units. When `--head-sha` is given, fan-in derives the expected dispatch-unit floor from every persisted plan for the head (the total pending angles across `requestGroups`) and FAILS CLOSED when the plan expects units but the round recorded zero reviewer sentinels. `verify-briefing-prefixes` correspondingly no longer returns `verified: true` for `sentinels.length === 0` when the plan-derived unit count is positive. A genuinely zero-unit gate (a plan whose `requestGroups` carry no angles, e.g. an all-carried round) is not forced to fail, and a corrupt or unparseable plan artifact fails closed (the plan is the enforcement authority, never silently ignorable). The optional `--expected-dispatch-units` flag still reconciles the EXACT unit count when the caller knows it; the plan, not the flag, decides whether units were expected at all.
 
@@ -643,7 +646,11 @@ emit-plan key" / "is stamped for ... but this round consolidates ...") before an
 `--out`/`--ledger-out` write. A rejected invocation writes no new output and
 preserves pre-existing caller-owned files at those paths; callers MUST honor the
 non-zero exit and MUST NOT infer success from path existence. The
-plan is not a findings or provenance source. The gate-context bundle's
+plan is not a findings source. With it, the ledger gains a `provenance` derived
+from the head-stamped artifacts, the plan units and `--carry-forward-plan`; the
+same ledger is also written to the keyed `<gate>-<headSha>.fanin-ledger.json`
+(`buildGateFaninLedgerPath`) under `--tmp-root` (the root the plan was emitted under; a stale keyed file is removed once the emit-plan key is verified and the path is the canonical emit-plan path, before any later refusal or write; a run refused by either guard leaves a prior keyed file in place), and a plan with a fresh unit but zero dispatch-prompt
+records of its gate at the head FAILS CLOSED. Fan-in refuses (exit 1, no write) an `--emit-plan` that is not the canonical emit-plan path (`buildGateEmitPlanPath`) for the resolved `--tmp-root`, and a verified `--emit-plan` lifts the over-budget `--ledger-out` requirement because the keyed ledger is the durable record. The gate-context bundle's
 `fanout.groups` stays authoritative. The plan names the freshly dispatched
 units whose pull receipts fan-in requires. On the sanctioned fan-out
 path, pass the same keyed plan to the later `write-gate-findings-log.mjs` call
@@ -652,8 +659,8 @@ additionally verifies the full round key (`repo`, `pr`, `gate`, `headSha`) and
 that the caller-supplied fresh provenance corresponds exactly to the emitted
 units: the same angle set and group per angle, one reviewer identity per emitted
 unit, and no under-reported `distinctReviewers` count. Carried rows are outside
-the fresh emit plan and remain governed by the carry-forward proof. This second
-use is still a guard only: it never derives provenance or findings from the
+the fresh emit plan and remain governed by the carry-forward proof. For `write-gate-findings-log.mjs` the plan
+is a guard only: it never derives provenance or findings from the
 plan, and omitting it preserves the findings-log writer's current behavior.
 
 Merge the parallel reviewer findings into one consolidated fix plan with the
@@ -668,9 +675,9 @@ dev-loops-run cli/index.mjs gate consolidate-fanin --repo <owner/name> --pr <n> 
   [--carried-angles <json> --carry-forward-plan <json>]
 ```
 
-(`scripts/loop/consolidate-fanin.mjs`), a thin wrapper over the pure `consolidateFanin` pass from `@dev-loops/core/loop/gate-fanin`, never manual concatenation and never an inline interpreter over the artifacts. Pass `--head-sha <sha>` (the round's reviewed head) on every round (the fail-closed stamp rule is `GATE-EXEC-ARTIFACT-HEAD-STAMP`); `--gate` applies that gate's `blockCleanOnFindingSeverities` to the overall verdict (omitted: the shipped `["high"]` default). This ONE invocation reads the per-angle artifacts directory and emits `findingsJson` (`--out <path>`, the nested per-angle shape `upsert-checkpoint-verdict.mjs --findings-json` accepts, clean angles included) and the `{ overallVerdict, findings, verifiedItems? }` wrapper (`--ledger-out <path>`), the exact `--findings-file` input `write-gate-findings-log.mjs` and `post-gate-findings.mjs` accept (the former threads `overallVerdict` into the durable ledger, #1616; the latter ignores it). It upserts the mandatory `pr-checklist` entry when asked (`--pr-checklist clean`, the fan-in bookkeeping entry; the pre-approval unchecked-box block of #1877 enforces completeness, see [Acceptance Criteria Verification](acceptance-criteria-verification.md)). Its stdout result carries `overallVerdict`, `severityCounts` (the true, unbudgeted totals) and the `out`/`ledgerOut` paths; narrow it with `--jq '.severityCounts'` (as above). It FAILS CLOSED (exit 1, naming the offending angles) when any per-angle artifact is malformed or itself blocked, so fix or re-run the offending reviewer first.
+(`scripts/loop/consolidate-fanin.mjs`), a thin wrapper over the pure `consolidateFanin` pass from `@dev-loops/core/loop/gate-fanin`, never manual concatenation and never an inline interpreter over the artifacts. Pass `--head-sha <sha>` (the round's reviewed head) on every round (the fail-closed stamp rule is `GATE-EXEC-ARTIFACT-HEAD-STAMP`); `--gate` applies that gate's `blockCleanOnFindingSeverities` to the overall verdict (omitted: the shipped `["high"]` default). This ONE invocation reads the per-angle artifacts directory and emits `findingsJson` (`--out <path>`, the nested per-angle shape `upsert-checkpoint-verdict.mjs --findings-json` accepts, clean angles included) and the `{ overallVerdict, findings, verifiedItems?, provenance? }` wrapper (`--ledger-out <path>`; `provenance?` is present only with `--emit-plan`), the exact `--findings-file` input `write-gate-findings-log.mjs` and `post-gate-findings.mjs` accept (the former threads `overallVerdict` into the durable ledger, #1616; the latter ignores it). It upserts the mandatory `pr-checklist` entry when asked (`--pr-checklist clean`, the fan-in bookkeeping entry; the pre-approval unchecked-box block of #1877 enforces completeness, see [Acceptance Criteria Verification](acceptance-criteria-verification.md)). Its stdout result carries `overallVerdict`, `severityCounts` (the true, unbudgeted totals) and the `out`/`ledgerOut` paths; narrow it with `--jq '.severityCounts'` (as above). It FAILS CLOSED (exit 1, naming the offending angles) when any per-angle artifact is malformed or itself blocked, so fix or re-run the offending reviewer first.
 
-`--carried-angles <json>` (a JSON array of angle-name strings, Phase 1.2's `plan.carried[].angle` values) upserts the proven prior verdict and findings with `carriedFromHead: <A>` for every named angle with no Phase 2 artifact, so a carried angle stays visible to `findingsJson`, the mandatory-angle coverage check and the posted verdict comment (an angle whose artifact was never written and is NOT named here is invisible to the CLI). `--carried-angles` is PAIR-REQUIRED with both `--gate` and `--carry-forward-plan <json>` (Phase 1.2's own plan result, or just its `carried` array); the plan is the proof, checked against the SAME `angleReviewSurface` predicate `resolve-angle-carry-forward.mjs` uses, so the two can never drift. Given without its pair, or given a name that predicate refuses (a configured mandatory angle, a hardcoded `ALWAYS_INCLUDE` angle (`gate-evidence`/`renderer-security`/`pr-description`), or an unmapped/unknown angle) or absent from the plan's own `carried` list, the CLI FAILS CLOSED (exit 1) rather than mint a fabricated clean entry. The emitted `carriedFromHead` field marks ONLY an entry this flag upserted, so `--out`'s own shape, not just the ledger's `provenance.perAngle`, distinguishes carried from fresh. A `findings_present` carry retains its open findings and their blocking effect; only a clean carry has an empty findings array (legacy plans without `prevVerdict` default to clean).
+`--carried-angles <json>` (a JSON array of angle-name strings, Phase 1.2's `plan.carried[].angle` values) upserts the proven prior verdict and findings with `carriedFromHead: <A>` for every named angle with no Phase 2 artifact, so a carried angle stays visible to `findingsJson`, the mandatory-angle coverage check and the posted verdict comment (an angle whose artifact was never written and is NOT named here is invisible to the CLI). `--carried-angles` is PAIR-REQUIRED with both `--gate` and `--carry-forward-plan <json>` (Phase 1.2's own plan result, or just its `carried` array); the plan is the proof, checked against the SAME `angleReviewSurface` predicate `resolve-angle-carry-forward.mjs` uses, so the two can never drift. Given without its pair, or given a name that predicate refuses (a configured mandatory angle, a hardcoded `ALWAYS_INCLUDE` angle (`gate-evidence`/`renderer-security`/`pr-description`), or an unmapped/unknown angle) or absent from the plan's own `carried` list, the CLI FAILS CLOSED (exit 1) rather than mint a fabricated clean entry. The emitted `carriedFromHead` field marks ONLY an angle this flag declares (an upserted entry, or an existing artifact whose own headSha is not the current head), so `--out`'s own shape, not just the ledger's `provenance.perAngle`, distinguishes carried from fresh. A `findings_present` carry retains its open findings and their blocking effect; only a clean carry has an empty findings array (legacy plans without `prevVerdict` default to clean).
 
 `--out`/`--ledger-out` are also rejected at
 parse time (exit 1) when they resolve to the same path as each other, or when
@@ -729,7 +736,7 @@ Consolidation:
   `overallVerdict`. The posted review verdict composes it with the judge act list (ADR 0089,
   `GATE-COMMENT-VERDICT-VALUES`):
   - `clean`: no findings with a severity in the gate's `blockCleanOnFindingSeverities` list
-    remain, and the judge act list is empty
+    remain, and the judge act list is empty (except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168))
   - `findings_present`: one or more findings with a blocking severity remain, or the judge act
     list is not empty
   - `blocked`: the gate could not complete or a hard blocker prevented a verdict
@@ -861,9 +868,23 @@ is available to every writer for the whole round, including Phase 3's fan-in led
 conductor always runs `scripts/loop/spec-context.mjs` to derive the run's spec/digest identities
 so nothing hand-derives them:
 
+Select exactly one source from the routed canonical authority: `--issue` for a tracker
+issue, or `--pr` when `canonicalSpecSource`/`specSource` is `pr_body`. The PR path
+reads that PR's live body and head together; it never substitutes a linked or umbrella
+issue. Any supplied `--head-sha` must equal the full live PR head SHA. Both sources
+use the same formal-spec parser, digests, complete criteria and identity stamp.
+
 ```sh
 content_digest=$(node scripts/loop/spec-context.mjs --repo <owner/name> --issue <linked_issue_number> \
   --content-file <reviewed-content-path> --head-sha <current_head_sha> \
+  --spec-out <spec-path> --identity-out <identity-path> --jq '.contentDigest')
+```
+
+For the existing PR-body authority, use the same command with `--pr` instead:
+
+```sh
+content_digest=$(node scripts/loop/spec-context.mjs --repo <owner/name> --pr <pr_number> \
+  --content-file <reviewed-content-path> --head-sha <current_full_head_sha> \
   --spec-out <spec-path> --identity-out <identity-path> --jq '.contentDigest')
 ```
 
@@ -928,8 +949,8 @@ the target's number (a PR number is a valid deferral target; a PR target gets no
 link nor a follow-up draft, only its `fingerprint` and rationale (the one-line audit entry).
 Re-running `judge-pass` for the same round reads the target's existing comments first and does
 not append a fingerprint the target already lists. A thread whose finding the judge disposes
-`act` is never defer-closed; it stays open until the fixer replies with the fixing commit or a
-decline reason and resolves it (see `GATE-EXEC-THREAD-DISPOSITION`).
+`act` is never defer-closed; it stays open until the fixer's reply with the fixing commit or a
+decline reason is posted and the thread is resolved (see `GATE-EXEC-THREAD-DISPOSITION`).
 
 <!-- rule: GATE-EXEC-JUDGE-AUTHORITY-SPLIT -->
 `GATE-EXEC-JUDGE-AUTHORITY-SPLIT`: The judge owns **relevance** (is this finding for this
@@ -1055,8 +1076,8 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   medium THREAD still forces another fix round, but through the unresolved-feedback
   routing `GATE-EXEC-THREAD-DISPOSITION` owns, not by changing what the ledger verdict `clean`
   means. The posted review verdict composes the ledger verdict with the judge act list: it is
-  `clean` only when the ledger verdict is `clean` and the judge act list is empty (ADR 0089). A
-  judge `act` therefore blocks `clean` at any round, inside or outside the medium fix window.
+  `clean` only when the ledger verdict is `clean` and the judge act list is empty (ADR 0089; except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)). A
+  judge `act` therefore blocks `clean` at any round (except `GATE-EXEC-LOW-NIT-CONVERGENCE`), inside or outside the medium fix window.
   GATE-CLOSE is a third, stricter layer owned by `GATE-EXEC-THREAD-DISPOSITION` below: a clean
   verdict is NOT sufficient to close the gate, because every gate-authored review thread (any
   severity) must first be resolved. Widening the blocking
@@ -1067,11 +1088,11 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
 
 After applying fixes and advancing the head SHA:
 
-- <!-- rule: GATE-EXEC-REGATE-MANDATORY --> `GATE-EXEC-REGATE-MANDATORY`: **Re-gate is mandatory:** a new head SHA MUST always trigger a fresh full-chain gate pass; the gate MUST NOT be skipped because a previous head was clean, except where `GATE-EXEC-BASE-MERGE-VERDICT-CARRY` carries a verdict across a base-only merge (ADR 0156); that carry takes effect only once `merge-pr` and gate coordination accept the evidence (issue 2752 slice 2), and until then every new head is re-gated. The `draft_gate` one-time skip is a narrow exemption from this rule that only applies after the PR has left draft ([GATE-COMMENT-DRAFT-REQUIREMENTS](./gate-review-comment-contract.md#draft-gate-draft_gate-comment-requirements)); while the PR is still draft, every new head is re-gated per this rule. A `draft_gate` never re-runs on a non-draft PR whose draft gate is already satisfied: `write-gate-context.mjs` refuses it before any reviewer work, and a new ready head instead takes a Copilot re-request when it answers Copilot findings, and a current-head `pre_approval_gate`.
-- rerun the sub-loop from Phase 1 (context-builder preamble for the new head SHA)
-- continue the fix-then-retry cycle until the posted review verdict is `clean`
+- <!-- rule: GATE-EXEC-REGATE-MANDATORY --> `GATE-EXEC-REGATE-MANDATORY`: **Re-gate is mandatory:** a new head SHA MUST always trigger a fresh full-chain gate pass; the gate MUST NOT be skipped because a previous head was clean, except where `GATE-EXEC-BASE-MERGE-VERDICT-CARRY` carries a verdict across a base-only merge (ADR 0156); that carry takes effect only once `merge-pr` and gate coordination accept the evidence (issue 2752 slice 2), and until then every new head is re-gated; and except `GATE-EXEC-LOW-NIT-CONVERGENCE`, where an all-low/nit `draft_gate` round converges after one fixer pass and a clean pre-push delta review without a second full `draft_gate` round (ADR 0168; the `pre_approval_gate` still reviews the final head in full). The `draft_gate` one-time skip is a narrow exemption from this rule that only applies after the PR has left draft ([GATE-COMMENT-DRAFT-REQUIREMENTS](./gate-review-comment-contract.md#draft-gate-draft_gate-comment-requirements)); while the PR is still draft, every new head is re-gated per this rule. A `draft_gate` never re-runs on a non-draft PR whose draft gate is already satisfied: `write-gate-context.mjs` refuses it before any reviewer work, and a new ready head instead takes a Copilot re-request when it answers Copilot findings, and a current-head `pre_approval_gate`.
+- rerun the sub-loop from Phase 1 (context-builder preamble for the new head SHA), except where `GATE-EXEC-LOW-NIT-CONVERGENCE` converges an all-low/nit `draft_gate` round via `upsert-checkpoint-verdict.mjs --converged-json`
+- continue the fix-then-retry cycle until the posted review verdict is `clean` (or converged per `GATE-EXEC-LOW-NIT-CONVERGENCE`)
 - on retry, re-invoke every reviewer whose review surface the new head's delta touched (including any angle whose prior finding attribution is ambiguous) and every mandatory / always-run angle; the context-builder and consolidation always run fresh. Other angles are carried forward per [GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed), on that rule's proof and never on guesswork (a carried `findings_present` angle brings its open findings forward and the round still blocks on them)
-- a clean pass means all gate-specific review angles pass, no findings with a severity in `blockCleanOnFindingSeverities` remain, and the judge act list is empty (ADR 0089): the posted review verdict composes the ledger's severity `overallVerdict` with the act list
+- a clean pass means all gate-specific review angles pass, no findings with a severity in `blockCleanOnFindingSeverities` remain, and the judge act list is empty (ADR 0089; except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)): the posted review verdict composes the ledger's severity `overallVerdict` with the act list
 
 #### Angle carry-forward (fail-closed) {#angle-carry-forward-fail-closed}
 
@@ -1084,6 +1105,9 @@ and ambiguously attributed angles re-run. No prior head, an ineligible prior-log
 or any whole-plan refusal means full re-dispatch. Context-builder and consolidation
 always run fresh at B; this never exempts a round from `GATE-EXEC-REGATE-MANDATORY`.
 Dispatch is computed per cap-split unit: a unit whose angles are all complete or carried is skipped, and a carried angle (head-bump only) is stripped from a mixed unit; a completed angle in a mixed unit is not stripped.
+
+<!-- rule: GATE-EXEC-RERUN-ANGLE -->
+`GATE-EXEC-RERUN-ANGLE` (issue 2895): pass `--rerun-angle <angle>` (repeatable) to `resolve-angle-carry-forward.mjs` to move a named angle into `mustRerun` with reason `operator_rerun`; use it for a carried finding the judge rejected in consecutive rounds, or when code changed the finding's premise. An angle absent from the prior log is refused and no plan is written.
 
 Eligibility is decided PER ANGLE by the delta against that angle's review surface: `clean` OR `findings_present` both carry when the delta provably misses the surface. The prior round's overall verdict never gates carry-forward, and a re-gate NEVER skips the resolver. The one and only skip is a gate's genuine FIRST round (no prior findings-log at any head); every subsequent head bump runs the resolver, enforced below.
 
@@ -1129,7 +1153,7 @@ Each gate chain exits when one of these conditions is met:
 
 | Condition | Result |
 |---|---|
-| Posted review verdict is `clean` (no findings at any blocking severity, and the judge act list is empty per ADR 0089) | Gate passes; proceed to next boundary |
+| Posted review verdict is `clean` (no findings at any blocking severity, and the judge act list is empty per ADR 0089, except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)) | Gate passes; proceed to next boundary |
 | `pre_approval_gate` checkpoint `blocked` composed from a deterministic AC/DoD blocker over a completed review ledger (the comment records a **Review verdict** and **Gate blockers**) | Resolve each remaining blocker per [acceptance-criteria-verification.md step 5](acceptance-criteria-verification.md), which says when the writer ticks automatically and when the operator ticks with the CLI; then rerun the gate (the writer's next action is "rerun gate") |
 | `blocked` verdict from the review/fan-in itself (gate could not complete) | Stop; escalate to operator |
 | Maximum retry cycles exhausted without reaching `clean` | Stop; escalate to operator |
@@ -1200,7 +1224,7 @@ node scripts/github/write-gate-findings-log.mjs \
 
 The conductor's fan-out round passes `--execution-mode fanout_fanin` on this call, activating the CLI's own write-time provenance fail-closed guard (distinct from `detect-checkpoint-evidence.mjs`'s read-time `requireFanoutProvenance` check described above).
 
-`--findings-file` reads the same JSON from a file (identical validation); use it for any non-trivial ledger so the array never rides a shell string, and pass the `consolidate-fanin` CLI's `--ledger-out <path>` wrapper (`{ overallVerdict, findings, verifiedItems? }`) straight to `--findings-file` on both `write-gate-findings-log.mjs` and `post-gate-findings.mjs`, with no hand extraction. `verifiedItems` is present only when non-empty: it holds the head-bound union of the `acceptance-criteria` and `pr-checklist` artifacts' `verifiedItems`, and the ledger carries it to the tick in step 5 of [Acceptance Criteria Verification](acceptance-criteria-verification.md). The sanctioned fan-out path also passes the emitter's keyed plan via `--emit-plan`, which requires `--provenance` and applies the correspondence guard owned by `GATE-EXEC-EMIT-PLAN-KEY` (additive for legacy/inline callers). `write-gate-findings-log.mjs` threads the wrapper's `overallVerdict` (the consolidator's computed verdict, never revised by the judge's `--judge-verdict` enrichment) into the durable ledger, so a `--verdict` that contradicts it is refused at write time and by `upsert-checkpoint-verdict.mjs` (#1616, `GATE-COMMENT-VERDICT-VALUES`), and the verdict is derived from the ledger by default (passing no `--verdict` is valid). `post-gate-findings.mjs` unwraps and ignores `overallVerdict`. Both tools derive a missing `disposition` (`deferred` for a `low` or `nit`; for a `question`, `needs-answer` when it is locatable and `deferred` otherwise, and `post-gate-findings.mjs` never carries `line`, so a question there resolves `deferred`).
+`--findings-file` reads the same JSON from a file (identical validation); use it for any non-trivial ledger so the array never rides a shell string, and pass the `consolidate-fanin` CLI's `--ledger-out <path>` wrapper (`{ overallVerdict, findings, verifiedItems?, provenance? }`; `provenance?` is present only with `--emit-plan`) straight to `--findings-file` on both `write-gate-findings-log.mjs` and `post-gate-findings.mjs`, with no hand extraction. `verifiedItems` is present only when non-empty: it holds the head-bound union of the `acceptance-criteria` and `pr-checklist` artifacts' `verifiedItems`, and the ledger carries it to the tick in step 5 of [Acceptance Criteria Verification](acceptance-criteria-verification.md). The sanctioned fan-out path also passes the emitter's keyed plan via `--emit-plan`, which requires `--provenance` and applies the correspondence guard owned by `GATE-EXEC-EMIT-PLAN-KEY` (additive for legacy/inline callers). `write-gate-findings-log.mjs` threads the wrapper's `overallVerdict` (the consolidator's computed verdict, never revised by the judge's `--judge-verdict` enrichment) into the durable ledger, so a `--verdict` that contradicts it is refused at write time and by `upsert-checkpoint-verdict.mjs` (#1616, `GATE-COMMENT-VERDICT-VALUES`), and the verdict is derived from the ledger by default (passing no `--verdict` is valid). `post-gate-findings.mjs` unwraps and ignores `overallVerdict`. Both tools derive a missing `disposition` (`deferred` for a `low` or `nit`; for a `question`, `needs-answer` when it is locatable and `deferred` otherwise, and `post-gate-findings.mjs` never carries `line`, so a question there resolves `deferred`).
 
 The log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.json`.
 Each log entry records the full disposition: severity, angle, summary, affected files, optional
@@ -1287,7 +1311,7 @@ Incomplete warns, never blocks detector/Copilot progression, and grants no compl
 
 Untackled, deferred, rejected, foreign-authored and newly arrived threads keep their existing judgment path; this boundary never auto-resolves outside the tackled set.
 
-`scripts/github/verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <fixer-emit-plan.json>` reads the handoff from the work order's outputRef and refuses without a matching fixer pull receipt, when the handoff predates the pull, or when the handoff head is not the observed head. It also fails, naming the thread id, when a work order's judge-act item carries the fingerprint of an open inline gate thread and the handoff has no disposition entry for that thread (an act item with an open inline gate thread is never threadless; only a thread whose root comment is authored by the gate login counts, every such thread needs its own entry, and a refused handoff writes no checkpoint). It records `tmp/gate-findings/<repo-slug>/pr-<N>/fixer-disposition-<headSha>.json`, captures live state, checks containment, and only after containment passes posts the evidenced reply and resolves (resolving without reposting when a matching reply exists). Live checks precede writes, so restart, rate limit, timeout and reply-success/resolve-failure re-entry cannot duplicate replies.
+`scripts/github/verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <fixer-emit-plan.json>` reads the handoff from the work order's outputRef (written by its own `--construct` in a full-phase order) and refuses without a matching fixer pull receipt, when the handoff predates the pull, or when the handoff head is not the observed head. It also fails, naming the thread id, when a work order's judge-act item carries the fingerprint of an open inline gate thread and the handoff has no disposition entry for that thread (an act item with an open inline gate thread is never threadless; only a thread whose root comment is authored by the gate login counts, every such thread needs its own entry, and a refused handoff writes no checkpoint). It records `tmp/gate-findings/<repo-slug>/pr-<N>/fixer-disposition-<headSha>.json`, captures live state, checks containment, and only after containment passes posts the evidenced reply and resolves (resolving without reposting when a matching reply exists). Live checks precede writes, so restart, rate limit, timeout and reply-success/resolve-failure re-entry cannot duplicate replies.
 
 Adding `--check` runs the same current-protocol plan/digest, role/target/execution, receipt/path, after-pull output, source integrity, current-head/contained-order-head, coverage, authenticated ACT-thread and containment checks, including live reply/resolution and `delta_blocked` evaluation. It writes no report or checkpoint and posts no reply or resolution. A THREAD unit validates its digest-bound source hash and requires dispositions for its own pinned thread IDs only; it adds no ACT query or all-history requirement. An authentic threadless ACT unit with complete required coverage may have an empty dispositions array. The default mutating verification remains the completion path after populated construction; legacy deliveries retain their existing coverage requirements.
 
@@ -1297,7 +1321,8 @@ ACT or THREAD source with raw-byte and semantic authentication. ACT additionally
 unique required Delta/completion-input reads and both completion authorities; missing all
 optional markers cannot fall back to ordinary delivery. THREAD rejects ACT/completion-input
 mixing and every extra delivered ID before checkpoint or reply/resolution mutation, while
-retaining required pinned IDs and ignoring unrelated live threads. There is no THREAD constructor.
+retaining required pinned IDs and ignoring unrelated live threads. THREAD reports are built by the
+verifier's `--construct` from the pinned threads source and the clearing delta record (ADR 0166).
 The emitted task precedes generic guidance and immutable JSON identity evidence: preserve the
 branch/worktree/source-hash bootstrap, authorize only the exact own output and evidenced
 delivery/reply/resolution verification, and perform no source edit/test, stage, commit, push,
@@ -1305,12 +1330,28 @@ new Delta or counter reset. ACT constructs only absent output; genuine existing 
 normal/check without clobbering. Existing empty-selector Write/Edit guards allow the exact
 output only. Codex managed permissions and supported Claude/Pi hooks retain their actual
 limits; this is not universal Bash enforcement. Ordinary emission remains `operation: fix`
-with unchanged marker behavior and ordinary renderer bytes. Main-checkout consumers must
+with unchanged marker behavior. Only the `commit_only` render keeps its renderer bytes. ADR 0166
+changed the ordinary full-phase render, so re-emit a full plan emitted before that change. Main-checkout consumers must
 ship this support before a later producer enables delivery-only reentry; these fixtures do
 not establish producer eligibility, new publication, runtime worker qualification or recovery.
 
-The optional `--construct` operation (ADR 0149) is ACT/full only and mutually exclusive with
-`--check`. It authenticates the current plan/digest, fixer identity/receipt/subject, canonical
+The `--construct` operation (ADR 0149, extended by ADR 0166) builds the ACT report from completion
+input and the THREAD report from the threads source, the clearing delta record (its `candidateHead`
+is the pushed head) and the pushed head. Normal verification and `--check` accept only a report that
+`--construct` wrote (a sha256 mark beside the output). For a plan that has a source they also refuse
+unless the head's checks are settled green, with no reply: `ci_failed` (red checks), `ci_pending`
+(pending checks) or `ci_unknown` (unreadable checks or unsupported conclusions). The guard judges only
+check runs listed in the PR `statusCheckRollup`, the set `wait-pr-checks` uses. A settled head with no
+check runs and no statuses passes. Normal mode, after the guard passes, also posts one residual-status
+reply on each deferred thread whose delta status is `not_resolved` or `cannot_verify` and leaves it open;
+re-entry posts no second reply. The fixer hands back the refusal code and resolves no thread.
+A complete THREAD order finds its clearing record by `candidateHead` equal to the pushed head, because
+its order head is already the candidate. The matching record must also cover every pinned thread ID,
+and zero or several matching records refuse with a named reason. Every full-phase order states the numbered steps: push, confirm
+the remote head, `wait-pr-checks` (run once, one retry on a not-settled exit, then hand back `ci_pending`
+or `ci_unknown`), `--construct`, verify, `--check`, and the Edit/Write-only rule. A THREAD order pushes
+exactly the delta-reviewed candidate and makes no further commit. The
+operation is mutually exclusive with `--check`. It authenticates the current plan/digest, fixer identity/receipt/subject, canonical
 plan/output paths and after-pull timing before constructing that execution's report. Missing
 output is permitted; an existing pre-pull output refuses. No caller-selected output is accepted.
 Any `completion-input` read or either completion authority field activates the same strict

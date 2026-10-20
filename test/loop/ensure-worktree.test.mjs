@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterAll as after, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -1445,6 +1445,32 @@ test("ensure: reuse does not install and reports no deps", async () => {
     const reused = await ensureWorktree({ repoRoot: repo.root, issue: 25 }, { installDeps: () => assert.fail("must not install on reuse") });
     assert.equal(reused.reused, true);
     assert.equal(reused.deps, undefined);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// #2865: provisioning renders the Pi-valid agent set into the (untracked) .pi/agents.
+test("ensure: provisioning renders .pi/agents as a real Pi-valid dir and keeps the tree clean (create + reuse)", async () => {
+  const repo = makeRepo();
+  try {
+    writeFileSync(path.join(repo.root, ".gitignore"), ".pi/agents/\n");
+    writeFileSync(path.join(repo.root, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    mkdirSync(path.join(repo.root, "agents"));
+    writeFileSync(path.join(repo.root, "agents", "quality.agent.md"), "---\nname: quality\ndescription: q\ntools: read, search, execute, bash\n---\nbody\n");
+    repo.git("add", ".gitignore", "package.json", "agents");
+    repo.git("commit", "-q", "-m", "ignore agents");
+    repo.git("fetch", "-q", "origin");
+    for (const pass of ["create", "reuse"]) {
+      const res = await ensureWorktree({ repoRoot: repo.root, issue: 2865, base: "origin/main" });
+      assert.equal(res.ok, true, pass);
+      const dir = path.join(res.path, ".pi", "agents");
+      assert.equal(lstatSync(dir).isDirectory(), true, `${pass}: real directory`);
+      const tools = readFileSync(path.join(dir, "quality.agent.md"), "utf8").match(/^tools: (.+)$/m)[1].split(",").map((t) => t.trim());
+      for (const t of ["grep", "find", "ls", "bash"]) assert.ok(tools.includes(t), `${pass}: ${t}`);
+      for (const t of ["search", "execute"]) assert.ok(!tools.includes(t), `${pass}: no ${t}`);
+      assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: res.path, encoding: "utf8", env: REPO_GIT_ENV }), "");
+    }
   } finally {
     repo.cleanup();
   }

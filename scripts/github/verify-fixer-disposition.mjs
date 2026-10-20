@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -26,13 +26,20 @@ import {
   siteCoverageGaps,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { deltaCoverageBinding, isDeltaResultFresh, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
-import { DELTA_CLEARING_NEXT_STEPS, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
+import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { LOOP_DERIVED_CI_CHECK_NAMES } from "@dev-loops/core/loop/copilot-ci-status";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { revalidateLegacyCompletion } from "./_legacy-fixer-revalidation.mjs";
 import { authenticateOriginalPlan } from "./_fixer-emission-evidence.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
+import { observeHeadCiSignals } from "./observe-head-ci.mjs";
+import { normalizeHeadScopedCiContract } from "@dev-loops/core/loop/copilot-ci-status";
+
+// Provenance mark: the sha256 of the report bytes --construct wrote, kept beside the report.
+const RESIDUAL_REPLY_MARKER = "Residual delta status:";
+const constructMarkPath = (handoffPath) => `${handoffPath}.constructed`;
 
 const USAGE = `Usage: verify-fixer-disposition.mjs --repo <owner/name> --pr <number> --head-sha <sha> --fixer-plan <path> [--tmp-root <path>]
 Enforce GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: verify every review thread a fixer
@@ -59,9 +66,22 @@ Required:
                         when written at or after that pull, and when its headSha is
                         the observed --head-sha.
 Optional:
-  --construct                 Construct the current ACT full worker's canonical
-                               report from authenticated completion input; no
-                               checkpoint or GitHub mutation. Not --check.
+  --construct                 Construct the full worker's canonical report (ACT: from
+                               authenticated completion input; THREAD: from the threads
+                               source, the clearing delta record and the pushed head);
+                               no checkpoint or GitHub mutation. Not --check. Normal
+                               and --check modes accept only a report this wrote, and
+                               refuse when the plan has a source and the head's checks are not
+                               settled green: ci_failed (red), ci_pending (pending),
+                               ci_unknown (unreadable or unsupported). The guard judges only
+                               check runs listed in the PR statusCheckRollup, the set
+                               wait-pr-checks uses. A settled head with no checks at all
+                               passes. Hand back the code and resolve no thread. Normal mode
+                               also posts one residual-status reply on each deferred thread
+                               whose delta status is not_resolved or cannot_verify and leaves
+                               it open. A residual reply that
+                               failed to post, or is not live under --check, returns
+                               ok:false (residual_reply_failed, complete:false).
   --check                     Read-only delivery and live-state check; never
                                write a checkpoint or reply/resolve a thread.
   --tmp-root <path>            Root tmp directory for the checkpoint and the pull
@@ -279,6 +299,17 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   const optionalCompletion = complete && order.source === "act-list" || completionReads.length > 0 || Object.hasOwn(order.authority ?? {}, "completionInputDigest")
     || Object.hasOwn(order.authority ?? {}, "completionInputBytesDigest");
   let completion = null;
+  if (optionalCompletion || options.construct) {
+    const executionDir = path.join(await realpath(path.dirname(planPath)), plan.executionIdentity);
+    const symlinks = await Promise.all([path.dirname(handoffPath), handoffPath].map(async (file) => {
+      const info = await lstat(file).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+      return info && (info.isSymbolicLink() || file === path.dirname(handoffPath) && !info.isDirectory());
+    }));
+    if (symlinks.some(Boolean) || path.normalize(realpathNearestExisting(path.dirname(handoffPath))) !== executionDir
+      || path.normalize(realpathNearestExisting(handoffPath)) !== path.join(executionDir, "fixer-disposition.json")) {
+      throw new Error("completion output or execution directory redirects outside its canonical execution path");
+    }
+  }
   if (optionalCompletion) {
     const read = completionReads[0];
     if (completionReads.length !== 1 || read.required !== true || typeof read.path !== "string"
@@ -298,12 +329,6 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       || !Array.isArray(completion.siteCoverage) || !Array.isArray(completion.threadBindings)) {
       throw new Error("completion input requires the actual full candidate/fixing heads, coverage and thread bindings");
     }
-    const executionDir = path.join(await real(path.dirname(planPath)), plan.executionIdentity);
-    const symlinks = await Promise.all([path.dirname(handoffPath), handoffPath].map((file) => lstat(file).then((info) => info.isSymbolicLink(), () => false)));
-    if (symlinks.some(Boolean) || path.normalize(realpathNearestExisting(path.dirname(handoffPath))) !== executionDir
-      || path.normalize(realpathNearestExisting(handoffPath)) !== path.join(executionDir, "fixer-disposition.json")) {
-      throw new Error("completion output or execution directory redirects outside its canonical execution path");
-    }
     const subject = receipt.receipt.subject;
     if (!/^f\d+-[a-f0-9]{8}$/.test(plan.executionIdentity) || plan.workOrderRef !== `fixer:${options.repo}#${options.pr}:${order.headSha}:${plan.executionIdentity}`
       || subject.repo !== options.repo || subject.pr !== options.pr || subject.headSha !== order.headSha
@@ -311,11 +336,19 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       throw new Error("completion current pull subject does not match its full fixer authority");
     }
   }
-  if (options.construct && !completion) throw new Error("--construct requires authenticated ACT completion input");
-  let raw = options.construct ? { headSha: options.headSha, dispositions: [], siteCoverage: completion.siteCoverage } : null;
+  if (options.construct && !completion && order.source !== "threads") throw new Error("--construct requires authenticated ACT completion input or a THREAD plan");
+  let raw = options.construct ? { headSha: options.headSha, dispositions: [], ...(completion ? { siteCoverage: completion.siteCoverage } : {}) } : null;
   try {
-    if (!options.construct) raw = JSON.parse(await readFile(handoffPath, "utf8"));
-  } catch {
+    if (!options.construct) {
+      const text = await readFile(handoffPath, "utf8");
+      raw = JSON.parse(text);
+      // Emitted plans carry a source: only the report this verifier's own --construct wrote counts.
+      if (order.source && await readFile(constructMarkPath(handoffPath), "utf8").catch(() => null) !== sha256Hex(text)) {
+        throw Object.assign(new Error(`Fixer disposition handoff ${handoffPath} was not written by this verifier's --construct; never hand-write it; rm only this execution's refused report ${handoffPath} and its corresponding stale marker ${constructMarkPath(handoffPath)}, then run the verifier with --construct. Preserve accepted construction evidence and unrelated files`), { handWritten: true });
+      }
+    }
+  } catch (error) {
+    if (error.handWritten) throw error;
     throw new Error(`Fixer disposition handoff ${handoffPath} is not valid JSON`);
   }
   if (raw?.headSha !== options.headSha) {
@@ -325,20 +358,46 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     const contained = await isCommitContainedByHead({ repo: options.repo, commitSha: order.headSha, headSha: options.headSha }, runtime);
     if (!contained.contained) throw new Error(`the work order head ${order.headSha} is not contained by the observed head ${options.headSha}: ${contained.reason}`);
   }
-  let handoff = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
   const threadsRead = (order.requiredReads ?? []).find((read) => read?.kind === "threads");
+  let source;
   if (threadsRead) {
     const bytes = await readFile(threadsRead.path);
     if (createHash("sha256").update(bytes).digest("hex") !== String(threadsRead.sha256 ?? "").replace(/^sha256:/, "")) {
       throw new Error(`the work order's threads ${threadsRead.path} differ from the sha256 the work order binds`);
     }
-    const source = JSON.parse(bytes.toString("utf8"));
+    source = JSON.parse(bytes.toString("utf8"));
     if (sha256Hex(source).slice(7) !== order.authority?.sourceDigest) {
       throw new Error(`the work order's threads ${threadsRead.path} differ from the canonical authority.sourceDigest the work order binds`);
     }
     if (!Array.isArray(source?.threads) || source.threads.some((thread) => typeof thread?.threadId !== "string" || !thread.threadId)) {
       throw new Error(`the work order's threads ${threadsRead.path} have invalid thread IDs`);
     }
+  }
+  if (options.construct && !completion) {
+    // THREAD route: the clearing delta record bound to the pushed head decides each thread. An ordinary order's head is
+    // the review baseline; a complete order's head is the pushed candidate, so its record is found by candidateHead.
+    // A record decides only when it clears the pushed head and its items cover the pinned thread IDs: an ACT-route or
+    // other-sequence record for the same candidate must not. A complete THREAD order carries no sequence identity, so a
+    // record binds by the pinned thread IDs plus the pushed head. Zero or several matches refuse; only the matches are
+    // sorted (the directory read is not).
+    const pinned = source.threads.map(({ threadId }) => threadId);
+    const clears = (candidate) => candidate && DELTA_CLEARING_NEXT_STEPS.includes(candidate.nextStep) && candidate.candidateHead === options.headSha
+      && pinned.every((id) => (candidate.items ?? []).some((item) => item?.ref === id));
+    const candidates = [readGateDeltaRecord(receiptTmpRoot, order.headSha), ...(complete ? listGateDeltaRecords(receiptTmpRoot) : [])].filter(Boolean);
+    const matches = [...new Map(candidates.filter(clears).map((candidate) => [candidate.reviewBaselineHead, candidate])).values()]
+      .sort((x, y) => x.reviewBaselineHead.localeCompare(y.reviewBaselineHead));
+    if (matches.length > 1) {
+      throw new Error(`--construct found several clearing delta records (baselines ${matches.map((m) => m.reviewBaselineHead).join(", ")}) covering the pinned threads for the pushed head ${options.headSha}; refusing an ambiguous record`);
+    }
+    const [record] = matches;
+    if (!record) {
+      throw new Error(`--construct needs a clearing delta record ${complete ? "" : `for baseline ${order.headSha} `}whose candidateHead is the pushed head ${options.headSha} and whose items cover the pinned threads; push the reviewed candidate first`);
+    }
+    const resolved = new Set((record.items ?? []).filter((item) => item?.status === "resolved").map((item) => item.ref));
+    raw.dispositions = source.threads.map(({ threadId }) => ({ threadId, fixingCommitSha: options.headSha, disposition: resolved.has(threadId) ? "tackled" : "deferred" }));
+  }
+  let handoff = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
+  if (threadsRead) {
     const disposed = new Set(handoff.dispositions.map((entry) => entry.threadId));
     const missing = source.threads.filter((thread) => !disposed.has(thread.threadId));
     if (missing.length) throw new Error(`the handoff has no disposition entry for source thread(s) ${missing.map((thread) => thread.threadId).join(", ")}`);
@@ -472,6 +531,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     deltaStatuses,
     completion,
     constructedReport: raw,
+    source: order.source,
     handoffPath,
     bindActiveFixer,
     delivery: { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity },
@@ -555,22 +615,79 @@ export async function verifyFixerDisposition(
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   const runtime = { env, ghCommand, runChild };
-  const { handoff, actList, deltaStatuses, completion, constructedReport, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  const { handoff, actList, deltaStatuses, completion, constructedReport, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
-  const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
-  const liveHead = live.code === 0 ? (() => { try { return JSON.parse(live.stdout).headRefOid; } catch { return null; } })() : null;
+  const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,statusCheckRollup"], env);
+  const livePayload = live.code === 0 ? (() => { try { return JSON.parse(live.stdout); } catch { return null; } })() : null;
+  const liveHead = livePayload?.headRefOid ?? null;
+  // Same PR-visible filter as wait-pr-checks (probe-ci-status.mjs): runs outside the rollup never block step 5.
+  const prVisibleCheckNames = (Array.isArray(livePayload?.statusCheckRollup) ? livePayload.statusCheckRollup : [])
+    .map((entry) => entry?.name || entry?.context).filter((name) => typeof name === "string" && name.length > 0);
   if (liveHead !== options.headSha) {
     throw new Error(`--head-sha ${options.headSha} is not the live PR head ${liveHead ?? `(unreadable: ${(live.stderr || "").trim()})`}; refresh the PR state before verifying`);
   }
   // A refused handoff writes no checkpoint: capture and assert before the write.
   const initialSnapshot = await captureParsedReviewThreads({ repo: options.repo, pr: options.pr }, runtime);
+  let gateLogin = null;
   if (Array.isArray(actList)) {
-    assertActItemThreadsDisposed(actList, handoff, initialSnapshot, await resolveAuthenticatedLogin({ env, ghCommand, runChild }), deltaStatuses, completion);
+    gateLogin = await resolveAuthenticatedLogin({ env, ghCommand, runChild });
+    assertActItemThreadsDisposed(actList, handoff, initialSnapshot, gateLogin, deltaStatuses, completion);
   }
   if (options.construct) {
     await mkdir(path.dirname(handoffPath), { recursive: true });
-    await writeFile(handoffPath, `${JSON.stringify(constructedReport, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+    const text = `${JSON.stringify(constructedReport, null, 2)}\n`;
+    let report, marker, temporary, markerIdentity, published = false;
+    try {
+      const existing = await lstat(handoffPath).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+      if (existing) throw Object.assign(new Error(`EEXIST: report already exists at ${handoffPath}`), { code: "EEXIST" });
+      temporary = await mkdtemp(path.join(path.dirname(handoffPath), ".fixer-construction-"));
+      const pending = path.join(temporary, "report.json");
+      report = await open(pending, "wx");
+      await report.writeFile(text, "utf8");
+      await report.close();
+      report = null;
+      marker = await open(constructMarkPath(handoffPath), "wx");
+      markerIdentity = await marker.stat();
+      await marker.writeFile(sha256Hex(text), "utf8");
+      await marker.close();
+      marker = null;
+      // Publish exclusively only after both files close; cleanup is never admission authority.
+      await link(pending, handoffPath);
+      published = true;
+    } catch (cause) {
+      throw Object.assign(new Error(`Fixer construction failed: ${cause.message}`, { cause }), { code: "FIXER_CONSTRUCTION_FAILED" });
+    } finally {
+      await Promise.allSettled([report, marker].filter(Boolean).map((file) => file.close()));
+      // Recover caught failures only; never remove a pre-existing or replaced marker.
+      if (!published && markerIdentity) {
+        const current = await lstat(constructMarkPath(handoffPath)).catch(() => null);
+        if (current?.dev === markerIdentity.dev && current.ino === markerIdentity.ino) {
+          await rm(constructMarkPath(handoffPath)).catch(() => {});
+        }
+      }
+      if (temporary) await rm(temporary, { recursive: true, force: true }).catch(() => {});
+    }
     return { ok: true, constructed: true, outputRef: handoffPath };
+  }
+  if (source) {
+    // A red head resolves nothing: the fixer hands back ci_failed with these check names.
+    const ci = await observeHeadCiSignals({ repo: options.repo, headSha: options.headSha, prVisibleCheckNames }, runtime);
+    const failed = [...(ci.checkRuns.visibleSignal?.failureDetails ?? []), ...ci.statuses.statusFailures.map((s) => s.name)];
+    if (failed.length > 0) throw new Error(`ci_failed: checks are red at ${options.headSha} (${failed.join(", ")}); resolve no thread, hand back ci_failed with these check names`);
+    // Fail closed: only an observed, settled-green head may resolve threads.
+    const state = !ci.checkRuns.ok || !ci.statuses.ok ? "unreadable"
+      : normalizeHeadScopedCiContract({
+        checkRunsStatus: ci.checkRuns.visibleSignal.status,
+        commitStatus: ci.statuses.commitStatus,
+        checkRunsUnsupportedCompleted: ci.checkRuns.visibleSignal.unsupportedCompleted,
+      }).overallStatus;
+    // A head with no check runs and no statuses besides the loop-derived gate-evidence is settled (wait-pr-checks settles it); anything else must be green.
+    const checkless = state === "none" && ci.checkRuns.nonLoopDerivedCount === 0 && ci.statuses.nonLoopDerivedCount === 0
+      && prVisibleCheckNames.every((name) => LOOP_DERIVED_CI_CHECK_NAMES.includes(name));
+    if (state !== "success" && !checkless) {
+      const code = state === "pending" ? "ci_pending" : "ci_unknown";
+      throw new Error(`${code}: checks at ${options.headSha} are ${state}, not settled green; resolve no thread, hand back ${code}`);
+    }
   }
   if (!options.check) {
     await mkdir(path.dirname(fullPath), { recursive: true });
@@ -591,6 +708,53 @@ export async function verifyFixerDisposition(
   });
 
   const actions = [];
+  const residualFailures = [];
+  // A deferred thread the delta review left not_resolved or cannot_verify gets one residual-status reply and stays open.
+  // Shared by the ACT and THREAD routes; --check only observes the reply and reports it missing; a live reply carrying the marker makes re-entry post nothing.
+  {
+    const deferred = handoff.dispositions.filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.DEFERRED);
+    const openTargets = deferred.length > 0 ? planBatchReplyTargets(initialSnapshot, "all").matchedTargets : [];
+    for (const entry of deferred) {
+      const target = openTargets.find((candidate) => candidate.threadId === entry.threadId);
+      if (!target) continue;
+      // The ACT route's authenticated delta statuses are authoritative; the delta record lookup serves the THREAD route.
+      let blocked = null;
+      if (Array.isArray(actList) && deltaStatuses) {
+        const actFingerprints = new Set(actList.map((item) => item?.fingerprint ?? fingerprintFinding(item)));
+        const { members } = selectActThreadBinding(initialSnapshot, entry.threadId, gateLogin, actFingerprints);
+        const status = members.map((fp) => deltaStatuses.get(fp)).find((value) => value === "not_resolved" || value === "cannot_verify");
+        if (status) blocked = { status };
+      }
+      blocked ??= await findDeltaBlockedFixedReply(
+        [{ threadId: entry.threadId, body: "", commit: entry.fixingCommitSha }],
+        { repo: options.repo, pr: options.pr, parsed: initialSnapshot, tmpRoot: path.resolve(repoRoot, tmpRoot) },
+        runtime,
+      );
+      if (!blocked) continue;
+      // Idempotent per fixing commit: a marker from an earlier round's commit never suppresses this round's status.
+      if (initialSnapshot.comments.some((comment) => comment.threadId === entry.threadId
+        && String(comment.body).includes(RESIDUAL_REPLY_MARKER) && String(comment.body).includes(entry.fixingCommitSha))) continue;
+      if (options.check) {
+        residualFailures.push({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha, failedStep: "residual_reply_failed", error: "residual-status reply not observed live" });
+        continue;
+      }
+      try {
+        await replyAndMaybeResolve(
+          {
+            repo: options.repo, pr: options.pr, commentId: target.commentId, threadId: entry.threadId,
+            body: `${RESIDUAL_REPLY_MARKER} ${blocked.status} after the delta review of commit ${entry.fixingCommitSha}; this thread stays open for the next gate round.`,
+            resolve: false, validatedSnapshot: initialSnapshot,
+          },
+          runtime,
+        );
+        actions.push({ threadId: entry.threadId, ok: true, step: "residual_replied" });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        actions.push({ threadId: entry.threadId, ok: false, error: message });
+        residualFailures.push({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha, failedStep: "residual_reply_failed", error: message });
+      }
+    }
+  }
   // Only progress steps that ARE authorized (commit contained) and that are
   // actually actionable via reply/resolve; commit_not_contained and
   // missing_from_handoff never trigger a mutation (Non-goals: a SHA alone, or
@@ -665,22 +829,25 @@ export async function verifyFixerDisposition(
     });
   }
 
-  const incomplete = evaluation.incomplete.map((entry) => (deltaBlocked.has(entry.threadId)
+  const incomplete = [...evaluation.incomplete, ...residualFailures].map((entry) => (deltaBlocked.has(entry.threadId)
     ? { ...entry, failedStep: FIXER_DISPOSITION_FAILED_STEP.DELTA_BLOCKED, deltaStatus: deltaBlocked.get(entry.threadId).status, deltaRecord: deltaBlocked.get(entry.threadId).recordPath }
     : entry));
   const activeFixer = evaluation.ok ? undefined : await bindActiveFixer(false);
   return {
-    ok: true,
+    // A failed residual-status reply is not delivered: nonzero exit naming the thread.
+    ok: residualFailures.length === 0,
+    ...(residualFailures.length ? { error: `residual-status reply failed for thread(s) ${residualFailures.map((failure) => failure.threadId).join(", ")}; re-run the verifier` } : {}),
     repo: options.repo,
     pr: options.pr,
     headSha: options.headSha,
     checkpointPath: options.check ? null : logPath,
-    complete: evaluation.ok,
+    complete: evaluation.ok && residualFailures.length === 0,
     ...(activeFixer ? { activeFixer } : {}),
     incomplete,
     forbiddenActions: evaluation.forbiddenActions,
     nextAction: evaluation.nextAction,
-    reason: deltaBlocked.size > 0 ? deltaBlockedReason(incomplete) : evaluation.reason,
+    reason: residualFailures.length > 0 ? `residual-status reply failed for thread(s) ${residualFailures.map((failure) => failure.threadId).join(", ")}; re-run the verifier`
+      : deltaBlocked.size > 0 ? deltaBlockedReason(incomplete) : evaluation.reason,
     actions,
   };
 }

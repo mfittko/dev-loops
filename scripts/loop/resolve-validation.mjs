@@ -84,7 +84,7 @@ export async function defaultReadCi({ repo, pr }, { read = viewPr, timeoutMs = 1
 // (a PR could point that at its own branch). A default branch with no `.devloops`
 // family file is an absent block, so the `ci-only` default applies. Returns the
 // resolved block or a refusal reason.
-function readBaseValidation(repoRoot) {
+export function readBaseValidation(repoRoot) {
   const base = readDefaultBranchConfig({ repoRoot });
   if (!base.ok && !base.noConfigFile) return { reason: `cannot read the base branch validation config: ${base.detail}` };
   const doc = base.ok ? base.parsed : undefined;
@@ -97,7 +97,7 @@ function readBaseValidation(repoRoot) {
 // The checkout's own `.devloops` family file (loader order, first existing file
 // wins), so both sides of the comparison read the same layer: the merged loader
 // config also carries `.pi/dev-loop/defaults.*`, which the base side never sees.
-function readCheckoutValidation(repoRoot) {
+export function readCheckoutValidation(repoRoot) {
   const name = DEVLOOPS_CONFIG_PATHS.find((candidate) => existsSync(path.join(repoRoot, candidate)));
   let raw;
   try {
@@ -169,7 +169,10 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
       const actualHead = readHead();
       headConfirmed = actualHead === options.headSha;
       if (!headConfirmed) return { reason: `worktree HEAD ${actualHead} differs from requested head`, writeArtifact: false };
-      const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: repoRoot, encoding: "utf8", env: gitEnv }).trim();
+      // Untracked .pi/agents is generated at provision time (decision record 0173), not a tree change.
+      // Tracked changes under it still count as dirt.
+      const dirty = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: repoRoot, encoding: "utf8", env: gitEnv })
+        .split("\n").filter((l) => l && !l.startsWith("?? .pi/agents/")).join("\n").trim();
       return dirty ? { reason: "validation requires a clean worktree at the requested head", writeArtifact: true } : null;
     };
     const beforeProblem = currentTreeProblem();

@@ -3942,7 +3942,7 @@ async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, 
       await mkdir(path.dirname(checkpoint), { recursive: true });
       await writeFile(checkpoint, JSON.stringify({ headSha: HEAD_SHA, dispositions: [] }));
       if (act) checkerCalls.push(
-        { assertArgs: ["pr", "view", String(PR), "--json", "headRefOid"], stdout: jsonLine({ headRefOid: HEAD_SHA }) },
+        { assertArgs: ["pr", "view", String(PR), "--json", "headRefOid,statusCheckRollup"], stdout: jsonLine({ headRefOid: HEAD_SHA, statusCheckRollup: [] }) },
         { assertArgs: ["api", "graphql"], stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_ACT", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "<!-- dev-loops:finding 0123456789abcdef -->", author: { login: "gate", __typename: "User" } }] } }] } } } } }) },
         { assertArgs: ["api", "user"], stdout: jsonLine({ login: "gate" }) },
       );

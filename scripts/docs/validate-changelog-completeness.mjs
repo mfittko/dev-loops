@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { lstat, readdir, readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
-import { createGitClient, resolveBaseRef } from "./_doc-git-client.mjs";
+import { createGitClient as createDocGitClient, resolveBaseRef } from "./_doc-git-client.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
 import {
@@ -176,10 +178,49 @@ export function validateChangelogCompleteness({
   return { notable, addedItems, addedFragment, errors };
 }
 
-// createGitClient + resolveBaseRef are shared with validate-decision-records.mjs
-// via ./_doc-git-client.mjs so the two base-ref-dependent validators cannot
-// drift. Re-exported here for the injected-git test suite.
-export { createGitClient };
+// Keep base resolution and existing validator operations on the shared client.
+// Lifecycle preflights validate committed bodies, allowing checkout line endings.
+export function createGitClient(root, exec = promisify(execFile)) {
+  return {
+    ...createDocGitClient(root, exec),
+    async assertHeadInputs() {
+      const bodies = new Map();
+      const { stdout } = await exec("git", ["ls-tree", "-rz", "HEAD", "--", CHANGELOG_PATH, FRAGMENTS_DIR], { cwd: root });
+      const entries = new Map(stdout.split("\0").filter(Boolean).map((row) => {
+        const tab = row.indexOf("\t");
+        return [row.slice(tab + 1), row.slice(0, tab).split(" ")];
+      }).filter(([file]) => file === CHANGELOG_PATH || isChangelogFragmentPath(file)));
+      const changesStat = await lstat(path.join(root, FRAGMENTS_DIR)).catch((error) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (changesStat && !changesStat.isDirectory()) throw new Error(`${FRAGMENTS_DIR}/: validation input differs from HEAD; expected a real directory`);
+      const pending = changesStat ? await readdir(path.join(root, FRAGMENTS_DIR)) : [];
+      const inputs = new Set([CHANGELOG_PATH, ...entries.keys(), ...pending.map((name) => `${FRAGMENTS_DIR}/${name}`).filter(isChangelogFragmentPath)]);
+      for (const file of inputs) {
+        const stat = await lstat(path.join(root, file)).catch((error) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        const entry = entries.get(file);
+        if (!entry && !stat) continue;
+        const [mode, type, oid] = entry ?? [];
+        if (!stat?.isFile() || type !== "blob" || !["100644", "100755"].includes(mode)) {
+          throw new Error(`${file}: validation input differs from HEAD; commit regular changelog inputs before retrying`);
+        }
+        const { stdout: committed } = await exec("git", ["cat-file", "blob", oid], { cwd: root, encoding: "buffer" });
+        const body = committed.toString("utf8");
+        const checkout = await readFile(path.join(root, file), "utf8");
+        // Only newline conversion may differ; validation below uses the blob.
+        if (checkout.replaceAll("\r\n", "\n") !== body.replaceAll("\r\n", "\n")) {
+          throw new Error(`${file}: validation input differs from HEAD; commit changelog inputs before retrying`);
+        }
+        bodies.set(file, body);
+      }
+      return bodies;
+    },
+  };
+}
 
 /**
  * Run the validator end to end, returning the process exit code. Injectable
@@ -187,8 +228,10 @@ export { createGitClient };
  * order, the degrade path, and exit codes), matching the sibling
  * validate-decision-records.mjs run({ root, git }) shape.
  */
-export async function main({ root, env = process.env, log = console, git = createGitClient(root) } = {}) {
-  const base = await resolveBaseRef(git, env).catch(() => null);
+export async function main({ root, base: explicitBase, env = process.env, log = console, git = createGitClient(root), requireHeadInputs = false } = {}) {
+  const base = explicitBase !== undefined
+    ? await git.mergeBase(explicitBase, "HEAD")
+    : await resolveBaseRef(git, env).catch(() => null);
   if (!base) {
     // Legitimate no-history case (shallow checkout, no origin): degrade with a
     // notice like the decision-record validator. PR CI fetches the base branch
@@ -197,11 +240,23 @@ export async function main({ root, env = process.env, log = console, git = creat
     return 0;
   }
 
+  let headInputs;
+  if (requireHeadInputs) {
+    try {
+      headInputs = await git.assertHeadInputs();
+    } catch (error) {
+      throw new Error(`base ${base}: ${error.message}`, { cause: error });
+    }
+  }
+  const readInput = async (file) => headInputs
+    ? headInputs.get(file) ?? ""
+    : readFile(path.join(root, file), "utf8").catch(() => "");
+
   const [commitSubjects, files, addedFiles, headChangelog, baseExists] = await Promise.all([
     git.logSubjects(base, "HEAD"),
     git.diffNameOnly(base, "HEAD", { nulDelimited: true }),
     git.diffAddedFiles(base, "HEAD", { nulDelimited: true }),
-    readFile(path.join(root, CHANGELOG_PATH), "utf8").catch(() => ""),
+    readInput(CHANGELOG_PATH),
     git.pathExistsIn(base, CHANGELOG_PATH),
   ]);
   const baseChangelog = baseExists ? await git.show(`${base}:${CHANGELOG_PATH}`) : "";
@@ -224,7 +279,7 @@ export async function main({ root, env = process.env, log = console, git = creat
       if (!changesDirIsReal) continue;
       const stat = await lstat(path.join(root, f)).catch(() => null);
       if (!stat || !stat.isFile()) continue; // missing, symlink, or non-regular
-      const body = await readFile(path.join(root, f), "utf8").catch(() => "");
+      const body = await readInput(f);
       // Reject an empty note, or a body with a level-2 "## " heading that would
       // truncate the release section at assembly (silently dropping later notes).
       if (body.trim() === "" || fragmentBodyClosesSection(body)) continue;
@@ -267,12 +322,12 @@ export async function main({ root, env = process.env, log = console, git = creat
         errors.push(`${f}: regular-file rule: a fragment must be a regular file, not a symlink or other file type`);
         continue;
       }
-      const body = await readFile(path.join(root, f), "utf8").catch(() => "");
+      const body = await readInput(f);
       for (const error of fragmentFormatErrors(body)) errors.push(`${f}: ${error}`);
     }
   }
   if (errors.length > 0) {
-    log.error("CHANGELOG completeness check failed (issue #1864):");
+    log.error(`CHANGELOG completeness check failed (base ${base.slice(0, 12)}; issue #1864):`);
     for (const error of errors) log.error(`  - ${error}`);
     return 1;
   }

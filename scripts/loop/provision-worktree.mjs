@@ -21,13 +21,20 @@
  * of the branch's. Stale/broken links are replaced; a real file/dir
  * already occupying the slot is left alone (dest-conflict, never clobbered).
  *
+ * In a dev-loops checkout (package.json names `dev-loops`, `agents/` exists) it also
+ * renders the Pi-valid `.pi/agents` set from that checkout's own `agents/` (action
+ * `mode: "render"`), independent of .devloops, unless the branch still tracks
+ * `.pi/agents` (then a `mode: "skip"` action records why).
+ *
  * Prints a JSON summary of actions to stdout. Never throws on a per-entry
  * problem; exits 0 unless its own arguments are invalid.
  */
+import { execFileSync } from "node:child_process";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
+import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
 import { parseArgs } from "node:util";
 import { loadDevLoopConfig, resolveWorktreeConfig } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -35,14 +42,15 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 const USAGE = `Usage:
   provision-worktree.mjs --worktree-path <p> --repo-root <p>
 Provision a worktree with gitignored files/dirs from the main checkout,
-driven by .devloops worktree.entries (mode: copy/link).
+driven by .devloops worktree.entries (mode: copy/link). A dev-loops checkout also
+gets its .pi/agents set rendered from its own agents/ (mode: render), or skipped when tracked.
 Required:
   --worktree-path <p>   Absolute path to the target worktree.
   --repo-root <p>       Absolute path to the main checkout (source of files).
 Optional:
   -h, --help            Show this help.
 Output (stdout, JSON):
-  { "ok": true, "actions": [ { "mode": "copy"|"link"|"skip"|"reject", ... } ],
+  { "ok": true, "actions": [ { "mode": "copy"|"link"|"skip"|"reject"|"render", ... } ],
     "summary": { "copied": n, "linked": n, "skipped": n, "rejected": n,
                  "warnings": n } }
 
@@ -313,6 +321,42 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
       src: path.join(dst, "packages", "core"),
       dest: path.join(dst, "node_modules", "@dev-loops", "core"),
     });
+  }
+
+  // `.pi/agents` is untracked; render the Pi-valid agent set from the worktree's own
+  // agents/ sources, only in a dev-loops checkout (package name "dev-loops" plus an agents/ dir).
+  // Lazy import of a plain .mjs: loads under Node from an installed package.
+  const isDevLoopsCheckout = async () => {
+    try {
+      const pkg = JSON.parse(await fsp.readFile(path.join(dst, "package.json"), "utf8"));
+      return pkg?.name === "dev-loops" && await pathExists(path.join(dst, "agents"));
+    } catch {
+      return false;
+    }
+  };
+  // A branch that predates the untracking still tracks .pi/agents; rendering would dirty it.
+  // Fail-soft: a git error means "not tracked".
+  const trackedPiAgents = () => {
+    try {
+      return execFileSync("git", ["-C", dst, "ls-files", ".pi/agents"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: gitEnvNoDirOverrides() }).trim() !== "";
+    } catch {
+      return false;
+    }
+  };
+  try {
+    if (await isDevLoopsCheckout()) {
+      if (trackedPiAgents()) {
+        actions.push({ entry: ".pi/agents", mode: "skip", reason: "pi-agents-tracked: .pi/agents is tracked in the worktree index; rebase or merge onto main first, then provision again" });
+      } else {
+        const { renderProjectAgents } = await import("../../extension/pi-agent-render.mjs");
+        renderProjectAgents(dst, path.join(dst, "agents"));
+        actions.push({ entry: ".pi/agents", mode: "render", dest: path.join(dst, ".pi", "agents") });
+      }
+    }
+  } catch (err) {
+    const msg = (err && err.message) ? err.message : String(err);
+    logWarn(`pi agent render failed, skipping: ${msg}`);
+    actions.push({ entry: ".pi/agents", mode: "skip", reason: `render-failed: ${msg}` });
   }
 
   const summary = { copied: 0, linked: 0, skipped: 0, rejected: 0, warnings: warnings.length };

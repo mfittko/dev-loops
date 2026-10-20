@@ -51,7 +51,7 @@ test("this repo's .devloops resolves the pre-push-reviewer to Opus on Claude and
   );
   assert.equal(
     resolveRoleModel(config, { role: "pre-push-reviewer", harness: "pi" }),
-    "openai-codex/gpt-6-sol",
+    "openai-codex/gpt-6.1-sol",
     "Pi harness pre-push-reviewer must resolve to the configured Codex child model",
   );
   // The rename leaves no alias: the old role key is gone from the repo config.
@@ -59,26 +59,42 @@ test("this repo's .devloops resolves the pre-push-reviewer to Opus on Claude and
 });
 
 // Regular vs. strong split: routine roles run on the regular tier (sonnet on
-// Claude, inherit on Pi); review, refiner, the pre-push reviewer and every
-// gate angle stay on opus.
+// Claude; on Pi the regular tier carries the operator's free model); review,
+// refiner, the pre-push reviewer and every gate angle stay on opus.
 test("this repo's .devloops resolves the regular tier to sonnet and the strong roles to opus", async () => {
   const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
   assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
 
+  // The regular tier's Pi model is an operator opt-in for the free
+  // Ollama-hosted model; the Claude side of the same tier stays on sonnet.
+  // The id is pinned rather than read back from the config under test, so a
+  // wrong or paid model id in `.devloops` fails here instead of passing by
+  // self-consistency.
+  assert.equal(
+    config.models.tiers.low.pi,
+    "ollama-cloud/minimax-m3.1-flash",
+    "the regular tier's Pi model must stay the operator's free Ollama-hosted model",
+  );
   for (const role of ["developer", "fixer", "docs", "quality"]) {
     assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "sonnet", `${role} on claude`);
-    assert.equal(resolveRoleModel(config, { role, harness: "pi" }), null, `${role} on pi`);
+    assert.equal(
+      resolveRoleModel(config, { role, harness: "pi" }),
+      "ollama-cloud/minimax-m3.1-flash",
+      `${role} on pi`,
+    );
   }
-  for (const role of ["review", "refiner", "pre-push-reviewer"]) {
+  assert.equal(config.models.tiers.high.pi, "openai-codex/gpt-6.1-sol", "the strong tier's Pi model must be the Codex model, never the free model");
+  for (const role of ["review", "refiner", "judge", "pre-push-reviewer"]) {
     assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "opus", `${role} on claude`);
+    assert.equal(resolveRoleModel(config, { role, harness: "pi" }), "openai-codex/gpt-6.1-sol", `${role} on pi`);
   }
-  assert.equal(resolveRoleModel(config, { role: "pre-push-reviewer", harness: "pi" }), "openai-codex/gpt-6-sol");
 
   for (const gate of GATE_KEYS) {
     const { pool } = resolveGateAngleContract(config, gate);
     assert.ok(Array.isArray(pool) && pool.length > 0, `gates.${gate} must resolve a non-empty angle pool`);
     for (const angle of pool) {
       assert.equal(resolveRoleModel(config, { role: angle, harness: "claude", kind: "angle" }), "opus", `${gate} angle ${angle} on claude`);
+      assert.equal(resolveRoleModel(config, { role: angle, harness: "pi", kind: "angle" }), "openai-codex/gpt-6.1-sol", `${gate} angle ${angle} on pi`);
     }
   }
 });

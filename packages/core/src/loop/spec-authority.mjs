@@ -300,6 +300,11 @@ function nonEmptyStringList(value) {
     : null;
 }
 
+// A form is an input, a surface is a location: inputs stay verbatim ("" and padding are real inputs).
+function inputFormList(value) {
+  return Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "string") ? [...value] : null;
+}
+
 /**
  * A valid_compliant remediation names the defect class and a site query the
  * fixer runs at the head: a `git grep` pattern or symbol list. A matcher or
@@ -333,10 +338,10 @@ function validateRemediationScope(d) {
   }
   const scope = { defectClass: d.defectClass.trim(), siteQuery: d.siteQuery.trim(), defectKind };
   if (defectKind === "matcher") {
-    const accepted = nonEmptyStringList(d.acceptedForms);
-    const rejected = nonEmptyStringList(d.rejectedForms);
+    const accepted = inputFormList(d.acceptedForms);
+    const rejected = inputFormList(d.rejectedForms);
     if (!accepted || !rejected) {
-      throw new Error("spec-authority matcher decision requires non-empty acceptedForms[] and rejectedForms[] (the input forms, one test each)");
+      throw new Error("spec-authority matcher decision requires acceptedForms[] and rejectedForms[] to be non-empty arrays of strings (the input forms, one test each; \"\" is allowed)");
     }
     return { ...scope, acceptedForms: accepted, rejectedForms: rejected };
   }

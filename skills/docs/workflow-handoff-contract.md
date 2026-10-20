@@ -29,6 +29,28 @@ Explicit phases (including the same label with `not_applicable` linkage) and loc
 branches retain their own slug paths. Missing or conflicting startup authority
 still requires reconciliation; a path label alone never establishes issue authority.
 
+For an active PR outside the `ui_review` strategy, the CLI builder binds `cwd`
+to exactly one existing registered linked checkout using the live PR's
+repository and head branch. It verifies the
+checkout's actual root, branch, common Git directory and isolation before passing
+the canonical root as `worktreeCwd`. An issue-named directory can therefore serve
+its PR without changing PR identity, routing or spec authority. Missing, foreign,
+ambiguous or unverifiable associations produce typed `pr_worktree_*` refusals;
+the builder does not acquire a checkout or fall back to an invented PR path.
+Local committed delivery may be ahead of the pushed PR; existing action checks
+retain authority over head-sensitive operations. Terminal reconciliation remains
+exempt from checkout association. The `ui_review` strategy retains the canonical
+PR provisioning path: its provisioner creates or reuses the isolated checkout,
+checks isolation and pins the PR head with a detached HEAD. Envelope construction
+does not require a branch checkout before that provisioning or on detached resume.
+
+When startup carries no canonical spec source, the CLI builder evaluates that
+same live PR body/head payload through the gate detector's refinement-artifact
+owner. Only a present PR-body result with no finding supplies the envelope's
+`pr_body` source. Existing authority retains precedence; linked issues, promoted
+plans, invalid bodies and unknown results never become PR-body authority here.
+The existing spec-context seam still owns live criteria extraction for the gate.
+
 In dev mode, correct a shared derivation mismatch at this owning seam and prove
 the unchanged startup-to-coordinator boundary in isolation. Do not repair an
 emitted envelope by hand or treat an isolated test as native continuation proof.
