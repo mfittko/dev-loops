@@ -163,7 +163,7 @@ export function toDeltaActItems(actList) {
     // The site coverage record keys on the ledger fingerprint, which a repeated-fingerprint ref suffix would hide.
     if (nonEmpty(entry.fingerprint)) item.fingerprint = entry.fingerprint.trim();
     for (const key of REMEDIATION_TEXT_FIELDS) if (nonEmpty(entry[key])) item[key] = entry[key].trim();
-    for (const key of REMEDIATION_LIST_FIELDS) if (Array.isArray(entry[key]) && entry[key].length > 0) item[key] = entry[key].filter(nonEmpty).map((v) => v.trim());
+    for (const key of REMEDIATION_LIST_FIELDS) if (Array.isArray(entry[key]) && entry[key].length > 0) item[key] = key === "statedSurfaces" ? entry[key].filter(nonEmpty).map((v) => v.trim()) : entry[key].filter((v) => typeof v === "string"); // a form is an input (verbatim), a surface is a location (trimmed)
     if (Array.isArray(entry.siblingRemediations) && entry.siblingRemediations.length > 0) item.siblingRemediations = entry.siblingRemediations;
     if (nonEmpty(entry.file)) item.file = entry.file.trim();
     if (Number.isInteger(entry.line)) item.line = entry.line;
@@ -331,7 +331,7 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], valid
     if (f?.skipReason != null && (!nonEmpty(f.skipReason) || !nonEmpty(f.residueOf))) errors.push(`newFindings[${i}].skipReason needs residueOf and a non-empty reason`);
     if (!membershipOnly && nonEmpty(f?.skipReason) && expectedRefs.has(f.residueOf)) {
       const actItem = sequence.actItems.find((item) => item.ref === f.residueOf);
-      const recorded = recordedSkipReason(validationCoverage, actItem.fingerprint ?? actItem.ref, nonEmpty(f.site) ? f.site.trim() : "");
+      const recorded = recordedSkipReason(validationCoverage, actItem.fingerprint ?? actItem.ref, typeof f.site === "string" ? f.site : null);
       if (recorded !== f.skipReason.trim()) {
         errors.push(`PRE-PUSH-DELTA-RESIDUE: newFindings[${i}].skipReason must equal the reason recorded for site ${JSON.stringify(f.site)} of act item ${f.residueOf}: ${JSON.stringify(recorded)}`);
       }

@@ -47,7 +47,7 @@ async function withCase({ siblingVerdict, identity = { specDigest, headSha: HEAD
       ]),
       judgeVerdict, specAuthority, tmpRoot: tmpDir,
     });
-    await fn({ run, ledgerPath: path.join(tmpDir, LEDGER) });
+    await fn({ run, ledgerPath: path.join(tmpDir, LEDGER), tmpDir });
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -115,4 +115,29 @@ test("an evidence-only valid_compliant sibling decision leaves zero open act ite
     assert.equal(listOpenActItems(findings).length, 0);
     assert.equal(composeReviewVerdict("clean", findings), "clean");
   });
+});
+
+test("check-judge-decision and the ledger writer agree on matcher rejectedForms", async () => {
+  const { main } = await import("../../scripts/loop/check-judge-decision.mjs");
+  const matcher = (rejectedForms) => ({
+    ...VERDICT,
+    decisions: [
+      VERDICT.decisions[0],
+      decision(1, "valid_compliant", { authorizedRemediation: "fix it", defectClass: "c", siteQuery: "q", defectKind: "matcher", acceptedForms: ["1"], rejectedForms }),
+    ],
+  });
+  for (const [rejectedForms, ok] of [[["", "abc"], true], [[" 12 "], true], [[], false], [["a", 5], false]]) {
+    await withCase({ siblingVerdict: matcher(rejectedForms) }, async ({ run, tmpDir }) => {
+      const out = [];
+      const saved = process.exitCode;
+      try {
+        await main(["--file", path.join(tmpDir, "spec-authority-verdict.json")], { stdout: { write: (s) => out.push(s) }, stderr: { write() {} } });
+      } finally {
+        process.exitCode = saved;
+      }
+      assert.equal(JSON.parse(out.join("")).ok, ok);
+      if (ok) await run();
+      else await assert.rejects(run(), /failed validation/);
+    });
+  }
 });
