@@ -434,14 +434,17 @@ async function isInternalOnlyPr({ repo, pr, patterns }, { env, ghCommand, runChi
   }
 }
 
-const defaultFetchPrHead = ({ pr, baseRefName, repoRoot }) => {
-  defaultFetchOrigin(baseRefName, { repoRoot });
-  defaultFetchOrigin(`pull/${pr}/head`, { repoRoot });
+export const defaultFetchPrHead = ({ pr, baseRefName, repoRoot }, exec) => {
+  // An explicit destination refspec updates the checked ref even when remote.origin.fetch excludes the base.
+  defaultFetchOrigin(`+refs/heads/${baseRefName}:refs/remotes/origin/${baseRefName}`, { repoRoot }, exec);
+  defaultFetchOrigin(`pull/${pr}/head`, { repoRoot }, exec);
 };
 
 // Returns an adr_tripwire refusal reason, or null when the tripwire passes.
-// Any evaluator or fetch error is a refusal (fail closed).
-async function resolveAdrTripwireRefusal({ options, baseRefName, body, headSha, repoRoot, env, ghCommand, runChild, ghJson, fetchPrHead, evaluateAdrTripwire, waiveAdrTripwire, detectOriginSlug }) {
+// Any evaluator or fetch error is a refusal (fail closed). This base refresh can advance
+// origin/<base> past the earlier ancestry check, so ancestry is revalidated before any
+// waiver write and refuses as base_not_integrated.
+async function resolveAdrTripwireRefusal({ options, baseRefName, body, headSha, repoRoot, env, ghCommand, runChild, ghJson, fetchPrHead, evaluateAdrTripwire, waiveAdrTripwire, detectOriginSlug, isAncestor }) {
   try {
     if (!baseRefName) throw new Error("the PR base branch is unreadable");
     const originSlug = detectOriginSlug(repoRoot);
@@ -449,17 +452,20 @@ async function resolveAdrTripwireRefusal({ options, baseRefName, body, headSha, 
       throw new Error(`the checkout origin (${originSlug ?? "unresolved"}) is not ${options.repo}`);
     }
     fetchPrHead({ pr: options.pr, baseRefName, repoRoot });
+    if (!isAncestor({ base: `origin/${baseRefName}`, head: headSha, repoRoot })) {
+      return { precondition: "base_not_integrated", reason: `head ${headSha} does not contain origin/${baseRefName} after the ADR tripwire base refresh (GATE-EXEC-BASE-REFRESH); merge origin/${baseRefName} into the branch, push, and re-run the gate round at the new head` };
+    }
     const evaluate = (prBody) => evaluateAdrTripwire({ base: `origin/${baseRefName}`, head: headSha, prBody, repoRoot, env });
     let result = await evaluate(body);
     if (result.outcome === "block" && result.waiver?.standing === true && result.waiver.stale === true) {
       const written = await waiveAdrTripwire({ repo: options.repo, pr: options.pr }, { env, ghCommand, repoRoot, runChild });
-      if (!written.ok) return `the standing-authorization waiver is stale and its re-issue was refused (${written.reason}: ${written.detail})`;
+      if (!written.ok) return { precondition: "adr_tripwire", reason: `the standing-authorization waiver is stale and its re-issue was refused (${written.reason}: ${written.detail})` };
       const fresh = await ghJson(["pr", "view", String(options.pr), "--repo", options.repo, "--json", "body"], { env, ghCommand, runChild });
       result = await evaluate(typeof fresh?.body === "string" ? fresh.body : "");
     }
-    return result.outcome === "pass" ? null : `the ADR tripwire blocks at head ${headSha}: ${(result.reasons ?? []).join(" ")}`;
+    return result.outcome === "pass" ? null : { precondition: "adr_tripwire", reason: `the ADR tripwire blocks at head ${headSha}: ${(result.reasons ?? []).join(" ")}` };
   } catch (error) {
-    return `the ADR tripwire could not be evaluated (unevaluable): ${error instanceof Error ? error.message : String(error)}`;
+    return { precondition: "adr_tripwire", reason: `the ADR tripwire could not be evaluated (unevaluable): ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 
@@ -797,13 +803,13 @@ export async function mergePr(options, runtime = {}) {
     body: typeof prView?.body === "string" ? prView.body : "",
     headSha: currentHeadSha,
     repoRoot: resolveRepoRoot(cwd),
-    env, ghCommand, runChild, ghJson, fetchPrHead, evaluateAdrTripwire, waiveAdrTripwire, detectOriginSlug,
+    env, ghCommand, runChild, ghJson, fetchPrHead, evaluateAdrTripwire, waiveAdrTripwire, detectOriginSlug, isAncestor,
   });
   if (adrReason !== null) {
-    const error = new Error(`Merge preconditions not satisfied: adr_tripwire (${adrReason})`);
+    const error = new Error(`Merge preconditions not satisfied: ${adrReason.precondition} (${adrReason.reason})`);
     error.mergePrFailure = {
       ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
-      mergeClass: verdict.mergeClass, failures: [{ precondition: "adr_tripwire", reason: adrReason }],
+      mergeClass: verdict.mergeClass, failures: [{ precondition: adrReason.precondition, reason: adrReason.reason }],
     };
     throw error;
   }

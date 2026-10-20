@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { mergePr, parseMergePrCliArgs, main, defaultIsAncestor } from "../../scripts/github/merge-pr.mjs";
+import { mergePr, parseMergePrCliArgs, main, defaultIsAncestor, defaultFetchPrHead } from "../../scripts/github/merge-pr.mjs";
 import { captureStream } from "../_helpers.mjs";
 
 const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
@@ -1273,4 +1273,25 @@ test("defaultIsAncestor answers true, false, and throws on a bad ref in a real r
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("defaultFetchPrHead fetches the base with an explicit refspec so a restricted remote.origin.fetch cannot leave a stale ref", () => {
+  const calls = [];
+  defaultFetchPrHead({ pr: 7, baseRefName: "main", repoRoot: "/repo" }, (cmd, args) => { calls.push([cmd, ...args]); });
+  assert.deepEqual(calls[0], ["git", "fetch", "origin", "--", "+refs/heads/main:refs/remotes/origin/main"]);
+  assert.deepEqual(calls[1], ["git", "fetch", "origin", "--", "pull/7/head"]);
+});
+
+test("base_not_integrated refuses when the ADR tripwire base refresh advances the base past the head, before any waiver write", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
+  let fetches = 0;
+  runtime.fetchPrHead = () => { fetches += 1; };
+  runtime.isAncestor = () => fetches < 2;
+  let waived = false;
+  runtime.waiveAdrTripwire = async () => { waived = true; return { ok: true }; };
+  const error = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.match(error.message, /base_not_integrated \(.*after the ADR tripwire base refresh/);
+  assert.equal(error.mergePrFailure.failures[0].precondition, "base_not_integrated");
+  assert.equal(waived, false);
+  assert.equal(mergeCalls(calls).length, 0);
 });
