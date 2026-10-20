@@ -93,7 +93,7 @@ for (const { name, titleArgs, fragment, allowed } of [
   });
 }
 
-for (const { name, args, fragment = false, fragmentOnBase = false, allowed = false } of [
+for (const { name, args, fragment = false, fragmentOnBase = false, allowed = false, defaultHead = false } of [
   { name: "repeated head and base with fragment", args: ["--head", "different", "--head", "feature", "--base", "earlier", "--base", "main"], fragment: true, allowed: true },
   { name: "attached short head and base with fragment", args: ["-Hfeature", "-Bmain"], fragment: true, allowed: true },
   { name: "equals short head and base with fragment", args: ["-H=feature", "-B=main"], fragment: true, allowed: true },
@@ -101,6 +101,8 @@ for (const { name, args, fragment = false, fragmentOnBase = false, allowed = fal
   { name: "repeated base with fragment already on main", args: ["--head", "feature", "--base", "earlier", "--base", "main"], fragment: true, fragmentOnBase: true },
   { name: "attached short head and base without fragment", args: ["-Hfeature", "-Bmain"] },
   { name: "equals short head and base without fragment", args: ["-H=feature", "-B=main"] },
+  { name: "final empty long head uses checkout without fragment", args: ["--base", "main", "--head", "different", "--head="], defaultHead: true },
+  { name: "final empty short head uses checkout without fragment", args: ["--base", "main", "--head", "different", "-H="], defaultHead: true },
 ]) {
   test(`create-pr effective comparison: ${name}`, async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "create-effective-comparison-"));
@@ -120,13 +122,13 @@ for (const { name, args, fragment = false, fragmentOnBase = false, allowed = fal
       const checks = [];
       const runtime = { cwd, env,
         validatePrePrReview: async ({ head, base }) => {
-          assert.equal(head, "feature");
+          assert.equal(head, defaultHead ? undefined : "feature");
           assert.equal(base, "main");
           checks.push("review");
           return { ok: true };
         },
         evaluatePrSizeBudget: async ({ head, base }) => {
-          assert.equal(head, "refs/heads/feature");
+          assert.equal(head, defaultHead ? "HEAD" : "refs/heads/feature");
           assert.equal(base, "origin/main");
           checks.push("size");
           return {};
@@ -151,6 +153,35 @@ for (const { name, args, fragment = false, fragmentOnBase = false, allowed = fal
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });
 }
+
+for (const args of [["--base="], ["-B="], ["--base", ""], ["-B", ""], ["--base", " "]]) {
+  test(`create-pr final empty base refuses before fetch: ${JSON.stringify(args)}`, async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "create-empty-base-"));
+    try {
+      await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "docs/note.md", content: "note\n" }] });
+      runGitFixture(cwd, ["checkout", "-qb", "feature"]);
+      const { env, ghLogPath, fetchLog } = await writeGhStub(cwd, [{}]);
+      await assert.rejects(createPrMain(["--base", "main", ...args, "--head", "feature", "--title", "fix(docs): note", "--body", "notes"], {
+        cwd, env, validatePrePrReview: async () => { assert.fail("empty base must refuse before preflights"); },
+      }), /--base requires a non-empty literal branch name/);
+      assert.deepEqual(await readGhCalls(ghLogPath), []);
+      await assert.rejects(readFile(fetchLog, "utf8"), { code: "ENOENT" });
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
+test("create-pr final empty head keeps the checkout closing-reference guard", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "create-empty-head-"));
+  try {
+    await initSizeBudgetFixtureRepo(cwd);
+    runGitFixture(cwd, ["checkout", "-qb", "issue-2335"]);
+    const { env, ghLogPath } = await writeGhStub(cwd, [{}]);
+    await assert.rejects(createPrMain(["--base", "main", "--head", "issue-2340", "--head=", "--body", "Closes #2340"], {
+      cwd, env, validatePrePrReview: async () => { assert.fail("closing mismatch must refuse before pre-PR review"); },
+    }), /2335/);
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
 
 for (const base of ["main", "origin/main", "release/v1"]) {
   test(`create-pr literal base accepts ${base}`, async () => {

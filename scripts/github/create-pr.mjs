@@ -79,7 +79,7 @@ Behavior:
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
   - refuses with \`size_split_required_before_pr\` before creating when the local \`origin/<base>...<head>\` whole-PR logic LOC is at or above the resolved default-tier \`waiverLoc\` (PRE-PR-SIZE-CHECK); no override flag; an unknown size does not refuse
   - fetches only \`origin <base>\` before size and changelog checks; refuses with \`base_fetch_failed_before_pr\` on fetch failure
-  - validates \`--base\` as a literal branch name before that fetch: refuses options, refspecs and revision syntax; valid branch names remain supported
+  - validates \`--base\` as a non-empty literal branch name before that fetch: refuses empty values, options, refspecs and revision syntax; valid branch names remain supported
   - refuses with \`changelog_incomplete_before_pr\` (LIFECYCLE-CHANGELOG-COMPLETENESS) after size checks against the fetched base when the selected head equals checkout HEAD; skips for an unresolved origin base or a different head; no override
   - after a successful create, prints one JSON line \`{"adrTripwire":...,"sizeBudget":...}\` (ADR-TRIPWIRE-EARLY-SURFACE);
     a block or unknown outcome is advisory and never refuses the already-created PR
@@ -378,7 +378,11 @@ export function buildCreatePrArgs(argv, { baseDefault = null } = {}) {
   // exactly one `--base` ever reaches gh. A null/empty baseDefault injects
   // nothing (main only resolves one when base is absent; a caller passing base
   // resolves none).
-  const hasBase = scanPrFlags(args).base !== null;
+  const base = scanPrFlags(args).base;
+  if (base !== null && base.trim().length === 0) {
+    throw parseError("--base requires a non-empty literal branch name (omit the flag to use the default)");
+  }
+  const hasBase = base !== null;
   const injectBase = !hasBase && typeof baseDefault === "string" && baseDefault.trim().length > 0;
   return {
     help: false,
@@ -586,7 +590,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     // wrong issue. A branch with no issue (issue-less), a body with no closing
     // reference, and --allow-cross-issue all pass.
     const headBranch = sources.head
-      ?? resolveCurrentBranch({ cwd: runtime.cwd ?? process.cwd(), env: runtime.env ?? process.env });
+      || resolveCurrentBranch({ cwd: runtime.cwd ?? process.cwd(), env: runtime.env ?? process.env });
     const refusal = resolveClosingRefMismatch({
       body,
       expectedIssue: extractIssueFromBranchSlug(headBranch),

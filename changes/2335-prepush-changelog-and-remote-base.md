@@ -1,3 +1,3 @@
 - Validate changelog fragments before PR creation and fragment-touching fix pushes; refresh the PR base and anchor local diff bases to origin (#2335)
 - Show the comparison base SHA when decision-record validation passes (#2335)
-- Reject nonliteral PR bases before fetching; use gh's effective head and base in preflights (#2335)
+- Reject empty or nonliteral PR bases before fetching; use effective head and base flags in preflights (#2335)
