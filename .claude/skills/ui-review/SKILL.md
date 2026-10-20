@@ -23,8 +23,9 @@ failure entries. Thread `failures` onward, even on stopped results: runner-unava
 
 `@axe-core/playwright` is a separate opt-in
 (`npm install --save-dev @axe-core/playwright`) for the computed-a11y artifact.
-Without it every `axe.json` is a JSON `null` and a11y findings lose their
-grounding.
+It is resolved from the reviewed worktree first, then from dev-loops. When
+neither has it, `axe.json` holds a stated `{ skipped: true, reason }` (never a bare
+`null`) and a11y findings lose their grounding. The drive also logs one stderr line `[ui-review-drive] <reason>` per run when axe is skipped.
 
 The route's handoff envelope carries its stop rules and acceptance
 self-validation (defined in `handoff-envelope.mjs`): no product-code writes,
@@ -37,11 +38,15 @@ Provision an isolated worktree for the PR head and boot the branch's app via
 `dev-loops-run cli/index.mjs loop ui-review-provision --repo-root <p> --pr <n>`
 (source-repo fallback: `dev-loops-run scripts/loop/ui-review-provision.mjs --repo-root <p> --pr <n>`; pure orchestration in
 `packages/core/src/loop/ui-review-provision.mjs`). It refuses the primary
-checkout, installs the dependency-lock delta, runs pending dev-DB migrations,
-boots the app and polls an HTTP readiness probe. It fails closed to a stated stop
+checkout, runs the frozen install for the present lockfile (`bun.lock`,
+`pnpm-lock.yaml`, `package-lock.json` or `yarn.lock`) when the lock differs or the
+worktree has no `node_modules`, runs pending dev-DB migrations,
+boots the app (output in `<tmpdir>/dev-loops-ui-review-pr-<n>-XXXXXX/boot.log`) and polls an HTTP
+readiness probe. It fails closed to a stated stop
 reason on: a primary-checkout target, a missing run recipe, a run-recipe `cwd`
 that resolves outside the provisioned worktree, a destructive migration lacking
-`--ack-destructive-migration`, or a readiness probe timeout. Every bounded cap is
+`--ack-destructive-migration`, a boot process that exits early (`boot-exited`,
+with exit code and log tail), or a readiness probe timeout. Every bounded cap is
 logged.
 
 A project declares the run recipe as `uiReview.run` in `.devloops`: a boot
@@ -121,7 +126,9 @@ decisions in `packages/core/src/loop/ui-review-report.mjs`). It reuses the
 shared pending-review poster (`scripts/github/stage-reviewer-draft.mjs` +
 `buildDraftReviewPayload`). Each anchorable finding becomes an inline comment on
 its exact `{path,line,side:RIGHT}` anchor with the reproduced exception and a fix
-direction. Non-anchorable findings stay in the review body. The stage fails
+direction. Non-anchorable findings stay in the review body. The HTML artifact
+embeds one labeled screenshot per named state (also with 0 findings), within the
+existing data-URI size cap. The stage fails
 closed when the diagnosed head is missing or the live head from `loop info` has
 advanced since diagnose.
 

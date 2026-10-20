@@ -292,7 +292,8 @@ export async function dismissInterstitials({ page, interstitials, timeoutMs = 20
 /** Map one declared step to its Playwright page call, then capture the state.
  * Exported so the per-state attribution + consolePath threading has a regression
  * test against the REAL production wiring (not a substitute fake runStep). */
-export function makeRunStep({ page, outputDir, sliceCapturedEvents }) {
+export function makeRunStep({ page, outputDir, sliceCapturedEvents, repoRoot, log = () => {} }) {
+  let axeSkipLogged = false;
   // The Playwright page keeps its size across steps, so a declared viewport stays
   // in effect for later undeclared steps too. Carry it forward so the slug always
   // names the viewport the page is ACTUALLY at — never a stale `default`. Before
@@ -344,12 +345,17 @@ export function makeRunStep({ page, outputDir, sliceCapturedEvents }) {
       interactionState: step.interactionState,
       fullPage: false,
       outputDir,
+      repoRoot,
       // Hand the already-sliced window to this state's console.json (same attribution
       // as before when capture succeeds); the cursor already advanced above.
       captureConsole: sliceCapturedEvents ? () => consolePayload : undefined,
       metadata: { fixture: null, route: step.path ?? null, reviewHint: `Drive step "${stateName}" for the "${flow.name}" flow.` },
     });
-    return { ok: true, screenshotPath: paths.screenshotPath, statePath: paths.statePath, snapshotPath: paths.snapshotPath, axePath: paths.axePath, consolePath: paths.consolePath };
+    if (paths.axeSkipReason && !axeSkipLogged) {
+      axeSkipLogged = true;
+      log(paths.axeSkipReason);
+    }
+    return { ok: true, screenshotPath: paths.screenshotPath, statePath: paths.statePath, snapshotPath: paths.snapshotPath, axePath: paths.axePath, consolePath: paths.consolePath, ...(paths.axeSkipReason && { axeSkipReason: paths.axeSkipReason }) };
   };
 }
 
@@ -442,7 +448,7 @@ export async function runCli(argv = process.argv.slice(2), {
       {
         authenticate: () => authenticate({ page, login: recipe.login, interstitials: recipe.interstitials }),
         dismissInterstitials: ({ interstitials }) => dismissInterstitials({ page, interstitials }),
-        runStep: makeRunStep({ page, outputDir: options.outputDir, sliceCapturedEvents }),
+        runStep: makeRunStep({ page, outputDir: options.outputDir, sliceCapturedEvents, repoRoot: options.repoRoot, log: (msg) => stderr.write(`[ui-review-drive] ${msg}\n`) }),
         getCapturedEvents,
         readServerLogTail: () => logTail.read(),
         log: (msg) => stderr.write(`[ui-review-drive] ${msg}\n`),
