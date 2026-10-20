@@ -240,6 +240,24 @@ test("a padded input_form residue site matches only its verbatim recorded skip",
   assert.ok(borrowed.errors.some((e) => /PRE-PUSH-DELTA-RESIDUE/.test(e)));
 });
 
+test("an omitted residue site never matches a recorded skipped empty input_form site", () => {
+  const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: [actEntry()] });
+  const reason = "the empty form is out of scope";
+  const run = (extra) => decideDeltaNextStep({
+    sequence,
+    result: deltaResult(sequence, { newFindings: [{ severity: "low", summary: "same guard", evidence: ["src/c.mjs:12"], residueOf: "fp1", skipReason: reason, ...extra }] }),
+    invocation: 1,
+    currentHead: CANDIDATE,
+    siteCoverage: record([coverageItem({ returnedSites: [""], sites: [{ site: "", status: "skipped", kind: "input_form", reason }] })]),
+  });
+  assert.equal(run({ site: "" }).outcome, "locally_clear");
+  for (const extra of [{}, { site: undefined }, { site: null }, { site: 0 }]) {
+    const out = run(extra);
+    assert.equal(out.outcome, "needs_fix");
+    assert.ok(out.errors.some((e) => /PRE-PUSH-DELTA-RESIDUE/.test(e)));
+  }
+});
+
 test("the delta check reports a coverage gap for an act item with no record", () => {
   const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: [actEntry()] });
   const next = decideDeltaNextStep({ sequence, result: deltaResult(sequence), invocation: 1, currentHead: CANDIDATE, siteCoverage: [] });

@@ -331,7 +331,7 @@ export function validateDeltaResult(result, { sequence, siteCoverage = [], valid
     if (f?.skipReason != null && (!nonEmpty(f.skipReason) || !nonEmpty(f.residueOf))) errors.push(`newFindings[${i}].skipReason needs residueOf and a non-empty reason`);
     if (!membershipOnly && nonEmpty(f?.skipReason) && expectedRefs.has(f.residueOf)) {
       const actItem = sequence.actItems.find((item) => item.ref === f.residueOf);
-      const recorded = recordedSkipReason(validationCoverage, actItem.fingerprint ?? actItem.ref, typeof f.site === "string" ? f.site : "");
+      const recorded = recordedSkipReason(validationCoverage, actItem.fingerprint ?? actItem.ref, typeof f.site === "string" ? f.site : null);
       if (recorded !== f.skipReason.trim()) {
         errors.push(`PRE-PUSH-DELTA-RESIDUE: newFindings[${i}].skipReason must equal the reason recorded for site ${JSON.stringify(f.site)} of act item ${f.residueOf}: ${JSON.stringify(recorded)}`);
       }

@@ -174,6 +174,7 @@ export function siteCoverageGaps(actItems, siteCoverage, residualRefs = new Set(
 
 /** The recorded skip reason for a site of an act item, or null. */
 export function recordedSkipReason(siteCoverage, fingerprint, site) {
+  if (typeof site !== "string") return null;
   const skipped = ((siteCoverage ?? []).find((record) => record.fingerprint === fingerprint)?.sites ?? []).filter((s) => s.status === SITE_STATUS.SKIPPED);
   const found = skipped.find((s) => s.site === site) ?? skipped.find((s) => s.kind !== "input_form" && s.site === site.trim());
   return found?.reason ?? null;
