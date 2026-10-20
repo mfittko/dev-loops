@@ -53,7 +53,7 @@ import {
   mapGateToConfigKey,
 } from "./write-gate-context.mjs";
 
-const USAGE = `Usage: resolve-angle-carry-forward.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --prev-head <sha> --head-sha <sha> [--tmp-root <path>]
+const USAGE = `Usage: resolve-angle-carry-forward.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --prev-head <sha> --head-sha <sha> [--tmp-root <path>] [--rerun-angle <angle>]...
 Decide, per angle, whether a prior gate verdict (clean OR findings_present, recorded
 at --prev-head) may be carried forward to the current head, using the fail-closed
 delta<->review-surface rule. A carried findings_present angle also carries its prior
@@ -67,6 +67,8 @@ Required:
                                  prefix refuses "not found"
   --head-sha <sha>              Current head SHA (head B); must be the CWD worktree HEAD
 Optional:
+  --rerun-angle <angle>         Repeatable. Force the named angle (an angle in the prior log) into
+                                 mustRerun with reason operator_rerun; an unknown angle is refused.
   --tmp-root <path>             Root tmp directory. Omitted, the prior findings-log ledger is read
                                  from the MAIN worktree's tmp/ (the stable per-repo ledger location)
                                  while the carry-forward plan stays worktree-local; an explicit path pins both.
@@ -98,6 +100,7 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
       "head-sha": { type: "string" },
       "tmp-root": { type: "string" },
       "spec-authority": { type: "string" },
+      "rerun-angle": { type: "string", multiple: true },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -118,6 +121,7 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
     // worktree would then hard-fail "prior gate findings-log not found").
     tmpRoot: undefined,
     specAuthority: undefined,
+    rerunAngles: [],
   };
   for (const token of tokens) {
     if (token.kind === "positional") throw parseError(`Unknown argument: ${token.value}`);
@@ -160,6 +164,7 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
       continue;
     }
     if (token.name === "tmp-root") { options.tmpRoot = requireTokenValue(token, parseError).trim(); continue; }
+    if (token.name === "rerun-angle") { options.rerunAngles.push(requireTokenValue(token, parseError).trim()); continue; }
     if (token.name === "spec-authority") { options.specAuthority = requireTokenValue(token, parseError).trim(); continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
@@ -209,7 +214,7 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
  * @param {import("@dev-loops/core/analysis/diff-analyzer").ClassifyRules|null} [input.rules] — repository `classify` rules from resolveClassifyRules
  * @returns {{ prevHead: string, carried: Array<{angle: string, carriedFromHead: string, reviewer?: string, dispatchId?: string, model?: string, prevVerdict: "clean"|"findings_present", findings: Array<object>, reason: string}>, mustRerun: Array<{angle: string, reason: string}> }}
  */
-export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = [], alwaysRerun = [], deltaComplete = false, rules = null }) {
+export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = [], alwaysRerun = [], deltaComplete = false, rules = null, rerunAngles = [] }) {
   if (!log || typeof log !== "object") {
     throw new Error("prior gate findings-log not found or unreadable — cannot carry forward (fail-closed)");
   }
@@ -327,11 +332,16 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
     priorFindingsByAngle.get(angle).push(finding);
   }
 
+  const unknownRerun = rerunAngles.filter((a) => !prevAngles.includes(a));
+  if (unknownRerun.length > 0) {
+    throw Object.assign(new Error(`--rerun-angle names no angle in the prior findings-log: ${unknownRerun.join(", ")}`), { code: "unknown_rerun_angle" });
+  }
+
   if (incrementalFiles.some(isDevLoopConfigSourcePath)) {
     return {
       prevHead: headSha,
       carried: [],
-      mustRerun: prevAngles.map((angle) => ({ angle, reason: "incremental delta changed a dev-loop config source; every angle must re-run" })),
+      mustRerun: prevAngles.map((angle) => ({ angle, reason: rerunAngles.includes(angle) ? "operator_rerun" : "incremental delta changed a dev-loop config source; every angle must re-run" })),
     };
   }
 
@@ -339,6 +349,10 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
   const mustRerun = [];
   const AMBIGUOUS_FINDING_REASON = "angle returned a finding at the prior head that matches more than one provenance.perAngle entry — attribution is ambiguous, so it never carries forward regardless of the delta (fail-closed)";
   for (const angle of prevAngles) {
+    if (rerunAngles.includes(angle)) {
+      mustRerun.push({ angle, reason: "operator_rerun" });
+      continue;
+    }
     if (ambiguousAngles.has(angle)) {
       mustRerun.push({ angle, reason: AMBIGUOUS_FINDING_REASON });
       continue;
@@ -502,7 +516,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // findings, duplicate angle) throws UNTAGGED and is treated like an
     // operational failure below: no marker, emitter refuses. So the catch never
     // blanket-tags — it trusts the tag the pure seam set.
-    const rawPlan = buildCarryForwardPlan({ log, changedFiles, incrementalFiles, alwaysRerun, deltaComplete: reduced, rules });
+    const rawPlan = buildCarryForwardPlan({ log, changedFiles, incrementalFiles, alwaysRerun, deltaComplete: reduced, rules, rerunAngles: options.rerunAngles });
     // AC1 (ADR 0061): optional --spec-authority stamps the pinned revision
     // identity onto the plan via the ONE shared helper. Pure no-op when absent.
     // Resolved against `repoRoot` (default process.cwd()) — matching every

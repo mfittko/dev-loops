@@ -634,6 +634,38 @@ test("CLI fails closed (exit 1, prior gate findings-log not found) on a first ro
   }
 });
 
+test("--rerun-angle forces the named angle to re-run (operator_rerun), carries the rest, and records the reason in the plan (#2895 AC1, AC3)", async () => {
+  const perAngle = cleanLog.provenance.perAngle;
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    perAngle,
+    mutate: (root) => writeFile(path.join(root, "docs/guide.md"), "# Guide\nmore\n", "utf8"),
+  });
+  try {
+    const argv = ["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha, "--tmp-root", "tmp"];
+    const result = await runMain([...argv, "--rerun-angle", "correctness"], { repoRoot });
+    assert.deepEqual(result.mustRerun.filter((m) => m.reason === "operator_rerun"), [{ angle: "correctness", reason: "operator_rerun" }]);
+    assert.deepEqual(result.carried.map((c) => c.angle), ["coverage"]);
+    const planPath = path.join(repoRoot, buildCarryForwardPlanPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
+    assert.ok(JSON.parse(await readFile(planPath, "utf8")).mustRerun.some((m) => m.angle === "correctness" && m.reason === "operator_rerun"));
+
+    // AC2: an unknown angle is refused with the typed error and no plan is left behind.
+    assert.throws(() => buildCarryForwardPlan({ log: cleanLog, changedFiles: [], rerunAngles: ["nope"] }), { code: "unknown_rerun_angle" });
+    const refused = await runMainRaw([...argv, "--rerun-angle", "nope"], { repoRoot });
+    assert.equal(refused.exitCode, 1);
+    await assert.rejects(readFile(planPath, "utf8"), { code: "ENOENT" });
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("parseResolveAngleCarryForwardCliArgs collects a repeated --rerun-angle", () => {
+  const opts = parseResolveAngleCarryForwardCliArgs([
+    "--repo", "o/n", "--pr", "5", "--gate", "draft_gate", "--prev-head", "a".repeat(40), "--head-sha", "b".repeat(40),
+    "--rerun-angle", "docs", "--rerun-angle", "coverage",
+  ]);
+  assert.deepEqual(opts.rerunAngles, ["docs", "coverage"]);
+});
+
 test("parseResolveAngleCarryForwardCliArgs requires the core args", () => {
   assert.throws(() => parseResolveAngleCarryForwardCliArgs(["--repo", "o/n"]), /Missing required arguments/);
   const fullPrevHead = "a".repeat(40);
@@ -1313,4 +1345,35 @@ test("parseResolveAngleCarryForwardCliArgs fails closed on a same-head carry", (
     ]),
     /--head-sha must be the FULL head commit SHA/,
   );
+});
+
+test("buildCarryForwardPlan: config-source early return keeps operator_rerun for a named angle only", () => {
+  const plan = buildCarryForwardPlan({ log: cleanLog, changedFiles: [], incrementalFiles: [".devloops"], deltaComplete: true, rerunAngles: ["docs"] });
+  assert.equal(plan.mustRerun.find((m) => m.angle === "docs").reason, "operator_rerun");
+  for (const m of plan.mustRerun.filter((x) => x.angle !== "docs")) assert.match(m.reason, /config.source/i);
+});
+
+test("buildCarryForwardPlan: a named ambiguous-finding angle gets operator_rerun and still re-runs", () => {
+  const plan = buildCarryForwardPlan({
+    log: {
+      headSha: "aaaaaaa",
+      verdict: "clean",
+      findings: [{ angle: "coverage", severity: "nice-to-have", summary: "still open" }],
+      provenance: { distinctReviewers: 3, perAngle: [
+        { angle: "correctness", reviewer: "review-a" },
+        { angle: "coverage", reviewer: "review-b" },
+        { angle: "Coverage", reviewer: "review-c" },
+      ] },
+    },
+    changedFiles: ["docs/guide.md"],
+    rerunAngles: ["coverage"],
+  });
+  assert.equal(plan.mustRerun.find((m) => m.angle === "coverage").reason, "operator_rerun");
+});
+
+test("buildCarryForwardPlan: duplicate rerun names are idempotent; case mismatch is refused", () => {
+  const once = buildCarryForwardPlan({ log: cleanLog, changedFiles: ["docs/guide.md"], rerunAngles: ["docs"] });
+  const twice = buildCarryForwardPlan({ log: cleanLog, changedFiles: ["docs/guide.md"], rerunAngles: ["docs", "docs"] });
+  assert.deepEqual(twice, once);
+  assert.throws(() => buildCarryForwardPlan({ log: cleanLog, changedFiles: [], rerunAngles: ["Docs"] }), { code: "unknown_rerun_angle" });
 });
