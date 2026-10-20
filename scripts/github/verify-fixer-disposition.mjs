@@ -344,7 +344,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       raw = JSON.parse(text);
       // Emitted plans carry a source: only the report this verifier's own --construct wrote counts.
       if (order.source && await readFile(constructMarkPath(handoffPath), "utf8").catch(() => null) !== sha256Hex(text)) {
-        throw Object.assign(new Error(`Fixer disposition handoff ${handoffPath} was not written by this verifier's --construct; never hand-write it; remove that file with rm and run the verifier with --construct`), { handWritten: true });
+        throw Object.assign(new Error(`Fixer disposition handoff ${handoffPath} was not written by this verifier's --construct; never hand-write it; rm only this execution's refused report ${handoffPath} and its corresponding stale marker ${constructMarkPath(handoffPath)}, then run the verifier with --construct. Preserve accepted construction evidence and unrelated files`), { handWritten: true });
       }
     }
   } catch (error) {

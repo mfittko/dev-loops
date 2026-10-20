@@ -366,6 +366,35 @@ test("a hand-written fixer-disposition.json with valid content is refused and na
   });
 });
 
+test("a refused hand-written report with a stale marker can follow the scoped cleanup instructions", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    await mkdir(path.dirname(f.output), { recursive: true });
+    const report = JSON.stringify({ headSha: f.head, dispositions: [] });
+    const marker = `${f.output}.constructed`;
+    const unrelated = path.join(path.dirname(f.output), "unrelated.json");
+    await writeFile(f.output, report);
+    await writeFile(marker, "stale marker");
+    await writeFile(unrelated, "preserve me");
+    const mock = f.runtimeFor([]);
+    await assert.rejects(verifyFixerDisposition(f.options, mock.deps), (error) => {
+      assert.equal(error.handWritten, true);
+      assert.ok(error.message.includes(`rm only this execution's refused report ${f.output} and its corresponding stale marker ${marker}`));
+      assert.match(error.message, /Preserve accepted construction evidence and unrelated files/);
+      return true;
+    });
+    assert.equal(mock.calls.length, 0);
+    assert.equal(await readFile(f.output, "utf8"), report);
+    assert.equal(await readFile(marker, "utf8"), "stale marker");
+    await rm(f.output);
+    await assert.rejects(verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps), /EEXIST/);
+    assert.equal(await readFile(marker, "utf8"), "stale marker");
+    await rm(marker);
+    assert.equal((await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps)).constructed, true);
+    assert.equal(await readFile(unrelated, "utf8"), "preserve me");
+  });
+});
+
 test("normal mode refuses while the head's checks are red and posts no reply", async () => {
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);

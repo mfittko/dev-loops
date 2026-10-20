@@ -1170,6 +1170,9 @@ function assertFullPhaseSteps(text, { push }) {
   assert.match(text, /If it exits 2 \(not settled\), run it exactly once more\./);
   assert.match(text, /reports `stuck` or `changed`, or exits 1 with an error, resolve no thread, run no verifier step, and hand back `ci_pending` \(`ci_unknown` when the checks cannot be read\)/);
   assert.doesNotMatch(text, /repeat while it reports/);
+  assert.match(text, /If step 5 refuses the report as hand-written, rm only this execution's refused outputRef and its corresponding stale `<outputRef>\.constructed` marker, then re-run step 4\./);
+  assert.match(text, /Preserve accepted construction evidence and unrelated files/);
+  assert.match(text, /Only after the verifier refuses this execution's report as hand-written, rm that report and its corresponding stale `\.constructed` marker; no other delete is allowed\./);
   assert.match(text, /Edit rule: write file content only with the Edit and Write tools\. Never write file content through Bash \(heredoc, redirect, `sed -i`, or cp\/mv onto a tracked file\)\. Scripts the order names, such as the asset generator and `--construct`, may write files\. Never write `fixer-disposition\*\.json`/);
 }
 
@@ -1916,9 +1919,7 @@ test("issue 2787: a THREAD full order has the numbered steps, runs --construct a
     assert.match(text, /Make no further commit/);
     assert.match(text, /never write the disposition handoff yourself/);
     assert.match(text, /--head-sha <pushed-head-sha>/);
-    assert.match(text, /If step 5 refuses the report as hand-written, rm the outputRef and re-run step 4\./);
     assert.match(text, /Replace `<pushed-head-sha>` in steps 4 to 6 with the confirmed SHA\./);
-    assert.match(text, /rm of a refused hand-written report is the one allowed delete\./);
   });
 });
 
