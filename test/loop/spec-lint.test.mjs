@@ -321,10 +321,10 @@ test("only cli/index.mjs wires spec-lint; no other shipped file imports or invok
   const files = execFileSync("git", ["ls-files", "scripts", "packages", "cli"], { cwd: repoRoot, encoding: "utf8" })
     .split("\n").filter((f) => /\.mjs$/u.test(f) && !f.includes("node_modules") && !/\.test\.mjs$/u.test(f) && f !== "cli/index.mjs" && f !== "scripts/loop/spec-lint.mjs");
   // Also match a quoted "spec-lint" argv token (runCli / execFile / spawn), not just the path and the symbol.
-  const consumer = /spec-lint\.mjs|lintSpec\b|["'`]spec-lint["'`]/u;
+  const consumer = /spec-lint\.mjs|lintSpec\b|["'`]spec-lint["'`]|\bloop\s+spec-lint\b/u;
   const offenders = files.filter((f) => consumer.test(readFileSync(path.join(repoRoot, f), "utf8")));
   assert.deepEqual(offenders, []);
-  for (const form of ['import { lintSpec } from "../loop/spec-lint.mjs";', "lintSpec(x)", 'runCli(["loop", "spec-lint", "--body-file", p])', "execFile('dev-loops', ['loop', 'spec-lint'])"]) {
+  for (const form of ['import { lintSpec } from "../loop/spec-lint.mjs";', "lintSpec(x)", 'runCli(["loop", "spec-lint", "--body-file", p])', "execFile('dev-loops', ['loop', 'spec-lint'])", "execSync(`dev-loops loop spec-lint --body-file ${p}`)"]) {
     assert.match(form, consumer, form);
   }
   assert.doesNotMatch("// the grill (refine-plan-file, spec-lint) reads it", consumer);
