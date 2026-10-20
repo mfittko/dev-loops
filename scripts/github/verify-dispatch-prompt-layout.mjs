@@ -71,6 +71,11 @@ function resolveFlagValue(argv, flag) {
   return val;
 }
 
+// A dispatch-prompt record is a regular file; shared with the fan-in records-floor count.
+export function isDispatchPromptRecordEntry(entry, headSha) {
+  return entry.isFile() && entry.name.startsWith(RECORD_PREFIX) && entry.name.endsWith(`-${headSha}.json`);
+}
+
 /**
  * Read every dispatch-prompt-layout record for this round (head SHA) from
  * `<tmpRoot>/`. A malformed/unreadable record is still counted, with
@@ -91,7 +96,7 @@ async function readDispatchPromptRecords(tmpRoot, headSha) {
     throw err;
   }
   const matches = entries
-    .filter((e) => e.isFile() && e.name.startsWith(RECORD_PREFIX) && e.name.endsWith(suffix))
+    .filter((e) => isDispatchPromptRecordEntry(e, headSha))
     .map((e) => ({ file: e.name, scope: e.name.slice(RECORD_PREFIX.length, -suffix.length) }))
     .filter((m) => m.scope.length > 0)
     .sort((a, b) => a.scope.localeCompare(b.scope));
