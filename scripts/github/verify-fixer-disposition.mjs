@@ -79,7 +79,9 @@ Optional:
                                passes. Hand back the code and resolve no thread. Normal mode
                                also posts one residual-status reply on each deferred thread
                                whose delta status is not_resolved or cannot_verify and leaves
-                               it open.
+                               it open. A residual reply that
+                               failed to post, or is not live under --check, returns
+                               ok:false (residual_reply_failed, complete:false).
   --check                     Read-only delivery and live-state check; never
                                write a checkpoint or reply/resolve a thread.
   --tmp-root <path>            Root tmp directory for the checkpoint and the pull
@@ -643,7 +645,7 @@ export async function verifyFixerDisposition(
       : normalizeHeadScopedCiContract({
         checkRunsStatus: ci.checkRuns.visibleSignal.status,
         commitStatus: ci.statuses.commitStatus,
-        checkRunsUnsupportedCompleted: ci.checkRuns.fullSignal.unsupportedCompleted,
+        checkRunsUnsupportedCompleted: ci.checkRuns.visibleSignal.unsupportedCompleted,
       }).overallStatus;
     // A head with no check runs and no statuses besides the loop-derived gate-evidence is settled (wait-pr-checks settles it); anything else must be green.
     const checkless = state === "none" && ci.checkRuns.nonLoopDerivedCount === 0 && ci.statuses.nonLoopDerivedCount === 0
@@ -674,8 +676,8 @@ export async function verifyFixerDisposition(
   const actions = [];
   const residualFailures = [];
   // A deferred thread the delta review left not_resolved or cannot_verify gets one residual-status reply and stays open.
-  // Shared by the ACT and THREAD routes; a live reply carrying the marker makes re-entry post nothing.
-  if (!options.check) {
+  // Shared by the ACT and THREAD routes; --check only observes the reply and reports it missing; a live reply carrying the marker makes re-entry post nothing.
+  {
     const deferred = handoff.dispositions.filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.DEFERRED);
     const openTargets = deferred.length > 0 ? planBatchReplyTargets(initialSnapshot, "all").matchedTargets : [];
     for (const entry of deferred) {
@@ -698,6 +700,10 @@ export async function verifyFixerDisposition(
       // Idempotent per fixing commit: a marker from an earlier round's commit never suppresses this round's status.
       if (initialSnapshot.comments.some((comment) => comment.threadId === entry.threadId
         && String(comment.body).includes(RESIDUAL_REPLY_MARKER) && String(comment.body).includes(entry.fixingCommitSha))) continue;
+      if (options.check) {
+        residualFailures.push({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha, failedStep: "residual_reply_failed", error: "residual-status reply not observed live" });
+        continue;
+      }
       try {
         await replyAndMaybeResolve(
           {
