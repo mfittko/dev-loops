@@ -3,7 +3,7 @@
  * spec-context.mjs — the CLI seam the skill runs so it never hand-derives the
  * spec/digests (ADR 0061 AC5). Two modes:
  *
- *   extract (default): resolve the canonical tracker issue body, extract the
+ *   extract (default): resolve the canonical issue or live PR body, extract the
  *   structured spec, and compute both revision-identity digests (specDigest,
  *   contentDigest) plus the complete criterion id set — everything judge-pass
  *   --spec-file/--content-digest needs, in one deterministic call.
@@ -26,32 +26,37 @@ import {
 } from "@dev-loops/core/loop/spec-authority";
 import { resolveTrackerAdapter } from "@dev-loops/core/tracker";
 import { rateLimitedResult, withGraphqlRateLimitWait } from "@dev-loops/core/github/gh";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { GRAPHQL_RATE_LIMIT_MAX_WAIT_MS } from "@dev-loops/core/loop/policy-constants";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { parseIssueNumber, requireTokenValue } from "../_cli-primitives.mjs";
+import { parseIssueNumber, parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { captureChangedFilesBetween } from "../lib/git-delta.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveTrackerLocalSpec } from "../github/resolve-tracker-local-spec.mjs";
+import { viewPr } from "../github/view-pr.mjs";
 
 const USAGE = `Usage:
-  spec-context.mjs --repo <owner/name> --issue <number> --content-file <path> [--head-sha <sha>] [--spec-out <path>] [--identity-out <path>]
+  spec-context.mjs --repo <owner/name> (--issue <number> | --pr <number>) --content-file <path> [--head-sha <sha>] [--spec-out <path>] [--identity-out <path>]
   spec-context.mjs changed-paths --base <ref> --head <ref> [--repo-root <path>]
 
-Default (extract) mode: resolve the canonical tracker issue body, extract the
+Default (extract) mode: resolve the selected canonical issue or live PR body, extract the
 structured spec ({ acceptanceCriteria, definitionOfDone, nonGoals }), and
 compute specDigest (from the spec) + contentDigest (from --content-file) +
 the complete criterionIds set — feeds judge-pass.mjs's --spec-file/
 --content-digest directly, so the skill never hand-derives them.
 Required (extract mode):
   --repo <owner/name>        Repository slug
-  --issue <number>           Canonical tracker issue number
+  --issue <number>           Canonical tracker issue number; exactly one of --issue/--pr
+  --pr <number>              Live GitHub PR number when routed authority is pr_body;
+                              reads its own body/head without fetching an issue
   --content-file <path>      Path to the reviewed implementation/prose content;
                               its bytes are hashed into contentDigest
 Optional (extract mode):
   --head-sha <sha>            Echoed onto the result (not hashed into any digest);
                               REQUIRED alongside --identity-out
+                              For --pr, must be the full live PR head SHA
   --spec-out <path>           Also write the structured spec JSON to this path
                               (the shape judge-pass.mjs --spec-file expects)
   --identity-out <path>       Also write the revision-identity stamp JSON
@@ -101,6 +106,7 @@ function parseExtractCliArgs(argv) {
       help: { type: "boolean", short: "h" },
       repo: { type: "string" },
       issue: { type: "string" },
+      pr: { type: "string" },
       "content-file": { type: "string" },
       "head-sha": { type: "string" },
       "spec-out": { type: "string" },
@@ -116,6 +122,7 @@ function parseExtractCliArgs(argv) {
     help: false,
     repo: undefined,
     issue: undefined,
+    pr: undefined,
     contentFile: undefined,
     headSha: undefined,
     specOut: undefined,
@@ -138,6 +145,10 @@ function parseExtractCliArgs(argv) {
     }
     if (token.name === "issue") {
       options.issue = parseIssueNumber(requireTokenValue(token, parseError), parseError);
+      continue;
+    }
+    if (token.name === "pr") {
+      options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
     if (token.name === "content-file") {
@@ -163,8 +174,9 @@ function parseExtractCliArgs(argv) {
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  if (options.repo === undefined || options.issue === undefined || options.contentFile === undefined) {
-    throw parseError("extract mode requires --repo <owner/name>, --issue <number>, and --content-file <path>");
+  if (options.repo === undefined || options.contentFile === undefined ||
+      (options.issue === undefined) === (options.pr === undefined)) {
+    throw parseError("extract mode requires --repo <owner/name>, exactly one of --issue <number> or --pr <number>, and --content-file <path>");
   }
   if (options.contentFile.length === 0) {
     throw parseError("--content-file requires a non-empty path");
@@ -184,25 +196,48 @@ function parseExtractCliArgs(argv) {
 }
 
 /**
- * Pure-ish extract: resolves the tracker issue body (network via the tracker
- * adapter), extracts the structured spec, and computes both revision-identity
+ * Pure-ish extract: resolves the selected issue or PR body, extracts the
+ * structured spec, and computes both revision-identity
  * digests + the complete criterion id set.
  */
 export async function specContextExtract(
   options,
   { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), tracker, sleep = delay, now = Date.now, runChild } = {},
 ) {
-  const resolvedTracker = tracker ?? await (async () => {
-    const { config, errors } = await loadDevLoopConfig({ repoRoot });
-    return resolveTrackerAdapter(errors.length === 0 ? config : {}, { env, ghCommand });
-  })();
+  if ((options.issue === undefined) === (options.pr === undefined)) {
+    throw new Error("extract mode requires exactly one of --issue or --pr");
+  }
+  const { owner, name } = parseRepoSlug(options.repo);
+  const repo = `${owner}/${name}`;
   let resolved;
   try {
+    let readSource;
+    if (options.pr !== undefined) {
+      readSource = async () => {
+        const { pr } = await viewPr(
+          { repo, pr: options.pr, fields: "number,body,headRefOid" },
+          { env, ghCommand, ...(runChild ? { run: runChild } : {}) },
+        );
+        if (pr.number !== options.pr || typeof pr.body !== "string" ||
+            typeof pr.headRefOid !== "string" || !/^[0-9a-f]{40}$/i.test(pr.headRefOid)) {
+          throw new Error("Cannot resolve usable live PR data (number, body and full head SHA required)");
+        }
+        if (options.headSha !== undefined && options.headSha.toLowerCase() !== pr.headRefOid.toLowerCase()) {
+          throw new Error("--head-sha must match the full live PR head SHA");
+        }
+        return { repo, pr: pr.number, body: pr.body };
+      };
+    } else {
+      const resolvedTracker = tracker ?? await (async () => {
+        const { config, errors } = await loadDevLoopConfig({ repoRoot });
+        return resolveTrackerAdapter(errors.length === 0 ? config : {}, { env, ghCommand });
+      })();
+      readSource = () => resolveTrackerLocalSpec(
+        { repo, issue: options.issue }, { env, ghCommand, tracker: resolvedTracker },
+      );
+    }
     resolved = await withGraphqlRateLimitWait(
-      () => resolveTrackerLocalSpec(
-        { repo: options.repo, issue: options.issue },
-        { env, ghCommand, tracker: resolvedTracker },
-      ),
+      readSource,
       { maxWaitMs: GRAPHQL_RATE_LIMIT_MAX_WAIT_MS, sleep, now, env, ghCommand, ...(runChild ? { runChild } : {}) },
     );
   } catch (error) {
@@ -222,7 +257,7 @@ export async function specContextExtract(
   const result = {
     ok: true,
     repo: resolved.repo,
-    issue: resolved.issue,
+    ...(options.pr !== undefined ? { pr: resolved.pr } : { issue: resolved.issue }),
     spec,
     specDigest,
     contentDigest,

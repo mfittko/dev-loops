@@ -37,6 +37,176 @@ function stubTracker(body = BODY) {
   };
 }
 
+const PR_HEAD = "c".repeat(40);
+const PR = { number: 2848, body: BODY, headRefOid: PR_HEAD };
+
+function prRead(pr = PR) {
+  return async (_command, args) => {
+    assert.deepEqual(args, ["pr", "view", "2848", "--repo", "mfittko/dev-loops", "--json", "number,body,headRefOid"]);
+    return { code: 0, stdout: JSON.stringify(pr), stderr: "" };
+  };
+}
+
+async function capturePrCli(args, deps) {
+  let stdout = "";
+  let stderr = "";
+  const code = await runCli(["--repo", "mfittko/dev-loops", ...args], {
+    stdout: { write: (chunk) => { stdout += chunk; } },
+    stderr: { write: (chunk) => { stderr += chunk; } },
+    extractDeps: deps,
+  });
+  return { code, stdout, stderr };
+}
+
+test("live PR extraction shares issue spec, digests and complete identity across harness-neutral callers", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "spec-context-pr-"));
+  try {
+    await writeFile(path.join(repoRoot, "content.txt"), "impl", "utf8");
+    const issue = await specContextExtract(
+      { repo: "mfittko/dev-loops", issue: 1, contentFile: "content.txt", headSha: PR_HEAD },
+      { repoRoot, tracker: stubTracker() },
+    );
+    for (const harness of ["pi", "claude", "codex"]) {
+      const result = await capturePrCli([
+        "--pr", "2848", "--content-file", "content.txt", "--head-sha", PR_HEAD.toUpperCase(),
+        "--spec-out", "spec.json", "--identity-out", "identity.json",
+      ], { repoRoot, env: { HARNESS: harness }, runChild: prRead(), tracker: {
+        getIssue: () => { throw new Error("PR authority must not read an issue"); },
+      } });
+      assert.equal(result.code, 0, result.stderr);
+      const extracted = JSON.parse(result.stdout);
+      assert.equal(extracted.pr, 2848);
+      assert.equal(extracted.issue, undefined);
+      for (const key of ["repo", "spec", "specDigest", "contentDigest", "criterionIds", "headSha"]) {
+        assert.deepEqual(extracted[key], issue[key], `${harness}: ${key}`);
+      }
+      const identity = await readSpecAuthorityIdentity(path.join(repoRoot, "identity.json"), (message) => new Error(message));
+      assert.deepEqual(identity.checkedCriteria, issue.criterionIds);
+      assert.equal(identity.checkedCriteria.length, 4);
+      assert.deepEqual(JSON.parse(await readFile(path.join(repoRoot, "spec.json"), "utf8")), issue.spec);
+    }
+    for (const [outputArgs, expectedCode] of [[["--jq", ".contentDigest"], 0], [["--silent"], 0], [["--jq", "["], 2]]) {
+      const result = await capturePrCli(["--pr", "2848", "--content-file", "content.txt", ...outputArgs], { repoRoot, runChild: prRead() });
+      assert.equal(result.code, expectedCode, result.stderr);
+      if (outputArgs[0] === "--silent") assert.equal(result.stdout, "");
+      else if (expectedCode === 0) assert.equal(result.stdout.trim(), issue.contentDigest);
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+for (const repo of ["mfittko/dev-loops", "  mfittko/dev-loops  "]) {
+  test(`spec source accepts canonical repository slug ${JSON.stringify(repo)}`, async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "spec-context-repo-"));
+    try {
+      await writeFile(path.join(repoRoot, "content.txt"), "impl", "utf8");
+      for (const selector of [["--pr", "2848"], ["--issue", "1"]]) {
+        const result = await capturePrCli([
+          "--repo", repo, ...selector, "--content-file", "content.txt", "--head-sha", PR_HEAD,
+          "--spec-out", "spec.json", "--identity-out", "identity.json",
+        ], { repoRoot, runChild: prRead(), tracker: {
+          getIssue: async (input) => {
+            assert.equal(input.repo, "mfittko/dev-loops");
+            return stubTracker().getIssue(input);
+          },
+        } });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(JSON.parse(result.stdout).repo, "mfittko/dev-loops");
+        for (const file of ["spec.json", "identity.json"]) await readFile(path.join(repoRoot, file));
+      }
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const repo of ["", "   ", "github.com/mfittko/dev-loops", "https://github.com/mfittko/dev-loops", "mfittko/dev-loops/extra", "../dev-loops", "mfittko/..", "mfittko/./dev-loops", "mfittko\\dev-loops"]) {
+  test(`spec source rejects repository slug ${JSON.stringify(repo)} before reads or artifacts`, async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "spec-context-repo-reject-"));
+    try {
+      await writeFile(path.join(repoRoot, "content.txt"), "impl", "utf8");
+      let sourceReads = 0;
+      const unexpectedRead = async () => {
+        sourceReads += 1;
+        throw new Error("Repository validation must precede source reads");
+      };
+      for (const selector of [["--pr", "2848"], ["--issue", "1"]]) {
+        const result = await capturePrCli([
+          "--repo", repo, ...selector, "--content-file", "content.txt", "--head-sha", PR_HEAD,
+          "--spec-out", "spec.json", "--identity-out", "identity.json",
+        ], { repoRoot, runChild: unexpectedRead, tracker: { getIssue: unexpectedRead } });
+        assert.equal(result.code, 1, result.stdout);
+        assert.equal(result.stdout, "");
+        assert.match(result.stderr, /--repo/);
+        assert.equal(sourceReads, 0);
+        for (const file of ["spec.json", "identity.json"]) await assert.rejects(readFile(path.join(repoRoot, file)), { code: "ENOENT" });
+      }
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test("PR source failures return exit 1 before spec or identity artifacts", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "spec-context-pr-fail-"));
+  try {
+    await writeFile(path.join(repoRoot, "content.txt"), "impl", "utf8");
+    const cases = [
+      { selector: ["--issue", "1", "--pr", "2848"], error: /exactly one/ },
+      { selector: [], error: /exactly one/ },
+      { selector: ["--pr", "invalid"], error: /positive integer/ },
+      { pr: { ...PR, number: 7 }, error: /PR data/ },
+      { pr: { ...PR, body: null }, error: /PR data/ },
+      { pr: { ...PR, headRefOid: undefined }, error: /PR data/ },
+      { pr: { ...PR, headRefOid: "bad" }, error: /PR data/ },
+      { pr: { ...PR, body: "no formal spec" }, error: /no acceptance criteria and no definition of done/ },
+      { head: "d".repeat(40), error: /live PR head/ },
+      { head: PR_HEAD.slice(0, 7), error: /live PR head/ },
+      { runChild: async () => ({ code: 1, stdout: "", stderr: "HTTP 404: Not Found" }), error: /HTTP 404/ },
+      { runChild: async () => ({ code: 0, stdout: "not json", stderr: "" }), error: /JSON/ },
+    ];
+    for (const entry of cases) {
+      const result = await capturePrCli([
+        ...(entry.selector ?? ["--pr", "2848"]), "--content-file", "content.txt", "--head-sha", entry.head ?? PR_HEAD,
+        "--spec-out", "spec.json", "--identity-out", "identity.json",
+      ], { repoRoot, runChild: entry.runChild ?? prRead(entry.pr), tracker: stubTracker() });
+      assert.equal(result.code, 1, result.stdout);
+      assert.equal(result.stdout, "");
+      assert.match(result.stderr, entry.error);
+      for (const file of ["spec.json", "identity.json"]) await assert.rejects(readFile(path.join(repoRoot, file)), { code: "ENOENT" });
+    }
+    const noHead = await capturePrCli(["--pr", "2848", "--content-file", "content.txt", "--identity-out", "identity.json"], { repoRoot, runChild: prRead() });
+    assert.equal(noHead.code, 1);
+    assert.match(noHead.stderr, /--identity-out requires --head-sha/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("PR live reads retain bounded GraphQL reset retry", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "spec-context-pr-rate-"));
+  try {
+    await writeFile(path.join(repoRoot, "content.txt"), "impl", "utf8");
+    let prReads = 0;
+    const sleeps = [];
+    const now = 1_000_000_000_000;
+    const result = await capturePrCli(["--pr", "2848", "--content-file", "content.txt"], {
+      repoRoot, env: {}, now: () => now, sleep: async (ms) => sleeps.push(ms),
+      runChild: async (command, args) => {
+        if (args[0] === "api") return rateLimitRunChild(now / 1000 + 300, [])(command, args);
+        if (++prReads === 1) return { code: 1, stdout: "", stderr: "GraphQL: API rate limit exceeded for user ID 1." };
+        return prRead()(command, args);
+      },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(prReads, 2);
+    assert.deepEqual(sleeps, [300_000]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // --- extract mode ---
 
 test("specContextExtract resolves the spec + both revision-identity digests + criterionIds", async () => {
