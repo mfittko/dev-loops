@@ -23,6 +23,38 @@ test("path refuses unsafe repo, short or uppercase sha, empty tmp root", () => {
     assert.throws(() => validationRecordPath({ ...ID, headSha }), /headSha/, String(headSha));
   }
   assert.throws(() => validationRecordPath({ ...ID, tmpRoot: " " }), /tmpRoot/);
+  for (const tmpRoot of ["/abs", "..", "a/../b", "../x", "a\\..\\b", "C:/x"]) {
+    assert.throws(() => validationRecordPath({ ...ID, tmpRoot }), /tmpRoot/, tmpRoot);
+  }
+});
+
+test("suites must match requestedSuites and the profile must match them", () => {
+  const refused = (value) => parseValidationRecord(value, ID);
+  const renamed = record();
+  renamed.suites[0].name = "other";
+  assert.match(refused(renamed).reason, /requestedSuites/);
+  const extra = record();
+  extra.suites.push({ ...extra.suites[0] });
+  assert.match(refused(extra).reason, /requestedSuites/);
+  const dup = record();
+  dup.requestedSuites = ["test:docs", "test:docs"];
+  assert.equal(refused(dup).ok, false);
+  assert.match(refused({ ...record(), profile: "full-repository" }).reason, /verify/);
+  const verifyTargeted = record();
+  verifyTargeted.requestedSuites = ["verify"];
+  verifyTargeted.suites[0].name = "verify";
+  assert.match(refused(verifyTargeted).reason, /verify/);
+  const full = { ...verifyTargeted, profile: "full-repository" };
+  assert.equal(refused(full).ok, true);
+});
+
+test("a 64-hex sha record is accepted and odd exitCode or depState types are refused", () => {
+  const sha = "c".repeat(64);
+  assert.equal(parseValidationRecord({ ...record(), headSha: sha }, { ...ID, headSha: sha }).ok, true);
+  const nan = record();
+  nan.suites[0].exitCode = Number.NaN;
+  assert.equal(parseValidationRecord(nan, ID).ok, false);
+  assert.equal(parseValidationRecord({ ...record(), depState: ["x"] }, ID).ok, false);
 });
 
 test("a valid record is accepted, with and without depState", () => {

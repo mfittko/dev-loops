@@ -5,7 +5,7 @@
  * timeout, no detached mode and no completion file. Nothing reads the record yet.
  */
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -20,6 +20,7 @@ import { buildValidationArtifact, classifyPackageSuites, readPackageScripts } fr
 const DEFAULT_TIMEOUT_S = 540;
 // DEV-LOOP-PROBE-TIMEOUT-CEILING: stay below the 600 s tool-call ceiling.
 const MAX_TIMEOUT_S = 570;
+const GIT_TIMEOUT_MS = 30000;
 
 const USAGE = `Usage: dev-loops loop validation-record --repo <owner/name> --head-sha <full SHA> --title <PR title> [--timeout <seconds>] [--tmp-root <dir>]
 Run the selected validation profile at a clean, confirmed head and write the head record
@@ -50,6 +51,7 @@ export function parseValidationRecordArgs(argv) {
   if (values.help) return { help: true };
   const missing = ["repo", "head-sha", "title"].filter((name) => !values[name]?.trim());
   if (missing.length > 0) throw parseError(`Missing required arguments: ${missing.join(", ")}`);
+  if (values.timeout !== undefined && !/^\d+(\.\d+)?$/.test(values.timeout)) throw parseError("--timeout must be a decimal number of seconds");
   const timeoutSeconds = values.timeout === undefined ? DEFAULT_TIMEOUT_S : Number(values.timeout);
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || timeoutSeconds > MAX_TIMEOUT_S) {
     throw parseError(`--timeout must be a positive number of seconds, at most ${MAX_TIMEOUT_S}`);
@@ -66,7 +68,7 @@ export function parseValidationRecordArgs(argv) {
 export async function produceValidationRecord(options, { repoRoot = resolveRepoRoot(process.cwd()), env = process.env } = {}) {
   const incomplete = (reason) => ({ ok: false, status: "incomplete", reason });
   const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
-  const git = (args) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8", env: gitEnv, stdio: ["ignore", "pipe", "ignore"] });
+  const git = (args) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8", env: gitEnv, stdio: ["ignore", "pipe", "ignore"], timeout: GIT_TIMEOUT_MS });
   const treeProblem = () => {
     const head = git(["rev-parse", "HEAD"]).trim().toLowerCase();
     if (head !== options.headSha) return `worktree HEAD ${head} differs from requested head`;
@@ -75,10 +77,15 @@ export async function produceValidationRecord(options, { repoRoot = resolveRepoR
   const relRecordPath = validationRecordPath(options);
   const recordPath = path.resolve(repoRoot, relRecordPath);
   try {
+    // A stale record for this head never survives an incomplete run: remove it before any check.
+    await rm(recordPath, { force: true });
     const before = treeProblem();
     if (before) return incomplete(before);
-    // A stale record for this head never survives an incomplete run.
-    await rm(recordPath, { force: true });
+    try {
+      git(["rev-parse", "--verify", "--quiet", "origin/HEAD^{commit}"]);
+    } catch {
+      return incomplete("origin/HEAD does not resolve; run git fetch origin and git remote set-head origin -a");
+    }
     const checkout = readCheckoutValidation(repoRoot);
     if (checkout.reason) return incomplete(checkout.reason);
     const base = readBaseValidation(repoRoot);
@@ -89,7 +96,7 @@ export async function produceValidationRecord(options, { repoRoot = resolveRepoR
     const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
     const pinned = packageJson.packageManager;
     if (!/^bun@\d+\.\d+\.\d+$/.test(pinned ?? "")) return incomplete("packageManager does not pin an exact Bun version");
-    const installed = execFileSync("bun", ["--version"], { cwd: repoRoot, encoding: "utf8", env }).trim();
+    const installed = execFileSync("bun", ["--version"], { cwd: repoRoot, encoding: "utf8", env, timeout: GIT_TIMEOUT_MS }).trim();
     if (`bun@${installed}` !== pinned) return incomplete(`installed bun@${installed} differs from ${pinned}`);
 
     const paths = git(["diff", "--name-only", "--no-renames", "-z", `origin/HEAD...${options.headSha}`]).split("\0").filter(Boolean).sort();
@@ -122,7 +129,9 @@ export async function produceValidationRecord(options, { repoRoot = resolveRepoR
     const parsed = parseValidationRecord(record, options);
     if (!parsed.ok) return incomplete(`record failed validation: ${parsed.reason}`);
     await mkdir(path.dirname(recordPath), { recursive: true });
-    await writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    const tmpPath = `${recordPath}.tmp-${process.pid}`;
+    await writeFile(tmpPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    await rename(tmpPath, recordPath);
     return record;
   } catch (error) {
     await rm(recordPath, { force: true }).catch(() => {});

@@ -103,6 +103,9 @@ test("a failing suite writes a failed record and exits non-zero", () => withFixt
 }));
 
 async function assertIncomplete(repoRoot, headSha, reason, extra) {
+  // A record left by an earlier run must be gone after every incomplete outcome.
+  await mkdir(path.dirname(recordFile(repoRoot, headSha)), { recursive: true });
+  await writeFile(recordFile(repoRoot, headSha), "{}\n");
   const out = await run(repoRoot, headSha, extra);
   assert.notEqual(out.code, 0);
   const result = JSON.parse(out.stdout);
@@ -128,6 +131,12 @@ test("a checkout validation block that differs from the base is incomplete", () 
   await assertIncomplete(repoRoot, headSha, /differs from the base branch/);
 }));
 
+test("an unresolvable origin/HEAD is incomplete", () => withFixture({}, async (repoRoot) => {
+  const headSha = await commit(repoRoot, { "docs/a.md": "# a\n" });
+  git(repoRoot, "remote", "set-head", "origin", "-d");
+  await assertIncomplete(repoRoot, headSha, /origin\/HEAD does not resolve; run git fetch origin and git remote set-head origin -a/);
+}));
+
 test("a toolchain mismatch is incomplete", () => withFixture({ pinned: "0.0.1" }, async (repoRoot) => {
   const headSha = await commit(repoRoot, { "docs/a.md": "# a\n" });
   await assertIncomplete(repoRoot, headSha, /differs from bun@0\.0\.1/);
@@ -147,7 +156,7 @@ test("usage offers no background option and rejects out-of-range or unknown argu
   assert.doesNotMatch(help.stdout, /background|detach|completion/i);
   const sha = "a".repeat(40);
   const base = ["loop", "validation-record", "--repo", "owner/repo", "--head-sha", sha, "--title", TITLE];
-  for (const extra of [["--background"], ["--detach"], ["--completion-file", "x"], ["--timeout", "0"], ["--timeout", "571"], ["--timeout", "abc"], ["--timeout", "-5"], ["stray"]]) {
+  for (const extra of [["--background"], ["--detach"], ["--completion-file", "x"], ["--timeout", "0"], ["--timeout", "571"], ["--timeout", "abc"], ["--timeout", "-5"], ["--timeout", "0x10"], ["--timeout", "1e2"], ["--tmp-root", "/abs"], ["--tmp-root", "a/../b"], ["--tmp-root", ".."], ["stray"]]) {
     const out = await runNode(CLI, [...base, ...extra]);
     assert.equal(out.code, 2, extra.join(" "));
   }

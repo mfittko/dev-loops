@@ -23,6 +23,7 @@ export function validationRecordPath({ repo, headSha, tmpRoot = "tmp" }) {
   const [owner, name] = parseRepo(repo);
   assertHeadSha(headSha);
   if (typeof tmpRoot !== "string" || tmpRoot.trim() === "") throw new Error("tmpRoot must be a non-empty string");
+  if (tmpRoot.startsWith("/") || /^[A-Za-z]:/.test(tmpRoot) || tmpRoot.split(/[\\/]/).includes("..")) throw new Error("tmpRoot must be a relative path without '..' segments");
   return `${tmpRoot.replace(/\/+$/, "")}/validation-records/${owner}/${name}/${headSha}.json`;
 }
 
@@ -37,6 +38,7 @@ export function parseValidationRecord(value, { repo, headSha }) {
   if (!PROFILES.includes(value.profile)) return refuse("profile must be targeted or full-repository");
   for (const field of ["toolchain", "prTitle"]) if (!isString(value[field])) return refuse(`${field} must be a non-empty string`);
   if (!Array.isArray(value.requestedSuites) || value.requestedSuites.length === 0 || !value.requestedSuites.every(isString)) return refuse("requestedSuites must be a non-empty string array");
+  if ((value.profile === "full-repository") !== (value.requestedSuites.length === 1 && value.requestedSuites[0] === "verify")) return refuse("profile full-repository requires requestedSuites to be exactly [verify]");
   if (!isString(value.generatedAt) || Number.isNaN(Date.parse(value.generatedAt))) return refuse("generatedAt must be an ISO timestamp");
   if (typeof value.allPassed !== "boolean") return refuse("allPassed must be a boolean");
   if (!Array.isArray(value.suites) || value.suites.length === 0) return refuse("suites must be a non-empty array");
@@ -45,6 +47,8 @@ export function parseValidationRecord(value, { repo, headSha }) {
       return refuse("each suite needs name, command, outputPath and an integer exitCode");
     }
   }
+  const requested = new Set(value.requestedSuites);
+  if (requested.size !== value.requestedSuites.length || value.suites.length !== requested.size || !value.suites.every((suite) => requested.has(suite.name))) return refuse("suites must match requestedSuites");
   if (value.allPassed !== value.suites.every((suite) => suite.exitCode === 0)) return refuse("allPassed disagrees with the suite exit codes");
   if (value.depState !== undefined && (value.depState === null || typeof value.depState !== "object" || Array.isArray(value.depState))) return refuse("depState must be an object");
   return { ok: true, record: value };
