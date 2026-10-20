@@ -10,9 +10,11 @@ import {
   readlinkSync,
   existsSync,
   symlinkSync,
+  cpSync,
   realpathSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 
@@ -484,7 +486,7 @@ test("provisionWorktree: a non-dev-loops package with agents/ gets no .pi/agents
   }
 });
 
-test("provisionWorktree: a regular file at .pi/agents fails soft with a warning and no render action", async () => {
+test("provisionWorktree: a regular file at .pi/agents fails soft with a warning and records a render-failed skip action", async () => {
   const fx = makeFixture("version: 1\n");
   try {
     writeFileSync(path.join(fx.worktreePath, "package.json"), JSON.stringify({ name: "dev-loops" }));
@@ -495,7 +497,9 @@ test("provisionWorktree: a regular file at .pi/agents fails soft with a warning 
     const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
     assert.equal(res.ok, true);
     assert.ok(res.summary.warnings >= 1);
-    assert.ok(!res.actions.some((a) => a.entry === ".pi/agents"));
+    const act = res.actions.find((a) => a.entry === ".pi/agents");
+    assert.equal(act.mode, "skip");
+    assert.match(act.reason, /^render-failed: /);
   } finally {
     fx.cleanup();
   }
@@ -530,6 +534,30 @@ test("provisionWorktree: a tracked .pi/agents symlink is left untouched and reco
     assert.match(act.reason, /\.pi\/agents/);
     assert.equal(readlinkSync(path.join(wt, ".pi", "agents")), "../agents");
     assert.equal(runGitFixture(wt, ["status", "--porcelain"]).replace(/.*node_modules.*\n?/g, ""), "");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// A packaged install runs the CLI under Node from node_modules, where .ts cannot load.
+test("provision-worktree CLI under Node from a node_modules package layout renders Pi-valid .pi/agents", () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    const repoDir = path.resolve(import.meta.dirname, "..", "..");
+    const pkg = path.join(fx.base, "node_modules", "dev-loops");
+    mkdirSync(path.join(pkg, "extension"), { recursive: true });
+    cpSync(path.join(repoDir, "scripts"), path.join(pkg, "scripts"), { recursive: true });
+    cpSync(path.join(repoDir, "extension", "pi-agent-render.mjs"), path.join(pkg, "extension", "pi-agent-render.mjs"));
+    cpSync(path.join(repoDir, "packages", "core"), path.join(fx.base, "node_modules", "@dev-loops", "core"), { recursive: true });
+    mkdirSync(path.join(pkg, "agents"));
+    writeFileSync(path.join(pkg, "agents", "x.agent.md"), "---\nname: x\ndescription: x\ntools: read, search, execute\n---\nbody\n");
+    const wt = fx.worktreePath;
+    writeFileSync(path.join(wt, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    cpSync(path.join(pkg, "agents"), path.join(wt, "agents"), { recursive: true });
+    const out = execFileSync("node", [path.join(pkg, "scripts", "loop", "provision-worktree.mjs"), "--worktree-path", wt, "--repo-root", fx.repoRoot], { encoding: "utf8" });
+    assert.ok(JSON.parse(out).actions.some((a) => a.entry === ".pi/agents" && a.mode === "render"), out);
+    const tools = readFileSync(path.join(wt, ".pi", "agents", "x.agent.md"), "utf8").match(/^tools: (.+)$/m)[1];
+    assert.equal(tools, "read, grep, find, ls, bash");
   } finally {
     fx.cleanup();
   }

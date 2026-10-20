@@ -325,7 +325,7 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
 
   // `.pi/agents` is untracked; render the Pi-valid agent set from the worktree's own
   // agents/ sources, only in a dev-loops checkout (package name "dev-loops" plus an agents/ dir).
-  // Lazy import: a packaged install cannot load .ts.
+  // Lazy import of a plain .mjs: loads under Node from an installed package.
   const isDevLoopsCheckout = async () => {
     try {
       const pkg = JSON.parse(await fsp.readFile(path.join(dst, "package.json"), "utf8"));
@@ -348,13 +348,15 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
       if (trackedPiAgents()) {
         actions.push({ entry: ".pi/agents", mode: "skip", reason: "pi-agents-tracked: .pi/agents is tracked in the worktree index; rebase or merge onto main first, then provision again" });
       } else {
-        const { renderProjectAgents } = await import("../../extension/sync-packaged-agents.ts");
+        const { renderProjectAgents } = await import("../../extension/pi-agent-render.mjs");
         renderProjectAgents(dst, path.join(dst, "agents"));
         actions.push({ entry: ".pi/agents", mode: "render", dest: path.join(dst, ".pi", "agents") });
       }
     }
   } catch (err) {
-    logWarn(`pi agent render failed, skipping: ${(err && err.message) ? err.message : String(err)}`);
+    const msg = (err && err.message) ? err.message : String(err);
+    logWarn(`pi agent render failed, skipping: ${msg}`);
+    actions.push({ entry: ".pi/agents", mode: "skip", reason: `render-failed: ${msg}` });
   }
 
   const summary = { copied: 0, linked: 0, skipped: 0, rejected: 0, warnings: warnings.length };
