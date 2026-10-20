@@ -19,6 +19,11 @@ function writeAt(file, text) {
   fs.writeFileSync(file, text);
 }
 
+function dl(dir) {
+  fs.mkdirSync(path.join(dir, "agents"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "dev-loops" }));
+}
+
 function launch(cwd, input = { agent: "quality" }) {
   const events = new Map();
   extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
@@ -48,6 +53,7 @@ async function withProject(fn) {
 
 test("a raw rendered dev-loops file blocks the launch and names its path and tokens", () =>
   withProject(async (root) => {
+    dl(root);
     const file = path.join(root, ".pi", "agents", "quality.agent.md");
     writeAt(file, RAW);
     const res = await launch(root);
@@ -57,15 +63,18 @@ test("a raw rendered dev-loops file blocks the launch and names its path and tok
     assert.ok(res.reason.includes("search, execute"));
   }));
 
-test("a consumer's own raw project agent never blocks", () =>
+test("a consumer root with its own raw agents is never blocked", () =>
   withProject(async (root) => {
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "some-consumer" }));
+    writeAt(path.join(root, ".pi", "agents", "developer.agent.md"), "---\nname: developer\ntools: read, search, execute\n---\nbody\n");
     writeAt(path.join(root, ".pi", "agents", "my-consumer-agent.agent.md"), RAW);
-    assert.deepEqual(await launch(root), { block: false });
+    assert.deepEqual(await launch(root, { agent: "developer" }), { block: false });
     assert.deepEqual(await launch(root, { agent: "my-consumer-agent" }), { block: false });
   }));
 
 test("a symlink to the raw agent sources is refused", () =>
   withProject(async (root) => {
+    dl(root);
     fs.mkdirSync(path.join(root, ".pi"));
     fs.symlinkSync(path.join(repoRoot, "agents"), path.join(root, ".pi", "agents"));
     const res = await launch(root);
@@ -75,24 +84,22 @@ test("a symlink to the raw agent sources is refused", () =>
 
 test("render output passes", () =>
   withProject(async (root) => {
+    dl(root);
     renderProjectAgents(root);
     assert.deepEqual(await launch(root), { block: false });
   }));
 
 test("an absent .pi/agents passes", () =>
   withProject(async (root) => {
+    dl(root);
     assert.deepEqual(await launch(root), { block: false });
     assert.equal(fs.existsSync(path.join(root, ".pi", "agents")), false);
   }));
 
-test("the remedy names provision-worktree only in a dev-loops checkout", () =>
+test("the dev-loops remedy names provision-worktree and a session restart", () =>
   withProject(async (root) => {
     writeAt(path.join(root, ".pi", "agents", "quality.agent.md"), RAW);
-    const consumer = (await launch(root)).reason;
-    assert.doesNotMatch(consumer, /provision-worktree/);
-    assert.match(consumer, /packaged-agent sync/);
-    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "dev-loops" }));
-    fs.mkdirSync(path.join(root, "agents"));
+    dl(root);
     const own = (await launch(root)).reason;
     assert.match(own, /provision-worktree\.mjs --worktree-path <worktree> --repo-root <main-checkout>/);
     assert.match(own, /restart the Pi session/);
@@ -100,12 +107,14 @@ test("the remedy names provision-worktree only in a dev-loops checkout", () =>
 
 test("the project root is the nearest ancestor holding .pi or .agents, not .git", () =>
   withProject(async (root) => {
+    dl(root);
     writeAt(path.join(root, ".pi", "agents", "quality.agent.md"), RAW);
     const sub = path.join(root, "packages", "core");
     fs.mkdirSync(path.join(sub, ".git"), { recursive: true });
     assert.match((await launch(sub)).reason, /^agent_set_not_rendered/);
     const alone = path.join(root, "alone");
     fs.mkdirSync(path.join(alone, ".git"), { recursive: true });
+    dl(alone);
     writeAt(path.join(alone, ".pi", "agents", "quality.agent.md"), RENDERED);
     assert.deepEqual(await launch(alone), { block: false });
   }));
@@ -113,8 +122,10 @@ test("the project root is the nearest ancestor holding .pi or .agents, not .git"
 test("input.cwd, relative or absolute, selects the checked project", () =>
   withProject(async (root) => {
     const wt = path.join(root, "wt");
+    dl(wt);
     writeAt(path.join(wt, ".pi", "agents", "quality.agent.md"), RAW);
     const clean = path.join(root, "clean");
+    dl(clean);
     fs.mkdirSync(path.join(clean, ".pi"), { recursive: true });
     assert.equal((await launch(clean, { agent: "quality", cwd: wt })).block, true);
     assert.equal((await launch(clean, { agent: "quality", cwd: "../wt" })).block, true);
@@ -208,6 +219,7 @@ test("a raw global copy is never checked", () =>
 test("an unreadable or missing packaged agents source refuses", () =>
   withProject(async (root) => {
     const { checkAgentSetRendered } = await import("../extension/sync-packaged-agents.ts");
+    dl(root);
     const missing = path.join(root, "no-such-source");
     assert.match(checkAgentSetRendered(root, missing), /^agent_set_not_rendered.*no-such-source/);
     const notDir = path.join(root, "file-source");
@@ -218,6 +230,7 @@ test("an unreadable or missing packaged agents source refuses", () =>
 test("a directory at a rendered name refuses while a missing file passes", () =>
   withProject(async (root) => {
     const { checkAgentSetRendered } = await import("../extension/sync-packaged-agents.ts");
+    dl(root);
     const src = path.join(root, "src");
     writeAt(path.join(src, "quality.agent.md"), RENDERED);
     assert.equal(checkAgentSetRendered(root, src), null);

@@ -268,7 +268,7 @@ export function findProjectRoot(cwd: string, home: string | null = process.env.H
 }
 
 /**
- * Preflight: refuse a launch when a file the dev-loops render writes into `.pi/agents` still
+ * Preflight: runs only in a dev-loops checkout (any other project returns null and nothing is read). Refuses a launch when a file the dev-loops render writes into `.pi/agents` still
  * declares a raw `search`/`execute` tool. Only the `*.agent.md` names found in the packaged agents
  * source directory are inspected; any other project agent file is never read. Returns the typed
  * `agent_set_not_rendered` reason, else null (an absent rendered file or a rendered set passes; an unreadable source directory or rendered file refuses).
@@ -278,6 +278,7 @@ export function checkAgentSetRendered(
   sourceRoot: string = fileURLToPath(PACKAGED_AGENTS_ROOT),
 ): string | null {
   const projectRoot = findProjectRoot(cwd);
+  if (!isDevLoopsAgentsCheckout(projectRoot)) return null;
   const dir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
   let names: string[];
   try {
@@ -309,11 +310,8 @@ export function checkAgentSetRendered(
   } catch {
     // absent or unreadable: keep the default remedy
   }
-  const devLoops = isDevLoopsAgentsCheckout(projectRoot);
-  const remedy = devLoops && isSymlink
+  const remedy = isSymlink
     ? `\`${dir}\` is a symlink to the raw agent sources and provisioning skips it. Rebase or merge the branch onto main first (this untracks \`.pi/agents\`), then run \`dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>\`. Never restore a \`.pi/agents\` symlink to the raw agent sources.`
-    : devLoops
-    ? `Render the project set: in a worktree run \`dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>\`; in the main checkout restart the Pi session (the session-start sync re-renders \`${dir}\`). Never restore a \`.pi/agents\` symlink to the raw agent sources.`
-    : "Re-render with the packaged-agent sync, or replace the named file with its rendered copy.";
+    : `Render the project set: in a worktree run \`dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>\`; in the main checkout restart the Pi session (the session-start sync re-renders \`${dir}\`). Never restore a \`.pi/agents\` symlink to the raw agent sources.`;
   return `agent_set_not_rendered: the rendered agent set carries non-Pi tool names or unreadable files: ${offenders.join("; ")}. ${remedy}`;
 }
