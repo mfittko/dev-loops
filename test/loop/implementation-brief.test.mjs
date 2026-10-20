@@ -548,24 +548,31 @@ const GATE_JUDGE_REVIEW_MODULE_RE = /(?:gate|emit|dispatch|verify|judge|review)/
 // every other agent definition must stay a non-consumer.
 const BRIEF_CONSUMER_AGENTS = new Set(["developer.agent.md"]);
 
-async function collectSurface(dir, accept) {
+async function collectSurface(dir, accept, { recursive = false } = {}) {
   const entries = await readdir(dir, { withFileTypes: true }).catch((error) => {
     if (error?.code === "ENOENT") return [];
     throw error;
   });
-  return entries
+  const files = entries
     .filter((entry) => entry.isFile() && accept(entry.name))
-    .map((entry) => path.join(dir, entry.name))
-    .sort();
+    .map((entry) => path.join(dir, entry.name));
+  if (recursive) {
+    for (const entry of entries.filter((candidate) => candidate.isDirectory())) {
+      files.push(...(await collectSurface(path.join(dir, entry.name), accept, { recursive })));
+    }
+  }
+  return files.sort();
 }
 
 test("no gate, judge or reviewer surface consumes the brief", async () => {
   // Scan the whole gate/judge/reviewer surface instead of a hand-picked list, so
   // a brief import wired into any OTHER gate, emit, verify or judge module fails
-  // this suite too.
+  // this suite too — including the shipped @dev-loops/core gate and reviewer
+  // modules, which no script or agent root would reach.
   const surfaces = [
     ...(await collectSurface(path.join(repoRoot, "scripts", "github"), (name) => name.endsWith(".mjs") && GATE_JUDGE_REVIEW_MODULE_RE.test(name))),
     ...(await collectSurface(path.join(repoRoot, "scripts", "loop"), (name) => name.endsWith(".mjs") && GATE_JUDGE_REVIEW_MODULE_RE.test(name))),
+    ...(await collectSurface(path.join(repoRoot, "packages", "core", "src"), (name) => name.endsWith(".mjs") && GATE_JUDGE_REVIEW_MODULE_RE.test(name), { recursive: true })),
     ...(await collectSurface(path.join(repoRoot, "agents"), (name) => name.endsWith(".agent.md") && !BRIEF_CONSUMER_AGENTS.has(name))),
   ];
   assert.ok(surfaces.length > 0, "the scan must find the gate/judge/reviewer surface");
@@ -574,6 +581,8 @@ test("no gate, judge or reviewer surface consumes the brief", async () => {
     "scripts/loop/judge-pass.mjs",
     "scripts/loop/emit-judge-work-order.mjs",
     "scripts/loop/resolve-gate-dispatch.mjs",
+    "packages/core/src/loop/gate-fanin.mjs",
+    "packages/core/src/loop/review-dispatch-plan.mjs",
     "agents/review.agent.md",
   ]) {
     assert.ok(surfaces.includes(path.join(repoRoot, relPath)), `the scan must cover ${relPath}`);
