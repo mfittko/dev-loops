@@ -868,9 +868,23 @@ is available to every writer for the whole round, including Phase 3's fan-in led
 conductor always runs `scripts/loop/spec-context.mjs` to derive the run's spec/digest identities
 so nothing hand-derives them:
 
+Select exactly one source from the routed canonical authority: `--issue` for a tracker
+issue, or `--pr` when `canonicalSpecSource`/`specSource` is `pr_body`. The PR path
+reads that PR's live body and head together; it never substitutes a linked or umbrella
+issue. Any supplied `--head-sha` must equal the full live PR head SHA. Both sources
+use the same formal-spec parser, digests, complete criteria and identity stamp.
+
 ```sh
 content_digest=$(node scripts/loop/spec-context.mjs --repo <owner/name> --issue <linked_issue_number> \
   --content-file <reviewed-content-path> --head-sha <current_head_sha> \
+  --spec-out <spec-path> --identity-out <identity-path> --jq '.contentDigest')
+```
+
+For the existing PR-body authority, use the same command with `--pr` instead:
+
+```sh
+content_digest=$(node scripts/loop/spec-context.mjs --repo <owner/name> --pr <pr_number> \
+  --content-file <reviewed-content-path> --head-sha <current_full_head_sha> \
   --spec-out <spec-path> --identity-out <identity-path> --jq '.contentDigest')
 ```
 
