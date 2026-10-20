@@ -2218,7 +2218,53 @@ for (const kind of ["resolved", "mixed", "repeated-mixed", "residual", "threadle
   });
 });
 
-for (const defect of ["partial", "duplicateRead", "optionalRead", "semantic", "bytes", "byteAuthority", "sourceHead", "fixingHead", "originIdentity", "originRef", "originDigest", "originReceipt", "originSubject", "originOutput", "originCoverage", "originPrePull", "deltaCoverage", "decisionCoverage", "baselineContainment", "fixContainment", "duplicateRoot", "duplicateMember", "emptyMembers", "unknownMember", "omittedRoot", "omittedMember", "foreignRoot", "unmarkedRoot", "replyMarker", "residualResolved", "unaccountedForm", "skippedForm", "prePull", "currentReceipt", "currentSubject", "currentPath", "outputPath", "outputSymlink", "directorySymlink", "role", "target", "planDigest", "noSource", "noDelta", "sourceAuthority"]) {
+for (const [defect, expectedError] of Object.entries({
+  partial: /completion input requires one required read and both semantic\/byte authorities/,
+  duplicateRead: /completion input requires one required read and both semantic\/byte authorities/,
+  optionalRead: /completion input requires one required read and both semantic\/byte authorities/,
+  semantic: /completion input differs from its semantic or exact-byte authority/,
+  bytes: /completion input differs from its semantic or exact-byte authority/,
+  byteAuthority: /completion input differs from its semantic or exact-byte authority/,
+  sourceHead: /completion input requires the actual full candidate\/fixing heads/,
+  fixingHead: /completion input requires the actual full candidate\/fixing heads/,
+  originIdentity: /completion origin is not a distinct original-baseline fixer execution/,
+  originRef: /completion origin is not a distinct original-baseline fixer execution/,
+  originDigest: /completion origin is not a distinct original-baseline fixer execution/,
+  originReceipt: /completion origin pull\/result failed verification/,
+  originSubject: /completion origin pull subject does not match the original commit_only authority/,
+  originOutput: /completion fixing commit\/coverage differs from the actual prior filled handback/,
+  originCoverage: /completion fixing commit\/coverage differs from the actual prior filled handback/,
+  originPrePull: /completion origin pull\/result failed verification: result_predates_pull/,
+  deltaCoverage: /completion coverage differs from the Delta result or clearing decision identity/,
+  decisionCoverage: /completion coverage differs from the Delta result or clearing decision identity/,
+  baselineContainment: /completion commit .* is not contained by the actual candidate/,
+  fixContainment: /completion commit .* is not contained by the actual candidate/,
+  duplicateRoot: /Fixer disposition handoff has a duplicate threadId/,
+  duplicateMember: /completion thread bindings require unique root IDs and complete unique ACT members/,
+  emptyMembers: /completion thread bindings require unique root IDs and complete unique ACT members/,
+  unknownMember: /completion thread bindings require unique root IDs and complete unique ACT members/,
+  omittedRoot: /completion binding does not match complete live ACT membership/,
+  omittedMember: /completion binding does not match complete live ACT membership/,
+  foreignRoot: /delta status and live thread disposition disagree/,
+  unmarkedRoot: /delta status and live thread disposition disagree/,
+  replyMarker: /delta status and live thread disposition disagree/,
+  residualResolved: /delta status and live thread disposition disagree/,
+  unaccountedForm: /GATE-EXEC-REMEDIATION-SITE-QUERY/,
+  skippedForm: /GATE-EXEC-REMEDIATION-SITE-QUERY/,
+  prePull: /result_predates_pull/,
+  currentReceipt: /fixer pull receipt .* failed verification/,
+  currentSubject: /completion current pull subject does not match its full fixer authority/,
+  currentPath: /is not the plan the fixer pull read/,
+  outputPath: /is not the emitted handoff path/,
+  outputSymlink: /completion output or execution directory redirects outside its canonical execution path/,
+  directorySymlink: /completion output or execution directory redirects outside its canonical execution path/,
+  role: /is not a full-phase fixer work order/,
+  target: /is not a full-phase fixer work order/,
+  planDigest: /does not match its workOrderDigest/,
+  noSource: /--construct requires authenticated ACT completion input or a THREAD plan/,
+  noDelta: /Invalid fixer review baseline: requires one required delta-result read/,
+  sourceAuthority: /Invalid fixer review baseline: missing ACT\/Delta semantic authority/,
+})) {
   test(`typed completion refuses ${defect} without output/checkpoint/GitHub writes`, async () => {
     await withRepoRoot(async (repoRoot) => {
       const f = await completionFixture(repoRoot, defect === "residualResolved" ? "mixed" : "resolved");
@@ -2294,7 +2340,8 @@ for (const defect of ["partial", "duplicateRead", "optionalRead", "semantic", "b
       if (defect === "replyMarker") f.nodes[0].comments.nodes.unshift(gateComment("c0", 0, "unmarked root"));
       if (defect === "residualResolved") f.nodes[0].isResolved = true;
       const canonical = path.join(path.dirname(f.fixerPlan), f.plan.executionIdentity, "fixer-disposition.json");
-      if (defect === "prePull") await utimes(canonical, 1, 1); else await rm(canonical);
+      if (defect === "prePull") await utimes(canonical, 1, 1);
+      else { await rm(canonical); await rm(`${canonical}.constructed`); }
       if (["outputSymlink", "directorySymlink"].includes(defect)) {
         const other = path.join(repoRoot, "unrelated");
         await mkdir(other);
@@ -2307,7 +2354,7 @@ for (const defect of ["partial", "duplicateRead", "optionalRead", "semantic", "b
       const entries = [compareEntry(f.baseline, defect === "baselineContainment" ? "diverged" : "ahead", f.candidate), compareEntry(f.fixing, defect === "fixContainment" ? "diverged" : "ahead", f.candidate), liveHeadEntry(f.candidate), threadsCallEntry(f.nodes), userEntry];
       const mock = runtime(entries, repoRoot, { live: false });
       await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan, construct: true }, mock.deps),
-        ["unaccountedForm", "skippedForm"].includes(defect) ? /GATE-EXEC-REMEDIATION-SITE-QUERY/ : undefined);
+        expectedError);
       assert.equal(existsSync(canonical) ? await readFile(canonical, "utf8") : null, before);
       assert.deepEqual(await Promise.all([f.originPath, f.sourcePath].map((file) => readFile(file, "utf8").catch(() => null))), evidenceBefore);
       assert.deepEqual(await checkpointFiles(repoRoot), []);
