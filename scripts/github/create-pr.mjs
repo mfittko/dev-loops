@@ -647,7 +647,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
       throw parseError("--base requires a literal branch name (no options, refspecs or revision syntax)");
     }
     try {
-      execFileSync("git", ["fetch", "--", "origin", bareBase], { cwd: diffCwd, env: diffEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      execFileSync("git", ["fetch", "--", "origin", `+refs/heads/${bareBase}:refs/remotes/origin/${bareBase}`], { cwd: diffCwd, env: diffEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
       throw Object.assign(parseError(`${BASE_FETCH_FAILED_BEFORE_PR}: cannot fetch origin ${bareBase}: ${error.message}`), { code: BASE_FETCH_FAILED_BEFORE_PR });
     }

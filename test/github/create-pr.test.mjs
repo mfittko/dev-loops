@@ -103,7 +103,7 @@ for (const base of ["main", "origin/main", "release/v1"]) {
       assert.equal(await createPrMain(["--base", base, "--title", "chore(docs): note", "--body", "notes"], {
         cwd, env, validatePrePrReview: async () => ({ ok: true }), evaluateEarlySurface: async () => ({}),
       }), 0);
-      assert.equal(await readFile(fetchLog, "utf8"), `fetch -- origin ${branch}\n`);
+      assert.equal(await readFile(fetchLog, "utf8"), `fetch -- origin +refs/heads/${branch}:refs/remotes/origin/${branch}\n`);
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });
 }
@@ -125,6 +125,39 @@ for (const base of ["main:refs/heads/unrelated", "--tags", "main~1"]) {
   });
 }
 
+for (const tracking of ["missing", "stale"]) {
+  test(`create-pr fetches literal plus-prefixed base with ${tracking} tracking ref`, async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "create-plus-base-"));
+    try {
+      await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "docs/note.md", content: "note\n" }] });
+      const selected = runGitFixture(cwd, ["rev-parse", "origin/main"]);
+      const main = runGitFixture(cwd, ["rev-parse", "HEAD"]);
+      runGitFixture(cwd, ["branch", "+main", selected]);
+      const remote = path.join(cwd, "remote.git");
+      runGitFixture(cwd, ["clone", "-q", "--bare", cwd, remote]);
+      runGitFixture(cwd, ["remote", "add", "origin", remote]);
+      if (tracking === "stale") runGitFixture(cwd, ["update-ref", "refs/remotes/origin/+main", main]);
+      const { env, fetchLog, ghLogPath } = await writeGhStub(cwd, [{}], { realFetch: true });
+      let sizeCalls = 0;
+      await assert.rejects(createPrMain(["--base=+main", "--title", "fix(docs): note", "--body", "notes"], {
+        cwd, env, validatePrePrReview: async () => ({ ok: true }),
+        evaluatePrSizeBudget: async ({ base }) => {
+          sizeCalls++;
+          assert.equal(base, "origin/+main");
+          assert.equal(runGitFixture(cwd, ["rev-parse", base]), selected);
+          return {};
+        },
+      }), (error) => error.code === "changelog_incomplete_before_pr");
+      assert.equal(sizeCalls, 1);
+      assert.equal(runGitFixture(cwd, ["rev-parse", "origin/+main"]), selected);
+      assert.equal(runGitFixture(cwd, ["rev-parse", "refs/heads/main"]), main);
+      assert.equal(runGitFixture(cwd, ["rev-parse", "origin/main"]), selected);
+      assert.equal(await readFile(fetchLog, "utf8"), "fetch -- origin +refs/heads/+main:refs/remotes/origin/+main\n");
+      assert.deepEqual(await readGhCalls(ghLogPath), []);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
 test("create-pr isolates fetch, OID and changelog Git calls from decoy overrides", async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "create-git-override-"));
   const decoy = await mkdtemp(path.join(os.tmpdir(), "create-decoy-"));
@@ -141,7 +174,7 @@ test("create-pr isolates fetch, OID and changelog Git calls from decoy overrides
     assert.equal(await createPrMain(["--base", "main", "--title", "chore(docs): note", "--body", "notes"], runtime), 0);
     await assert.rejects(createPrMain(["--base", "main", "--title", "fix(docs): note", "--body", "notes"], runtime),
       (error) => error.code === "changelog_incomplete_before_pr");
-    assert.equal(await readFile(fetchLog, "utf8"), "fetch -- origin main\nfetch -- origin main\n");
+    assert.equal(await readFile(fetchLog, "utf8"), "fetch -- origin +refs/heads/main:refs/remotes/origin/main\nfetch -- origin +refs/heads/main:refs/remotes/origin/main\n");
     assert.equal((await readGhCalls(ghLogPath)).length, 1);
   } finally {
     await rm(cwd, { recursive: true, force: true });
@@ -178,7 +211,7 @@ test("create-pr fetches only the base before size/changelog, and fails closed on
     assert.notEqual(stale, fetched);
     assert.equal(await createPrMain(["--base", "main", "--title", "fix(local): feature", "--body", "notes"], runtime), 0);
     assert.equal(sizeCalls, 1);
-    assert.equal(await readFile(fetchLog, "utf8"), "fetch -- origin main\n");
+    assert.equal(await readFile(fetchLog, "utf8"), "fetch -- origin +refs/heads/main:refs/remotes/origin/main\n");
     runGitFixture(cwd, ["rm", "changes/feature.md"]);
     runGitFixture(cwd, ["commit", "-qm", "fix(local): remove note"]);
     await assert.rejects(createPrMain(["--base", "main", "--title", "fix(local): feature", "--body", "notes"], runtime), (err) => {
