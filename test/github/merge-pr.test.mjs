@@ -161,8 +161,10 @@ test("adr_tripwire refuses a block that is not a stale waiver, never merging", a
 test("adr_tripwire fails closed when the evaluator throws or the head fetch fails", async () => {
   for (const key of ["evaluateAdrTripwire", "fetchPrHead"]) {
     const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
-    runtime[key] = () => { throw new Error("git exploded"); };
-    await assert.rejects(() => mergePr(baseOptions(), runtime), /(adr_tripwire|base_not_integrated) \(.*(unevaluable|could not verify).*git exploded/);
+    // fetchPrHead runs twice (base check, then tripwire); let the first call pass so the tripwire fetch path is the one that throws.
+    let calls_ = 0;
+    runtime[key] = () => { if (key === "fetchPrHead" && ++calls_ < 2) return; throw new Error("git exploded"); };
+    await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*git exploded/);
     assert.equal(mergeCalls(calls).length, 0);
   }
 });
@@ -194,7 +196,7 @@ test("adr_tripwire evaluates origin/<base> at the PR head after fetching it", as
   assert.deepEqual(evaluated, [{ base: "origin/main", head: HEAD }]);
 });
 
-test("adr_tripwire refuses as unevaluable when the PR base branch is unreadable", async () => {
+test("base_not_integrated refuses as unevaluable when the PR base branch is unreadable", async () => {
   const { runtime, calls } = makeRuntime({ prView: { baseRefName: "" } });
   await assert.rejects(() => mergePr(baseOptions(), runtime), /base_not_integrated \(.*base branch is unreadable/);
   assert.equal(mergeCalls(calls).length, 0);
@@ -985,7 +987,7 @@ test("merge-pr default evidence probe shells the same detect-checkpoint-evidence
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { buildResolveDevLoopStartupResult, resolvePendingRetrospectives } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
-import { resolverTestEnv } from "../_helpers.mjs";
+import { resolverTestEnv, runGitFixture } from "../_helpers.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1252,7 +1254,8 @@ test("base_not_integrated fails closed when the checkout origin stops matching -
 
 test("defaultIsAncestor answers true, false, and throws on a bad ref in a real repo", () => {
   const dir = mkdtempSync(join(tmpdir(), "is-ancestor-"));
-  const git = (...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: dir, encoding: "utf8" }).trim();
+  try {
+  const git = (...args) => runGitFixture(dir, ["-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@t", ...args]);
   git("init", "-q", "-b", "main");
   writeFileSync(join(dir, "a"), "1");
   git("add", "a");
@@ -1267,4 +1270,7 @@ test("defaultIsAncestor answers true, false, and throws on a bad ref in a real r
   assert.equal(defaultIsAncestor({ base: side, head: side, repoRoot: dir }), true);
   assert.equal(defaultIsAncestor({ base: side, head: first, repoRoot: dir }), false);
   assert.throws(() => defaultIsAncestor({ base: "no-such-ref", head: side, repoRoot: dir }));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

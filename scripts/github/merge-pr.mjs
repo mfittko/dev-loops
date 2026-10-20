@@ -85,8 +85,9 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
   human_approver, mergeable, ci_green, title_markers, gate_evidence,
   copilot_convergence, size_budget_human_approval, merge_approval, adr_tripwire,
   retrospective_checkpoint (only when workflow.requireRetrospective is true),
-  adr_number_collision (a PR-added docs/decisions record shares its number with
-  the base branch tip).
+  base_not_integrated (origin/<base> must be an ancestor of the PR head; a fetch
+  or git failure refuses), adr_number_collision (a PR-added docs/decisions
+  record shares its number with the base branch tip).
   adr_tripwire fetches the PR head and evaluates the ADR tripwire at
   origin/<base>...<head> against the current PR body, on every merge class. It
   refuses when the tripwire blocks or cannot be evaluated. When the only cause
