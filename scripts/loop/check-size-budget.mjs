@@ -56,7 +56,7 @@ logic), resolves each changed file's tier from configured path patterns, and
 emits pass | escalate | block.
 
 Required:
-  --base <ref>          Git ref to diff against (git diff <ref>...<head>)
+  --base <ref>          Git ref to diff against (git diff <ref>...<head>); a bare branch uses origin/<branch> when that commit resolves. Explicit remote refs and revision expressions stay unchanged.
 
 Optional:
   --head <ref>          Git ref for the PR head (default: HEAD)

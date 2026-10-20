@@ -11,7 +11,7 @@ test("anchors only bare branches with an origin commit, isolated to repoRoot", (
   const git = (...args) => execFileSync("git", ["-C", repoRoot, ...args], { encoding: "utf8" }).trim();
   try {
     git("init", "-q", "-b", "main");
-    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "-q", "--allow-empty", "-m", "base");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "--no-gpg-sign", "-q", "--allow-empty", "-m", "base");
     git("update-ref", "refs/remotes/origin/main", "HEAD");
     assert.equal(anchorBaseRef("main", { repoRoot }), "origin/main");
     for (const ref of ["origin/main", "a".repeat(40), "HEAD~1", "HEAD", "main^", "main@{0}", "missing", "topic/branch", ""]) {

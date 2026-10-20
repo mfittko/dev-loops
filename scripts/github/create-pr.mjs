@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import {
   detectClosingKeyword,
@@ -23,6 +24,7 @@ import { PRE_PR_REVIEW_MISSING, validatePrePrReview } from "../loop/_pre-pr-revi
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
+import { createGitClient } from "../docs/_doc-git-client.mjs";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
 Canonical PR-creation wrapper around \`gh pr create\`. Every PR opened through this
 tool is ALWAYS a draft and is self-assigned by default. Never call raw \`gh pr create\`.
@@ -237,7 +239,7 @@ const SCAN_OPTIONS = {
   web: { type: "boolean", short: "w" },
 };
 function scanBodySources(args) {
-  const found = { body: null, bodyFile: null, sourced: false, editorOrWeb: false };
+  const found = { body: null, bodyFile: null, title: null, sourced: false, editorOrWeb: false };
   const { tokens } = parseArgs({ args, options: SCAN_OPTIONS, strict: false, allowPositionals: true, tokens: true });
   for (const token of tokens) {
     if (token.kind !== "option") continue;
@@ -248,6 +250,7 @@ function scanBodySources(args) {
     if (value !== null && token.inlineValue && /^-[^-]/u.test(token.rawName) && value.startsWith("=")) value = value.slice(1);
     if (token.name === "body") found.body = value;
     else if (token.name === "body-file") found.bodyFile = value;
+    else if (token.name === "title") found.title = value;
   }
   return found;
 }
@@ -631,9 +634,20 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   if (typeof baseForDiff === "string" && baseForDiff.trim().length > 0) {
     const bareBase = baseForDiff.trim().replace(/^origin\//u, "");
     const diffCwd = runtime.cwd ?? process.cwd();
-    const diffEnv = runtime.env ?? process.env;
+    const diffEnv = { ...(runtime.env ?? process.env) };
+    delete diffEnv.GIT_DIR;
+    delete diffEnv.GIT_WORK_TREE;
+    delete diffEnv.GIT_COMMON_DIR;
     try {
-      execFileSync("git", ["fetch", "origin", bareBase], { cwd: diffCwd, env: diffEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      const branch = execFileSync("git", ["check-ref-format", "--branch", bareBase], {
+        cwd: diffCwd, env: diffEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+      if (branch !== bareBase) throw new Error("branch expansion is not a literal name");
+    } catch {
+      throw parseError("--base requires a literal branch name (no options, refspecs or revision syntax)");
+    }
+    try {
+      execFileSync("git", ["fetch", "--", "origin", bareBase], { cwd: diffCwd, env: diffEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
       throw Object.assign(parseError(`${BASE_FETCH_FAILED_BEFORE_PR}: cannot fetch origin ${bareBase}: ${error.message}`), { code: BASE_FETCH_FAILED_BEFORE_PR });
     }
@@ -681,12 +695,14 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
         const diagnostics = [];
         const log = { log: (...args) => diagnostics.push(args.join(" ")), error: (...args) => diagnostics.push(args.join(" ")) };
         const env = { ...diffEnv };
-        const title = getFlagValue(forwardedArgv, /^--title(?:$|=)|^-t$/u);
+        const title = sources.title;
         if (title === null) delete env.DEVLOOPS_PR_TITLE;
         else env.DEVLOOPS_PR_TITLE = title;
         let code;
         try {
-          code = await validateChangelog({ root: resolveRepoRoot(diffCwd), base: `origin/${bareBase}`, env, log });
+          const root = resolveRepoRoot(diffCwd);
+          const git = createGitClient(root, (command, args, options) => promisify(execFile)(command, args, { ...options, env }));
+          code = await validateChangelog({ root, base: `origin/${bareBase}`, env, log, git });
         } catch (error) {
           diagnostics.push(error.message);
           code = 1;
