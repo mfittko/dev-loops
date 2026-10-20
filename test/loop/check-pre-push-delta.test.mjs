@@ -73,7 +73,9 @@ test("real delta CLI exits 2 for a committed 201-character fragment and records 
   for (const length of [201, 200, 0]) {
   const { dir, threadsFile } = threadsFixture();
   try {
-    initGitFixture(dir, { branch: "main", commit: "base" });
+    initGitFixture(dir, { branch: "main", commit: null });
+    runGitFixture(dir, ["config", "commit.gpgsign", "false"]);
+    runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", "base"]);
     const baseline = runGitFixture(dir, ["rev-parse", "HEAD"]);
     runGitFixture(dir, ["update-ref", "refs/remotes/origin/main", baseline]);
     if (length) {
@@ -113,8 +115,11 @@ test("result-mode changelog ignores inherited Git directory overrides", async ()
   try {
     fs.mkdirSync(target);
     fs.mkdirSync(decoy);
-    initGitFixture(target, { branch: "main", commit: "base" });
-    initGitFixture(decoy, { branch: "main", commit: "decoy without origin" });
+    for (const [root, message] of [[target, "base"], [decoy, "decoy without origin"]]) {
+      initGitFixture(root, { branch: "main", commit: null });
+      runGitFixture(root, ["config", "commit.gpgsign", "false"]);
+      runGitFixture(root, ["commit", "-q", "--allow-empty", "-m", message]);
+    }
     const baseline = runGitFixture(target, ["rev-parse", "HEAD"]);
     runGitFixture(target, ["update-ref", "refs/remotes/origin/main", baseline]);
     fs.mkdirSync(path.join(target, "changes"));

@@ -79,6 +79,7 @@ Behavior:
   - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
   - refuses with \`size_split_required_before_pr\` before creating when the local \`origin/<base>...<head>\` whole-PR logic LOC is at or above the resolved default-tier \`waiverLoc\` (PRE-PR-SIZE-CHECK); no override flag; an unknown size does not refuse
   - fetches only \`origin <base>\` before size and changelog checks; refuses with \`base_fetch_failed_before_pr\` on fetch failure
+  - validates \`--base\` as a literal branch name before that fetch: refuses options, refspecs and revision syntax; valid branch names remain supported
   - refuses with \`changelog_incomplete_before_pr\` (LIFECYCLE-CHANGELOG-COMPLETENESS) after size checks against the fetched base when the selected head equals checkout HEAD; skips for an unresolved origin base or a different head; no override
   - after a successful create, prints one JSON line \`{"adrTripwire":...,"sizeBudget":...}\` (ADR-TRIPWIRE-EARLY-SURFACE);
     a block or unknown outcome is advisory and never refuses the already-created PR
@@ -87,7 +88,7 @@ Examples:
   node <resolved-skill-scripts>/github/create-pr.mjs --repo owner/repo --base main --head feature --title "..." --body-file pr.md
 Notes:
   - Use \`gh pr ready\` later to leave draft state; this wrapper never opens a ready PR.
-  - Wrapper-owned validation: \`--ready\` (rejected), \`--issue\` closing-reference enforcement, the tracker-backed PR-body spec contract (same \`validate-pr-body-spec\` the ready boundary runs — a non-conformant body fails closed at create), and the linked-PR duplicate guard; all other argument validation is left to \`gh pr create\`.
+  - Wrapper-owned validation: \`--ready\` (rejected), literal \`--base\` branch names (before fetch), \`--issue\` closing-reference enforcement, the tracker-backed PR-body spec contract (same \`validate-pr-body-spec\` the ready boundary runs — a non-conformant body fails closed at create), and the linked-PR duplicate guard; all other argument validation is left to \`gh pr create\`.
   - A tracker-backed PR (a closing issue via \`--issue\`/\`Closes #N\`) must carry the spec-of-record sections (Objective, In scope, Acceptance criteria + Definition of done checklists, explicit Non-goals) or create fails closed; issue-less \`--lightweight\` PRs carry no closing reference and are exempt. Canonical skeleton: \`skills/dev-loop/templates/pr-body.md\`.
   - \`--issue <n>\` makes the closing reference a MUST (refused if missing or mismatched); without \`--issue\` the closing keyword is not enforced.
   - The linked-PR duplicate guard runs for any closing keyword/\`--issue\` and fails closed on ambiguity when the probe cannot run.
@@ -176,15 +177,6 @@ function isResolvableRef(ref, { cwd, env }) {
 const HEAD_UNRESOLVABLE = "head_unresolvable";
 // Both `--repo owner/name` and `--repo=owner/name` — gh accepts either form.
 const REPO_FLAG_PATTERN = /^--repo(?:$|=)/u;
-// An explicit base in any form `gh pr create` accepts: `--base <b>`,
-// `--base=<b>`, or the `-B` short flag. Any match suppresses the injected
-// resolveBaseBranch default so the caller value always wins (and no second
-// `--base` is added).
-const BASE_FLAG_PATTERN = /^(?:--base(?:$|=)|-B$)/u;
-// The PR's head branch in any form `gh pr create` accepts: `--head <b>`,
-// `--head=<b>`, or the `-H` short flag. Forwarded to gh unchanged; read here to
-// derive the expected issue for the branch-derived closing-reference guard.
-const HEAD_FLAG_PATTERN = /^(?:--head(?:$|=)|-H$)/u;
 const PR_URL_NUMBER_PATTERN = /\/pull\/(\d+)(?:\D|$)/u;
 const DRAFT_FLAG_PATTERN = /^--draft(?:=(.*))?$/iu;
 // Shared inline-boolean truthiness for --draft= and --lightweight= values.
@@ -211,7 +203,7 @@ export { detectClosingKeyword, extractClosingIssueNumber };
 // substituting "" (which used to let a broken/blank --body-file open a body-less
 // PR unnoticed).
 async function resolveBody(args) {
-  const { body, bodyFile } = scanBodySources(args);
+  const { body, bodyFile } = scanPrFlags(args);
   if (body !== null) {
     return body;
   }
@@ -220,9 +212,9 @@ async function resolveBody(args) {
   }
   return null; // no --body/--body-file given
 }
-// pflag-style scan of the forwarded `gh pr create` flags: reads `--body`,
-// `--body-file`, `-b`, `-F` (space, `=`, attached `-bx` and shorthand-bundle
-// `-db x` forms) only in flag position, so a flag VALUE that merely starts
+// pflag-style scan of forwarded `gh pr create` flags, including effective
+// head/base/title/body values (last occurrence wins; space, `=`, attached
+// and bundled short forms), only in flag position, so a flag VALUE that merely starts
 // with `-b`/`-F` (for example `--title -bump`) is never read as the body.
 // `sourced` is true when gh sources the body itself (--fill*, --template, --editor, --web, -f, -T, -e, -w),
 // so its marker lines cannot be checked here.
@@ -238,8 +230,8 @@ const SCAN_OPTIONS = {
   editor: { type: "boolean", short: "e" },
   web: { type: "boolean", short: "w" },
 };
-function scanBodySources(args) {
-  const found = { body: null, bodyFile: null, title: null, sourced: false, editorOrWeb: false };
+function scanPrFlags(args) {
+  const found = { body: null, bodyFile: null, title: null, head: null, base: null, sourced: false, editorOrWeb: false };
   const { tokens } = parseArgs({ args, options: SCAN_OPTIONS, strict: false, allowPositionals: true, tokens: true });
   for (const token of tokens) {
     if (token.kind !== "option") continue;
@@ -251,6 +243,8 @@ function scanBodySources(args) {
     if (token.name === "body") found.body = value;
     else if (token.name === "body-file") found.bodyFile = value;
     else if (token.name === "title") found.title = value;
+    else if (token.name === "head") found.head = value;
+    else if (token.name === "base") found.base = value;
   }
   return found;
 }
@@ -384,7 +378,7 @@ export function buildCreatePrArgs(argv, { baseDefault = null } = {}) {
   // exactly one `--base` ever reaches gh. A null/empty baseDefault injects
   // nothing (main only resolves one when base is absent; a caller passing base
   // resolves none).
-  const hasBase = args.some((token) => BASE_FLAG_PATTERN.test(token));
+  const hasBase = scanPrFlags(args).base !== null;
   const injectBase = !hasBase && typeof baseDefault === "string" && baseDefault.trim().length > 0;
   return {
     help: false,
@@ -531,7 +525,8 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   // When the caller gave no explicit --base/-B, resolve the default base from
   // workflow.baseBranch (or the auto-detected default branch) so a configured
   // non-default base is honored instead of gh's repository-default fallback.
-  const hasBase = forwardedArgv.some((token) => BASE_FLAG_PATTERN.test(token));
+  const sources = scanPrFlags(forwardedArgv);
+  const hasBase = sources.base !== null;
   const baseDefault = hasBase
     ? null
     : await resolveBaseDefault(runtime.cwd ?? process.cwd(), runtime);
@@ -540,7 +535,6 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
-  const sources = scanBodySources(forwardedArgv);
   if (sources.body !== null && sources.bodyFile !== null) {
     throw parseError("--body and --body-file are mutually exclusive; pass only one");
   }
@@ -591,7 +585,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     // (fail-closed) so a swapped body cannot silently re-point the PR at the
     // wrong issue. A branch with no issue (issue-less), a body with no closing
     // reference, and --allow-cross-issue all pass.
-    const headBranch = getFlagValue(forwardedArgv, HEAD_FLAG_PATTERN)
+    const headBranch = sources.head
       ?? resolveCurrentBranch({ cwd: runtime.cwd ?? process.cwd(), env: runtime.env ?? process.env });
     const refusal = resolveClosingRefMismatch({
       body,
@@ -607,9 +601,9 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   // local ref, or origin/<head> when only that exists; a local/remote divergence is refused. Plan-doc
   // promotion (a diff of only docs/phases/**/*.md) is exempt; skills/** prose needs a record.
   {
-    const headFlag = getFlagValue(forwardedArgv, HEAD_FLAG_PATTERN);
+    const headFlag = sources.head;
     const headRef = headFlag ? headFlag.trim().replace(/^[^:]*:/u, "") : undefined;
-    const baseRef = hasBase ? getFlagValue(forwardedArgv, BASE_FLAG_PATTERN) : baseDefault;
+    const baseRef = hasBase ? sources.base : baseDefault;
     const review = await (runtime.validatePrePrReview ?? validatePrePrReview)({
       cwd: runtime.cwd ?? process.cwd(),
       head: headRef || undefined,
@@ -630,7 +624,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   // error, a malformed-ref rejection, or an evaluator bug propagates and
   // refuses PR creation, matching how the ready boundary lets it throw.
   let resolvedHead = "HEAD";
-  const baseForDiff = hasBase ? getFlagValue(forwardedArgv, BASE_FLAG_PATTERN) : baseDefault;
+  const baseForDiff = hasBase ? sources.base : baseDefault;
   if (typeof baseForDiff === "string" && baseForDiff.trim().length > 0) {
     const bareBase = baseForDiff.trim().replace(/^origin\//u, "");
     const diffCwd = runtime.cwd ?? process.cwd();
@@ -652,7 +646,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
       throw Object.assign(parseError(`${BASE_FETCH_FAILED_BEFORE_PR}: cannot fetch origin ${bareBase}: ${error.message}`), { code: BASE_FETCH_FAILED_BEFORE_PR });
     }
     if (isResolvableRef(`origin/${bareBase}`, { cwd: diffCwd, env: diffEnv })) {
-      const headFlagValue = getFlagValue(forwardedArgv, HEAD_FLAG_PATTERN);
+      const headFlagValue = sources.head;
       if (headFlagValue) {
         const branch = headFlagValue.trim().replace(/^[^:]*:/u, "");
         const found = [`refs/heads/${branch}`, `refs/remotes/origin/${branch}`].find((ref) => isResolvableRef(ref, { cwd: diffCwd, env: diffEnv }));
