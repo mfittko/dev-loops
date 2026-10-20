@@ -15,7 +15,7 @@ const SANCTIONED_PULL_RE = new RegExp(
 );
 const parseSanctionedPullLine = (command: string) => SANCTIONED_PULL_RE.test(command.trim());
 const JUDGE_DECISION_CHECK_RE = /^dev-loops-run scripts\/loop\/check-judge-decision\.mjs --file [\w.\/#-]*tmp\/gate-judge\/[\w.\/#-]+\.json$/;
-export const stripPluginNamespace = (agentType: string) => agentType.slice(agentType.lastIndexOf(':') + 1);
+const stripPluginNamespace = (agentType: string) => agentType.slice(agentType.lastIndexOf(':') + 1);
 /**
  * The plugin namespace a tag value names: the text before its first `:`, trimmed; '' when the value
  * carries no namespace. Read off the same trimmed value as the bare name so a `dev-loops:`-prefixed

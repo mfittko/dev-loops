@@ -180,3 +180,26 @@ test("a raw global copy is never checked", () =>
       fs.rmSync(home, { recursive: true, force: true });
     }
   }));
+
+test("an unreadable or missing packaged agents source refuses", () =>
+  withProject(async (root) => {
+    const { checkAgentSetRendered } = await import("../extension/sync-packaged-agents.ts");
+    const missing = path.join(root, "no-such-source");
+    assert.match(checkAgentSetRendered(root, missing), /^agent_set_not_rendered.*no-such-source/);
+    const notDir = path.join(root, "file-source");
+    fs.writeFileSync(notDir, "x");
+    assert.match(checkAgentSetRendered(root, notDir), /^agent_set_not_rendered.*file-source/);
+  }));
+
+test("a directory at a rendered name refuses while a missing file passes", () =>
+  withProject(async (root) => {
+    const { checkAgentSetRendered } = await import("../extension/sync-packaged-agents.ts");
+    const src = path.join(root, "src");
+    writeAt(path.join(src, "quality.agent.md"), RENDERED);
+    assert.equal(checkAgentSetRendered(root, src), null);
+    const asDir = path.join(root, ".pi", "agents", "quality.agent.md");
+    fs.mkdirSync(asDir, { recursive: true });
+    const res = checkAgentSetRendered(root, src);
+    assert.match(res, /^agent_set_not_rendered/);
+    assert.ok(res.includes(`${asDir} (unreadable)`));
+  }));

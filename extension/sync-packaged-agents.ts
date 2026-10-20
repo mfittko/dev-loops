@@ -271,7 +271,7 @@ export function findProjectRoot(cwd: string, home: string | null = process.env.H
  * Preflight: refuse a launch when a file the dev-loops render writes into `.pi/agents` still
  * declares a raw `search`/`execute` tool. Only the `*.agent.md` names found in the packaged agents
  * source directory are inspected; any other project agent file is never read. Returns the typed
- * `agent_set_not_rendered` reason, else null (an absent directory or a rendered set passes).
+ * `agent_set_not_rendered` reason, else null (an absent rendered file or a rendered set passes; an unreadable source directory or rendered file refuses).
  */
 export function checkAgentSetRendered(
   cwd: string,
@@ -283,7 +283,7 @@ export function checkAgentSetRendered(
   try {
     names = fs.readdirSync(sourceRoot).filter((n) => n.endsWith(".agent.md")).sort();
   } catch {
-    return null;
+    return `agent_set_not_rendered: the packaged agents source ${sourceRoot} cannot be read, so the rendered set cannot be verified.`;
   }
   const offenders: string[] = [];
   for (const name of names) {
@@ -291,7 +291,11 @@ export function checkAgentSetRendered(
     let raw: string;
     try {
       raw = fs.readFileSync(file, "utf8");
-    } catch {
+    } catch (error) {
+      // ENOTDIR: a parent path component is a file, so the rendered file is absent.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") continue;
+      offenders.push(`${file} (unreadable)`);
       continue;
     }
     const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1].match(TOOLS_LINE_RE);
@@ -302,5 +306,5 @@ export function checkAgentSetRendered(
   const remedy = isDevLoopsAgentsCheckout(projectRoot)
     ? `Render the project set: in a worktree run \`dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>\`; in the main checkout restart the Pi session (the session-start sync re-renders \`${dir}\`). Never restore a \`.pi/agents\` symlink to the raw agent sources.`
     : "Re-render with the packaged-agent sync, or replace the named file with its rendered copy.";
-  return `agent_set_not_rendered: the rendered agent set carries non-Pi tool names: ${offenders.join("; ")}. ${remedy}`;
+  return `agent_set_not_rendered: the rendered agent set carries non-Pi tool names or unreadable files: ${offenders.join("; ")}. ${remedy}`;
 }
