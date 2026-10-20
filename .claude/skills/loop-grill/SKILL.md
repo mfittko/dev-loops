@@ -162,7 +162,7 @@ Write the raw Q&A transcript ONLY to the gitignored, ephemeral, session-scoped a
 - Any contradiction between now-stale prose and the locked AC/DoD/approach: resolve in favor of the locked form; delete the stale prose.
 - Any bare `#<number>` used as a defect/item enumeration rather than a genuine issue/PR reference (`GRILL-SUBLOOP-NO-BARE-HASH`): rewrite as `defect N` / `item N` / backticks. GitHub auto-links a bare `#<number>` to an unrelated issue/PR in this repo — reserve `#<number>` only for a real issue/PR cross-reference.
 
-The rewritten description carries ONLY normative locked content: context, the decided approach, the `## AC / DoD matrix` (the authoritative AC→DoD mapping table), `## Non-goals`, the `## Size forecast` section, and a linked refinement doc reference if present. (A body MAY additionally carry human-readable `## Acceptance criteria` / `## Definition of done` prose, but the matrix — not those checklists — is what refinement detection requires.) Write it back with:
+The rewritten description carries ONLY normative locked content: context, the decided approach, the `## AC / DoD matrix` (the authoritative AC→DoD mapping table), `## Non-goals`, the `## Size forecast` section, the `## Simplest design` section, and a linked refinement doc reference if present. (A body MAY additionally carry human-readable `## Acceptance criteria` / `## Definition of done` prose, but the matrix — not those checklists — is what refinement detection requires.) Write it back with:
 
 ```
 dev-loops-run cli/index.mjs issue edit --repo <owner/repo> --issue <n> --body-file <tmp-body-path>
@@ -188,7 +188,7 @@ Never `gh issue comment` directly, and never fold this content back into the iss
 
 Three distinct artifacts for tracker-first AND PR-body (two for local-planning, which has no comment surface at all in this contract):
 
-1. **Rewritten description** (issue/PR/plan body): the fully rewritten, locked spec — context, decided approach, the authoritative `## AC / DoD matrix`, `## Non-goals`, and `## Size forecast` (optional human-readable AC/DoD prose may accompany the matrix). No raw Q&A, no rationale narrative, no unresolved "suggested … or …" phrasing, no bare non-issue `#<number>`.
+1. **Rewritten description** (issue/PR/plan body): the fully rewritten, locked spec — context, decided approach, the authoritative `## AC / DoD matrix`, `## Non-goals`, `## Size forecast`, and `## Simplest design` (optional human-readable AC/DoD prose may accompany the matrix). No raw Q&A, no rationale narrative, no unresolved "suggested … or …" phrasing, no bare non-issue `#<number>`.
 
 2. **Results comment** (issue AND PR surfaces, posted separately per Step 4; its FIRST LINE MUST be exactly `## 🔬 Grill / refinement results`): the rationale. For an interactive run the `source:` line reads `source: <handle> answers via operator Q&A` using the same resolved handle (fallback: `source: human answers via operator Q&A`).
 
