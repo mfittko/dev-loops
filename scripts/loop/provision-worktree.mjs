@@ -29,6 +29,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { parseArgs } from "node:util";
+import { renderProjectAgents } from "../../extension/sync-packaged-agents.ts";
 import { loadDevLoopConfig, resolveWorktreeConfig } from "@dev-loops/core/config";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -313,6 +314,15 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
       src: path.join(dst, "packages", "core"),
       dest: path.join(dst, "node_modules", "@dev-loops", "core"),
     });
+  }
+
+  // #2865: `.pi/agents` is untracked; render the Pi-valid agent set here so every
+  // checkout gets it deterministically. Fail-soft like the other steps.
+  try {
+    renderProjectAgents(dst);
+    actions.push({ entry: ".pi/agents", mode: "render", dest: path.join(dst, ".pi", "agents") });
+  } catch (err) {
+    logWarn(`pi agent render failed, skipping: ${(err && err.message) ? err.message : String(err)}`);
   }
 
   const summary = { copied: 0, linked: 0, skipped: 0, rejected: 0, warnings: warnings.length };

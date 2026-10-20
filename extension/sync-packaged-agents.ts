@@ -167,6 +167,24 @@ export function syncProjectAgentsDir(projectRoot: string, sourceRoot: string) {
 }
 
 /**
+ * Provision-time render (#2865): ensure `<projectRoot>/.pi/agents` is a REAL
+ * directory of Pi-valid rendered copies, creating it when absent. Unlike
+ * `syncProjectAgentsDir` (absent => no-op, for the consumer session_start path),
+ * worktree provisioning calls this so every checkout gets the set.
+ */
+export function renderProjectAgents(
+  projectRoot: string,
+  sourceRoot: string = fileURLToPath(PACKAGED_AGENTS_ROOT),
+) {
+  const dir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
+  if (fs.lstatSync(dir, { throwIfNoEntry: false })) {
+    syncProjectAgentsDir(projectRoot, sourceRoot);
+  } else {
+    writeSyncedAgents(sourceRoot, dir);
+  }
+}
+
+/**
  * Sync the canonical packaged agents into `~/.agents/`, rewriting the `tools:`
  * frontmatter to Pi-valid builtin names (#1583). The source `agents/*.agent.md`
  * files stay harness-neutral (role agents retain mapped `search` and use `bash`

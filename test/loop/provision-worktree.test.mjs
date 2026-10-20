@@ -209,10 +209,8 @@ test("provision: config with errors yields zero config-driven actions (fail-clos
       { loadConfig },
     );
     assert.equal(res.ok, true);
-    // Only the unconditional self-link action remains (this fixture has no
-    // packages/core in the worktree, so it's a source-missing skip).
-    assert.equal(res.actions.length, 1);
-    assert.equal(res.actions[0].entry, "node_modules/@dev-loops/core");
+    // Only the unconditional self-link and the .pi/agents render (#2865) remain.
+    assert.deepEqual(res.actions.map((a) => a.entry), ["node_modules/@dev-loops/core", ".pi/agents"]);
     assert.equal(res.summary.copied, 0);
     assert.equal(res.summary.linked, 0);
     assert.ok(res.summary.warnings >= 1, "one WARN about the invalid config");
