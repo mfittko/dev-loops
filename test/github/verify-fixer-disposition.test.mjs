@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { link, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -237,6 +237,77 @@ test("THREAD full --construct builds the report from the threads, the clearing r
   });
 });
 
+for (const route of ["THREAD", "ACT"]) for (const existing of ["report", "marker", "directory", "symlink"]) test(`${route} construction preserves existing ${existing} entries`, async () => {
+  await withRepoRoot(async (root) => {
+    const f = route === "THREAD" ? await threadConstructFixture(root) : await completionFixture(root);
+    const output = f.output ?? f.plan.workOrder.outputRefs[0];
+    if (route === "ACT") { await rm(output); await rm(`${output}.constructed`); }
+    await mkdir(path.dirname(output), { recursive: true });
+    const target = existing === "report" ? output : `${output}.constructed`;
+    const saved = path.join(root, "saved");
+    await writeFile(saved, "existing bytes");
+    if (existing === "directory") await mkdir(target);
+    else if (existing === "symlink") await symlink(saved, target);
+    else await writeFile(target, "existing bytes");
+    const options = f.options ?? { repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan };
+    const deps = route === "THREAD" ? f.runtimeFor([threadsCallEntry([])]).deps : f.depsFor().deps;
+    await assert.rejects(verifyFixerDisposition({ ...options, construct: true }, deps), /EEXIST/);
+    assert.equal(await readFile(saved, "utf8"), "existing bytes");
+    if (existing === "directory") assert.ok((await lstat(target)).isDirectory());
+    else assert.equal(await readFile(target, "utf8"), "existing bytes");
+    if (existing === "report") assert.equal(existsSync(`${output}.constructed`), false);
+    if (existing !== "report") await assert.rejects(verifyFixerDisposition({ ...options, check: true }, deps));
+  });
+});
+
+for (const defect of ["directorySymlink", "outputSymlink", "notDirectory"]) test(`THREAD construction refuses ${defect} before output writes`, async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    const saved = path.join(root, "saved");
+    await mkdir(saved);
+    await writeFile(path.join(saved, "fixer-disposition.json"), "existing bytes");
+    if (defect === "directorySymlink") await symlink(saved, path.dirname(f.output), "dir");
+    else {
+      await mkdir(path.dirname(f.output));
+      if (defect === "outputSymlink") await symlink(path.join(saved, "fixer-disposition.json"), f.output);
+      else { await rm(path.dirname(f.output), { recursive: true }); await writeFile(path.dirname(f.output), "existing bytes"); }
+    }
+    await assert.rejects(verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([]).deps), /canonical execution path|ENOTDIR/);
+    assert.equal(await readFile(path.join(saved, "fixer-disposition.json"), "utf8"), "existing bytes");
+    assert.equal(existsSync(`${f.output}.constructed`), false);
+  });
+});
+
+for (const [failed, operation] of [["report", "writeFile"], ["report", "close"], ["marker", "writeFile"], ["marker", "close"], ["report", "link"]]) test(`construction ${failed} ${operation} failure cannot become delivery evidence even when cleanup fails`, async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    const source = await readFile(new URL("../../scripts/github/verify-fixer-disposition.mjs", import.meta.url), "utf8");
+    const start = source.indexOf("  if (options.construct) {\n    await mkdir");
+    const end = source.indexOf("\n  if (source) {", start);
+    assert.ok(start >= 0 && end > start);
+    await assert.rejects(runInNewContext(`(async () => { ${source.slice(start, end)} })()`, {
+      options: { construct: true }, path, mkdir, mkdtemp, lstat, handoffPath: f.output, constructMarkPath: (file) => `${file}.constructed`, sha256Hex,
+      link: async (...args) => {
+        if (operation === "link") throw Object.assign(new Error("injected publication failure"), { code: "EIO" });
+        await link(...args);
+      },
+      rm: async () => { throw new Error("injected cleanup failure"); },
+      constructedReport: { headSha: f.head, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: f.head, disposition: "tackled" }] },
+      open: async (file, flags) => {
+        const handle = await open(file, flags);
+        const invoke = async (method, args) => {
+          await handle[method](...args);
+          if (file.endsWith(".constructed") === (failed === "marker") && method === operation) throw Object.assign(new Error("injected output failure"), { code: "EIO" });
+          if (file.endsWith(".constructed") === (failed === "marker") && method === "close" && operation === "writeFile") throw new Error("injected secondary close failure");
+        };
+        return { truncate: async () => { throw new Error("injected cleanup failure"); }, close: () => invoke("close", []), writeFile: (...args) => invoke("writeFile", args) };
+      },
+    }), (error) => error.code === "FIXER_CONSTRUCTION_FAILED" && error.cause.code === "EIO");
+    assert.equal(existsSync(f.output), false);
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true }, f.runtimeFor([]).deps), /result_missing/);
+  });
+});
+
 for (const [label, over] of [
   ["a missing record", { missing: true }],
   ["a non-clearing nextStep", { nextStep: "fix_and_rereview" }],
@@ -292,6 +363,35 @@ test("a hand-written fixer-disposition.json with valid content is refused and na
     const mock = f.runtimeFor([]);
     await assert.rejects(verifyFixerDisposition(f.options, mock.deps), /not written by this verifier's --construct/);
     assert.equal(mock.calls.length, 0);
+  });
+});
+
+test("a refused hand-written report with a stale marker can follow the scoped cleanup instructions", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    await mkdir(path.dirname(f.output), { recursive: true });
+    const report = JSON.stringify({ headSha: f.head, dispositions: [] });
+    const marker = `${f.output}.constructed`;
+    const unrelated = path.join(path.dirname(f.output), "unrelated.json");
+    await writeFile(f.output, report);
+    await writeFile(marker, "stale marker");
+    await writeFile(unrelated, "preserve me");
+    const mock = f.runtimeFor([]);
+    await assert.rejects(verifyFixerDisposition(f.options, mock.deps), (error) => {
+      assert.equal(error.handWritten, true);
+      assert.ok(error.message.includes(`rm only this execution's refused report ${f.output} and its corresponding stale marker ${marker}`));
+      assert.match(error.message, /Preserve accepted construction evidence and unrelated files/);
+      return true;
+    });
+    assert.equal(mock.calls.length, 0);
+    assert.equal(await readFile(f.output, "utf8"), report);
+    assert.equal(await readFile(marker, "utf8"), "stale marker");
+    await rm(f.output);
+    await assert.rejects(verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps), /EEXIST/);
+    assert.equal(await readFile(marker, "utf8"), "stale marker");
+    await rm(marker);
+    assert.equal((await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps)).constructed, true);
+    assert.equal(await readFile(unrelated, "utf8"), "preserve me");
   });
 });
 
@@ -1731,6 +1831,7 @@ test("explicit legacy completion requalifies unchanged evidence with inherited g
     f.git("config", "grep.column", "true");
     const options = { repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan };
     await rm(f.plan.workOrder.outputRefs[0]);
+    await rm(`${f.plan.workOrder.outputRefs[0]}.constructed`);
     assert.equal((await verifyFixerDisposition({ ...options, construct: true }, f.depsFor().deps)).constructed, true);
     for (const check of [false, true]) {
       const mock = f.depsFor([compareEntry(f.candidate, "identical", f.candidate)]);
@@ -1818,7 +1919,7 @@ for (const mode of ["construct", "normal", "check"]) for (const retiredIdentity 
     }
     const options = { repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan, construct: mode === "construct", check: mode === "check" };
     const report = f.plan.workOrder.outputRefs[0];
-    if (mode === "construct") await rm(report);
+    if (mode === "construct") { await rm(report); await rm(`${report}.constructed`); }
     const before = existsSync(report) ? await readFile(report, "utf8") : null;
     const mock = f.depsFor([compareEntry(f.candidate, "identical", f.candidate)]);
     if (retiredIdentity) {
@@ -2005,8 +2106,8 @@ test("typed completion CLI rejects construct/check together", () => {
 
 test("typed completion path guard accepts canonical Windows paths with helper-normalized separators", async () => {
   const source = await readFile(new URL("../../scripts/github/verify-fixer-disposition.mjs", import.meta.url), "utf8");
-  const start = source.indexOf("    const executionDir = path.join(await real(path.dirname(planPath)), plan.executionIdentity);");
-  const end = source.indexOf("    const subject =", start);
+  const start = source.indexOf("    const executionDir = path.join(await realpath(path.dirname(planPath)), plan.executionIdentity);");
+  const end = source.indexOf("\n  }\n  if (optionalCompletion)", start);
   assert.ok(start >= 0 && end > start);
   const planPath = "C:\\repo\\tmp\\gate-fixer\\owner-repo\\pr-1975\\fixer-emit-plan.json";
   const executionIdentity = "f1-0000abcd";
@@ -2015,11 +2116,19 @@ test("typed completion path guard accepts canonical Windows paths with helper-no
   await runInNewContext(`(async () => { ${source.slice(start, end)} })()`, {
     path: path.win32, planPath, plan: { executionIdentity },
     handoffPath: path.win32.join(path.win32.dirname(planPath), executionIdentity, "fixer-disposition.json"),
-    real: async (file) => file,
-    lstat: async () => ({ isSymbolicLink: () => false }),
+    realpath: async (file) => file,
+    lstat: async () => ({ isSymbolicLink: () => false, isDirectory: () => true }),
     realpathNearestExisting: (file) => { normalized.push(file); return path.win32.normalize(file).replaceAll("\\", "/"); },
   });
   assert.deepEqual(normalized, [path.win32.join(path.win32.dirname(planPath), executionIdentity), path.win32.join(path.win32.dirname(planPath), executionIdentity, "fixer-disposition.json")]);
+  for (const code of ["EACCES", "ENOTDIR", "EIO"]) {
+    await assert.rejects(runInNewContext(`(async () => { ${source.slice(start, end)} })()`, {
+      path, planPath: "/repo/plan.json", plan: { executionIdentity }, handoffPath: `/repo/${executionIdentity}/fixer-disposition.json`,
+      realpath: async (file) => file,
+      lstat: async () => { throw Object.assign(new Error("uncertain output location"), { code }); },
+      realpathNearestExisting: () => assert.fail("uncertain locations must not fall back to lexical paths"),
+    }), (error) => error.code === code);
+  }
 });
 
 for (const existing of ["output", "origin", "source", "late-origin"]) test(`typed completion refuses existing ${existing} without clobbering evidence`, async () => {
@@ -2114,6 +2223,7 @@ for (const kind of ["resolved", "mixed", "repeated-mixed", "residual", "threadle
   await withRepoRoot(async (repoRoot) => {
     const f = await completionFixture(repoRoot, kind);
     await rm(f.plan.workOrder.outputRefs[0]);
+    await rm(`${f.plan.workOrder.outputRefs[0]}.constructed`);
     const options = { repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan, construct: true };
     const mock = f.depsFor();
     const constructed = await verifyFixerDisposition(options, mock.deps);
@@ -2137,7 +2247,53 @@ for (const kind of ["resolved", "mixed", "repeated-mixed", "residual", "threadle
   });
 });
 
-for (const defect of ["partial", "duplicateRead", "optionalRead", "semantic", "bytes", "byteAuthority", "sourceHead", "fixingHead", "originIdentity", "originRef", "originDigest", "originReceipt", "originSubject", "originOutput", "originCoverage", "originPrePull", "deltaCoverage", "decisionCoverage", "baselineContainment", "fixContainment", "duplicateRoot", "duplicateMember", "emptyMembers", "unknownMember", "omittedRoot", "omittedMember", "foreignRoot", "unmarkedRoot", "replyMarker", "residualResolved", "unaccountedForm", "skippedForm", "prePull", "currentReceipt", "currentSubject", "currentPath", "outputPath", "outputSymlink", "directorySymlink", "role", "target", "planDigest", "noSource", "noDelta", "sourceAuthority"]) {
+for (const [defect, expectedError] of Object.entries({
+  partial: /completion input requires one required read and both semantic\/byte authorities/,
+  duplicateRead: /completion input requires one required read and both semantic\/byte authorities/,
+  optionalRead: /completion input requires one required read and both semantic\/byte authorities/,
+  semantic: /completion input differs from its semantic or exact-byte authority/,
+  bytes: /completion input differs from its semantic or exact-byte authority/,
+  byteAuthority: /completion input differs from its semantic or exact-byte authority/,
+  sourceHead: /completion input requires the actual full candidate\/fixing heads/,
+  fixingHead: /completion input requires the actual full candidate\/fixing heads/,
+  originIdentity: /completion origin is not a distinct original-baseline fixer execution/,
+  originRef: /completion origin is not a distinct original-baseline fixer execution/,
+  originDigest: /completion origin is not a distinct original-baseline fixer execution/,
+  originReceipt: /completion origin pull\/result failed verification/,
+  originSubject: /completion origin pull subject does not match the original commit_only authority/,
+  originOutput: /completion fixing commit\/coverage differs from the actual prior filled handback/,
+  originCoverage: /completion fixing commit\/coverage differs from the actual prior filled handback/,
+  originPrePull: /completion origin pull\/result failed verification: result_predates_pull/,
+  deltaCoverage: /completion coverage differs from the Delta result or clearing decision identity/,
+  decisionCoverage: /completion coverage differs from the Delta result or clearing decision identity/,
+  baselineContainment: /completion commit .* is not contained by the actual candidate/,
+  fixContainment: /completion commit .* is not contained by the actual candidate/,
+  duplicateRoot: /Fixer disposition handoff has a duplicate threadId/,
+  duplicateMember: /completion thread bindings require unique root IDs and complete unique ACT members/,
+  emptyMembers: /completion thread bindings require unique root IDs and complete unique ACT members/,
+  unknownMember: /completion thread bindings require unique root IDs and complete unique ACT members/,
+  omittedRoot: /completion binding does not match complete live ACT membership/,
+  omittedMember: /completion binding does not match complete live ACT membership/,
+  foreignRoot: /delta status and live thread disposition disagree/,
+  unmarkedRoot: /delta status and live thread disposition disagree/,
+  replyMarker: /delta status and live thread disposition disagree/,
+  residualResolved: /delta status and live thread disposition disagree/,
+  unaccountedForm: /GATE-EXEC-REMEDIATION-SITE-QUERY/,
+  skippedForm: /GATE-EXEC-REMEDIATION-SITE-QUERY/,
+  prePull: /result_predates_pull/,
+  currentReceipt: /fixer pull receipt .* failed verification/,
+  currentSubject: /completion current pull subject does not match its full fixer authority/,
+  currentPath: /is not the plan the fixer pull read/,
+  outputPath: /is not the emitted handoff path/,
+  outputSymlink: /completion output or execution directory redirects outside its canonical execution path/,
+  directorySymlink: /completion output or execution directory redirects outside its canonical execution path/,
+  role: /is not a full-phase fixer work order/,
+  target: /is not a full-phase fixer work order/,
+  planDigest: /does not match its workOrderDigest/,
+  noSource: /--construct requires authenticated ACT completion input or a THREAD plan/,
+  noDelta: /Invalid fixer review baseline: requires one required delta-result read/,
+  sourceAuthority: /Invalid fixer review baseline: missing ACT\/Delta semantic authority/,
+})) {
   test(`typed completion refuses ${defect} without output/checkpoint/GitHub writes`, async () => {
     await withRepoRoot(async (repoRoot) => {
       const f = await completionFixture(repoRoot, defect === "residualResolved" ? "mixed" : "resolved");
@@ -2213,7 +2369,8 @@ for (const defect of ["partial", "duplicateRead", "optionalRead", "semantic", "b
       if (defect === "replyMarker") f.nodes[0].comments.nodes.unshift(gateComment("c0", 0, "unmarked root"));
       if (defect === "residualResolved") f.nodes[0].isResolved = true;
       const canonical = path.join(path.dirname(f.fixerPlan), f.plan.executionIdentity, "fixer-disposition.json");
-      if (defect === "prePull") await utimes(canonical, 1, 1); else await rm(canonical);
+      if (defect === "prePull") await utimes(canonical, 1, 1);
+      else { await rm(canonical); await rm(`${canonical}.constructed`); }
       if (["outputSymlink", "directorySymlink"].includes(defect)) {
         const other = path.join(repoRoot, "unrelated");
         await mkdir(other);
@@ -2226,7 +2383,7 @@ for (const defect of ["partial", "duplicateRead", "optionalRead", "semantic", "b
       const entries = [compareEntry(f.baseline, defect === "baselineContainment" ? "diverged" : "ahead", f.candidate), compareEntry(f.fixing, defect === "fixContainment" ? "diverged" : "ahead", f.candidate), liveHeadEntry(f.candidate), threadsCallEntry(f.nodes), userEntry];
       const mock = runtime(entries, repoRoot, { live: false });
       await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: f.candidate, fixerPlan: f.fixerPlan, construct: true }, mock.deps),
-        ["unaccountedForm", "skippedForm"].includes(defect) ? /GATE-EXEC-REMEDIATION-SITE-QUERY/ : undefined);
+        expectedError);
       assert.equal(existsSync(canonical) ? await readFile(canonical, "utf8") : null, before);
       assert.deepEqual(await Promise.all([f.originPath, f.sourcePath].map((file) => readFile(file, "utf8").catch(() => null))), evidenceBefore);
       assert.deepEqual(await checkpointFiles(repoRoot), []);

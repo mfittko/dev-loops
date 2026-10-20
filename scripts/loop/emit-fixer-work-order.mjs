@@ -136,7 +136,7 @@ export function buildSiteCoverageSkeleton(actList) {
 }
 
 const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-const EDIT_RULE = "Edit rule: write file content only with the Edit and Write tools. Never write file content through Bash (heredoc, redirect, `sed -i`, or cp/mv onto a tracked file). Scripts the order names, such as the asset generator and `--construct`, may write files. Never write `fixer-disposition*.json` (the verifier's --construct writes it; a hand-written report is refused). rm of a refused hand-written report is the one allowed delete.";
+const EDIT_RULE = "Edit rule: write file content only with the Edit and Write tools. Never write file content through Bash (heredoc, redirect, `sed -i`, or cp/mv onto a tracked file). Scripts the order names, such as the asset generator and `--construct`, may write files. Never write `fixer-disposition*.json` (the verifier's --construct writes it; a hand-written report is refused). Only after the verifier refuses this execution's report as hand-written, rm that report and its corresponding stale `.constructed` marker; no other delete is allowed. Preserve accepted construction evidence and unrelated files.";
 
 // The numbered full-phase steps (issue 2787 C1): push, confirm the remote head, wait for CI, --construct, verify, --check.
 function fullPhaseSteps(workOrder, verifier, { push }) {
@@ -149,7 +149,7 @@ function fullPhaseSteps(workOrder, verifier, { push }) {
 1. ${push}
 2. Confirm the remote head equals the candidate: run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}; it must print the pushed candidate SHA. If it does not, stop and report.${verifier.includes("<pushed-head-sha>") ? " Replace `<pushed-head-sha>` in steps 4 to 6 with the confirmed SHA." : ""}
 3. Run \`${wait}\` once. If it exits 2 (not settled), run it exactly once more. If CI is red (\`failure\`), resolve no thread, run no verifier step, and hand back \`ci_failed\` with the failing check names. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, resolve no thread, run no verifier step, and hand back \`ci_pending\` (\`ci_unknown\` when the checks cannot be read).
-4. Run \`${verifier} --construct\`. If it fails because the output exists, go to step 5. If step 5 refuses the report as hand-written, rm the outputRef and re-run step 4.
+4. Run \`${verifier} --construct\`. If it fails because the output exists, go to step 5. If step 5 refuses the report as hand-written, rm only this execution's refused outputRef and its corresponding stale \`<outputRef>.constructed\` marker, then re-run step 4. Preserve accepted construction evidence and unrelated files.
 5. Run \`${verifier}\`.
 6. Run \`${verifier} --check\`.
 ${EDIT_RULE}`;
