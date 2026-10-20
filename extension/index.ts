@@ -33,7 +33,7 @@ const WIDGET_KEY = 'dev-loops.setup';
 // re-export so tests can reach the same binding the session_start handler calls.
 import { checkAgentSetRendered, syncPackagedAgents } from './sync-packaged-agents.ts';
 export { syncPackagedAgents };
-import { decidePiToolCall, isReadOnlyPiRole, resolvePiRole } from './readonly-role-gate.ts';
+import { DEV_LOOPS_ROLES, decidePiToolCall, isReadOnlyPiRole, resolvePiRole } from './readonly-role-gate.ts';
 
 // The calling session's own role for one handler call: resolved from its system prompt, with the
 // session id scoping the untagged native-async-child fail-closed row (readonly-role-gate.ts).
@@ -84,7 +84,14 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
     const { toolName, input } = event as { toolName?: string; input?: { command?: unknown } };
     if (toolName === 'subagent' && ctx.cwd) {
       // refuse a child launch when the loaded agent set carries raw non-Pi tools.
-      const reason = checkAgentSetRendered(ctx.cwd);
+      const sub = (input ?? {}) as {
+        agent?: unknown; tasks?: { agent?: unknown }[]; chain?: { agent?: unknown }[]; options?: { agentScope?: unknown };
+      };
+      const requested = [sub.agent, ...(sub.tasks ?? []).map((t) => t?.agent), ...(sub.chain ?? []).map((t) => t?.agent)]
+        .filter((a): a is string => typeof a === 'string')
+        .map((a) => a.replace(/^[^:]*:/, ''));
+      const roles = DEV_LOOPS_ROLES.filter((role) => requested.includes(role));
+      const reason = checkAgentSetRendered(ctx.cwd, { roles, home: sub.options?.agentScope === 'project' ? null : undefined });
       if (reason) return { block: true, reason };
     }
     return decidePiToolCall({ toolName, input, agentType: resolveSessionRole(ctx) });

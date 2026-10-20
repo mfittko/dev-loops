@@ -71,7 +71,7 @@ A read-only child loads the whole extension, so the extension keeps its mutation
 
 ## Project agent set on Pi
 
-`.pi/agents` is an untracked, gitignored directory (decision record 0173, amending the layout convention from issues 1606 and 1655). `provision-worktree.mjs` renders the Pi-valid copies of `agents/*.agent.md` into it on worktree create and reuse. The `tool_call` handler refuses a `subagent` launch with `agent_set_not_rendered` when a loaded agent still lists `search` or `execute`. Never restore a symlink at `.pi/agents`. The sources keep the neutral vocabulary and the Claude assets are unchanged.
+`.pi/agents` is an untracked, gitignored directory (decision record 0173, amending the layout convention from issues 1606 and 1655). `provision-worktree.mjs` renders the Pi-valid copies of `agents/*.agent.md` into it on worktree create and reuse. The `tool_call` handler refuses a `subagent` launch with `agent_set_not_rendered` when a loaded agent still lists `search` or `execute`. The same refusal names the path of a stale global copy (`~/.agents`, `~/.pi/agent/agents`, Pi npm or git package copies) of a requested dev-loops role that declares them, unless `options.agentScope` is `project`. Never restore a symlink at `.pi/agents`. The sources keep the neutral vocabulary and the Claude assets are unchanged.
 
 ## Non-goals
 

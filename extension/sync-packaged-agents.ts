@@ -230,26 +230,61 @@ export function syncPackagedAgents({
 /** Neutral source tokens that are not Pi tool names. */
 const NON_PI_TOOLS = ["search", "execute"];
 
+function subdirs(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => path.join(dir, e.name));
+  } catch {
+    return [];
+  }
+}
+
+/** Bounded global directories where Pi may discover dev-loops agent definitions. */
+function globalAgentRoots(home: string): string[] {
+  const piAgent = path.join(home, ".pi", "agent");
+  const gitRoots = subdirs(path.join(piAgent, "git"))
+    .flatMap(subdirs)
+    .map((d) => path.join(d, "dev-loops", "agents"));
+  return [
+    path.join(home, ".agents"),
+    path.join(piAgent, "agents"),
+    path.join(piAgent, "npm", "node_modules", "dev-loops", "agents"),
+    ...gitRoots,
+  ];
+}
+
 /**
  * Preflight: inspect the loaded project agent set (`.pi/agents`, real
  * directory or symlink) and return a typed `agent_set_not_rendered` reason when any
  * `*.agent.md` still declares a raw `search`/`execute` tool, else null. An absent
  * directory is allowed (consumer repos resolve from the rendered `~/.agents/`).
  */
-export function checkAgentSetRendered(projectRoot: string): string | null {
-  const dir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
-  let names: string[];
-  try {
-    names = fs.readdirSync(dir).filter((name) => name.endsWith(".agent.md")).sort();
-  } catch {
-    return null;
-  }
+export function checkAgentSetRendered(
+  projectRoot: string,
+  { roles = [], home = process.env.HOME || os.homedir() }: { roles?: readonly string[]; home?: string | null } = {},
+): string | null {
   const offenders: string[] = [];
-  for (const name of names) {
-    const raw = fs.readFileSync(path.join(dir, name), "utf8");
+  const check = (file: string) => {
+    let raw: string;
+    try {
+      raw = fs.readFileSync(file, "utf8");
+    } catch {
+      return;
+    }
     const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1].match(TOOLS_LINE_RE);
     const bad = parseToolList(match?.[1] ?? "").filter((tool) => NON_PI_TOOLS.includes(tool));
-    if (bad.length > 0) offenders.push(`${path.join(dir, name)} (${bad.join(", ")})`);
+    if (bad.length > 0) offenders.push(`${file} (${bad.join(", ")})`);
+  };
+  const dir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
+  try {
+    for (const name of fs.readdirSync(dir).filter((n) => n.endsWith(".agent.md")).sort()) check(path.join(dir, name));
+  } catch {
+    // Absent project directory is allowed.
+  }
+  // Pi also discovers global copies that can win over the project render (decision record 0173).
+  if (home && roles.length > 0) {
+    for (const root of globalAgentRoots(home)) {
+      for (const role of roles) check(path.join(root, `${role}.agent.md`));
+    }
   }
   if (offenders.length === 0) return null;
   return (

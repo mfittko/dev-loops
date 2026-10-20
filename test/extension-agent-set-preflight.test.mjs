@@ -11,7 +11,7 @@ const repoRoot = path.resolve(new URL("../", import.meta.url).pathname);
 function subagentCall(cwd) {
   const events = new Map();
   extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
-  return events.get("tool_call")({ toolName: "subagent", input: { agent: "quality" } }, { cwd });
+  return events.get("tool_call")({ toolName: "subagent", input: { agent: "quality", options: { agentScope: "project" } } }, { cwd });
 }
 
 function tmpProject() {
@@ -66,3 +66,60 @@ test("#2865 an absent .pi/agents is allowed (consumer repos resolve from ~/.agen
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+const RAW = "---\nname: quality\ntools: read, search, execute\n---\nbody\n";
+const RENDERED = "---\nname: quality\ntools: read, grep, find, ls, bash\n---\nbody\n";
+
+async function withHome(fn) {
+  const root = tmpProject();
+  const home = tmpProject();
+  const prev = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    return await fn(root, home);
+  } finally {
+    process.env.HOME = prev;
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+function writeAt(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+}
+
+function launch(cwd, input) {
+  const events = new Map();
+  extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
+  return events.get("tool_call")({ toolName: "subagent", input }, { cwd });
+}
+
+for (const [label, parts] of [
+  ["npm", [".pi", "agent", "npm", "node_modules", "dev-loops", "agents"]],
+  ["git", [".pi", "agent", "git", "github.com", "mfittko", "dev-loops", "agents"]],
+]) {
+  test(`stale global ${label} copy is refused with its path named, and ignored under agentScope project`, () =>
+    withHome(async (root, home) => {
+      const file = path.join(home, ...parts, "quality.agent.md");
+      writeAt(file, RAW);
+      const res = await launch(root, { tasks: [{ agent: "dev-loops:quality" }] });
+      assert.equal(res.block, true);
+      assert.match(res.reason, /^agent_set_not_rendered/);
+      assert.ok(res.reason.includes(file));
+      assert.ok(res.reason.includes("search, execute"));
+      assert.deepEqual(await launch(root, { agent: "quality", options: { agentScope: "project" } }), { block: false });
+    }));
+}
+
+test("a rendered global copy is allowed", () =>
+  withHome(async (root, home) => {
+    writeAt(path.join(home, ".agents", "quality.agent.md"), RENDERED);
+    assert.deepEqual(await launch(root, { chain: [{ agent: "quality" }] }), { block: false });
+  }));
+
+test("a requested non-dev-loops agent is not checked against global copies", () =>
+  withHome(async (root, home) => {
+    writeAt(path.join(home, ".agents", "quality.agent.md"), RAW);
+    assert.deepEqual(await launch(root, { agent: "scout" }), { block: false });
+  }));

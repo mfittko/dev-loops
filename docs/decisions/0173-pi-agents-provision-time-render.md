@@ -18,6 +18,7 @@ Amends the `.pi/agents` layout convention from issues 1606 and 1655: this repo t
 - The main checkout is rendered by the existing session-start sync. Provisioning makes no call there.
 - Render adds and refreshes files. It does not delete agents removed from `agents/`.
 - The Pi `tool_call` handler refuses a `subagent` launch with `agent_set_not_rendered` when a loaded `.pi/agents/*.agent.md` still declares `search` or `execute`. An absent directory is allowed, so consumer repos keep resolving from `~/.agents`.
+- The same refusal covers a stale global copy of a requested dev-loops role (`~/.agents`, `~/.pi/agent/agents`, and the Pi npm and git package copies) that declares `search` or `execute`, because Pi reads those copies and they can win over the project render. The refusal names the offending path, and `options.agentScope: "project"` skips the global check.
 - `agents/*.agent.md` keeps the neutral source vocabulary. The Claude generator is unchanged.
 
 ## Consequences
