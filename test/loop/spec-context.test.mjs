@@ -96,6 +96,58 @@ test("live PR extraction shares issue spec, digests and complete identity across
   }
 });
 
+for (const repo of ["mfittko/dev-loops", "  mfittko/dev-loops  "]) {
+  test(`spec source accepts canonical repository slug ${JSON.stringify(repo)}`, async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "spec-context-repo-"));
+    try {
+      await writeFile(path.join(repoRoot, "content.txt"), "impl", "utf8");
+      for (const selector of [["--pr", "2848"], ["--issue", "1"]]) {
+        const result = await capturePrCli([
+          "--repo", repo, ...selector, "--content-file", "content.txt", "--head-sha", PR_HEAD,
+          "--spec-out", "spec.json", "--identity-out", "identity.json",
+        ], { repoRoot, runChild: prRead(), tracker: {
+          getIssue: async (input) => {
+            assert.equal(input.repo, "mfittko/dev-loops");
+            return stubTracker().getIssue(input);
+          },
+        } });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(JSON.parse(result.stdout).repo, "mfittko/dev-loops");
+        for (const file of ["spec.json", "identity.json"]) await readFile(path.join(repoRoot, file));
+      }
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const repo of ["", "   ", "github.com/mfittko/dev-loops", "https://github.com/mfittko/dev-loops", "mfittko/dev-loops/extra", "../dev-loops", "mfittko/..", "mfittko/./dev-loops", "mfittko\\dev-loops"]) {
+  test(`spec source rejects repository slug ${JSON.stringify(repo)} before reads or artifacts`, async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "spec-context-repo-reject-"));
+    try {
+      await writeFile(path.join(repoRoot, "content.txt"), "impl", "utf8");
+      let sourceReads = 0;
+      const unexpectedRead = async () => {
+        sourceReads += 1;
+        throw new Error("Repository validation must precede source reads");
+      };
+      for (const selector of [["--pr", "2848"], ["--issue", "1"]]) {
+        const result = await capturePrCli([
+          "--repo", repo, ...selector, "--content-file", "content.txt", "--head-sha", PR_HEAD,
+          "--spec-out", "spec.json", "--identity-out", "identity.json",
+        ], { repoRoot, runChild: unexpectedRead, tracker: { getIssue: unexpectedRead } });
+        assert.equal(result.code, 1, result.stdout);
+        assert.equal(result.stdout, "");
+        assert.match(result.stderr, /--repo/);
+        assert.equal(sourceReads, 0);
+        for (const file of ["spec.json", "identity.json"]) await assert.rejects(readFile(path.join(repoRoot, file)), { code: "ENOENT" });
+      }
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+}
+
 test("PR source failures return exit 1 before spec or identity artifacts", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "spec-context-pr-fail-"));
   try {

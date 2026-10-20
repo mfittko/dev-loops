@@ -26,6 +26,7 @@ import {
 } from "@dev-loops/core/loop/spec-authority";
 import { resolveTrackerAdapter } from "@dev-loops/core/tracker";
 import { rateLimitedResult, withGraphqlRateLimitWait } from "@dev-loops/core/github/gh";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { GRAPHQL_RATE_LIMIT_MAX_WAIT_MS } from "@dev-loops/core/loop/policy-constants";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -206,13 +207,15 @@ export async function specContextExtract(
   if ((options.issue === undefined) === (options.pr === undefined)) {
     throw new Error("extract mode requires exactly one of --issue or --pr");
   }
+  const { owner, name } = parseRepoSlug(options.repo);
+  const repo = `${owner}/${name}`;
   let resolved;
   try {
     let readSource;
     if (options.pr !== undefined) {
       readSource = async () => {
         const { pr } = await viewPr(
-          { repo: options.repo, pr: options.pr, fields: "number,body,headRefOid" },
+          { repo, pr: options.pr, fields: "number,body,headRefOid" },
           { env, ghCommand, ...(runChild ? { run: runChild } : {}) },
         );
         if (pr.number !== options.pr || typeof pr.body !== "string" ||
@@ -222,7 +225,7 @@ export async function specContextExtract(
         if (options.headSha !== undefined && options.headSha.toLowerCase() !== pr.headRefOid.toLowerCase()) {
           throw new Error("--head-sha must match the full live PR head SHA");
         }
-        return { repo: options.repo, pr: pr.number, body: pr.body };
+        return { repo, pr: pr.number, body: pr.body };
       };
     } else {
       const resolvedTracker = tracker ?? await (async () => {
@@ -230,7 +233,7 @@ export async function specContextExtract(
         return resolveTrackerAdapter(errors.length === 0 ? config : {}, { env, ghCommand });
       })();
       readSource = () => resolveTrackerLocalSpec(
-        { repo: options.repo, issue: options.issue }, { env, ghCommand, tracker: resolvedTracker },
+        { repo, issue: options.issue }, { env, ghCommand, tracker: resolvedTracker },
       );
     }
     resolved = await withGraphqlRateLimitWait(
