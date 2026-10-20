@@ -181,15 +181,17 @@ fixer and owns the push. The sequence is:
    head; the coordinator returns to step 2 without a fixer.
 4. On `nextStep: push` (`locally_clear`) or `nextStep: push_to_gate`
    (`bounded_out`), it emits a `full` work order with `--delta-result <result>`
-   and dispatches the fixer to push and reply to each gate thread with the
-   fixing commit. `verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <plan>` then checks
-   the handoff that fixer wrote to the work order's outputRef. On
-   `locally_clear`, the fixer resolves each thread. On `bounded_out`, the fixer
+   and dispatches the fixer to push the candidate and wait for CI. The fixer writes no handoff
+   and posts no reply. `verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <plan> --construct`
+   writes the handoff to the work order's outputRef, and the same command without `--construct` then replies to each
+   gate thread with the fixing commit and resolves it after CI settles. On
+   `locally_clear`, the verifier resolves each thread. On `bounded_out`, it
    resolves only the threads of act items with status `resolved`. For
    `not_resolved` and `cannot_verify` items, it replies with the residual delta
    status and leaves the thread unresolved. The fixer MUST NOT mark these
    residual threads `tackled`; its handoff disposition records them as
-   `deferred`. On the thread route the emitter attaches the head's delta record
+   `deferred`. In a full-phase order, the verifier's `--construct` step writes that
+   `deferred` entry and its normal step posts the residual reply. On the thread route the emitter attaches the head's delta record
    as a `delta-result` required read to the work order when a delta record exists for the head (always in the `full` phase; the
    `--delta-result` flag stays refused for thread sources), so this residual-thread
    rule applies to thread sources through that read.
@@ -267,7 +269,8 @@ disposition: all resolved means tackled; any residual means deferred/open withou
 A scalar fingerprint cannot narrow root membership, and distinct roots sharing a fingerprint each
 need an entry. This completion exception supplies no lifecycle gate evidence.
 
-For optional authenticated typed completion (ADR 0149), the full worker may use
+After the push is confirmed and CI is green (ADR 0166), the full worker runs
+`--construct` for every full-phase order (ACT and THREAD). For optional authenticated typed completion (ADR 0149), it uses
 `verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <plan> --construct`
 before normal verification. Follow the complete source,
 prior commit-only provenance, raw coverage identity and live-root checks in
@@ -290,8 +293,8 @@ mixed-root tests establish command routing, not actual worker qualification or r
 Explicit full `operation: complete` consumes already-reviewed delivery with empty source
 selectors, exactly one authenticated ACT/THREAD source and only its own output authority.
 Follow `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`: ACT completion input is mandatory, even when
-all optional markers are absent; THREAD reports exactly its pinned IDs without ACT/history
-or a constructor. Preserve bootstrap/hash checks and immutable output; perform no source
+all optional markers are absent; THREAD reports exactly its pinned IDs, built by `--construct`,
+without ACT/history. Preserve bootstrap/hash checks and immutable output; perform no source
 validation, stage, commit, push, new Delta or counter reset. Complete task prose overrides
 generic guidance and quoted JSON task fields without rewriting that evidence. Consumer
 support does not enable emission or qualify a fresh worker: ordinary producers still emit
