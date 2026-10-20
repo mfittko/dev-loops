@@ -268,7 +268,8 @@ export function findProjectRoot(cwd: string, home: string | null = process.env.H
 }
 
 /**
- * Preflight: runs only in a dev-loops checkout (any other project returns null and nothing is read). Refuses a launch when a file the dev-loops render writes into `.pi/agents` still
+ * Preflight: runs only in a dev-loops checkout (any other project returns null and nothing is
+ * read). Refuses a launch when a file the dev-loops render writes into `.pi/agents` still
  * declares a raw `search`/`execute` tool. Only the `*.agent.md` names found in the packaged agents
  * source directory are inspected; any other project agent file is never read. Returns the typed
  * `agent_set_not_rendered` reason, else null (an absent rendered file or a rendered set passes; an unreadable source directory or rendered file refuses).

@@ -152,17 +152,24 @@ test("a cwd that names a file does not throw in the project-root walk", () =>
     const file = path.join(root, "afile");
     fs.writeFileSync(file, "x");
     assert.doesNotThrow(() => findProjectRoot(path.join(file, "child")));
+    dl(root);
     assert.deepEqual(await launch(root, { agent: "quality", cwd: file }), { block: false });
   }));
 
 test("session_start syncs the resolved project root", () =>
   withProject(async (root) => {
+    dl(root);
+    writeAt(path.join(root, "agents", "quality.agent.md"), RAW);
     writeAt(path.join(root, ".pi", "agents", "quality.agent.md"), RAW);
     const sub = path.join(root, "packages", "core");
     fs.mkdirSync(sub, { recursive: true });
     const events = new Map();
     extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
     await withHome(() => events.get("session_start")({}, { cwd: sub, getSessionId: () => "s" }));
+    assert.doesNotMatch(
+      fs.readFileSync(path.join(root, ".pi", "agents", "quality.agent.md"), "utf8"),
+      /tools:.*\b(search|execute)\b/,
+    );
     assert.deepEqual(await launch(sub), { block: false });
     assert.equal(fs.existsSync(path.join(sub, ".pi")), false);
   }));
@@ -204,6 +211,7 @@ test("a tracked .pi/agents symlink refusal names the rebase step, the path and t
 
 test("a raw global copy is never checked", () =>
   withProject(async (root) => {
+    dl(root);
     const prev = process.env.HOME;
     const home = tmpProject();
     process.env.HOME = home;
