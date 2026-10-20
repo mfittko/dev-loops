@@ -22,6 +22,339 @@ const withoutEarlySurface = (stdout) => stdout.split("\n").filter((line) => !lin
 const scriptPath = path.resolve("scripts/github/create-pr.mjs");
 const runNode = (args = [], options = {}) => runNodeWithPrePrRecord(scriptPath, args, options);
 
+test("create-pr checks changelog format and title before any GitHub write", async () => {
+  for (const { length, crlf } of [{ length: null }, { length: 201 }, { length: 200 }, { length: 200, crlf: true }]) {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "create-changelog-"));
+    try {
+      await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "docs/note.md", content: "note\n" },
+        ...(crlf ? [{ path: "CHANGELOG.md", content: "# Changelog\n\n## Unreleased\n\n- Existing note (#1)\n" }] : []),
+        ...(length === null ? [] : [{ path: "changes/note.md", content: `- ${"x".repeat(length - 7)} (#1)\n` }])] });
+      if (crlf) {
+        runGitFixture(cwd, ["config", "core.autocrlf", "true"]);
+        for (const file of ["CHANGELOG.md", "changes/note.md"]) {
+          await rm(path.join(cwd, file));
+          runGitFixture(cwd, ["checkout", "--", file]);
+          assert.ok((await readFile(path.join(cwd, file), "utf8")).includes("\r\n"));
+          assert.ok(!runGitFixture(cwd, ["show", `HEAD:${file}`]).includes("\r"));
+        }
+        assert.equal(runGitFixture(cwd, ["status", "--porcelain"]), "");
+      }
+      const base = runGitFixture(cwd, ["rev-parse", "origin/main"]).slice(0, 12);
+      const { env, ghLogPath } = await writeGhStub(cwd, [{}]);
+      const result = await runNode(["--base", "main", "--head", "feature", "--title", "fix(local): validate notes", "--body", "notes"], { cwd, env });
+      if (length === 200) assert.equal(result.code, 0, result.stderr);
+      else {
+        const refusal = JSON.parse(result.stderr);
+        assert.equal(refusal.code, "changelog_incomplete_before_pr");
+        assert.match(refusal.error, /^LIFECYCLE-CHANGELOG-COMPLETENESS/);
+        assert.ok(refusal.error.includes(base));
+        assert.deepEqual(await readGhCalls(ghLogPath), []);
+      }
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  }
+});
+
+for (const input of ["changes/note.md", "changes/other.md", "CHANGELOG.md"]) {
+  test(`create-pr refuses an uncommitted correction to committed ${input}`, async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "create-changelog-dirty-"));
+    try {
+      const invalid = `- ${"x".repeat(194)} (#1)\n`;
+      const valid = `- ${"x".repeat(193)} (#1)\n`;
+      const content = (body) => input === "CHANGELOG.md" ? `# Changelog\n\n## Unreleased\n\n${body}` : body;
+      await initSizeBudgetFixtureRepo(cwd, { headFiles: [
+        { path: "changes/note.md", content: input === "changes/note.md" ? invalid : valid },
+        ...(input === "changes/note.md" ? [] : [{ path: input, content: content(invalid) }]),
+      ] });
+      await writeFile(path.join(cwd, input), content(valid));
+      const base = runGitFixture(cwd, ["rev-parse", "origin/main"]);
+      const { env, ghLogPath } = await writeGhStub(cwd, [{}]);
+      await assert.rejects(createPrMain(["--base", "main", "--title", "fix(local): validate notes", "--body", "notes"], {
+        cwd, env, validatePrePrReview: async () => ({ ok: true }), evaluateEarlySurface: async () => ({}),
+      }), (error) => error.code === "changelog_incomplete_before_pr"
+        && /^LIFECYCLE-CHANGELOG-COMPLETENESS/.test(error.message)
+        && /differs from HEAD/.test(error.message) && error.message.includes(base));
+      assert.deepEqual(await readGhCalls(ghLogPath), []);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
+test("create-pr honors chore title over fix commits and compares head OIDs", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "create-changelog-title-"));
+  try {
+    await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "docs/note.md", content: "note\n" }] });
+    runGitFixture(cwd, ["commit", "--amend", "-qm", "fix(docs): note"]);
+    const { env } = await writeGhStub(cwd, [{}]);
+    const result = await runNode(["--base", "main", "--head", "feature", "--title=chore(docs): note", "--body", "notes"], { cwd, env });
+    assert.equal(result.code, 0, result.stderr);
+    runGitFixture(cwd, ["branch", "different", "origin/main"]);
+    const code = await createPrMain(["--base", "main", "--head", "different", "-t", "fix(docs): note", "--body", "notes"], {
+      cwd, env, validatePrePrReview: async () => ({ ok: true }), evaluateEarlySurface: async () => ({}),
+    });
+    assert.equal(code, 0);
+    runGitFixture(cwd, ["branch", "same"]);
+    await assert.rejects(createPrMain(["--base", "main", "--head", "same", "-t", "fix(docs): note", "--body", "notes"], {
+      cwd, env, validatePrePrReview: async () => ({ ok: true }),
+    }), (err) => err.code === "changelog_incomplete_before_pr");
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+for (const { name, titleArgs, fragment, allowed } of [
+  { name: "last chore title", titleArgs: ["--title", "fix(docs): note", "--title", "chore(docs): note"], allowed: true },
+  { name: "last fix title", titleArgs: ["--title", "chore(docs): note", "--title", "fix(docs): note"], allowed: false },
+  { name: "attached short fix title", titleArgs: ["-tfix(docs): note"], allowed: false },
+  { name: "equals short fix title", titleArgs: ["-t=fix(docs): note"], allowed: false },
+  { name: "attached short fix title with fragment", titleArgs: ["-tfix(docs): note"], fragment: true, allowed: true },
+  { name: "equals short fix title with fragment", titleArgs: ["-t=fix(docs): note"], fragment: true, allowed: true },
+  { name: "nonconventional attached short title", titleArgs: ["-tfix(docs):note"], allowed: true },
+  { name: "nonconventional equals short title", titleArgs: ["-t=fix(docs):note"], allowed: true },
+]) {
+  test(`create-pr effective title: ${name}`, async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "create-effective-title-"));
+    try {
+      await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "docs/note.md", content: "note\n" },
+        ...(fragment ? [{ path: "changes/note.md", content: "- Record the note (#1)\n" }] : [])] });
+      runGitFixture(cwd, ["commit", "--amend", "-qm", "chore(docs): note"]);
+      const { env, ghLogPath } = await writeGhStub(cwd, [{}]);
+      const argv = ["--base", "main", ...titleArgs, "--body", "notes"];
+      const runtime = { cwd, env, validatePrePrReview: async () => ({ ok: true }), evaluateEarlySurface: async () => ({}) };
+      if (allowed) {
+        assert.equal(await createPrMain(argv, runtime), 0);
+        assert.ok((await readGhCalls(ghLogPath))[0].includes(titleArgs.at(-1)), "title flags reach gh unchanged");
+      } else {
+        await assert.rejects(createPrMain(argv, runtime), (error) => error.code === "changelog_incomplete_before_pr");
+        assert.deepEqual(await readGhCalls(ghLogPath), []);
+      }
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
+for (const { name, args, fragment = false, fragmentOnBase = false, allowed = false, defaultHead = false } of [
+  { name: "repeated head and base with fragment", args: ["--head", "different", "--head", "feature", "--base", "earlier", "--base", "main"], fragment: true, allowed: true },
+  { name: "attached short head and base with fragment", args: ["-Hfeature", "-Bmain"], fragment: true, allowed: true },
+  { name: "equals short head and base with fragment", args: ["-H=feature", "-B=main"], fragment: true, allowed: true },
+  { name: "repeated head without fragment", args: ["--base", "main", "--head", "different", "--head", "feature"] },
+  { name: "repeated base with fragment already on main", args: ["--head", "feature", "--base", "earlier", "--base", "main"], fragment: true, fragmentOnBase: true },
+  { name: "attached short head and base without fragment", args: ["-Hfeature", "-Bmain"] },
+  { name: "equals short head and base without fragment", args: ["-H=feature", "-B=main"] },
+  { name: "final empty long head uses checkout without fragment", args: ["--base", "main", "--head", "different", "--head="], defaultHead: true },
+  { name: "final empty short head uses checkout without fragment", args: ["--base", "main", "--head", "different", "-H="], defaultHead: true },
+]) {
+  test(`create-pr effective comparison: ${name}`, async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "create-effective-comparison-"));
+    try {
+      await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "docs/note.md", content: "note\n" },
+        ...(fragment ? [{ path: "changes/note.md", content: "- Record the note (#1)\n" }] : [])] });
+      runGitFixture(cwd, ["branch", "earlier", "origin/main"]);
+      runGitFixture(cwd, ["branch", "different", "origin/main"]);
+      if (fragmentOnBase) {
+        runGitFixture(cwd, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        await writeFile(path.join(cwd, "docs/note.md"), "updated note\n");
+        runGitFixture(cwd, ["commit", "-qam", "chore(docs): update note"]);
+      }
+      runGitFixture(cwd, ["checkout", "-qb", "feature"]);
+      const { env, ghLogPath, fetchLog } = await writeGhStub(cwd, [{}]);
+      const argv = [...args, "--title", "fix(docs): note", "--body", "notes"];
+      const checks = [];
+      const runtime = { cwd, env,
+        validatePrePrReview: async ({ head, base }) => {
+          assert.equal(head, defaultHead ? undefined : "feature");
+          assert.equal(base, "main");
+          checks.push("review");
+          return { ok: true };
+        },
+        evaluatePrSizeBudget: async ({ head, base }) => {
+          assert.equal(head, defaultHead ? "HEAD" : "refs/heads/feature");
+          assert.equal(base, "origin/main");
+          checks.push("size");
+          return {};
+        },
+        evaluateEarlySurface: async ({ head, baseRefName }) => {
+          assert.equal(head, "refs/heads/feature");
+          assert.equal(baseRefName, "main");
+          checks.push("early");
+          return {};
+        },
+      };
+      if (allowed) {
+        assert.equal(await createPrMain(argv, runtime), 0);
+        assert.deepEqual((await readGhCalls(ghLogPath))[0], ["pr", "create", ...argv, "--assignee", "@me", "--draft"]);
+        assert.deepEqual(checks, ["review", "size", "early"]);
+      } else {
+        await assert.rejects(createPrMain(argv, runtime), (error) => error.code === "changelog_incomplete_before_pr");
+        assert.deepEqual(await readGhCalls(ghLogPath), []);
+        assert.deepEqual(checks, ["review", "size"]);
+      }
+      assert.equal(await readFile(fetchLog, "utf8"), "fetch -- origin +refs/heads/main:refs/remotes/origin/main\n");
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
+for (const args of [["--base="], ["-B="], ["--base", ""], ["-B", ""], ["--base", " "]]) {
+  test(`create-pr final empty base refuses before fetch: ${JSON.stringify(args)}`, async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "create-empty-base-"));
+    try {
+      await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "docs/note.md", content: "note\n" }] });
+      runGitFixture(cwd, ["checkout", "-qb", "feature"]);
+      const { env, ghLogPath, fetchLog } = await writeGhStub(cwd, [{}]);
+      await assert.rejects(createPrMain(["--base", "main", ...args, "--head", "feature", "--title", "fix(docs): note", "--body", "notes"], {
+        cwd, env, validatePrePrReview: async () => { assert.fail("empty base must refuse before preflights"); },
+      }), /--base requires a non-empty literal branch name/);
+      assert.deepEqual(await readGhCalls(ghLogPath), []);
+      await assert.rejects(readFile(fetchLog, "utf8"), { code: "ENOENT" });
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
+test("create-pr final empty head keeps the checkout closing-reference guard", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "create-empty-head-"));
+  try {
+    await initSizeBudgetFixtureRepo(cwd);
+    runGitFixture(cwd, ["checkout", "-qb", "issue-2335"]);
+    const { env, ghLogPath } = await writeGhStub(cwd, [{}]);
+    await assert.rejects(createPrMain(["--base", "main", "--head", "issue-2340", "--head=", "--body", "Closes #2340"], {
+      cwd, env, validatePrePrReview: async () => { assert.fail("closing mismatch must refuse before pre-PR review"); },
+    }), /2335/);
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+for (const base of ["main", "origin/main", "release/v1"]) {
+  test(`create-pr literal base accepts ${base}`, async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "create-literal-base-"));
+    try {
+      const branch = base.replace(/^origin\//u, "");
+      await initSizeBudgetFixtureRepo(cwd, { baseBranch: branch, headFiles: [{ path: "docs/note.md", content: "note\n" }] });
+      const { env, fetchLog } = await writeGhStub(cwd, [{}]);
+      assert.equal(await createPrMain(["--base", base, "--title", "chore(docs): note", "--body", "notes"], {
+        cwd, env, validatePrePrReview: async () => ({ ok: true }), evaluateEarlySurface: async () => ({}),
+      }), 0);
+      assert.equal(await readFile(fetchLog, "utf8"), `fetch -- origin +refs/heads/${branch}:refs/remotes/origin/${branch}\n`);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
+for (const base of ["main:refs/heads/unrelated", "--tags", "main~1"]) {
+  test(`create-pr literal base refuses ${base} before fetch`, async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "create-invalid-base-"));
+    try {
+      await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "docs/note.md", content: "note\n" }] });
+      const before = runGitFixture(cwd, ["show-ref"]);
+      const { env, fetchLog, ghLogPath } = await writeGhStub(cwd, [{}]);
+      await assert.rejects(createPrMain([`--base=${base}`, "--body", "notes"], {
+        cwd, env, validatePrePrReview: async () => ({ ok: true }),
+      }), /literal branch name/);
+      await assert.rejects(readFile(fetchLog), { code: "ENOENT" });
+      assert.equal(runGitFixture(cwd, ["show-ref"]), before);
+      assert.deepEqual(await readGhCalls(ghLogPath), []);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
+for (const tracking of ["missing", "stale"]) {
+  test(`create-pr fetches literal plus-prefixed base with ${tracking} tracking ref`, async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "create-plus-base-"));
+    try {
+      await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "docs/note.md", content: "note\n" }] });
+      const selected = runGitFixture(cwd, ["rev-parse", "origin/main"]);
+      const main = runGitFixture(cwd, ["rev-parse", "HEAD"]);
+      runGitFixture(cwd, ["branch", "+main", selected]);
+      const remote = path.join(cwd, "remote.git");
+      runGitFixture(cwd, ["clone", "-q", "--bare", cwd, remote]);
+      runGitFixture(cwd, ["remote", "add", "origin", remote]);
+      if (tracking === "stale") runGitFixture(cwd, ["update-ref", "refs/remotes/origin/+main", main]);
+      const { env, fetchLog, ghLogPath } = await writeGhStub(cwd, [{}], { realFetch: true });
+      let sizeCalls = 0;
+      await assert.rejects(createPrMain(["--base=+main", "--title", "fix(docs): note", "--body", "notes"], {
+        cwd, env, validatePrePrReview: async () => ({ ok: true }),
+        evaluatePrSizeBudget: async ({ base }) => {
+          sizeCalls++;
+          assert.equal(base, "origin/+main");
+          assert.equal(runGitFixture(cwd, ["rev-parse", base]), selected);
+          return {};
+        },
+      }), (error) => error.code === "changelog_incomplete_before_pr");
+      assert.equal(sizeCalls, 1);
+      assert.equal(runGitFixture(cwd, ["rev-parse", "origin/+main"]), selected);
+      assert.equal(runGitFixture(cwd, ["rev-parse", "refs/heads/main"]), main);
+      assert.equal(runGitFixture(cwd, ["rev-parse", "origin/main"]), selected);
+      assert.equal(await readFile(fetchLog, "utf8"), "fetch -- origin +refs/heads/+main:refs/remotes/origin/+main\n");
+      assert.deepEqual(await readGhCalls(ghLogPath), []);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
+test("create-pr isolates fetch, OID and changelog Git calls from decoy overrides", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "create-git-override-"));
+  const decoy = await mkdtemp(path.join(os.tmpdir(), "create-decoy-"));
+  try {
+    await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "docs/note.md", content: "note\n" }] });
+    await initSizeBudgetFixtureRepo(decoy);
+    const remote = path.join(cwd, "remote.git");
+    runGitFixture(cwd, ["clone", "-q", "--bare", cwd, remote]);
+    runGitFixture(cwd, ["remote", "add", "origin", remote]);
+    const { env, fetchLog, ghLogPath } = await writeGhStub(cwd, [{}], { realFetch: true });
+    const runtime = { cwd, env: { ...env, GIT_DIR: path.join(decoy, ".git"), GIT_WORK_TREE: decoy,
+      GIT_COMMON_DIR: path.join(decoy, ".git"), DEVLOOPS_PR_TITLE: "fix(docs): stale inherited title" },
+      validatePrePrReview: async () => ({ ok: true }), evaluateEarlySurface: async () => ({}) };
+    assert.equal(await createPrMain(["--base", "main", "--title", "chore(docs): note", "--body", "notes"], runtime), 0);
+    await assert.rejects(createPrMain(["--base", "main", "--title", "fix(docs): note", "--body", "notes"], runtime),
+      (error) => error.code === "changelog_incomplete_before_pr");
+    assert.equal(await readFile(fetchLog, "utf8"), "fetch -- origin +refs/heads/main:refs/remotes/origin/main\nfetch -- origin +refs/heads/main:refs/remotes/origin/main\n");
+    assert.equal((await readGhCalls(ghLogPath)).length, 1);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+    await rm(decoy, { recursive: true, force: true });
+  }
+});
+
+test("create-pr fetches only the base before size/changelog, and fails closed on fetch errors", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "create-base-fetch-"));
+  try {
+    await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "scripts/upstream.mjs", content: repeatedLinesContent(1600) },
+      { path: "changes/upstream.md", content: "- Record upstream changes (#1)\n" }] });
+    const stale = runGitFixture(cwd, ["rev-parse", "origin/main"]);
+    const fetched = runGitFixture(cwd, ["rev-parse", "HEAD"]);
+    const remote = path.join(cwd, "remote.git");
+    runGitFixture(cwd, ["clone", "-q", "--bare", cwd, remote]);
+    runGitFixture(cwd, ["remote", "add", "origin", remote]);
+    runGitFixture(cwd, ["checkout", "-qb", "feature"]);
+    await writeFile(path.join(cwd, "changes/feature.md"), "- Record the feature (#1)\n");
+    runGitFixture(cwd, ["add", "changes"]);
+    runGitFixture(cwd, ["commit", "-qm", "fix(local): feature"]);
+    const { env, fetchLog, ghLogPath } = await writeGhStub(cwd, [{}], { realFetch: true });
+    let sizeCalls = 0;
+    const runtime = { cwd, env, validatePrePrReview: async () => ({ ok: true }), evaluateEarlySurface: async () => ({}),
+      evaluatePrSizeBudget: async ({ base }) => {
+        sizeCalls++;
+        assert.equal(base, "origin/main");
+        assert.equal(runGitFixture(cwd, ["rev-parse", base]), fetched);
+        const { evaluatePrSizeBudget } = await import("../../scripts/loop/check-size-budget.mjs");
+        const result = await evaluatePrSizeBudget({ base, repoRoot: cwd });
+        assert.equal(result.wholeLogicLoc, 0);
+        return result;
+      } };
+    assert.notEqual(stale, fetched);
+    assert.equal(await createPrMain(["--base", "main", "--title", "fix(local): feature", "--body", "notes"], runtime), 0);
+    assert.equal(sizeCalls, 1);
+    assert.equal(await readFile(fetchLog, "utf8"), "fetch -- origin +refs/heads/main:refs/remotes/origin/main\n");
+    runGitFixture(cwd, ["rm", "changes/feature.md"]);
+    runGitFixture(cwd, ["commit", "-qm", "fix(local): remove note"]);
+    await assert.rejects(createPrMain(["--base", "main", "--title", "fix(local): feature", "--body", "notes"], runtime), (err) => {
+      assert.equal(err.code, "changelog_incomplete_before_pr");
+      assert.ok(err.message.includes(fetched.slice(0, 12)), "changelog uses the fetched merge base, not the stale origin ref");
+      return true;
+    });
+    runGitFixture(cwd, ["remote", "set-url", "origin", path.join(cwd, "missing.git")]);
+    const before = (await readGhCalls(ghLogPath)).length;
+    await assert.rejects(createPrMain(["--base", "main", "--body", "notes"], runtime), (err) => {
+      assert.equal(err.code, "base_fetch_failed_before_pr");
+      assert.match(err.message, /main.*(?:fatal|repository)/s);
+      return true;
+    });
+    assert.equal((await readGhCalls(ghLogPath)).length, before);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
 // #2062: create-pr now injects `--base <resolveBaseBranch(config)>` whenever the
 // caller gives no explicit --base/-B. For CLI runs that omit --base and do not
 // set a cwd, the child inherits this process's cwd, so the injected base is what
@@ -30,11 +363,19 @@ const runNode = (args = [], options = {}) => runNodeWithPrePrRecord(scriptPath, 
 const INHERITED_BASE_DEFAULT = await resolveBaseDefault(process.cwd());
 
 async function writeGhStub(tempDir, entries, options = {}) {
-  return writeGhStubHelper(tempDir, entries, {
+  const stub = await writeGhStubHelper(tempDir, entries, {
     repeatLastOnOverflow: true,
     logCalls: true,
     ...options,
   });
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const gitBin = path.join(tempDir, "fetch-stub");
+  await mkdir(gitBin, { recursive: true });
+  const fetchLog = path.join(tempDir, "fetch.log");
+  const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+  await writeFile(path.join(gitBin, "git"), `#!/bin/sh\nif [ "$1" = fetch ]; then\n  printf '%s\\n' "$*" >> ${quote(fetchLog)}\n  ${options.realFetch ? ":" : "exit 0"}\nfi\nexec ${quote(realGit)} "$@"\n`);
+  await chmod(path.join(gitBin, "git"), 0o755);
+  return { ...stub, fetchLog, env: { ...stub.env, PATH: `${gitBin}${path.delimiter}${stub.env.PATH}` } };
 }
 
 async function readGhCalls(logPath) {
@@ -1568,6 +1909,7 @@ test("create-pr admits a diff whose issue-citing comment carries the comment-dis
     await initSizeBudgetFixtureRepo(tempDir, {
       headFiles: [
         { path: "scripts/sample.mjs", content: "// keep: load-bearing note comment-discipline:allow #2171\nexport const x = 1;\n" },
+        { path: "changes/comment.md", content: "- Exercise comment discipline (#1)\n" },
       ],
     });
     const { env, ghLogPath } = await writeGhStub(tempDir, [
@@ -1858,6 +2200,7 @@ test("create-pr fails closed when the resolvability probe errors for a reason ot
     await writeFile(gitStubPath, [
       "#!/usr/bin/env bun",
       'const argv = process.argv.slice(2);',
+      'if (argv[0] === "fetch") process.exit(0);',
       'if (argv[0] === "rev-parse" && argv[1] === "--is-inside-work-tree") {',
       '  process.stdout.write("true\\n");',
       "  process.exit(0);",
@@ -2054,7 +2397,7 @@ test("create-pr refuses --editor and --web even with an explicit --body", async 
 async function createPrEarlySurface(headFiles) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-early-surface-"));
   try {
-    await initSizeBudgetFixtureRepo(tempDir, { headFiles });
+    await initSizeBudgetFixtureRepo(tempDir, { headFiles: [...headFiles, { path: "changes/surface.md", content: "- Exercise early surface checks (#1)\n" }] });
     execFileSync("git", ["branch", "feature"], { cwd: tempDir });
     const { env } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
     const result = await runNode([
@@ -2096,7 +2439,7 @@ async function createPrAtWaiverLoc(waiverLoc, { branchLines = 300, harnessEnv = 
   try {
     await initSizeBudgetFixtureRepo(tempDir, {
       devloopsYaml: waiverLoc === null ? null : `version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 100\n        waiverLoc: ${waiverLoc}\n`,
-      headFiles: [{ path: "scripts/big.mjs", content: repeatedLinesContent(branchLines) }],
+      headFiles: [{ path: "scripts/big.mjs", content: repeatedLinesContent(branchLines) }, { path: "changes/size.md", content: "- Exercise size checks (#1)\n" }],
     });
     execFileSync("git", ["branch", "feature"], { cwd: tempDir });
     const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: "https://github.com/owner/repo/pull/1\n" }]);
@@ -2122,13 +2465,13 @@ test("create-pr refuses with size_split_required_before_pr at and above waiverLo
   }
 });
 
-test("create-pr creates when the branch is below the resolved waiverLoc, with no override needed", async () => {
-  for (const waiverLoc of [301, 1500, null]) {
+for (const waiverLoc of [301, 1500, null]) {
+  test(`create-pr creates when the branch is below the resolved waiverLoc ${waiverLoc ?? "default"}, with no override needed`, async () => {
     const { result, ghCalls } = await createPrAtWaiverLoc(waiverLoc);
     assert.equal(result.code, 0, result.stderr);
     assert.equal(ghCalls.length, 1);
-  }
-});
+  });
+}
 
 test("create-pr creates when the size cannot be evaluated (unknown does not refuse)", async () => {
   for (const result of [() => { throw new Error("no ref"); }, () => null]) {

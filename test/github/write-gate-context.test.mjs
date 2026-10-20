@@ -119,6 +119,29 @@ async function makeBaseDiffRepo() {
   return { repoRoot, baseSha, headSha };
 }
 
+test("CLI --base main uses origin/main when local main is stale", async () => {
+  const { repoRoot, baseSha } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["checkout", "--detach", "-q"]);
+    git(repoRoot, ["update-ref", "refs/heads/main", baseSha]);
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    await writeFile(path.join(repoRoot, "feature.md"), "feature\n");
+    git(repoRoot, ["add", "feature.md"]);
+    git(repoRoot, ["commit", "-qm", "feature"]);
+    const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    const scopes = [];
+    for (const base of ["main", "origin/main"]) {
+      await main(["--repo", "owner/repo", "--pr", "65", "--gate", "review", "--head-sha", headSha,
+        "--base", base, "--angles", '["correctness"]'], { repoRoot, run: stubGhRun });
+      scopes.push((await readGateContext({ repo: "owner/repo", pr: 65, gate: "review", headSha }, { repoRoot })).scope.changedFiles);
+    }
+    assert.deepEqual(scopes[0], scopes[1]);
+    assert.deepEqual(scopes[0], ["feature.md"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // Builds the unified gates.<gate>.angles array (D3: one array-of-objects,
 // string sugar for plain entries) from the old flat angles/mandatoryAngles/
 // excludeAngles lists these fixtures were originally written against, so the

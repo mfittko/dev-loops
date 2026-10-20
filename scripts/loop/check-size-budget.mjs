@@ -32,6 +32,7 @@
  * computing a zero — see `substantiallyUnclassified` below.
  */
 import { execFileSync } from "node:child_process";
+import { anchorBaseRef } from "../lib/anchor-base-ref.mjs";
 import { parseArgs } from "node:util";
 
 import { analyzeDiff, classifyFile, matchesGlob } from "@dev-loops/core/analysis/diff-analyzer";
@@ -55,7 +56,7 @@ logic), resolves each changed file's tier from configured path patterns, and
 emits pass | escalate | block.
 
 Required:
-  --base <ref>          Git ref to diff against (git diff <ref>...<head>)
+  --base <ref>          Git ref to diff against (git diff <ref>...<head>); a bare branch uses origin/<branch> when that commit resolves. Explicit remote refs and revision expressions stay unchanged.
 
 Optional:
   --head <ref>          Git ref for the PR head (default: HEAD)
@@ -464,6 +465,7 @@ export function computeSizeBudget({
  * a run produces don't depend on the operator's local git config.
  */
 function captureSizeBudgetDiff({ base, head = "HEAD", repoRoot = process.cwd(), maxBuffer = 64 * 1024 * 1024 }) {
+  base = anchorBaseRef(base, { repoRoot });
   const range = `${base}...${head}`;
   // Shared byte-identical flag set (see captureDiffFromBase in
   // scripts/github/write-gate-context.mjs); this path keeps its own runGit stdio
