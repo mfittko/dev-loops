@@ -67,12 +67,21 @@ test("this repo's .devloops resolves the regular tier to sonnet and the strong r
 
   // The regular tier's Pi model is an operator opt-in for the free
   // Ollama-hosted model; the Claude side of the same tier stays on sonnet.
-  const piLow = config.models.tiers.low.pi;
-  assert.equal(typeof piLow, "string", "the regular tier must carry a Pi model id");
-  assert.ok(piLow.length > 0, "the regular tier's Pi model id must be non-empty");
+  // The id is pinned rather than read back from the config under test, so a
+  // wrong or paid model id in `.devloops` fails here instead of passing by
+  // self-consistency.
+  assert.equal(
+    config.models.tiers.low.pi,
+    "ollama-cloud/minimax-m3.1-flash",
+    "the regular tier's Pi model must stay the operator's free Ollama-hosted model",
+  );
   for (const role of ["developer", "fixer", "docs", "quality"]) {
     assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "sonnet", `${role} on claude`);
-    assert.equal(resolveRoleModel(config, { role, harness: "pi" }), piLow, `${role} on pi`);
+    assert.equal(
+      resolveRoleModel(config, { role, harness: "pi" }),
+      "ollama-cloud/minimax-m3.1-flash",
+      `${role} on pi`,
+    );
   }
   for (const role of ["review", "refiner", "pre-push-reviewer"]) {
     assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "opus", `${role} on claude`);
