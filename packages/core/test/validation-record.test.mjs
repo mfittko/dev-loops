@@ -48,19 +48,16 @@ test("suites must match requestedSuites and the profile must match them", () => 
   assert.equal(refused(full).ok, true);
 });
 
-test("a 64-hex sha record is accepted and odd exitCode or depState types are refused", () => {
+test("a 64-hex sha record is accepted and an odd exitCode is refused", () => {
   const sha = "c".repeat(64);
   assert.equal(parseValidationRecord({ ...record(), headSha: sha }, { ...ID, headSha: sha }).ok, true);
   const nan = record();
   nan.suites[0].exitCode = Number.NaN;
   assert.equal(parseValidationRecord(nan, ID).ok, false);
-  assert.equal(parseValidationRecord({ ...record(), depState: ["x"] }, ID).ok, false);
 });
 
-test("a valid record is accepted, with and without depState", () => {
-  assert.equal(parseValidationRecord(record(), ID).ok, true);
-  assert.equal(parseValidationRecord({ ...record(), depState: { status: "synced", detail: "d" } }, ID).ok, true);
-  const failed = record();
+test("a valid record is accepted", () => {
+  assert.equal(parseValidationRecord(record(), ID).ok, true);  const failed = record();
   failed.suites[0].exitCode = 2;
   failed.allPassed = false;
   assert.equal(parseValidationRecord(failed, ID).ok, true);
@@ -74,7 +71,6 @@ test("refusals", () => {
   assert.equal(refused({ ...record(), suites: [] }).ok, false);
   assert.match(refused({ ...record(), allPassed: false }).reason, /allPassed/);
   assert.match(refused({ ...record(), allPassed: "true" }).reason, /allPassed/);
-  assert.equal(refused({ ...record(), depState: [] }).ok, false);
   assert.equal(refused({ ...record(), generatedAt: "not a date" }).ok, false);
   assert.equal(refused({ ...record(), generatedAt: "2026-10-20T12:00:00.000Z" }).ok, true);
   for (const generatedAt of ["1", "Oct 20 2026", "2026-10-20", ""]) assert.equal(refused({ ...record(), generatedAt }).ok, false, generatedAt);

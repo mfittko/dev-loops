@@ -95,6 +95,9 @@ export async function produceValidationRecord(options, { repoRoot = resolveRepoR
     if (JSON.stringify(checkout.validation) !== JSON.stringify(base.validation)) {
       return incomplete("validation config differs from the base branch: a config-source change needs review before validation runs");
     }
+    if (base.validation.mode !== "local") {
+      return incomplete(`base validation mode resolves to ${JSON.stringify(base.validation.mode)}; ci-only selects the ci producer (ADR 0170), so the local producer runs nothing`);
+    }
     const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
     const pinned = packageJson.packageManager;
     if (!/^bun@\d+\.\d+\.\d+$/.test(pinned ?? "")) return incomplete("packageManager does not pin an exact Bun version");
@@ -131,7 +134,6 @@ export async function produceValidationRecord(options, { repoRoot = resolveRepoR
       requestedSuites: suites,
       suites: artifact.suites.map(({ name, command, exitCode, outputPath }) => ({ name, command, exitCode, outputPath })),
       prTitle: options.title, generatedAt: artifact.generatedAt, allPassed: artifact.allPassed,
-      ...(artifact.depState ? { depState: artifact.depState } : {}),
     };
     const parsed = parseValidationRecord(record, options);
     if (!parsed.ok) return incomplete(`record failed validation: ${parsed.reason}`);

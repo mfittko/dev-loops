@@ -33,6 +33,7 @@ async function fixture({ pinned = bunVersion, files = {} } = {}) {
     ...files,
   };
   for (const [name, body] of Object.entries(tree)) {
+    if (body === null) continue;
     await mkdir(path.dirname(path.join(repoRoot, name)), { recursive: true });
     await writeFile(path.join(repoRoot, name), body);
   }
@@ -144,6 +145,16 @@ test("a checkout validation block that differs from the base is incomplete", () 
   const headSha = await commit(repoRoot, { ".devloops": DEVLOOPS.replace("bun run test:docs", "echo changed") });
   await assertIncomplete(repoRoot, headSha, /differs from the base branch/);
 }));
+
+test("a base validation block in ci-only mode, absent or with no config file is incomplete and writes no record", async () => {
+  for (const files of [{ ".devloops": DEVLOOPS.replace("mode: local", "mode: ci-only") }, { ".devloops": "version: 1\n" }, { ".devloops": null }]) {
+    await withFixture({ files }, async (repoRoot) => {
+      const headSha = await commit(repoRoot, { "src/x.txt": "x\n" });
+      await assertIncomplete(repoRoot, headSha, /ci-only selects the ci producer/);
+      assert.equal(existsSync(recordFile(repoRoot, headSha)), false);
+    });
+  }
+});
 
 test("an unresolvable origin/HEAD is incomplete", () => withFixture({}, async (repoRoot) => {
   const headSha = await commit(repoRoot, { "docs/a.md": "# a\n" });
