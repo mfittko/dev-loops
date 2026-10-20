@@ -1322,7 +1322,8 @@ check runs and no statuses passes. Normal mode, after the guard passes, also pos
 reply on each deferred thread whose delta status is `not_resolved` or `cannot_verify` and leaves it open;
 re-entry posts no second reply. The fixer hands back the refusal code and resolves no thread.
 A complete THREAD order finds its clearing record by `candidateHead` equal to the pushed head, because
-its order head is already the candidate. Every full-phase order states the numbered steps: push, confirm
+its order head is already the candidate. The matching record must also cover every pinned thread ID,
+and zero or several matching records refuse with a named reason. Every full-phase order states the numbered steps: push, confirm
 the remote head, `wait-pr-checks` (run once, one retry on a not-settled exit, then hand back `ci_pending`
 or `ci_unknown`), `--construct`, verify, `--check`, and the Edit/Write-only rule. A THREAD order pushes
 exactly the delta-reviewed candidate and makes no further commit. The

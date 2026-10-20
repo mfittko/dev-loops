@@ -1169,7 +1169,7 @@ function assertFullPhaseSteps(text, { push }) {
   assert.match(text, /If it exits 2 \(not settled\), run it exactly once more\./);
   assert.match(text, /reports `stuck` or `changed`, or exits 1 with an error, resolve no thread, run no verifier step, and hand back `ci_pending` \(`ci_unknown` when the checks cannot be read\)/);
   assert.doesNotMatch(text, /repeat while it reports/);
-  assert.match(text, /Edit rule: write files only with the Edit and Write tools\. Never write a file through a Bash heredoc, redirect or `sed -i`, and never write `fixer-disposition\*\.json`/);
+  assert.match(text, /Edit rule: write file content only with the Edit and Write tools\. Never write file content through Bash \(heredoc, redirect, `sed -i`, or cp\/mv onto a tracked file\)\. Scripts the order names, such as the asset generator and `--construct`, may write files\. Never write `fixer-disposition\*\.json`/);
 }
 
 for (const source of ["act-list", "threads"]) test(`complete ${source} pulls delivery-only prose and an empty source grant`, async () => {

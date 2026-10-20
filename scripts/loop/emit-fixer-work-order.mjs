@@ -136,7 +136,7 @@ export function buildSiteCoverageSkeleton(actList) {
 }
 
 const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-const EDIT_RULE = "Edit rule: write files only with the Edit and Write tools. Never write a file through a Bash heredoc, redirect or `sed -i`, and never write `fixer-disposition*.json` (the verifier's --construct writes it; a hand-written report is refused). rm of a refused hand-written report is the one allowed delete.";
+const EDIT_RULE = "Edit rule: write file content only with the Edit and Write tools. Never write file content through Bash (heredoc, redirect, `sed -i`, or cp/mv onto a tracked file). Scripts the order names, such as the asset generator and `--construct`, may write files. Never write `fixer-disposition*.json` (the verifier's --construct writes it; a hand-written report is refused). rm of a refused hand-written report is the one allowed delete.";
 
 // The numbered full-phase steps (issue 2787 C1): push, confirm the remote head, wait for CI, --construct, verify, --check.
 function fullPhaseSteps(workOrder, verifier, { push }) {
