@@ -263,7 +263,13 @@ function globalAgentRoots(home: string): string[] {
  * home directory (`~/.pi` and `~/.agents` are user configuration, never an implicit project).
  */
 export function findProjectRoot(cwd: string, home: string | null = process.env.HOME || os.homedir()): string {
-  const isDir = (p: string) => fs.statSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
+  const isDir = (p: string) => {
+    try {
+      return fs.statSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
+    } catch {
+      return false;
+    }
+  };
   const real = (p: string) => {
     try {
       return fs.realpathSync.native(p);
@@ -289,7 +295,7 @@ export function findProjectRoot(cwd: string, home: string | null = process.env.H
  */
 export function checkAgentSetRendered(
   cwd: string,
-  { roles = [], home = process.env.HOME || os.homedir() }: { roles?: readonly string[]; home?: string | null } = {},
+  { roles = [], home = process.env.HOME || os.homedir(), scope }: { roles?: readonly string[]; home?: string | null; scope?: "project" | "user" } = {},
 ): string | null {
   const projectOffenders: string[] = [];
   const globalOffenders: string[] = [];
@@ -309,13 +315,14 @@ export function checkAgentSetRendered(
   const dir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
   let projectFiles: string[] = [];
   try {
+    if (scope === "user") throw new Error("user scope loads no project agents");
     projectFiles = fs.readdirSync(dir).filter((n) => n.endsWith(".agent.md")).sort();
   } catch {
     // Absent project directory is allowed.
   }
   for (const name of projectFiles) check(path.join(dir, name), projectOffenders);
   // Pi also discovers global copies that load when the project has no copy of the role (decision record 0173).
-  if (home) {
+  if (home && scope !== "project") {
     const roots = globalAgentRoots(home);
     for (const role of roles) {
       if (projectFiles.includes(`${role}.agent.md`)) continue;

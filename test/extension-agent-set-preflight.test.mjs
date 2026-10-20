@@ -239,3 +239,33 @@ test("the project remedy names the resolved project root and session_start syncs
     assert.deepEqual(await launch(sub, { agent: "quality" }), { block: false });
     assert.equal(fs.existsSync(path.join(sub, ".pi")), false);
   }));
+
+test("agentScope user refuses a raw global copy even when the project set is rendered", () =>
+  withHome(async (root, home) => {
+    writeAt(path.join(root, ".pi", "agents", "quality.agent.md"), RENDERED);
+    const file = path.join(home, ".agents", "quality.agent.md");
+    writeAt(file, RAW);
+    assert.deepEqual(await launch(root, { agent: "quality" }), { block: false });
+    const res = await launch(root, { agent: "quality", agentScope: "user" });
+    assert.equal(res.block, true);
+    assert.ok(res.reason.includes(file));
+    writeAt(file, RENDERED);
+    writeAt(path.join(root, ".pi", "agents", "quality.agent.md"), RAW);
+    assert.deepEqual(await launch(root, { agent: "quality", agentScope: "user" }), { block: false });
+  }));
+
+test("agentScope project keeps the home walk boundary and skips the global roots", () =>
+  withHome(async (root, home) => {
+    writeAt(path.join(home, ".pi", "agents", "quality.agent.md"), RAW);
+    const cwd = path.join(home, "work", "proj");
+    fs.mkdirSync(cwd, { recursive: true });
+    assert.deepEqual(await launch(cwd, { agent: "quality", options: { agentScope: "project" } }), { block: false });
+  }));
+
+test("a cwd that names a file does not throw in the project-root walk", () =>
+  withHome(async (root) => {
+    const file = path.join(root, "afile");
+    fs.writeFileSync(file, "x");
+    assert.doesNotThrow(() => findProjectRoot(path.join(file, "child")));
+    assert.deepEqual(await launch(root, { agent: "quality", cwd: file }), { block: false });
+  }));

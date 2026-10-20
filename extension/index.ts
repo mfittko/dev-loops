@@ -101,7 +101,7 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
       const launchCwd = [opts.cwd, sub.cwd].find((c): c is string => typeof c === 'string' && c.length > 0);
       const reason = checkAgentSetRendered(launchCwd ? path.resolve(ctx.cwd, launchCwd) : ctx.cwd, {
         roles,
-        home: scope === 'project' ? null : undefined,
+        scope: scope === 'project' || scope === 'user' ? scope : undefined,
       });
       if (reason) return { block: true, reason };
     }
