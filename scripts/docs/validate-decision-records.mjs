@@ -242,7 +242,7 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
         });
       }
     }
-    rule3 = { state: "ran" };
+    rule3 = { state: "ran", base };
   }
 
   return { ok: errors.length === 0, errors, filesScanned: names.length, rule3 };
@@ -274,7 +274,7 @@ export async function run({ root = resolveDefaultRepoRoot(), git = createGitClie
       out.write("Decision record validation failed: rule 3 degraded in CI (base ref unavailable); it must run to enforce ADR-SUPERSEDE-NOT-REWRITE.\n");
       return 1;
     }
-    out.write(`Decision record validation passed: ${result.filesScanned} records; rule 3 ${result.rule3.state}.\n`);
+    out.write(`Decision record validation passed: ${result.filesScanned} records; rule 3 ${result.rule3.state}${result.rule3.base ? ` (base ${result.rule3.base.slice(0, 12)})` : ""}.\n`);
     return 0;
   }
   out.write(`Decision record validation failed (${result.errors.length}):\n`);
