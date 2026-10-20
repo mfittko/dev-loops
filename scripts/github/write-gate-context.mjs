@@ -684,6 +684,12 @@ export function buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot = "tmp"
   return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".emit-plan.json" });
 }
 
+// Keyed sibling of the emit plan: consolidate-fanin.mjs's ledger object
+// (verdict, findings, derived fan-out provenance) at the same round key.
+export function buildGateFaninLedgerPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".fanin-ledger.json" });
+}
+
 // Deterministic path for the keyed carry-forward plan artifact
 // (GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED, `resolve-angle-carry-forward.mjs`):
 // the resolver's own plan result persisted as a keyed sibling of the
