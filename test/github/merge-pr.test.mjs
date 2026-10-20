@@ -158,15 +158,11 @@ test("adr_tripwire refuses a block that is not a stale waiver, never merging", a
   assert.equal(mergeCalls(calls).length, 0);
 });
 
-test("adr_tripwire fails closed when the evaluator throws or the head fetch fails", async () => {
-  for (const key of ["evaluateAdrTripwire", "fetchPrHead"]) {
-    const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
-    // fetchPrHead runs twice (base check, then tripwire); let the first call pass so the tripwire fetch path is the one that throws.
-    let calls_ = 0;
-    runtime[key] = () => { if (key === "fetchPrHead" && ++calls_ < 2) return; throw new Error("git exploded"); };
-    await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*git exploded/);
-    assert.equal(mergeCalls(calls).length, 0);
-  }
+test("adr_tripwire fails closed when the evaluator throws", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
+  runtime.evaluateAdrTripwire = () => { throw new Error("git exploded"); };
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*git exploded/);
+  assert.equal(mergeCalls(calls).length, 0);
 });
 
 test("adr_tripwire re-issues a stale covered waiver through the writer, re-reads the body, and merges", async () => {
@@ -184,15 +180,14 @@ test("adr_tripwire re-issues a stale covered waiver through the writer, re-reads
   assert.equal(mergeCalls(calls).length, 1);
 });
 
-test("adr_tripwire evaluates origin/<base> at the PR head after fetching it", async () => {
+test("the merge fetches the base and PR head once and the tripwire evaluates origin/<base> at the PR head", async () => {
   const { runtime } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
   const fetched = [];
   const evaluated = [];
   runtime.fetchPrHead = (opts) => { fetched.push({ pr: opts.pr, baseRefName: opts.baseRefName }); };
   runtime.evaluateAdrTripwire = async (opts) => { evaluated.push({ base: opts.base, head: opts.head }); return { outcome: "pass" }; };
   await mergePr(baseOptions(), runtime);
-  // One fetch for the ADR tripwire, one for the base_not_integrated check.
-  assert.deepEqual(fetched, [{ pr: 5, baseRefName: "main" }, { pr: 5, baseRefName: "main" }]);
+  assert.deepEqual(fetched, [{ pr: 5, baseRefName: "main" }]);
   assert.deepEqual(evaluated, [{ base: "origin/main", head: HEAD }]);
 });
 
@@ -1154,7 +1149,8 @@ test("adr_number_collision: refuses fail-closed when the base branch name is unk
   for (const baseRefName of ["", "  "]) {
     const { runtime, calls } = makeRuntime({ prView: { baseRefName }, adrPrFiles: [adrFile("docs/decisions/0001-a.md")] });
     const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
-    assert.match(threw.mergePrFailure.failures.find((f) => f.precondition === "adr_number_collision").reason, /base branch name is unknown/);
+    // An unreadable base now refuses at the top as base_not_integrated, before any ADR number read.
+    assert.match(threw.mergePrFailure.failures.find((f) => f.precondition === "base_not_integrated").reason, /base branch is unreadable/);
     assert.equal(contentsCalls(calls).length, 0);
     assert.equal(mergeCalls(calls).length, 0);
   }
@@ -1282,16 +1278,28 @@ test("defaultFetchPrHead fetches the base with an explicit refspec so a restrict
   assert.deepEqual(calls[1], ["git", "fetch", "origin", "--", "pull/7/head"]);
 });
 
-test("base_not_integrated refuses when the ADR tripwire base refresh advances the base past the head, before any waiver write", async () => {
-  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
-  let fetches = 0;
-  runtime.fetchPrHead = () => { fetches += 1; };
-  runtime.isAncestor = () => fetches < 2;
-  let waived = false;
-  runtime.waiveAdrTripwire = async () => { waived = true; return { ok: true }; };
+test("ancestry is rechecked after the ADR tripwire base refresh", async () => {
+  // The waiver writer refreshes the base and advances it past the head; the single post-ADR ancestry check must refuse.
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main", body: "old" } });
+  let advanced = false;
+  runtime.isAncestor = () => !advanced;
+  runtime.evaluateAdrTripwire = async ({ prBody }) => (prBody === "old" ? STALE_BLOCK : { outcome: "pass" });
+  runtime.waiveAdrTripwire = async () => { advanced = true; return { ok: true, action: "waiver_written" }; };
+  const base = runtime.ghJson;
+  runtime.ghJson = async (args) => (args.join(" ").endsWith("--json body") ? { body: "new" } : base(args));
   const error = await mergePr(baseOptions(), runtime).catch((e) => e);
-  assert.match(error.message, /base_not_integrated \(.*after the ADR tripwire base refresh/);
+  assert.match(error.message, /base_not_integrated \(.*does not contain origin\/main/);
   assert.equal(error.mergePrFailure.failures[0].precondition, "base_not_integrated");
-  assert.equal(waived, false);
+  assert.equal(advanced, true);
   assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("the ancestry check runs once, after the ADR step and the single fetch", async () => {
+  const { runtime } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+  const order = [];
+  runtime.fetchPrHead = () => { order.push("fetch"); };
+  runtime.evaluateAdrTripwire = async () => { order.push("adr"); return { outcome: "pass" }; };
+  runtime.isAncestor = () => { order.push("ancestry"); return true; };
+  await mergePr(baseOptions(), runtime);
+  assert.deepEqual(order, ["fetch", "adr", "ancestry"]);
 });

@@ -1,3 +1,3 @@
 ### Fixed
 
-- `merge-pr` refuses a head that does not contain `origin/<base>` with `base_not_integrated` (GATE-EXEC-BASE-REFRESH); a fetch or git failure refuses (#2863)
+- `merge-pr` fetches once, then refuses after the ADR step with `base_not_integrated` when the head lacks `origin/<base>` (GATE-EXEC-BASE-REFRESH) (#2863)
