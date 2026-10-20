@@ -928,8 +928,8 @@ the target's number (a PR number is a valid deferral target; a PR target gets no
 link nor a follow-up draft, only its `fingerprint` and rationale (the one-line audit entry).
 Re-running `judge-pass` for the same round reads the target's existing comments first and does
 not append a fingerprint the target already lists. A thread whose finding the judge disposes
-`act` is never defer-closed; it stays open until the fixer replies with the fixing commit or a
-decline reason and resolves it (see `GATE-EXEC-THREAD-DISPOSITION`).
+`act` is never defer-closed; it stays open until the fixer's reply with the fixing commit or a
+decline reason is posted and the thread is resolved (see `GATE-EXEC-THREAD-DISPOSITION`).
 
 <!-- rule: GATE-EXEC-JUDGE-AUTHORITY-SPLIT -->
 `GATE-EXEC-JUDGE-AUTHORITY-SPLIT`: The judge owns **relevance** (is this finding for this
@@ -1287,7 +1287,7 @@ Incomplete warns, never blocks detector/Copilot progression, and grants no compl
 
 Untackled, deferred, rejected, foreign-authored and newly arrived threads keep their existing judgment path; this boundary never auto-resolves outside the tackled set.
 
-`scripts/github/verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <fixer-emit-plan.json>` reads the handoff from the work order's outputRef and refuses without a matching fixer pull receipt, when the handoff predates the pull, or when the handoff head is not the observed head. It also fails, naming the thread id, when a work order's judge-act item carries the fingerprint of an open inline gate thread and the handoff has no disposition entry for that thread (an act item with an open inline gate thread is never threadless; only a thread whose root comment is authored by the gate login counts, every such thread needs its own entry, and a refused handoff writes no checkpoint). It records `tmp/gate-findings/<repo-slug>/pr-<N>/fixer-disposition-<headSha>.json`, captures live state, checks containment, and only after containment passes posts the evidenced reply and resolves (resolving without reposting when a matching reply exists). Live checks precede writes, so restart, rate limit, timeout and reply-success/resolve-failure re-entry cannot duplicate replies.
+`scripts/github/verify-fixer-disposition.mjs --repo <owner/repo> --pr <n> --head-sha <sha> --fixer-plan <fixer-emit-plan.json>` reads the handoff from the work order's outputRef (written by its own `--construct` in a full-phase order) and refuses without a matching fixer pull receipt, when the handoff predates the pull, or when the handoff head is not the observed head. It also fails, naming the thread id, when a work order's judge-act item carries the fingerprint of an open inline gate thread and the handoff has no disposition entry for that thread (an act item with an open inline gate thread is never threadless; only a thread whose root comment is authored by the gate login counts, every such thread needs its own entry, and a refused handoff writes no checkpoint). It records `tmp/gate-findings/<repo-slug>/pr-<N>/fixer-disposition-<headSha>.json`, captures live state, checks containment, and only after containment passes posts the evidenced reply and resolves (resolving without reposting when a matching reply exists). Live checks precede writes, so restart, rate limit, timeout and reply-success/resolve-failure re-entry cannot duplicate replies.
 
 Adding `--check` runs the same current-protocol plan/digest, role/target/execution, receipt/path, after-pull output, source integrity, current-head/contained-order-head, coverage, authenticated ACT-thread and containment checks, including live reply/resolution and `delta_blocked` evaluation. It writes no report or checkpoint and posts no reply or resolution. A THREAD unit validates its digest-bound source hash and requires dispositions for its own pinned thread IDs only; it adds no ACT query or all-history requirement. An authentic threadless ACT unit with complete required coverage may have an empty dispositions array. The default mutating verification remains the completion path after populated construction; legacy deliveries retain their existing coverage requirements.
 
@@ -1297,7 +1297,8 @@ ACT or THREAD source with raw-byte and semantic authentication. ACT additionally
 unique required Delta/completion-input reads and both completion authorities; missing all
 optional markers cannot fall back to ordinary delivery. THREAD rejects ACT/completion-input
 mixing and every extra delivered ID before checkpoint or reply/resolution mutation, while
-retaining required pinned IDs and ignoring unrelated live threads. There is no THREAD constructor.
+retaining required pinned IDs and ignoring unrelated live threads. THREAD reports are built by the
+verifier's `--construct` from the pinned threads source and the clearing delta record (ADR 0166).
 The emitted task precedes generic guidance and immutable JSON identity evidence: preserve the
 branch/worktree/source-hash bootstrap, authorize only the exact own output and evidenced
 delivery/reply/resolution verification, and perform no source edit/test, stage, commit, push,
@@ -1305,12 +1306,28 @@ new Delta or counter reset. ACT constructs only absent output; genuine existing 
 normal/check without clobbering. Existing empty-selector Write/Edit guards allow the exact
 output only. Codex managed permissions and supported Claude/Pi hooks retain their actual
 limits; this is not universal Bash enforcement. Ordinary emission remains `operation: fix`
-with unchanged marker behavior and ordinary renderer bytes. Main-checkout consumers must
+with unchanged marker behavior. Only the `commit_only` render keeps its renderer bytes. ADR 0166
+changed the ordinary full-phase render, so re-emit a full plan emitted before that change. Main-checkout consumers must
 ship this support before a later producer enables delivery-only reentry; these fixtures do
 not establish producer eligibility, new publication, runtime worker qualification or recovery.
 
-The optional `--construct` operation (ADR 0149) is ACT/full only and mutually exclusive with
-`--check`. It authenticates the current plan/digest, fixer identity/receipt/subject, canonical
+The `--construct` operation (ADR 0149, extended by ADR 0166) builds the ACT report from completion
+input and the THREAD report from the threads source, the clearing delta record (its `candidateHead`
+is the pushed head) and the pushed head. Normal verification and `--check` accept only a report that
+`--construct` wrote (a sha256 mark beside the output). For a plan that has a source they also refuse
+unless the head's checks are settled green, with no reply: `ci_failed` (red checks), `ci_pending`
+(pending checks) or `ci_unknown` (unreadable checks or unsupported conclusions). The guard judges only
+check runs listed in the PR `statusCheckRollup`, the set `wait-pr-checks` uses. A settled head with no
+check runs and no statuses passes. Normal mode, after the guard passes, also posts one residual-status
+reply on each deferred thread whose delta status is `not_resolved` or `cannot_verify` and leaves it open;
+re-entry posts no second reply. The fixer hands back the refusal code and resolves no thread.
+A complete THREAD order finds its clearing record by `candidateHead` equal to the pushed head, because
+its order head is already the candidate. The matching record must also cover every pinned thread ID,
+and zero or several matching records refuse with a named reason. Every full-phase order states the numbered steps: push, confirm
+the remote head, `wait-pr-checks` (run once, one retry on a not-settled exit, then hand back `ci_pending`
+or `ci_unknown`), `--construct`, verify, `--check`, and the Edit/Write-only rule. A THREAD order pushes
+exactly the delta-reviewed candidate and makes no further commit. The
+operation is mutually exclusive with `--check`. It authenticates the current plan/digest, fixer identity/receipt/subject, canonical
 plan/output paths and after-pull timing before constructing that execution's report. Missing
 output is permitted; an existing pre-pull output refuses. No caller-selected output is accepted.
 Any `completion-input` read or either completion authority field activates the same strict
