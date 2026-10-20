@@ -28,7 +28,7 @@ failure entries. Thread `failures` onward, even on stopped results: runner-unava
 (`npm install --save-dev @axe-core/playwright`) for the computed-a11y artifact.
 It is resolved from the reviewed worktree first, then from dev-loops. When
 neither has it, `axe.json` holds a stated `{ skipped: true, reason }` (never a bare
-`null`) and a11y findings lose their grounding.
+`null`) and a11y findings lose their grounding. The drive also logs one stderr line `[ui-review-drive] <reason>` per run when axe is skipped.
 
 The route's handoff envelope carries its stop rules and acceptance
 self-validation (defined in `handoff-envelope.mjs`): no product-code writes,

@@ -32,7 +32,7 @@ The drive resolves it from the reviewed worktree first (its `package.json`), the
 from the dev-loops install, so a globally installed dev-loops works when the
 consumer repo lists the package. When neither location has it, `axe.json` holds
 `{ "skipped": true, "reason": "axe: @axe-core/playwright not resolvable from <worktree> or dev-loops" }`
-(never a bare `null`) and the rest of the review still works.
+(never a bare `null`) and the rest of the review still works. The drive also logs one stderr line `[ui-review-drive] <reason>` per run when axe is skipped.
 
 ## Where the recipe lives
 

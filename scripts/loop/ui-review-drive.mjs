@@ -353,7 +353,7 @@ export function makeRunStep({ page, outputDir, sliceCapturedEvents, repoRoot, lo
     });
     if (paths.axeSkipReason && !axeSkipLogged) {
       axeSkipLogged = true;
-      log(`axe skipped: ${paths.axeSkipReason}`);
+      log(paths.axeSkipReason);
     }
     return { ok: true, screenshotPath: paths.screenshotPath, statePath: paths.statePath, snapshotPath: paths.snapshotPath, axePath: paths.axePath, consolePath: paths.consolePath, ...(paths.axeSkipReason && { axeSkipReason: paths.axeSkipReason }) };
   };

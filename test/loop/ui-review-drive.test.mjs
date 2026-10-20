@@ -686,7 +686,7 @@ test("makeRunStep: logs one stated line the first time axe is skipped and return
   await runStep({ appUrl: "http://app", flow: { name: "checkout" }, step: { name: "b", action: "goto" }, index: 1 });
   assert.match(first.axeSkipReason, /^axe: /);
   assert.equal(logs.length, 1);
-  assert.match(logs[0], /^axe skipped: axe: /);
+  assert.match(logs[0], /^axe: /);
 });
 
 test("makeRunStep: a declared step viewport resizes the page and slugs the capture into a distinct directory (same state name, different viewport)", async () => {
