@@ -1807,6 +1807,8 @@ for (const route of ["THREAD", "ACT", "HISTORICAL_CONSTRUCT", "LEGACY", "AUTHORI
     if (isAct && !legacy) assert.equal(nodes[1].isResolved, false, "deferred residual receives no Fixed reply or resolution");
     const checkpoint = [await readFile(completed.checkpointPath, "utf8"), (await stat(completed.checkpointPath)).mtimeMs];
     const featureResolver = await import(pathToFileURL(path.join(wt, "scripts/loop/detect-pr-gate-coordination-state.mjs")).href);
+    // The normal verifier just posted the residual reply; --check requires it in the live snapshot.
+    if (isAct && !legacy) nodes[1].comments.nodes.push({ id: "c3", databaseId: 555, body: `Residual delta status: not_resolved after the delta review of commit ${candidate}; this thread stays open for the next gate round.`, author: { login: "bot", __typename: "User" } });
     const mock = makeGhMock([...entries(), comparison(candidate)]);
     const checked = await featureResolver.resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: candidate, parsedThreads }, runtime(mock));
     assert.equal(checked.complete, true);
