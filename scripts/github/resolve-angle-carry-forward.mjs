@@ -218,7 +218,7 @@ export function buildCarryForwardPlan({ log, changedFiles, incrementalFiles = []
   if (!log || typeof log !== "object") {
     throw new Error("prior gate findings-log not found or unreadable — cannot carry forward (fail-closed)");
   }
-  // Refusal precedence (#2895 AC2): an unknown --rerun-angle name is refused before the
+  // Refusal precedence (GATE-EXEC-RERUN-ANGLE): an unknown --rerun-angle name is refused before the
   // eligibility refusal below, so no fallback plan is written for a typo.
   const knownAngles = Array.isArray(log.provenance?.perAngle) ? log.provenance.perAngle.map((a) => a?.angle) : [];
   const unknownRerun = rerunAngles.filter((a) => !knownAngles.includes(a));
@@ -572,7 +572,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
         // Best-effort only — the original refusal below is authoritative.
       }
     }
-    // The shared formatter drops the typed code; keep it for the unknown-angle refusal (#2895 AC2).
+    // The shared formatter drops the typed code; keep it for the unknown-angle refusal (GATE-EXEC-RERUN-ANGLE).
     const rendered = error instanceof Error && error.code === "unknown_rerun_angle"
       ? JSON.stringify({ ...JSON.parse(formatCliError(error)), code: error.code })
       : formatCliError(error);
