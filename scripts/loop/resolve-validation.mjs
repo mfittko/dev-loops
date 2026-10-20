@@ -84,7 +84,7 @@ export async function defaultReadCi({ repo, pr }, { read = viewPr, timeoutMs = 1
 // (a PR could point that at its own branch). A default branch with no `.devloops`
 // family file is an absent block, so the `ci-only` default applies. Returns the
 // resolved block or a refusal reason.
-function readBaseValidation(repoRoot) {
+export function readBaseValidation(repoRoot) {
   const base = readDefaultBranchConfig({ repoRoot });
   if (!base.ok && !base.noConfigFile) return { reason: `cannot read the base branch validation config: ${base.detail}` };
   const doc = base.ok ? base.parsed : undefined;
@@ -97,7 +97,7 @@ function readBaseValidation(repoRoot) {
 // The checkout's own `.devloops` family file (loader order, first existing file
 // wins), so both sides of the comparison read the same layer: the merged loader
 // config also carries `.pi/dev-loop/defaults.*`, which the base side never sees.
-function readCheckoutValidation(repoRoot) {
+export function readCheckoutValidation(repoRoot) {
   const name = DEVLOOPS_CONFIG_PATHS.find((candidate) => existsSync(path.join(repoRoot, candidate)));
   let raw;
   try {

@@ -14,7 +14,7 @@
  * boundary: a free-form command string is never accepted, so this CLI can
  * only ever run what the repo's own package.json already declares runnable.
  */
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -264,6 +264,40 @@ function runSuite(name, { repoRoot, env }) {
   });
 }
 
+// Run one suite under a deadline. The suite leads its own process group, so the
+// SIGKILL on expiry also reaches grandchildren (no orphans). Rejects with
+// `timedOut: true` on expiry.
+function runSuiteWithDeadline(name, { repoRoot, env }, remainingMs) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("bun", ["run", name], { cwd: repoRoot, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    let spawnError = null;
+    const killGroup = () => { try { process.kill(-child.pid, "SIGKILL"); } catch { /* the group already exited */ } };
+    // Termination of the producer also kills the suite group, so it is never orphaned.
+    const relays = ["SIGINT", "SIGTERM", "SIGHUP"].map((signal) => {
+      const relay = () => { killGroup(); cleanup(); process.kill(process.pid, signal); };
+      process.on(signal, relay);
+      return [signal, relay];
+    });
+    function cleanup() { for (const [signal, relay] of relays) process.off(signal, relay); }
+    const timer = setTimeout(() => {
+      killGroup();
+      cleanup();
+      reject(Object.assign(new Error(`suite ${name} timed out`), { timedOut: true }));
+    }, remainingMs);
+    for (const stream of [child.stdout, child.stderr]) {
+      stream.setEncoding("utf8");
+      stream.on("data", (chunk) => { output = (output + chunk).slice(-MAX_BUFFER_BYTES); });
+    }
+    child.on("error", (error) => { spawnError = error; });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      cleanup();
+      resolve({ name, command: `bun run ${name}`, exitCode: typeof code === "number" ? code : 1, output: output.trim() === "" && spawnError ? spawnError.message : output });
+    });
+  });
+}
+
 const PR_TITLE_READ_TIMEOUT_MS = 10_000;
 
 // A stalled gh call maps to null (commit-subject fallback) instead of hanging the
@@ -306,10 +340,11 @@ export async function defaultReadPrTitle(
  */
 export async function buildValidationArtifact(
   { repo, pr, gate, headSha, suites, tmpRoot },
-  { repoRoot, readPrTitle = defaultReadPrTitle, env = process.env },
+  { repoRoot, readPrTitle = defaultReadPrTitle, env = process.env, timeoutMs, logDir },
 ) {
-  const artifactPath = buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot });
-  const artifactDir = path.dirname(artifactPath);
+  // `logDir` (repo-relative) replaces the gate-context directory, so a caller without a PR or gate builds no gate path.
+  const artifactDir = logDir ?? path.dirname(buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot }));
+  const deadline = timeoutMs === undefined ? null : Date.now() + timeoutMs;
   await mkdir(path.resolve(repoRoot, artifactDir), { recursive: true });
 
   // The changelog validator reads the PR title from DEVLOOPS_PR_TITLE. A failed or
@@ -323,7 +358,11 @@ export async function buildValidationArtifact(
 
   const suiteResults = [];
   for (const name of suites) {
-    const { command, exitCode, output } = await runSuite(name, { repoRoot, env: suiteEnv });
+    const remainingMs = deadline === null ? null : deadline - Date.now();
+    if (remainingMs !== null && remainingMs <= 0) throw Object.assign(new Error(`suite ${name} timed out`), { timedOut: true });
+    const { command, exitCode, output } = remainingMs === null
+      ? await runSuite(name, { repoRoot, env: suiteEnv })
+      : await runSuiteWithDeadline(name, { repoRoot, env: suiteEnv }, remainingMs);
     const cleaned = stripAnsi(output);
     // ":" is a routine npm-script-key character (assets:check, schema:check)
     // but not a valid filename character on Windows, so it is mapped to "-"
@@ -332,7 +371,7 @@ export async function buildValidationArtifact(
     // file; accepted, since both must already be safe path segments and the
     // artifact entries stay distinct.
     const logName = name.replace(/:/g, "-");
-    const outputPath = path.join(artifactDir, `${gate}-${headSha}.validation-${logName}.log`);
+    const outputPath = path.join(artifactDir, logDir ? `${logName}.log` : `${gate}-${headSha}.validation-${logName}.log`);
     await writeFile(path.resolve(repoRoot, outputPath), cleaned.endsWith("\n") ? cleaned : `${cleaned}\n`, "utf8");
     suiteResults.push({
       name,
