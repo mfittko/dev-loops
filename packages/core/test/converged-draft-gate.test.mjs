@@ -79,6 +79,13 @@ describe("composeConvergedDraftGate", () => {
     assert.throws(() => compose(posted, converged([act("low", 1), act("nit", 3)])), /same items/);
   });
 
+  test("a crafted summary containing the key separator does not equal two separate items", () => {
+    const crafted = [{ ...act("low", 1), summary: "x\nlow|y" }];
+    const split = [{ ...act("low", 1), summary: "x" }, { ...act("low", 2), summary: "y" }];
+    assert.throws(() => compose(crafted, converged(split)), /same items/);
+    assert.throws(() => compose(split, converged(crafted)), /same items/);
+  });
+
   test("a stale delta result (candidateHead is not the fixer commit) fails closed", () => {
     const items = [act("low", 1)];
     const input = converged(items);

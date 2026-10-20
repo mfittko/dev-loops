@@ -386,8 +386,9 @@ export function composeConvergedDraftGate({ gate, headSha, roundActItems, conver
   if (!FULL_SHA_RE.test(fixerCommit ?? "") || fixerCommit === headSha) throw new Error("converged.fixerCommit must be a full sha different from the reviewed head");
   if (!isLowNitActList(roundActItems)) throw new Error("converged verdict requires a non-empty round act list of only low or nit items; a medium, high, question, unknown or mixed list needs a full round");
   // Multiset by convergedActItemKey (severity and summary): a low item never matches a nit one, and an extra or missing copy differs.
-  const keys = (items) => items.map(convergedActItemKey).sort().join("\n");
-  if (!isLowNitActList(converged.actList) || keys(converged.actList) !== keys(/** @type {any[]} */ (roundActItems))) {
+  const keys = (items) => items.map(convergedActItemKey).sort();
+  const sameKeys = (a, b) => JSON.stringify(keys(a)) === JSON.stringify(keys(b));
+  if (!isLowNitActList(converged.actList) || !sameKeys(converged.actList, /** @type {any[]} */ (roundActItems))) {
     throw new Error("converged.actList must be the round's non-empty low/nit act list (same items as the posted act items)");
   }
   const result = converged.deltaResult;
