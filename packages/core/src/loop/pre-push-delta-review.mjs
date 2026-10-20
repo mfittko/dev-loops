@@ -363,6 +363,45 @@ export function isDeltaResultFresh(result, currentHead) {
   return nonEmpty(result?.candidateHead) && nonEmpty(currentHead) && result.candidateHead.trim() === currentHead.trim();
 }
 
+const CONVERGED_SEVERITIES = Object.freeze(["low", "nit"]);
+const FULL_SHA_RE = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
+export const convergedActItemKey = (item) => `${normalizeSeverity(item?.severity)}|${String(item?.summary).trim()}`;
+const isLowNitActList = (items) => Array.isArray(items) && items.length > 0
+  && items.every((item) => CONVERGED_SEVERITIES.includes(/** @type {string} */ (normalizeSeverity(item?.severity))));
+
+/**
+ * Low/nit convergence of a draft_gate round (gate-review-sub-loop-contract.md, GATE-EXEC-LOW-NIT-CONVERGENCE).
+ * A round whose open judge act items are ALL low or nit converges after one commit_only fixer pass whose
+ * pre-push delta review is fresh and locally_clear. Any other act item (medium, high, question, unknown) or a
+ * mixed list, an empty list, a non-draft_gate gate, or a stale or malformed delta result throws: the caller
+ * keeps today's full round. No round count or cap input.
+ * Returns the converged marker the draft_gate comment at `headSha` records.
+ * @param {{ gate?: string, headSha?: string, roundActItems?: unknown, converged?: { fixerCommit?: string, actList?: unknown, deltaResult?: any } }} input
+ * @returns {{ fixerCommit: string, deltaDigest: string }}
+ */
+export function composeConvergedDraftGate({ gate, headSha, roundActItems, converged } = {}) {
+  if (gate !== "draft_gate") throw new Error(`converged verdict applies to draft_gate only, got ${JSON.stringify(gate)}`);
+  if (!FULL_SHA_RE.test(headSha ?? "")) throw new Error("converged verdict requires the full reviewed head sha");
+  const fixerCommit = converged?.fixerCommit;
+  if (!FULL_SHA_RE.test(fixerCommit ?? "") || fixerCommit === headSha) throw new Error("converged.fixerCommit must be a full sha different from the reviewed head");
+  if (!isLowNitActList(roundActItems)) throw new Error("converged verdict requires a non-empty round act list of only low or nit items; a medium, high, question, unknown or mixed list needs a full round");
+  // Multiset by convergedActItemKey (severity and summary): a low item never matches a nit one, and an extra or missing copy differs.
+  const keys = (items) => items.map(convergedActItemKey).sort();
+  const sameKeys = (a, b) => JSON.stringify(keys(a)) === JSON.stringify(keys(b));
+  if (!isLowNitActList(converged.actList) || !sameKeys(converged.actList, /** @type {any[]} */ (roundActItems))) {
+    throw new Error("converged.actList must be the round's non-empty low/nit act list (same items as the posted act items)");
+  }
+  const result = converged.deltaResult;
+  const errors = validateDeltaResult(result, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: converged.actList }), membershipOnly: true });
+  if (errors.length > 0) throw new Error(`converged.deltaResult is invalid: ${errors.join("; ")}`);
+  if (result.outcome !== "locally_clear") throw new Error("converged.deltaResult must be locally_clear");
+  if (!isDeltaResultFresh(result, fixerCommit)) throw new Error("converged.deltaResult is stale: candidateHead is not the fixer commit");
+  // membershipOnly is enough: the act-set id and baseline A bind the result to this round, and pre_approval_gate reviews the final head in full.
+  // A converged round has no unposted new finding.
+  if (!Array.isArray(result.newFindings) || result.newFindings.length > 0) throw new Error("converged.deltaResult must carry no new findings");
+  return { fixerCommit, deltaDigest: sha256Hex(result) };
+}
+
 /**
  * Decide the next step after invocation `invocation` (1-based) of a sequence.
  * - fresh, valid, locally_clear: push.
