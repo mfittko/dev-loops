@@ -114,6 +114,19 @@ test("agents/review.agent.md applies the severity calibration so reviewers do no
   ], "reviewer agent severity calibration");
 });
 
+// Fixture cases for the judge's calibration on code whose behavior is correct (DESIGN-SIMPLEST-FIRST issue, judge row).
+test("agents/judge.agent.md caps doc lag and coverage gaps on correct code at low unless named, and keeps a fail-open coverage gap at medium", async () => {
+  const block = (await read("agents/judge.agent.md"))
+    .split("\n").find((line) => line.includes("calibrate severity on code whose behavior is correct"));
+  assert.ok(block, "expected the calibration instruction");
+  const cases = [
+    { name: "doc lag on correct code is low", claim: ["documentation-lag finding", "test-coverage gap", "at most `low`"] },
+    { name: "a gap that an AC or DoD row names keeps its severity", claim: ["unless an AC or DoD row names that document or that test"] },
+    { name: "a coverage gap that hides a fail-open path stays medium", claim: ["coverage gap that hides a fail-open path", "stays `medium`"] },
+  ];
+  for (const { name, claim } of cases) assertClaims(block, [claim], name);
+});
+
 // --- ADR provenance: the amendment is recorded, 0051's body is untouched ---
 
 test("ADR 0078 records the merit-disposition + calibration decision and amends ADR 0051", async () => {
