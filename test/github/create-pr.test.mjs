@@ -43,6 +43,27 @@ test("create-pr checks changelog format and title before any GitHub write", asyn
   }
 });
 
+for (const input of ["changes/note.md", "changes/other.md", "CHANGELOG.md"]) {
+  test(`create-pr refuses an uncommitted correction to committed ${input}`, async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "create-changelog-dirty-"));
+    try {
+      const invalid = `- ${"x".repeat(194)} (#1)\n`;
+      const valid = `- ${"x".repeat(193)} (#1)\n`;
+      const content = (body) => input === "CHANGELOG.md" ? `# Changelog\n\n## Unreleased\n\n${body}` : body;
+      await initSizeBudgetFixtureRepo(cwd, { headFiles: [
+        { path: "changes/note.md", content: input === "changes/note.md" ? invalid : valid },
+        ...(input === "changes/note.md" ? [] : [{ path: input, content: content(invalid) }]),
+      ] });
+      await writeFile(path.join(cwd, input), content(valid));
+      const { env, ghLogPath } = await writeGhStub(cwd, [{}]);
+      await assert.rejects(createPrMain(["--base", "main", "--title", "fix(local): validate notes", "--body", "notes"], {
+        cwd, env, validatePrePrReview: async () => ({ ok: true }), evaluateEarlySurface: async () => ({}),
+      }), (error) => error.code === "changelog_incomplete_before_pr" && /differs from HEAD/.test(error.message));
+      assert.deepEqual(await readGhCalls(ghLogPath), []);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+}
+
 test("create-pr honors chore title over fix commits and compares head OIDs", async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "create-changelog-title-"));
   try {

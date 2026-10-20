@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { lstat, readdir, readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
-import { createGitClient, resolveBaseRef } from "./_doc-git-client.mjs";
+import { createGitClient as createDocGitClient, resolveBaseRef } from "./_doc-git-client.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
 import {
@@ -176,10 +178,43 @@ export function validateChangelogCompleteness({
   return { notable, addedItems, addedFragment, errors };
 }
 
-// createGitClient + resolveBaseRef are shared with validate-decision-records.mjs
-// via ./_doc-git-client.mjs so the two base-ref-dependent validators cannot
-// drift. Re-exported here for the injected-git test suite.
-export { createGitClient };
+// Keep base resolution and existing validator operations on the shared client.
+// Lifecycle preflights additionally require every disk input to match HEAD.
+export function createGitClient(root, exec = promisify(execFile)) {
+  return {
+    ...createDocGitClient(root, exec),
+    async assertHeadInputs() {
+      const { stdout } = await exec("git", ["ls-tree", "-rz", "HEAD", "--", CHANGELOG_PATH, FRAGMENTS_DIR], { cwd: root });
+      const entries = new Map(stdout.split("\0").filter(Boolean).map((row) => {
+        const tab = row.indexOf("\t");
+        return [row.slice(tab + 1), row.slice(0, tab).split(" ")];
+      }).filter(([file]) => file === CHANGELOG_PATH || isChangelogFragmentPath(file)));
+      const changesStat = await lstat(path.join(root, FRAGMENTS_DIR)).catch((error) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (changesStat && !changesStat.isDirectory()) throw new Error(`${FRAGMENTS_DIR}/: validation input differs from HEAD; expected a real directory`);
+      const pending = changesStat ? await readdir(path.join(root, FRAGMENTS_DIR)) : [];
+      const inputs = new Set([CHANGELOG_PATH, ...entries.keys(), ...pending.map((name) => `${FRAGMENTS_DIR}/${name}`).filter(isChangelogFragmentPath)]);
+      for (const file of inputs) {
+        const stat = await lstat(path.join(root, file)).catch((error) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        const entry = entries.get(file);
+        if (!entry && !stat) continue;
+        const [mode, type, oid] = entry ?? [];
+        if (!stat?.isFile() || type !== "blob" || !["100644", "100755"].includes(mode)) {
+          throw new Error(`${file}: validation input differs from HEAD; commit regular changelog inputs before retrying`);
+        }
+        const { stdout: committed } = await exec("git", ["cat-file", "blob", oid], { cwd: root, encoding: "buffer" });
+        if (!(await readFile(path.join(root, file))).equals(committed)) {
+          throw new Error(`${file}: validation input differs from HEAD; commit changelog inputs before retrying`);
+        }
+      }
+    },
+  };
+}
 
 /**
  * Run the validator end to end, returning the process exit code. Injectable
@@ -187,7 +222,7 @@ export { createGitClient };
  * order, the degrade path, and exit codes), matching the sibling
  * validate-decision-records.mjs run({ root, git }) shape.
  */
-export async function main({ root, base: explicitBase, env = process.env, log = console, git = createGitClient(root) } = {}) {
+export async function main({ root, base: explicitBase, env = process.env, log = console, git = createGitClient(root), requireHeadInputs = false } = {}) {
   const base = explicitBase !== undefined
     ? await git.mergeBase(explicitBase, "HEAD")
     : await resolveBaseRef(git, env).catch(() => null);
@@ -198,6 +233,8 @@ export async function main({ root, base: explicitBase, env = process.env, log = 
     log.log("base ref unavailable; skipping CHANGELOG completeness check");
     return 0;
   }
+
+  if (requireHeadInputs) await git.assertHeadInputs();
 
   const [commitSubjects, files, addedFiles, headChangelog, baseExists] = await Promise.all([
     git.logSubjects(base, "HEAD"),

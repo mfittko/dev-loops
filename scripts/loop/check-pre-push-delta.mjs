@@ -371,7 +371,7 @@ export async function runCli(
         const root = resolveRepoRoot(options.worktree);
         const exec = promisify(execFile);
         const git = createGitClient(root, (command, args, options) => exec(command, args, { ...options, env: gitEnvNoDirOverrides() }));
-        code = await changelog({ root, git, log });
+        code = await changelog({ root, git, log, requireHeadInputs: true });
       } catch (error) {
         diagnostics.push(error.message);
         code = 1;

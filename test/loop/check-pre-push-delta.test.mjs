@@ -69,8 +69,9 @@ test("result-only changelog seam checks touched changes paths before writing evi
   }
 });
 
-test("real delta CLI exits 2 for a committed 201-character fragment and records no delta", async () => {
-  for (const length of [201, 200, 0]) {
+test("real delta CLI refuses committed invalid inputs concealed by uncommitted corrections", async () => {
+  for (const { length, correction } of [{ length: 201 }, { length: 200 }, { length: 0 },
+    { length: 201, correction: "changes/note.md" }, { length: 200, correction: "changes/other.md" }, { length: 200, correction: "CHANGELOG.md" }]) {
   const { dir, threadsFile } = threadsFixture();
   try {
     initGitFixture(dir, { branch: "main", commit: null });
@@ -82,8 +83,16 @@ test("real delta CLI exits 2 for a committed 201-character fragment and records 
       fs.mkdirSync(path.join(dir, "changes"));
       fs.writeFileSync(path.join(dir, "changes/note.md"), `- ${"x".repeat(length - 7)} (#1)\n`);
     } else fs.writeFileSync(path.join(dir, "fix.mjs"), "export const fixed = true;\n");
+    if (correction && correction !== "changes/note.md") {
+      const body = `- ${"x".repeat(194)} (#1)\n`;
+      fs.writeFileSync(path.join(dir, correction), correction === "CHANGELOG.md" ? `# Changelog\n\n## Unreleased\n\n${body}` : body);
+    }
     runGitFixture(dir, ["add", "."]);
     runGitFixture(dir, ["commit", "-qm", "fix(local): fragment"]);
+    if (correction) {
+      const body = `- ${"x".repeat(193)} (#1)\n`;
+      fs.writeFileSync(path.join(dir, correction), correction === "CHANGELOG.md" ? `# Changelog\n\n## Unreleased\n\n${body}` : body);
+    }
     const args = ["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", dir];
     const input = (await runDeltaCli([...args, "--spec-identity", "spec@1"], { ...quiet })).input;
     const resultPath = path.join(dir, "review.json");
@@ -93,10 +102,11 @@ test("real delta CLI exits 2 for a committed 201-character fragment and records 
     }));
     const resultArgs = [...args, "--result", resultPath, "--invocation", "1"];
     const recordDir = path.join(resolveGateArtifactTmpRoot(dir), "gate-delta");
-    if (length === 201) {
+    if (length === 201 || correction) {
       const out = spawnSync(process.execPath, [path.resolve("scripts/loop/check-pre-push-delta.mjs"), ...resultArgs], { cwd: dir, encoding: "utf8" });
       assert.equal(out.status, 2, out.stderr);
       assert.match(JSON.parse(out.stderr).error, /^LIFECYCLE-CHANGELOG-COMPLETENESS/);
+      if (correction) assert.match(JSON.parse(out.stderr).error, /differs from HEAD/);
       assert.equal(fs.existsSync(recordDir), false);
     } else {
       let calls = 0;

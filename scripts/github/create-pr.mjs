@@ -23,8 +23,7 @@ import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { PRE_PR_REVIEW_MISSING, validatePrePrReview } from "../loop/_pre-pr-review-record.mjs";
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
-import { main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
-import { createGitClient } from "../docs/_doc-git-client.mjs";
+import { createGitClient, main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
 Canonical PR-creation wrapper around \`gh pr create\`. Every PR opened through this
 tool is ALWAYS a draft and is self-assigned by default. Never call raw \`gh pr create\`.
@@ -700,7 +699,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
         try {
           const root = resolveRepoRoot(diffCwd);
           const git = createGitClient(root, (command, args, options) => promisify(execFile)(command, args, { ...options, env }));
-          code = await validateChangelog({ root, base: `origin/${bareBase}`, env, log, git });
+          code = await validateChangelog({ root, base: `origin/${bareBase}`, env, log, git, requireHeadInputs: true });
         } catch (error) {
           diagnostics.push(error.message);
           code = 1;
