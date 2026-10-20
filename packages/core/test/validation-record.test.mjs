@@ -15,8 +15,14 @@ test("path layout", () => {
   assert.equal(validationRecordPath({ ...ID, headSha: "b".repeat(64), tmpRoot: "x/" }), `x/validation-records/owner/repo/${"b".repeat(64)}.json`);
 });
 
+test("path accepts dot-leading and dotted repo names", () => {
+  for (const repo of ["acme/repo", "acme/.github", "acme/repo.name", "acme/repo-name_1"]) {
+    assert.equal(validationRecordPath({ ...ID, repo }), `tmp/validation-records/${repo}/${SHA}.json`);
+  }
+});
+
 test("path refuses unsafe repo, short or uppercase sha, empty tmp root", () => {
-  for (const repo of ["owner", "a/b/c", "../repo", "owner/..", "owner/.x", "ow ner/repo", "/repo", "", undefined]) {
+  for (const repo of ["owner", "acme/.", "acme/..", "acme/", "a/b/c", "../repo", "owner/..", "ow ner/repo", "/repo", "", undefined]) {
     assert.throws(() => validationRecordPath({ ...ID, repo }), /repo/, String(repo));
   }
   for (const headSha of ["abc1234", "A".repeat(40), "a".repeat(41), "../".repeat(14), undefined]) {

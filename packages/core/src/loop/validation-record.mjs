@@ -3,24 +3,17 @@
  * `<tmpRoot>/validation-records/<owner>/<repo>/<headSha>.json`. The record has
  * no PR number: the first push happens before the PR exists.
  */
-const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const PROFILES = ["targeted", "full-repository"];
+import { parseRepoSlugParts } from "../github/repo-slug.mjs";
 
-function parseRepo(repo) {
-  const parts = typeof repo === "string" ? repo.split("/") : [];
-  if (parts.length !== 2 || !parts.every((part) => SEGMENT_RE.test(part) && !part.includes(".."))) {
-    throw new Error(`repo must be owner/name with safe segments, got: ${JSON.stringify(repo)}`);
-  }
-  return parts;
-}
+const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const PROFILES = ["targeted", "full-repository"];
 
 function assertHeadSha(headSha) {
   if (typeof headSha !== "string" || !SHA_RE.test(headSha)) throw new Error("headSha must be a full 40- or 64-character lowercase hex SHA");
 }
 
 export function validationRecordPath({ repo, headSha, tmpRoot = "tmp" }) {
-  const [owner, name] = parseRepo(repo);
+  const { owner, name } = parseRepoSlugParts(repo, { errorMessage: `repo must be owner/name with safe segments, got: ${JSON.stringify(repo)}` });
   assertHeadSha(headSha);
   if (typeof tmpRoot !== "string" || tmpRoot.trim() === "") throw new Error("tmpRoot must be a non-empty string");
   if (tmpRoot.startsWith("/") || /^[A-Za-z]:/.test(tmpRoot) || tmpRoot.split(/[\\/]/).includes("..")) throw new Error("tmpRoot must be a relative path without '..' segments");
