@@ -56,3 +56,10 @@ test("agent tool lint rejects unsupported names and redundant execute with bash"
   assert.throws(() => assertSupportedTools(["read", "execute", "bash"], "fixture.agent.md"),
     /fixture\.agent\.md: execute is redundant with bash/);
 });
+
+test(".pi/agents is untracked and ignored (#2865)", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const cwd = new URL(".", repoRoot).pathname;
+  assert.equal(execFileSync("git", ["ls-files", ".pi/agents"], { cwd, encoding: "utf8" }), "");
+  assert.match(fs.readFileSync(new URL(".gitignore", repoRoot), "utf8"), /^\.pi\/agents\/$/m);
+});

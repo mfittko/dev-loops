@@ -15,6 +15,7 @@ site/
 worktrees/
 .pi/input-history.jsonl
 .pi/runner-coordination/
+.pi/agents/
 
 # repo-wiki generated artifacts (checked-in source of truth lives in .llmwiki/config.json
 # and .llmwiki/schema.md, not in the generated wiki pages or run artifacts)
