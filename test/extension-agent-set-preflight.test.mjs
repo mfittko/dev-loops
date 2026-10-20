@@ -28,7 +28,7 @@ test("#2865 subagent launch is refused when .pi/agents holds raw search/execute 
     assert.match(res.reason, /^agent_set_not_rendered/);
     assert.ok(res.reason.includes(path.join(root, ".pi", "agents", "quality.agent.md")));
     assert.ok(res.reason.includes("search") && res.reason.includes("execute"));
-    assert.match(res.reason, /ensure-worktree/);
+    assert.match(res.reason, /provision-worktree/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -146,7 +146,7 @@ for (const [label, parts] of [["~/.agents", [".agents"]], ["~/.pi/agent/agents",
       assert.match(res.reason, /^agent_set_not_rendered/);
       assert.ok(res.reason.includes(file));
       assert.match(res.reason, /agentScope/);
-      assert.doesNotMatch(res.reason, /ensure-worktree/);
+      assert.doesNotMatch(res.reason, /provision-worktree/);
     }));
 }
 
@@ -154,8 +154,26 @@ test("a project offender gets the provisioning remedy, not the global one", () =
   withHome(async (root) => {
     writeAt(path.join(root, ".pi", "agents", "quality.agent.md"), RAW);
     const res = await launch(root, { agent: "quality" });
-    assert.match(res.reason, /provision-worktree/);
+    assert.match(res.reason, /provision-worktree\.mjs --worktree-path <worktree> --repo-root <main-checkout>/);
+    assert.match(res.reason, /restart the Pi session/);
     assert.doesNotMatch(res.reason, /agentScope/);
+  }));
+
+test("the project root is the nearest ancestor holding .pi or .agents, not .git", () =>
+  withHome(async (root) => {
+    writeAt(path.join(root, ".pi", "agents", "quality.agent.md"), RAW);
+    const sub = path.join(root, "packages", "core");
+    fs.mkdirSync(path.join(sub, ".git"), { recursive: true });
+    assert.match((await launch(sub, { agent: "quality" })).reason, /^agent_set_not_rendered/);
+    const alone = path.join(root, "alone");
+    fs.mkdirSync(path.join(alone, ".git"), { recursive: true });
+    writeAt(path.join(alone, ".pi", "agents", "quality.agent.md"), RENDERED);
+    assert.deepEqual(await launch(alone, { agent: "quality" }), { block: false });
+    const agentsRoot = path.join(root, "viaAgents");
+    fs.mkdirSync(path.join(agentsRoot, ".agents"), { recursive: true });
+    const deep = path.join(agentsRoot, "x", "y");
+    fs.mkdirSync(deep, { recursive: true });
+    assert.deepEqual(await launch(deep, { agent: "quality" }), { block: false });
   }));
 
 test("a launch from a subdirectory checks the project root's raw .pi/agents", () =>

@@ -258,12 +258,13 @@ function globalAgentRoots(home: string): string[] {
 }
 
 /**
- * The project root Pi resolves for a cwd: the nearest ancestor (cwd included) holding `.pi` or
- * `.git`, else the cwd itself.
+ * The project root Pi resolves for a cwd: the nearest ancestor (cwd included) holding a `.pi` or
+ * `.agents` directory, else the cwd itself. `.git` does not stop the walk.
  */
 export function findProjectRoot(cwd: string): string {
+  const isDir = (p: string) => fs.statSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
   for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
-    if (fs.existsSync(path.join(dir, ".pi")) || fs.existsSync(path.join(dir, ".git"))) return dir;
+    if (isDir(path.join(dir, ".pi")) || isDir(path.join(dir, ".agents"))) return dir;
     if (path.dirname(dir) === dir) return path.resolve(cwd);
   }
 }
@@ -315,7 +316,7 @@ export function checkAgentSetRendered(
   if (projectOffenders.length + globalOffenders.length === 0) return null;
   const remedies = [
     projectOffenders.length > 0 &&
-      "Render the project set with `dev-loops-run scripts/loop/provision-worktree.mjs` (or `ensure-worktree.mjs`) and never restore a `.pi/agents` symlink to the raw agent sources.",
+      "Render the project set: in a worktree run `dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>`; in the main checkout restart the Pi session so the session-start sync re-renders it. Never restore a `.pi/agents` symlink to the raw agent sources.",
     globalOffenders.length > 0 &&
       "Remove or reinstall the named global copy (re-run the packaged-agent sync for `~/.agents`), or launch with `options.agentScope: \"project\"` to skip the global check.",
   ].filter(Boolean);
