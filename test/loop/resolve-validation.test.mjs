@@ -12,6 +12,9 @@ import { runNode } from "../_helpers.mjs";
 
 // Hermetic: the default PR title reader would otherwise shell out to gh.
 process.env.DEVLOOPS_SKIP_PR_TITLE_READ = "1";
+// Ignore the machine global git config and excludes so fixture repos see only their own .gitignore.
+process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+process.env.GIT_CONFIG_SYSTEM = "/dev/null";
 
 const LEGACY = fileURLToPath(new URL("../../scripts/loop/run-gate-validation.mjs", import.meta.url));
 const CLI = fileURLToPath(new URL("../../cli/index.mjs", import.meta.url));
