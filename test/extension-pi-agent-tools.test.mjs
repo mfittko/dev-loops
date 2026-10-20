@@ -305,7 +305,7 @@ body
 test("#2854 role-agent sources keep search/bash without execute (no Claude regression — #1086)", async () => {
   // Pi dispatches source frontmatter verbatim under a strict allowlist, so an
   // unavailable execute token fails launch. Raw-source `search` stays rejected
-  // under Pi until the .pi/agents render slice (#2865); this slice removes only `execute`.
+  // under Pi; .pi/agents is rendered at provision time (#2865) and the preflight refuses raw tokens.
   // Retain search and bash: the Claude generator maps them to Grep/Glob and Bash.
   // agent-tools-contract.test.mjs proves that generated capability parity.
   // #1659 already established removing unavailable source tools for review;
