@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -299,6 +299,17 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   const optionalCompletion = complete && order.source === "act-list" || completionReads.length > 0 || Object.hasOwn(order.authority ?? {}, "completionInputDigest")
     || Object.hasOwn(order.authority ?? {}, "completionInputBytesDigest");
   let completion = null;
+  if (optionalCompletion || options.construct) {
+    const executionDir = path.join(await realpath(path.dirname(planPath)), plan.executionIdentity);
+    const symlinks = await Promise.all([path.dirname(handoffPath), handoffPath].map(async (file) => {
+      const info = await lstat(file).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+      return info && (info.isSymbolicLink() || file === path.dirname(handoffPath) && !info.isDirectory());
+    }));
+    if (symlinks.some(Boolean) || path.normalize(realpathNearestExisting(path.dirname(handoffPath))) !== executionDir
+      || path.normalize(realpathNearestExisting(handoffPath)) !== path.join(executionDir, "fixer-disposition.json")) {
+      throw new Error("completion output or execution directory redirects outside its canonical execution path");
+    }
+  }
   if (optionalCompletion) {
     const read = completionReads[0];
     if (completionReads.length !== 1 || read.required !== true || typeof read.path !== "string"
@@ -318,12 +329,6 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       || !Array.isArray(completion.siteCoverage) || !Array.isArray(completion.threadBindings)) {
       throw new Error("completion input requires the actual full candidate/fixing heads, coverage and thread bindings");
     }
-    const executionDir = path.join(await real(path.dirname(planPath)), plan.executionIdentity);
-    const symlinks = await Promise.all([path.dirname(handoffPath), handoffPath].map((file) => lstat(file).then((info) => info.isSymbolicLink(), () => false)));
-    if (symlinks.some(Boolean) || path.normalize(realpathNearestExisting(path.dirname(handoffPath))) !== executionDir
-      || path.normalize(realpathNearestExisting(handoffPath)) !== path.join(executionDir, "fixer-disposition.json")) {
-      throw new Error("completion output or execution directory redirects outside its canonical execution path");
-    }
     const subject = receipt.receipt.subject;
     if (!/^f\d+-[a-f0-9]{8}$/.test(plan.executionIdentity) || plan.workOrderRef !== `fixer:${options.repo}#${options.pr}:${order.headSha}:${plan.executionIdentity}`
       || subject.repo !== options.repo || subject.pr !== options.pr || subject.headSha !== order.headSha
@@ -339,7 +344,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       raw = JSON.parse(text);
       // Emitted plans carry a source: only the report this verifier's own --construct wrote counts.
       if (order.source && await readFile(constructMarkPath(handoffPath), "utf8").catch(() => null) !== sha256Hex(text)) {
-        throw Object.assign(new Error(`Fixer disposition handoff ${handoffPath} was not written by this verifier's --construct; never hand-write it; remove that file with rm and run the verifier with --construct`), { handWritten: true });
+        throw Object.assign(new Error(`Fixer disposition handoff ${handoffPath} was not written by this verifier's --construct; never hand-write it; rm only this execution's refused report ${handoffPath} and its corresponding stale marker ${constructMarkPath(handoffPath)}, then run the verifier with --construct. Preserve accepted construction evidence and unrelated files`), { handWritten: true });
       }
     }
   } catch (error) {
@@ -631,8 +636,28 @@ export async function verifyFixerDisposition(
   if (options.construct) {
     await mkdir(path.dirname(handoffPath), { recursive: true });
     const text = `${JSON.stringify(constructedReport, null, 2)}\n`;
-    await writeFile(handoffPath, text, { encoding: "utf8", flag: "wx" });
-    await writeFile(constructMarkPath(handoffPath), sha256Hex(text), "utf8");
+    let report, marker, temporary;
+    try {
+      const existing = await lstat(handoffPath).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
+      if (existing) throw Object.assign(new Error(`EEXIST: report already exists at ${handoffPath}`), { code: "EEXIST" });
+      temporary = await mkdtemp(path.join(path.dirname(handoffPath), ".fixer-construction-"));
+      const pending = path.join(temporary, "report.json");
+      report = await open(pending, "wx");
+      await report.writeFile(text, "utf8");
+      await report.close();
+      report = null;
+      marker = await open(constructMarkPath(handoffPath), "wx");
+      await marker.writeFile(sha256Hex(text), "utf8");
+      await marker.close();
+      marker = null;
+      // Publish exclusively only after both files close; cleanup is never admission authority.
+      await link(pending, handoffPath);
+    } catch (cause) {
+      throw Object.assign(new Error(`Fixer construction failed: ${cause.message}`, { cause }), { code: "FIXER_CONSTRUCTION_FAILED" });
+    } finally {
+      await Promise.allSettled([report, marker].filter(Boolean).map((file) => file.close()));
+      if (temporary) await rm(temporary, { recursive: true, force: true }).catch(() => {});
+    }
     return { ok: true, constructed: true, outputRef: handoffPath };
   }
   if (source) {
