@@ -1033,9 +1033,17 @@ test("consolidateGateFanin proceeds unchanged without a cache-telemetry artifact
 
 const EMIT_HEAD = "e5".repeat(20);
 
+// An object plan written under the default filename lands at the canonical keyed
+// path under `dir` (the fan-in binds --emit-plan to buildGateEmitPlanPath); a
+// string plan, a custom filename or an uncomputable key falls back to dir/filename.
 async function writeEmitPlan(dir, plan, filename = "emit-plan.json") {
-  await mkdir(dir, { recursive: true });
-  const planPath = path.join(dir, filename);
+  let planPath = path.join(dir, filename);
+  if (typeof plan === "object" && filename === "emit-plan.json") {
+    try {
+      planPath = buildGateEmitPlanPath({ repo: plan.repo, pr: plan.pr, gate: String(plan.gate).trim().toLowerCase(), headSha: String(plan.headSha).toLowerCase(), tmpRoot: dir });
+    } catch { /* keep the fallback path */ }
+  }
+  await mkdir(path.dirname(planPath), { recursive: true });
   await writeFile(planPath, typeof plan === "string" ? plan : JSON.stringify(plan), "utf8");
   return planPath;
 }
@@ -1151,7 +1159,7 @@ test("consolidateGateFanin fails closed on a missing, wrong-execution, wrong-uni
       // Written at the plan unit's receipt path, carrying the wrong identity.
       if (receipt) await writeEmitPlanReceipt(planDir, unit, receipt);
       await assert.rejects(
-        () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, receiptTmpRoot: planDir }),
+        () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, tmpRoot: planDir, receiptTmpRoot: planDir }),
         (err) => reason.test(err.message) && /incomplete delivery evidence/.test(err.message),
       );
     }));
@@ -1169,7 +1177,7 @@ test("consolidateGateFanin classifies a matching receipt without a post-pull res
     await writeEmitPlanReceipt(planDir);
     await writeEmitPlanReceipt(planDir, docsUnit);
     await assert.rejects(
-      () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, receiptTmpRoot: planDir }),
+      () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, tmpRoot: planDir, receiptTmpRoot: planDir }),
       /interrupted reviewer: unit review-docs .*no post-pull result for angle\(s\) docs/,
     );
   }));
@@ -4735,7 +4743,7 @@ test("#2526 records-floor: a fresh-unit plan with zero dispatch-prompt records f
     const out = path.join(root, "out", "findings.json");
     await assert.rejects(
       () => consolidateGateFanin({ ...base, out, ledgerOut }),
-      /GATE-EXEC-FANOUT-DISPATCH-EMIT: --emit-plan has 1 fresh unit\(s\) .* zero dispatch-prompt records/,
+      /GATE-EXEC-FANOUT-DISPATCH-EMIT: --emit-plan has 1 fresh unit\(s\) .* zero draft_gate dispatch-prompt records/,
     );
     assert.equal(existsSync(out), false);
     assert.equal(existsSync(ledgerOut), false);
@@ -4755,7 +4763,7 @@ test("#2526 records-floor: only the other gate's dispatch-prompt record at the h
     const out = path.join(root, "out", "findings.json");
     await assert.rejects(
       () => consolidateGateFanin({ ...base, out, ledgerOut }),
-      /GATE-EXEC-FANOUT-DISPATCH-EMIT: --emit-plan has 1 fresh unit\(s\) .* zero dispatch-prompt records/,
+      /GATE-EXEC-FANOUT-DISPATCH-EMIT: --emit-plan has 1 fresh unit\(s\) .* zero draft_gate dispatch-prompt records/,
     );
     assert.equal(existsSync(out), false);
     assert.equal(existsSync(ledgerOut), false);
@@ -4802,5 +4810,77 @@ test("#2526: zero-unit carried-only derived provenance (full identity) is accept
       findingsFile: ledgerOut, emitPlan: planPath, tmpRoot: path.join(root, "ledgers"),
     }, { repoRoot: root });
     assert.equal(written.ok, true);
+  });
+});
+
+// #2526 review fixes: the keyed fan-in ledger is bound to the verified plan location,
+// and a keyed (durable) ledger target lifts the over-budget --ledger-out requirement.
+async function zeroUnitCarriedPlan(root, { planRoot = root, planPr = 42 } = {}) {
+  const gate = "draft_gate";
+  const entry = { angle: "coverage", carriedFromHead: PRIOR_HEAD, reviewer: "rev-x", prevVerdict: "clean", reason: "unchanged" };
+  const plan = { ok: true, gate, headSha: PROV_HEAD, repo: "owner/repo", pr: planPr, pending: true, count: 0, units: [], carried: [entry] };
+  const planPath = buildGateEmitPlanPath({ repo: "owner/repo", pr: 42, gate, headSha: PROV_HEAD, tmpRoot: planRoot });
+  await mkdir(path.dirname(planPath), { recursive: true });
+  await writeFile(planPath, JSON.stringify(plan), "utf8");
+  const dir = path.join(root, "findings");
+  await mkdir(dir, { recursive: true });
+  const options = {
+    findingsDir: dir, emitPlan: planPath, gate, headSha: PROV_HEAD, tmpRoot: root, receiptTmpRoot: root, repoRoot: root,
+    repo: "owner/repo", pr: "42", carriedAngles: ["coverage"], carryForwardPlan: [entry], resolvedAngles: ["coverage"],
+  };
+  return { options, planPath, keyed: (tmpRoot) => buildGateFaninLedgerPath({ repo: "owner/repo", pr: 42, gate, headSha: PROV_HEAD, tmpRoot }) };
+}
+
+test("#2526 keyed ledger binding: an --emit-plan path equal to the canonical path is accepted, absolute and relative", async () => {
+  await withTempDir(async (root) => {
+    const { options, planPath } = await zeroUnitCarriedPlan(root);
+    assert.equal((await consolidateGateFanin(options)).ok, true);
+    const relative = path.relative(process.cwd(), planPath);
+    assert.equal((await consolidateGateFanin({ ...options, emitPlan: relative })).ok, true);
+  });
+});
+
+test("#2526 keyed ledger binding: a zero-unit plan under another tmp root is refused with no keyed write", async () => {
+  await withTempDir(async (root) => {
+    const other = path.join(root, "other-checkout-tmp");
+    const { options, keyed } = await zeroUnitCarriedPlan(root);
+    await assert.rejects(
+      () => consolidateGateFanin({ ...options, tmpRoot: other, receiptTmpRoot: other }),
+      /not the canonical emit-plan path/,
+    );
+    assert.equal(existsSync(keyed(other)), false);
+    assert.equal(existsSync(keyed(root)), false);
+  });
+});
+
+test("#2526 keyed ledger binding: a fresh-unit plan under another tmp root is refused before any write", async () => {
+  const units = [unitOf(["scope"], null, "r1-u0")];
+  await withProvenanceRound({ units, fanout: "    mode: per-angle" }, async ({ root, base, ledgerOut }) => {
+    const other = path.join(root, "other-checkout-tmp");
+    await assert.rejects(
+      () => consolidateGateFanin({ ...base, tmpRoot: other, ledgerOut }),
+      /not the canonical emit-plan path/,
+    );
+    assert.equal(existsSync(ledgerOut), false);
+  });
+});
+
+test("#2526 keyed ledger binding: a plan whose repo/pr map to another pr directory than its location is refused", async () => {
+  await withTempDir(async (root) => {
+    const { options, keyed } = await zeroUnitCarriedPlan(root, { planPr: 43 });
+    await assert.rejects(() => consolidateGateFanin(options), /matching --repo and --pr round identities|not the canonical emit-plan path/);
+    assert.equal(existsSync(keyed(root)), false);
+  });
+});
+
+test("#2526: an over-budget --emit-plan round without --ledger-out succeeds with the durable keyed ledger", async () => {
+  await withTempDir(async (root) => {
+    const { options, keyed } = await zeroUnitCarriedPlan(root);
+    const files = wideAngleFiles({ angleCount: 25, findingsPerAngle: 30 });
+    for (const [name, body] of Object.entries(files)) await writeFile(path.join(options.findingsDir, name), JSON.stringify({ ...body, headSha: PROV_HEAD }), "utf8");
+    const result = await consolidateGateFanin(options);
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+    assert.equal(JSON.parse(await readFile(keyed(root), "utf8")).findings.length, 25 * 30);
   });
 });

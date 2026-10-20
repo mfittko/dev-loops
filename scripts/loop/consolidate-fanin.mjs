@@ -46,7 +46,7 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { GATE_NAMES, gateScopePrefix } from "../github/_gate-names.mjs";
-import { buildGateFaninLedgerPath } from "../github/write-gate-context.mjs";
+import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../github/write-gate-context.mjs";
 import { lintFillerPhrases } from "../github/_gate-finding-text.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, validateCarryForwardPlanEntries, validateCarryForwardPlanShape, validateZeroUnitCarryProof } from "../github/_carried-angles.mjs";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -255,8 +255,10 @@ Optional:
                                  --head-sha (the round the plan's key is verified against).
                                  Also fails closed when the plan has a fresh unit and the head has
                                  zero dispatch-prompt records of --gate. The plan is never a findings source.
-                                 The keyed fan-in ledger is written under --tmp-root, which MUST be the
-                                 root the plan was emitted under; a stale keyed file is removed once the emit-plan key is verified, before any later refusal or write.
+                                 The keyed fan-in ledger is written under --tmp-root; the run refuses (exit 1,
+                                 no write) unless --emit-plan is the canonical emit-plan path for that root,
+                                 so pass the --tmp-root the plan was emitted under. A round over the render
+                                 budget needs --ledger-out only without --emit-plan (the keyed ledger is durable). A stale keyed file is removed once the emit-plan key is verified, before any later refusal or write.
                                  The ledger gains a "provenance" object ({ distinctReviewers, perAngle })
                                  derived from the head-stamped artifacts, the plan units
                                  and --carry-forward-plan, and the same ledger is also written to the
@@ -336,7 +338,7 @@ Exit codes:
      (not "clean"/"findings_present"), a "findings_present" entry with no non-empty
      well-formed "findings" array, or a "clean" entry carrying non-empty "findings"
      (issue #2017), a round still over the
-     render budget at minimum summary length with --ledger-out not given, or a
+     render budget at minimum summary length with neither --ledger-out nor --emit-plan given, or a
      GATE-EXEC-BRIEFING-PREFIX verification failure when --head-sha is given
      (a sentinel records a divergent/missing prefix hash, the sentinel count
      is short of --expected-dispatch-units, a recorded reviewer prompt does
@@ -1034,10 +1036,19 @@ export async function consolidateGateFanin(options) {
   let emitPlan;
   if (options.emitPlan !== undefined) {
     emitPlan = await verifyEmitPlanKey(options.emitPlan, options);
+    // Bind the keyed ledger to the verified plan location: the plan must sit
+    // at the canonical keyed path under the resolved tmp root, else the keyed
+    // ledger would land in a different tree than the plan (fail-closed, no write).
+    const keyedGate = options.gate.trim().toLowerCase();
+    const keyedTmpRoot = options.tmpRoot ?? path.join(process.cwd(), "tmp");
+    const canonicalPlanPath = path.resolve(buildGateEmitPlanPath({ repo: emitPlan.repo, pr: emitPlan.pr, gate: keyedGate, headSha: options.headSha, tmpRoot: keyedTmpRoot }));
+    if (path.resolve(options.emitPlan) !== canonicalPlanPath) {
+      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: --emit-plan ${path.resolve(options.emitPlan)} is not the canonical emit-plan path ${canonicalPlanPath} for --tmp-root ${path.resolve(keyedTmpRoot)}; pass the --tmp-root the plan was emitted under (fail-closed)`);
+    }
     // Clear any stale keyed fan-in ledger once the plan key is verified (the
     // keyed path is unknown before). A run refused by the plan-key guard leaves
     // a prior keyed file in place; any later refusal leaves none behind.
-    await rm(buildGateFaninLedgerPath({ repo: emitPlan.repo, pr: emitPlan.pr, gate: options.gate.trim().toLowerCase(), headSha: options.headSha, tmpRoot: options.tmpRoot ?? path.join(process.cwd(), "tmp") }), { force: true });
+    await rm(buildGateFaninLedgerPath({ repo: emitPlan.repo, pr: emitPlan.pr, gate: keyedGate, headSha: options.headSha, tmpRoot: keyedTmpRoot }), { force: true });
     // The guard already proved this is a canonical string gate. Normalize it
     // for downstream guarded consumers without changing the omission
     // programmatic path, whose legacy pass-through behavior is preserved.
@@ -1232,7 +1243,7 @@ export async function consolidateGateFanin(options) {
     // Records-floor (after the retired-head checks, which carry their own message):
     // a plan with fresh units must leave this gate's dispatch-prompt records at this head.
     if (emitPlan !== undefined && Array.isArray(emitPlan.units) && emitPlan.units.length > 0 && (await countGateDispatchRecords(tmpRoot, options.gate, options.headSha)) === 0) {
-      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: --emit-plan has ${emitPlan.units.length} fresh unit(s) but head ${options.headSha} has zero dispatch-prompt records, so the layout check would pass vacuously; re-dispatch every unit's compact dispatchPrompt via the sanctioned emitter, then re-consolidate (fail-closed)`);
+      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT: --emit-plan has ${emitPlan.units.length} fresh unit(s) but head ${options.headSha} has zero ${options.gate} dispatch-prompt records, so the layout check would pass vacuously; re-dispatch every unit's compact dispatchPrompt via the sanctioned emitter, then re-consolidate (fail-closed)`);
     }
   }
 
@@ -1624,7 +1635,8 @@ export async function consolidateGateFanin(options) {
     // stdout, an unrecoverable success-envelope-over-zero-evidence outcome —
     // so fail closed here instead of returning ok:true, naming the round size
     // so the caller knows to re-run with --ledger-out.
-    if (options.ledgerOut === undefined) {
+    // An --emit-plan run writes the keyed fan-in ledger, which is durable.
+    if (options.ledgerOut === undefined && emitPlan === undefined) {
       throw new Error(
         `fan-in round (${findingsJson.length} angles) is over the gate-comment render budget and would degrade "findingsJson"/--out, but --ledger-out was not given — re-run with --ledger-out <path> so the round's findings are not lost`,
       );
