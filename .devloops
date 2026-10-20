@@ -248,12 +248,12 @@ standingAuthorizations:
     expires: 2027-01-03
     reason: Queue drain; waive contract-doc tripwires that record no new decision
 
-# Gate validation (ADR 0137, amends ADR 0105). This repo keeps local full
-# validation; consumers default to ci-only. `paths` is this repo's targeted
+# Gate validation (ADR 0137, amends ADR 0105). This repo uses the ci producer
+# (ADR 0137 as amended by ADR 0172). `paths` is this repo's targeted
 # worker map for resolveTargetedValidation: first match wins, one surface per
 # change set, an empty command list pins matching paths to full validation.
 validation:
-  mode: local
+  mode: ci-only
   paths:
     - { match: "packages/core/test/*.test.mjs", surface: core, commands: ["bun scripts/run-bun-test.mjs {path}"], gateSuites: [test:core] }
     - { match: "packages/core/package.json", surface: core, commands: ["bun run test:core", "bun run test:pack"] }
