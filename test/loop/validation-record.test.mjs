@@ -121,7 +121,14 @@ test("a dirty worktree is incomplete", () => withFixture({}, async (repoRoot) =>
   await assertIncomplete(repoRoot, headSha, /clean worktree/);
 }));
 
-test("a head mismatch is incomplete", () => withFixture({}, async (repoRoot) => {
+test("--jq filters the JSON output", () => withFixture({}, async (repoRoot) => {
+  await commit(repoRoot, { "docs/a.md": "# a\n" });
+  const out = await run(repoRoot, "b".repeat(40), ["--jq", ".status"]);
+  assert.equal(out.code, 1);
+  assert.equal(out.stdout.trim(), "incomplete");
+}));
+
+test("a head mismatch is incomplete",() => withFixture({}, async (repoRoot) => {
   await commit(repoRoot, { "docs/a.md": "# a\n" });
   await assertIncomplete(repoRoot, "b".repeat(40), /differs from requested head/);
 }));

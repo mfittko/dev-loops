@@ -12,7 +12,8 @@ import { parseArgs } from "node:util";
 import { resolveTargetedValidation } from "@dev-loops/core/loop/validation-classify";
 import { parseValidationRecord, validationRecordPath } from "@dev-loops/core/loop/validation-record";
 
-import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
+import { buildParseError,formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { readBaseValidation, readCheckoutValidation } from "./resolve-validation.mjs";
 import { buildValidationArtifact, classifyPackageSuites, readPackageScripts } from "./run-gate-validation.mjs";
@@ -33,7 +34,8 @@ Optional:
   --timeout <seconds>  Suite deadline, positive, at most ${MAX_TIMEOUT_S} (default ${DEFAULT_TIMEOUT_S})
   --tmp-root <dir>     Root tmp directory (default: tmp)
 Output (stdout, JSON): the record, or { "ok": false, "status": "incomplete", "reason": "..." } with no record written.
-Exit codes: 0 all suites passed; 1 failed suite (failed record written) or incomplete; 2 usage error.`;
+Exit codes: 0 all suites passed; 1 failed suite (failed record written) or incomplete; 2 usage error.
+${JQ_OUTPUT_USAGE}`;
 const parseError = buildParseError(USAGE);
 
 export function parseValidationRecordArgs(argv) {
@@ -41,7 +43,7 @@ export function parseValidationRecordArgs(argv) {
   try {
     ({ values } = parseArgs({
       args: [...argv],
-      options: { help: { type: "boolean", short: "h" }, repo: { type: "string" }, "head-sha": { type: "string" }, title: { type: "string" }, timeout: { type: "string" }, "tmp-root": { type: "string" } },
+      options: { help: { type: "boolean", short: "h" }, repo: { type: "string" }, "head-sha": { type: "string" }, title: { type: "string" }, timeout: { type: "string" }, "tmp-root": { type: "string" }, ...JQ_OUTPUT_PARSE_OPTIONS },
       allowPositionals: false,
       strict: true,
     }));
@@ -54,9 +56,9 @@ export function parseValidationRecordArgs(argv) {
   if (values.timeout !== undefined && !/^\d+(\.\d+)?$/.test(values.timeout)) throw parseError("--timeout must be a decimal number of seconds");
   const timeoutSeconds = values.timeout === undefined ? DEFAULT_TIMEOUT_S : Number(values.timeout);
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || timeoutSeconds > MAX_TIMEOUT_S) {
-    throw parseError(`--timeout must be a positive number of seconds, at most ${MAX_TIMEOUT_S}`);
+    throw parseError(`VALIDATE-LOCAL-RECORD-PRODUCER: --timeout must be a positive number of seconds, at most ${MAX_TIMEOUT_S}`);
   }
-  const options = { repo: values.repo.trim(), headSha: values["head-sha"].trim(), title: values.title, timeoutSeconds, tmpRoot: values["tmp-root"]?.trim() || "tmp" };
+  const options = { jq: values.jq, silent: values.silent, fields: values.fields, repo: values.repo.trim(), headSha: values["head-sha"].trim(), title: values.title, timeoutSeconds, tmpRoot: values["tmp-root"]?.trim() || "tmp" };
   try {
     validationRecordPath(options);
   } catch (error) {
@@ -153,9 +155,10 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write(`${USAGE}\n`);
     return;
   }
+  if (preflightJqFilter(options.jq) === 2) { process.exitCode = 2; return; }
   const result = await produceValidationRecord(options);
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  process.exitCode = result.allPassed === true ? 0 : 1;
+  const emitted = emitResult(result, { jq: options.jq, silent: options.silent, fields: options.fields });
+  process.exitCode = emitted === 2 ? 2 : result.allPassed === true ? 0 : 1;
 }
 
 if (isDirectCliRun(import.meta.url)) await main();
