@@ -412,6 +412,19 @@ test("a sentence-final path citation keeps the path and drops the period", async
   assert.deepEqual(brief.unresolvedPaths, []);
 });
 
+for (const citation of ["src/a.mjs:", "src/a.mjs:42", "src/a.mjs:42:7", "AGENTS.md:"]) {
+  test(`a colon-delimited citation ${citation} keeps the existing path`, async () => {
+    const citedPath = citation.split(":")[0];
+    const root = await fixtureRepo({ files: { [citedPath]: "// Citation fixture\n" } });
+    const brief = await buildImplementationBrief({
+      body: `Update ${citation} change the export.\n`,
+      repoRoot: root,
+    });
+    assert.deepEqual(brief.touchedPaths, [citedPath]);
+    assert.deepEqual(brief.unresolvedPaths, []);
+  });
+}
+
 test("a root-level existing citation is claimed", async () => {
   const root = await fixtureRepo({ files: { "AGENTS.md": "# Agents\n" } });
   const brief = await buildImplementationBrief({ body: `${MATRIX}\nUpdate AGENTS.md next.\n`, repoRoot: root });

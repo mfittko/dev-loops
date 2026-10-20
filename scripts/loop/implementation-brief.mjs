@@ -69,11 +69,12 @@ error.`;
 const REQUIRED_READS = Object.freeze(["skills/docs/structural-quality.md", "changes/README.md"]);
 const ADR_NEED_UNSTATED = "unstated";
 // Repo-relative path citation, including extensionless root entries (LICENSE).
-// A token never ends on a dot, so sentence punctuation stays out. Colon/slash
-// boundaries exclude URL schemes and their path segments. Every candidate still
-// requires existence and containment before it is claimed.
+// A token never ends on a dot, so sentence punctuation stays out. Leading
+// colon/slash boundaries exclude URL path segments; a trailing colon only
+// excludes a URL scheme when followed by a slash, not prose or file:line cites.
+// Every candidate still requires existence and containment before it is claimed.
 const PATH_CANDIDATE_RE = new RegExp(
-  `(?<![\\w./:-])((?:\\.\\/)?(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]*[A-Za-z0-9_-])(?![\\w/:-])`,
+  `(?<![\\w./:-])((?:\\.\\/)?(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]*[A-Za-z0-9_-])(?![\\w/-]|:\\/)`,
   "gu",
 );
 const PATH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/u;
