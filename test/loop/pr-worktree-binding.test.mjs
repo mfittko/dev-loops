@@ -104,6 +104,39 @@ test("real startup, envelope, MAIN emission and CLI pull preserve the PR route f
   });
 }, 30000);
 
+for (const strategy of ["ui_review", " ui_review "]) for (const state of ["first review", "detached resume"]) {
+  test(`UI-review startup-to-envelope preserves provisioning for ${state}${strategy === "ui_review" ? "" : " with padded strategy"}`, async () => {
+    await fixture(async (f) => {
+      if (state === "first review") runGitFixture(f.main, ["worktree", "remove", "--force", f.checkout]);
+      else runGitFixture(f.checkout, ["checkout", "-q", "--detach", f.pr.headRefOid]);
+      const registrations = runGitFixture(f.main, ["worktree", "list", "--porcelain"]);
+      const startup = await runNode(cli, ["loop", "startup", "--pr", "2848", "--ui-review", "--no-reconcile"], { cwd: f.main, env: f.env });
+      assert.equal(startup.code, 0, startup.stderr);
+      const resolved = JSON.parse(startup.stdout);
+      assert.equal(resolved.selectedStrategy, "ui_review");
+      assert.equal(resolved.bundle.selectedStrategy, "ui_review");
+      resolved.bundle.selectedStrategy = strategy;
+      await writeFile(f.input, JSON.stringify(resolved));
+      const built = await f.build();
+      assert.equal(built.code, 0, built.stderr);
+      const envelope = JSON.parse(built.stdout);
+      const settings = (await loadDevLoopConfigStrict({ repoRoot: f.main })).config;
+      const expected = buildDevLoopHandoffEnvelope(resolved, settings, {}, { repoSlug: "o/r", repoRoot: f.main });
+      assert.equal(envelope.cwd, f.checkout);
+      assert.deepEqual(envelope.target, { kind: "pr", repo: "o/r", pr: 2848 });
+      assert.equal(envelope.nextAction, resolved.bundle.nextAction);
+      assert.deepEqual(envelope.requiredReads, expected.requiredReads);
+      assert.deepEqual(envelope.stopRules, expected.stopRules);
+      assert.deepEqual(envelope.acceptance, expected.acceptance);
+      assert.equal(envelope.worktreeRequired, true);
+      assert.equal(runGitFixture(f.main, ["worktree", "list", "--porcelain"]), registrations);
+      assert.equal(existsSync(f.checkout), state === "detached resume");
+      if (state === "detached resume") assert.equal(runGitFixture(f.checkout, ["rev-parse", "--abbrev-ref", "HEAD"]), "HEAD");
+      assert.deepEqual(JSON.parse(await readFile(f.input, "utf8")), resolved);
+    }, { directory: "tmp/worktrees/dev-loops/pr-2848" });
+  });
+}
+
 for (const [label, changes, status, source] of [
   ["invalid live body", { body: "No formal scope." }, "missing", REFINEMENT_ARTIFACT_SPEC_SOURCE.PR_BODY],
   ["unknown ready authority", { isDraft: false }, "unknown", undefined],

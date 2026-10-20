@@ -23,6 +23,10 @@ binding verifies the live PR's repository/head branch against registered isolate
 checkouts, so an existing `issue-<number>` checkout can remain the PR's cwd.
 It carries PR-body authority only when the existing refinement owner validates
 the same live PR payload; the directory name supplies no spec authority.
+The `ui_review` strategy retains its provisioning owner instead: it creates or
+reuses the canonical PR checkout, checks isolation and detaches at the PR head.
+Its handoff does not require an existing branch checkout before provisioning or
+on detached resume.
 See [Workflow Handoff — Derivation Contract](./workflow-handoff-contract.md#authoritative-sources).
 
 - The `dev-loops/` namespace marks loop-owned worktrees, so cleanup never

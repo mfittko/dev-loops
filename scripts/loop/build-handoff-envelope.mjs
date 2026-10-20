@@ -22,6 +22,8 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildDevLoopHandoffEnvelope, CANONICAL_SPEC_SOURCE } from "@dev-loops/core/loop/handoff-envelope";
+import { INTERNAL_DEV_LOOP_STRATEGY } from "@dev-loops/core/loop/public-dev-loop-routing-contract";
+import { trimmedOrNull } from "@dev-loops/core/loop/normalize";
 import { REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
 import { ConfigLoadFailedError, loadDevLoopConfigStrict } from "@dev-loops/core/config";
 import { createPiAdapter } from "@dev-loops/core/harness";
@@ -61,8 +63,9 @@ const parseError = buildParseError(USAGE);
 async function resolvePrWorktree(bundle, repoRoot, repoSlug) {
   const artifact = bundle?.activeArtifact ?? bundle?.canonicalState?.target;
   const kind = typeof artifact?.kind === "string" ? artifact.kind.trim().toLowerCase() : null;
-  // Terminal reconciliation needs no checkout; other target kinds retain their acquisition paths.
-  if (kind !== "pr" || bundle?.routeKind === "needs_reconcile") return undefined;
+  // UI-review provisioning owns checkout acquisition and detaches at the PR head.
+  if (kind !== "pr" || bundle?.routeKind === "needs_reconcile"
+    || trimmedOrNull(bundle?.selectedStrategy) === INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW) return undefined;
   const refuse = (refusal, message) => { throw Object.assign(new Error(message), { refusal }); };
   try {
     const prNumber = artifact.pr;
