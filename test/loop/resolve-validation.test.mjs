@@ -387,6 +387,21 @@ test("an untracked .pi/agents directory does not make the tree dirty, another un
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
+test("a tracked modified file under .pi/agents still makes the tree dirty", async () => {
+  const { repoRoot } = await fixture();
+  try {
+    await mkdir(path.join(repoRoot, ".pi", "agents"), { recursive: true });
+    await writeFile(path.join(repoRoot, ".pi", "agents", "x.agent.md"), "x\n");
+    execFileSync("git", ["add", "-f", ".pi/agents/x.agent.md"], { cwd: repoRoot });
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "track agent"], { cwd: repoRoot });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    await writeFile(path.join(repoRoot, ".pi", "agents", "x.agent.md"), "changed\n");
+    const dirty = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot });
+    assert.equal(dirty.status, "incomplete");
+    assert.match(dirty.reason, /clean worktree/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
 test("suite changes to tracked files leave typed incomplete evidence and no complete artifact", async () => {
   const { repoRoot } = await fixture();
   try {

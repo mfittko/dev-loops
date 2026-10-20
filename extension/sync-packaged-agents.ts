@@ -8,10 +8,11 @@ const PACKAGED_AGENTS_ROOT = new URL("../agents/", import.meta.url);
 /**
  * The project-local agents directory, relative to the session's project root.
  * Pi resolves project role agents from here with precedence over the global
- * `~/.agents/` (#1606): when a repo symlinks `.pi/agents` -> the package source
- * (the dev-loops repo dogfooding convention), the dispatch reads the raw neutral
- * templates and Pi strict-rejects `search`. The project-local sync
- * replaces that symlink with a real directory of Pi-valid copies.
+ * `~/.agents/` (#1606). A `.pi/agents` symlink to the package source is a legacy
+ * layout: the dispatch would read the raw neutral templates and Pi strict-rejects
+ * `search`, so the sync still replaces such a symlink with a real directory of
+ * Pi-valid copies. `.pi/agents` is now untracked and rendered at worktree
+ * provision time (#2865).
  */
 const PROJECT_AGENTS_SUBPATH = path.join(".pi", "agents");
 

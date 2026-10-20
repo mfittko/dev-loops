@@ -316,9 +316,18 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
   }
 
   // #2865: `.pi/agents` is untracked; render the Pi-valid agent set from the worktree's own
-  // agents/ sources (consumer worktrees have none). Lazy import: a packaged install cannot load .ts.
+  // agents/ sources, only in a dev-loops checkout (package name "dev-loops" plus an agents/ dir).
+  // Lazy import: a packaged install cannot load .ts.
+  const isDevLoopsCheckout = async () => {
+    try {
+      const pkg = JSON.parse(await fsp.readFile(path.join(dst, "package.json"), "utf8"));
+      return pkg?.name === "dev-loops" && await pathExists(path.join(dst, "agents"));
+    } catch {
+      return false;
+    }
+  };
   try {
-    if (await pathExists(path.join(dst, "agents"))) {
+    if (await isDevLoopsCheckout()) {
       const { renderProjectAgents } = await import("../../extension/sync-packaged-agents.ts");
       renderProjectAgents(dst, path.join(dst, "agents"));
       actions.push({ entry: ".pi/agents", mode: "render", dest: path.join(dst, ".pi", "agents") });

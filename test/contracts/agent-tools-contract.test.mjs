@@ -5,8 +5,8 @@ import { test } from "bun:test";
 const repoRoot = new URL("../../", import.meta.url);
 // #2854: canonical Pi child allowlists and their Claude capability projection.
 // #1659 set the precedent: unavailable source tools must not reach child launch.
-// Raw-source `search` stays rejected under Pi until the .pi/agents render slice (#2865);
-// this slice removes only the redundant `execute` (shell execution uses bash).
+// Raw-source `search` stays rejected under Pi; .pi/agents is rendered at provision time (#2865)
+// and the preflight refuses raw tokens. Sources drop only the redundant `execute` (shell execution uses bash).
 const claudeTools = {
   read: ["Read"],
   search: ["Grep", "Glob"],

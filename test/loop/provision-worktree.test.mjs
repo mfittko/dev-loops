@@ -456,6 +456,7 @@ test("provision: does not reject normal entries when the main checkout lives und
 test("provisionWorktree: renders .pi/agents from the worktree's agents/ sources", async () => {
   const fx = makeFixture("version: 1\n");
   try {
+    writeFileSync(path.join(fx.worktreePath, "package.json"), JSON.stringify({ name: "dev-loops" }));
     mkdirSync(path.join(fx.worktreePath, "agents"));
     writeFileSync(path.join(fx.worktreePath, "agents", "x.agent.md"), "---\nname: x\ndescription: x\ntools: read, search, execute, bash\n---\nbody\n");
     const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
@@ -463,6 +464,37 @@ test("provisionWorktree: renders .pi/agents from the worktree's agents/ sources"
     const tools = readFileSync(path.join(fx.worktreePath, ".pi", "agents", "x.agent.md"), "utf8").match(/^tools: (.+)$/m)[1].split(",").map((t) => t.trim());
     for (const t of ["grep", "find", "ls", "bash"]) assert.ok(tools.includes(t), t);
     for (const t of ["search", "execute"]) assert.ok(!tools.includes(t), `no ${t}`);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provisionWorktree: a non-dev-loops package with agents/ gets no .pi/agents", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    writeFileSync(path.join(fx.worktreePath, "package.json"), JSON.stringify({ name: "some-consumer" }));
+    mkdirSync(path.join(fx.worktreePath, "agents"));
+    writeFileSync(path.join(fx.worktreePath, "agents", "x.agent.md"), "---\nname: x\ndescription: x\ntools: read\n---\nbody\n");
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    assert.ok(!res.actions.some((a) => a.entry === ".pi/agents"));
+    assert.ok(!existsSync(path.join(fx.worktreePath, ".pi", "agents")));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provisionWorktree: a regular file at .pi/agents fails soft with a warning and no render action", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    writeFileSync(path.join(fx.worktreePath, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    mkdirSync(path.join(fx.worktreePath, "agents"));
+    writeFileSync(path.join(fx.worktreePath, "agents", "x.agent.md"), "---\nname: x\ndescription: x\ntools: read\n---\nbody\n");
+    mkdirSync(path.join(fx.worktreePath, ".pi"));
+    writeFileSync(path.join(fx.worktreePath, ".pi", "agents"), "not a directory\n");
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    assert.equal(res.ok, true);
+    assert.ok(res.summary.warnings >= 1);
+    assert.ok(!res.actions.some((a) => a.entry === ".pi/agents"));
   } finally {
     fx.cleanup();
   }

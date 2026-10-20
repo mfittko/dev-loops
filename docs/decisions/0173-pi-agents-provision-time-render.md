@@ -14,6 +14,9 @@ Amends the `.pi/agents` layout convention from issues 1606 and 1655: this repo t
 
 - `.pi/agents` is untracked and listed in `.gitignore`.
 - `scripts/loop/provision-worktree.mjs` renders the Pi-valid agent set into `<worktree>/.pi/agents` on create and reuse. Provisioning stays fail-soft.
+- Provisioning renders only in a dev-loops checkout: `package.json` names the package `dev-loops` and an `agents/` directory exists.
+- The main checkout is rendered by the existing session-start sync. Provisioning makes no call there.
+- Render adds and refreshes files. It does not delete agents removed from `agents/`.
 - The Pi `tool_call` handler refuses a `subagent` launch with `agent_set_not_rendered` when a loaded `.pi/agents/*.agent.md` still declares `search` or `execute`. An absent directory is allowed, so consumer repos keep resolving from `~/.agents`.
 - `agents/*.agent.md` keeps the neutral source vocabulary. The Claude generator is unchanged.
 
