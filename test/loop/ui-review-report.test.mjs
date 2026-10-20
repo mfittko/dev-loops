@@ -14,7 +14,7 @@ import {
 } from "@dev-loops/core/loop/ui-review-report";
 import { buildDraftReviewPayload } from "@dev-loops/core/loop/reviewer-loop-state";
 import { containsBareCopilotSummon } from "@dev-loops/core/github/copilot-helpers";
-import { parseUiReviewReportCliArgs, loadScreenshot, publishGist, runCli } from "../../scripts/loop/ui-review-report.mjs";
+import { parseUiReviewReportCliArgs, loadScreenshot, loadStateScreenshots, publishGist, runCli } from "../../scripts/loop/ui-review-report.mjs";
 import { makeGhMock } from "../_helpers.mjs";
 
 const HEAD_SHA = "a".repeat(40);
@@ -357,6 +357,76 @@ test("CLI: parses required args, submit-authorized and dry-run default off", () 
   assert.equal(opts.submitAuthorized, false);
   assert.equal(opts.dryRun, false);
   assert.throws(() => parseUiReviewReportCliArgs(["--diagnose-result", "d.json", "--html-output", "o.html"]), /Missing required --pr/);
+});
+
+test("named states: 0-finding HTML has one labeled img per state; unreadable and oversize states get a stated cap (#2855)", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "ui-review-states-"));
+  const prefixLen = "data:image/png;base64,".length;
+  const maxRawBytes = 3 * Math.floor((ARTIFACT_MAX_SCREENSHOT_BYTES - prefixLen) / 4);
+  const mk = (name, bytes) => {
+    const p = path.join(dir, name);
+    writeFileSync(p, Buffer.alloc(bytes));
+    return p;
+  };
+  const caps = [];
+  const states = loadStateScreenshots([
+    { flow: "home", step: "<load>", screenshotPath: mk("a.png", 10) },
+    { flow: "cart", step: "open", screenshotPath: mk("b.png", 10) },
+    { flow: "big", step: "x", screenshotPath: mk("big.png", maxRawBytes + 1) },
+    { flow: "gone", step: "y", screenshotPath: path.join(dir, "missing.png") },
+    { flow: "nopath", step: "z" },
+  ], caps);
+  assert.equal(states.length, 2);
+  assert.equal(caps.length, 2);
+  assert.ok(caps.some((c) => /omitted/.test(c) && /big\.png/.test(c)));
+  assert.ok(caps.some((c) => /not readable/.test(c) && /missing\.png/.test(c)));
+  const { html } = buildArtifactHtml({ findings: [], counts: { total: 0 }, pr: { number: 1, headSha: HEAD_SHA }, states, generatedAt: "t" });
+  assert.equal((html.match(/<img /g) ?? []).length, 2);
+  assert.match(html, /Named states/);
+  assert.match(html, /home \/ &lt;load&gt;/);
+  // Defense in depth: buildArtifactHtml re-applies the cap to an oversize inline state.
+  const over = buildArtifactHtml({ findings: [], pr: {}, states: [{ flow: "f", step: "s", path: "/p", dataUri: "x".repeat(ARTIFACT_MAX_SCREENSHOT_BYTES + 1) }] });
+  assert.equal((over.html.match(/<img /g) ?? []).length, 0);
+  assert.ok(over.caps.some((c) => /state screenshot omitted/.test(c)));
+});
+
+test("buildArtifactHtml: a state whose screenshot is the evidence screenshot is not inlined twice", () => {
+  const dataUri = "data:image/png;base64,AAAA";
+  const { html } = buildArtifactHtml({
+    findings: [], pr: {},
+    screenshot: { path: "/s/a.png", dataUri },
+    states: [{ flow: "f", step: "a", path: "/s/a.png", dataUri }, { flow: "f", step: "b", path: "/s/b.png", dataUri }],
+  });
+  assert.equal((html.match(/<img /g) ?? []).length, 2);
+});
+
+test("loadScreenshot/loadStateScreenshots: cap messages name evidence vs state", () => {
+  const caps = [];
+  loadScreenshot([{ evidence: { screenshotPath: "/nope/e.png" } }], caps);
+  loadStateScreenshots([{ flow: "f", step: "s", screenshotPath: "/nope/s.png" }], caps);
+  assert.match(caps[0], /evidence screenshot not readable/);
+  assert.match(caps[1], /state screenshot not readable/);
+});
+
+test("runCli: a 0-finding diagnose with two states writes two <img under Named states", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "ui-review-runcli-states-"));
+  const png = (n) => { const p = path.join(dir, n); writeFileSync(p, Buffer.alloc(10)); return p; };
+  const diagPath = path.join(dir, "diagnose.json");
+  writeFileSync(diagPath, JSON.stringify({
+    pr: { headSha: HEAD_SHA },
+    counts: { total: 0, anchorable: 0, nonAnchorable: 0 },
+    findings: [],
+    states: [{ flow: "home", step: "load", screenshotPath: png("a.png") }, { flow: "cart", step: "open", screenshotPath: png("b.png") }],
+  }));
+  const htmlPath = path.join(dir, "report.html");
+  const sink = { write: () => true };
+  await runCli(
+    ["--pr", "42", "--repo", "o/n", "--diagnose-result", diagPath, "--html-output", htmlPath],
+    { stdout: sink, stderr: sink, env: {}, run: makeGhMock([{ stdout: "https://gist.github.com/o/abc123\n" }]).runChild, loadLiveHead: () => null, postReview: () => ({ reviewId: 1, reviewUrl: "u", commitSha: HEAD_SHA }) },
+  );
+  const html = readFileSync(htmlPath, "utf8");
+  assert.match(html, /Named states/);
+  assert.equal((html.match(/<img /g) ?? []).length, 2);
 });
 
 test("loadScreenshot: raw-file cap agrees with the data-URI budget (no read-then-drop)", () => {
