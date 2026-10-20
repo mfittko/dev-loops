@@ -468,8 +468,7 @@ function normalizeHeadShaValue(value) {
 // Count the dispatch-prompt records of ONE gate at a head (the other gate's
 // same-head records stay live and are not counted).
 async function countGateDispatchRecords(tmpRoot, gate, headSha) {
-  if (typeof gate !== "string") return 0;
-  const prefix = `checkpoint-dispatch-prompt-${gateScopePrefix(gate.trim().toLowerCase())}`;
+  const prefix = `checkpoint-dispatch-prompt-${gateScopePrefix(gate)}`;
   // Same regular-file predicate as the layout verifier's reader: a directory or symlink never counts.
   return (await readdir(tmpRoot, { withFileTypes: true }).catch(() => [])).filter((e) => isDispatchPromptRecordEntry(e, headSha) && e.name.startsWith(prefix)).length;
 }

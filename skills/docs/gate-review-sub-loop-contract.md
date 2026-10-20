@@ -659,8 +659,8 @@ additionally verifies the full round key (`repo`, `pr`, `gate`, `headSha`) and
 that the caller-supplied fresh provenance corresponds exactly to the emitted
 units: the same angle set and group per angle, one reviewer identity per emitted
 unit, and no under-reported `distinctReviewers` count. Carried rows are outside
-the fresh emit plan and remain governed by the carry-forward proof. This second
-use is still a guard only: it never derives provenance or findings from the
+the fresh emit plan and remain governed by the carry-forward proof. For `write-gate-findings-log.mjs` the plan
+is a guard only: it never derives provenance or findings from the
 plan, and omitting it preserves the findings-log writer's current behavior.
 
 Merge the parallel reviewer findings into one consolidated fix plan with the
