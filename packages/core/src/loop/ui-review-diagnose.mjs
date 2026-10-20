@@ -283,9 +283,14 @@ export function diagnoseFailures({ failures = [], captures = [], diffOutput = ""
 
   const findings = rankFindings(failures.map((f) => diagnoseOne(f, anchorsByPath, evidence)));
   const anchorable = findings.filter((f) => f.anchorable).length;
+  // One screenshot per captured named state, so a clean run can still be reviewed visually.
+  const states = captures
+    .filter((c) => typeof c?.screenshotPath === "string" && c.screenshotPath.length > 0)
+    .map((c) => ({ flow: c.flow ?? null, step: c.step ?? null, screenshotPath: c.screenshotPath }));
   return {
     ok: findings.length === 0,
     findings,
+    states,
     counts: { total: findings.length, anchorable, nonAnchorable: findings.length - anchorable },
   };
 }

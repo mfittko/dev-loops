@@ -28,8 +28,11 @@ computed-accessibility artifact:
 npm install --save-dev @axe-core/playwright
 ```
 
-Without it every `axe.json` is a deterministic JSON `null` and the rest of the
-review still works.
+The drive resolves it from the reviewed worktree first (its `package.json`), then
+from the dev-loops install, so a globally installed dev-loops works when the
+consumer repo lists the package. When neither location has it, `axe.json` holds
+`{ "skipped": true, "reason": "axe: @axe-core/playwright not resolvable from <worktree> or dev-loops" }`
+(never a bare `null`) and the rest of the review still works. The drive also logs one stderr line `[ui-review-drive] <reason>` per run when axe is skipped.
 
 ## Where the recipe lives
 
@@ -49,8 +52,14 @@ drive your app.
 `resolve → provision/boot → auth+drive → diagnose → report → teardown`
 
 1. **Provision + boot** — provisions an isolated worktree for the PR head,
-   installs only the dependency-lock delta, runs pending dev-DB migrations, then
-   boots the app and polls an HTTP readiness probe.
+   installs dependencies with the frozen install matching the worktree lockfile
+   (`bun.lock`, `pnpm-lock.yaml`, `package-lock.json` or `yarn.lock`; first present
+   wins) when the lock differs from the primary checkout's or the worktree has no
+   `node_modules`, runs pending dev-DB migrations, then boots the app and polls an
+   HTTP readiness probe. Boot stdout and stderr go to
+   `<tmpdir>/dev-loops-ui-review-pr-<n>-XXXXXX/boot.log`. If the boot process exits before
+   the app is ready, the stage stops at once with a `boot-exited` finding that
+   carries the exit code and the last log lines.
 2. **Auth + drive** — launches one headless WebKit context, authenticates
    through your dev-login recipe, dismisses declared interstitials once, then
    walks the changed UI flows, capturing a screenshot + `state.json` + `snapshot.json` + `axe.json` + `console.json` per step.
@@ -109,7 +118,9 @@ worktree:
 
 ## `uiReview.run` — boot recipe (required to boot)
 
-- `uiReview.run.command` — shell command that starts the app.
+- `uiReview.run.command` — shell command that starts the app. It must stay in
+  the foreground. An exit before readiness, including exit code 0, stops the
+  stage with `boot-exited`.
 - `uiReview.run.readyUrl` — an `http(s)` URL an HTTP probe polls until the app
   answers (never a fixed sleep).
 - `uiReview.run.readyTimeoutMs` — probe budget in ms (default `60000`).
@@ -262,8 +273,9 @@ uiReview:
 ## Artifact hosting (Stage 4)
 
 The report stage always produces a self-contained, CSP-safe HTML artifact
-(ranked findings plus the reproduced-evidence screenshot inlined as a data URI,
-no external resources).
+(ranked findings, the reproduced-evidence screenshot and one labeled screenshot
+per named state, each inlined as a data URI within the size cap, also when there
+are 0 findings; no external resources).
 
 - On the **Claude Code** harness the stage emits a publishable directive, and the
   orchestrating agent publishes the artifact via **Claude Code Artifacts**. The
