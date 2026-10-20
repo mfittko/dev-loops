@@ -23,11 +23,22 @@ const scriptPath = path.resolve("scripts/github/create-pr.mjs");
 const runNode = (args = [], options = {}) => runNodeWithPrePrRecord(scriptPath, args, options);
 
 test("create-pr checks changelog format and title before any GitHub write", async () => {
-  for (const length of [null, 201, 200]) {
+  for (const { length, crlf } of [{ length: null }, { length: 201 }, { length: 200 }, { length: 200, crlf: true }]) {
     const cwd = await mkdtemp(path.join(os.tmpdir(), "create-changelog-"));
     try {
       await initSizeBudgetFixtureRepo(cwd, { headFiles: [{ path: "docs/note.md", content: "note\n" },
+        ...(crlf ? [{ path: "CHANGELOG.md", content: "# Changelog\n\n## Unreleased\n\n- Existing note (#1)\n" }] : []),
         ...(length === null ? [] : [{ path: "changes/note.md", content: `- ${"x".repeat(length - 7)} (#1)\n` }])] });
+      if (crlf) {
+        runGitFixture(cwd, ["config", "core.autocrlf", "true"]);
+        for (const file of ["CHANGELOG.md", "changes/note.md"]) {
+          await rm(path.join(cwd, file));
+          runGitFixture(cwd, ["checkout", "--", file]);
+          assert.ok((await readFile(path.join(cwd, file), "utf8")).includes("\r\n"));
+          assert.ok(!runGitFixture(cwd, ["show", `HEAD:${file}`]).includes("\r"));
+        }
+        assert.equal(runGitFixture(cwd, ["status", "--porcelain"]), "");
+      }
       const base = runGitFixture(cwd, ["rev-parse", "origin/main"]).slice(0, 12);
       const { env, ghLogPath } = await writeGhStub(cwd, [{}]);
       const result = await runNode(["--base", "main", "--head", "feature", "--title", "fix(local): validate notes", "--body", "notes"], { cwd, env });
@@ -55,10 +66,13 @@ for (const input of ["changes/note.md", "changes/other.md", "CHANGELOG.md"]) {
         ...(input === "changes/note.md" ? [] : [{ path: input, content: content(invalid) }]),
       ] });
       await writeFile(path.join(cwd, input), content(valid));
+      const base = runGitFixture(cwd, ["rev-parse", "origin/main"]);
       const { env, ghLogPath } = await writeGhStub(cwd, [{}]);
       await assert.rejects(createPrMain(["--base", "main", "--title", "fix(local): validate notes", "--body", "notes"], {
         cwd, env, validatePrePrReview: async () => ({ ok: true }), evaluateEarlySurface: async () => ({}),
-      }), (error) => error.code === "changelog_incomplete_before_pr" && /differs from HEAD/.test(error.message));
+      }), (error) => error.code === "changelog_incomplete_before_pr"
+        && /^LIFECYCLE-CHANGELOG-COMPLETENESS/.test(error.message)
+        && /differs from HEAD/.test(error.message) && error.message.includes(base));
       assert.deepEqual(await readGhCalls(ghLogPath), []);
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });

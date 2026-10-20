@@ -70,7 +70,7 @@ test("result-only changelog seam checks touched changes paths before writing evi
 });
 
 test("real delta CLI refuses committed invalid inputs concealed by uncommitted corrections", async () => {
-  for (const { length, correction } of [{ length: 201 }, { length: 200 }, { length: 0 },
+  for (const { length, correction, crlf } of [{ length: 201 }, { length: 200 }, { length: 200, crlf: true }, { length: 0 },
     { length: 201, correction: "changes/note.md" }, { length: 200, correction: "changes/other.md" }, { length: 200, correction: "CHANGELOG.md" }]) {
   const { dir, threadsFile } = threadsFixture();
   try {
@@ -89,6 +89,13 @@ test("real delta CLI refuses committed invalid inputs concealed by uncommitted c
     }
     runGitFixture(dir, ["add", "."]);
     runGitFixture(dir, ["commit", "-qm", "fix(local): fragment"]);
+    if (crlf) {
+      runGitFixture(dir, ["config", "core.autocrlf", "true"]);
+      fs.rmSync(path.join(dir, "changes/note.md"));
+      runGitFixture(dir, ["checkout", "--", "changes/note.md"]);
+      assert.ok(fs.readFileSync(path.join(dir, "changes/note.md"), "utf8").includes("\r\n"));
+      assert.equal(runGitFixture(dir, ["status", "--porcelain"]), "");
+    }
     if (correction) {
       const body = `- ${"x".repeat(193)} (#1)\n`;
       fs.writeFileSync(path.join(dir, correction), correction === "CHANGELOG.md" ? `# Changelog\n\n## Unreleased\n\n${body}` : body);
