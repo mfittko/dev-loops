@@ -3,7 +3,8 @@
  * CLI wrapper for the ui_review provision+boot orchestrator.
  *
  * Provisions an isolated worktree for a PR head (create-or-reuse + provision),
- * installs only the dependency-lock delta, runs pending dev-DB migrations
+ * runs a lockfile-matched frozen install on a dependency-lock delta or a
+ * missing node_modules, then runs pending dev-DB migrations
  * (destructive ones fail closed pending ack), boots the branch's app via the
  * project's declared run recipe, and waits on an HTTP readiness probe.
  *
@@ -12,9 +13,10 @@
  * orchestrator (packages/core/src/loop/ui-review-provision.mjs).
  */
 import { execFileSync, spawn } from "node:child_process";
-import { lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -118,21 +120,41 @@ function readOrNull(file) {
   }
 }
 
+/** Supported lockfiles in priority order; the first one present in the worktree wins. */
+export const LOCKFILES = [
+  { lock: "bun.lock", command: () => [process.env.BUN_BIN || "bun", ["install", "--frozen-lockfile"]] },
+  { lock: "pnpm-lock.yaml", command: () => ["pnpm", ["install", "--frozen-lockfile"]] },
+  { lock: "package-lock.json", command: () => ["npm", ["ci"]] },
+  { lock: "yarn.lock", command: () => ["yarn", ["install", "--frozen-lockfile"]] },
+];
+
+/** The lockfile entry present in `dir`, or null. */
+export function detectLockfile(dir) {
+  return LOCKFILES.find(({ lock }) => readOrNull(path.join(dir, lock)) !== null) ?? null;
+}
+
 /**
- * Bun-scoped dependency-lock delta: compare the worktree's bun.lock to
- * the primary checkout's. Differing (or one-sided) content means the branch
- * changed dependencies and needs an install; identical means deps are shared.
+ * Dependency delta for the worktree's lockfile (bun/pnpm/npm/yarn). Changed when
+ * the lock differs from the primary checkout's, or when the worktree has no
+ * node_modules entry at all (a fresh worktree cannot boot without one).
  */
-function detectDepDelta({ repoRoot, worktreePath }) {
-  const main = readOrNull(path.join(repoRoot, "bun.lock"));
-  const branch = readOrNull(path.join(worktreePath, "bun.lock"));
-  if (main === null && branch === null) {
-    return Promise.resolve({ changed: false, detail: "no bun.lock in either checkout" });
+export function detectDepDelta({ repoRoot, worktreePath }) {
+  const entry = detectLockfile(worktreePath);
+  if (!entry) return Promise.resolve({ changed: false, detail: "no supported lockfile (bun.lock, pnpm-lock.yaml, package-lock.json, yarn.lock) in the worktree" });
+  let hasModules = true;
+  try {
+    lstatSync(path.join(worktreePath, "node_modules"));
+    // provisioning itself creates node_modules/@dev-loops/core, so a dir holding only
+    // that link (or dot-entries) is not an installed tree.
+    hasModules = readdirSync(path.join(worktreePath, "node_modules")).some((e) => e !== "@dev-loops" && !e.startsWith("."));
+  } catch {
+    hasModules = false;
   }
-  if (main === branch) {
-    return Promise.resolve({ changed: false, detail: "bun.lock identical" });
+  if (!hasModules) return Promise.resolve({ changed: true, detail: `${entry.lock} present but worktree has no node_modules` });
+  if (readOrNull(path.join(repoRoot, entry.lock)) !== readOrNull(path.join(worktreePath, entry.lock))) {
+    return Promise.resolve({ changed: true, detail: `${entry.lock} differs` });
   }
-  return Promise.resolve({ changed: true, detail: "bun.lock differs" });
+  return Promise.resolve({ changed: false, detail: `${entry.lock} identical` });
 }
 
 /**
@@ -163,14 +185,18 @@ export function ensureOwnNodeModules(worktreePath) {
   return true;
 }
 
-/** Frozen Bun install in the worktree, after ensuring it owns its node_modules. */
-function installDeps({ worktreePath }) {
+/** Frozen install (matching the present lockfile) in the worktree, after ensuring it owns its node_modules. */
+export function installDeps({ worktreePath }, exec = execFileSync) {
+  const entry = detectLockfile(worktreePath);
+  if (!entry) return Promise.resolve({ ok: false, detail: "no supported lockfile to install from" });
+  const [bin, args] = entry.command();
+  const label = `${path.basename(bin)} ${args.join(" ")}`;
   try {
     const materialized = ensureOwnNodeModules(worktreePath);
-    execFileSync(process.env.BUN_BIN || "bun", ["install", "--frozen-lockfile"], { cwd: worktreePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-    return Promise.resolve({ ok: true, detail: materialized ? "bun install --frozen-lockfile (materialized own node_modules)" : "bun install --frozen-lockfile" });
+    exec(bin, args, { cwd: worktreePath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return Promise.resolve({ ok: true, detail: materialized ? `${label} (materialized own node_modules)` : label });
   } catch (err) {
-    return Promise.resolve({ ok: false, detail: (err.stderr ?? err.message ?? "bun install failed").toString().trim() });
+    return Promise.resolve({ ok: false, detail: (err.stderr ?? err.message ?? `${label} failed`).toString().trim() });
   }
 }
 
@@ -214,12 +240,34 @@ function applyMigrations({ recipe, runCwd }) {
   }
 }
 
-/** Spawn the boot command detached so the app stays up after this CLI exits. */
-function bootApp({ recipe, runCwd }) {
-  const cwd = runCwd;
-  const child = spawn(recipe.command, { cwd, shell: true, detached: true, stdio: "ignore" });
+/** Last `n` lines of a log file ("" when unreadable). */
+export function tailLines(file, n = 20) {
+  return (readOrNull(file) ?? "").trimEnd().split("\n").slice(-n).join("\n");
+}
+
+/**
+ * Spawn the boot command detached so the app stays up after this CLI exits.
+ * stdout+stderr go to boot.log; `exited()` reports the exit once it happened.
+ */
+export function bootApp({ recipe, runCwd, pr }) {
+  const dir = mkdtempSync(path.join(tmpdir(), `dev-loops-ui-review-pr-${pr}-`));
+  const logFile = path.join(dir, "boot.log");
+  const fd = openSync(logFile, "w");
+  let child;
+  try {
+    child = spawn(recipe.command, { cwd: runCwd, shell: true, detached: true, stdio: ["ignore", fd, fd] });
+  } finally {
+    closeSync(fd);
+  }
+  let exit = null;
+  let notifyExit;
+  const onExit = new Promise((r) => { notifyExit = r; });
+  child.on("exit", (code, signal) => {
+    exit = { code, signal };
+    notifyExit(exit);
+  });
   child.unref();
-  return Promise.resolve({ pid: child.pid ?? null, detail: `spawned: ${recipe.command}` });
+  return Promise.resolve({ pid: child.pid ?? null, detail: `spawned: ${recipe.command} (log: ${logFile})`, logFile, exited: () => exit, onExit, logTail: () => tailLines(logFile) });
 }
 
 /** HTTP(S) readiness probe: resolve true on a 2xx/3xx response, false otherwise. */
