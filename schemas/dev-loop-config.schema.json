@@ -1890,7 +1890,7 @@
               "surface": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Surface name. A change set that spans surfaces, or an unmapped path, needs full validation."
+                "description": "Surface name. Fully mapped change sets combine checks across surfaces."
               },
               "commands": {
                 "type": "array",
@@ -1918,7 +1918,7 @@
             ],
             "additionalProperties": false
           },
-          "description": "Ordered, first-match-wins path-to-command map for targeted worker checks (`resolveTargetedValidation`)."
+          "description": "Ordered, first-match-wins path-to-command map for targeted worker checks (`resolveTargetedValidation`). When every path maps to non-empty commands, use the sorted, deduplicated union of commands and gateSuites across surfaces. An unmapped, empty-command or unsafe templated path needs full validation."
         }
       },
       "additionalProperties": false,
