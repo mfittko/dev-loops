@@ -2198,7 +2198,7 @@ test("parseConsolidateFaninCliArgs rejects a malformed prevVerdict/findings on -
   );
 });
 
-test("consolidateGateFanin never overrides a REAL artifact with a --carried-angles upsert for the same angle", async () => {
+test("consolidateGateFanin never replaces a REAL artifact's findings with a --carried-angles upsert for the same angle", async () => {
   await withMinimalConfigRepoRoot(async (repoRoot) => {
     await withFindingsDir(
       {
@@ -2218,7 +2218,7 @@ test("consolidateGateFanin never overrides a REAL artifact with a --carried-angl
         });
         assert.equal(result.angles.length, 1);
         assert.equal(result.angles[0].findingCount, 1, "the real artifact's finding must survive, not be replaced by the synthetic clean upsert");
-        assert.equal(result.angles[0].carriedFromHead, undefined, "a REAL artifact's entry is never marked carried");
+        assert.equal(result.angles[0].carriedFromHead, "a".repeat(40), "a declared carried angle's artifact takes provenance from the validated carry proof");
       },
     );
   });
@@ -4884,6 +4884,64 @@ test("#2526: an over-budget --emit-plan round without --ledger-out succeeds with
     const result = await consolidateGateFanin(options);
     assert.equal(result.ok, true);
     assert.equal(result.commentBudgetExceeded, true);
+    assert.equal(JSON.parse(await readFile(keyed(root), "utf8")).findings.length, 25 * 30);
+  });
+});
+
+test("#2526: a declared carried angle with a prior-head artifact keeps its findings and derives carried provenance the writer accepts", async () => {
+  await withTempDir(async (root) => {
+    await writeFile(path.join(root, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - coverage\n      - name: pr-description\n        enabled: false\n      - name: holistic\n        enabled: false\n", "utf8");
+    const { options, planPath } = await zeroUnitCarriedPlan(root);
+    const finding = { severity: "medium", summary: "prior open finding", disposition: "deferred" };
+    await writeFile(path.join(options.findingsDir, "coverage.json"), JSON.stringify({ angle: "coverage", verdict: "findings_present", findings: [finding], headSha: PRIOR_HEAD }), "utf8");
+    const ledgerOut = path.join(root, "out", "ledger.json");
+    const carryForwardPlan = [{ ...options.carryForwardPlan[0], prevVerdict: "findings_present", findings: [finding] }];
+    await writeFile(planPath, JSON.stringify({ ...JSON.parse(await readFile(planPath, "utf8")), carried: carryForwardPlan }), "utf8");
+    const result = await consolidateGateFanin({ ...options, carryForwardPlan, ledgerOut });
+    assert.equal(result.angles[0].carriedFromHead, PRIOR_HEAD);
+    assert.equal(result.findings.length, 1);
+    const ledger = JSON.parse(await readFile(ledgerOut, "utf8"));
+    assert.deepEqual(ledger.provenance.perAngle, [{ angle: "coverage", reviewer: "rev-x", carriedFromHead: PRIOR_HEAD, carriedVerdict: "findings_present" }]);
+    const written = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, verdict: ledger.overallVerdict, executionMode: "fanout_fanin",
+      findingsFile: ledgerOut, emitPlan: planPath, tmpRoot: path.join(root, "ledgers"),
+    }, { repoRoot: root });
+    assert.equal(written.ok, true);
+  });
+});
+
+test("#2526 records-floor: a directory named like a dispatch-prompt record does not satisfy the floor", async () => {
+  const units = [unitOf(["scope"], null, "r1-u0")];
+  await withProvenanceRound({ units, fanout: "    mode: per-angle" }, async ({ root, base }) => {
+    const record = dispatchPromptLayoutRecordPath(root, "draft-gate-u0", PROV_HEAD);
+    await rm(record);
+    await mkdir(record);
+    await assert.rejects(() => consolidateGateFanin(base), /zero draft_gate dispatch-prompt records/);
+  });
+});
+
+test("#2526: --out aliasing the keyed ledger is refused without overwriting it (symlink alias too)", async () => {
+  await withTempDir(async (root) => {
+    const { options, keyed } = await zeroUnitCarriedPlan(root);
+    const keyedPath = keyed(root);
+    for (const out of [keyedPath, path.join(root, "alias.json")]) {
+      if (out !== keyedPath) {
+        await mkdir(path.dirname(keyedPath), { recursive: true });
+        await writeFile(keyedPath, "x", "utf8");
+        await symlink(keyedPath, out);
+      }
+      await assert.rejects(() => consolidateGateFanin({ ...options, out }), /GATE-EXEC-OUT-LEDGER-ALIAS/);
+      assert.equal(JSON.parse(await readFile(keyedPath, "utf8")).overallVerdict, "clean");
+    }
+  });
+});
+
+test("#2526: a withheld over-budget round with --out at the keyed ledger is refused and does not delete it", async () => {
+  await withTempDir(async (root) => {
+    const { options, keyed } = await zeroUnitCarriedPlan(root);
+    const files = wideAngleFiles({ angleCount: 25, findingsPerAngle: 30 });
+    for (const [name, body] of Object.entries(files)) await writeFile(path.join(options.findingsDir, name), JSON.stringify({ ...body, headSha: PROV_HEAD }), "utf8");
+    await assert.rejects(() => consolidateGateFanin({ ...options, out: keyed(root) }), /GATE-EXEC-OUT-LEDGER-ALIAS/);
     assert.equal(JSON.parse(await readFile(keyed(root), "utf8")).findings.length, 25 * 30);
   });
 });

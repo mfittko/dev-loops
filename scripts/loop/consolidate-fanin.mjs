@@ -52,7 +52,7 @@ import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, validateCar
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
-import { verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-prompt-layout.mjs";
+import { isDispatchPromptRecordEntry, verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-prompt-layout.mjs";
 import { verifyPullReceipt, verifyPulledResult } from "../github/_work-order-protocol.mjs";
 import { resolveGateArtifactTmpRoot, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
@@ -470,7 +470,8 @@ function normalizeHeadShaValue(value) {
 async function countGateDispatchRecords(tmpRoot, gate, headSha) {
   if (typeof gate !== "string") return 0;
   const prefix = `checkpoint-dispatch-prompt-${gateScopePrefix(gate.trim().toLowerCase())}`;
-  return (await readdir(tmpRoot).catch(() => [])).filter((n) => n.startsWith(prefix) && n.endsWith(`-${headSha}.json`)).length;
+  // Same regular-file predicate as the layout verifier's reader: a directory or symlink never counts.
+  return (await readdir(tmpRoot, { withFileTypes: true }).catch(() => [])).filter((e) => isDispatchPromptRecordEntry(e, headSha) && e.name.startsWith(prefix)).length;
 }
 
 async function verifyEmitPlanKey(planPath, { repo, pr, gate, headSha, carriedAngles, carryForwardPlan, resolvedAngles }) {
@@ -1418,7 +1419,13 @@ export async function consolidateGateFanin(options) {
       if (!planEntry) {
         throw new Error(`--carried-angles names "${angle}", which is not present in --carry-forward-plan's "carried" list — refusing to mint a carried entry with no proof it was ever carried (fail-closed)`);
       }
-      if (realAngleKeys.has(key) || seenCarriedNames.has(trimmedAngle)) continue;
+      if (realAngleKeys.has(key) || seenCarriedNames.has(trimmedAngle)) {
+        // A declared carried angle that already has a prior-head artifact keeps that artifact's
+        // findings, but its provenance comes from the validated carry proof, never a fresh stamp.
+        const existing = rawArtifacts.find((a) => a.angle.trim() === trimmedAngle && typeof a.carriedFromHead !== "string");
+        if (existing) existing.carriedFromHead = planEntry.carriedFromHead;
+        continue;
+      }
       seenCarriedNames.add(trimmedAngle);
       // A carried angle is not unconditionally upserted clean — when the plan
       // proves it was carrying an open findings_present verdict
@@ -1557,6 +1564,9 @@ export async function consolidateGateFanin(options) {
   // rethrows any non-length-bound error. "findings" is final at this point
   // (the blocked-verdict guard above already ran), so writing here is the
   // latest point that still precedes every remaining throw in this function.
+  // ONE resolved list of every ledger target (explicit --ledger-out and the keyed
+  // fan-in ledger); the --out alias guard below checks --out against all of them.
+  const ledgerTargets = [];
   if (options.ledgerOut !== undefined || emitPlan !== undefined) {
     // Write `{ overallVerdict, findings }` rather than a bare array so the
     // consolidator's computed verdict flows downstream to the durable ledger
@@ -1589,7 +1599,6 @@ export async function consolidateGateFanin(options) {
     if (emitPlan !== undefined) ledgerWrapper.provenance = deriveFaninProvenance(rawArtifacts, emitPlan, options.headSha, options.carryForwardPlan);
     const ledgerRecord = stampOptionalSpecAuthority(ledgerWrapper, specAuthorityIdentity);
     const ledgerText = `${JSON.stringify(ledgerRecord, null, 2)}\n`;
-    const ledgerTargets = [];
     if (options.ledgerOut !== undefined) ledgerTargets.push(options.ledgerOut);
     // The keyed fan-in ledger: byte-identical to --ledger-out, at the plan's round key.
     if (emitPlan !== undefined) {
@@ -1679,13 +1688,13 @@ export async function consolidateGateFanin(options) {
   // caller of this shared function is protected. Both paths must already
   // exist (the ledger write above already created --ledger-out) for dev+ino
   // to be comparable; a nonexistent --out is never the same file.
-  if (options.out !== undefined && options.ledgerOut !== undefined) {
-    const [outStat, ledgerStat] = await Promise.all([
-      stat(options.out).catch(() => null),
-      stat(options.ledgerOut).catch(() => null),
-    ]);
-    if (outStat && ledgerStat && outStat.dev === ledgerStat.dev && outStat.ino === ledgerStat.ino) {
-      throw new Error(`--out ${JSON.stringify(options.out)} and --ledger-out ${JSON.stringify(options.ledgerOut)} resolve to the same file on disk`);
+  if (options.out !== undefined) {
+    const outStat = await stat(options.out).catch(() => null);
+    for (const target of ledgerTargets) {
+      const ledgerStat = outStat && await stat(target).catch(() => null);
+      if (ledgerStat && outStat.dev === ledgerStat.dev && outStat.ino === ledgerStat.ino) {
+        throw new Error(`GATE-EXEC-OUT-LEDGER-ALIAS: --out ${JSON.stringify(options.out)} and ledger target ${JSON.stringify(target)} resolve to the same file on disk`);
+      }
     }
   }
   if (options.out !== undefined) {
