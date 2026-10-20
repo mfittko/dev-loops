@@ -12,7 +12,7 @@
  * orchestrator (packages/core/src/loop/ui-review-provision.mjs).
  */
 import { execFileSync, spawn } from "node:child_process";
-import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import { tmpdir } from "node:os";
@@ -143,6 +143,9 @@ export function detectDepDelta({ repoRoot, worktreePath }) {
   let hasModules = true;
   try {
     lstatSync(path.join(worktreePath, "node_modules"));
+    // provisioning itself creates node_modules/@dev-loops/core, so a dir holding only
+    // that link (or dot-entries) is not an installed tree.
+    hasModules = readdirSync(path.join(worktreePath, "node_modules")).some((e) => e !== "@dev-loops" && !e.startsWith("."));
   } catch {
     hasModules = false;
   }
@@ -256,11 +259,14 @@ export function bootApp({ recipe, runCwd, pr }) {
     closeSync(fd);
   }
   let exit = null;
+  let notifyExit;
+  const onExit = new Promise((r) => { notifyExit = r; });
   child.on("exit", (code, signal) => {
     exit = { code, signal };
+    notifyExit(exit);
   });
   child.unref();
-  return Promise.resolve({ pid: child.pid ?? null, detail: `spawned: ${recipe.command} (log: ${logFile})`, logFile, exited: () => exit, logTail: () => tailLines(logFile) });
+  return Promise.resolve({ pid: child.pid ?? null, detail: `spawned: ${recipe.command} (log: ${logFile})`, logFile, exited: () => exit, onExit, logTail: () => tailLines(logFile) });
 }
 
 /** HTTP(S) readiness probe: resolve true on a 2xx/3xx response, false otherwise. */

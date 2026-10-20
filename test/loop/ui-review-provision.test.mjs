@@ -540,7 +540,7 @@ function lockFixture(files, { nodeModules = true } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "ui-lock-"));
   tempRoots.push(dir);
   for (const f of files) writeFileSync(path.join(dir, f), "lock\n");
-  if (nodeModules) mkdirSync(path.join(dir, "node_modules"));
+  if (nodeModules) mkdirSync(path.join(dir, "node_modules", "react"), { recursive: true });
   return dir;
 }
 
@@ -650,4 +650,54 @@ test("boot-exited: an exit that lands after the last failed probe is reported, n
   const r = await provisionAndBoot({ repoRoot: "/main", pr: 1 }, seams);
   assert.ok(r.findings.some((x) => x.kind === "boot-exited"));
   assert.ok(!r.findings.some((x) => x.kind === "boot-timeout"));
+});
+
+test("detectDepDelta: node_modules holding only the provisioned @dev-loops link counts as not installed", async () => {
+  const primary = lockFixture(["bun.lock"]);
+  const wt = lockFixture(["bun.lock"], { nodeModules: false });
+  mkdirSync(path.join(wt, "node_modules", "@dev-loops", "core"), { recursive: true });
+  mkdirSync(path.join(wt, "node_modules", ".bin"));
+  assert.equal((await detectDepDelta({ repoRoot: primary, worktreePath: wt })).changed, true);
+});
+
+test("boot-exited: a successful probe from another app does not mask an exited boot", async () => {
+  const { seams } = baseSeams(makeFixture(RECIPE_YAML), {
+    probe: async () => true,
+    bootApp: async () => ({ pid: 1, detail: "s", exited: () => ({ code: 1, signal: null }) }),
+  });
+  const r = await provisionAndBoot({ repoRoot: "/main", pr: 1 }, seams);
+  assert.ok(r.findings.some((x) => x.kind === "boot-exited"));
+  assert.ok(!r.boot.ready);
+});
+
+test("boot-exited: an exit during a hung probe stops at once", async () => {
+  let exit = null;
+  let fire;
+  const onExit = new Promise((r) => { fire = r; });
+  const { seams } = baseSeams(makeFixture(RECIPE_YAML), {
+    probe: () => { exit = { code: 7, signal: null }; fire(); return new Promise(() => {}); },
+    bootApp: async () => ({ pid: 1, detail: "s", exited: () => exit, onExit }),
+  });
+  const r = await provisionAndBoot({ repoRoot: "/main", pr: 1 }, seams);
+  assert.ok(r.findings.some((x) => x.kind === "boot-exited" && x.exitCode === 7));
+});
+
+test("boot-exited: an exit during the interval wait stops at once and clears the delay timer", async () => {
+  let exit = null;
+  let fire;
+  const onExit = new Promise((r) => { fire = r; });
+  let cleared = false;
+  const { seams } = baseSeams(makeFixture(RECIPE_YAML), {
+    delay: () => {
+      const p = new Promise(() => {});
+      p.clear = () => { cleared = true; };
+      exit = { code: 2, signal: null };
+      fire();
+      return p;
+    },
+    bootApp: async () => ({ pid: 1, detail: "s", exited: () => exit, onExit }),
+  });
+  const r = await provisionAndBoot({ repoRoot: "/main", pr: 1 }, seams);
+  assert.ok(r.findings.some((x) => x.kind === "boot-exited" && x.exitCode === 2));
+  assert.equal(cleared, true);
 });

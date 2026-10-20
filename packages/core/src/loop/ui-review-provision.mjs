@@ -47,7 +47,7 @@ const MUST_FIX = "must-fix";
  * @param {(worktreePath:string)=>Promise<object|null>} seams.resolveRunRecipe
  * @param {(a:{worktreePath:string,recipe:object,runCwd:string})=>Promise<{pending:string[],destructive:string[],detail:string}>} seams.inspectMigrations — MUST run in `runCwd` (the guard-validated absolute cwd), never re-derive it
  * @param {(a:{worktreePath:string,recipe:object,runCwd:string})=>Promise<{ok:boolean,applied:number,detail:string}>} seams.applyMigrations — MUST run in `runCwd`
- * @param {(a:{worktreePath:string,recipe:object,runCwd:string,pr:number})=>Promise<{pid:number|null,detail:string,logFile?:string,exited?:()=>({code:number|null,signal:string|null}|null),logTail?:()=>string}>} seams.bootApp — MUST run in `runCwd`.
+ * @param {(a:{worktreePath:string,recipe:object,runCwd:string,pr:number})=>Promise<{pid:number|null,detail:string,logFile?:string,exited?:()=>({code:number|null,signal:string|null}|null),logTail?:()=>string,onExit?:Promise<unknown>}>} seams.bootApp — MUST run in `runCwd`.
  *   Optional `exited()`/`logTail()`/`logFile`: when `exited()` returns a value after a
  *   failed probe, the poll stops at once with a `boot-exited` finding (exit code/signal + log tail).
  * @param {(url:string)=>Promise<boolean>} seams.probe
@@ -86,7 +86,12 @@ export async function provisionAndBoot(
       p.clear = () => clearTimeout(t);
       return p;
     },
-    delay = (ms) => new Promise((r) => setTimeout(r, ms)),
+    delay = (ms) => {
+      let t;
+      const p = /** @type {Promise<void> & {clear?:()=>void}} */ (new Promise((r) => { t = setTimeout(r, ms); }));
+      p.clear = () => clearTimeout(t);
+      return p;
+    },
     now = () => Date.now(),
     log = () => {},
   } = {},
@@ -251,6 +256,9 @@ export async function provisionAndBoot(
   let ready = false;
   let attempts = 0;
   let exitInfo = null;
+  const EXITED = Symbol("boot-exited");
+  // Optional onExit interrupts a pending probe or interval wait the moment the boot dies.
+  const exitP = boot.onExit ? Promise.resolve(boot.onExit).then(() => EXITED, () => EXITED) : new Promise(() => {});
   // Bounded poll (never a fixed sleep): probe, then wait one interval, until the
   // deadline. The injected clock/delay make the timeout deterministic in tests.
   while (now() <= deadline) {
@@ -263,25 +271,31 @@ export async function provisionAndBoot(
     let probeOk = false;
     const timeout = probeTimeout(Math.max(0, deadline - now()));
     try {
-      probeOk = await Promise.race([Promise.resolve(probe(recipe.readyUrl)), timeout]);
+      probeOk = (await Promise.race([Promise.resolve(probe(recipe.readyUrl)), timeout, exitP])) === true;
     } catch {
       probeOk = false;
     } finally {
       timeout.clear?.(); // cancel the pending per-attempt timer once the race is decided
     }
-    if (probeOk) {
-      ready = true;
-      break;
-    }
-    // Early exit: a boot process that already died can never become ready, so
-    // stop now with its exit status and output tail instead of waiting out the deadline.
+    // Early exit first: a boot process that already died can never become ready (a 2xx
+    // may come from another app owning readyUrl), so stop now with its exit status
+    // and output tail instead of accepting the probe or waiting out the deadline.
     const exit = boot.exited?.();
     if (exit) {
       exitInfo = exit;
       break;
     }
+    if (probeOk) {
+      ready = true;
+      break;
+    }
     if (now() + intervalMs > deadline) break; // would overshoot the deadline
-    await delay(intervalMs);
+    const wait = delay(intervalMs);
+    try {
+      await Promise.race([wait, exitP]);
+    } finally {
+      wait?.clear?.();
+    }
   }
 
   // A late exit (after the last probe, before the deadline break) is still an exit.
