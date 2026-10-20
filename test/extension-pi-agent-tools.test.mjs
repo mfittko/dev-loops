@@ -269,8 +269,9 @@ test("syncPackagedAgents preserves every mappable source tool in the canonical s
   }
 });
 
-// The source entrypoint stays Pi-valid while role templates remain harness-neutral.
-test("#1604 dev-loop.agent.md source drops agent/todo and declares edit/write", async () => {
+// #2854: Pi dispatches source frontmatter under a strict allowlist; execute is
+// unavailable. Claude parity is proven by the generator contract (#1086).
+test("#2854 dev-loop source keeps bash, drops execute and retains #1604 agent/todo and edit/write guards", async () => {
   const raw = await readFile(fileURLToPath(new URL("../agents/dev-loop.agent.md", import.meta.url)), "utf8");
   const toolsLine = raw.match(/^tools:\s*(.*)$/m);
   assert.ok(toolsLine, "dev-loop.agent.md must declare a tools: line");
@@ -280,7 +281,8 @@ test("#1604 dev-loop.agent.md source drops agent/todo and declares edit/write", 
   assert.ok(tools.includes("edit"), "dev-loop source must declare `edit` (conductor mutates under Pi)");
   assert.ok(tools.includes("write"), "dev-loop source must declare `write` (conductor mutates under Pi)");
   assert.ok(tools.includes("search"), "dev-loop source keeps neutral `search`");
-  assert.ok(tools.includes("execute"), "dev-loop source keeps neutral `execute`");
+  assert.ok(tools.includes("bash"), "dev-loop source keeps `bash` (Claude maps to Bash)");
+  assert.equal(tools.includes("execute"), false, "dev-loop source must not request unavailable `execute` (#2854)");
   assert.ok(tools.includes("subagent"), "dev-loop source keeps `subagent`");
 });
 
@@ -300,23 +302,20 @@ body
   }
 });
 
-test("#1604 role-agent sources keep neutral search/execute (no Claude regression — #1086)", async () => {
-  // Role agents MUST keep search/execute in source: Claude maps search->Grep+Glob
-  // and execute->Bash; dropping them removes Grep/Glob from the Claude-rendered
-  // role agents (a cross-harness regression). Pi sync maps `search` to grep/find/ls
-  // and `execute` to bash.
-  //
-  // The `review` agent is exempted per #1659: it drops search/execute from source
-  // so Pi does not mark review steps `failed` for unavailable declared tools (which
-  // aborts the wave's runs.all). The review agent can search via `bash`
-  // (rg/grep) on both harnesses, and code-execution verification is delegated to CI.
-  // See the dedicated `#1659 review agent source is Pi-safe` test below.
+test("#2854 role-agent sources keep search/bash without execute (no Claude regression — #1086)", async () => {
+  // Pi dispatches source frontmatter verbatim under a strict allowlist, so an
+  // unavailable execute token fails launch even if sync can render it to bash.
+  // Retain search and bash: the Claude generator maps them to Grep/Glob and Bash.
+  // agent-tools-contract.test.mjs proves that generated capability parity.
+  // #1659 already established removing unavailable source tools for review;
+  // its dedicated test below retains the review agent's bash-only search policy.
   const roleAgents = ["fixer", "developer", "docs", "quality", "refiner"];
   for (const name of roleAgents) {
     const raw = await readFile(fileURLToPath(new URL(`../agents/${name}.agent.md`, import.meta.url)), "utf8");
     const tools = (raw.match(/^tools:\s*(.*)$/m)?.[1] ?? "").split(/[\s,]+/).filter(Boolean);
     assert.ok(tools.includes("search"), `agents/${name}.agent.md must keep neutral \`search\` (Claude maps to Grep+Glob)`);
-    assert.ok(tools.includes("execute"), `agents/${name}.agent.md must keep neutral \`execute\` (Claude maps to Bash)`);
+    assert.ok(tools.includes("bash"), `agents/${name}.agent.md must keep \`bash\` (Claude maps to Bash)`);
+    assert.equal(tools.includes("execute"), false, `agents/${name}.agent.md must not request unavailable \`execute\` (#2854)`);
     assert.equal(tools.includes("agent"), false, `role agent ${name} must not declare \`agent\``);
     assert.equal(tools.includes("todo"), false, `role agent ${name} must not declare \`todo\``);
   }
