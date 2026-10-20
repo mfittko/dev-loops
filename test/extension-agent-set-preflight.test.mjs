@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { initGitFixture, runGitFixture } from "./_helpers.mjs";
 import extension from "../extension/index.ts";
 import { findProjectRoot, renderProjectAgents } from "../extension/sync-packaged-agents.ts";
 
@@ -185,6 +186,23 @@ test("session_start renders .pi/agents in a fresh dev-loops-shaped clone", () =>
     assert.equal(fs.lstatSync(dir).isDirectory(), true);
     assert.deepEqual(await launch(root), { block: false });
     assert.doesNotMatch(fs.readFileSync(path.join(dir, "quality.agent.md"), "utf8"), /tools:.*\b(search|execute)\b/);
+  }));
+
+test("session_start in a git main checkout leaves git status empty with a real .pi/agents directory", () =>
+  withProject(async (root) => {
+    initGitFixture(root, { commit: null });
+    fs.copyFileSync(path.join(repoRoot, ".gitignore"), path.join(root, ".gitignore"));
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    writeAt(path.join(root, "agents", "quality.agent.md"), "---\nname: quality\ntools: read, search, execute, bash\n---\nbody\n");
+    runGitFixture(root, ["add", "-A"]);
+    runGitFixture(root, ["commit", "-q", "-m", "init"]);
+    const events = new Map();
+    extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
+    await withHome(() => events.get("session_start")({}, { cwd: root, getSessionId: () => "s" }));
+    const dir = path.join(root, ".pi", "agents");
+    assert.equal(fs.lstatSync(dir).isDirectory(), true);
+    assert.doesNotMatch(fs.readFileSync(path.join(dir, "quality.agent.md"), "utf8"), /tools:.*\b(search|execute)\b/);
+    assert.equal(runGitFixture(root, ["status", "--porcelain", "--untracked-files=all"]), "");
   }));
 
 test("session_start leaves a consumer root with its own agents/ without .pi/agents", () =>

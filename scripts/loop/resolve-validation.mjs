@@ -172,7 +172,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
       // Untracked .pi/agents is generated at provision time (decision record 0173), not a tree change.
       // Tracked changes under it still count as dirt.
       const dirty = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: repoRoot, encoding: "utf8", env: gitEnv })
-        .split("\n").filter((l) => l && l !== "?? .pi/agents" && !l.startsWith("?? .pi/agents/")).join("\n").trim();
+        .split("\n").filter((l) => l && !l.startsWith("?? .pi/agents/")).join("\n").trim();
       return dirty ? { reason: "validation requires a clean worktree at the requested head", writeArtifact: true } : null;
     };
     const beforeProblem = currentTreeProblem();

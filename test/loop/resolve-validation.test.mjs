@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -381,6 +381,43 @@ test("an untracked .pi/agents directory does not make the tree dirty, another un
     const ok = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot });
     assert.doesNotMatch(ok.reason ?? "", /clean worktree/);
     await writeFile(path.join(repoRoot, "stray.txt"), "x\n");
+    const dirty = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot });
+    assert.equal(dirty.status, "incomplete");
+    assert.match(dirty.reason, /clean worktree/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("an untracked .pi/agents symlink makes the tree dirty", async () => {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    await mkdir(path.join(repoRoot, ".pi"), { recursive: true });
+    await symlink("../scripts", path.join(repoRoot, ".pi", "agents"));
+    const dirty = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot });
+    assert.equal(dirty.status, "incomplete");
+    assert.match(dirty.reason, /clean worktree/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("an untracked developer.agent.md under .pi/agents stays clean", async () => {
+  const { repoRoot, headSha } = await fixture();
+  try {
+    await mkdir(path.join(repoRoot, ".pi", "agents"), { recursive: true });
+    await writeFile(path.join(repoRoot, ".pi", "agents", "developer.agent.md"), "x\n");
+    const ok = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot });
+    assert.doesNotMatch(ok.reason ?? "", /clean worktree/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a modified tracked developer.agent.md under .pi/agents keeps the tree dirty", async () => {
+  const { repoRoot } = await fixture();
+  try {
+    await mkdir(path.join(repoRoot, ".pi", "agents"), { recursive: true });
+    const file = path.join(repoRoot, ".pi", "agents", "developer.agent.md");
+    await writeFile(file, "x\n");
+    execFileSync("git", ["add", "-f", ".pi/agents/developer.agent.md"], { cwd: repoRoot });
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "track agent"], { cwd: repoRoot });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    await writeFile(file, "changed\n");
     const dirty = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot });
     assert.equal(dirty.status, "incomplete");
     assert.match(dirty.reason, /clean worktree/);
