@@ -648,10 +648,6 @@ export async function mergePr(options, runtime = {}) {
     };
     throw error;
   };
-  // The only base + PR-head fetch of the merge; the ADR tripwire and the ancestry check reuse it.
-  const fetchReason = resolveBaseFetchRefusal({ options, baseRefName, headSha: currentHeadSha, repoRoot, fetchPrHead, detectOriginSlug });
-  if (fetchReason !== null) refuseBaseNotIntegrated(fetchReason, null);
-
   const rawReviews = flattenPaginatedSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`],
     { env, ghCommand, runChild },
@@ -682,6 +678,10 @@ export async function mergePr(options, runtime = {}) {
     error.mergePrFailure = { ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy, humanMergeOnly: true };
     throw error;
   }
+
+  // The only base + PR-head fetch of the merge; the ADR tripwire and the ancestry check reuse it.
+  const fetchReason = resolveBaseFetchRefusal({ options, baseRefName, headSha: currentHeadSha, repoRoot, fetchPrHead, detectOriginSlug });
+  if (fetchReason !== null) refuseBaseNotIntegrated(fetchReason, null);
 
   // A standing authorization is NOT established by config alone
   // (autonomy.humanMergeOnly:false authorizes nothing). The orchestrator asserts

@@ -641,6 +641,15 @@ test("under autonomy.humanMergeOnly the wrapper refuses outright, even with a fr
   assert.equal(calls.runChild.length, 0, "no merge under humanMergeOnly");
 });
 
+test("humanMergeOnly refuses before the base fetch, even when the fetch would throw", async () => {
+  const { runtime } = makeRuntime({ humanMergeOnly: true });
+  let fetched = false;
+  runtime.fetchPrHead = () => { fetched = true; throw new Error("fetch must not run"); };
+  const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.equal(threw.mergePrFailure.humanMergeOnly, true);
+  assert.equal(fetched, false);
+});
+
 test("a drain merge without --standing-authorization requires a fresh operator approval", async () => {
   // No standing flag, no fresh approval -> refused.
   const noApproval = makeRuntime();
@@ -1145,7 +1154,7 @@ test("adr_number_collision: a 404 on the tip directory is an empty tip", async (
   assert.equal((await mergePr(baseOptions(), runtime)).merged, true);
 });
 
-test("adr_number_collision: refuses fail-closed when the base branch name is unknown or blank and a record is added", async () => {
+test("adr_number_collision: a blank base branch name refuses before any ADR number read", async () => {
   for (const baseRefName of ["", "  "]) {
     const { runtime, calls } = makeRuntime({ prView: { baseRefName }, adrPrFiles: [adrFile("docs/decisions/0001-a.md")] });
     const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
