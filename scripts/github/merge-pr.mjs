@@ -462,6 +462,34 @@ async function resolveAdrTripwireRefusal({ options, baseRefName, body, headSha, 
   }
 }
 
+export function defaultIsAncestor({ base, head, repoRoot }) {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", base, head], { cwd: repoRoot, env: scrubGitEnv(process.env), stdio: "ignore" });
+    return true;
+  } catch (error) {
+    if (error?.status === 1) return false;
+    throw error;
+  }
+}
+
+// Returns a base_not_integrated refusal reason, or null when origin/<base> is an ancestor of the head.
+// Any fetch or git error is a refusal (fail closed).
+function resolveBaseNotIntegratedRefusal({ options, baseRefName, headSha, repoRoot, fetchPrHead, detectOriginSlug, isAncestor }) {
+  try {
+    if (!baseRefName) throw new Error("the PR base branch is unreadable");
+    if (!headSha) throw new Error("the PR head is unreadable");
+    const originSlug = detectOriginSlug(repoRoot);
+    if (!originSlug || !repoSlugEquals(originSlug, options.repo)) {
+      throw new Error(`the checkout origin (${originSlug ?? "unresolved"}) is not ${options.repo}`);
+    }
+    fetchPrHead({ pr: options.pr, baseRefName, repoRoot });
+    if (isAncestor({ base: `origin/${baseRefName}`, head: headSha, repoRoot })) return null;
+    return `head ${headSha} does not contain origin/${baseRefName} (GATE-EXEC-BASE-REFRESH); merge origin/${baseRefName} into the branch, push, and re-run the gate round at the new head`;
+  } catch (error) {
+    return `could not verify that the head contains origin/${baseRefName || "<base>"}: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
 const POST_MERGE_ACTIONS_PATH = fileURLToPath(new URL("../loop/run-post-merge-actions.mjs", import.meta.url));
 const SELF_PATH = fileURLToPath(import.meta.url);
 
@@ -589,6 +617,7 @@ export async function mergePr(options, runtime = {}) {
     detectOriginSlug = detectRepoSlug,
     evaluateAdrTripwire = defaultEvaluateAdrTripwire,
     waiveAdrTripwire = defaultWaiveAdrTripwire,
+    isAncestor = defaultIsAncestor,
   } = runtime;
 
   assertGithubWriteStubbedInTestMode(runChild, "pr merge", { env });
@@ -757,6 +786,22 @@ export async function mergePr(options, runtime = {}) {
     error.mergePrFailure = {
       ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
       mergeClass: verdict.mergeClass, failures: [{ precondition: "adr_tripwire", reason: adrReason }],
+    };
+    throw error;
+  }
+
+  const baseReason = resolveBaseNotIntegratedRefusal({
+    options,
+    baseRefName: typeof prView?.baseRefName === "string" ? prView.baseRefName.trim() : "",
+    headSha: currentHeadSha,
+    repoRoot: resolveRepoRoot(cwd),
+    fetchPrHead, detectOriginSlug, isAncestor,
+  });
+  if (baseReason !== null) {
+    const error = new Error(`Merge preconditions not satisfied: base_not_integrated (${baseReason})`);
+    error.mergePrFailure = {
+      ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
+      mergeClass: verdict.mergeClass, failures: [{ precondition: "base_not_integrated", reason: baseReason }],
     };
     throw error;
   }
