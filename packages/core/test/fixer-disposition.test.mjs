@@ -7,6 +7,7 @@ import {
   FIXER_DISPOSITION_FAILED_STEP,
   FIXER_DISPOSITION_FORBIDDEN_ACTIONS,
   normalizeFixerDispositionHandoff,
+  recordedSkipReason,
   siteCoverageGaps,
 } from "../src/loop/fixer-disposition.mjs";
 import { PR_CHECKPOINT_ACTION } from "../src/loop/pr-gate-coordination.mjs";
@@ -372,9 +373,40 @@ test("normalizeFixerDispositionHandoff refuses an unedited FILL: noSitesReason",
   );
 });
 
+test("normalizeFixerDispositionHandoff keeps empty and padded input_form sites verbatim", () => {
+  const sites = ["", " 12 "].map((site) => ({ site, kind: "input_form", status: "fixed", test: "form test" }));
+  const handoff = normalizeFixerDispositionHandoff({ headSha: SHA, siteCoverage: [{ fingerprint: "fp", returnedSites: ["", " 12 "], sites }] });
+  assert.deepEqual(handoff.siteCoverage[0].sites.map((s) => s.site), ["", " 12 "]);
+  assert.deepEqual(handoff.siteCoverage[0].returnedSites, ["", " 12 "]);
+});
+
 test("normalizeFixerDispositionHandoff refuses a count-valued returnedSites and quotes the expected shape", () => {
   assert.throws(
     () => normalizeFixerDispositionHandoff({ headSha: SHA, siteCoverage: [{ fingerprint: "fp", returnedSites: 3, sites: 3 }] }),
     /not counts; expected returnedSites: \["<site>", \.\.\.\] and sites: \[\{ "site": "<site>", "status": "fixed"\|"skipped"/,
   );
+});
+
+test("recordedSkipReason matches an input_form site verbatim and never borrows a trimmed sibling", () => {
+  const skipped = (site, kind) => ({ site, status: "skipped", reason: `reason ${JSON.stringify(site)}`, ...(kind ? { kind } : {}) });
+  const padded = [{ fingerprint: "fp", sites: [skipped(" 12 ", "input_form")] }];
+  assert.equal(recordedSkipReason(padded, "fp", " 12 "), 'reason " 12 "');
+  assert.equal(recordedSkipReason(padded, "fp", "12"), null);
+  const trimmedOnly = [{ fingerprint: "fp", sites: [skipped("12", "input_form")] }];
+  assert.equal(recordedSkipReason(trimmedOnly, "fp", " 12 "), null);
+  const location = [{ fingerprint: "fp", sites: [skipped("src/a.mjs")] }];
+  assert.equal(recordedSkipReason(location, "fp", " src/a.mjs "), 'reason "src/a.mjs"');
+  const both = [{ fingerprint: "fp", sites: [skipped("12"), skipped(" 12 ", "input_form")] }];
+  assert.equal(recordedSkipReason(both, "fp", " 12 "), 'reason " 12 "');
+  const fixedForm = [{ fingerprint: "fp", sites: [{ site: " src/a.mjs ", kind: "input_form", status: "fixed", test: "t" }, skipped("src/a.mjs")] }];
+  assert.equal(recordedSkipReason(fixedForm, "fp", " src/a.mjs "), null);
+});
+
+test("normalizeFixerDispositionHandoff keeps the empty-site relaxation confined to input_form", () => {
+  const handoff = (entry) => () => normalizeFixerDispositionHandoff({ headSha: SHA, siteCoverage: [{ fingerprint: "fp", ...entry }] });
+  assert.throws(handoff({ returnedSites: [""], sites: [{ site: "", status: "fixed" }] }), /needs a site/);
+  assert.throws(handoff({ returnedSites: [""], sites: [{ site: "x", status: "fixed" }] }), /non-empty strings/);
+  assert.throws(handoff({ returnedSites: [""] }), /non-empty strings/);
+  const dup = { kind: "input_form", status: "fixed", test: "t" };
+  assert.throws(handoff({ sites: [{ site: "", ...dup }, { site: "", ...dup }] }), /records site "" more than once/);
 });

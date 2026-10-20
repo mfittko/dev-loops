@@ -34,7 +34,7 @@ test("GATE-COMMENT-VERDICT-VALUES states the clean/findings_present meanings the
   // The stated meaning of "clean" matches what consolidate-fanin computes
   // (no findings at a blocking severity remain), composed with the judge act
   // list at post time (ADR 0089).
-  assert.match(doc, /\| `clean` \| No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain, and the judge act list is empty \|/);
+  assert.match(doc, /\| `clean` \| No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain, and the judge act list is empty(, except [^|]*)? \|/);
   // The stated meaning of "findings_present" matches (blocking findings found
   // or a non-empty act list).
   assert.match(doc, /\| `findings_present` \| The gate found issues at blocking severities, or the judge act list is not empty/);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterAll as after, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync, chmodSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, appendFileSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -663,6 +663,30 @@ test("makeRunStep: threads consolePath into the runStep result and points state.
   assert.ok(typeof outcome.consolePath === "string" && outcome.consolePath.endsWith("console.json"), "consolePath is threaded into the runStep result");
   const state = JSON.parse(readFileSync(outcome.statePath, "utf8"));
   assert.equal(state.artifacts.console.path, outcome.consolePath, "state.json back-references the same console.json");
+});
+
+test("makeRunStep: forwards repoRoot so axe resolves @axe-core/playwright from the reviewed worktree", async () => {
+  const wt = tempDir();
+  const pkgDir = path.join(wt, "node_modules", "@axe-core", "playwright");
+  mkdirSync(pkgDir, { recursive: true });
+  writeFileSync(path.join(wt, "package.json"), '{"name":"fixture"}');
+  writeFileSync(path.join(pkgDir, "package.json"), '{"name":"@axe-core/playwright","main":"index.js"}');
+  writeFileSync(path.join(pkgDir, "index.js"), 'class AxeBuilder { async analyze() { return { violations: [{ id: "from-worktree" }] }; } }\nmodule.exports = { default: AxeBuilder };');
+  const runStep = makeRunStep({ page: fakeDrivePage(), outputDir: tempDir(), repoRoot: wt });
+
+  const outcome = await runStep({ appUrl: "http://app", flow: { name: "checkout" }, step: { name: "save", action: "goto" }, index: 0 });
+
+  assert.deepEqual(JSON.parse(readFileSync(outcome.axePath, "utf8")), { violations: [{ id: "from-worktree" }] });
+});
+
+test("makeRunStep: logs one stated line the first time axe is skipped and returns axeSkipReason (AC4)", async () => {
+  const logs = [];
+  const runStep = makeRunStep({ page: fakeDrivePage(), outputDir: tempDir(), repoRoot: tempDir(), log: (m) => logs.push(m) });
+  const first = await runStep({ appUrl: "http://app", flow: { name: "checkout" }, step: { name: "a", action: "goto" }, index: 0 });
+  await runStep({ appUrl: "http://app", flow: { name: "checkout" }, step: { name: "b", action: "goto" }, index: 1 });
+  assert.match(first.axeSkipReason, /^axe: /);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /^axe: /);
 });
 
 test("makeRunStep: a declared step viewport resizes the page and slugs the capture into a distinct directory (same state name, different viewport)", async () => {

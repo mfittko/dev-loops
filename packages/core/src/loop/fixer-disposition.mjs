@@ -71,15 +71,17 @@ function normalizeSiteCoverage(entry, label, ruleIds) {
     throw new Error(`${label} sites and returnedSites must be arrays, not counts; expected returnedSites: ["<site>", ...] and sites: [{ "site": "<site>", "status": "fixed"|"skipped", "reason": "<required for skipped>" }, ...]`);
   }
   const sites = rawSites.map((site, i) => {
-    if (!site || typeof site !== "object" || !isNonEmptyString(site.site)) throw new Error(`${label} sites[${i}] needs a site`);
+    // An input form is an input, so "" and " 12 " are kept verbatim; other sites are locations.
+    const verbatim = site?.kind === "input_form" && typeof site.site === "string";
+    if (!site || typeof site !== "object" || !(verbatim || isNonEmptyString(site.site))) throw new Error(`${label} sites[${i}] needs a site`);
     const status = typeof site.status === "string" ? site.status.trim().toLowerCase() : "";
-    if (!Object.values(SITE_STATUS).includes(status)) throw new Error(`${label} site ${site.site} has status ${JSON.stringify(site.status)}, expected fixed or skipped`);
-    if (status === SITE_STATUS.SKIPPED && !isNonEmptyString(site.reason)) throw new Error(`${label} skipped site ${site.site} records no skip reason`);
+    if (!Object.values(SITE_STATUS).includes(status)) throw new Error(`${label} site ${JSON.stringify(site.site)} has status ${JSON.stringify(site.status)}, expected fixed or skipped`);
+    if (status === SITE_STATUS.SKIPPED && !isNonEmptyString(site.reason)) throw new Error(`${label} skipped site ${JSON.stringify(site.site)} records no skip reason`);
     if (status === SITE_STATUS.FIXED && site.kind === "input_form" && !isNonEmptyString(site.test)) {
-      throw new Error(`${label} fixed input form ${site.site} names no test`);
+      throw new Error(`${label} fixed input form ${JSON.stringify(site.site)} names no test`);
     }
     return {
-      site: site.site.trim(),
+      site: verbatim ? site.site : site.site.trim(),
       status,
       ...(isNonEmptyString(site.reason) ? { reason: site.reason.trim() } : {}),
       ...(site.kind === "input_form" ? { kind: "input_form" } : {}),
@@ -89,9 +91,10 @@ function normalizeSiteCoverage(entry, label, ruleIds) {
   const disposed = new Set(sites.map((s) => s.site));
   if (disposed.size !== sites.length) {
     const dup = sites.find((s, i) => sites.findIndex((o) => o.site === s.site) !== i);
-    throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: ${label} records site ${dup.site} more than once`);
+    throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: ${label} records site ${JSON.stringify(dup.site)} more than once`);
   }
   const returnedSites = returned.map((site) => {
+    if (typeof site === "string" && sites.some((s) => s.kind === "input_form" && s.site === site)) return site;
     if (!isNonEmptyString(site)) throw new Error(`${label} returnedSites entries must be non-empty strings`);
     if (!disposed.has(site.trim())) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: ${label} leaves returned site ${site.trim()} neither fixed nor skipped with a reason`);
     return site.trim();
@@ -171,8 +174,11 @@ export function siteCoverageGaps(actItems, siteCoverage, residualRefs = new Set(
 
 /** The recorded skip reason for a site of an act item, or null. */
 export function recordedSkipReason(siteCoverage, fingerprint, site) {
-  const found = (siteCoverage ?? []).find((record) => record.fingerprint === fingerprint)?.sites?.find((s) => s.site === site && s.status === SITE_STATUS.SKIPPED);
-  return found?.reason ?? null;
+  if (typeof site !== "string") return null;
+  const sites = (siteCoverage ?? []).find((record) => record.fingerprint === fingerprint)?.sites ?? [];
+  // Resolve the exact site first, then filter by status, so a fixed exact form is not shadowed by a skipped trimmed location.
+  const found = sites.find((s) => s.site === site) ?? sites.find((s) => s.kind !== "input_form" && s.site === site.trim());
+  return found?.status === SITE_STATUS.SKIPPED ? (found.reason ?? null) : null;
 }
 
 /**

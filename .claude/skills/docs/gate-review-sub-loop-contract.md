@@ -164,6 +164,9 @@ inconsistent record is a full re-gate. The validator never re-derives blob facts
 git, so a consumer re-runs `computeBaseMergeCarry` for the bound heads and compares before
 trusting the recorded facts. ADR 0156 records this rule.
 
+<!-- rule: GATE-EXEC-LOW-NIT-CONVERGENCE -->
+`GATE-EXEC-LOW-NIT-CONVERGENCE`: A `draft_gate` round at head A whose open judge act items are ALL `low` or `nit` (a non-empty list) converges after one `commit_only` fixer pass and a fresh, valid `locally_clear` pre-push delta review of the fixer commit (`PRE-PUSH-DELTA-NOT-GATE-EVIDENCE`). No further full `draft_gate` round runs. The poster updates the `draft_gate` comment at A to `clean` with `upsert-checkpoint-verdict.mjs --converged-json` and records `**Converged:** fixer <sha> delta sha256:<digest>` (the fixer commit and the digest of the clean delta result). The round converges once: one pre-push delta sequence from A, bound by the delta result baseline A and `candidateHead` = the fixer commit. `composeConvergedDraftGate` (`packages/core/src/loop/pre-push-delta-review.mjs`) refuses a non-`draft_gate` gate, an empty act list, a `medium`, `high`, `question` or unknown severity, a mixed list, an act list that differs from the round's (compared by severity and summary as a multiset with counts), a delta result that is invalid, not `locally_clear`, stale or carries a new finding. The membership-only delta check is sufficient: the act-set id and baseline A bind the result to this round, and `pre_approval_gate` reviews the final head in full. `upsert-checkpoint-verdict.mjs` requires `--findings-ledger` and takes the round's act items from the union of the ledger at A and the `--findings-json` act items (it refuses without the ledger, and a missing or unreadable ledger refuses naming the path and error), refuses a PR head other than the fixer commit, and refuses a comment at A that is already `clean` or already converged. Any refusal keeps the full round. `detect-checkpoint-evidence.mjs` re-derives the light-mode scope, risk-path and size floors for an inline marker against the marker's own head (the fixer commit). The rule takes no round count and no cap. Gate coordination reads the marker as the `draft_gate` marker of the fixer commit (`summarizeGateReviewCommentMarkers`) and returns `mark_ready_for_review`, then the mandatory `pre_approval_gate`. The `pre_approval_gate` stays a full review of the final head, and `merge-pr.mjs` is unchanged: the marker is not merge evidence. ADR 0168 records this rule.
+
 ### Phase 1 — Preamble: context-builder
 
 Before fanning out reviewers, run a preamble pass that produces review handoff context
@@ -729,7 +732,7 @@ Consolidation:
   `overallVerdict`. The posted review verdict composes it with the judge act list (ADR 0089,
   `GATE-COMMENT-VERDICT-VALUES`):
   - `clean`: no findings with a severity in the gate's `blockCleanOnFindingSeverities` list
-    remain, and the judge act list is empty
+    remain, and the judge act list is empty (except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168))
   - `findings_present`: one or more findings with a blocking severity remain, or the judge act
     list is not empty
   - `blocked`: the gate could not complete or a hard blocker prevented a verdict
@@ -861,9 +864,23 @@ is available to every writer for the whole round, including Phase 3's fan-in led
 conductor always runs `scripts/loop/spec-context.mjs` to derive the run's spec/digest identities
 so nothing hand-derives them:
 
+Select exactly one source from the routed canonical authority: `--issue` for a tracker
+issue, or `--pr` when `canonicalSpecSource`/`specSource` is `pr_body`. The PR path
+reads that PR's live body and head together; it never substitutes a linked or umbrella
+issue. Any supplied `--head-sha` must equal the full live PR head SHA. Both sources
+use the same formal-spec parser, digests, complete criteria and identity stamp.
+
 ```sh
 content_digest=$(node scripts/loop/spec-context.mjs --repo <owner/name> --issue <linked_issue_number> \
   --content-file <reviewed-content-path> --head-sha <current_head_sha> \
+  --spec-out <spec-path> --identity-out <identity-path> --jq '.contentDigest')
+```
+
+For the existing PR-body authority, use the same command with `--pr` instead:
+
+```sh
+content_digest=$(node scripts/loop/spec-context.mjs --repo <owner/name> --pr <pr_number> \
+  --content-file <reviewed-content-path> --head-sha <current_full_head_sha> \
   --spec-out <spec-path> --identity-out <identity-path> --jq '.contentDigest')
 ```
 
@@ -1055,8 +1072,8 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   medium THREAD still forces another fix round, but through the unresolved-feedback
   routing `GATE-EXEC-THREAD-DISPOSITION` owns, not by changing what the ledger verdict `clean`
   means. The posted review verdict composes the ledger verdict with the judge act list: it is
-  `clean` only when the ledger verdict is `clean` and the judge act list is empty (ADR 0089). A
-  judge `act` therefore blocks `clean` at any round, inside or outside the medium fix window.
+  `clean` only when the ledger verdict is `clean` and the judge act list is empty (ADR 0089; except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)). A
+  judge `act` therefore blocks `clean` at any round (except `GATE-EXEC-LOW-NIT-CONVERGENCE`), inside or outside the medium fix window.
   GATE-CLOSE is a third, stricter layer owned by `GATE-EXEC-THREAD-DISPOSITION` below: a clean
   verdict is NOT sufficient to close the gate, because every gate-authored review thread (any
   severity) must first be resolved. Widening the blocking
@@ -1067,11 +1084,11 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
 
 After applying fixes and advancing the head SHA:
 
-- <!-- rule: GATE-EXEC-REGATE-MANDATORY --> `GATE-EXEC-REGATE-MANDATORY`: **Re-gate is mandatory:** a new head SHA MUST always trigger a fresh full-chain gate pass; the gate MUST NOT be skipped because a previous head was clean, except where `GATE-EXEC-BASE-MERGE-VERDICT-CARRY` carries a verdict across a base-only merge (ADR 0156); that carry takes effect only once `merge-pr` and gate coordination accept the evidence (issue 2752 slice 2), and until then every new head is re-gated. The `draft_gate` one-time skip is a narrow exemption from this rule that only applies after the PR has left draft ([GATE-COMMENT-DRAFT-REQUIREMENTS](./gate-review-comment-contract.md#draft-gate-draft_gate-comment-requirements)); while the PR is still draft, every new head is re-gated per this rule. A `draft_gate` never re-runs on a non-draft PR whose draft gate is already satisfied: `write-gate-context.mjs` refuses it before any reviewer work, and a new ready head instead takes a Copilot re-request when it answers Copilot findings, and a current-head `pre_approval_gate`.
-- rerun the sub-loop from Phase 1 (context-builder preamble for the new head SHA)
-- continue the fix-then-retry cycle until the posted review verdict is `clean`
+- <!-- rule: GATE-EXEC-REGATE-MANDATORY --> `GATE-EXEC-REGATE-MANDATORY`: **Re-gate is mandatory:** a new head SHA MUST always trigger a fresh full-chain gate pass; the gate MUST NOT be skipped because a previous head was clean, except where `GATE-EXEC-BASE-MERGE-VERDICT-CARRY` carries a verdict across a base-only merge (ADR 0156); that carry takes effect only once `merge-pr` and gate coordination accept the evidence (issue 2752 slice 2), and until then every new head is re-gated; and except `GATE-EXEC-LOW-NIT-CONVERGENCE`, where an all-low/nit `draft_gate` round converges after one fixer pass and a clean pre-push delta review without a second full `draft_gate` round (ADR 0168; the `pre_approval_gate` still reviews the final head in full). The `draft_gate` one-time skip is a narrow exemption from this rule that only applies after the PR has left draft ([GATE-COMMENT-DRAFT-REQUIREMENTS](./gate-review-comment-contract.md#draft-gate-draft_gate-comment-requirements)); while the PR is still draft, every new head is re-gated per this rule. A `draft_gate` never re-runs on a non-draft PR whose draft gate is already satisfied: `write-gate-context.mjs` refuses it before any reviewer work, and a new ready head instead takes a Copilot re-request when it answers Copilot findings, and a current-head `pre_approval_gate`.
+- rerun the sub-loop from Phase 1 (context-builder preamble for the new head SHA), except where `GATE-EXEC-LOW-NIT-CONVERGENCE` converges an all-low/nit `draft_gate` round via `upsert-checkpoint-verdict.mjs --converged-json`
+- continue the fix-then-retry cycle until the posted review verdict is `clean` (or converged per `GATE-EXEC-LOW-NIT-CONVERGENCE`)
 - on retry, re-invoke every reviewer whose review surface the new head's delta touched (including any angle whose prior finding attribution is ambiguous) and every mandatory / always-run angle; the context-builder and consolidation always run fresh. Other angles are carried forward per [GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed), on that rule's proof and never on guesswork (a carried `findings_present` angle brings its open findings forward and the round still blocks on them)
-- a clean pass means all gate-specific review angles pass, no findings with a severity in `blockCleanOnFindingSeverities` remain, and the judge act list is empty (ADR 0089): the posted review verdict composes the ledger's severity `overallVerdict` with the act list
+- a clean pass means all gate-specific review angles pass, no findings with a severity in `blockCleanOnFindingSeverities` remain, and the judge act list is empty (ADR 0089; except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)): the posted review verdict composes the ledger's severity `overallVerdict` with the act list
 
 #### Angle carry-forward (fail-closed) {#angle-carry-forward-fail-closed}
 
@@ -1129,7 +1146,7 @@ Each gate chain exits when one of these conditions is met:
 
 | Condition | Result |
 |---|---|
-| Posted review verdict is `clean` (no findings at any blocking severity, and the judge act list is empty per ADR 0089) | Gate passes; proceed to next boundary |
+| Posted review verdict is `clean` (no findings at any blocking severity, and the judge act list is empty per ADR 0089, except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)) | Gate passes; proceed to next boundary |
 | `pre_approval_gate` checkpoint `blocked` composed from a deterministic AC/DoD blocker over a completed review ledger (the comment records a **Review verdict** and **Gate blockers**) | Resolve each remaining blocker per [acceptance-criteria-verification.md step 5](acceptance-criteria-verification.md), which says when the writer ticks automatically and when the operator ticks with the CLI; then rerun the gate (the writer's next action is "rerun gate") |
 | `blocked` verdict from the review/fan-in itself (gate could not complete) | Stop; escalate to operator |
 | Maximum retry cycles exhausted without reaching `clean` | Stop; escalate to operator |

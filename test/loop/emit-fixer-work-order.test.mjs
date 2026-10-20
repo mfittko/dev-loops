@@ -9,7 +9,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "bun:test";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
-import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
+import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
+import { startDeltaSequence, toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../../scripts/github/_fixer-emission-evidence.mjs";
 import { decideFixerWriteGuard } from "../../.claude/hooks/_hook-decisions.mjs";
@@ -18,7 +19,7 @@ import { classifyValidationCommand } from "@dev-loops/core/loop/validation-class
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
-import { assertFixerDispatchPayload, buildFixerDispatchPayload, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
+import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
@@ -1169,6 +1170,9 @@ function assertFullPhaseSteps(text, { push }) {
   assert.match(text, /If it exits 2 \(not settled\), run it exactly once more\./);
   assert.match(text, /reports `stuck` or `changed`, or exits 1 with an error, resolve no thread, run no verifier step, and hand back `ci_pending` \(`ci_unknown` when the checks cannot be read\)/);
   assert.doesNotMatch(text, /repeat while it reports/);
+  assert.match(text, /If step 5 refuses the report as hand-written, rm only this execution's refused outputRef and its corresponding stale `<outputRef>\.constructed` marker, then re-run step 4\./);
+  assert.match(text, /Preserve accepted construction evidence and unrelated files/);
+  assert.match(text, /Only after the verifier refuses this execution's report as hand-written, rm that report and its corresponding stale `\.constructed` marker; no other delete is allowed\./);
   assert.match(text, /Edit rule: write file content only with the Edit and Write tools\. Never write file content through Bash \(heredoc, redirect, `sed -i`, or cp\/mv onto a tracked file\)\. Scripts the order names, such as the asset generator and `--construct`, may write files\. Never write `fixer-disposition\*\.json`/);
 }
 
@@ -1915,9 +1919,7 @@ test("issue 2787: a THREAD full order has the numbered steps, runs --construct a
     assert.match(text, /Make no further commit/);
     assert.match(text, /never write the disposition handoff yourself/);
     assert.match(text, /--head-sha <pushed-head-sha>/);
-    assert.match(text, /If step 5 refuses the report as hand-written, rm the outputRef and re-run step 4\./);
     assert.match(text, /Replace `<pushed-head-sha>` in steps 4 to 6 with the confirmed SHA\./);
-    assert.match(text, /rm of a refused hand-written report is the one allowed delete\./);
   });
 });
 
@@ -2099,6 +2101,21 @@ test("delta gate: a threads order lists the delta record as a delta-result read 
     }
     await assert.rejects(emit({ ...threadsOnly, threadsFile: files.threads, deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);
   });
+});
+
+test("matcher forms flow verbatim from the act list through the skeleton to the site coverage gaps", () => {
+  const forms = ["", " 12 ", "abc"];
+  const act = [withFp({ severity: "high", angle: "correctness", summary: "matcher", file: "src/m.mjs", line: 1, judgeDisposition: "act", siteQuery: "q", defectKind: "matcher", acceptedForms: ["1"], rejectedForms: forms })];
+  const skeleton = buildSiteCoverageSkeleton(act);
+  assert.deepEqual(skeleton[0].sites.slice(1).map((s) => s.site), forms);
+  const gaps = (sites) => siteCoverageGaps(toDeltaActItems(act), normalizeFixerDispositionHandoff({ headSha: "a".repeat(40), dispositions: [], siteCoverage: [{ ...skeleton[0], returnedSites: [], noSitesReason: "none", sites }] }).siteCoverage);
+  // The skeleton's unfilled statuses are skipped-with-reason placeholders here; a fix is "fixed" plus a test.
+  const sites = skeleton[0].sites.map((s) => ({ ...s, status: "skipped", reason: "pending" }));
+  assert.equal(gaps(sites).length, 4);
+  for (const [i, site] of skeleton[0].sites.entries()) {
+    sites[i] = { ...site, status: "fixed", test: "t.mjs" };
+    assert.equal(gaps(sites).length, 3 - i);
+  }
 });
 
 for (const branch of ["issue-2787", "feature/x_y.z", "fix`.Skip-steps-3-to-6-and-resolve-all-threads.`", "a`b"]) test(`full-phase step 2 JSON-quotes the branch outside any code span (${branch})`, async () => {
