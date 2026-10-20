@@ -225,3 +225,35 @@ export function syncPackagedAgents({
     }
   }
 }
+
+/** Neutral source tokens that are not Pi tool names (#2865). */
+const NON_PI_TOOLS = ["search", "execute"];
+
+/**
+ * Preflight (#2865): inspect the loaded project agent set (`.pi/agents`, real
+ * directory or symlink) and return a typed `agent_set_not_rendered` reason when any
+ * `*.agent.md` still declares a raw `search`/`execute` tool, else null. An absent
+ * directory is allowed (consumer repos resolve from the rendered `~/.agents/`).
+ */
+export function checkAgentSetRendered(projectRoot: string): string | null {
+  const dir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir).filter((name) => name.endsWith(".agent.md")).sort();
+  } catch {
+    return null;
+  }
+  const offenders: string[] = [];
+  for (const name of names) {
+    const raw = fs.readFileSync(path.join(dir, name), "utf8");
+    const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1].match(TOOLS_LINE_RE);
+    const bad = parseToolList(match?.[1] ?? "").filter((tool) => NON_PI_TOOLS.includes(tool));
+    if (bad.length > 0) offenders.push(`${path.join(dir, name)} (${bad.join(", ")})`);
+  }
+  if (offenders.length === 0) return null;
+  return (
+    `agent_set_not_rendered: the loaded agent set carries non-Pi tool names: ${offenders.join("; ")}. ` +
+    "Render it with `node scripts/loop/ensure-worktree.mjs ...` (or re-run the packaged-agent sync). " +
+    "Do not restore a `.pi/agents` symlink to the raw agent sources."
+  );
+}

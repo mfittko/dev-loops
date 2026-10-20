@@ -31,7 +31,7 @@ const WIDGET_KEY = 'dev-loops.setup';
 // builtins at session-start sync time (#1583); the pure transform + IO live in
 // a dedicated module so they stay testable offline. Import for local use AND
 // re-export so tests can reach the same binding the session_start handler calls.
-import { syncPackagedAgents } from './sync-packaged-agents.ts';
+import { checkAgentSetRendered, syncPackagedAgents } from './sync-packaged-agents.ts';
 export { syncPackagedAgents };
 import { decidePiToolCall, isReadOnlyPiRole, resolvePiRole } from './readonly-role-gate.ts';
 
@@ -82,6 +82,11 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
   // read-only roles; Pi honours `{ block, reason }` from `tool_call`.
   adapter.on('tool_call', (event, ctx) => {
     const { toolName, input } = event as { toolName?: string; input?: { command?: unknown } };
+    if (toolName === 'subagent' && ctx.cwd) {
+      // #2865: refuse a child launch when the loaded agent set carries raw non-Pi tools.
+      const reason = checkAgentSetRendered(ctx.cwd);
+      if (reason) return { block: true, reason };
+    }
     return decidePiToolCall({ toolName, input, agentType: resolveSessionRole(ctx) });
   });
 
