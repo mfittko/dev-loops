@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,16 +8,18 @@ import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 import { parseValidationRecord } from "@dev-loops/core/loop/validation-record";
-import { runNode } from "../_helpers.mjs";
+import { runGitFixture, runNode } from "../_helpers.mjs";
 
 const CLI = fileURLToPath(new URL("../../cli/index.mjs", import.meta.url));
+const SCRIPT = fileURLToPath(new URL("../../scripts/loop/validation-record.mjs", import.meta.url));
 const bunVersion = execFileSync("bun", ["--version"], { encoding: "utf8" }).trim();
 const TITLE = "feat: record title";
 const DEVLOOPS = "version: 1\nvalidation:\n  mode: local\n  paths:\n    - match: \"docs/**\"\n      surface: docs\n      commands: [\"bun run test:docs\"]\n";
 // Both suites fail unless they see the injected PR title.
 const TITLE_CHECK = `process.exit(process.env.DEVLOOPS_PR_TITLE === ${JSON.stringify(TITLE)} ? 0 : 3);\n`;
 
-const git = (cwd, ...args) => execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { cwd, encoding: "utf8" }).trim();
+// runGitFixture scrubs GIT_DIR/GIT_WORK_TREE and sets the identity; signing is off for host independence.
+const git = (cwd, ...args) => runGitFixture(cwd, ["-c", "commit.gpgsign=false", ...args]);
 
 // A fixture repo whose HEAD is published as origin/main (the trusted base).
 async function fixture({ pinned = bunVersion, files = {} } = {}) {
@@ -149,13 +151,48 @@ test("a toolchain mismatch is incomplete", () => withFixture({ pinned: "0.0.1" }
   await assertIncomplete(repoRoot, headSha, /differs from bun@0\.0\.1/);
 }));
 
+test("a base fullCommand on the full-repository path is incomplete", () => withFixture({
+  files: { ".devloops": DEVLOOPS.replace("mode: local\n", "mode: local\n  fullCommand: \"make check\"\n") },
+}, async (repoRoot) => {
+  const headSha = await commit(repoRoot, { "src/x.txt": "x\n" });
+  await assertIncomplete(repoRoot, headSha, /fullCommand "make check"/);
+}));
+
+// The suite starts a `sleep` grandchild and records its PID under tmp/ as a readiness signal.
+const GRANDCHILD_SUITE = "import { spawn } from 'node:child_process';\nimport { mkdirSync, writeFileSync } from 'node:fs';\nconst child = spawn('sleep', ['60'], { stdio: 'ignore' });\nmkdirSync('tmp', { recursive: true });\nwriteFileSync('tmp/grandchild.pid', String(child.pid));\nsetTimeout(() => {}, 60000);\n";
+const pidFile = (repoRoot) => path.join(repoRoot, "tmp", "grandchild.pid");
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { if (error.code === "ESRCH") return false; throw error; } };
+async function until(predicate, ms) {
+  for (const deadline = Date.now() + ms; Date.now() < deadline;) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return predicate();
+}
+
 test("a timeout writes no record, reports it and leaves no orphan process", () => withFixture({
-  files: { "scripts/docs/validate-decision-records.mjs": "import { spawn } from 'node:child_process';\nspawn('sleep', ['31.737'], { stdio: 'ignore' });\nsetTimeout(() => {}, 30000);\n" },
+  files: { "scripts/docs/validate-decision-records.mjs": GRANDCHILD_SUITE },
 }, async (repoRoot) => {
   const headSha = await commit(repoRoot, { "docs/a.md": "# a\n" });
-  await assertIncomplete(repoRoot, headSha, /timed out after 1 s/, ["--timeout", "1"]);
-  assert.notEqual(spawnSync("pgrep", ["-f", "sleep 31.737"]).status, 0);
-}));
+  await assertIncomplete(repoRoot, headSha, /timed out after 8 s/, ["--timeout", "8"]);
+  assert.ok(existsSync(pidFile(repoRoot)), "the grandchild started before the deadline");
+  const pid = Number(await readFile(pidFile(repoRoot), "utf8"));
+  assert.ok(await until(() => !alive(pid), 2000), "the grandchild is gone");
+}), 30000);
+
+test("interrupting the producer kills the suite process group", () => withFixture({
+  files: { "scripts/docs/validate-decision-records.mjs": GRANDCHILD_SUITE },
+}, async (repoRoot) => {
+  const headSha = await commit(repoRoot, { "docs/a.md": "# a\n" });
+  const producer = spawn("node", [SCRIPT, "--repo", "owner/repo", "--head-sha", headSha, "--title", TITLE, "--timeout", "60"], { cwd: repoRoot, stdio: "ignore" });
+  const exited = new Promise((resolve) => producer.on("close", resolve));
+  assert.ok(await until(() => existsSync(pidFile(repoRoot)) && readFileSync(pidFile(repoRoot), "utf8") !== "", 30000), "the grandchild started");
+  const pid = Number(readFileSync(pidFile(repoRoot), "utf8"));
+  assert.ok(alive(pid));
+  producer.kill("SIGINT");
+  await exited;
+  assert.ok(await until(() => !alive(pid), 2000), "the grandchild is gone");
+}), 60000);
 
 test("usage offers no background option and rejects out-of-range or unknown arguments", async () => {
   const help = await runNode(CLI, ["loop", "validation-record", "--help"]);

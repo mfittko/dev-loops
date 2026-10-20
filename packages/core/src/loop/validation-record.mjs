@@ -39,7 +39,7 @@ export function parseValidationRecord(value, { repo, headSha }) {
   for (const field of ["toolchain", "prTitle"]) if (!isString(value[field])) return refuse(`${field} must be a non-empty string`);
   if (!Array.isArray(value.requestedSuites) || value.requestedSuites.length === 0 || !value.requestedSuites.every(isString)) return refuse("requestedSuites must be a non-empty string array");
   if ((value.profile === "full-repository") !== (value.requestedSuites.length === 1 && value.requestedSuites[0] === "verify")) return refuse("profile full-repository requires requestedSuites to be exactly [verify]");
-  if (!isString(value.generatedAt) || Number.isNaN(Date.parse(value.generatedAt))) return refuse("generatedAt must be an ISO timestamp");
+  if (!isString(value.generatedAt) || Number.isNaN(Date.parse(value.generatedAt)) || new Date(value.generatedAt).toISOString() !== value.generatedAt) return refuse("generatedAt must be an ISO timestamp");
   if (typeof value.allPassed !== "boolean") return refuse("allPassed must be a boolean");
   if (!Array.isArray(value.suites) || value.suites.length === 0) return refuse("suites must be a non-empty array");
   for (const suite of value.suites) {

@@ -76,6 +76,8 @@ test("refusals", () => {
   assert.match(refused({ ...record(), allPassed: "true" }).reason, /allPassed/);
   assert.equal(refused({ ...record(), depState: [] }).ok, false);
   assert.equal(refused({ ...record(), generatedAt: "not a date" }).ok, false);
+  assert.equal(refused({ ...record(), generatedAt: "2026-10-20T12:00:00.000Z" }).ok, true);
+  for (const generatedAt of ["1", "Oct 20 2026", "2026-10-20", ""]) assert.equal(refused({ ...record(), generatedAt }).ok, false, generatedAt);
   assert.equal(refused({ ...record(), producer: "ci" }).ok, false);
   assert.equal(refused({ ...record(), profile: "partial" }).ok, false);
   assert.equal(refused({ ...record(), requestedSuites: [] }).ok, false);

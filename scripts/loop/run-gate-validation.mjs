@@ -272,14 +272,27 @@ function runSuiteWithDeadline(name, { repoRoot, env }, remainingMs) {
     const child = spawn("bun", ["run", name], { cwd: repoRoot, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     let spawnError = null;
+    const killGroup = () => { try { process.kill(-child.pid, "SIGKILL"); } catch { /* the group already exited */ } };
+    // Termination of the producer also kills the suite group, so it is never orphaned.
+    const relays = ["SIGINT", "SIGTERM", "SIGHUP"].map((signal) => {
+      const relay = () => { killGroup(); cleanup(); process.kill(process.pid, signal); };
+      process.on(signal, relay);
+      return [signal, relay];
+    });
+    function cleanup() { for (const [signal, relay] of relays) process.off(signal, relay); }
     const timer = setTimeout(() => {
-      try { process.kill(-child.pid, "SIGKILL"); } catch { /* the group already exited */ }
+      killGroup();
+      cleanup();
       reject(Object.assign(new Error(`suite ${name} timed out`), { timedOut: true }));
     }, remainingMs);
-    for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => { output = (output + chunk).slice(-MAX_BUFFER_BYTES); });
+    for (const stream of [child.stdout, child.stderr]) {
+      stream.setEncoding("utf8");
+      stream.on("data", (chunk) => { output = (output + chunk).slice(-MAX_BUFFER_BYTES); });
+    }
     child.on("error", (error) => { spawnError = error; });
     child.on("close", (code) => {
       clearTimeout(timer);
+      cleanup();
       resolve({ name, command: `bun run ${name}`, exitCode: typeof code === "number" ? code : 1, output: output.trim() === "" && spawnError ? spawnError.message : output });
     });
   });

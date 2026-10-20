@@ -113,7 +113,12 @@ export async function produceValidationRecord(options, { repoRoot = resolveRepoR
       return incomplete("verify script is not classified as full-repository validation");
     }
 
-    const logDir = relRecordPath.replace(/\.json$/, ".logs");
+    // ADR 0137: the base block's fullCommand is authoritative for the full profile; this producer only runs `verify`.
+    if (profile === "full-repository" && base.validation.fullCommand) {
+      return incomplete(`base validation declares fullCommand ${JSON.stringify(base.validation.fullCommand)}; the producer does not run it, use gate resolve-validation`);
+    }
+
+    const logDir =relRecordPath.replace(/\.json$/, ".logs");
     const artifact = await buildValidationArtifact(
       { repo: options.repo, headSha: options.headSha, suites, tmpRoot: options.tmpRoot },
       { repoRoot, env, readPrTitle: () => options.title, timeoutMs: options.timeoutSeconds * 1000, logDir },
