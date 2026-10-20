@@ -13,7 +13,7 @@ Amends the `.pi/agents` layout convention from issues 1606 and 1655: this repo t
 ## Decision
 
 - `.pi/agents` is untracked and listed in `.gitignore`.
-- `scripts/loop/provision-worktree.mjs` renders the Pi-valid agent set into `<worktree>/.pi/agents` on create and reuse. Provisioning stays fail-soft.
+- `scripts/loop/provision-worktree.mjs` renders the Pi-valid agent set into `<worktree>/.pi/agents` on create and reuse. Provisioning stays fail-soft. It skips the render and records a `pi-agents-tracked` skip action when `.pi/agents` is tracked in the worktree index, so a tracked path is never replaced.
 - Provisioning renders only in a dev-loops checkout: `package.json` names the package `dev-loops` and an `agents/` directory exists.
 - The Pi `session_start` handler renders `<project root>/.pi/agents` from the project's own `agents/` when the project root is a dev-loops checkout (same guard), so a fresh clone gets the set. Every other project root keeps the absent-directory no-op. The render is best-effort.
 - Render adds and refreshes files. It does not delete agents removed from `agents/`.
