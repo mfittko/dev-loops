@@ -407,7 +407,7 @@ satisfies the gate.
 
 <!-- rule: GATE-COMMENT-DRAFT-REQUIREMENTS -->
 `GATE-COMMENT-DRAFT-REQUIREMENTS`: The PR MUST NOT leave draft unless a visible, current-head
-`clean` `draft_gate` checkpoint verdict comment exists, per the rules below.
+`clean` `draft_gate` checkpoint verdict comment exists, per the rules below. Exception: `GATE-EXEC-LOW-NIT-CONVERGENCE` lets the converged `draft_gate` comment at head A that names the fixer commit stand as the comment for the fixer head.
 
 **One-time transition boundary.** `draft_gate` records exactly one decision point: the
 draft → ready-for-review transition. Once a clean `draft_gate` comment exists on the PR and the
@@ -417,7 +417,7 @@ follow-up relies on normal review/fix loops and the recurring per-head `pre_appr
 - **Skip rule:** skip the draft gate entirely only when a clean `draft_gate` comment exists on
   the PR (any head) AND the PR has already left draft. Do not re-post it on later heads.
 - While the PR is still draft, a checkpoint verdict comment for an older head SHA does not
-  satisfy the current head. A new head requires a new current-head `draft_gate` comment.
+  satisfy the current head. A new head requires a new current-head `draft_gate` comment, except that the converged comment of `GATE-EXEC-LOW-NIT-CONVERGENCE` at head A satisfies the fixer commit head it names.
 - When the `draft_gate` runs (while the PR is still draft and no clean evidence exists
   for the current head), the PR MUST receive a visible checkpoint verdict comment.
 - If the `draft_gate` verdict is `findings_present` or `blocked`, the comment MUST

@@ -4,7 +4,7 @@
 
 Accepted — 2026-10-20 ([issue 2462](https://github.com/mfittko/dev-loops/issues/2462))
 
-Amends `GATE-EXEC-REGATE-MANDATORY` and `PRE-PUSH-DELTA-NOT-GATE-EVIDENCE` for this case only. Amends [0094](./0094-pre-push-reviewer-delta-mode.md) and [0089](./0089-judge-act-list-drives-review-verdict.md) for this case only: a `clean` `draft_gate` verdict may stand over an all-low/nit act list. It narrows the statement of [0131](./0131-pre-push-delta-thread-route-and-decision-record.md) that no gate verdict comment reads a delta result: for this case the comment records the digest of the clean delta result. The records that introduced those rules stay unedited.
+Amends `GATE-EXEC-REGATE-MANDATORY`, `GATE-COMMENT-DRAFT-REQUIREMENTS` and `PRE-PUSH-DELTA-NOT-GATE-EVIDENCE` for this case only. Amends [0094](./0094-pre-push-reviewer-delta-mode.md) and [0089](./0089-judge-act-list-drives-review-verdict.md) for this case only: a `clean` `draft_gate` verdict may stand over an all-low/nit act list. It narrows the statement of [0131](./0131-pre-push-delta-thread-route-and-decision-record.md) that no gate verdict comment reads a delta result: for this case the comment records the digest of the clean delta result. The records that introduced those rules stay unedited.
 
 ## Context
 
