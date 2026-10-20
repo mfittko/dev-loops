@@ -11,6 +11,8 @@ import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseCheckPrePushDeltaArgs, runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { A, B, boundArgs } from "./_delta-coverage-fixture.mjs";
+import { initGitFixture, runGitFixture } from "../_helpers.mjs";
+import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 
 const ACT = { ref: "act-1", severity: "low", angle: "correctness", summary: "s", judgeDisposition: "act" };
 const FP = fingerprintFinding(ACT);
@@ -46,7 +48,118 @@ function fixture() {
 }
 
 const quiet = { stdout: { write: () => {} } };
-const headAt = (head, tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"))) => ({ ...quiet, tmpRoot, revParse: (_worktree, rev) => (rev === "HEAD" ? head : rev), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }) });
+const headAt = (head, tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"))) => ({ ...quiet, tmpRoot, changedPaths: () => [], revParse: (_worktree, rev) => (rev === "HEAD" ? head : rev), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }) });
+
+test("result-only changelog seam checks touched changes paths before writing evidence", async () => {
+  for (const changedPaths of [["changes/a.md"], ["changes/deleted.md", "docs/moved.md"], ["scripts/fix.mjs"]]) {
+    const { actList, result } = fixture();
+    let calls = 0;
+    const seam = { ...headAt(B), changedPaths: () => changedPaths, validateChangelog: async () => { calls++; return 1; } };
+    const args = ["--act-list", actList, "--baseline", A];
+    await runCli([...args, "--spec-identity", "spec@1", "--findings-log", logFor(A)], seam);
+    assert.equal(calls, 0, "input mode never checks changelog");
+    if (changedPaths[0].startsWith("changes/")) {
+      await assert.rejects(runCli([...args, "--result", result, "--invocation", "1"], seam), /^Error: LIFECYCLE-CHANGELOG-COMPLETENESS/);
+      assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta")), false);
+      assert.equal(calls, 1);
+    } else {
+      assert.equal((await runCli([...args, "--result", result, "--invocation", "1"], seam)).nextStep, "push");
+      assert.equal(calls, 0);
+    }
+  }
+});
+
+test("real delta CLI refuses committed invalid inputs concealed by uncommitted corrections", async () => {
+  for (const { length, correction, crlf } of [{ length: 201 }, { length: 200 }, { length: 200, crlf: true }, { length: 0 },
+    { length: 201, correction: "changes/note.md" }, { length: 200, correction: "changes/other.md" }, { length: 200, correction: "CHANGELOG.md" }]) {
+  const { dir, threadsFile } = threadsFixture();
+  try {
+    initGitFixture(dir, { branch: "main", commit: null });
+    runGitFixture(dir, ["config", "commit.gpgsign", "false"]);
+    runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", "base"]);
+    const baseline = runGitFixture(dir, ["rev-parse", "HEAD"]);
+    runGitFixture(dir, ["update-ref", "refs/remotes/origin/main", baseline]);
+    if (length) {
+      fs.mkdirSync(path.join(dir, "changes"));
+      fs.writeFileSync(path.join(dir, "changes/note.md"), `- ${"x".repeat(length - 7)} (#1)\n`);
+    } else fs.writeFileSync(path.join(dir, "fix.mjs"), "export const fixed = true;\n");
+    if (correction && correction !== "changes/note.md") {
+      const body = `- ${"x".repeat(194)} (#1)\n`;
+      fs.writeFileSync(path.join(dir, correction), correction === "CHANGELOG.md" ? `# Changelog\n\n## Unreleased\n\n${body}` : body);
+    }
+    runGitFixture(dir, ["add", "."]);
+    runGitFixture(dir, ["commit", "-qm", "fix(local): fragment"]);
+    if (crlf) {
+      runGitFixture(dir, ["config", "core.autocrlf", "true"]);
+      fs.rmSync(path.join(dir, "changes/note.md"));
+      runGitFixture(dir, ["checkout", "--", "changes/note.md"]);
+      assert.ok(fs.readFileSync(path.join(dir, "changes/note.md"), "utf8").includes("\r\n"));
+      assert.equal(runGitFixture(dir, ["status", "--porcelain"]), "");
+    }
+    if (correction) {
+      const body = `- ${"x".repeat(193)} (#1)\n`;
+      fs.writeFileSync(path.join(dir, correction), correction === "CHANGELOG.md" ? `# Changelog\n\n## Unreleased\n\n${body}` : body);
+    }
+    const args = ["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", dir];
+    const input = (await runDeltaCli([...args, "--spec-identity", "spec@1"], { ...quiet })).input;
+    const resultPath = path.join(dir, "review.json");
+    fs.writeFileSync(resultPath, JSON.stringify({ ...input.resultShape,
+      actionableItems: input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["checked"] })),
+      newFindings: [], widenedReads: [], outcome: "locally_clear",
+    }));
+    const resultArgs = [...args, "--result", resultPath, "--invocation", "1"];
+    const recordDir = path.join(resolveGateArtifactTmpRoot(dir), "gate-delta");
+    if (length === 201 || correction) {
+      const out = spawnSync(process.execPath, [path.resolve("scripts/loop/check-pre-push-delta.mjs"), ...resultArgs], { cwd: dir, encoding: "utf8" });
+      assert.equal(out.status, 2, out.stderr);
+      assert.match(JSON.parse(out.stderr).error, /^LIFECYCLE-CHANGELOG-COMPLETENESS/);
+      if (correction) assert.match(JSON.parse(out.stderr).error, /differs from HEAD/);
+      assert.equal(fs.existsSync(recordDir), false);
+    } else {
+      let calls = 0;
+      const seam = length ? quiet : { ...quiet, validateChangelog: async () => { calls++; throw new Error("must not run"); } };
+      assert.equal((await runDeltaCli(resultArgs, seam)).nextStep, "push");
+      assert.equal(calls, 0);
+      assert.equal(fs.existsSync(path.join(recordDir, `${baseline}.json`)), true);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test("result-mode changelog ignores inherited Git directory overrides", async () => {
+  const { dir, threadsFile } = threadsFixture();
+  const target = path.join(dir, "target"), decoy = path.join(dir, "decoy");
+  try {
+    fs.mkdirSync(target);
+    fs.mkdirSync(decoy);
+    for (const [root, message] of [[target, "base"], [decoy, "decoy without origin"]]) {
+      initGitFixture(root, { branch: "main", commit: null });
+      runGitFixture(root, ["config", "commit.gpgsign", "false"]);
+      runGitFixture(root, ["commit", "-q", "--allow-empty", "-m", message]);
+    }
+    const baseline = runGitFixture(target, ["rev-parse", "HEAD"]);
+    runGitFixture(target, ["update-ref", "refs/remotes/origin/main", baseline]);
+    fs.mkdirSync(path.join(target, "changes"));
+    fs.writeFileSync(path.join(target, "changes/note.md"), `- ${"x".repeat(194)} (#1)\n`);
+    runGitFixture(target, ["add", "."]);
+    runGitFixture(target, ["commit", "-qm", "fix(local): invalid fragment"]);
+    const args = ["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", target];
+    const input = (await runDeltaCli([...args, "--spec-identity", "spec@1"], quiet)).input;
+    const resultPath = path.join(dir, "review.json");
+    fs.writeFileSync(resultPath, JSON.stringify({ ...input.resultShape,
+      actionableItems: input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["checked"] })),
+      newFindings: [], widenedReads: [], outcome: "locally_clear",
+    }));
+    const recordDir = path.join(resolveGateArtifactTmpRoot(target), "gate-delta");
+    assert.equal(fs.existsSync(recordDir), false);
+    const out = spawnSync(process.execPath, [path.resolve("scripts/loop/check-pre-push-delta.mjs"), ...args, "--result", resultPath, "--invocation", "1"], {
+      cwd: dir, encoding: "utf8", env: { ...process.env, GIT_DIR: path.join(decoy, ".git"), GIT_WORK_TREE: decoy },
+    });
+    assert.equal(out.status, 2, out.stderr);
+    assert.match(JSON.parse(out.stderr).error, /^LIFECYCLE-CHANGELOG-COMPLETENESS/);
+    assert.equal(fs.existsSync(recordDir), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("without --result the CLI prints the cumulative delta input for the worktree head", async () => {
   const { dir, actList } = fixture();
