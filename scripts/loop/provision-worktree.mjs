@@ -315,7 +315,7 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
     });
   }
 
-  // #2865: `.pi/agents` is untracked; render the Pi-valid agent set from the worktree's own
+  // `.pi/agents` is untracked; render the Pi-valid agent set from the worktree's own
   // agents/ sources, only in a dev-loops checkout (package name "dev-loops" plus an agents/ dir).
   // Lazy import: a packaged install cannot load .ts.
   const isDevLoopsCheckout = async () => {

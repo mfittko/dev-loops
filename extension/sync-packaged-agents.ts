@@ -8,11 +8,11 @@ const PACKAGED_AGENTS_ROOT = new URL("../agents/", import.meta.url);
 /**
  * The project-local agents directory, relative to the session's project root.
  * Pi resolves project role agents from here with precedence over the global
- * `~/.agents/` (#1606). A `.pi/agents` symlink to the package source is a legacy
+ * `~/.agents/`. A `.pi/agents` symlink to the package source is a legacy
  * layout: the dispatch would read the raw neutral templates and Pi strict-rejects
  * `search`, so the sync still replaces such a symlink with a real directory of
  * Pi-valid copies. `.pi/agents` is now untracked and rendered at worktree
- * provision time (#2865).
+ * provision time.
  */
 const PROJECT_AGENTS_SUBPATH = path.join(".pi", "agents");
 
@@ -168,7 +168,7 @@ export function syncProjectAgentsDir(projectRoot: string, sourceRoot: string) {
 }
 
 /**
- * Provision-time render (#2865): ensure `<projectRoot>/.pi/agents` is a REAL
+ * Provision-time render: ensure `<projectRoot>/.pi/agents` is a REAL
  * directory of Pi-valid rendered copies, creating it when absent. Unlike
  * `syncProjectAgentsDir` (absent => no-op, for the consumer session_start path),
  * worktree provisioning calls this so every checkout gets the set.
@@ -227,11 +227,11 @@ export function syncPackagedAgents({
   }
 }
 
-/** Neutral source tokens that are not Pi tool names (#2865). */
+/** Neutral source tokens that are not Pi tool names. */
 const NON_PI_TOOLS = ["search", "execute"];
 
 /**
- * Preflight (#2865): inspect the loaded project agent set (`.pi/agents`, real
+ * Preflight: inspect the loaded project agent set (`.pi/agents`, real
  * directory or symlink) and return a typed `agent_set_not_rendered` reason when any
  * `*.agent.md` still declares a raw `search`/`execute` tool, else null. An absent
  * directory is allowed (consumer repos resolve from the rendered `~/.agents/`).

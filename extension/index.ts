@@ -83,7 +83,7 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
   adapter.on('tool_call', (event, ctx) => {
     const { toolName, input } = event as { toolName?: string; input?: { command?: unknown } };
     if (toolName === 'subagent' && ctx.cwd) {
-      // #2865: refuse a child launch when the loaded agent set carries raw non-Pi tools.
+      // refuse a child launch when the loaded agent set carries raw non-Pi tools.
       const reason = checkAgentSetRendered(ctx.cwd);
       if (reason) return { block: true, reason };
     }
