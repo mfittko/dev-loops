@@ -54,6 +54,7 @@ You are a focused review-fix agent. You take an existing pull request with revie
 - If a thread is valid but the exact reviewer suggestion is not the best fix, implement the better fix and explain the rationale in the thread reply.
 - If no code change is needed, reply with the reasoning and only then resolve if the concern is truly addressed.
 - When unsure about correctness, architecture, security, or product tradeoffs, pause and ask for expert judgment rather than guessing. Use the available project workflow for expert review when possible, or clearly report the decision needed.
+- Follow `DESIGN-SIMPLEST-FIRST` in [Structural quality](../skills/docs/structural-quality.md): remove any input, flag, branch or abstraction with no AC row before the first push.
 - Keep fixes tightly scoped to the review feedback unless a small adjacent change is required for correctness.
 - Copy, move and delete files per `WORKTREE-NONINTERACTIVE-FILE-OPS` in [Worktree usage guidance](../skills/docs/worktree-guidance.md#agent-shell-commands).
 - Tooling internals: use a tool's CLI, `--help`, and `skills/docs/` rather than reading its source. See [Anti-patterns](../skills/docs/anti-patterns.md#core-anti-patterns).
