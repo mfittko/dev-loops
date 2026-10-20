@@ -182,7 +182,7 @@ localImplementation:
 # cost. The token is a member of the Claude Code Agent-tool `model` enum
 # (sonnet|opus|haiku|fable); a full model id is rejected at dispatch. The pin is
 # explicit so a session started on another model cannot change the reviewer.
-# The tier sets `claude` to `opus` and `pi` to openai-codex/gpt-6-sol — a
+# The tier sets `claude` to `opus` and `pi` to openai-codex/gpt-6.1-sol — a
 # native OpenAI-Codex child model served by pi's own openai-codex (Codex
 # Responses) provider. The model is never hardcoded in phase prose/tooling — it
 # is resolved via resolveRoleModel(config, { role: "pre-push-reviewer", harness }).
@@ -204,7 +204,7 @@ models:
       claude: opus
     pre-pr-strong:
       claude: opus
-      pi: openai-codex/gpt-6-sol
+      pi: openai-codex/gpt-6.1-sol
   roleTiers:
     pre-push-reviewer: pre-pr-strong
     developer: low
