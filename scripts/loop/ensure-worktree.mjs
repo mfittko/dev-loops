@@ -32,7 +32,7 @@
  *
  * Prints a JSON result to stdout:
  *   { ok, path, created|reused, base?, branchOrigin, diverged?,
- *     fetchDegraded?, provision: { actions, summary }, deps?, guard }
+ *     fetchDegraded?, provision: { actions, summary }, deps?, warning?, guard }
  * See the full USAGE block below for the field-by-field contract.
  * A git create failure is a hard error (exit 1); provisioning is fail-soft.
  */
@@ -632,10 +632,13 @@ function ensureDeps(worktreePath, installDeps) {
 
 // A provisioned worktree must be clean; list untracked/modified paths so a dirty-tree prerequisite is reported, not discovered later.
 function dirtyAfterProvision(gitCommand, target) {
-  const paths = runGit(gitCommand, ["status", "--porcelain"], target)
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => line.slice(3));
+  // -z and --untracked-files=all pin the output against status.showUntrackedFiles and core.quotePath; a rename/copy entry is followed by its source field, which is skipped.
+  const fields = runGit(gitCommand, ["status", "--porcelain", "-z", "--untracked-files=all"], target).split("\0").filter(Boolean);
+  const paths = [];
+  for (let i = 0; i < fields.length; i += 1) {
+    paths.push(fields[i].slice(3));
+    if (/^.?[RC]/.test(fields[i].slice(0, 2))) i += 1;
+  }
   return paths.length > 0 ? { warning: { code: "dirty_after_provision", paths } } : {};
 }
 
