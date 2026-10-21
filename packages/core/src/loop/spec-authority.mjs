@@ -877,8 +877,9 @@ function extractScopeExcerpts(body) {
   for (const line of body.replace(/<!--[\s\S]*?-->/gu, "").split(/\r?\n/u)) {
     if (line.trim() === "" || /^\s{0,3}#{1,6}(?:\s|$)/u.test(line)) {
       flush();
-    } else if (open && /^\s{0,3}(?:-{3,}|={3,})\s*$/u.test(line)) {
-      // Setext underline: the line above is a heading, so it is not an excerpt.
+    } else if (open && !/^(?:[-*+]|\d+[.)])\s/u.test(open[0]) && /^\s{0,3}(?:-{3,}|={3,})\s*$/u.test(line)) {
+      // Setext underline: the paragraph above is a heading, so it is not an excerpt.
+      // A list item is never a setext heading; there `---` is a thematic break.
       open.pop();
       flush();
     } else if (/^(?:[-*+]|\d+[.)])\s/u.test(line)) {

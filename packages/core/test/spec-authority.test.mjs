@@ -1133,6 +1133,7 @@ describe("pr_scope spec kind (review gate)", () => {
     assert.deepEqual(resolvePrDescriptionSpec("Summary\n-------\nAdds the X flag.\n").spec.scope, ["Adds the X flag."]);
     assert.deepEqual(resolvePrDescriptionSpec("Adds the X flag.\n\n---\n").spec.scope, ["Adds the X flag."]);
     assert.deepEqual(resolvePrDescriptionSpec("## Summary\nAdds the X flag.\n").spec.scope, ["Adds the X flag."]);
+    assert.deepEqual(resolvePrDescriptionSpec("- Fixes reload\n---\n").spec.scope, ["- Fixes reload"]);
     const mixed = resolvePrDescriptionSpec("Fixes reload.\n- [ ]\n- [ ] keep build\n");
     assert.equal(mixed.specSource, "pr_scope");
     assert.deepEqual(mixed.spec.scope, ["Fixes reload.", "- [ ] keep build"]);
