@@ -119,10 +119,10 @@ this skill dispatches the `review` agents directly.
    3. When `specSource` is `none` (no usable PR scope), do not run the judge. Post
       with `--judge-spec-source none`.
    4. Otherwise run the lifecycle judge path with `--gate review`:
-      `emit-judge-work-order.mjs --gate review --findings-file <ledger-out-path>
-      --spec-file <spec-path> --identity-file <identity-path>`, dispatch the `judge` agent with
+      `emit-judge-work-order.mjs --gate review --repo <owner/repo> --pr <n> --head-sha <sha>
+      --findings-file <ledger-out-path> --spec-file <spec-path> --identity-file <identity-path>`, dispatch the `judge` agent with
       the printed `dispatchPrompt` (pull transport), then `judge-pass.mjs --gate
-      review --judge-plan <plan> --findings-file <ledger-out-path> --judge-verdict <path>
+      review --repo <owner/repo> --pr <n> --judge-plan <plan> --findings-file <ledger-out-path> --judge-verdict <path>
       --spec-file <spec-path> --content-digest <digest> --spec-authority-verdict <path>
       --head-sha <sha>`. Pass no `--out` and no `--ledger-out`: the durable write in
       step 6 reads the pre-judge `<ledger-out-path>` and re-applies the judgment itself. The review

@@ -1127,9 +1127,12 @@ describe("pr_scope spec kind (review gate)", () => {
   });
 
   test("resolvePrDescriptionSpec: template boilerplate is not usable scope", () => {
-    for (const body of ["- [ ]\n- [ ] \n", "## Test plan\n- [ ]\n", "---\n", "```\n```"]) {
+    for (const body of ["- [ ]\n- [ ] \n", "## Test plan\n- [ ]\n", "---\n", "```\n```", "Summary\n-------\n\nTest plan\n---------\n", "Summary\n=======\n"]) {
       assert.deepEqual(resolvePrDescriptionSpec(body), { specSource: "none", reason: "no_usable_scope" }, JSON.stringify(body));
     }
+    assert.deepEqual(resolvePrDescriptionSpec("Summary\n-------\nAdds the X flag.\n").spec.scope, ["Adds the X flag."]);
+    assert.deepEqual(resolvePrDescriptionSpec("Adds the X flag.\n\n---\n").spec.scope, ["Adds the X flag."]);
+    assert.deepEqual(resolvePrDescriptionSpec("## Summary\nAdds the X flag.\n").spec.scope, ["Adds the X flag."]);
     const mixed = resolvePrDescriptionSpec("Fixes reload.\n- [ ]\n- [ ] keep build\n");
     assert.equal(mixed.specSource, "pr_scope");
     assert.deepEqual(mixed.spec.scope, ["Fixes reload.", "- [ ] keep build"]);

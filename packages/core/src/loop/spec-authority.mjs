@@ -877,6 +877,10 @@ function extractScopeExcerpts(body) {
   for (const line of body.replace(/<!--[\s\S]*?-->/gu, "").split(/\r?\n/u)) {
     if (line.trim() === "" || /^\s{0,3}#{1,6}(?:\s|$)/u.test(line)) {
       flush();
+    } else if (open && /^\s{0,3}(?:-{3,}|={3,})\s*$/u.test(line)) {
+      // Setext underline: the line above is a heading, so it is not an excerpt.
+      open.pop();
+      flush();
     } else if (/^(?:[-*+]|\d+[.)])\s/u.test(line)) {
       flush();
       open = [line];
