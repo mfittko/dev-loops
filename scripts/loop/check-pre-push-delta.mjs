@@ -176,6 +176,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
     fixerPlan: values["fixer-plan"] ?? null,
     findingsLog: values["findings-log"] ?? null,
     result: values.result ?? null,
+    handback: values.handback === true,
     invocation,
     worktree: values.worktree ?? process.cwd(),
     jq: values.jq,
@@ -192,7 +193,7 @@ function gitRevParse(worktree, rev) {
   return out.stdout.trim();
 }
 
-export const DELTA_EVIDENCE_RULE = "Read patchPath with the read tool. Evidence is a file:line, or a test's path:line, read from disk. Do not run tests or any other shell command; test execution is neither required nor permitted.";
+export const DELTA_EVIDENCE_RULE = "Read patchPath with the read tool. Evidence is a file:line, or a test's path:line, read from disk. Run no tests, builds, or other command that mutates or executes anything; for a site query use only the shell-inert read/search commands the reviewer read-only gate allows (git grep, grep, rg).";
 
 export const deltaPatchPath = (tmpRoot, baseline, candidate) => path.join(tmpRoot, "gate-delta", `${baseline}-${candidate}.patch`);
 
@@ -405,7 +406,7 @@ export async function runCli(
       mkdirSync(path.dirname(patchPath), { recursive: true });
       writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead));
     }
-    payload = { ok: true, input: { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;

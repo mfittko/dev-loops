@@ -178,8 +178,6 @@ test("without --result only the patch is written under the tmp root, no decision
   assert.deepEqual(fs.readdirSync(path.join(seam.tmpRoot, "gate-delta")), [`${A}-${B}.patch`]);
 });
 
-
-
 test("input.patchPath is the gate-delta patch holding the diffPatch bytes", async () => {
   const { actList } = fixture();
   const seam = { ...headAt(B), diffPatch: () => "diff --git a/x b/x\n" };
@@ -214,19 +212,18 @@ test("the real patch file holds the cumulative baseline..candidate git diff", as
 
 test("the evidence rule reads, forbids executing tests, and the input carries no shell instruction", async () => {
   assert.match(DELTA_EVIDENCE_RULE, /Read patchPath with the read tool/);
-  assert.match(DELTA_EVIDENCE_RULE, /Do not run tests/);
+  assert.match(DELTA_EVIDENCE_RULE, /Run no tests, builds/);
+  assert.match(DELTA_EVIDENCE_RULE, /git grep, grep, rg/);
   const { actList } = fixture();
   const out = await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], headAt(B));
   const text = JSON.stringify(out.input);
-  for (const banned of [/\bsed\b/, /\| head/, /git diff/]) assert.doesNotMatch(text, banned);
+  for (const banned of [/\bsed\b/, /\| head/, /git diff/, /run the tests/i]) assert.doesNotMatch(text, banned);
 });
 
-test("the read-only role gate denies none of the commands the evidence rule names", () => {
-  // The rule names the read tool only, so the reviewer issues no bash call; the gate denies any test run.
-  for (const role of ["review", "judge"]) {
-    assert.equal(decidePiToolCall({ toolName: "read", input: { path: "/x.patch" }, agentType: role }).block, false);
-    assert.equal(decidePiToolCall({ toolName: "bash", input: { command: "bun test" }, agentType: role }).block, true);
-  }
+test("the read-only role gate allows read and git grep and blocks bun test", () => {
+  assert.equal(decidePiToolCall({ toolName: "read", input: { path: "/x.patch" }, agentType: "review" }).block, false);
+  assert.equal(decidePiToolCall({ toolName: "bash", input: { command: "git grep -n foo" }, agentType: "review" }).block, false);
+  for (const role of ["review", "judge"]) assert.equal(decidePiToolCall({ toolName: "bash", input: { command: "bun test" }, agentType: role }).block, true);
 });
 
 test("with --result the CLI records the decision for the baseline, and the last write wins", async () => {
@@ -383,6 +380,17 @@ test("argument errors fail closed", () => {
   for (const n of ["0", "4", "1.5"]) {
     assert.throws(() => parseCheckPrePushDeltaArgs(["--act-list", "x", "--baseline", A, "--result", "r", "--invocation", n]), /1\.\.3/, n);
   }
+});
+
+test("a --handback run writes no patch and prints no patchPath or evidenceRule", async () => {
+  const { dir, actList } = fixture();
+  const coverage = path.join(dir, "coverage.json");
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: B, siteCoverage: [] }));
+  const seam = headAt(B);
+  const out = await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--handback", "--site-coverage", coverage], seam);
+  assert.equal(out.input.patchPath, undefined);
+  assert.equal(out.input.evidenceRule, undefined);
+  assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta")), false);
 });
 
 test("--site-coverage threads a valid record into the delta input", async () => {
