@@ -42,7 +42,7 @@ Exit codes:
   2  malformed arguments (unknown flag, missing required flag, invalid owner id, blank execution id, journal outside fixture role)`;
 
 const VALUE_FLAGS = new Set(["repo-root", "owner-thread-id", "execution-id", "cwd", "journal", "jq"]);
-const BOOLEAN_FLAGS = new Set(["json", "silent", "s", "help", "h"]);
+const BOOLEAN_FLAGS = new Set(["json", "silent", "help"]);
 
 class ArgumentError extends Error {}
 
@@ -50,11 +50,14 @@ function parseReconcileArgs(argv, env = process.env) {
   const raw = {};
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
+    if (token === "-h") { raw.help = true; continue; }
+    if (token === "-s") { raw.silent = true; continue; }
     if (!token.startsWith("--")) throw new ArgumentError(`unexpected positional argument: ${token}`);
     const match = /^--([^=]+)(?:=(.*))?$/.exec(token);
     if (!match) throw new ArgumentError(`unrecognized flag: ${token}`);
     const name = match[1];
     if (VALUE_FLAGS.has(name)) {
+      if (Object.hasOwn(raw, name)) throw new ArgumentError(`duplicate flag: --${name}`);
       let value = match[2];
       if (value === undefined) {
         value = argv[index + 1];
@@ -71,7 +74,7 @@ function parseReconcileArgs(argv, env = process.env) {
     }
     throw new ArgumentError(`unrecognized flag: --${name}`);
   }
-  if (raw.help || raw.h) return { help: true };
+  if (raw.help) return { help: true };
   for (const required of ["repo-root", "owner-thread-id", "execution-id", "cwd"]) {
     if (raw[required] === undefined || raw[required].trim() === "") {
       throw new ArgumentError(`missing required flag: --${required}`);
@@ -82,6 +85,9 @@ function parseReconcileArgs(argv, env = process.env) {
   }
   if (raw["execution-id"].trim() === "") throw new ArgumentError("--execution-id must be a non-blank opaque id");
   if (raw["repo-root"].trim() === "" || raw.cwd.trim() === "") throw new ArgumentError("--repo-root and --cwd must be non-blank paths");
+  if (raw.journal !== undefined && raw.journal.trim() === "") {
+    throw new ArgumentError("--journal must be a non-blank path when supplied");
+  }
   if (raw.journal !== undefined && env.DEVLOOPS_RECONCILE_FIXTURE !== "1") {
     throw new ArgumentError("--journal is only available in the test/fixture role (DEVLOOPS_RECONCILE_FIXTURE=1)");
   }
@@ -93,7 +99,7 @@ function parseReconcileArgs(argv, env = process.env) {
     journal: raw.journal,
     json: raw.json === true,
     jq: raw.jq,
-    silent: raw.silent === true || raw.s === true,
+    silent: raw.silent === true,
   };
 }
 

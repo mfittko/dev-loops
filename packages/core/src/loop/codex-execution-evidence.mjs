@@ -139,6 +139,11 @@ export function validateCodexJournalOwner(header, ownerThreadId) {
 function readOwnerJournal({ ownerThreadId, journalPath, env, fs }) {
   let resolvedPath;
   if (isNonBlankString(journalPath)) {
+    // An explicit path is a test/fixture capability only; production always uses
+    // the bounded discovery helper below.
+    if (env?.DEVLOOPS_RECONCILE_FIXTURE !== "1") {
+      return { ok: false, reason: "journal_path_outside_fixture_role" };
+    }
     resolvedPath = path.resolve(journalPath);
   } else {
     const discovery = findNativeCodexSessionJournal({ threadId: ownerThreadId, env, fs });

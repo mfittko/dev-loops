@@ -31,7 +31,7 @@ function makeWorkspace() {
   fs.mkdirSync(cwd, { recursive: true });
   fs.mkdirSync(sessionDir, { recursive: true });
   const journalPath = path.join(sessionDir, `rollout-2026-10-20T13-54-33-${OWNER}.jsonl`);
-  const env = { CODEX_HOME: path.join(root, ".codex"), CODEX_THREAD_ID: OWNER };
+  const env = { CODEX_HOME: path.join(root, ".codex"), CODEX_THREAD_ID: OWNER, DEVLOOPS_RECONCILE_FIXTURE: "1" };
   return { root, repoRoot, cwd, sessionDir, journalPath, env };
 }
 
@@ -241,6 +241,13 @@ test("C2: owner journal binding fails closed for a mismatched header or unreadab
   assert.equal(mismatch.ok, false);
   assert.equal(mismatch.reason, "owner_journal_mismatch");
   assert.equal(reconcile(workspace, { journalPath: path.join(workspace.root, "missing.jsonl") }).ok, false);
+  // An explicit path is a fixture capability; the public adapter refuses it in production mode.
+  const noFixtureRole = reconcile(workspace, { env: { CODEX_HOME: workspace.env.CODEX_HOME, CODEX_THREAD_ID: OWNER } });
+  assert.equal(noFixtureRole.ok, false);
+  assert.equal(noFixtureRole.reason, "journal_path_outside_fixture_role");
+  // Discovery (no explicit path) still works without the fixture role.
+  const discovered = reconcile(workspace, { journalPath: undefined, env: { CODEX_HOME: workspace.env.CODEX_HOME, CODEX_THREAD_ID: OWNER } });
+  assert.equal(discovered.status, "completed");
 });
 
 test("C3: only completed clears the cleanup blocker and no status authorizes process probing", () => {

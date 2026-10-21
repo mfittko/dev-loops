@@ -148,6 +148,8 @@ test("CLI: malformed arguments exit 2 with a JSON error and usage", () => {
     ["blank execution id", required(OWNER, "   ")],
     ["pid-shaped option", [...required(), "--pid", "12938"]],
     ["kill-shaped option", [...required(), "--kill=12938"]],
+    ["duplicate value flag", [...required(), "--cwd", workspace.cwd]],
+    ["blank journal", [...required(), "--journal", "   "]],
   ];
   for (const [name, argv] of cases) {
     const result = run(argv, workspace.env);
@@ -157,6 +159,18 @@ test("CLI: malformed arguments exit 2 with a JSON error and usage", () => {
     assert.match(result.stderr, /Usage: reconcile-codex-execution\.mjs/, name);
   }
   assert.throws(() => parseReconcileArgs(["--pid", "1"]), /unrecognized flag/);
+});
+
+test("CLI: -h and -s short aliases are honored", () => {
+  const workspace = makeWorkspace();
+  writeJournal(workspace);
+  const helpOut = capture();
+  const helpErr = capture();
+  assert.equal(main(["-h"], { env: workspace.env, stdout: helpOut, stderr: helpErr }), 0);
+  assert.match(helpOut.data, /Usage: reconcile-codex-execution\.mjs/);
+  const silent = run([...baseArgs(workspace), "-s"], workspace.env);
+  assert.equal(silent.code, 0);
+  assert.equal(silent.stdout, "");
 });
 
 test("CLI: --journal is refused outside the test/fixture role", () => {
