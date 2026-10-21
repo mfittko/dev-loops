@@ -13,9 +13,9 @@ Relates to [0173](./0173-pi-agents-provision-time-render.md) and [0176](./0176-t
 ## Decision
 
 - The provision-time render writes a quoted `model:` line into every Pi project agent that has a non-null Pi resolution for its role tier.
-- `.devloops` `roleTiers` maps `dev-loop` and `gate-coordinator` to `low`, so their rendered Pi agents pin the low-tier model when Pi trusts the project. The Claude side keeps the built-in tier policy, where `dev-loop` inherits (`skills/docs/main-agent-contract.md`).
+- `.devloops` `roleTiers` maps `dev-loop` and `gate-coordinator` to `low`, so their rendered Pi agents pin the low-tier model when Pi trusts the project. The Claude side keeps the built-in tier policy, where `dev-loop` inherits ([main-agent contract](../../skills/docs/main-agent-contract.md)).
 - Project-trust ceiling: the preflight cannot read Pi's project-trust state. A pinned `model:` line applies only when Pi trusts the project. The repo does not claim more than that.
-- Full-mode pre-push briefs name the artifact paths, state the read-only evidence rule, and forbid `sed`, pipe-to-`head` and test execution.
+- Full-mode pre-push briefs name the artifact paths, state the read-only evidence rule, and MUST NOT prescribe `sed`, pipe-to-`head` or test execution.
 - No file outside `.devloops` names a concrete model id (see 0176).
 
 ## Consequences
