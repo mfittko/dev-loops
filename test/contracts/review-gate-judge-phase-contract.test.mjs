@@ -46,8 +46,8 @@ test("REVIEW-GATE-JUDGE-PHASE is owned by the comment contract and registered", 
   assert.match(flat(await readRepo("skills/docs/spec-authority-contract.md")), /`pr_scope` spec for them, naming the spec kind/);
 });
 
-test("ADR 0178 amends ADR 0060 and cites the unchanged ADRs", async () => {
-  const adr = await readRepo("docs/decisions/0178-judge-in-standalone-review.md");
+test("ADR 0179 amends ADR 0060 and cites the unchanged ADRs", async () => {
+  const adr = await readRepo("docs/decisions/0179-judge-in-standalone-review.md");
   assert.match(adr, /^Amends \[ADR 0060\]/m);
   for (const n of ["0046", "0092", "0051", "0078", "0054", "0089", "0106", "0107", "0115"]) {
     assert.match(adr, new RegExp(`/${n}-`), `ADR ${n} linked`);
