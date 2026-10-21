@@ -2,7 +2,7 @@
 
 ## Status
 
-Superseded by [0175](0175-tier-policy-shape-owned-by-the-repo-not-the-model-id.md) — 2026-10-21
+Superseded by [0175](0175-tier-policy-shape-owned-by-the-repo-not-the-model-id.md) — 2026-10-21 ([PR 2900](https://github.com/mfittko/dev-loops/pull/2900))
 
 ## Context
 

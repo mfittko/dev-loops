@@ -2,9 +2,11 @@
 
 ## Status
 
-Proposed
+Accepted — 2026-10-21 ([PR 2900](https://github.com/mfittko/dev-loops/pull/2900))
 
 ## Context
+
+[PR 2900](https://github.com/mfittko/dev-loops/pull/2900) records this policy change.
 
 [ADR 0167](./0167-pi-pre-push-reviewer-enabled-model.md) pinned this repo's Pi pre-push reviewer to one concrete model id, and the repo-level contract test pinned the same literal in four places. The pin had a good origin: a wrong or paid model id used to pass the test by self-consistency, because the assertion read the expected value back out of the config under test. But it pinned the operator's current model choice, and the repo does not own that choice. The consequence was a shape mismatch: switching the Pi review model required TWO tracked edits — the `.devloops` tier value AND the test file — so a one-line operator preference change could not ship as a config-only change.
 

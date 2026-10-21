@@ -17,6 +17,60 @@ import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolve
 
 const GATE_KEYS = ["draft", "preApproval"];
 
+// Keep the repo's Pi policy guard local: concrete ids are operator choices.
+function assertPiTierPolicy(tiers) {
+  for (const tier of ["low", "high", "pre-pr-strong"]) {
+    const model = tiers[tier]?.pi;
+    // Both provider and model must be non-empty and whitespace-free. This
+    // also excludes bare Claude tokens and null/inherited Pi defaults.
+    assert.ok(
+      typeof model === "string" && /^[^/\s]+\/\S+$/.test(model),
+      `${tier}.pi must carry a concrete provider-qualified Pi model id`,
+    );
+  }
+  for (const tier of ["high", "pre-pr-strong"]) {
+    assert.notEqual(tiers[tier].pi, tiers.low.pi, `${tier}.pi must differ from the cheap tier's model`);
+  }
+}
+
+const syntheticPiTiers = () => ({
+  low: { pi: "provider/cheap" },
+  high: { pi: "provider/review" },
+  "pre-pr-strong": { pi: "provider/review" },
+});
+
+for (const model of ["provider/model", "provider/nested/model", "another-provider/new-model"]) {
+  test(`Pi tier policy accepts a distinct provider-qualified review model: ${model}`, () => {
+    const tiers = syntheticPiTiers();
+    tiers.high.pi = model;
+    tiers["pre-pr-strong"].pi = model;
+    assert.doesNotThrow(() => assertPiTierPolicy(tiers));
+  });
+}
+
+for (const tier of ["low", "high", "pre-pr-strong"]) {
+  for (const model of [undefined, null, "", "sonnet", "opus", "haiku", "fable", "/", "/model", "openrouter/", "a/", "provider/white space", " provider/model"]) {
+    test(`Pi tier policy rejects ${tier}.pi = ${JSON.stringify(model)}`, () => {
+      const tiers = syntheticPiTiers();
+      tiers[tier].pi = model;
+      assert.throws(() => assertPiTierPolicy(tiers), { code: "ERR_ASSERTION" });
+    });
+  }
+  test(`Pi tier policy rejects a missing ${tier} harness key`, () => {
+    const tiers = syntheticPiTiers();
+    delete tiers[tier].pi;
+    assert.throws(() => assertPiTierPolicy(tiers), { code: "ERR_ASSERTION" });
+  });
+}
+
+for (const tier of ["high", "pre-pr-strong"]) {
+  test(`Pi tier policy rejects ${tier}.pi reusing the cheap model`, () => {
+    const tiers = syntheticPiTiers();
+    tiers[tier].pi = tiers.low.pi;
+    assert.throws(() => assertPiTierPolicy(tiers), { code: "ERR_ASSERTION" });
+  });
+}
+
 test("every configured tier angle is inside its gate's resolved angle pool", async () => {
   const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
   assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
@@ -68,15 +122,8 @@ test("this repo's .devloops resolves the pre-push-reviewer to Opus on Claude and
     undefined,
     "the rename leaves no alias: the old role key is gone from the repo config",
   );
+  assertPiTierPolicy(config.models.tiers);
   const prePrStrongPi = config.models.tiers["pre-pr-strong"]?.pi;
-  assert.ok(
-    typeof prePrStrongPi === "string" && prePrStrongPi.length > 0,
-    "the pre-pr-strong tier must carry a concrete Pi model id in .devloops",
-  );
-  assert.ok(
-    prePrStrongPi.includes("/") && !/^(sonnet|opus|haiku|fable)$/i.test(prePrStrongPi),
-    `the pre-pr-strong tier's Pi model must be a concrete provider-qualified id, got ${prePrStrongPi}`,
-  );
   assert.equal(
     resolveRoleModel(config, { role: "pre-push-reviewer", harness: "pi" }),
     prePrStrongPi,
@@ -87,7 +134,7 @@ test("this repo's .devloops resolves the pre-push-reviewer to Opus on Claude and
 // Regular vs. strong split: routine roles run on the regular tier (sonnet on
 // Claude; on Pi the regular tier carries the operator's cheap model); review,
 // refiner, the pre-push reviewer and every gate angle stay on opus.
-test("this repo's .devloops resolves the regular tier to sonnet and the strong roles to opus", async () => {
+test("this repo's .devloops preserves role-to-tier routing, concrete distinct Pi review models and Claude tokens", async () => {
   const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
   assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
 
@@ -114,32 +161,8 @@ test("this repo's .devloops resolves the regular tier to sonnet and the strong r
   );
   const lowPi = config.models.tiers.low?.pi;
   const highPi = config.models.tiers.high?.pi;
-  assert.ok(
-    typeof lowPi === "string" && lowPi.length > 0,
-    "the regular tier must carry a concrete Pi model id in .devloops",
-  );
-  assert.ok(
-    typeof highPi === "string" && highPi.length > 0,
-    "the strong tier must carry a concrete Pi model id in .devloops",
-  );
-  // Non-vacuity: the review tier must be a DISTINCT model from the cheap tier
-  // the reviewers check, and a real provider-qualified id rather than a Claude
-  // token or a built-in fallback. A config with no Pi opt-in at all (both ids
-  // null, or the review tier reusing the cheap model) fails here instead of
-  // passing by reading the expected value back out of the config under test.
-  assert.notEqual(
-    highPi,
-    lowPi,
-    "the strong tier's Pi model must be the review model, never the cheap tier's model",
-  );
-  assert.ok(
-    !/^(sonnet|opus|haiku|fable)$/i.test(highPi),
-    `the strong tier's Pi model must be a concrete provider-qualified id, not a Claude token (got ${highPi})`,
-  );
-  assert.ok(
-    highPi.includes("/"),
-    `the strong tier's Pi model must be a provider-qualified id, got ${highPi}`,
-  );
+  // Non-vacuity and model shape are shared with the pre-push reviewer guard.
+  assertPiTierPolicy(config.models.tiers);
 
   for (const role of ["developer", "fixer", "docs", "quality"]) {
     assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "sonnet", `${role} on claude`);
