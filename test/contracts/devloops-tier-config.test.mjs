@@ -21,15 +21,23 @@ const GATE_KEYS = ["draft", "preApproval"];
 function assertPiTierPolicy(tiers) {
   for (const tier of ["low", "high", "pre-pr-strong"]) {
     const model = tiers[tier]?.pi;
-    // Every slash-delimited component must be non-empty and whitespace-free.
-    // Nested model ids remain valid; bare Claude tokens and null defaults do not.
+    // Components must be non-empty, not dot segments, and free of whitespace
+    // or URI suffixes. Nested and dotted model ids remain valid.
     assert.ok(
-      typeof model === "string" && /^[^/\s]+(?:\/[^/\s]+)+$/.test(model),
+      typeof model === "string" && /^(?!\.{1,2}(?:\/|$))[^/\s?#]+(?:\/(?!\.{1,2}(?:\/|$))[^/\s?#]+)+$/.test(model),
       `${tier}.pi must carry a concrete provider-qualified Pi model id`,
     );
   }
   for (const tier of ["high", "pre-pr-strong"]) {
     assert.notEqual(tiers[tier].pi, tiers.low.pi, `${tier}.pi must differ from the cheap tier's model`);
+  }
+}
+
+function assertAngleTierPolicy(entries, gate) {
+  for (const entry of entries) {
+    if (!entry || entry.name === undefined || entry.enabled === false) continue;
+    if (entry.tier === undefined) continue;
+    assert.equal(entry.tier, "high", `${gate} angle ${entry.name} must declare the high tier, not ${entry.tier}`);
   }
 }
 
@@ -39,7 +47,7 @@ const syntheticPiTiers = () => ({
   "pre-pr-strong": { pi: "provider/review" },
 });
 
-for (const model of ["p/m", "provider/model", "provider/nested/model", "another-provider/new-model"]) {
+for (const model of ["p/m", "provider/model", "provider/nested/model", "another-provider/new-model", "provider.example/model.v1"]) {
   test(`Pi tier policy accepts a distinct provider-qualified review model: ${model}`, () => {
     const tiers = syntheticPiTiers();
     tiers.high.pi = model;
@@ -49,7 +57,7 @@ for (const model of ["p/m", "provider/model", "provider/nested/model", "another-
 }
 
 for (const tier of ["low", "high", "pre-pr-strong"]) {
-  for (const model of [undefined, null, "", "sonnet", "opus", "haiku", "fable", "/", "/model", "openrouter/", "a/", "provider//model", "provider//", "provider/model/", "provider/nested//model", "provider/white space", " provider/model"]) {
+  for (const model of [undefined, null, "", "sonnet", "opus", "haiku", "fable", "/", "/model", "openrouter/", "a/", "provider//model", "provider//", "provider/model/", "provider/nested//model", "provider/white space", " provider/model", "provider/.", "provider/..", "../..", "./model", "../model", "provider/./model", "provider/../model", "provider/model?x=1", "provider/model#frag", "provider?x/model", "provider#frag/model"]) {
     test(`Pi tier policy rejects ${tier}.pi = ${JSON.stringify(model)}`, () => {
       const tiers = syntheticPiTiers();
       tiers[tier].pi = model;
@@ -68,6 +76,18 @@ for (const tier of ["high", "pre-pr-strong"]) {
     const tiers = syntheticPiTiers();
     tiers[tier].pi = tiers.low.pi;
     assert.throws(() => assertPiTierPolicy(tiers), { code: "ERR_ASSERTION" });
+  });
+}
+
+for (const entry of [{ name: "x", tier: "high" }, { name: "x" }, { name: "x", tier: "low", enabled: false }, "x"]) {
+  test(`angle tier policy accepts high, inherited or disabled entries: ${JSON.stringify(entry)}`, () => {
+    assert.doesNotThrow(() => assertAngleTierPolicy([entry], "synthetic"));
+  });
+}
+
+for (const tier of ["pre-pr-strong", "low"]) {
+  test(`angle tier policy rejects the ${tier} alias`, () => {
+    assert.throws(() => assertAngleTierPolicy([{ name: "x", tier }], "synthetic"), { code: "ERR_ASSERTION" });
   });
 }
 
@@ -202,12 +222,9 @@ test("this repo's .devloops preserves role-to-tier routing, concrete distinct Pi
   // and not only on the resolved model: `high` and `pre-pr-strong` currently
   // carry the same models, so a wrong angle tier would otherwise pass by
   // self-consistency (the same reason the concrete model id is unpinned).
-  for (const gate of GATE_KEYS) {
-    for (const entry of config.gates?.[gate]?.angles ?? []) {
-      if (!entry || entry.name === undefined || entry.enabled === false) continue;
-      if (entry.tier === undefined) continue;
-      assert.equal(entry.tier, "high", `${gate} angle ${entry.name} must declare the high tier, not ${entry.tier}`);
-    }
+  // All schema-supported gates, including spike, can supply angle tier aliases.
+  for (const gate of ["draft", "preApproval", "spike"]) {
+    assertAngleTierPolicy(config.gates?.[gate]?.angles ?? [], gate);
   }
 });
 
