@@ -16,6 +16,7 @@ import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } from "@dev-loops/core/loop/finding-cluster";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
@@ -777,7 +778,13 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       throw parseError(`--judge-verdict could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
     }
     const enriched = applyJudgeDispositions(rawFindings, judgeVerdict);
-    findings = enriched.findings;
+    // Same cluster projection judge-pass applies: one judge decision per root cause, so the durable ledger
+    // matches judge-pass's --ledger-out instead of dropping the cluster-normalized dispositions.
+    const stamped = enriched.findings.every((f) => Number.isInteger(f?.clusterId));
+    const clusters = stamped
+      ? clustersFromStampedIds(enriched.findings)
+      : clusterFindings(enriched.findings, { headSha: options.headSha }).clusters;
+    findings = projectClusterDisposition(enriched.findings, clusters);
     scopeDrift = enriched.scopeDrift;
     if (specAuthorityIdentity !== undefined) {
       findings = await applySiblingSpecAuthorityVerdict(findings, judgePath, specAuthorityIdentity);

@@ -2943,6 +2943,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         if (lf.followUpIssueNumber == null && judged.followUpIssueNumber) lf.followUpIssueNumber = judged.followUpIssueNumber;
       }
     }
+    // Re-check after the merge: the early check saw only the ledger's own dispositions, not the ones just copied onto it.
+    if (preloadedFindingsLedger) assertJudgeSpecSourceMatchesLedger(options, preloadedFindingsLedger.findings ?? []);
     const actItems = listOpenActItems(flatFindings);
     enrichedActItems = actItems;
     if (options.verdict === "clean" && (await guardedActItems(actItems)).length > 0) {

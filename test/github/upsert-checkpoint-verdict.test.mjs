@@ -12072,6 +12072,21 @@ test("upsertCheckpointVerdict --gate review refuses a pr_scope post whose ledger
   assert.equal(posts.length, 0, "no review POST happens before the ledger refusal");
 });
 
+test("upsertCheckpointVerdict --gate review refuses --judge-spec-source none when --findings-json merges judge dispositions onto an unjudged ledger", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [BODY_FILED_FINDING], { overallVerdict: "findings_present" });
+    const findingsJson = path.join(tempDir, "judged-findings.json");
+    await writeFile(findingsJson, JSON.stringify([ACT_FINDING_FOR(BODY_FILED_FINDING)]), "utf8");
+    const { runChild } = makeGhMock([...reviewGateFindingSurfaceEntries()]);
+    await assert.rejects(upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath, findingsJson, executionMode: "fanout_fanin", judgeSpecSource: "none",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }), /--judge-spec-source none requires no finding/);
+  }, { prefix: "dev-loops-upsert-judge-spec-merge-" });
+});
+const ACT_FINDING_FOR = (f) => ({ ...f, judgeDisposition: "act", judgeRationale: "in scope" });
+
 test("parseUpsertCheckpointVerdictCliArgs validates --judge-spec-source and --judge-unavailable-reason", () => {
   const base = ["--repo", "owner/repo", "--pr", "17", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--execution-mode", "fanout_fanin"];
   const parse = (...extra) => parseUpsertCheckpointVerdictCliArgs([...base, ...extra]);

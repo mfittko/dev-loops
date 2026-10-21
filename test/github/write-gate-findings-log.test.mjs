@@ -2504,6 +2504,40 @@ test("writeGateFindingsLog enriches findings from --judge-verdict and records sc
   }
 });
 
+test("writeGateFindingsLog projects the representative's judge disposition onto cluster members (PR 2905)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-cluster-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdictPath, JSON.stringify({
+      headSha,
+      scopeDrift: { verdict: "within_scope", rationale: "within AC", driftedAreas: [] },
+      dispositions: [
+        { index: 0, disposition: "act", rationale: "root cause", criterion: "AC-1" },
+        { index: 1, disposition: "reject", rationale: "duplicate disposed separately", criterion: "Non-goal 1" },
+      ],
+    }), "utf8");
+    await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 42,
+      gate: "review",
+      headSha,
+      verdict: "findings_present",
+      findings: JSON.stringify([
+        { severity: "medium", angle: "correctness", summary: "null deref", files: ["src/a.mjs"], line: 10, recommendation: "guard it", disposition: "accepted-for-fix" },
+        { severity: "medium", angle: "security", summary: "null deref again", files: ["src/a.mjs"], line: 10, recommendation: "guard it", disposition: "accepted-for-fix" },
+      ]),
+      judgeVerdict: judgeVerdictPath,
+      tmpRoot: tmpDir,
+    });
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", `review-${headSha}.json`);
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.deepEqual(parsed.findings.map((f) => f.judgeDisposition), ["act", "act"]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 // #2246: the sanctioned shape from the PR 2243 round — a consolidator `clean`
 // wrapper (no blocking-severity finding) whose findings the judge acts on at
 // non-blocking severities only. write-gate-findings-log must ACCEPT it: the
