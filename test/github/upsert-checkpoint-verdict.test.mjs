@@ -12027,11 +12027,15 @@ for (const [flags, findings, line] of [
   [{ judgeSpecSource: "unavailable", judgeUnavailableReason: "spec_cannot_decide" }, [BODY_FILED_FINDING], JUDGE_LINES.spec_cannot_decide],
   [{ judgeSpecSource: "unavailable", judgeUnavailableReason: "judge_failed" }, [BODY_FILED_FINDING], JUDGE_LINES.judge_failed],
 ]) {
-  test(`--gate review renders the judge line for ${flags.judgeSpecSource}${flags.judgeUnavailableReason ? ` (${flags.judgeUnavailableReason})` : ""} with every finding visible in one review body`, async () => {
+  test(`--gate review renders the judge line for ${flags.judgeSpecSource}${flags.judgeUnavailableReason ? ` (${flags.judgeUnavailableReason})` : ""} with every finding present in one review body`, async () => {
     const { posts, body } = await postReviewWithJudgeFlags(findings, flags);
     assert.equal(posts.length, 1, "exactly one review body is posted");
     assert.equal(body.split("\n").filter((l) => l.startsWith("**Judge")).join("\n"), line);
-    for (const f of findings) assert.ok(body.includes(f.summary), `${f.summary} stays visible`);
+    for (const f of findings) assert.ok(body.includes(f.summary), `${f.summary} is present`);
+    if (["none", "unavailable"].includes(flags.judgeSpecSource)) {
+      const open = body.indexOf("<details>");
+      for (const f of findings) assert.ok(body.slice(0, open === -1 ? undefined : open).includes(f.summary), `${f.summary} is outside the Details block`);
+    }
     assert.equal(parseGateReviewCommentBody(body), null, "a judged review body is never lifecycle gate evidence");
   });
 }
