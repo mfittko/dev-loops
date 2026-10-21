@@ -43,13 +43,15 @@ const USAGE = `Usage:
   spec-context.mjs changed-paths --base <ref> --head <ref> [--repo-root <path>]
 
 Default (extract) mode: resolve the selected canonical issue or live PR body, extract the
-structured spec ({ acceptanceCriteria, definitionOfDone, nonGoals }), and
+structured spec ({ acceptanceCriteria, definitionOfDone, nonGoals }; a pr_scope spec
+also carries specKind "pr_scope" and a scope list), echo specSource ("issue" or
+"pr_body" for --issue/--pr; "pr_body", "pr_scope" or "none" for --body-file), and
 compute specDigest (from the spec) + contentDigest (from --content-file) +
 the complete criterionIds set — feeds judge-pass.mjs's --spec-file/
 --content-digest directly, so the skill never hand-derives them.
 Required (extract mode):
   --repo <owner/name>        Repository slug
-  --issue <number>           Canonical tracker issue number; exactly one of --issue/--pr
+  --issue <number>           Canonical tracker issue number; exactly one of --issue/--pr/--body-file
   --pr <number>              Live GitHub PR number when routed authority is pr_body;
                               reads its own body/head without fetching an issue
   --body-file <path>         Standalone review gate: a PR description read from a file

@@ -877,7 +877,7 @@ function extractScopeExcerpts(body) {
   for (const line of body.replace(/<!--[\s\S]*?-->/gu, "").split(/\r?\n/u)) {
     if (line.trim() === "" || /^\s{0,3}#{1,6}(?:\s|$)/u.test(line)) {
       flush();
-    } else if (/^[-*+]\s/u.test(line)) {
+    } else if (/^(?:[-*+]|\d+[.)])\s/u.test(line)) {
       flush();
       open = [line];
     } else if (open) {

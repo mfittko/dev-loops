@@ -127,7 +127,8 @@ The standalone `review` gate is outside this rule's scope, with one exception. O
 `--review` route, a `gate-coordinator` agent runs the review round's Phases 1 to 3 through fan-in
 and the ledger write. The route runs no judge phase, so the typed result omits the act-list path,
 the spec-authority identity path and the judge summary. The dev-loop
-coordinator then posts the verdict and makes the submit choice.
+coordinator then runs Phase 3.5 (`REVIEW-GATE-JUDGE-PHASE`) before it posts the verdict and makes
+the submit choice, as `skills/review/SKILL.md` states.
 
 ### Base refresh before a gate round
 

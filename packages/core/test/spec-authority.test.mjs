@@ -1135,6 +1135,11 @@ describe("pr_scope spec kind (review gate)", () => {
     assert.deepEqual(mixed.spec.scope, ["Fixes reload.", "- [ ] keep build"]);
   });
 
+  test("resolvePrDescriptionSpec: ordered-list items are their own scope excerpts", () => {
+    const { spec } = resolvePrDescriptionSpec("Fixes reload.\n1. Invalidate cache\n  1. indented continues\n2) Keep build\n10. Ten\n1.nospace\n");
+    assert.deepEqual(spec.scope, ["Fixes reload.", "1. Invalidate cache\n  1. indented continues", "2) Keep build", "10. Ten\n1.nospace"]);
+  });
+
   test("resolvePrDescriptionSpec keeps explicit AC and non-goals verbatim without a DoD", () => {
     const { specSource, spec } = resolvePrDescriptionSpec("Handles reload.\n## Acceptance criteria\n- [ ] reload is fresh\n## Non-goals\n- no build changes\n");
     assert.equal(specSource, "pr_scope");

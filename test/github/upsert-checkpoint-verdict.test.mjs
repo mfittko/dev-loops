@@ -11999,7 +11999,7 @@ const JUDGE_LINES = {
 const ACT_FINDING = { ...BODY_FILED_FINDING, summary: "runtime defect in reload", judgeDisposition: "act", judgeRationale: "in scope" };
 const REJECT_FINDING = { ...BODY_FILED_FINDING, summary: "template sections missing", judgeDisposition: "reject", judgeRationale: "template-only" };
 
-async function postReviewWithJudgeFlags(findings, judgeFlags) {
+async function postReviewWithJudgeFlags(findings, judgeFlags, callsOut = []) {
   let posted;
   await withTempDir(async (tempDir) => {
     const ledgerPath = await writeReviewGateLedger(tempDir, findings, { overallVerdict: "findings_present" });
@@ -12007,6 +12007,7 @@ async function postReviewWithJudgeFlags(findings, judgeFlags) {
       ...reviewGateFindingSurfaceEntries(),
       { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":910,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-910"}\n' },
     ]);
+    callsOut.push(calls);
     const result = await upsertCheckpointVerdict({
       repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
       nextAction: "none — informational review, no re-gate required",
@@ -12061,7 +12062,10 @@ test("assertJudgeSpecSourceMatchesLedger fails closed on every ledger and source
 });
 
 test("upsertCheckpointVerdict --gate review refuses a pr_scope post whose ledger holds unjudged findings, before any post", async () => {
-  await assert.rejects(postReviewWithJudgeFlags([BODY_FILED_FINDING], { judgeSpecSource: "pr_scope" }), /requires every finding in --findings-ledger to carry a judgeDisposition/);
+  const callsOut = [];
+  await assert.rejects(postReviewWithJudgeFlags([BODY_FILED_FINDING], { judgeSpecSource: "pr_scope" }, callsOut), /requires every finding in --findings-ledger to carry a judgeDisposition/);
+  const posts = callsOut[0].filter((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+  assert.equal(posts.length, 0, "no review POST happens before the ledger refusal");
 });
 
 test("parseUpsertCheckpointVerdictCliArgs validates --judge-spec-source and --judge-unavailable-reason", () => {
