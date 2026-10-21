@@ -36,6 +36,7 @@ function assertPiTierPolicy(tiers) {
 function assertAngleTierPolicy(entries, gate) {
   for (const entry of entries) {
     if (!entry || entry.name === undefined || entry.enabled === false) continue;
+    assert.equal(Object.hasOwn(entry, "model"), false, `${gate} angle ${entry.name} must not declare a model override`);
     if (entry.tier === undefined) continue;
     assert.equal(entry.tier, "high", `${gate} angle ${entry.name} must declare the high tier, not ${entry.tier}`);
   }
@@ -91,7 +92,7 @@ for (const tier of ["high", "pre-pr-strong"]) {
   });
 }
 
-for (const entry of [{ name: "x", tier: "high" }, { name: "x" }, { name: "x", tier: "low", enabled: false }, "x"]) {
+for (const entry of [{ name: "x", tier: "high" }, { name: "x" }, { name: "x", tier: "low", enabled: false }, { name: "x", model: "sonnet", enabled: false }, "x"]) {
   test(`angle tier policy accepts high, inherited or disabled entries: ${JSON.stringify(entry)}`, () => {
     assert.doesNotThrow(() => assertAngleTierPolicy([entry], "synthetic"));
   });
@@ -104,7 +105,7 @@ for (const tier of ["pre-pr-strong", "low"]) {
 }
 
 for (const harness of ["claude", "pi"]) {
-  test(`gate angle model policy rejects a spike-only ${harness} model override`, async () => {
+  test(`raw entry and resolved-model policies reject a spike-only ${harness} model override`, async () => {
     const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
     assert.deepEqual(errors, []);
     const synthetic = structuredClone(config);
@@ -120,7 +121,11 @@ for (const harness of ["claude", "pi"]) {
     // Opus preserves Claude's expectation while violating Pi's concrete model,
     // so the Pi case reaches the Pi assertion rather than failing on Claude.
     entry.model = harness === "claude" ? "sonnet" : "opus";
-    assert.doesNotThrow(() => assertAngleTierPolicy([entry], "spike"));
+    // Raw entries must reject the escape hatch even before model resolution.
+    assert.throws(() => assertAngleTierPolicy([entry], "spike"), {
+      code: "ERR_ASSERTION",
+      message: new RegExp(`spike angle ${angle} must not declare a model override`),
+    });
     assert.equal(resolveRoleModel(synthetic, { role: angle, harness, kind: "angle" }), entry.model);
     assert.throws(() => assertGateAngleModelPolicy(synthetic), {
       code: "ERR_ASSERTION",
@@ -128,6 +133,27 @@ for (const harness of ["claude", "pi"]) {
     });
   });
 }
+
+test("raw entry policy rejects a shared-name model override hidden by another gate", async () => {
+  const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+  assert.deepEqual(errors, []);
+  const synthetic = structuredClone(config);
+  const angle = "scope";
+  for (const gate of ["draft", "spike"]) {
+    assert.ok(resolveGateAngleContract(synthetic, gate).pool.includes(angle), `${angle} must be shared with ${gate}`);
+  }
+  const entry = synthetic.gates.spike.angles.find((entry) => entry.name === angle);
+  assert.ok(entry && entry.enabled !== false);
+  entry.tier = "high";
+  entry.model = "sonnet";
+
+  // Draft wins the name lookup, hiding spike's override from both harnesses.
+  assert.doesNotThrow(() => assertGateAngleModelPolicy(synthetic));
+  assert.throws(() => assertAngleTierPolicy(synthetic.gates.spike.angles, "spike"), {
+    code: "ERR_ASSERTION",
+    message: /spike angle scope must not declare a model override/,
+  });
+});
 
 test("every configured tier angle is inside its gate's resolved angle pool", async () => {
   const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
@@ -253,6 +279,8 @@ test("this repo's .devloops preserves role-to-tier routing, concrete distinct Pi
   // and not only on the resolved model: `high` and `pre-pr-strong` currently
   // carry the same models, so a wrong angle tier would otherwise pass by
   // self-consistency (the same reason the concrete model id is unpinned).
+  // Check raw entries per gate: a shared name can hide a model override from
+  // resolution, and enabled entries must never declare that escape hatch.
   // All schema-supported gates, including spike, can supply angle tier aliases.
   for (const gate of ["draft", "preApproval", "spike"]) {
     assertAngleTierPolicy(config.gates?.[gate]?.angles ?? [], gate);
