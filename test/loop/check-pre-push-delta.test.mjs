@@ -210,6 +210,21 @@ test("the real patch file holds the cumulative baseline..candidate git diff", as
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("the real patch keeps a committed gitlink change under diff.ignoreSubmodules=all", async () => {
+  const { dir, threadsFile } = threadsFixture();
+  try {
+    initGitFixture(dir, { branch: "main", commit: null });
+    runGitFixture(dir, ["config", "commit.gpgsign", "false"]);
+    runGitFixture(dir, ["config", "diff.ignoreSubmodules", "all"]);
+    runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", "base"]);
+    const baseline = runGitFixture(dir, ["rev-parse", "HEAD"]);
+    runGitFixture(dir, ["update-index", "--add", "--cacheinfo", `160000,${baseline},sub`]);
+    runGitFixture(dir, ["commit", "-qm", "fix(local): gitlink"]);
+    const out = await runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", dir, "--spec-identity", "spec@1"], quiet);
+    assert.match(fs.readFileSync(out.input.patchPath, "utf8"), /^\+Subproject commit /m);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("the evidence rule reads, forbids executing tests, and the input carries no shell instruction", async () => {
   assert.match(DELTA_EVIDENCE_RULE, /Read patchPath with the read tool/);
   assert.match(DELTA_EVIDENCE_RULE, /Run no tests, builds/);

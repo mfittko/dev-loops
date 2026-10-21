@@ -199,7 +199,7 @@ export const deltaPatchPath = (tmpRoot, baseline, candidate) => path.join(tmpRoo
 
 // The cumulative baseline..head patch the reviewer reads; formats pinned against operator git config.
 function gitDiffPatch(worktree, baseline, head) {
-  const out = spawnSync("git", ["-C", worktree, "-c", "core.quotePath=false", "diff", "--unified=3", "--diff-algorithm=myers", "-O/dev/null", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-renames", "--no-relative", `${baseline}..${head}`], {
+  const out = spawnSync("git", ["-C", worktree, "-c", "core.quotePath=false", "diff", "--unified=3", "--diff-algorithm=myers", "-O/dev/null", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-renames", "--no-relative", "--ignore-submodules=none", `${baseline}..${head}`], {
     env: gitEnvNoDirOverrides(), maxBuffer: 1024 * 1024 * 1024,
   });
   if (out.status !== 0) throw new Error(`git diff ${baseline}..${head} failed in ${worktree}: ${out.error?.message ?? out.stderr.toString().trim()}`);
