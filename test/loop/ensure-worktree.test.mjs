@@ -1517,3 +1517,22 @@ test("ensure: dirty_after_provision paths survive spaces, renames and status.sho
     repo.cleanup();
   }
 });
+
+// A GIT_DIR pointing at the main checkout must not hide the target worktree's dirt.
+test("ensure: dirty_after_provision ignores an inherited GIT_DIR", async () => {
+  const repo = makeRepo();
+  const saved = { dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE };
+  try {
+    process.env.GIT_DIR = path.join(repo.root, ".git");
+    process.env.GIT_WORK_TREE = repo.root;
+    const provision = ({ worktreePath }) => {
+      writeFileSync(path.join(worktreePath, "provision-leftover.txt"), "x\n");
+      return { ok: true, actions: [], summary: {} };
+    };
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 2854 }, { provision });
+    assert.deepEqual(res.warning, { code: "dirty_after_provision", paths: ["provision-leftover.txt"] });
+  } finally {
+    for (const [k, v] of [["GIT_DIR", saved.dir], ["GIT_WORK_TREE", saved.tree]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    repo.cleanup();
+  }
+});

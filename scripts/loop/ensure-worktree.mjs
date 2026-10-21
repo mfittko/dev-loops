@@ -50,6 +50,7 @@ import { provisionWorktree } from "./provision-worktree.mjs";
 import { GUARDED_HOOKS, installDefaultBranchGuard } from "@dev-loops/core/loop/default-branch-guard";
 import { installCommitMsgGuard } from "@dev-loops/core/loop/commit-msg-guard";
 import { canonicalize } from "./_worktree-path.mjs";
+import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage:
@@ -218,6 +219,7 @@ function listRemotes(gitCommand, cwd) {
 function runGit(gitCommand, args, cwd) {
   return execFileSync(gitCommand, args, {
     cwd,
+    env: gitEnvNoDirOverrides(),
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });

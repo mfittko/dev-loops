@@ -349,7 +349,10 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
         actions.push({ entry: ".pi/agents", mode: "skip", reason: "pi-agents-tracked: .pi/agents is tracked in the worktree index; rebase or merge onto main first, then provision again" });
       } else {
         const { renderProjectAgents } = await import("../../extension/pi-agent-render.mjs");
-        renderProjectAgents(dst, path.join(dst, "agents"), (role) => resolveRoleModel(safeConfig, { role, harness: "pi" }));
+        // The worktree branch may change Pi model/role mapping: pin from the worktree's own config, not the main checkout's.
+        const { config: dstConfig, errors: dstErrors } = await loadConfig({ repoRoot: dst });
+        const dstSafeConfig = dstErrors && dstErrors.length > 0 ? null : dstConfig;
+        renderProjectAgents(dst, path.join(dst, "agents"), (role) => resolveRoleModel(dstSafeConfig, { role, harness: "pi" }));
         actions.push({ entry: ".pi/agents", mode: "render", dest: path.join(dst, ".pi", "agents") });
       }
     }

@@ -270,3 +270,16 @@ test("a directory at a rendered name refuses while a missing file passes", () =>
     assert.match(res, /^agent_set_not_rendered/);
     assert.ok(res.includes(`${asDir} (unreadable)`));
   }));
+
+test("session_start in a dev-loops checkout never runs the unpinned project sync", () =>
+  withProject(async (root) => {
+    dl(root);
+    writeAt(path.join(root, "agents", "quality.agent.md"), RAW);
+    // A packaged agent the checkout lacks: the unpinned sync would overwrite this pinned file.
+    const PINNED = "---\nname: developer\nmodel: \"pin/me\"\n---\nbody\n";
+    writeAt(path.join(root, ".pi", "agents", "developer.agent.md"), PINNED);
+    const events = new Map();
+    extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
+    await withHome(() => events.get("session_start")({}, { cwd: root, getSessionId: () => "s" }));
+    assert.equal(fs.readFileSync(path.join(root, ".pi", "agents", "developer.agent.md"), "utf8"), PINNED);
+  }));

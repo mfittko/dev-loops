@@ -65,9 +65,11 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
     postMergeUpdateHook.onSessionStart();
     try {
       const projectRoot = ctx.cwd ? findProjectRoot(ctx.cwd) : undefined;
-      syncPackagedAgents({ projectRoot });
+      const devLoopsCheckout = !!projectRoot && isDevLoopsAgentsCheckout(projectRoot);
+      // The unpinned project sync would strip provisioned `model:` pins in a dev-loops checkout; render there instead.
+      syncPackagedAgents({ projectRoot: devLoopsCheckout ? undefined : projectRoot });
       // A fresh dev-loops clone has no `.pi/agents`; render it from the checkout's own agents/ (decision record 0173).
-      if (projectRoot && isDevLoopsAgentsCheckout(projectRoot)) {
+      if (projectRoot && devLoopsCheckout) {
         // Same pinned-model resolution as provisioning; an invalid config pins nothing; children inherit.
         const { config, errors } = await loadDevLoopConfig({ repoRoot: projectRoot });
         const safeConfig = errors && errors.length > 0 ? null : config;
