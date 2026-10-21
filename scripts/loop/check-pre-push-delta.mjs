@@ -15,7 +15,7 @@
  *   <tmp-root>/gate-delta/<baseline>.json (last write wins; local evidence only,
  *   PRE-PUSH-DELTA-NOT-GATE-EVIDENCE).
  *
- * The run without --result writes only the cumulative patch (PRE-PUSH-DELTA-PATCH-ARTIFACT) at
+ * The run without --result (except --handback, which writes nothing and omits patchPath and evidenceRule) writes only the cumulative patch (PRE-PUSH-DELTA-PATCH-ARTIFACT) at
  * <tmp-root>/gate-delta/<baseline>-<candidate>.patch: it reads the act list (or the
  * unresolved-threads file of the thread route), the result file, the
  * --findings-log file and `git rev-parse HEAD`, runs the stale-surface reads
@@ -77,7 +77,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
 
 Output (stdout, JSON):
-  without --result: { "ok": true, "input": { ..., "patchPath", "evidenceRule", "resultShape": { ... } } }
+  without --result (except --handback, which writes nothing and omits "patchPath" and "evidenceRule"): { "ok": true, "input": { ..., "patchPath", "evidenceRule", "resultShape": { ... } } }
                     Also writes the cumulative baseline..candidate patch to input.patchPath (<tmp-root>/gate-delta/<baseline>-<candidate>.patch); the reviewer reads it with the read tool and needs no shell.
                     Fill input.resultShape; on ACT copy its binding below unchanged.
 
@@ -199,7 +199,7 @@ export const deltaPatchPath = (tmpRoot, baseline, candidate) => path.join(tmpRoo
 
 // The cumulative baseline..head patch the reviewer reads; formats pinned against operator git config.
 function gitDiffPatch(worktree, baseline, head) {
-  const out = spawnSync("git", ["-C", worktree, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-renames", "--no-relative", `${baseline}..${head}`], {
+  const out = spawnSync("git", ["-C", worktree, "-c", "core.quotePath=false", "diff", "--unified=3", "--diff-algorithm=myers", "-O/dev/null", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-renames", "--no-relative", `${baseline}..${head}`], {
     env: gitEnvNoDirOverrides(), maxBuffer: 1024 * 1024 * 1024,
   });
   if (out.status !== 0) throw new Error(`git diff ${baseline}..${head} failed in ${worktree}: ${out.error?.message ?? out.stderr.toString().trim()}`);

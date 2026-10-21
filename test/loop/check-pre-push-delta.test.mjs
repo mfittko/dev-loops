@@ -223,6 +223,7 @@ test("the evidence rule reads, forbids executing tests, and the input carries no
 test("the read-only role gate allows read and git grep and blocks bun test", () => {
   assert.equal(decidePiToolCall({ toolName: "read", input: { path: "/x.patch" }, agentType: "review" }).block, false);
   assert.equal(decidePiToolCall({ toolName: "bash", input: { command: "git grep -n foo" }, agentType: "review" }).block, false);
+  for (const command of ["grep -n foo x", "rg -n foo"]) assert.equal(decidePiToolCall({ toolName: "bash", input: { command }, agentType: "review" }).block, false);
   for (const role of ["review", "judge"]) assert.equal(decidePiToolCall({ toolName: "bash", input: { command: "bun test" }, agentType: role }).block, true);
 });
 
