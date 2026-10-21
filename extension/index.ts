@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createExtensionCoreRuntime } from './checks.ts';
 import { createPostMergeUpdateHook } from './post-merge-update.ts';
 import { createPiExtensionAdapter, type ExtensionAPI } from './pi-extension-adapter.ts';
+import { loadDevLoopConfig, resolveRoleModel } from '@dev-loops/core/config';
 import {
   createChildRoleGateRegistrar,
   loadRegisterRequiredChildExtensions,
@@ -64,9 +65,16 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
     postMergeUpdateHook.onSessionStart();
     try {
       const projectRoot = ctx.cwd ? findProjectRoot(ctx.cwd) : undefined;
-      syncPackagedAgents({ projectRoot });
+      const devLoopsCheckout = !!projectRoot && isDevLoopsAgentsCheckout(projectRoot);
+      // The unpinned project sync would strip provisioned `model:` pins in a dev-loops checkout; render there instead.
+      syncPackagedAgents({ projectRoot: devLoopsCheckout ? undefined : projectRoot });
       // A fresh dev-loops clone has no `.pi/agents`; render it from the checkout's own agents/ (decision record 0173).
-      if (projectRoot && isDevLoopsAgentsCheckout(projectRoot)) renderProjectAgents(projectRoot, path.join(projectRoot, 'agents'));
+      if (projectRoot && devLoopsCheckout) {
+        // Same pinned-model resolution as provisioning; an invalid config pins nothing; children inherit.
+        const { config, errors } = await loadDevLoopConfig({ repoRoot: projectRoot });
+        const safeConfig = errors && errors.length > 0 ? null : config;
+        renderProjectAgents(projectRoot, path.join(projectRoot, 'agents'), (role: string) => resolveRoleModel(safeConfig, { role, harness: 'pi' }));
+      }
     } catch {
       // Best-effort agent sync — do not break session start
     }
