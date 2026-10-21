@@ -28,4 +28,4 @@ Rejected alternatives:
 
 Changing the Pi review model is now a `.devloops` edit alone and ships as a config-only change. The contract test still fails on a wrong tier mapping, a wrong role-to-tier mapping, a missing harness key or a config without a Pi opt-in, so the structure stays guarded; the concrete id is no longer guarded, which is the intended trade.
 
-The superseded record [0167](./0167-pi-pre-push-reviewer-enabled-model.md) keeps its history: it recorded a correct one-time correction of an unavailable model id, and that correction is now expressed as a policy shape rather than an id.
+The superseded record [0167](./0167-pi-pre-push-reviewer-enabled-model.md) keeps its history of a one-time correction of an unavailable model id, but its id pin is superseded, not preserved as a policy shape. This change replaces the Pi review model; the concrete id is operator-owned, tracked in `.devloops` and deliberately unrecorded here. Model availability is deliberately unguarded by the contract test: an unavailable id surfaces only at reviewer dispatch.
