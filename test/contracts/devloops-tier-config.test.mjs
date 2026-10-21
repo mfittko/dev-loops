@@ -41,6 +41,18 @@ function assertAngleTierPolicy(entries, gate) {
   }
 }
 
+function assertGateAngleModelPolicy(config) {
+  const highPi = config.models.tiers.high.pi;
+  for (const gate of ["draft", "preApproval", "spike"]) {
+    const { pool } = resolveGateAngleContract(config, gate);
+    assert.ok(Array.isArray(pool) && pool.length > 0, `gates.${gate} must resolve a non-empty angle pool`);
+    for (const angle of pool) {
+      assert.equal(resolveRoleModel(config, { role: angle, harness: "claude", kind: "angle" }), "opus", `${gate} angle ${angle} on claude`);
+      assert.equal(resolveRoleModel(config, { role: angle, harness: "pi", kind: "angle" }), highPi, `${gate} angle ${angle} on pi`);
+    }
+  }
+}
+
 const syntheticPiTiers = () => ({
   low: { pi: "provider/cheap" },
   high: { pi: "provider/review" },
@@ -88,6 +100,32 @@ for (const entry of [{ name: "x", tier: "high" }, { name: "x" }, { name: "x", ti
 for (const tier of ["pre-pr-strong", "low"]) {
   test(`angle tier policy rejects the ${tier} alias`, () => {
     assert.throws(() => assertAngleTierPolicy([{ name: "x", tier }], "synthetic"), { code: "ERR_ASSERTION" });
+  });
+}
+
+for (const harness of ["claude", "pi"]) {
+  test(`gate angle model policy rejects a spike-only ${harness} model override`, async () => {
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+    assert.deepEqual(errors, []);
+    const synthetic = structuredClone(config);
+    const angle = "synthetic-spike-only-model-policy";
+    for (const gate of GATE_KEYS) {
+      assert.ok(!resolveGateAngleContract(synthetic, gate).pool.includes(angle), `${angle} must not be shadowed by ${gate}`);
+    }
+    const entry = { name: angle };
+    synthetic.gates.spike.angles.push(entry);
+    assert.ok(resolveGateAngleContract(synthetic, "spike").pool.includes(angle));
+    assert.doesNotThrow(() => assertGateAngleModelPolicy(synthetic));
+
+    // Opus preserves Claude's expectation while violating Pi's concrete model,
+    // so the Pi case reaches the Pi assertion rather than failing on Claude.
+    entry.model = harness === "claude" ? "sonnet" : "opus";
+    assert.doesNotThrow(() => assertAngleTierPolicy([entry], "spike"));
+    assert.equal(resolveRoleModel(synthetic, { role: angle, harness, kind: "angle" }), entry.model);
+    assert.throws(() => assertGateAngleModelPolicy(synthetic), {
+      code: "ERR_ASSERTION",
+      message: new RegExp(`spike angle ${angle} on ${harness}`),
+    });
   });
 }
 
@@ -210,14 +248,7 @@ test("this repo's .devloops preserves role-to-tier routing, concrete distinct Pi
     assert.equal(resolveRoleModel(config, { role, harness: "pi" }), highPi, `${role} on pi`);
   }
 
-  for (const gate of GATE_KEYS) {
-    const { pool } = resolveGateAngleContract(config, gate);
-    assert.ok(Array.isArray(pool) && pool.length > 0, `gates.${gate} must resolve a non-empty angle pool`);
-    for (const angle of pool) {
-      assert.equal(resolveRoleModel(config, { role: angle, harness: "claude", kind: "angle" }), "opus", `${gate} angle ${angle} on claude`);
-      assert.equal(resolveRoleModel(config, { role: angle, harness: "pi", kind: "angle" }), highPi, `${gate} angle ${angle} on pi`);
-    }
-  }
+  assertGateAngleModelPolicy(config);
   // An angle's OWN tier alias must be the strong tier, asserted on the alias
   // and not only on the resolved model: `high` and `pre-pr-strong` currently
   // carry the same models, so a wrong angle tier would otherwise pass by
