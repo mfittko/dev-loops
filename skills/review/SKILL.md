@@ -102,9 +102,14 @@ this skill dispatches the `review` agents directly.
       scripts/loop/spec-context.mjs --repo <owner/repo> --issue <closing-issue> ...`
       (`specSource: "issue"`); when that call exits 1 because the issue body has
       no formal spec, or when the PR has zero or several closing issues, go on to
-      (b); several closing issues are never merged. (b) `node
+      (b). The no-formal-spec signal is a stderr JSON with no `code` field and an
+      `error` starting `spec body has no`; several closing issues are never merged. (b) `node
       scripts/loop/spec-context.mjs --repo <owner/repo> --body-file <body-path> ...`
-      returns `specSource: "pr_body"`, `"pr_scope"` or `"none"`.
+      returns `specSource: "pr_body"`, `"pr_scope"` or `"none"`. Every other
+      `spec-context.mjs` failure in (a) or (b) (a `code: "RATE_LIMITED"` envelope, a
+      fetch error, an unreadable `--content-file`) never falls through: post the
+      review unjudged with `--judge-spec-source unavailable --judge-unavailable-reason
+      judge_failed`, never aborted.
    3. When `specSource` is `none` (no usable PR scope), do not run the judge. Post
       with `--judge-spec-source none`.
    4. Otherwise run the lifecycle judge path with `--gate review`:
