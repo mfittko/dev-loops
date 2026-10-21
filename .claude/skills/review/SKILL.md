@@ -97,8 +97,8 @@ this skill dispatches the `review` agents directly.
       they are the issues named by `Closes`/`Fixes`/`Resolves #N` keywords in the PR
       body, the same resolution `resolveLinkedIssuesFromPr` applies in Phase 1.
       Each closing issue carries its repository: a `closingIssuesReferences` entry has
-      `repository.owner.login` and `repository.name`, a body keyword of the form
-      `owner/repo#N` names its repository, and a bare `#N` is in the PR repository.
+      `repository.owner.login` and `repository.name`, a body keyword matches only a bare
+      `#N`, which is in the PR repository.
    2. Resolve the spec in this order, with `--head-sha <sha>`, `--content-file
       <reviewed-content-path>`, `--spec-out <spec-path>` and `--identity-out
       <identity-path>` on each call: (a) exactly one closing issue (as resolved in step 1): `dev-loops-run scripts/loop/spec-context.mjs --repo <issue-owner/issue-repo> --issue <closing-issue> ...`

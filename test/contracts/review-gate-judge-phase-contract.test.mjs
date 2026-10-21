@@ -23,6 +23,7 @@ test("review SKILL.md posts unjudged with the matching reason when judge-pass ex
   assert.match(skill, /`judge_failed` \(any other failure\)/);
   assert.match(skill, /several closing issues are never merged/);
   assert.match(skill, /Each closing issue carries its repository/);
+  assert.match(skill, /a body keyword matches only a bare\s+`#N`, which is in the PR repository/);
   assert.match(skill, /--repo <issue-owner\/issue-repo> --issue <closing-issue>/);
   assert.match(skill, /exits 1 because the issue body has no formal spec, or when the PR has zero or several closing issues, go on to \(b\)/);
   assert.match(skill, /--judge-spec-source none/);
