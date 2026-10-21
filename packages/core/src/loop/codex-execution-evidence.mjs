@@ -3,41 +3,18 @@
  *
  * Reconciles ONE owned native Codex execution against the single already-resolved
  * owning rollout journal and returns a typed disposition. It never scans other
- * sessions, never searches globally, never follows a caller-supplied path in
- * production mode, and never converts a tool-session identifier into an OS process
- * identifier. This module imports no process, child-process, spawn or signal API.
+ * sessions, never searches globally, and never converts a tool-session identifier
+ * into an OS process identifier. Production never follows a caller-supplied path;
+ * an explicit path is a `DEVLOOPS_RECONCILE_FIXTURE=1` fixture capability. This
+ * module imports no process, child-process, spawn or signal API.
  *
- * Typed statuses:
- *   - `completed`   exactly one terminal CommandExecution record binds to the
- *                   supplied owner thread, execution id, repository and cwd.
- *   - `unknown`     no result, wrong owner/thread, wrong execution id, wrong cwd or
- *                   repository, malformed record, schema drift, conflicting records.
- *   - `unsupported` the runtime cannot use a supported session/result API and cannot
- *                   read the native journal here.
+ * Reconciliation runs before any cleanup escalation per the Codex active-joins
+ * section of `skills/docs/main-agent-contract.md`.
  *
- * Supported schema disclosure (derived from the real journal named in issue 2886's
- * Evidence locator, `rollout-2026-10-20T13-54-33-01a15929-c860-7690-86d8-50f51506a786.jsonl`,
- * terminal record `ordinal: 185` for tool session `12938`). These are the ONLY JSON
- * pointer paths this adapter reads. A terminal record missing a required path is
- * schema drift and yields `unknown`; unread extra paths are ignored.
- *
- * | Field                         | JSON pointer                     | Required | Notes |
- * | ----------------------------- | -------------------------------- | -------- | ----- |
- * | event discriminator           | `/type`                          | yes      | `event_msg` |
- * | terminal item discriminator   | `/payload/type`                  | yes      | `item_completed` |
- * | execution item type           | `/payload/item/type`             | yes      | `CommandExecution` |
- * | owning thread id              | `/payload/thread_id`             | yes      | equals `--owner-thread-id` |
- * | tool session / execution id   | `/payload/item/process_id`       | yes      | opaque string, e.g. `"12938"` |
- * | native execution id           | `/payload/item/id`               | yes      | alternate execution-id binding, e.g. `exec-...` |
- * | terminal timestamp            | `/timestamp`                     | yes      | ISO-8601 |
- * | terminal status               | `/payload/item/status`           | yes      | e.g. `failed` |
- * | exit code                     | `/payload/item/exit_code`        | yes      | integer |
- * | command                       | `/payload/item/command`          | yes      | array of strings |
- * | working directory             | `/payload/item/cwd`              | yes      | `file://` URI |
- * | retained output               | `/payload/item/aggregated_output`| yes      | recorded text |
- * | completion epoch (corroborate)| `/payload/completed_at_ms`       | no       | integer ms |
- * | start epoch (corroborate)     | `/payload/started_at_ms`         | no       | integer ms |
- * | journal header owner          | `/payload/id on /type = session_meta` | yes | equals `--owner-thread-id` |
+ * Typed statuses: `completed` (exactly one terminal CommandExecution binds to the
+ * supplied owner thread, execution id, repository and cwd), `unknown` (no result,
+ * wrong binding, malformed record, schema drift, conflicting records) and
+ * `unsupported` (the runtime cannot read the native journal here).
  */
 
 import fsDefault from "node:fs";
@@ -52,7 +29,31 @@ import {
 /** Upper bound on the journal bytes this adapter will read. */
 export const CODEX_JOURNAL_MAX_BYTES = 64 * 1024 * 1024;
 
-/** Structured disclosure of the exact key paths read; mirrored in `skills/docs/main-agent-contract.md`. */
+/**
+ * Supported schema disclosure: the ONLY JSON pointer paths this adapter reads.
+ * Derived from the real journal `rollout-2026-10-20T13-54-33-01a15929-c860-7690-86d8-50f51506a786.jsonl`
+ * (terminal record `ordinal: 185`, tool session `12938`). A terminal record missing
+ * a required path is schema drift and yields `unknown`; unread extra paths are ignored.
+ * Mirrored in `skills/docs/main-agent-contract.md` (Codex active joins).
+ *
+ * | Field                         | JSON pointer                     | Required | Notes |
+ * | ----------------------------- | -------------------------------- | -------- | ----- |
+ * | event discriminator           | `/type`                          | yes      | `event_msg` |
+ * | terminal item discriminator   | `/payload/type`                  | yes      | `item_completed` |
+ * | execution item type           | `/payload/item/type`             | yes      | `CommandExecution` |
+ * | owning thread id              | `/payload/thread_id`             | yes      | equals `--owner-thread-id` |
+ * | tool session / execution id   | `/payload/item/process_id`       | yes      | opaque string, e.g. `"12938"` |
+ * | native execution id           | `/payload/item/id`               | yes      | alternate execution-id binding |
+ * | terminal timestamp            | `/timestamp`                     | yes      | ISO-8601 |
+ * | terminal status               | `/payload/item/status`           | yes      | e.g. `failed` |
+ * | exit code                     | `/payload/item/exit_code`        | yes      | integer |
+ * | command                       | `/payload/item/command`          | yes      | array of strings |
+ * | working directory             | `/payload/item/cwd`              | yes      | `file://` URI |
+ * | retained output               | `/payload/item/aggregated_output`| yes      | recorded text |
+ * | completion epoch (corroborate)| `/payload/completed_at_ms`       | no       | integer ms |
+ * | start epoch (corroborate)     | `/payload/started_at_ms`         | no       | integer ms |
+ * | journal header owner          | `/payload/id on /type = session_meta` | yes | equals `--owner-thread-id` |
+ */
 export const CODEX_EXECUTION_EVIDENCE_SCHEMA = Object.freeze([
   Object.freeze({ field: "event discriminator", pointer: "/type", required: true }),
   Object.freeze({ field: "terminal item discriminator", pointer: "/payload/type", required: true }),
