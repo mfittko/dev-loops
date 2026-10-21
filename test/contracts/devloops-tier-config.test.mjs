@@ -21,10 +21,10 @@ const GATE_KEYS = ["draft", "preApproval"];
 function assertPiTierPolicy(tiers) {
   for (const tier of ["low", "high", "pre-pr-strong"]) {
     const model = tiers[tier]?.pi;
-    // Both provider and model must be non-empty and whitespace-free. This
-    // also excludes bare Claude tokens and null/inherited Pi defaults.
+    // Every slash-delimited component must be non-empty and whitespace-free.
+    // Nested model ids remain valid; bare Claude tokens and null defaults do not.
     assert.ok(
-      typeof model === "string" && /^[^/\s]+\/\S+$/.test(model),
+      typeof model === "string" && /^[^/\s]+(?:\/[^/\s]+)+$/.test(model),
       `${tier}.pi must carry a concrete provider-qualified Pi model id`,
     );
   }
@@ -39,7 +39,7 @@ const syntheticPiTiers = () => ({
   "pre-pr-strong": { pi: "provider/review" },
 });
 
-for (const model of ["provider/model", "provider/nested/model", "another-provider/new-model"]) {
+for (const model of ["p/m", "provider/model", "provider/nested/model", "another-provider/new-model"]) {
   test(`Pi tier policy accepts a distinct provider-qualified review model: ${model}`, () => {
     const tiers = syntheticPiTiers();
     tiers.high.pi = model;
@@ -49,7 +49,7 @@ for (const model of ["provider/model", "provider/nested/model", "another-provide
 }
 
 for (const tier of ["low", "high", "pre-pr-strong"]) {
-  for (const model of [undefined, null, "", "sonnet", "opus", "haiku", "fable", "/", "/model", "openrouter/", "a/", "provider/white space", " provider/model"]) {
+  for (const model of [undefined, null, "", "sonnet", "opus", "haiku", "fable", "/", "/model", "openrouter/", "a/", "provider//model", "provider//", "provider/model/", "provider/nested//model", "provider/white space", " provider/model"]) {
     test(`Pi tier policy rejects ${tier}.pi = ${JSON.stringify(model)}`, () => {
       const tiers = syntheticPiTiers();
       tiers[tier].pi = model;
@@ -111,7 +111,7 @@ test("this repo's .devloops resolves the pre-push-reviewer to Opus on Claude and
   );
   // Structure: the pre-push reviewer runs on its own strong tier, and that tier
   // carries a concrete Pi model. A wrong role->tier mapping, a missing tier or
-  // a missing harness key fails here; a different model id does not.
+  // a missing harness key fails this contract; a different model id does not.
   assert.equal(
     config.models.roleTiers["pre-push-reviewer"],
     "pre-pr-strong",
@@ -159,6 +159,19 @@ test("this repo's .devloops preserves role-to-tier routing, concrete distinct Pi
     "high",
     "the judge role must map to the strong tier",
   );
+  // These roles may omit overrides and inherit their built-in aliases. Check
+  // any configured alias directly, even when two tiers share the same models.
+  for (const role of ["docs", "quality"]) {
+    assert.equal(config.models.roleTiers[role] ?? "low", "low", `${role} must map to the regular tier`);
+  }
+  for (const role of ["review", "refiner"]) {
+    assert.equal(config.models.roleTiers[role] ?? "high", "high", `${role} must map to the strong tier`);
+  }
+  // Check configured Claude tokens directly: resolver fallback must not hide
+  // a missing harness key (in particular high.claude inherits built-in opus).
+  for (const [tier, token] of [["low", "sonnet"], ["high", "opus"], ["pre-pr-strong", "opus"]]) {
+    assert.equal(config.models.tiers[tier]?.claude, token, `${tier}.claude must explicitly carry ${token}`);
+  }
   const lowPi = config.models.tiers.low?.pi;
   const highPi = config.models.tiers.high?.pi;
   // Non-vacuity and model shape are shared with the pre-push reviewer guard.
