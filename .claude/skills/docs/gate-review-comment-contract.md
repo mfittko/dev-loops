@@ -250,6 +250,24 @@ gates: the `review`-header guard reads only the comment body, never the review's
 `event`/`state`, so `detect-checkpoint-evidence.mjs`/`detect-pr-gate-coordination-state.mjs`
 report no draft/pre-approval evidence from it.
 
+<!-- rule: REVIEW-GATE-JUDGE-PHASE -->
+### `review` gate judge phase
+
+`REVIEW-GATE-JUDGE-PHASE`: the standalone `review` gate runs the judge between the Phase 3 fan-in ledger and the verdict post (Phase 3.5, ADR 0177). A ledger with zero findings skips the judge. The judge takes its spec in this order: the single closing issue when its body passes `requireSpecFromBody` (`issue`); the PR description when it passes (`pr_body`); the PR description as scope text (`pr_scope`); otherwise none, and the judge does not run. `judge-pass.mjs --gate review` posts no deferral comment and takes no `--out`, so the round keeps one visible surface and never feeds a fixer. The judge-spec line is the only change to the review body in this phase. The verdict and the finding rendering are unchanged.
+
+`upsert-checkpoint-verdict.mjs --gate review` takes `--judge-spec-source <issue|pr_body|pr_scope|none|unavailable>` and `--judge-unavailable-reason <spec_cannot_decide|judge_failed>`. Both flags are refused on `draft_gate` and `pre_approval_gate`. The reason is required with `unavailable` and refused with every other source. When the `--findings-ledger` holds at least one finding, `--judge-spec-source` is required, and `issue`, `pr_body` and `pr_scope` need every finding to carry a `judgeDisposition`, while `none` and `unavailable` need no finding to carry one. A mismatch fails closed. A judge failure (`judge-pass.mjs` exits 1) posts the review unjudged with `unavailable`; the post is never aborted. The body renders one line:
+
+| Source | Line |
+|---|---|
+| `issue` | `**Judge spec:** linked issue` |
+| `pr_body` | `**Judge spec:** PR description` |
+| `pr_scope` | `**Judge spec:** PR description scope (no formal acceptance criteria or definition of done; informational)` |
+| `none` | `**Judge spec:** none, no usable PR scope, judge not run, every finding shown` |
+| `unavailable` with `spec_cannot_decide` | `**Judge:** unavailable, the judge could not decide against the PR scope, every finding shown` |
+| `unavailable` with `judge_failed` | `**Judge:** unavailable, judge failed, every finding shown` |
+
+The line is interim. The review body stays non-evidence: `parseGateReviewCommentFields` returns `null` for it.
+
 ## Separate chains per gate
 
 Each gate runs its own independent review chain (`GATE-EXEC-SEPARATE-CHAINS`, owned by

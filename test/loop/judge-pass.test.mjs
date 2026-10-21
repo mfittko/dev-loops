@@ -625,13 +625,13 @@ function stubDeferralDeps({ closing = [], listed = [] } = {}) {
   return { deps: { run, commentIssue }, runCalls, commentCalls };
 }
 
-async function runDeferRound({ findings, dispositions, deps, config, pr = "1658" }) {
+async function runDeferRound({ findings, dispositions, deps, config, pr = "1658", gate = "draft_gate" }) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-defer-"));
   if (config) await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify(config));
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
   await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions })));
   const payload = await judgePassCli(
-    { repo: "mfittko/dev-loops", pr, gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
+    { repo: "mfittko/dev-loops", pr, gate, headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", ...(gate === "review" ? {} : { out: "./act.json" }), ledgerOut: "./enriched.json" },
     { repoRoot: tmpDir, ...deps },
   );
   const enriched = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8"));
@@ -1746,3 +1746,103 @@ test("gitShowSource reads a file at a commit and returns null for a missing path
   assert.equal(gitShowSource(root, "HEAD", "no/such/file.mjs"), null);
   assert.equal(gitShowSource(root, "f".repeat(40), "package.json"), null);
 });
+
+// --- Review gate (standalone review judge phase) ---
+
+test("judge-pass review gate: a defer posts no deferral comment and no gh call, and the ledger carries the defer", async () => {
+  const { deps, runCalls, commentCalls } = stubDeferralDeps({ closing: [2425] });
+  const { payload, enriched } = await runDeferRound({
+    gate: "review",
+    findings: [finding({ summary: "defer this", severity: "medium" })],
+    dispositions: [{ index: 0, ...DEFER }],
+    deps,
+  });
+  assert.equal(payload.ok, true);
+  assert.equal(commentCalls.length, 0, "the review round keeps one visible surface");
+  assert.equal(runCalls.length, 0, "no closing-reference or comment-list lookup");
+  assert.equal(enriched.findings[0].judgeDisposition, "defer");
+  assert.strictEqual(typeof enriched.findings[0].fingerprint, "string");
+});
+
+test("judge-pass pre_approval_gate: the same defer still posts the batched deferral comment", async () => {
+  const { deps, commentCalls } = stubDeferralDeps({ closing: [2425] });
+  await runDeferRound({
+    gate: "pre_approval_gate",
+    findings: [finding({ summary: "defer this", severity: "medium" })],
+    dispositions: [{ index: 0, ...DEFER }],
+    deps,
+  });
+  assert.equal(commentCalls.length, 1);
+});
+
+test("validateCliArgs: --out is refused with --gate review", () => {
+  const base = { repo: "mfittko/dev-loops", pr: "2000", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json" };
+  assert.throws(() => validateCliArgs({ ...base, gate: "review" }), /--out is not accepted with --gate review/);
+  assert.doesNotThrow(() => validateCliArgs({ ...base, gate: "pre_approval_gate" }));
+});
+
+const PR_SCOPE_SPEC = {
+  specKind: "pr_scope",
+  scope: ["Fix the stale cache in reload()", "Leave the build scripts alone"],
+  acceptanceCriteria: [],
+  definitionOfDone: [],
+  nonGoals: [],
+};
+
+// Three findings judged against a pr_scope spec: an in-scope runtime defect (act), a template-only
+// medium (reject, scope:1 conflict) and a follow-up (defer).
+async function runPrScopeRound(gate, deps = {}) {
+  const { computeSpecDigest, computeContentDigest, specCriterionIds } = await import("@dev-loops/core/loop/spec-authority");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-pr-scope-"));
+  const specDigest = computeSpecDigest(PR_SCOPE_SPEC);
+  const contentDigest = computeContentDigest("reviewed-impl");
+  const checkedCriteria = specCriterionIds(PR_SCOPE_SPEC);
+  assert.deepEqual(checkedCriteria, ["scope:0", "scope:1"]);
+  const findings = [
+    finding({ summary: "reload() returns the stale cache entry" }),
+    finding({ severity: "medium", summary: "PR has no Acceptance criteria or Definition of done section" }),
+    finding({ severity: "low", summary: "rename the helper later" }),
+  ];
+  const base = { specDigest, headSha: HEAD, contentDigest, checkedCriteria };
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({
+    dispositions: [
+      { index: 0, disposition: "act", rationale: "in scope:0" },
+      { index: 1, disposition: "reject", rationale: "template-only finding on a pr_scope spec" },
+      { index: 2, ...DEFER },
+    ],
+  })));
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(PR_SCOPE_SPEC));
+  await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({
+    ...base,
+    decisions: [
+      { index: 0, outcome: "valid_compliant", ...base, rationale: "real runtime defect inside scope:0", authorizedRemediation: "invalidate on reload", defectClass: "stale-cache", siteQuery: "reload" },
+      { index: 1, outcome: "finding_conflicts", ...base, conflictingCriteria: ["scope:1"], rationale: "template sections are not part of the stated scope" },
+      { index: 2, outcome: "valid_compliant", ...base, rationale: "real but a follow-up", authorizedRemediation: "rename", remedyKind: "evidence_only" },
+    ],
+  }));
+  const run = () => judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "2000", gate, headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json", ledgerOut: "./enriched.json" },
+    { repoRoot: tmpDir, ...deps },
+  );
+  return { tmpDir, run };
+}
+
+test("judge-pass review gate: a pr_scope spec judges the in-scope defect act and the template-only finding reject", async () => {
+  const { deps, commentCalls } = stubDeferralDeps({ closing: [] });
+  const { tmpDir, run } = await runPrScopeRound("review", deps);
+  const payload = await run();
+  assert.equal(payload.ok, true);
+  const enriched = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8"));
+  assert.deepEqual(enriched.findings.map((f) => f.judgeDisposition), ["act", "reject", "defer"]);
+  assert.match(enriched.findings[1].judgeRationale, /template-only|finding_conflicts/);
+  assert.equal(enriched.findings.length, 3, "every finding stays in the ledger");
+  assert.equal(commentCalls.length, 0);
+});
+
+for (const gate of ["draft_gate", "pre_approval_gate"]) {
+  test(`judge-pass ${gate}: a pr_scope spec is refused, naming the spec kind`, async () => {
+    const { run } = await runPrScopeRound(gate);
+    await assert.rejects(run(), /specKind "pr_scope".*only the review gate/);
+  });
+}

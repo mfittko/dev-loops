@@ -42,8 +42,9 @@ This contract owns the **execution shape** of gate-review work. It does not own:
 - the broader PR lifecycle sequencing (owned by the workflow skill and [PR Lifecycle Contract](./pr-lifecycle-contract.md))
 
 The standalone `review` gate (`GATE_NAMES`, `scripts/github/_gate-names.mjs`) runs
-Phases 1, 1.5, 2 and 3 with `--gate review`, then stops: no judge, fix, repeat,
-auto-resolve, forbidden-action refusal or CI wait; any PR is eligible. Its recognized
+Phases 1, 1.5, 2, 3 and 3.5 with `--gate review`, then stops: no fix, repeat,
+auto-resolve, forbidden-action refusal or CI wait; any PR is eligible. Its Phase 3.5 judge
+follows `REVIEW-GATE-JUDGE-PHASE` in the [Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md#review-gate-judge-phase). Its recognized
 header makes `@dev-loops/core/github/copilot-helpers` return non-evidence, with or without a
 findings-ledger marker. Gate name and head SHA come only from labeled field lines. Its separate absence
 from `GATE_CONFIG_KEY` means no draft/preApproval threshold, not the reason it cannot

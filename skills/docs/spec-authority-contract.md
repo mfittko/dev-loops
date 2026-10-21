@@ -72,6 +72,19 @@ The judge-pass bridge is the runtime caller. `--prior-approvals` feeds the previ
 
 After an authorized fixer push, thread reply/resolution and live verification finish before the required fresh review begins. Owners: `COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE` and `COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY` in `skills/copilot-pr-followup/SKILL.md` Step 7, and the fresh-review-context rules in `gate-review-sub-loop-contract.md`. This contract does not weaken that ordering, current-head gate evidence, CI, review coverage, approval, or merge-authorization requirements.
 
+## Review-gate spec source and the `pr_scope` kind (ADR 0177)
+
+The standalone `review` gate resolves its spec in this order. The first source that applies wins, and the specs of several closing issues are never merged.
+
+1. `issue`: the PR's single closing issue, when its body passes `requireSpecFromBody`.
+2. `pr_body`: the PR description, when it passes `requireSpecFromBody`.
+3. `pr_scope`: the PR description, when it holds usable text but no formal spec.
+4. `none`: the PR description holds no usable text after HTML comments and empty template headings are stripped. The judge does not run and every finding stays visible.
+
+A `pr_scope` spec has `specKind: "pr_scope"` and a `scope` category. Its items are verbatim paragraph and top-level bullet excerpts of the PR description, with criterion ids `scope:<n>`. `computeSpecDigest` covers the scope items. Explicit acceptance criteria, definition of done and non-goals items on the PR description stay verbatim in their own categories, and those lists are empty when the description has none. Nothing is taken from the closing issue, and no criterion, completion evidence or non-goal is fabricated. `normalizeSpec` and `specCriterionIds` accept a spec with no acceptance criteria only when `specKind` is `pr_scope` and `scope` is non-empty. Every other spec keeps the fail-closed rule.
+
+`draft_gate` and `pre_approval_gate` keep the strict spec contract: `judge-pass.mjs` refuses a `pr_scope` spec for them, naming the spec kind. `spec-context.mjs --body-file <path>` resolves sources 2 to 4 from a PR description file, and `--issue` is unchanged.
+
 ## Severity and batching never bypass authority
 
 Low and nit findings receive the same whole-spec finding/remediation comparison before they may join an existing fixer pass. Severity and batching are advisory weight and scheduling; they never exempt a finding from `SPEC-AUTHORITY-WHOLE-SPEC-EVAL`.

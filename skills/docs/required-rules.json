@@ -809,6 +809,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "REVIEW-GATE-JUDGE-PHASE",
+      "enforcement": "doc"
+    },
+    {
       "id": "REVIEW-GATE-VERDICT-CANONICAL",
       "enforcement": "doc"
     },

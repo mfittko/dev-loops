@@ -40,14 +40,15 @@ bare `/loop-review` form is dev-loops-repo-local (repo-local
 
 ## What it runs
 
-Read [Gate-review sub-loop contract](../docs/gate-review-sub-loop-contract.md) before execution. Reuse its context, fan-out and fan-in procedure with `--gate review` through every stage; stop after verdict-post and the submit choice, before judge, fix or repeat phases.
+Read [Gate-review sub-loop contract](../docs/gate-review-sub-loop-contract.md) before execution. Reuse its context, fan-out and fan-in procedure with `--gate review` through every stage; run the judge phase (Phase 3.5) between fan-in and the verdict post, and stop after verdict-post and the submit choice, before fix or repeat phases.
 
 When the `review` route runs inside a `dev-loop` agent (`loop startup --pr <n> --review`), that
 agent dispatches one `gate-coordinator` agent for the round. The `gate-coordinator` agent runs
 steps 1 to 3 and step 4 up to the ledger write, dispatches the `review` agents, and returns the
 typed round result without the act-list path, the spec-authority identity path and the judge
-summary, since the route runs no judge phase (`GATE-EXEC-GATE-COORDINATOR`). The `dev-loop` agent
-then runs the `upsert-checkpoint-verdict.mjs` post and the submit choice. In the main session
+summary, since the coordinator runs no judge phase (`GATE-EXEC-GATE-COORDINATOR`). The `dev-loop` agent
+then runs Phase 3.5 below, rewrites the durable ledger with the judge flags, and runs the
+`upsert-checkpoint-verdict.mjs` post and the submit choice. In the main session
 this skill dispatches the `review` agents directly.
 
 1. **Phase 1 — context-builder.** `node scripts/github/write-gate-context.mjs
@@ -60,7 +61,9 @@ this skill dispatches the `review` agents directly.
    `pr-description`, and `gate-evidence` — are each DROPPED (with a recorded
    rationale entry, reason `"no spec-of-record"`) only when the PR closes no
    issue AND its own body carries no AC checklist; all are KEPT when either
-   is true.
+   is true. `pr-checklist` is also DROPPED (reason `"no formal spec on the closing
+   issue or PR description"`) when neither the single closing issue nor the PR
+   description passes `requireSpecFromBody`; an unknown fact keeps every angle.
 2. **First-wave release.** Same `GATE-EXEC-FIRST-WAVE-RELEASE` contract as any
    other gate fan-out: no primer and no lead reviewer; release the first wave
    immediately after emission.
@@ -82,8 +85,51 @@ this skill dispatches the `review` agents directly.
    verdict (`<emit-plan-path>` is the keyed `review-<headSha>.emit-plan.json`
    sibling `emit-fanout-dispatch.mjs` persisted in Phase 2, consumed by the
    fan-in's `GATE-EXEC-EMIT-PLAN-KEY` fail-closed round-key guard — a stale or
-   foreign emit plan fails closed instead of being consumed). Before posting,
-   write the durable ledger through `write-gate-findings-log.mjs` with
+   foreign emit plan fails closed instead of being consumed).
+   **Phase 3.5 — judge.** Run it on the fan-in ledger after `consolidate-fanin.mjs`
+   and before the durable ledger write and the post. The rule and its
+   judge-spec line are owned by `REVIEW-GATE-JUDGE-PHASE` in the
+   [Checkpoint Verdict Comment Contract](../docs/gate-review-comment-contract.md#review-gate-judge-phase);
+   the spec precedence is owned by the
+   [Spec Authority Contract](../docs/spec-authority-contract.md). A ledger with zero
+   findings skips this phase and posts with no `--judge-spec-source`.
+   1. Read the PR description and its closing issues through
+      `scripts/github/view-pr.mjs --repo <owner/repo> --pr <n> --json body,closingIssuesReferences`
+      (never raw `gh`). Write the body to `<body-path>` with `--jq '.pr.body'`.
+   2. Resolve the spec in this order, with `--head-sha <sha>`, `--content-file
+      <reviewed-content-path>`, `--spec-out <spec-path>` and `--identity-out
+      <identity-path>` on each call: (a) exactly one closing issue: `node
+      scripts/loop/spec-context.mjs --repo <owner/repo> --issue <closing-issue> ...`
+      (`specSource: "issue"`); when that call exits 1 because the issue body has
+      no formal spec, or when the PR has zero or several closing issues, go on to
+      (b); several closing issues are never merged. (b) `node
+      scripts/loop/spec-context.mjs --repo <owner/repo> --body-file <body-path> ...`
+      returns `specSource: "pr_body"`, `"pr_scope"` or `"none"`.
+   3. When `specSource` is `none` (no usable PR scope), do not run the judge. Post
+      with `--judge-spec-source none`.
+   4. Otherwise run the lifecycle judge path with `--gate review`:
+      `emit-judge-work-order.mjs --gate review --findings-file <ledger-out-path>
+      --spec-file <spec-path> --identity-file <identity-path>`, dispatch the `judge` agent with
+      the printed `dispatchPrompt` (pull transport), then `judge-pass.mjs --gate
+      review --judge-plan <plan> --findings-file <ledger-out-path> --judge-verdict <path>
+      --spec-file <spec-path> --content-digest <digest> --spec-authority-verdict <path>
+      --head-sha <sha>`. Pass no `--out` and no `--ledger-out`: the durable write in
+      step 6 reads the pre-judge `<ledger-out-path>` and re-applies the judgment itself. The review
+      gate never feeds a fixer, and `judge-pass` posts no deferral comment, so a `defer`
+      finding is recorded on the review body and in the findings log only.
+   5. When `judge-pass.mjs` exits 1 (the judge failed, or returned
+      `spec_cannot_decide`), never abort the post. Post the review unjudged with
+      `--judge-spec-source unavailable --judge-unavailable-reason spec_cannot_decide`
+      (the judge returned that outcome) or `judge_failed` (any other failure). Every
+      finding stays visible in its normal track.
+   6. When the judge succeeded, write the durable ledger with
+      `write-gate-findings-log.mjs --judge-verdict <path> --spec-authority <identity-path>`
+      (it reads the pre-judge `--findings-file <ledger-out-path>`; `--judge-verdict` re-applies the judgment) and post with `--judge-spec-source <issue|pr_body|pr_scope>`. Missing formal
+      acceptance criteria or definition of done is never an `act` finding and never
+      blocks review completion; it shows only as the informational note on the judge-spec line.
+
+   After Phase 3.5 and before posting,
+   write the durable ledger (with `--judge-verdict <path>` on a judged round, per step 6) through `write-gate-findings-log.mjs` with
    `--findings-file <ledger-out-path> --emit-plan <emit-plan-path>`,
    `--execution-mode fanout_fanin` (this IS a fan-out/fan-in write, so the ledger
    records the real execution mode — omitting it defaults to `inline_single_agent`
@@ -150,7 +196,7 @@ this skill dispatches the `review` agents directly.
      leave-pending keeps one draft, discard leaves none.
    - **`--auto`/headless:** post `--submit comment` and skip the prompt.
 
-**Stop here.** Never proceed to the judge pass, the fix cycle, a re-gate
+**Stop here.** After the post and the submit choice, never proceed to the fix cycle, a re-gate
 round, `pr ready-for-review`, or a board move — a `review` round is a single,
 complete, terminal pass. There is no `review` fixer loop and no re-gate path;
 if the operator wants findings fixed, that is a SEPARATE, explicit

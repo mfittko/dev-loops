@@ -40,6 +40,7 @@ import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
 import { resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
@@ -126,20 +127,26 @@ const SPEC_OF_RECORD_DEPENDENT_ANGLES = ["acceptance-criteria", "pr-checklist", 
  * `--prefix-file` mode) — an unknown fact must never be coerced to "false",
  * so this fails CLOSED and keeps every angle.
  *
+ * `pr-checklist` is also dropped when both `hasFormalIssueSpec` (the single
+ * closing issue's body passes `requireSpecFromBody`) and `hasFormalPrSpec`
+ * (the PR description passes it) are definitively false. An unknown
+ * (`undefined`) fact keeps it.
+ *
  * @param {import("@dev-loops/core/config").DevLoopConfig} config
- * @param {{ hasClosingIssue: boolean|undefined, hasAcChecklist: boolean|undefined }} facts
+ * @param {{ hasClosingIssue: boolean|undefined, hasAcChecklist: boolean|undefined, hasFormalIssueSpec?: boolean, hasFormalPrSpec?: boolean }} facts
  * @returns {{ recommendedAngles: string[], skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: false, dynamicAnglesActive: false, addedAngles: string[], addedReasons: Record<string,string> }}
  */
-export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklist }) {
+export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklist, hasFormalIssueSpec, hasFormalPrSpec }) {
   const union = resolveOperationAnglePool(config, "review");
   const provablyNoSpecOfRecord = hasClosingIssue === false && hasAcChecklist === false;
+  const provablyNoFormalSpec = hasFormalIssueSpec === false && hasFormalPrSpec === false;
   const anglesToDrop = provablyNoSpecOfRecord
     ? SPEC_OF_RECORD_DEPENDENT_ANGLES.filter((a) => union.includes(a))
-    : [];
+    : provablyNoFormalSpec && union.includes("pr-checklist") ? ["pr-checklist"] : [];
   return {
     recommendedAngles: union.filter((a) => !anglesToDrop.includes(a)),
     skippedAngles: anglesToDrop,
-    reasons: Object.fromEntries(anglesToDrop.map((a) => [a, "no spec-of-record"])),
+    reasons: Object.fromEntries(anglesToDrop.map((a) => [a, provablyNoSpecOfRecord ? "no spec-of-record" : "no formal spec on the closing issue or PR description"])),
     fallbackToAll: false,
     dynamicAnglesActive: false,
     addedAngles: [],
@@ -3050,6 +3057,15 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
 // no Non-goals still keeps the acceptance-criteria angle. Reads `acItems`
 // directly since the PR body carries only list-form AC/DoD checklists, never
 // a matrix; the matrix floor is an issue-side concern.
+function passesRequireSpecFromBody(body) {
+  try {
+    requireSpecFromBody(body);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function detectRefinementHasAcChecklist(prBody) {
   const artifact = detectIssueRefinementArtifact({ body: prBody });
   return artifact.acItems.length > 0;
@@ -3082,6 +3098,8 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
         // passes" — so an issue-less PR with a real checklist but no
         // Non-goals still keeps every spec-of-record-dependent angle.
         hasAcChecklist: detectRefinementHasAcChecklist(input.prBody ?? ""),
+        hasFormalIssueSpec: input.hasFormalIssueSpec,
+        hasFormalPrSpec: input.hasFormalPrSpec,
       })
     : await resolveGateAnglesDynamic(input.config, configKey, {
         diff: input.diff,
@@ -3308,6 +3326,8 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
   // description) and renders as PR_BODY_ABSENT_SENTINEL. That is distinct from
   // the throw above, which is the unresolvable case.
   if (needsBody) options.prBody = typeof pr.body === "string" ? pr.body : "";
+  const isReview = options.gate === "review";
+  if (isReview) options.hasFormalPrSpec = passesRequireSpecFromBody(options.prBody);
 
   // Recorded whenever `pr` was actually fetched (regardless of the acProvided
   // short-circuit below), for the `review` gate's own angle resolution
@@ -3322,6 +3342,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
   }
 
   if (closingNumbers.length === 0) {
+    if (isReview) options.hasFormalIssueSpec = false;
     // Genuinely no closing reference (and no body-keyword fallback match) —
     // recorded as such, so a consumer can tell "this PR closes no issue" from
     // "nobody fetched the issue".
@@ -3352,6 +3373,8 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
     targets.push({ repo, number: entry.number, label: sameRepo ? `#${entry.number}` : `${repo}#${entry.number}` });
   }
   options.acceptanceCriteria = targets.map((t) => t.label).join(", ");
+  // Several closing issues never merge into one spec, so only a single closing issue can be formal.
+  if (isReview && targets.length !== 1) options.hasFormalIssueSpec = false;
 
   if (options.issueBody == null) {
     const bodies = [];
@@ -3369,6 +3392,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
         );
       }
       const body = typeof issue.body === "string" ? issue.body : "";
+      if (isReview && targets.length === 1) options.hasFormalIssueSpec = passesRequireSpecFromBody(body);
       // "gives a reviewer real criteria to read" — true when the linked issue
       // is refined (`hasACs`: a valid AC→DoD matrix + Non-goals, or a
       // resolvable linked refinement doc + Non-goals) OR simply carries AC
@@ -3395,6 +3419,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
     }
     options.acceptanceCriteriaSource = anyRefined ? "linked-issue" : "linked-issue-unrefined";
   } else {
+    if (isReview && targets.length === 1) options.hasFormalIssueSpec = passesRequireSpecFromBody(options.issueBody);
     // Caller supplied the issue body text directly (without also supplying
     // --acceptance-criteria) — classify it as given rather than making a
     // network call whose result would be discarded. Uses `hasACs ||
@@ -3599,6 +3624,8 @@ export async function main(
         resolverResult = resolveReviewGateAngles(config, {
           hasClosingIssue: options.hasClosingIssue,
           hasAcChecklist: detectRefinementHasAcChecklist(options.prBody ?? ""),
+          hasFormalIssueSpec: options.hasFormalIssueSpec,
+          hasFormalPrSpec: options.hasFormalPrSpec,
         });
       } else {
         if (options.fullLabel !== true && !options.prefixFile) {
