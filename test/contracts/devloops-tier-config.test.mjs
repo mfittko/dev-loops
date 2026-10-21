@@ -17,7 +17,8 @@ import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolve
 
 const GATE_KEYS = ["draft", "preApproval"];
 
-// Keep the repo's Pi policy guard local: concrete ids are operator choices.
+// Keep the repo's Pi policy guard local: concrete ids and tier distinctness are
+// operator choices (ADR 0176, amending 0175).
 function assertPiTierPolicy(tiers) {
   for (const tier of ["low", "high", "pre-pr-strong"]) {
     const model = tiers[tier]?.pi;
@@ -207,7 +208,7 @@ test("this repo's .devloops resolves the pre-push-reviewer to Opus on Claude and
 // Regular vs. strong split: routine roles run on the regular tier (sonnet on
 // Claude; on Pi the regular tier carries the operator's cheap model); review,
 // refiner, the pre-push reviewer and every gate angle stay on opus.
-test("this repo's .devloops preserves role-to-tier routing, concrete distinct Pi review models and Claude tokens", async () => {
+test("this repo's .devloops preserves role-to-tier routing, concrete Pi review models and Claude tokens", async () => {
   const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
   assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
 
