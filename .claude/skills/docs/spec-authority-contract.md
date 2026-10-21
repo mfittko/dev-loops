@@ -72,7 +72,7 @@ The judge-pass bridge is the runtime caller. `--prior-approvals` feeds the previ
 
 After an authorized fixer push, thread reply/resolution and live verification finish before the required fresh review begins. Owners: `COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE` and `COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY` in `skills/copilot-pr-followup/SKILL.md` Step 7, and the fresh-review-context rules in `gate-review-sub-loop-contract.md`. This contract does not weaken that ordering, current-head gate evidence, CI, review coverage, approval, or merge-authorization requirements.
 
-## Review-gate spec source and the `pr_scope` kind (ADR 0177)
+## Review-gate spec source and the `pr_scope` kind (ADR 0178)
 
 The standalone `review` gate resolves its spec in this order. The first source that applies wins, and the specs of several closing issues are never merged.
 
