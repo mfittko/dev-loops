@@ -29,10 +29,10 @@ The standalone `review` gate posted every reviewer finding at the same level and
 - On the review gate `judge-pass.mjs` posts no deferral comment and takes no `--out`: the round keeps one visible surface and never feeds a fixer.
 - The posted review records the judgment source with `upsert-checkpoint-verdict.mjs --judge-spec-source` and `--judge-unavailable-reason`. A judge failure posts the review unjudged with its reason, and every finding stays visible.
 
-Verdict composition, finding rendering and the `gate-evidence` angle rule stay as they are in this record.
+The verdict composition and finding rendering code stay unchanged, and the `gate-evidence` angle rule stays as it is in this record.
 
 ## Consequences
 
 - A review of a PR with no formal spec still gets a judge pass against the PR's stated scope.
-- The review body gains one judge-spec line. Until later work changes the rendering, judged findings render in their normal track.
+- The review body gains one judge-spec line. The existing disposition-gated fold applies to judged findings: `reject` and `defer` findings below the blocking severities fold into the Details block, and the verdict follows the judged `act` items. Unjudged posts keep every finding in its normal track.
 - The spec-authority code gains one spec kind that only the review gate accepts.
