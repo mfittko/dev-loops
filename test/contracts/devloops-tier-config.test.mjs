@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolveGateTier, resolveRoleModel } from "@dev-loops/core/config";
 
@@ -17,7 +19,8 @@ import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolve
 
 const GATE_KEYS = ["draft", "preApproval"];
 
-// Keep the repo's Pi policy guard local: concrete ids are operator choices.
+// Keep the repo's Pi policy guard local: concrete ids and tier distinctness are
+// operator choices (ADR 0176, amending 0175).
 function assertPiTierPolicy(tiers) {
   for (const tier of ["low", "high", "pre-pr-strong"]) {
     const model = tiers[tier]?.pi;
@@ -27,9 +30,6 @@ function assertPiTierPolicy(tiers) {
       typeof model === "string" && /^(?!\.{1,2}(?:\/|$))[^/\s?#]+(?:\/(?!\.{1,2}(?:\/|$))[^/\s?#]+)+$/.test(model),
       `${tier}.pi must carry a concrete provider-qualified Pi model id`,
     );
-  }
-  for (const tier of ["high", "pre-pr-strong"]) {
-    assert.notEqual(tiers[tier].pi, tiers.low.pi, `${tier}.pi must differ from the cheap tier's model`);
   }
 }
 
@@ -61,7 +61,7 @@ const syntheticPiTiers = () => ({
 });
 
 for (const model of ["p/m", "provider/model", "provider/nested/model", "another-provider/new-model", "provider.example/model.v1"]) {
-  test(`Pi tier policy accepts a distinct provider-qualified review model: ${model}`, () => {
+  test(`Pi tier policy accepts a provider-qualified review model: ${model}`, () => {
     const tiers = syntheticPiTiers();
     tiers.high.pi = model;
     tiers["pre-pr-strong"].pi = model;
@@ -80,14 +80,6 @@ for (const tier of ["low", "high", "pre-pr-strong"]) {
   test(`Pi tier policy rejects a missing ${tier} harness key`, () => {
     const tiers = syntheticPiTiers();
     delete tiers[tier].pi;
-    assert.throws(() => assertPiTierPolicy(tiers), { code: "ERR_ASSERTION" });
-  });
-}
-
-for (const tier of ["high", "pre-pr-strong"]) {
-  test(`Pi tier policy rejects ${tier}.pi reusing the cheap model`, () => {
-    const tiers = syntheticPiTiers();
-    tiers[tier].pi = tiers.low.pi;
     assert.throws(() => assertPiTierPolicy(tiers), { code: "ERR_ASSERTION" });
   });
 }
@@ -218,7 +210,7 @@ test("this repo's .devloops resolves the pre-push-reviewer to Opus on Claude and
 // Regular vs. strong split: routine roles run on the regular tier (sonnet on
 // Claude; on Pi the regular tier carries the operator's cheap model); review,
 // refiner, the pre-push reviewer and every gate angle stay on opus.
-test("this repo's .devloops preserves role-to-tier routing, concrete distinct Pi review models and Claude tokens", async () => {
+test("this repo's .devloops preserves role-to-tier routing, concrete Pi review models and Claude tokens", async () => {
   const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
   assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
 
@@ -315,4 +307,27 @@ test("a synthetic matching diff resolves a non-empty tier angle set including th
       );
     }
   }
+});
+
+// ADR 0176: a model change is a one-line `.devloops` edit, so no tracked file may
+// name a concrete tier model id. Only provider-qualified ids (containing `/`) are
+// checked; claude family tokens such as sonnet/opus are legitimate repo vocabulary.
+test("no tracked file outside .devloops, docs/decisions and changes names a concrete tier model id (ADR 0176)", async () => {
+  const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+  const ids = new Set(
+    Object.values(config.models.tiers).flatMap((tier) => Object.values(tier)).filter((v) => typeof v === "string" && v.includes("/")),
+  );
+  assert.ok(ids.size > 0, "expected at least one provider-qualified tier model id");
+  const files = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8", maxBuffer: 1 << 28 })
+    .split("\0")
+    .filter((f) => f && f !== ".devloops" && !f.startsWith("docs/decisions/") && !f.startsWith("changes/"));
+  const hits = [];
+  for (const file of files) {
+    let buf;
+    try { buf = readFileSync(file); } catch { continue; }
+    if (buf.includes(0)) continue;
+    const text = buf.toString("utf8");
+    for (const id of ids) if (text.includes(id)) hits.push(`${file}: ${id}`);
+  }
+  assert.deepEqual(hits, [], "tier model ids belong only in .devloops");
 });
