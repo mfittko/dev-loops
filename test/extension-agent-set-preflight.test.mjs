@@ -179,10 +179,12 @@ test("session_start renders .pi/agents in a fresh dev-loops-shaped clone", () =>
   withProject(async (root) => {
     fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "dev-loops" }));
     writeAt(path.join(root, "agents", "quality.agent.md"), "---\nname: quality\ntools: read, search, execute, bash\n---\nbody\n");
+    fs.writeFileSync(path.join(root, ".devloops"), "version: 1\nmodels:\n  tiers:\n    low:\n      claude: sonnet\n      pi: test/pinned-model\n  roleTiers:\n    quality: low\n");
     const events = new Map();
     extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
     await withHome(() => events.get("session_start")({}, { cwd: root, getSessionId: () => "s" }));
     const dir = path.join(root, ".pi", "agents");
+    assert.match(fs.readFileSync(path.join(dir, "quality.agent.md"), "utf8"), /^model: "test\/pinned-model"$/m);
     assert.equal(fs.lstatSync(dir).isDirectory(), true);
     assert.deepEqual(await launch(root), { block: false });
     assert.doesNotMatch(fs.readFileSync(path.join(dir, "quality.agent.md"), "utf8"), /tools:.*\b(search|execute)\b/);
@@ -225,6 +227,7 @@ test("a tracked .pi/agents symlink refusal names the rebase step, the path and t
     const reason = checkAgentSetRendered(root, path.join(root, "agents"));
     assert.match(reason, /Rebase or merge the branch onto main first/);
     assert.match(reason, /quality\.agent\.md \(search, execute\)/);
+    assert.match(reason, /cannot read Pi's project-trust state/);
   }));
 
 test("a raw global copy is never checked", () =>
@@ -248,6 +251,7 @@ test("an unreadable or missing packaged agents source refuses", () =>
     dl(root);
     const missing = path.join(root, "no-such-source");
     assert.match(checkAgentSetRendered(root, missing), /^agent_set_not_rendered.*no-such-source/);
+    assert.match(checkAgentSetRendered(root, missing), /cannot read Pi's project-trust state/);
     const notDir = path.join(root, "file-source");
     fs.writeFileSync(notDir, "x");
     assert.match(checkAgentSetRendered(root, notDir), /^agent_set_not_rendered.*file-source/);
@@ -265,4 +269,17 @@ test("a directory at a rendered name refuses while a missing file passes", () =>
     const res = checkAgentSetRendered(root, src);
     assert.match(res, /^agent_set_not_rendered/);
     assert.ok(res.includes(`${asDir} (unreadable)`));
+  }));
+
+test("session_start in a dev-loops checkout never runs the unpinned project sync", () =>
+  withProject(async (root) => {
+    dl(root);
+    writeAt(path.join(root, "agents", "quality.agent.md"), RAW);
+    // A packaged agent the checkout lacks: the unpinned sync would overwrite this pinned file.
+    const PINNED = "---\nname: developer\nmodel: \"pin/me\"\n---\nbody\n";
+    writeAt(path.join(root, ".pi", "agents", "developer.agent.md"), PINNED);
+    const events = new Map();
+    extension({ on: (e, h) => events.set(e, h), registerCommand() {}, exec: async () => ({ code: 0 }) });
+    await withHome(() => events.get("session_start")({}, { cwd: root, getSessionId: () => "s" }));
+    assert.equal(fs.readFileSync(path.join(root, ".pi", "agents", "developer.agent.md"), "utf8"), PINNED);
   }));

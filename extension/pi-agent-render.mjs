@@ -72,11 +72,13 @@ export const TOOLS_LINE_RE = /^tools:\s*(.*)$/m;
  * Render a canonical `agents/*.agent.md` into a Pi-valid `~/.agents/*.agent.md` by
  * rewriting the `tools:` frontmatter to the Pi-mapped set (dropping `todo`). The
  * body is preserved verbatim — Pi consumes `<!-- pi-only -->` blocks (#817); only
- * the strict `tools:` allowlist needs remapping. A source with no frontmatter or
+ * the strict `tools:` allowlist needs remapping. When `resolveModel(name)` returns a
+ * non-null id, the frontmatter `model:` line is set to it (replacing any existing
+ * one) so the child never inherits the conductor. A source with no frontmatter or
  * no `tools:` line is returned unchanged (defensive — all canonical agents have
  * both).
  */
-export function renderPiAgent(raw) {
+export function renderPiAgent(raw, resolveModel) {
   const match = raw.match(FRONTMATTER_RE);
   if (!match) {
     return raw;
@@ -96,6 +98,13 @@ export function renderPiAgent(raw) {
   } else {
     newFrontmatter = frontmatter.replace(TOOLS_LINE_RE, `tools: ${mapped.join(", ")}`);
   }
+  const name = newFrontmatter.match(/^name:\s*["']?([^"'\n]+?)["']?\s*$/m)?.[1];
+  const model = name && resolveModel ? resolveModel(name) : null;
+  if (model) {
+    newFrontmatter = /^model:/m.test(newFrontmatter)
+      ? newFrontmatter.replace(/^model:.*$/m, () => `model: ${JSON.stringify(model)}`)
+      : `${newFrontmatter}\nmodel: ${JSON.stringify(model)}`;
+  }
   return `${open}${newFrontmatter}${close}${body}`;
 }
 
@@ -105,14 +114,14 @@ export function renderPiAgent(raw) {
  * project-local `.pi/agents/` sync (#1606) so both targets get identical Pi-valid
  * rewrites from the same neutral source.
  */
-export function writeSyncedAgents(sourceRoot, destDir) {
+export function writeSyncedAgents(sourceRoot, destDir, resolveModel) {
   fs.mkdirSync(destDir, { recursive: true });
   for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".agent.md")) {
       continue;
     }
     const raw = fs.readFileSync(path.join(sourceRoot, entry.name), "utf8");
-    fs.writeFileSync(path.join(destDir, entry.name), renderPiAgent(raw));
+    fs.writeFileSync(path.join(destDir, entry.name), renderPiAgent(raw, resolveModel));
   }
 }
 
@@ -135,7 +144,7 @@ export function writeSyncedAgents(sourceRoot, destDir) {
  * project `.pi/agents` entry resolve from the global `~/.agents/` (already
  * Pi-valid after `syncPackagedAgents`) and stay unaffected.
  */
-export function syncProjectAgentsDir(projectRoot, sourceRoot) {
+export function syncProjectAgentsDir(projectRoot, sourceRoot, resolveModel) {
   const projectAgentsDir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
   let stat;
   try {
@@ -154,7 +163,7 @@ export function syncProjectAgentsDir(projectRoot, sourceRoot) {
     const tmpDir = path.join(path.dirname(projectAgentsDir), `.pi-agents.tmp-${process.pid}`);
     fs.rmSync(tmpDir, { force: true, recursive: true });
     try {
-      writeSyncedAgents(sourceRoot, tmpDir);
+      writeSyncedAgents(sourceRoot, tmpDir, resolveModel);
     } catch (err) {
       fs.rmSync(tmpDir, { force: true, recursive: true });
       throw err;
@@ -164,7 +173,7 @@ export function syncProjectAgentsDir(projectRoot, sourceRoot) {
   } else {
     // Real directory: refresh packaged-agent files in place (same overwrite
     // semantics as the global ~/.agents/ sync).
-    writeSyncedAgents(sourceRoot, projectAgentsDir);
+    writeSyncedAgents(sourceRoot, projectAgentsDir, resolveModel);
   }
 }
 
@@ -177,11 +186,12 @@ export function syncProjectAgentsDir(projectRoot, sourceRoot) {
 export function renderProjectAgents(
   projectRoot,
   sourceRoot = fileURLToPath(PACKAGED_AGENTS_ROOT),
+  resolveModel,
 ) {
   const dir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
   if (fs.lstatSync(dir, { throwIfNoEntry: false })) {
-    syncProjectAgentsDir(projectRoot, sourceRoot);
+    syncProjectAgentsDir(projectRoot, sourceRoot, resolveModel);
   } else {
-    writeSyncedAgents(sourceRoot, dir);
+    writeSyncedAgents(sourceRoot, dir, resolveModel);
   }
 }

@@ -71,11 +71,11 @@ local, remote }` report on both paths instead of picking a side. A
 unfetched remote branch can still fall through to `created-from-base`.
 
 It prints `{ ok, path, created|reused, base?, branchOrigin, diverged?,
-fetchDegraded?, provision: { actions, summary }, deps?, guard }`. `base` appears only on
+fetchDegraded?, provision: { actions, summary }, deps?, warning?, guard }`. `base` appears only on
 create; `provision` is the full `provisionWorktree()` result; `fetchDegraded: true`
 means at least one candidate remote's fetch failed, so branch resolution used the
 refs already present. Provisioning is fail-soft; a `git worktree add` failure is
-a hard error. A newly created worktree first runs `bun install --frozen-lockfile` inside it when a `bun.lock` exists and reports `deps: { ok, ran, reason?, exitCode? }`; a failed install never fails the worktree (`WORKTREE-DEPS-ISOLATED`). A reused worktree is not touched and reports no `deps`.
+a hard error. A newly created worktree first runs `bun install --frozen-lockfile` inside it when a `bun.lock` exists and reports `deps: { ok, ran, reason?, exitCode? }`; a failed install never fails the worktree (`WORKTREE-DEPS-ISOLATED`). A reused worktree is not touched and reports no `deps`. `warning: { code: "dirty_after_provision", paths }` appears when `git status --porcelain` is non-empty after provisioning, which on reuse includes pre-existing uncommitted changes; list those paths before starting work.
 
 `guard` is the default-branch guard's install result for the primary checkout
 (`{ ok, installed, refreshed, skipped, defaultBranches?, droppedExplicitBranches?, reason? }`),
