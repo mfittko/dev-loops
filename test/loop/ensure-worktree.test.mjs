@@ -1494,3 +1494,26 @@ test("ensure: a dirty tree after provisioning yields a typed dirty_after_provisi
     repo.cleanup();
   }
 });
+
+// #2854 slice 3: paths are NUL-delimited and untracked files are always listed, whatever quoting/status config applies.
+test("ensure: dirty_after_provision paths survive spaces, renames and status.showUntrackedFiles=no", async () => {
+  const repo = makeRepo();
+  try {
+    const run = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: REPO_GIT_ENV });
+    const provision = ({ worktreePath }) => {
+      run(worktreePath, "config", "status.showUntrackedFiles", "no");
+      writeFileSync(path.join(worktreePath, "my file.txt"), "x\n");
+      return { ok: true, actions: [], summary: {} };
+    };
+    const created = await ensureWorktree({ repoRoot: repo.root, issue: 2854 }, { provision });
+    assert.deepEqual(created.warning, { code: "dirty_after_provision", paths: ["my file.txt"] });
+    run(created.path, "add", "my file.txt");
+    run(created.path, "commit", "-q", "-m", "test(loop): add file");
+    run(created.path, "mv", "my file.txt", "new name.txt");
+    const reused = await ensureWorktree({ repoRoot: repo.root, issue: 2854 }, { provision: () => ({ ok: true, actions: [], summary: {} }) });
+    assert.equal(reused.created, false);
+    assert.deepEqual(reused.warning, { code: "dirty_after_provision", paths: ["new name.txt"] });
+  } finally {
+    repo.cleanup();
+  }
+});
