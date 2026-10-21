@@ -115,7 +115,7 @@ this skill dispatches the `review` agents directly.
    5. When `judge-pass.mjs` exits 1 (the judge failed, or returned
       `spec_cannot_decide`), never abort the post. Post the review unjudged with
       `--judge-spec-source unavailable --judge-unavailable-reason spec_cannot_decide`
-      (the judge returned that outcome) or `judge_failed` (any other failure). Every
+      (the judge-pass stdout carries `humanDecisionRequired: true`) or `judge_failed` (any other failure). Every
       finding stays visible in its normal track.
    6. When the judge succeeded, write the durable ledger with
       `write-gate-findings-log.mjs --judge-verdict <path> --spec-authority <identity-path>`
@@ -133,7 +133,7 @@ this skill dispatches the `review` agents directly.
    same keyed plan also guards that caller-supplied reviewer provenance
    corresponds to the emitted units; for `write-gate-findings-log.mjs` the plan remains a guard, never a findings
    or provenance source. Then `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo> --pr <n>
-   --gate review --head-sha <sha> --findings-ledger <path> --next-action "none
+   --gate review --head-sha <sha> --findings-ledger <path> [--judge-spec-source <source> [--judge-unavailable-reason <reason>]] --next-action "none
    — informational review, no re-gate required" --submit <mode> [--auto]
    [...]` posts the SINGLE visible PR review surface
    (`GATE-COMMENT-SINGLE-SURFACE`) straight from that ledger — no CI wait, no
@@ -168,7 +168,7 @@ this skill dispatches the `review` agents directly.
    part of this skill's own procedure.
 5. **Phase 4 — submit choice.**
    - **Interactive:** post `--submit pending` first, then present `AskUserQuestion`.
-     Every submit choice re-runs `upsert-checkpoint-verdict.mjs --gate review`
+     Every submit choice re-runs `upsert-checkpoint-verdict.mjs --gate review` (repeating the Phase 3.5 judge flags of the first post)
      for the SAME round, without another fan-out. It consumes the caller's own
      same-head pending review through `/reviews/<id>/events`, preserving inline
      comments and the review id; never create a second review.
