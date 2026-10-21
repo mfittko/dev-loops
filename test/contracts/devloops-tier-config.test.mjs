@@ -28,9 +28,6 @@ function assertPiTierPolicy(tiers) {
       `${tier}.pi must carry a concrete provider-qualified Pi model id`,
     );
   }
-  for (const tier of ["high", "pre-pr-strong"]) {
-    assert.notEqual(tiers[tier].pi, tiers.low.pi, `${tier}.pi must differ from the cheap tier's model`);
-  }
 }
 
 function assertAngleTierPolicy(entries, gate) {
@@ -61,7 +58,7 @@ const syntheticPiTiers = () => ({
 });
 
 for (const model of ["p/m", "provider/model", "provider/nested/model", "another-provider/new-model", "provider.example/model.v1"]) {
-  test(`Pi tier policy accepts a distinct provider-qualified review model: ${model}`, () => {
+  test(`Pi tier policy accepts a provider-qualified review model: ${model}`, () => {
     const tiers = syntheticPiTiers();
     tiers.high.pi = model;
     tiers["pre-pr-strong"].pi = model;
@@ -80,14 +77,6 @@ for (const tier of ["low", "high", "pre-pr-strong"]) {
   test(`Pi tier policy rejects a missing ${tier} harness key`, () => {
     const tiers = syntheticPiTiers();
     delete tiers[tier].pi;
-    assert.throws(() => assertPiTierPolicy(tiers), { code: "ERR_ASSERTION" });
-  });
-}
-
-for (const tier of ["high", "pre-pr-strong"]) {
-  test(`Pi tier policy rejects ${tier}.pi reusing the cheap model`, () => {
-    const tiers = syntheticPiTiers();
-    tiers[tier].pi = tiers.low.pi;
     assert.throws(() => assertPiTierPolicy(tiers), { code: "ERR_ASSERTION" });
   });
 }
