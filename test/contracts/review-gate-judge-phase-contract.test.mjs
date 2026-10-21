@@ -24,6 +24,7 @@ test("review SKILL.md posts unjudged with the matching reason when judge-pass ex
   assert.match(skill, /several closing issues are never merged/);
   assert.match(skill, /exits 1 because the issue body has no formal spec, or when the PR has zero or several closing issues, go on to \(b\)/);
   assert.match(skill, /--judge-spec-source none/);
+  assert.match(skill, /when that list is empty, they are the issues named by `Closes`\/`Fixes`\/`Resolves #N` keywords in the PR body, the same resolution `resolveLinkedIssuesFromPr` applies in Phase 1/);
 });
 
 test("the judge agent and its generated Claude asset carry the review-gate reject rules", async () => {

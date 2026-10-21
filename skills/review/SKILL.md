@@ -96,9 +96,12 @@ this skill dispatches the `review` agents directly.
    1. Read the PR description and its closing issues through
       `scripts/github/view-pr.mjs --repo <owner/repo> --pr <n> --json body,closingIssuesReferences`
       (never raw `gh`). Write the body to `<body-path>` with `--jq '.pr.body'`.
+      The closing issues are `closingIssuesReferences`; when that list is empty,
+      they are the issues named by `Closes`/`Fixes`/`Resolves #N` keywords in the PR
+      body, the same resolution `resolveLinkedIssuesFromPr` applies in Phase 1.
    2. Resolve the spec in this order, with `--head-sha <sha>`, `--content-file
       <reviewed-content-path>`, `--spec-out <spec-path>` and `--identity-out
-      <identity-path>` on each call: (a) exactly one closing issue: `node
+      <identity-path>` on each call: (a) exactly one closing issue (as resolved in step 1): `node
       scripts/loop/spec-context.mjs --repo <owner/repo> --issue <closing-issue> ...`
       (`specSource: "issue"`); when that call exits 1 because the issue body has
       no formal spec, or when the PR has zero or several closing issues, go on to
