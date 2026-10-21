@@ -128,15 +128,16 @@ this skill dispatches the `review` agents directly.
       `--judge-spec-source unavailable --judge-unavailable-reason spec_cannot_decide`
       (the judge-pass stdout carries `humanDecisionRequired: true`) or `judge_failed` (any other failure). Every
       finding stays visible in its normal track.
-   6. When the judge succeeded, write the durable ledger with
-      `write-gate-findings-log.mjs --judge-verdict <path> --spec-authority <identity-path>`
-      (it reads the pre-judge `--findings-file <ledger-out-path>`; `--judge-verdict` re-applies the judgment) and post with `--judge-spec-source <issue|pr_body|pr_scope>`. Missing formal
+   6. When the judge succeeded, write the durable ledger in the paragraph below (it
+      reads the pre-judge `--findings-file <ledger-out-path>` and re-applies the judgment
+      from the judged-round flags) and post with `--judge-spec-source <issue|pr_body|pr_scope>`. Missing formal
       acceptance criteria or definition of done is never an `act` finding and never
       blocks review completion; it shows only as the informational note on the judge-spec line.
 
    After Phase 3.5 and before posting,
-   write the durable ledger (with `--judge-verdict <path>` on a judged round, per step 6) through `write-gate-findings-log.mjs` with
-   `--findings-file <ledger-out-path> --emit-plan <emit-plan-path>`,
+   write the durable ledger through `write-gate-findings-log.mjs` with
+   `--findings-file <ledger-out-path> --emit-plan <emit-plan-path>`, plus
+   `--judge-verdict <path> --spec-authority <identity-path>` on a judged round,
    `--execution-mode fanout_fanin` (this IS a fan-out/fan-in write, so the ledger
    records the real execution mode — omitting it defaults to `inline_single_agent`
    and mis-records the round), and
