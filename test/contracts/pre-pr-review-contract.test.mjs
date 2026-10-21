@@ -73,7 +73,7 @@ test("each pre-PR rule states its invariant with RFC-2119 modality and the right
   // [rule, /modal/, [required keywords...]]
   const checks = [
     ["PRE-PR-BEFORE-FIRST-PUSH", /MUST/, ["before the first push", "committed"]],
-    ["PRE-PR-ONE-FRESH-REVIEWER", /MUST/, ["exactly ONE", "fresh-context", "general-purpose", "brief"]],
+    ["PRE-PR-ONE-FRESH-REVIEWER", /MUST/, ["exactly ONE", "fresh-context", "general-purpose", "brief", "artifact paths", "read-only evidence rule", "MUST NOT prescribe `sed`, a pipe to `head`, or test execution"]],
     ["PRE-PR-BOUNDED-TWO-ROUNDS", /MUST NOT/, ["one general-purpose reviewer per round", "two", "reviewer"]],
     ["PRE-PR-EPHEMERAL-NO-ARTIFACTS", /MUST NOT/, ["pull request", "comment", "review thread", "copilot"]],
     ["PRE-PR-MODEL-CONFIG-RESOLVED", /MUST/, ["resolveRoleModel", "pre-push-reviewer", "non-null"]],

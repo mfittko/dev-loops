@@ -562,3 +562,21 @@ test("provision-worktree CLI under Node from a node_modules package layout rende
     fx.cleanup();
   }
 });
+
+// #2854 slice 3: provisioning threads the repo's config into the Pi render.
+test("provisionWorktree: the .pi/agents render pins the model the repo config resolves for the agent's role", async () => {
+  const fx = makeFixture("version: 1\nmodels:\n  tiers:\n    low:\n      claude: sonnet\n      pi: fixture/pinned-model\n  roleTiers:\n    developer: low\n");
+  try {
+    writeFileSync(path.join(fx.worktreePath, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    mkdirSync(path.join(fx.worktreePath, "agents"));
+    for (const name of ["developer", "judge"]) {
+      writeFileSync(path.join(fx.worktreePath, "agents", `${name}.agent.md`), `---\nname: ${name}\ndescription: x\ntools: read\n---\nbody\n`);
+    }
+    await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    const rendered = (name) => readFileSync(path.join(fx.worktreePath, ".pi", "agents", `${name}.agent.md`), "utf8");
+    assert.match(rendered("developer"), /^model: fixture\/pinned-model$/m);
+    assert.doesNotMatch(rendered("judge"), /^model: fixture/m);
+  } finally {
+    fx.cleanup();
+  }
+});

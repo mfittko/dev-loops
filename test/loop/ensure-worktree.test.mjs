@@ -1470,6 +1470,25 @@ test("ensure: provisioning renders .pi/agents as a real Pi-valid dir and keeps t
       for (const t of ["grep", "find", "ls", "bash"]) assert.ok(tools.includes(t), `${pass}: ${t}`);
       for (const t of ["search", "execute"]) assert.ok(!tools.includes(t), `${pass}: no ${t}`);
       assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: res.path, encoding: "utf8", env: REPO_GIT_ENV }), "");
+      assert.equal(res.warning, undefined, `${pass}: no dirty warning on a clean tree`);
+    }
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// #2854 slice 3: a worktree dirtied by provisioning is reported, never silent.
+test("ensure: a dirty tree after provisioning yields a typed dirty_after_provision warning (create + reuse)", async () => {
+  const repo = makeRepo();
+  try {
+    const provision = ({ worktreePath }) => {
+      writeFileSync(path.join(worktreePath, "provision-leftover.txt"), "x\n");
+      return { ok: true, actions: [], summary: {} };
+    };
+    for (const pass of ["create", "reuse"]) {
+      const res = await ensureWorktree({ repoRoot: repo.root, issue: 2854 }, { provision });
+      assert.equal(res.created, pass === "create", pass);
+      assert.deepEqual(res.warning, { code: "dirty_after_provision", paths: ["provision-leftover.txt"] }, pass);
     }
   } finally {
     repo.cleanup();

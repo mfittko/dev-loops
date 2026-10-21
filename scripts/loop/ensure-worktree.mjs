@@ -101,6 +101,10 @@ Output (stdout, JSON):
                      // create only: the fail-soft bun install --frozen-lockfile
                      // result (ran:false when no bun.lock)
     "provision": { "actions": [...], "summary": {...} },
+    "warning"?: { "code": "dirty_after_provision", "paths": [...] },
+                     // present, on both create and reuse, only when
+                     // git status --porcelain in the worktree is non-empty after
+                     // provisioning (the paths it lists)
     "guard": { "ok": bool, "installed": [...], "refreshed": [...], "skipped": [...],
                "defaultBranches"?: [...], "droppedExplicitBranches"?: [...],
                "reason"? }                              // default-branch guard
@@ -626,6 +630,15 @@ function ensureDeps(worktreePath, installDeps) {
   return { ran: true, ...result };
 }
 
+// A provisioned worktree must be clean; list untracked/modified paths so a dirty-tree prerequisite is reported, not discovered later.
+function dirtyAfterProvision(gitCommand, target) {
+  const paths = runGit(gitCommand, ["status", "--porcelain"], target)
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.slice(3));
+  return paths.length > 0 ? { warning: { code: "dirty_after_provision", paths } } : {};
+}
+
 export async function ensureWorktree(
   { repoRoot, issue, pr, branch, base },
   { gitCommand = "git", provision = provisionWorktree, installDeps = defaultInstallDeps } = {},
@@ -696,6 +709,7 @@ export async function ensureWorktree(
     // Reuse: still (re-)provision — provisioning is idempotent, on BOTH the
     // detached and local-branch reuse outcomes below.
     const summary = await provision({ worktreePath: target, repoRoot: root });
+    const dirty = dirtyAfterProvision(gitCommand, target);
     if (!existing.branch) {
       // DETACHED HEAD (e.g. ui-review's pinPrHead runs `git checkout --detach`
       // inside the worktree): there is no local branch here to associate a divergence
@@ -708,6 +722,7 @@ export async function ensureWorktree(
         created: false,
         reused: true,
         branchOrigin: "reused-detached",
+        ...dirty,
         provision: summary,
         guard: installGuard(gitCommand, root, base),
         commitMsgGuard: installCommitMsgGuardForRoot(gitCommand, root),
@@ -726,6 +741,7 @@ export async function ensureWorktree(
       reused: true,
       branchOrigin: "reused-local",
       ...(diverged ? { diverged } : {}),
+      ...dirty,
       ...(fetchDegraded ? { fetchDegraded: true } : {}),
       provision: summary,
       guard: installGuard(gitCommand, root, base),
@@ -783,6 +799,7 @@ export async function ensureWorktree(
   // Install before provision: provision's @dev-loops/core link then lands on top.
   const deps = ensureDeps(target, installDeps);
   const summary = await provision({ worktreePath: target, repoRoot: root });
+  const dirty = dirtyAfterProvision(gitCommand, target);
   return {
     ok: true,
     path: target,
@@ -794,6 +811,7 @@ export async function ensureWorktree(
     ...(fetchDegraded ? { fetchDegraded: true } : {}),
     deps,
     provision: summary,
+    ...dirty,
     guard: installGuard(gitCommand, root, base),
     commitMsgGuard: installCommitMsgGuardForRoot(gitCommand, root),
   };

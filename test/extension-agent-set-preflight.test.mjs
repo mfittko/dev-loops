@@ -225,6 +225,7 @@ test("a tracked .pi/agents symlink refusal names the rebase step, the path and t
     const reason = checkAgentSetRendered(root, path.join(root, "agents"));
     assert.match(reason, /Rebase or merge the branch onto main first/);
     assert.match(reason, /quality\.agent\.md \(search, execute\)/);
+    assert.match(reason, /cannot read Pi's project-trust state/);
   }));
 
 test("a raw global copy is never checked", () =>
@@ -248,6 +249,7 @@ test("an unreadable or missing packaged agents source refuses", () =>
     dl(root);
     const missing = path.join(root, "no-such-source");
     assert.match(checkAgentSetRendered(root, missing), /^agent_set_not_rendered.*no-such-source/);
+    assert.match(checkAgentSetRendered(root, missing), /cannot read Pi's project-trust state/);
     const notDir = path.join(root, "file-source");
     fs.writeFileSync(notDir, "x");
     assert.match(checkAgentSetRendered(root, notDir), /^agent_set_not_rendered.*file-source/);

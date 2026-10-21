@@ -3,6 +3,7 @@ import { test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
+import { renderPiAgent } from "../../extension/pi-agent-render.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolveGateTier, resolveRoleModel } from "@dev-loops/core/config";
 
 // ---------------------------------------------------------------------------
@@ -253,7 +254,7 @@ test("this repo's .devloops preserves role-to-tier routing, concrete Pi review m
   // Non-vacuity and model shape are shared with the pre-push reviewer guard.
   assertPiTierPolicy(config.models.tiers);
 
-  for (const role of ["developer", "fixer", "docs", "quality"]) {
+  for (const role of ["developer", "fixer", "dev-loop", "gate-coordinator", "docs", "quality"]) {
     assert.equal(resolveRoleModel(config, { role, harness: "claude" }), "sonnet", `${role} on claude`);
     assert.equal(
       resolveRoleModel(config, { role, harness: "pi" }),
@@ -330,4 +331,21 @@ test("no tracked file outside .devloops, docs/decisions and changes names a conc
     for (const id of ids) if (text.includes(id)) hits.push(`${file}: ${id}`);
   }
   assert.deepEqual(hits, [], "tier model ids belong only in .devloops");
+});
+
+test("the Pi render pins dev-loop and gate-coordinator to the low tier's model and replaces an existing model line (#2854)", async () => {
+  const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+  assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
+  const lowPi = config.models.tiers.low.pi;
+  assert.ok(lowPi, "the low tier carries a Pi model");
+  const resolveModel = (role) => resolveRoleModel(config, { role, harness: "pi" });
+  for (const role of ["dev-loop", "gate-coordinator"]) {
+    const raw = readFileSync(`agents/${role}.agent.md`, "utf8");
+    assert.doesNotMatch(raw, /^model:/m, `${role} source declares no model`);
+    assert.match(renderPiAgent(raw, resolveModel), new RegExp(`^model: ${lowPi.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"), `${role} renders the pinned id`);
+    assert.equal(renderPiAgent(raw), renderPiAgent(raw, () => null), `${role} without a resolved model is unchanged`);
+  }
+  const withModel = "---\nname: x\nmodel: old/id\ntools: read\n---\nbody\n";
+  assert.equal(renderPiAgent(withModel, () => "new/id"), "---\nname: x\nmodel: new/id\ntools: read\n---\nbody\n");
+  assert.equal(renderPiAgent(withModel), withModel);
 });

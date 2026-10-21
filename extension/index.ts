@@ -32,6 +32,7 @@ const WIDGET_KEY = 'dev-loops.setup';
 // builtins at session-start sync time (#1583); the pure transform + IO live in
 // a dedicated module so they stay testable offline. Import for local use AND
 // re-export so tests can reach the same binding the session_start handler calls.
+import { loadDevLoopConfig, resolveRoleModel } from '@dev-loops/core/config';
 import { checkAgentSetRendered, findProjectRoot, isDevLoopsAgentsCheckout, renderProjectAgents, syncPackagedAgents } from './sync-packaged-agents.ts';
 export { syncPackagedAgents };
 import { decidePiToolCall, isReadOnlyPiRole, resolvePiRole } from './readonly-role-gate.ts';
@@ -66,7 +67,12 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
       const projectRoot = ctx.cwd ? findProjectRoot(ctx.cwd) : undefined;
       syncPackagedAgents({ projectRoot });
       // A fresh dev-loops clone has no `.pi/agents`; render it from the checkout's own agents/ (decision record 0173).
-      if (projectRoot && isDevLoopsAgentsCheckout(projectRoot)) renderProjectAgents(projectRoot, path.join(projectRoot, 'agents'));
+      if (projectRoot && isDevLoopsAgentsCheckout(projectRoot)) {
+        // Same pinned-model resolution as provisioning; an invalid config pins nothing (fail-closed to inherit-free render).
+        const { config, errors } = await loadDevLoopConfig({ repoRoot: projectRoot });
+        const safeConfig = errors && errors.length > 0 ? null : config;
+        renderProjectAgents(projectRoot, path.join(projectRoot, 'agents'), (role: string) => resolveRoleModel(safeConfig, { role, harness: 'pi' }));
+      }
     } catch {
       // Best-effort agent sync — do not break session start
     }
