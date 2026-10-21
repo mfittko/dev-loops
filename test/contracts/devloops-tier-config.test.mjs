@@ -198,6 +198,17 @@ test("this repo's .devloops preserves role-to-tier routing, concrete distinct Pi
       assert.equal(resolveRoleModel(config, { role: angle, harness: "pi", kind: "angle" }), highPi, `${gate} angle ${angle} on pi`);
     }
   }
+  // An angle's OWN tier alias must be the strong tier, asserted on the alias
+  // and not only on the resolved model: `high` and `pre-pr-strong` currently
+  // carry the same models, so a wrong angle tier would otherwise pass by
+  // self-consistency (the same reason the concrete model id is unpinned).
+  for (const gate of GATE_KEYS) {
+    for (const entry of config.gates?.[gate]?.angles ?? []) {
+      if (!entry || entry.name === undefined || entry.enabled === false) continue;
+      if (entry.tier === undefined) continue;
+      assert.equal(entry.tier, "high", `${gate} angle ${entry.name} must declare the high tier, not ${entry.tier}`);
+    }
+  }
 });
 
 test("a synthetic matching diff resolves a non-empty tier angle set including the gate's mandatory angles", async () => {
