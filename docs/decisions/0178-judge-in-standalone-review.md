@@ -6,6 +6,8 @@ Accepted — 2026-10-21 ([issue 2540](https://github.com/mfittko/dev-loops/issue
 
 Amends [ADR 0060](./0060-immutable-spec-authority.md): the review gate may take its spec from the PR description, either as formal criteria or as scope text, and a spec with no acceptance criteria is valid for that gate when it carries scope.
 
+Amends [ADR 0112](./0112-gate-coordinator-agent-joins-the-agent-taxonomy.md) and [ADR 0116](./0116-dev-loop-keeps-pre-pr-and-delta-review-dispatches.md): the dev-loop agent may dispatch the emitted standalone review-gate judge pointer (`--ref judge:<repo>#<n>:review:`). Lifecycle-gate judge dispatches by the dev-loop agent stay denied with `GATE_COORDINATOR_REQUIRED`.
+
 Leaves unchanged these records and their amendments:
 
 - [ADR 0046](./0046-one-review-surface-per-gate-round.md), amended by [ADR 0092](./0092-gate-tools-comment-only-blocker-only-filing.md).

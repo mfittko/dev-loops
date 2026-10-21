@@ -959,7 +959,7 @@ const isStandaloneReviewJudgePointer = (prompt) =>
 
 /**
  * Decide whether a PreToolUse Agent/Task dispatch must be denied (GATE-EXEC-GATE-COORDINATOR,
- * ADRs 0112 and 0116). The dev-loop coordinator never dispatches a `judge` agent and never
+ * ADRs 0112 and 0116). The dev-loop coordinator dispatches no `judge` agent except the emitted standalone review-gate judge pointer, and never
  * dispatches a `review` agent whose prompt carries a `pull-work-order` invocation with a work-order ref or execution identity, in any flag order or wrapping; its prose-briefed pre-PR
  * and delta `review` dispatches are allowed. The `gate-coordinator` agent dispatches only
  * `review` and `judge`, each with the emitted `dispatchPrompt` byte for byte. Every other
