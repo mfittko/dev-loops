@@ -574,7 +574,7 @@ test("provisionWorktree: the .pi/agents render pins the model the repo config re
     }
     await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
     const rendered = (name) => readFileSync(path.join(fx.worktreePath, ".pi", "agents", `${name}.agent.md`), "utf8");
-    assert.match(rendered("developer"), /^model: fixture\/pinned-model$/m);
+    assert.match(rendered("developer"), /^model: "fixture\/pinned-model"$/m);
     assert.doesNotMatch(rendered("judge"), /^model: fixture/m);
   } finally {
     fx.cleanup();

@@ -102,8 +102,8 @@ export function renderPiAgent(raw, resolveModel) {
   const model = name && resolveModel ? resolveModel(name) : null;
   if (model) {
     newFrontmatter = /^model:/m.test(newFrontmatter)
-      ? newFrontmatter.replace(/^model:.*$/m, () => `model: ${model}`)
-      : `${newFrontmatter}\nmodel: ${model}`;
+      ? newFrontmatter.replace(/^model:.*$/m, () => `model: ${JSON.stringify(model)}`)
+      : `${newFrontmatter}\nmodel: ${JSON.stringify(model)}`;
   }
   return `${open}${newFrontmatter}${close}${body}`;
 }

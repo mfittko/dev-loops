@@ -342,10 +342,10 @@ test("the Pi render pins dev-loop and gate-coordinator to the low tier's model a
   for (const role of ["dev-loop", "gate-coordinator"]) {
     const raw = readFileSync(`agents/${role}.agent.md`, "utf8");
     assert.doesNotMatch(raw, /^model:/m, `${role} source declares no model`);
-    assert.match(renderPiAgent(raw, resolveModel), new RegExp(`^model: ${lowPi.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"), `${role} renders the pinned id`);
+    assert.match(renderPiAgent(raw, resolveModel), new RegExp(`^model: "${lowPi.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"$`, "m"), `${role} renders the pinned id`);
     assert.equal(renderPiAgent(raw), renderPiAgent(raw, () => null), `${role} without a resolved model is unchanged`);
   }
   const withModel = "---\nname: x\nmodel: old/id\ntools: read\n---\nbody\n";
-  assert.equal(renderPiAgent(withModel, () => "new/id"), "---\nname: x\nmodel: new/id\ntools: read\n---\nbody\n");
+  assert.equal(renderPiAgent(withModel, () => "new/id"), "---\nname: x\nmodel: \"new/id\"\ntools: read\n---\nbody\n");
   assert.equal(renderPiAgent(withModel), withModel);
 });

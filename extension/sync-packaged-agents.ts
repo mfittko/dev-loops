@@ -9,7 +9,6 @@ export { TOOL_NAME_MAP_PI, mapAgentToolsForPi, renderPiAgent, renderProjectAgent
 const PACKAGED_AGENTS_ROOT = new URL("../agents/", import.meta.url);
 const PROJECT_TRUST_CEILING = "This preflight cannot read Pi's project-trust state, so it cannot tell whether Pi loads the project agents in `.pi/agents`.";
 
-
 /** A dev-loops checkout: `package.json` names `dev-loops` and an `agents/` directory exists (same guard as `provision-worktree.mjs`). */
 export function isDevLoopsAgentsCheckout(dir: string): boolean {
   try {
