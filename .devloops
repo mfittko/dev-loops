@@ -173,7 +173,7 @@ localImplementation:
     maxFiles: 2
     maxLines: 40 # micro-PR ceiling (ADR 0108)
 
-# Model tiers (issue #2305, skills/docs/pre-pr-review-contract.md).
+# Model tiers (skills/docs/pre-pr-review-contract.md).
 # Each tier maps to one model per harness (`claude`, `pi`). The `pi` value is
 # switchable here in `models.tiers`; no other file needs to change. The Claude
 # side is baked from built-in policy into the agent frontmatter.

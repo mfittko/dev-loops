@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolveGateTier, resolveRoleModel } from "@dev-loops/core/config";
 
@@ -305,4 +307,27 @@ test("a synthetic matching diff resolves a non-empty tier angle set including th
       );
     }
   }
+});
+
+// ADR 0176: a model change is a one-line `.devloops` edit, so no tracked file may
+// name a concrete tier model id. Only provider-qualified ids (containing `/`) are
+// checked; claude family tokens such as sonnet/opus are legitimate repo vocabulary.
+test("no tracked file outside .devloops, docs/decisions and changes names a concrete tier model id (ADR 0176)", async () => {
+  const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+  const ids = new Set(
+    Object.values(config.models.tiers).flatMap((tier) => Object.values(tier)).filter((v) => typeof v === "string" && v.includes("/")),
+  );
+  assert.ok(ids.size > 0, "expected at least one provider-qualified tier model id");
+  const files = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8", maxBuffer: 1 << 28 })
+    .split("\0")
+    .filter((f) => f && f !== ".devloops" && !f.startsWith("docs/decisions/") && !f.startsWith("changes/"));
+  const hits = [];
+  for (const file of files) {
+    let buf;
+    try { buf = readFileSync(file); } catch { continue; }
+    if (buf.includes(0)) continue;
+    const text = buf.toString("utf8");
+    for (const id of ids) if (text.includes(id)) hits.push(`${file}: ${id}`);
+  }
+  assert.deepEqual(hits, [], "tier model ids belong only in .devloops");
 });

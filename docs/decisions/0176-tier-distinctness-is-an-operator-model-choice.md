@@ -12,7 +12,9 @@ Amends [0175](./0175-tier-policy-shape-owned-by-the-repo-not-the-model-id.md): t
 
 ## Decision
 
-The repo guards only the structure: the role-to-tier mapping, a harness key on every tier, a concrete provider-qualified model id on the Pi side, and the sonnet and opus tokens on Claude. Tier distinctness is no longer asserted. Prose may recommend distinct review and cheap models.
+Changing a tier's concrete model id is a one-line edit of that tier's harness value in `.devloops`. No test, contract doc, skill, generated asset or `.devloops` comment may pin, name or constrain a concrete model id, or require a relation between ids (distinctness included). A contract test reads the ids from `.devloops` and fails when any other tracked file outside `docs/decisions/` and `changes/` names a provider-qualified id.
+
+The repo guards only the structure: the role-to-tier mapping, a harness key on every tier, a concrete provider-qualified model id on the Pi side, and the sonnet and opus tokens on Claude. Tier distinctness is no longer asserted.
 
 ## Consequences
 
