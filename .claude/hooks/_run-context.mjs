@@ -130,13 +130,24 @@ export function validateNativeCodexMetadata(header, threadId) {
     agentPath: spawn.agent_path, agentRole: spawn.agent_role };
 }
 
-/** Finite UUIDv7-date discovery and first-record-only IO; no recursive history scan or cache. */
-export function resolveNativeCodexContext({ env = process.env, fs = fsDefault } = {}) {
+/** UUIDv7 lookup-key shape shared by discovery and the identity reader. */
+export const NATIVE_CODEX_THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/**
+ * Bounded discovery of the single native Codex rollout journal for one thread id.
+ *
+ * Shared by the header-only identity reader (`resolveNativeCodexContext`) and the
+ * terminal-evidence adapter (`codex-execution-evidence`), so both resolve the SAME
+ * single journal file. Discovery only lists the date-partitioned directories; it
+ * reads no journal bytes. Finite UUIDv7-date discovery, no recursive history scan,
+ * no cache and no global scan.
+ *
+ * @returns {{ status: "found", path: string } | { status: "rejected", reason: string }}
+ */
+export function findNativeCodexSessionJournal({ threadId, env = process.env, fs = fsDefault } = {}) {
   const reject = (reason) => ({ status: "rejected", reason });
-  const threadId = env?.CODEX_THREAD_ID;
-  if (env?.DEVLOOPS_DETACHED === "1") return reject("Detached execution is not a native Codex async child.");
-  if (typeof threadId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(threadId)) {
-    return reject("Native Codex context requires a supported UUIDv7 CODEX_THREAD_ID lookup key.");
+  if (typeof threadId !== "string" || !NATIVE_CODEX_THREAD_ID_PATTERN.test(threadId)) {
+    return reject("Native Codex discovery requires a supported UUIDv7 thread id lookup key.");
   }
   const home = env.CODEX_HOME || (env.HOME ? path.join(env.HOME, ".codex") : path.join(os.homedir(), ".codex"));
   const createdAt = Number.parseInt(threadId.slice(0, 13).replaceAll("-", ""), 16);
@@ -162,8 +173,25 @@ export function resolveNativeCodexContext({ env = process.env, fs = fsDefault } 
         }
       } finally { dir.closeSync(); }
     }
-    if (matches.length !== 1) return reject("Native Codex session metadata not found.");
-    const fd = fs.openSync(matches[0], "r");
+  } catch {
+    return reject("Native Codex journal discovery is unreadable or malformed.");
+  }
+  if (matches.length !== 1) return reject("Native Codex session metadata not found.");
+  return { status: "found", path: matches[0] };
+}
+
+/** Finite UUIDv7-date discovery and first-record-only IO; no recursive history scan or cache. */
+export function resolveNativeCodexContext({ env = process.env, fs = fsDefault } = {}) {
+  const reject = (reason) => ({ status: "rejected", reason });
+  const threadId = env?.CODEX_THREAD_ID;
+  if (env?.DEVLOOPS_DETACHED === "1") return reject("Detached execution is not a native Codex async child.");
+  if (typeof threadId !== "string" || !NATIVE_CODEX_THREAD_ID_PATTERN.test(threadId)) {
+    return reject("Native Codex context requires a supported UUIDv7 CODEX_THREAD_ID lookup key.");
+  }
+  const discovery = findNativeCodexSessionJournal({ threadId, env, fs });
+  if (discovery.status !== "found") return reject(discovery.reason);
+  try {
+    const fd = fs.openSync(discovery.path, "r");
     try {
       if (!fs.fstatSync(fd).isFile()) return reject("Native Codex metadata is not a regular file.");
       const header = Buffer.alloc(128 * 1024);

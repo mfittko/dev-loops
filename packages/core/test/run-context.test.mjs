@@ -26,6 +26,8 @@ import {
   CLAUDE_HARNESS_MARKER,
   validateNativeCodexMetadata,
   resolveNativeCodexContext,
+  findNativeCodexSessionJournal,
+  NATIVE_CODEX_THREAD_ID_PATTERN,
 } from "../src/loop/run-context.mjs";
 
 const codexId = "01a15519-285b-74b3-8f36-01e51619bba3";
@@ -65,6 +67,22 @@ test("native Codex metadata validates child origin and returns only identity", (
     mutate(metadata.payload);
     assert.equal(validateNativeCodexMetadata(metadata, codexId).status, "rejected");
   }
+});
+
+test("shared discovery resolves the same single journal without reading journal bytes", () => {
+  const { env, file } = codexFixture();
+  let bytes = 0;
+  const trackedFs = { ...fs, readSync(...args) { const count = fs.readSync(...args); bytes += count; return count; } };
+  const discovery = findNativeCodexSessionJournal({ threadId: codexId, env, fs: trackedFs });
+  assert.equal(discovery.status, "found");
+  assert.equal(discovery.path, file);
+  // Discovery only lists directories; the header-only identity reader still reads the header.
+  assert.equal(bytes, 0);
+  assert.equal(resolveNativeCodexContext({ env, fs: trackedFs }).status, "valid");
+  assert.equal(bytes, fs.readFileSync(file).indexOf(10) + 1);
+  assert.match(findNativeCodexSessionJournal({ threadId: "not-a-uuid", env, fs }).reason, /UUIDv7/);
+  assert.equal(NATIVE_CODEX_THREAD_ID_PATTERN.test(codexId), true);
+  assert.equal(NATIVE_CODEX_THREAD_ID_PATTERN.test("01a15519-285b-44b3-8f36-01e51619bba3"), false);
 });
 
 test("native Codex discovery is bounded, header-only and rejects uncertain IO", () => {

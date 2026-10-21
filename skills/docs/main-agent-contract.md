@@ -119,6 +119,41 @@ child alone proves neither progress nor a stall. Pi-only `detect-agent-stall` fi
 Codex liveness. Report an immediate blocker with artifact/head, last completed step, exact reason,
 preserved work, owner and next action; keep committed work available for the next authorized actor.
 
+### Terminal reconciliation before cleanup
+
+Terminal reconciliation MUST run before any process-inspection or cleanup escalation, and an
+unavailable handle is never evidence of a live process. When a Codex child stops without
+reporting a collected result, reconcile the owned execution against its already-resolved native
+journal with `node scripts/loop/reconcile-codex-execution.mjs --repo-root <p> --owner-thread-id
+<uuid> --execution-id <id> --cwd <path> [--json]` (backed by the read-only
+`@dev-loops/core/loop/codex-execution-evidence` adapter) before treating the session as an active
+process or asking for cleanup approval. A `completed` result clears the cleanup blocker; `unknown`
+and `unsupported` keep it typed unknown and never authorize process probing, cross-owner session
+control or termination. A tool-session id is opaque and is never converted to an OS pid, kill or
+signal target.
+
+The adapter reads only the following JSON pointer paths from the single owning journal (derived
+from the real journal named in issue 2886's Evidence locator). A terminal record missing a
+required path is schema drift and yields `unknown`; unread paths are ignored.
+
+| Field                         | JSON pointer                     | Required | Notes |
+| ----------------------------- | -------------------------------- | -------- | ----- |
+| event discriminator           | `/type`                          | yes      | `event_msg` |
+| terminal item discriminator   | `/payload/type`                  | yes      | `item_completed` |
+| execution item type           | `/payload/item/type`             | yes      | `CommandExecution` |
+| owning thread id              | `/payload/thread_id`             | yes      | equals `--owner-thread-id` |
+| tool session / execution id   | `/payload/item/process_id`       | yes      | opaque string, e.g. `"12938"` |
+| native execution id           | `/payload/item/id`               | yes      | alternate execution-id binding, e.g. `exec-...` |
+| terminal timestamp            | `/timestamp`                     | yes      | ISO-8601 |
+| terminal status               | `/payload/item/status`           | yes      | e.g. `failed` |
+| exit code                     | `/payload/item/exit_code`        | yes      | integer |
+| command                       | `/payload/item/command`          | yes      | array of strings |
+| working directory             | `/payload/item/cwd`              | yes      | `file://` URI |
+| retained output               | `/payload/item/aggregated_output`| yes      | recorded text |
+| completion epoch (corroborate)| `/payload/completed_at_ms`       | no       | integer ms |
+| start epoch (corroborate)     | `/payload/started_at_ms`         | no       | integer ms |
+| journal header owner          | `/payload/id on /type = session_meta` | yes | equals `--owner-thread-id` |
+
 Active joining mitigates an upstream idle-parent wake limitation and costs wait time and tokens;
 it does not fix the Codex parent wake mechanism. Public source at commit
 [`a9b0815167c27ab13719dd12d13b63e02b70d221`](https://github.com/openai/codex/blob/a9b0815167c27ab13719dd12d13b63e02b70d221/codex-rs/core/src/agent/control/completion.rs) <!-- secret-scan:allow Verified public upstream commit reference; not a credential -->
