@@ -1512,7 +1512,7 @@ test("ensure: dirty_after_provision paths survive spaces, renames and status.sho
     run(created.path, "mv", "my file.txt", "new name.txt");
     const reused = await ensureWorktree({ repoRoot: repo.root, issue: 2854 }, { provision: () => ({ ok: true, actions: [], summary: {} }) });
     assert.equal(reused.created, false);
-    assert.deepEqual(reused.warning, { code: "dirty_after_provision", paths: ["new name.txt"] });
+    assert.deepEqual(reused.warning, { code: "dirty_after_provision", paths: ["my file.txt", "new name.txt"] });
   } finally {
     repo.cleanup();
   }

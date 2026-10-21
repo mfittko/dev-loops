@@ -632,13 +632,8 @@ function ensureDeps(worktreePath, installDeps) {
 
 // A provisioned worktree must be clean; list untracked/modified paths so a dirty-tree prerequisite is reported, not discovered later.
 function dirtyAfterProvision(gitCommand, target) {
-  // -z and --untracked-files=all pin the output against status.showUntrackedFiles and core.quotePath; a rename/copy entry is followed by its source field, which is skipped.
-  const fields = runGit(gitCommand, ["status", "--porcelain", "-z", "--untracked-files=all"], target).split("\0").filter(Boolean);
-  const paths = [];
-  for (let i = 0; i < fields.length; i += 1) {
-    paths.push(fields[i].slice(3));
-    if (/^.?[RC]/.test(fields[i].slice(0, 2))) i += 1;
-  }
+  // -z, --untracked-files=all and --no-renames pin the output against status.showUntrackedFiles, core.quotePath and status.renames: one entry per path, no rename source fields.
+  const paths = runGit(gitCommand, ["status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"], target).split("\0").filter(Boolean).map((f) => f.slice(3));
   return paths.length > 0 ? { warning: { code: "dirty_after_provision", paths } } : {};
 }
 

@@ -52,7 +52,8 @@ single developer self-check (`LOCAL-DEV-SELF-CHECK-NO-FANOUT`), which the
 implementer runs against the plan; the pre-push reviewer MUST be a separate
 fresh-context agent. The reviewer returns findings only and MUST NOT edit the
 tree; the implementer applies the fixes. The full-mode brief MUST name the
-artifact paths the reviewer reads and the read-only evidence rule, and
+artifact paths the reviewer reads and the read-only evidence rule (the
+`evidenceRule` text defined under `PRE-PUSH-DELTA-PATCH-ARTIFACT`), and
 MUST NOT prescribe `sed`, a pipe to `head`, or test execution.
 
 The reviewer MUST run with the adversarial-enumeration checklist below.

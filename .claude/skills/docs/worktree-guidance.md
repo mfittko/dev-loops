@@ -75,7 +75,7 @@ fetchDegraded?, provision: { actions, summary }, deps?, warning?, guard }`. `bas
 create; `provision` is the full `provisionWorktree()` result; `fetchDegraded: true`
 means at least one candidate remote's fetch failed, so branch resolution used the
 refs already present. Provisioning is fail-soft; a `git worktree add` failure is
-a hard error. A newly created worktree first runs `bun install --frozen-lockfile` inside it when a `bun.lock` exists and reports `deps: { ok, ran, reason?, exitCode? }`; a failed install never fails the worktree (`WORKTREE-DEPS-ISOLATED`). A reused worktree is not touched and reports no `deps`. `warning: { code: "dirty_after_provision", paths }` appears when provisioning leaves the worktree dirty; list those paths before starting work.
+a hard error. A newly created worktree first runs `bun install --frozen-lockfile` inside it when a `bun.lock` exists and reports `deps: { ok, ran, reason?, exitCode? }`; a failed install never fails the worktree (`WORKTREE-DEPS-ISOLATED`). A reused worktree is not touched and reports no `deps`. `warning: { code: "dirty_after_provision", paths }` appears when `git status --porcelain` is non-empty after provisioning, which on reuse includes pre-existing uncommitted changes; list those paths before starting work.
 
 `guard` is the default-branch guard's install result for the primary checkout
 (`{ ok, installed, refreshed, skipped, defaultBranches?, droppedExplicitBranches?, reason? }`),
