@@ -8,11 +8,12 @@ import { test } from "bun:test";
 import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 
-import { parseCheckPrePushDeltaArgs, runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
+import { DELTA_EVIDENCE_RULE, deltaPatchPath, parseCheckPrePushDeltaArgs, runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { A, B, boundArgs } from "./_delta-coverage-fixture.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { decidePiToolCall } from "../../extension/readonly-role-gate.ts";
 
 const ACT = { ref: "act-1", severity: "low", angle: "correctness", summary: "s", judgeDisposition: "act" };
 const FP = fingerprintFinding(ACT);
@@ -48,7 +49,7 @@ function fixture() {
 }
 
 const quiet = { stdout: { write: () => {} } };
-const headAt = (head, tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"))) => ({ ...quiet, tmpRoot, changedPaths: () => [], revParse: (_worktree, rev) => (rev === "HEAD" ? head : rev), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }) });
+const headAt = (head, tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"))) => ({ ...quiet, tmpRoot, changedPaths: () => [], revParse: (_worktree, rev) => (rev === "HEAD" ? head : rev), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }), diffPatch: () => "patch\n" });
 
 test("result-only changelog seam checks touched changes paths before writing evidence", async () => {
   for (const changedPaths of [["changes/a.md"], ["changes/deleted.md", "docs/moved.md"], ["scripts/fix.mjs"]]) {
@@ -60,7 +61,7 @@ test("result-only changelog seam checks touched changes paths before writing evi
     assert.equal(calls, 0, "input mode never checks changelog");
     if (changedPaths[0].startsWith("changes/")) {
       await assert.rejects(runCli([...args, "--result", result, "--invocation", "1"], seam), /^Error: LIFECYCLE-CHANGELOG-COMPLETENESS/);
-      assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta")), false);
+      assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`)), false);
       assert.equal(calls, 1);
     } else {
       assert.equal((await runCli([...args, "--result", result, "--invocation", "1"], seam)).nextStep, "push");
@@ -114,7 +115,7 @@ test("real delta CLI refuses committed invalid inputs concealed by uncommitted c
       assert.equal(out.status, 2, out.stderr);
       assert.match(JSON.parse(out.stderr).error, /^LIFECYCLE-CHANGELOG-COMPLETENESS/);
       if (correction) assert.match(JSON.parse(out.stderr).error, /differs from HEAD/);
-      assert.equal(fs.existsSync(recordDir), false);
+      assert.equal(fs.existsSync(path.join(recordDir, `${baseline}.json`)), false);
     } else {
       let calls = 0;
       const seam = length ? quiet : { ...quiet, validateChangelog: async () => { calls++; throw new Error("must not run"); } };
@@ -151,13 +152,13 @@ test("result-mode changelog ignores inherited Git directory overrides", async ()
       newFindings: [], widenedReads: [], outcome: "locally_clear",
     }));
     const recordDir = path.join(resolveGateArtifactTmpRoot(target), "gate-delta");
-    assert.equal(fs.existsSync(recordDir), false);
+    assert.equal(fs.existsSync(path.join(recordDir, `${baseline}.json`)), false);
     const out = spawnSync(process.execPath, [path.resolve("scripts/loop/check-pre-push-delta.mjs"), ...args, "--result", resultPath, "--invocation", "1"], {
       cwd: dir, encoding: "utf8", env: { ...process.env, GIT_DIR: path.join(decoy, ".git"), GIT_WORK_TREE: decoy },
     });
     assert.equal(out.status, 2, out.stderr);
     assert.match(JSON.parse(out.stderr).error, /^LIFECYCLE-CHANGELOG-COMPLETENESS/);
-    assert.equal(fs.existsSync(recordDir), false);
+    assert.equal(fs.existsSync(path.join(recordDir, `${baseline}.json`)), false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -166,15 +167,66 @@ test("without --result the CLI prints the cumulative delta input for the worktre
   const out = await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], headAt(B));
   assert.equal(out.input.diffRange, `${A}..${B}`);
   assert.equal(out.input.specIdentity, "spec@1");
-  // Write-free: nothing is written next to the inputs.
+  // Nothing is written next to the inputs (the patch goes under the tmp root).
   assert.deepEqual(fs.readdirSync(dir).sort(), ["act-list.json", "result.json"]);
 });
 
-test("without --result no decision record is written under the tmp root", async () => {
+test("without --result only the patch is written under the tmp root, no decision record", async () => {
   const { actList } = fixture();
   const seam = headAt(B);
   await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], seam);
-  assert.deepEqual(fs.readdirSync(seam.tmpRoot), []);
+  assert.deepEqual(fs.readdirSync(path.join(seam.tmpRoot, "gate-delta")), [`${A}-${B}.patch`]);
+});
+
+
+
+test("input.patchPath is the gate-delta patch holding the diffPatch bytes", async () => {
+  const { actList } = fixture();
+  const seam = { ...headAt(B), diffPatch: () => "diff --git a/x b/x\n" };
+  const out = await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], seam);
+  assert.equal(out.input.patchPath, deltaPatchPath(seam.tmpRoot, A, B));
+  assert.equal(fs.readFileSync(out.input.patchPath, "utf8"), "diff --git a/x b/x\n");
+  assert.equal(out.input.evidenceRule, DELTA_EVIDENCE_RULE);
+});
+
+test("the real patch file holds the cumulative baseline..candidate git diff", async () => {
+  const { dir, threadsFile } = threadsFixture();
+  try {
+    initGitFixture(dir, { branch: "main", commit: null });
+    runGitFixture(dir, ["config", "commit.gpgsign", "false"]);
+    runGitFixture(dir, ["commit", "-q", "--allow-empty", "-m", "base"]);
+    const baseline = runGitFixture(dir, ["rev-parse", "HEAD"]);
+    fs.writeFileSync(path.join(dir, "one.mjs"), "export const one = 1;\n");
+    runGitFixture(dir, ["add", "."]);
+    runGitFixture(dir, ["commit", "-qm", "fix(local): one"]);
+    fs.writeFileSync(path.join(dir, "two.mjs"), "export const two = 2;\n");
+    runGitFixture(dir, ["add", "."]);
+    runGitFixture(dir, ["commit", "-qm", "fix(local): two"]);
+    const head = runGitFixture(dir, ["rev-parse", "HEAD"]);
+    const out = await runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", baseline, "--worktree", dir, "--spec-identity", "spec@1"], quiet);
+    assert.equal(out.input.patchPath, deltaPatchPath(resolveGateArtifactTmpRoot(dir), baseline, head));
+    const patch = fs.readFileSync(out.input.patchPath, "utf8");
+    assert.match(patch, /^diff --git a\/one\.mjs b\/one\.mjs$/m);
+    assert.match(patch, /^\+export const one = 1;$/m);
+    assert.match(patch, /^\+export const two = 2;$/m);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the evidence rule reads, forbids executing tests, and the input carries no shell instruction", async () => {
+  assert.match(DELTA_EVIDENCE_RULE, /Read patchPath with the read tool/);
+  assert.match(DELTA_EVIDENCE_RULE, /Do not run tests/);
+  const { actList } = fixture();
+  const out = await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], headAt(B));
+  const text = JSON.stringify(out.input);
+  for (const banned of [/\bsed\b/, /\| head/, /git diff/]) assert.doesNotMatch(text, banned);
+});
+
+test("the read-only role gate denies none of the commands the evidence rule names", () => {
+  // The rule names the read tool only, so the reviewer issues no bash call; the gate denies any test run.
+  for (const role of ["review", "judge"]) {
+    assert.equal(decidePiToolCall({ toolName: "read", input: { path: "/x.patch" }, agentType: role }).block, false);
+    assert.equal(decidePiToolCall({ toolName: "bash", input: { command: "bun test" }, agentType: role }).block, true);
+  }
 });
 
 test("with --result the CLI records the decision for the baseline, and the last write wins", async () => {

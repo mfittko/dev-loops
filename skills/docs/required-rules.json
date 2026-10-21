@@ -705,6 +705,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "PRE-PUSH-DELTA-PATCH-ARTIFACT",
+      "enforcement": "doc"
+    },
+    {
       "id": "PRE-PUSH-DELTA-NOT-GATE-EVIDENCE",
       "enforcement": "doc"
     },
