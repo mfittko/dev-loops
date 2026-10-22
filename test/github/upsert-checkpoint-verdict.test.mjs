@@ -12048,6 +12048,30 @@ test("--gate review with a pr_scope judge and an in-scope defect plus a template
   assert.ok(body.includes(ACT_FINDING.summary) && body.includes(REJECT_FINDING.summary));
 });
 
+test("--gate review counts one 3-member act cluster as one item, with a ledger alone or a ledger plus --findings-json", async () => {
+  const members = ["first", "second", "third"].map((word) => ({ ...ACT_FINDING, summary: `${word} member of one cluster`, clusterId: 0 }));
+  const bodies = [];
+  for (const withJson of [false, true]) {
+    await withTempDir(async (tempDir) => {
+      const ledgerPath = await writeReviewGateLedger(tempDir, members, { overallVerdict: "findings_present" });
+      const findingsJson = path.join(tempDir, "judged-findings.json");
+      await writeFile(findingsJson, JSON.stringify(members.map(({ clusterId, ...rest }) => rest)), "utf8");
+      const { runChild, calls } = makeGhMock([
+        ...reviewGateFindingSurfaceEntries(),
+        { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":910,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-910"}\n' },
+      ]);
+      await upsertCheckpointVerdict({
+        repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+        nextAction: "none — informational review, no re-gate required",
+        findingsLedger: ledgerPath, ...(withJson ? { findingsJson } : {}), executionMode: "fanout_fanin", judgeSpecSource: "pr_body",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+      const post = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+      bodies.push(JSON.parse(post.stdinText).body);
+    }, { prefix: "dev-loops-upsert-cluster-count-" });
+  }
+  for (const body of bodies) assert.match(body, /fix the 1 item this review lists/);
+});
+
 test("assertJudgeSpecSourceMatchesLedger fails closed on every ledger and source mismatch, naming the flag", () => {
   const options = (judgeSpecSource) => ({ gate: "review", judgeSpecSource });
   const judged = [ACT_FINDING, REJECT_FINDING];

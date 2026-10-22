@@ -21,7 +21,8 @@ import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWo
 import { buildGateArtifactPath, buildGateContextPath } from "../github/_gate-artifact-paths.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
-import { resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { resolveGateRound } from "../github/_gate-finding-surface.mjs";
 
 const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--tmp-root <path>]
 Derives the judge's work order from the round's authoritative inputs: the consolidated
@@ -100,6 +101,8 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   // Anchor at the checkout root, never a cwd subdirectory the pull and write guard never scan.
   const checkoutRoot = resolveRepoRoot(cwd);
   const { config } = await loadDevLoopConfigStrict({ repoRoot: checkoutRoot });
+  // The round counts this gate's local findings-log ledgers (main-anchored, as close-gate-findings reads them) plus this head, so it exists before the judge runs. An explicit --round wins.
+  round ??= await resolveGateRound({ repo, pr, gate, headSha, reviews: [], issueComments: [], tmpRoot: resolveGateArtifactTmpRoot(checkoutRoot), repoRoot: checkoutRoot });
   tmpRoot ??= path.join(checkoutRoot, "tmp");
   const abs = (p) => path.resolve(cwd, p);
   const dir = path.resolve(judgeDir({ repo, pr, gate, headSha, tmpRoot }));

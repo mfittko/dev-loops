@@ -57,7 +57,8 @@ test("GATE-EXEC-THREAD-DISPOSITION states the act-thread exclusion and the fixer
   assertClaims(section, [
     ["never selects", "did not dispose", "`defer`"],
     ["current round's ledger", "decides first"],
-    ["prior local ledgers", "judge: <disposition>"],
+    ["prior local ledgers", "decide"],
+    ["Only a reject", "judge: <disposition>", "a defer needs ledger evidence"],
     ["`act`", "no stamp", "no reply", "no resolve", "no deferral comment entry", "fixing commit", "decline reason", "judge rerun"],
     ["fixer", "replies", "`act`", "decline reason", "resolves it", "`close-gate-findings.mjs`"],
   ], "GATE-EXEC-THREAD-DISPOSITION");
@@ -100,10 +101,10 @@ test("the judge `defer` bullets file a new issue only for a blocker, never via c
   }
 });
 
-test("GATE-EXEC-THREAD-DISPOSITION reject-closes judge-rejected medium and low threads and keeps a judge-rejected high open (ADR 0144)", async () => {
+test("GATE-EXEC-THREAD-DISPOSITION reject-closes judge-rejected medium, low and nit threads and keeps a judge-rejected high open (ADR 0144)", async () => {
   const section = ruleSection(await readFile(`${repoRoot}${CONTRACT}`, "utf8"), "GATE-EXEC-THREAD-DISPOSITION");
   assertClaims(section, [
-    ["close-gate-findings.mjs", "reject-closes", "medium or low"],
+    ["close-gate-findings.mjs", "reject-closes", "medium, low or nit"],
     ["judge-rejected high", "never reject-closed", "roundCapReached"],
   ], "judge-rejected reject-close scope");
 });

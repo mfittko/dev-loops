@@ -675,6 +675,29 @@ for (const [label, closing] of [["no closing reference", []], ["more than one cl
   });
 }
 
+test("runJudgePass fails closed when projecting a defer onto an unstamped cluster that holds a high (GATE-EXEC-THREAD-DISPOSITION)", () => {
+  const findings = ledger(
+    locatedFinding({ severity: "low", angle: "correctness", summary: "null deref (low report)" }),
+    locatedFinding({ severity: "high", angle: "security", summary: "null deref (high report)" }),
+  );
+  const act = { disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" };
+  for (const dispositions of [[{ index: 0, ...DEFER }, { index: 1, ...act }], [{ index: 0, ...act }, { index: 1, ...DEFER }]]) {
+    assert.throws(() => runJudgePass(findings, verdict({ dispositions }), HEAD), /never deferred/);
+  }
+});
+
+test("judgePassCli: the deferral comment omits the nit member of a deferred medium plus nit cluster", async () => {
+  const { deps, commentCalls } = stubDeferralDeps({ closing: [2425] });
+  await runDeferRound({
+    findings: [finding({ severity: "medium", summary: "medium member", clusterId: 0 }), finding({ severity: "nit", summary: "nit member", clusterId: 0 })],
+    dispositions: [{ index: 0, ...DEFER }],
+    deps,
+  });
+  assert.equal(commentCalls.length, 1);
+  assert.match(commentCalls[0].body, /medium member/);
+  assert.doesNotMatch(commentCalls[0].body, /nit member/);
+});
+
 test("judgePassCli: tracker.provider other than github — no deferral comment, with no closing-reference lookup", async () => {
   const { deps, runCalls, commentCalls } = stubDeferralDeps({ closing: [2425] });
   const { enriched } = await runDeferRound({

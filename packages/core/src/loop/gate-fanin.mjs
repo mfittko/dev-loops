@@ -1198,6 +1198,17 @@ export function validateJudgeVerdict(verdict) {
 }
 
 /**
+ * The severity that forbids a judge `defer` on a cluster's members (GATE-EXEC-THREAD-DISPOSITION):
+ * a high or a question, or an all-nit cluster. Null when the cluster may be deferred.
+ * @param {Array<{severity?: string}>} members
+ * @returns {"high"|"question"|"nit"|null}
+ */
+export function neverDeferredSeverity(members) {
+  const severities = members.map((f) => normalizeSeverity(f.severity));
+  return severities.find((s) => s === "high" || s === "question") ?? (severities.every((s) => s === "nit") ? "nit" : null);
+}
+
+/**
  * Merge the judge's relevance-based dispositions into the flat consolidated
  * findings array. The judge runs AFTER fan-in and BEFORE the fix pass:
  * it emits a per-finding disposition (`act`/`defer`/`reject`) plus a scope-drift
@@ -1233,8 +1244,7 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
     }
     if (d.disposition === "defer") {
       // GATE-EXEC-THREAD-DISPOSITION: a high has no exit unless rejected, a question is never deferred, and a nit is never a judge defer.
-      const severities = enriched.filter((_f, i) => clusterOf(i) === d.index).map((f) => normalizeSeverity(f.severity));
-      const blocked = severities.find((s) => s === "high" || s === "question") ?? (severities.every((s) => s === "nit") ? "nit" : null);
+      const blocked = neverDeferredSeverity(enriched.filter((_f, i) => clusterOf(i) === d.index));
       if (blocked) {
         throw new Error(`judge disposition for cluster ${d.index} defers a cluster whose severity is ${blocked}; a high, a question or an all-nit cluster is never deferred (GATE-EXEC-THREAD-DISPOSITION) — fail closed`);
       }

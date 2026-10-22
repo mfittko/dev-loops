@@ -6,7 +6,7 @@ import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, pullWorkOrder, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
-import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import { seedJudgeSources } from "./_judge-delivery-fixture.mjs";
@@ -341,8 +341,35 @@ test("the work order carries the round and the medium fix window as judge inputs
     assert.match(text, /a cluster that contains a `high` or a `question`, and an all-`nit` cluster, is never deferred/);
     assert.match(text, /`title`.*`detail`.*`fix`.*`reason`/s);
     assert.match(text, /no em dashes and no arrows/);
-    assert.equal((await emitJudgeWorkOrder(sources)).workOrder.round, null);
+    assert.equal((await emitJudgeWorkOrder(sources)).workOrder.round, 1);
   });
+});
+
+test("an omitted --round derives from the gate's local ledgers, so a second head emits round 2", async () => {
+  await withDir(async (root) => {
+    const first = await seed(root, { headSha: "e".repeat(40) });
+    const ledger = (headSha) => path.join(root, buildLogPath({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha, tmpRoot: "tmp" }));
+    for (const headSha of ["e".repeat(40), HEAD]) {
+      await mkdir(path.dirname(ledger(headSha)), { recursive: true });
+      await writeFile(ledger(headSha), "{}");
+    }
+    assert.equal((await emitJudgeWorkOrder(first)).workOrder.round, 2);
+    assert.equal((await emitJudgeWorkOrder({ ...(await seed(root)), round: 5 })).workOrder.round, 5, "an explicit --round wins");
+  });
+});
+
+test("a configured mediumFixWindow, or only the deprecated alias, reaches a draft_gate work order", async () => {
+  for (const [yaml, expected] of [
+    ["version: 1\ngates:\n  draft:\n    mediumFixWindow: 2\n", 2],
+    ["version: 1\ngates:\n  draft:\n    worthFixingNowFixWindow: 5\n", 5],
+    ["version: 1\ngates:\n  preApproval:\n    mediumFixWindow: 4\n", 3],
+  ]) {
+    await withDir(async (root) => {
+      await writeFile(path.join(root, ".devloops"), yaml, "utf8");
+      const plan = await emitJudgeWorkOrder(await seed(root, { gate: "draft_gate" }));
+      assert.equal(plan.workOrder.mediumFixWindow, expected, yaml);
+    });
+  }
 });
 
 test("J1: the --round CLI accepts only /^[1-9][0-9]*$/ and carries it to the work order", async () => {

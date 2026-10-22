@@ -3118,7 +3118,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // BOTH the render and the same-head idempotency compare see the derived
   // value (a render-only fix would let the compare read the raw caller
   // string against the rendered derived one).
-  const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate, listOpenActItems([...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems]));
+  const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate, listOpenActItems(preloadedFindingsLedger ? (preloadedFindingsLedger.findings ?? []) : enrichedActItems));
   if (derivedNextAction !== null) {
     options.nextAction = derivedNextAction;
   }

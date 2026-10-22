@@ -8,6 +8,8 @@ import {
   GATE_CONFIG_KEY,
   applyJudgeDispositions,
   isOpenActItem,
+  neverDeferredSeverity,
+  normalizeSeverity,
   validateJudgeVerdict,
 } from "@dev-loops/core/loop/gate-fanin";
 import {
@@ -483,6 +485,14 @@ export function runJudgePass(findings, judgeVerdict, headSha) {
     ? clustersFromStampedIds(applied.findings)
     : clusterFindings(applied.findings, { headSha: validated.headSha }).clusters;
   const enriched = projectClusterDisposition(applied.findings, clusters);
+  // The never-deferred rule also holds after projection: a defer on one member must not reach a high, a question or an all-nit cluster.
+  for (const cluster of clusters) {
+    const members = cluster.memberIndices.map((i) => enriched[i]);
+    const blocked = members.some((f) => f.judgeDisposition === "defer") ? neverDeferredSeverity(members) : null;
+    if (blocked) {
+      throw new Error(`projected judge defer reaches a cluster whose severity is ${blocked}; a high, a question or an all-nit cluster is never deferred (GATE-EXEC-THREAD-DISPOSITION) — fail closed`);
+    }
+  }
   return {
     enriched,
     act: enriched.filter((f) => f.judgeDisposition === "act"),
@@ -544,7 +554,8 @@ async function applyDeferralComment(enriched, { repo, pr, trackerProvider }, dep
   for (const f of enriched) {
     f.fingerprint = fingerprintFinding(f);
   }
-  const deferred = enriched.filter((f) => f.judgeDisposition === "defer");
+  // A nit member of a deferred mixed cluster is never filed (matches selectFoldedFileableEntries).
+  const deferred = enriched.filter((f) => f.judgeDisposition === "defer" && normalizeSeverity(f.severity) !== "nit");
   if (deferred.length === 0) return;
   const entries = deferred.map((f) => ({
     fingerprint: f.fingerprint,
