@@ -1118,7 +1118,7 @@ export function normalizeScopeDriftVerdict(verdict) {
  * {
  *   headSha: "<sha>",
  *   scopeDrift: { verdict: "within_scope"|"drift_detected", rationale: "...", driftedAreas: ["..."] },
- *   dispositions: [{ index, disposition: "act"|"defer"|"reject", rationale, criterion?, followUpDraft? }]
+ *   dispositions: [{ index, disposition: "act"|"defer"|"reject", title, detail, fix, reason (required unless act), rationale, criterion?, followUpDraft? }]
  * }
  * ```
  *
@@ -1230,6 +1230,14 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
   for (const d of validated.dispositions) {
     if (!clusterIds.has(d.index)) {
       throw new Error(`judge disposition index ${d.index} is out of range (findings has ${enriched.length} entries) or is not a clusterId`);
+    }
+    if (d.disposition === "defer") {
+      // GATE-EXEC-THREAD-DISPOSITION: a high has no exit unless rejected, a question is never deferred, and a nit is never a judge defer.
+      const severities = enriched.filter((_f, i) => clusterOf(i) === d.index).map((f) => normalizeSeverity(f.severity));
+      const blocked = severities.find((s) => s === "high" || s === "question") ?? (severities.every((s) => s === "nit") ? "nit" : null);
+      if (blocked) {
+        throw new Error(`judge disposition for cluster ${d.index} defers a cluster whose severity is ${blocked}; a high, a question or an all-nit cluster is never deferred (GATE-EXEC-THREAD-DISPOSITION) — fail closed`);
+      }
     }
     for (const [i, target] of enriched.entries()) {
       if (clusterOf(i) !== d.index) continue;

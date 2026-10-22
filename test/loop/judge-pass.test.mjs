@@ -74,7 +74,7 @@ test("runJudgePass derives the fixer act list and scopeDrift verdict (#1658)", (
     finding({ summary: "in-scope defect" }),
     finding({ severity: "low", summary: "real but follow-up", disposition: "deferred" }),
     finding({ severity: "medium", summary: "out of non-goal", disposition: "deferred" }),
-    finding(),
+    finding({ severity: "medium" }),
   );
   const v = verdict({
     dispositions: [
@@ -98,7 +98,7 @@ test("runJudgePass derives the fixer act list and scopeDrift verdict (#1658)", (
 });
 
 test("runJudgePass leaves the severity-based disposition intact (relevance axis, #1525)", () => {
-  const findings = ledger(finding({ disposition: "accepted-for-fix" }), finding({ disposition: "deferred" }));
+  const findings = ledger(finding({ severity: "medium", disposition: "accepted-for-fix" }), finding({ disposition: "deferred" }));
   const v = verdict({
     dispositions: [
       { index: 0, disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } },
@@ -156,7 +156,7 @@ test("runJudgePass projects the representative's judge disposition onto every du
   const findings = ledger(
     locatedFinding({ angle: "correctness", summary: "null deref (angle A)" }),
     locatedFinding({ angle: "security", summary: "null deref (angle B)" }),
-    finding({ summary: "distinct finding" }),
+    finding({ severity: "medium", summary: "distinct finding" }),
   );
   const v = verdict({
     dispositions: [

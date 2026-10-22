@@ -250,12 +250,13 @@ question is likewise unresolved feedback.
 2. before the first local file write in each fixer pass on a Copilot-assigned PR, run `node <resolved-skill-scripts>/loop/pre-write-remote-freshness-guard.mjs --branch <headRefName>` as a required fail-closed guard
    - source `<headRefName>` from authoritative PR state (`headRefName`), not from a local branch guess
    - if the guard exits non-zero (`remote_ahead`), stop writing locally, reconcile to the refreshed remote head, then restart the fixer pass
-3. classify findings:
-   - high: blocks gate; always fixed
-   - medium: blocks gate when `blockCleanOnFindingSeverities` includes it; a LOCATABLE finding is also fixed through round 3 of the gate's chain even when not blocking (then deferred), while a NON-LOCATABLE one is deferred immediately (`GATE-EXEC-BLOCKING-ONLY-FIX` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md#phase-4--fix))
-   - low / non-blocking / disagree (defer is the fixer's disposition for these, not a severity) — EXCEPT a low the judge disposed `act`, which is a fix target, not a defer candidate: decline it only on reproduction grounds (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`), the same way a judge `act` overrides a nit's no-fixer-cycle default
-   - question: never deferred; answer it, promote it to a defect severity when the answer reveals one, or escalate to the author when it is unanswerable. An unanswered question blocks gate-close like an open defect.
-   - nit: cosmetic, non-defect; resolved-with-rationale immediately, no fixer action on the severity axis (judge-acted nits excepted), and NEVER filed to the deferral comment (net-reduction disposition policy, #1846)
+3. classify findings by the judge's disposition of the cluster (`GATE-EXEC-THREAD-DISPOSITION` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md)); severity and round never decide:
+   - judge `act`: a fix target at every severity and round; decline it only on reproduction grounds (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`)
+   - judge `defer`: resolved by the closing sweep as deferred; a high is never deferred, a question is never deferred and a nit is never a judge defer
+   - judge `reject`: reject-closed by the closing sweep; a medium, low or nit thread closes directly, a question closes once it carries an answer reply, and a rejected high stays open on the round-cap path
+   - unjudged or ambiguous: stays open
+   - high: blocks gate; fixed unless the judge rejected it
+   - question: answer it, promote it to a defect severity when the answer reveals one, or escalate to the author when it is unanswerable. An unanswered question blocks gate-close like an open defect.
 4. apply only the accepted narrow fixes
 5. run the smallest validation that honestly proves the fix
 6. if files changed, run `node <resolved-skill-scripts>/loop/pre-commit-branch-guard.mjs --expected-branch <headRefName>` immediately before every `git add && git commit` sequence as a required fail-closed guard

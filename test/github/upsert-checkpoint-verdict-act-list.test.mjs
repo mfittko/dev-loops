@@ -135,14 +135,15 @@ test("a ledger without overallVerdict refuses an explicit clean over an open act
   }, { prefix: "dev-loops-act-list-bare-" });
 });
 
-test("a high finding judged reject still keeps the round from clean", async () => {
+test("a high finding judged reject posts clean over a fan-in findings_present verdict", async () => {
   await withTempDir(async (tempDir) => {
-    // The consolidator's blockCleanOnFindingSeverities floor made this findings_present.
+    // The consolidator's blockCleanOnFindingSeverities floor made the fan-in verdict findings_present; the judge's empty act list wins.
     const ledgerPath = await writeLedger(tempDir, { overallVerdict: "findings_present", findings: [finding("high", "reject")] });
     const derived = await post(ledgerPath, undefined, 1);
     assert.equal(derived.error, undefined);
-    assert.match(derived.body, /\*\*Verdict:\*\* findings_present/);
-    assert.match((await post(ledgerPath, "clean", 1)).error, /--verdict "clean"/);
+    assert.match(derived.body, /\*\*Verdict:\*\* clean/);
+    assert.equal((await post(ledgerPath, "clean", 1)).error, undefined);
+    assert.match((await post(ledgerPath, "findings_present", 1)).error, /--verdict "findings_present"/);
   }, { prefix: "dev-loops-act-list-high-" });
 });
 
@@ -369,4 +370,27 @@ test("a fan-out ledger with no --execution-mode is not refused as an inline post
     }
     assert.doesNotMatch(message, /Cannot post a inline_single_agent/);
   }, { prefix: "dev-loops-act-list-real-config-" });
+});
+
+test("a review-gate ledger with fan-in findings_present and a sole rejected high posts clean with the no-change-requested next action", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = path.join(tempDir, "review-ledger.json");
+    await writeFile(ledgerPath, JSON.stringify({
+      repo: "owner/repo", pr: 17, gate: "review", headSha: HEAD, verdict: "findings_present", overallVerdict: "findings_present",
+      loggedAt: "2026-09-23T00:00:00.000Z", findings: [finding("high", "reject")],
+    }), "utf8");
+    const args = [
+      "--repo", "owner/repo", "--pr", "17", "--gate", "review", "--head-sha", HEAD, "--submit", "comment",
+      "--inline-reason", "review gate judged", "--judge-spec-source", "pr_body",
+      "--findings-ledger", ledgerPath, "--findings-summary", "act list test", "--next-action", "follow the verdict",
+      "--findings-severity-counts", JSON.stringify({ high: 1, medium: 0, low: 0, question: 0, nit: 0 }),
+    ];
+    const posted = [];
+    await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild(posted),
+    });
+    const body = posted.join("\n");
+    assert.match(body, /\*\*Verdict:\*\* clean/);
+    assert.match(body, /no change requested/);
+  }, { prefix: "dev-loops-act-list-review-reject-high-" });
 });

@@ -94,6 +94,9 @@ ${JSON.stringify(workOrder, null, 2)}
  */
 export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile, specFile, identityFile, priorVerdicts = [], round = null, cwd = process.cwd(), tmpRoot, roundId = `j${Date.now()}-${randomBytes(4).toString("hex")}` }) {
   if (!/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Refusal(`--head-sha must be a full 40- or 64-char lowercase SHA, got ${headSha}`);
+  if (round !== null && !(Number.isInteger(round) && round > 0)) {
+    throw Object.assign(new Refusal(`--round must be a positive integer, got ${round}`), { refusal: "invalid_round" });
+  }
   // Anchor at the checkout root, never a cwd subdirectory the pull and write guard never scan.
   const checkoutRoot = resolveRepoRoot(cwd);
   const { config } = await loadDevLoopConfigStrict({ repoRoot: checkoutRoot });

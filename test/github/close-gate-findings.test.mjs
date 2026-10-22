@@ -516,44 +516,30 @@ test("round source (C): real <gate>-*.json findings-log files under --tmp-root c
 
 test("buildMeritRationale requires per-finding engagement, not severity-only closure text", () => {
   const body = `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity: "low", angle: "correctness", round: 1 })}\n**low** (\`correctness\`): wrong guidance reaches operators`;
-  const rationale = buildMeritRationale({ body, severity: "low", operatorVisible: false, round: 1, mediumFixWindow: 3 });
+  const rationale = buildMeritRationale({ body, judgeReason: "Out of scope for this PR." });
   assert.match(rationale, /^Examined on merits:/);
   assert.match(rationale, /wrong guidance reaches operators/);
   assert.match(rationale, /scope and acceptance criteria/);
   assert.throws(
-    () => buildMeritRationale({ body: "<!-- dev-loops:finding aaaaaaaaaaaaaaaa severity=low angle=correctness round=1 -->", severity: "low", operatorVisible: false, round: 1, mediumFixWindow: 3 }),
+    () => buildMeritRationale({ body: "<!-- dev-loops:finding aaaaaaaaaaaaaaaa severity=low angle=correctness round=1 -->", judgeReason: "x" }),
     /finding summary/,
   );
 });
 
-test("buildMeritRationale pins each severity/visibility reason branch by content (#1882)", () => {
-  const bodyFor = (severity, summary = "wrong guidance reaches operators") =>
-    `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity, angle: "correctness", round: 1 })}\n**${severity}** (\`correctness\`): ${summary}`;
-  // medium: names the fix window it aged out of
-  assert.match(
-    buildMeritRationale({ body: bodyFor("medium"), severity: "medium", operatorVisible: false, round: 4, mediumFixWindow: 3 }),
-    /remained open past the round-3 fix window and no in-scope fix was selected/,
-  );
-  // low + operator-visible: tracking preserves the operator-visible concern
-  assert.match(
-    buildMeritRationale({ body: bodyFor("low"), severity: "low", operatorVisible: true, round: 1, mediumFixWindow: 3 }),
-    /tracking preserves the operator-visible concern/,
-  );
-  // low + not visible: below the operator-visibility filing bar
-  assert.match(
-    buildMeritRationale({ body: bodyFor("low"), severity: "low", operatorVisible: false, round: 1, mediumFixWindow: 3 }),
-    /does not clear the operator-visibility filing bar/,
-  );
-  // nit / default: cosmetic
-  assert.match(
-    buildMeritRationale({ body: bodyFor("nit"), severity: "nit", operatorVisible: false, round: 1, mediumFixWindow: 3 }),
-    /it is cosmetic and does not warrant a fixer cycle or tracked follow-up/,
-  );
+test("buildMeritRationale states the judge's reason, else its rationale, never a severity or round text", () => {
+  const bodyFor = (severity) =>
+    `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity, angle: "correctness", round: 1 })}\n**${severity}** (\`correctness\`): wrong guidance reaches operators`;
+  for (const severity of ["medium", "low", "nit"]) {
+    assert.match(buildMeritRationale({ body: bodyFor(severity), judgeReason: "Belongs to the follow-up.", judgeRationale: "ignored" }), /; Belongs to the follow-up\.$/);
+    assert.match(buildMeritRationale({ body: bodyFor(severity), judgeRationale: "Only the rationale." }), /; Only the rationale\.$/);
+    assert.match(buildMeritRationale({ body: bodyFor(severity) }), /the judge recorded no reason text/);
+  }
+  assert.doesNotMatch(buildMeritRationale({ body: bodyFor("medium"), judgeReason: "r" }), /fix window|cosmetic|filing bar/);
 });
 
 test("buildMeritRationale collapses embedded double quotes so the wrapped summary stays legible (#1882)", () => {
   const body = `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity: "low", angle: "correctness", round: 1 })}\n**low** (\`correctness\`): the "foo" bug bites`;
-  const rationale = buildMeritRationale({ body, severity: "low", operatorVisible: false, round: 1, mediumFixWindow: 3 });
+  const rationale = buildMeritRationale({ body, judgeReason: "r" });
   assert.match(rationale, /"the 'foo' bug bites"/);
   assert.doesNotMatch(rationale, /"foo"/);
 });
@@ -1597,7 +1583,7 @@ test("a round-4 medium thread with an empty current ledger and a rendered 'judge
   ));
 });
 
-// Tier 2 of isJudgeActThread: with an empty current ledger and NO rendered
+// Tier 2 of resolveThreadDisposition: with an empty current ledger and NO rendered
 // judge suffix, the prior local ledgers decide. A prior `act` keeps the thread
 // open; a tied act-vs-defer disagreement is ambiguous and also keeps it open
 // (fail closed). No stamp/reply/resolve/comment entry is stubbed, so selecting
@@ -2285,7 +2271,7 @@ function defectThread({ severity, summary, judgeDisposition, judgeRationale, com
   return { finding, fp, thread: threadNode({ id, commentId, body }) };
 }
 
-for (const severity of ["medium", "low"]) {
+for (const severity of ["medium", "low", "nit"]) {
   test(`a judge-rejected ${severity} defect thread is reply-resolved with the summary and judge rationale, never deferred or filed`, async () => {
     const { finding, thread } = defectThread({ severity, summary: `the ${severity} claim about parsing`, judgeDisposition: "reject", judgeRationale: "The claim contradicts the spec.", commentId: 6300, id: `THREAD_${severity}_REJECTED` });
     await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
@@ -2330,6 +2316,22 @@ test("a judge-rejected medium past the fix window is reject-closed, never stampe
     },
   ));
 });
+
+// A high has no exit unless rejected and a question is never deferred, even when the ledger says defer.
+for (const severity of ["high", "question"]) {
+  test(`a judge-deferred ${severity} thread is never deferred: it stays open`, async () => {
+    const { finding, thread } = defectThread({ severity, summary: `a ${severity} the judge wrongly deferred`, judgeDisposition: "defer", judgeRationale: "Outside scope.", commentId: 6310, id: `THREAD_${severity}_DEFER` });
+    await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+      // No stamp, reply or resolve entries: a regression that defers it overflows the stub.
+      roundEntries({ threads: [thread] }),
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+        assert.equal(result.deferredResolved, 0);
+        assert.equal(result.unresolvedGateThreadCount, 1);
+      },
+    ));
+  });
+}
 
 function mergedThread(primary, member, { id, commentId }) {
   const body = `${buildFindingMarker({ fp: primary.fp, severity: "medium", angle: "correctness", round: 1 })}\n${buildFindingMarker({ fp: member.fp, severity: "medium", angle: "correctness", round: 1 })}\n**Problem:** merged`;

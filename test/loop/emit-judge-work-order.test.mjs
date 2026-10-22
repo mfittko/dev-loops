@@ -255,6 +255,17 @@ test("J4: a colliding execution index entry for the next identity refuses the em
   });
 });
 
+test("J1: --round must be a positive integer, else the emission refuses as invalid_round", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    for (const round of [0, -1, 1.5, Number.NaN]) {
+      await assert.rejects(emitJudgeWorkOrder({ ...sources, round }), (err) => err.refusal === "invalid_round" && /positive integer/.test(err.message));
+    }
+    const plan = await emitJudgeWorkOrder({ ...sources, round: 2 });
+    assert.equal(plan.workOrder.round, 2);
+  });
+});
+
 test("J1: a truncated identity stamp or a partial checkedCriteria refuses", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);

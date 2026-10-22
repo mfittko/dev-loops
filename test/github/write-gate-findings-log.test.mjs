@@ -2854,3 +2854,34 @@ test("writeGateFindingsLog validates failingCase: blank or non-string throws, a 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("writeGateFindingsLog disposes a 3-member cluster by one clusterId through --judge-verdict and refuses a partly stamped array", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-clusterid-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdictPath, JSON.stringify({
+      headSha,
+      scopeDrift: { verdict: "within_scope", rationale: "ok", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "noise" }, { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "one root cause" }],
+    }), "utf8");
+    const member = (angle, extra = {}) => ({ severity: "medium", angle, summary: "shared root cause", clusterId: 1, ...extra });
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate: "draft_gate", headSha, verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "low", angle: "docs", summary: "noise", clusterId: 0 }, member("correctness"), member("holistic"), member("coverage")]),
+      judgeVerdict: judgeVerdictPath, tmpRoot: tmpDir,
+    });
+    assert.equal(result.ok, true);
+    const parsed = JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", `draft_gate-${headSha}.json`), "utf8"));
+    assert.deepEqual(parsed.findings.map((f) => f.judgeDisposition), ["reject", "act", "act", "act"]);
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "owner/repo", pr: 42, gate: "draft_gate", headSha, verdict: "findings_present",
+        findings: JSON.stringify([member("correctness"), member("holistic", { clusterId: undefined })]), tmpRoot: tmpDir,
+      }),
+      /clusterId/,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});

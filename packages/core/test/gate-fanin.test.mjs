@@ -1516,6 +1516,25 @@ describe("applyJudgeDispositions (#1525)", () => {
     assert.equal(scopeDrift.verdict, "within_scope");
   });
 
+  // GATE-EXEC-THREAD-DISPOSITION: a high has no exit unless rejected, a question is never deferred, a nit is never a judge defer.
+  for (const [severity, others] of [["high", ["low"]], ["question", ["low"]], ["nit", ["nit", "nit"]]]) {
+    test(`a defer on a cluster whose findings are ${severity} fails closed`, () => {
+      const findings = [severity, ...others].map((s, i) => ({ severity: s, angle: `a${i}`, summary: `finding ${i}`, clusterId: 0 }));
+      const verdict = judgeVerdict([
+        { index: 0, disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "later", followUpDraft: { title: "t", body: "b" } },
+      ]);
+      assert.throws(() => applyJudgeDispositions(findings, verdict), /never deferred/);
+    });
+  }
+
+  test("a defer on a medium plus nit cluster is accepted", () => {
+    const findings = [{ severity: "medium", angle: "a", summary: "m", clusterId: 0 }, { severity: "nit", angle: "b", summary: "n", clusterId: 0 }];
+    const verdict = judgeVerdict([
+      { index: 0, disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "later", followUpDraft: { title: "t", body: "b" } },
+    ]);
+    assert.equal(applyJudgeDispositions(findings, verdict).findings[1].judgeDisposition, "defer");
+  });
+
   test("a finding rejected as out-of-scope against a named non-goal gets judgeDisposition reject", () => {
     const verdict = judgeVerdict([
       { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in-scope defect", criterion: "AC-1" },

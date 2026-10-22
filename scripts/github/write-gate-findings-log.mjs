@@ -122,7 +122,7 @@ function validateFindingsArray(parsed, flagLabel) {
   if (!Array.isArray(parsed)) {
     throw parseError(`${flagLabel} must be a JSON array`);
   }
-  return parsed.map((f, i) => {
+  const entries = parsed.map((f, i) => {
     if (!f || typeof f !== "object") {
       throw parseError(`${flagLabel}[${i}] must be an object`);
     }
@@ -272,8 +272,21 @@ function validateFindingsArray(parsed, flagLabel) {
     if (entry.judgeDisposition === "defer" && entry.followUpDraft === undefined) {
       throw parseError(`${flagLabel}[${i}].followUpDraft is required when judgeDisposition is "defer"`);
     }
+    // The fan-in cluster stamp: --judge-verdict dispositions key on it, so it must reach the judge pass.
+    if ("clusterId" in f) {
+      if (!Number.isInteger(f.clusterId) || f.clusterId < 0) {
+        throw parseError(`${flagLabel}[${i}].clusterId must be a non-negative integer`);
+      }
+      entry.clusterId = f.clusterId;
+    }
     return entry;
   });
+  // A partly stamped array would key the judge's dispositions two ways at once, so it fails closed.
+  const stampedCount = entries.filter((e) => e.clusterId !== undefined).length;
+  if (stampedCount > 0 && stampedCount < entries.length) {
+    throw parseError(`${flagLabel}: clusterId must be set on every finding or on none (${stampedCount} of ${entries.length} carry it)`);
+  }
+  return entries;
 }
 // Resolve the findings array from either --findings (inline JSON) or
 // --findings-file (a path), with identical validation either way. Shared
