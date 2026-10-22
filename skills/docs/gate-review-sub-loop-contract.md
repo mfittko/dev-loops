@@ -1034,7 +1034,7 @@ The threshold is fixed.
 
 ### Phase 4 — Fix
 
-If findings with a severity in the gate's `blockCleanOnFindingSeverities` list are present:
+If the judge act list is non-empty (a round with an unjudged finding and no act item has none, and then the verdict follows the fan-in severity rule above):
 
 - The coordinator emits the fixer work order with `scripts/loop/emit-fixer-work-order.mjs
   --repo <owner/name> --pr <n> --head-sha <headRefOid> --phase commit_only
@@ -1087,7 +1087,7 @@ After applying fixes and advancing the head SHA:
 - rerun the sub-loop from Phase 1 (context-builder preamble for the new head SHA), except where `GATE-EXEC-LOW-NIT-CONVERGENCE` converges an all-low/nit `draft_gate` round via `upsert-checkpoint-verdict.mjs --converged-json`
 - continue the fix-then-retry cycle until the posted review verdict is `clean` (or converged per `GATE-EXEC-LOW-NIT-CONVERGENCE`)
 - on retry, re-invoke every reviewer whose review surface the new head's delta touched (including any angle whose prior finding attribution is ambiguous) and every mandatory / always-run angle; the context-builder and consolidation always run fresh. Other angles are carried forward per [GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed), on that rule's proof and never on guesswork (a carried `findings_present` angle brings its open findings forward and the round still blocks on them)
-- a clean pass means all gate-specific review angles pass, no findings with a severity in `blockCleanOnFindingSeverities` remain, and the judge act list is empty (ADR 0089; except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)): the posted review verdict composes the ledger's severity `overallVerdict` with the act list
+- a clean pass means all gate-specific review angles pass and the posted verdict is `clean` (ADR 0089; except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)): on a fully judged round (every finding carries a judge disposition) that is an empty judge act list whatever the severities, and on a round with an unjudged finding the fan-in verdict applies, so no finding at a `blockCleanOnFindingSeverities` severity remains and the act list is empty
 
 #### Angle carry-forward (fail-closed) {#angle-carry-forward-fail-closed}
 
@@ -1148,7 +1148,7 @@ Each gate chain exits when one of these conditions is met:
 
 | Condition | Result |
 |---|---|
-| Posted review verdict is `clean` (no findings at any blocking severity, and the judge act list is empty per ADR 0089, except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)) | Gate passes; proceed to next boundary |
+| Posted review verdict is `clean` (an empty judge act list on a fully judged round, or no finding at a blocking severity and an empty act list on a round with an unjudged finding, per ADR 0089, except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)) | Gate passes; proceed to next boundary |
 | `pre_approval_gate` checkpoint `blocked` composed from a deterministic AC/DoD blocker over a completed review ledger (the comment records a **Review verdict** and **Gate blockers**) | Resolve each remaining blocker per [acceptance-criteria-verification.md step 5](acceptance-criteria-verification.md), which says when the writer ticks automatically and when the operator ticks with the CLI; then rerun the gate (the writer's next action is "rerun gate") |
 | `blocked` verdict from the review/fan-in itself (gate could not complete) | Stop; escalate to operator |
 | Maximum retry cycles exhausted without reaching `clean` | Stop; escalate to operator |
@@ -1239,7 +1239,7 @@ locatability split above: a finding is visible (`isVisibleFinding`) when the jud
 `blockCleanOnFindingSeverities` severity, it is a `question`, it has an unrecognized severity, or it has no judge disposition and ranks at or above the inline floor; on a create, a locatable finding at or above the inline floor also takes the inline or body-filed track. Every other finding, locatable or not, and on an update every non-visible finding,
 folds into the verdict body's one `Details` section instead, grouped by disposition (`Deferred`,
 `Rejected`, `Not judged`), carrying the same
-fingerprint+`disposition=deferred` marker shape a body-filed finding carries (a folded `high`, possible only when `blockCleanOnFindingSeverities` excludes `high`, carries no `disposition` field, like a body-filed `high` marker). A round without a
+fingerprint marker shape a body-filed finding carries, with `disposition=deferred` only on a judge defer and never on a nit, a Rejected entry or a Not judged entry (a folded `high`, possible only when `blockCleanOnFindingSeverities` excludes `high`, carries no `disposition` field, like a body-filed `high` marker). A round without a
 judge disposition keeps the severity rule (`inlineSeverityFloor`, default `medium`). A locatable finding at or above the floor keeps its inline thread on a create whatever its judge disposition. An `act`
 finding never folds and never carries `disposition=deferred`, and the fixer work order includes
 every `act` finding whatever track it rendered on. A folded finding creates NO review thread, so it
