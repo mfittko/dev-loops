@@ -1052,7 +1052,7 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   — findings the judge marked `act`. The fixer retains reproduction-based rejection (a finding
   that does not reproduce is dead regardless of the judge's verdict) but stops deciding
   relevance (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`). When no judge verdict is present, the fixer
-  falls back to the severity-based `blockCleanOnFindingSeverities` set below.
+  receives only the judge act list and derives no disposition from severity.
 - apply only the accepted narrow fixes on the same branch
 - do not broaden scope or touch unrelated files
 - when the fix changes a file under `skills/`, `agents/` or `commands/`, follow the work order's `executionRules.regenerate`: regenerate the `.claude` mirror, commit it with the fix, and never hand-edit it

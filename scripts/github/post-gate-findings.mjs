@@ -368,7 +368,7 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
       const summary = sanitizeInline(finding.summary);
       const dispositionSuffix = finding.disposition ? ` — _${sanitizeInline(finding.disposition)}_` : "";
       // Judge relevance-based disposition, alongside the
-      // severity-derived one.
+      // prior ledger disposition field.
       const judgeSuffix = finding.judgeDisposition
         ? ` — judge: _${sanitizeInline(finding.judgeDisposition)}_`
         : "";

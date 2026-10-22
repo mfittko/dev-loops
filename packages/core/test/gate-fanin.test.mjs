@@ -1512,7 +1512,7 @@ describe("applyJudgeDispositions (#1525)", () => {
     assert.equal(findings[0].judgeDisposition, "act");
     assert.equal(findings[0].judgeRationale, "fixes the null-deref named in AC criterion 1");
     assert.equal(findings[0].judgeCriterion, "AC-1: parser must not crash on null input");
-    // severity-based disposition stays intact (complementary, not replaced)
+    // the prior ledger disposition field passes through unchanged
     assert.equal(findings[0].disposition, "accepted-for-fix");
     assert.equal(scopeDrift.verdict, "within_scope");
   });

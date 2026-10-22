@@ -73,7 +73,7 @@ verdict body's one `Details` block, grouped by disposition: `Deferred (N)`, `Rej
 severity/angle/summary bullet plus its own INVISIBLE fingerprint marker (`disposition=deferred` only on a folded entry the judge disposed `defer`; Rejected and Not judged markers carry no `disposition` field, and neither does a folded `high`, possible only when `blockCleanOnFindingSeverities` excludes `high`, like a body-filed `high` marker) at
 line start, the same shape a body-filed marker carries, so cross-round fingerprint suppression
 still applies and a folded finding renders exactly once. A deferred finding keeps its deferral
-comment or `issue=<n>` link, so folding hides no record (a folded Deferred marker carries `issue=<n>` for its deferral target: the recorded follow-up issue (`followUpIssueNumber`), else the PR). An `act` finding never folds and its
+comment or `issue=<n>` link, so folding hides no record (a folded Deferred marker carries `issue=<n>` for its deferral target: the recorded follow-up issue (`followUpIssueNumber`), else the PR; a `nit` member of a deferred cluster carries neither the `disposition=deferred` stamp nor `issue=<n>`, per the Nit bullet in the sub-loop contract). An `act` finding never folds and its
 marker never carries `disposition=deferred`, on any track: below the floor it takes the normal
 track (an inline thread when locatable, a visible body entry otherwise). A folded finding creates
 NO gate-authored review thread and never enters `unresolvedGateThreadCount`

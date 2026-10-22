@@ -159,6 +159,8 @@ test("the fixer persona derives no disposition from severity without a judge ver
   const persona = (await readRepo("agents/fixer.agent.md")).replace(/\s+/g, " ");
   assert.match(persona, /When no judge verdict is present, the findings stay unjudged\. You derive no disposition from severity/);
   assert.doesNotMatch(persona, /severity-based disposition/);
+  const contract = (await readRepo("skills/docs/gate-review-sub-loop-contract.md")).replace(/\s+/g, " ");
+  assert.doesNotMatch(contract, /falls back to the severity-based/);
 });
 
 test("phase routing checks accept wrapped prose but cannot borrow a sibling's command", () => {

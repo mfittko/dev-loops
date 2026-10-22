@@ -94,7 +94,8 @@ gates:
     # stamps a deferral from severity or round alone. A LOCATABLE finding
     # (in-diff file:line) stays an open PR review thread until the fixer
     # resolves it or the judge disposes it defer or reject. A NON-LOCATABLE one
-    # is body-filed and carries disposition=deferred only on a judge defer. An
+    # is body-filed and carries disposition=deferred only on a judge defer
+    # (never on a nit, which carries no stamp and no issue link). An
     # unjudged finding stays open. This key lists the severities that the
     # fan-in verdict treats as blocking when no judge ran or a finding stays
     # unjudged (a partly judged ledger keeps the fan-in verdict). A judged

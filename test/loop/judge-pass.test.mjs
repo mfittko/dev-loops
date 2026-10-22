@@ -97,7 +97,7 @@ test("runJudgePass derives the fixer act list and scopeDrift verdict (#1658)", (
   assert.equal(result.scopeDrift.verdict, "within_scope");
 });
 
-test("runJudgePass leaves the severity-based disposition intact (relevance axis, #1525)", () => {
+test("runJudgePass passes the prior ledger disposition through unchanged (relevance axis, #1525)", () => {
   const findings = ledger(finding({ severity: "medium", disposition: "accepted-for-fix" }), finding({ disposition: "deferred" }));
   const v = verdict({
     dispositions: [
@@ -106,7 +106,7 @@ test("runJudgePass leaves the severity-based disposition intact (relevance axis,
     ],
   });
   const result = runJudgePass(findings, v, HEAD);
-  // The severity-derived disposition is complementary, not replaced.
+  // The prior ledger disposition field passes through unchanged.
   assert.equal(result.enriched[0].disposition, "accepted-for-fix");
   assert.equal(result.enriched[0].judgeDisposition, "defer");
   assert.equal(result.enriched[1].disposition, "deferred");
