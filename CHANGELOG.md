@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.8-pre.2
+
+### Added
+
+- The standalone `review` gate runs the judge between fan-in and the post; `upsert-checkpoint-verdict.mjs --gate review` takes `--judge-spec-source` (#2540)
+- Base-merge verdict carry classifier and evidence CLI (`classify-base-merge-carry.mjs`); carry takes effect once merge-pr and gate coordination consume it (#2752)
+- Grilled issues and slices need a `## Simplest design` section; spec-lint flags a missing one, and the judge caps doc-lag and coverage findings on correct code at low (#2839)
+- `loop validation-record` runs the validation profile at a clean head and writes a head-pinned validation record (#2866)
+- `resolve-angle-carry-forward.mjs --rerun-angle <angle>` forces a named angle to re-review at the current head (reason `operator_rerun`) (#2895)
+
+### Changed
+
+- Validate changelog fragments before PR creation and fragment-touching fix pushes; refresh the PR base and anchor local diff bases to origin (#2335)
+- Show the comparison base SHA when decision-record validation passes (#2335)
+- Reject empty or nonliteral PR bases before fetching; use effective head and base flags in preflights (#2335)
+- A draft gate round with only low or nit act items now converges after one fixer pass and a clean pre-push delta review (#2462)
+- With `--emit-plan`, `consolidate-fanin` derives ledger `provenance`, writes the keyed `fanin-ledger.json`, and fails closed on fresh units with no dispatch-prompt records (#2526)
+- Fixer full-phase orders state numbered push, CI, `--construct` and verify steps; the verifier builds the THREAD report, refuses hand-written ones and red CI (#2787)
+- The verifier CI guard judges only PR-rollup check runs like `wait-pr-checks`; the verifier posts one residual reply on bounded_out deferred threads (#2787)
+- Add native Codex resumed coordinator dispatch with verified pull-first role/runtime bootstrap (#2843)
+- The delta pre-push review input now carries a written patch path and a read-only evidence rule, so the reviewer needs no shell (#2854)
+- This repo now validates through current-head CI (`validation.mode: ci-only`) instead of local full validation (#2873)
+
+### Fixed
+
+- Combine targeted validation checks across fully mapped change sets while preserving full validation for unmapped or unsafe paths (#2508)
+- Verify native Codex child context and stable run identity; keep MAIN joining children to mitigate idle-parent wake limits, with shared artifact and protected-Git guidance (#2836)
+- Tracker-backed local handoffs use the sanctioned issue worktree path while preserving explicit phase and branch identities (#2845)
+- Accept the empty string and keep padding verbatim in matcher acceptedForms and rejectedForms so the spec-authority ledger write no longer fails (#2853)
+- Pi child agents no longer request the unavailable, redundant execution tool; contract checks guard supported tools and Claude capability parity (#2854)
+- The Pi pre-push reviewer selects the enabled Codex model instead of a stale model id (#2854)
+- `ensure-worktree` reports a typed `dirty_after_provision` warning whenever `git status --porcelain` is non-empty after provisioning (#2854)
+- The Pi render pins every rendered agent to its resolved tier model (the `.devloops` change adds `dev-loop` and `gate-coordinator`), and the preflight refusal names the project-trust ceiling (#2854)
+- ui-review: lockfile-aware frozen install, boot log with early-exit stop, axe resolved from the reviewed worktree with a stated skip, per-state screenshots in the report (#2855)
+- ui-review: the deck-fit harness skips per-slide axe for deck suites (timeout budget) and the drive logs one stderr line when axe is skipped (#2855)
+- Constrain ACT/THREAD outputs, create reports/markers exclusively, publish after writes/closes succeed, and limit recovery to the current execution's refused report and stale marker (#2860)
+- Spec-context can derive the formal spec and revision identity from the canonical live PR body while verifying its head (#2862)
+- `merge-pr` fetches once, then refuses after the ADR step with `base_not_integrated` when the head lacks `origin/<base>` (GATE-EXEC-BASE-REFRESH) (#2863)
+- `.pi/agents` is untracked and rendered with Pi-valid tools at worktree provision time; a subagent launch on an unrendered agent set is refused with `agent_set_not_rendered` (#2865)
+- A fresh dev-loops clone gets `.pi/agents` rendered at the first Pi session start (#2865)
+- PR coordinator handoffs bind verified existing isolated worktrees, preserve validated PR-body authority, and refuse missing or conflicting associations before dispatch (#2878)
+- Fixer construction removes its own marker after a failed publish, so a retry succeeds; a foreign or replaced marker is never removed (#2880)
+
 ## 1.0.8-pre.1
 
 ### Added
