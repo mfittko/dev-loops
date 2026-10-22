@@ -91,7 +91,7 @@ this skill dispatches the `review` agents directly.
    [Spec Authority Contract](../docs/spec-authority-contract.md). A ledger with zero
    findings skips this phase and posts with no `--judge-spec-source`.
    1. Read the PR description and its closing issues through
-      `scripts/github/view-pr.mjs --repo <owner/repo> --pr <n> --json body,closingIssuesReferences`
+      `dev-loops-run scripts/github/view-pr.mjs --repo <owner/repo> --pr <n> --json body,closingIssuesReferences`
       (never raw `gh`). Write the body to `<body-path>` with `--jq '.pr.body'`.
       The closing issues are `closingIssuesReferences`; when that list is empty,
       they are the issues named by `Closes`/`Fixes`/`Resolves #N` keywords in the PR
@@ -114,9 +114,9 @@ this skill dispatches the `review` agents directly.
    3. When `specSource` is `none` (no usable PR scope), do not run the judge. Post
       with `--judge-spec-source none`.
    4. Otherwise run the lifecycle judge path with `--gate review`:
-      `emit-judge-work-order.mjs --gate review --repo <owner/repo> --pr <n> --head-sha <sha>
+      `dev-loops-run scripts/loop/emit-judge-work-order.mjs --gate review --repo <owner/repo> --pr <n> --head-sha <sha>
       --findings-file <ledger-out-path> --spec-file <spec-path> --identity-file <identity-path>`, dispatch the `judge` agent with
-      the printed `dispatchPrompt` (pull transport), then `judge-pass.mjs --gate
+      the printed `dispatchPrompt` (pull transport), then `dev-loops-run scripts/loop/judge-pass.mjs --gate
       review --repo <owner/repo> --pr <n> --judge-plan <plan> --findings-file <ledger-out-path> --judge-verdict <path>
       --spec-file <spec-path> --content-digest <digest> --spec-authority-verdict <path>
       --head-sha <sha>`. Pass no `--out` and no `--ledger-out`: the durable write in
@@ -135,7 +135,7 @@ this skill dispatches the `review` agents directly.
       blocks review completion; it shows only as the informational note on the judge-spec line.
 
    After Phase 3.5 and before posting,
-   write the durable ledger through `write-gate-findings-log.mjs` with
+   write the durable ledger through `dev-loops-run scripts/github/write-gate-findings-log.mjs` with
    `--findings-file <ledger-out-path> --emit-plan <emit-plan-path>`, plus
    `--judge-verdict <path> --spec-authority <identity-path>` on a judged round,
    `--execution-mode fanout_fanin` (this IS a fan-out/fan-in write, so the ledger
