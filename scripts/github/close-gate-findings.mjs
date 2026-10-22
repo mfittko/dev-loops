@@ -624,7 +624,7 @@ async function resolveThreadDisposition(wanted, { fp, threadBody, ...rest }) {
   let primary = null;
   for (const memberFp of fps) {
     // The rendered header suffix (tier 3) carries only the primary's disposition, so a
-    // non-primary member never reads it: with no ledger evidence the thread leaves the reject-close path and follows the severity path.
+    // non-primary member never reads it: with no ledger evidence the thread stays open.
     const judgement = await resolveJudgeRejection({ fp: memberFp, threadBody: memberFp === fp ? threadBody : "", allowRendered: wanted !== "defer", ...rest });
     if (judgement?.disposition !== wanted) return null;
     primary ??= judgement;

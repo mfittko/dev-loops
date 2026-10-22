@@ -1209,6 +1209,22 @@ export function neverDeferredSeverity(members) {
 }
 
 /**
+ * The never-deferred rule after cluster projection: a defer copied onto a cluster
+ * must not reach a high, a question or an all-nit cluster. Throws (fail closed).
+ * @param {Array<object>} enriched findings after projectClusterDisposition
+ * @param {Array<{memberIndices: number[]}>} clusters
+ */
+export function assertNoProjectedForbiddenDefer(enriched, clusters) {
+  for (const cluster of clusters) {
+    const members = cluster.memberIndices.map((i) => enriched[i]);
+    const blocked = members.some((f) => f.judgeDisposition === "defer") ? neverDeferredSeverity(members) : null;
+    if (blocked) {
+      throw new Error(`projected judge defer reaches a cluster whose severity is ${blocked}; a high, a question or an all-nit cluster is never deferred (GATE-EXEC-THREAD-DISPOSITION) — fail closed`);
+    }
+  }
+}
+
+/**
  * Merge the judge's relevance-based dispositions into the flat consolidated
  * findings array. The judge runs AFTER fan-in and BEFORE the fix pass:
  * it emits a per-finding disposition (`act`/`defer`/`reject`) plus a scope-drift

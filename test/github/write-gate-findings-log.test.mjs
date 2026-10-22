@@ -2503,6 +2503,35 @@ test("writeGateFindingsLog enriches findings from --judge-verdict and records sc
   }
 });
 
+test("writeGateFindingsLog refuses a projected judge defer that reaches a high cluster member", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-"));
+  try {
+    const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+    const act = { disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" };
+    const defer = { disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } };
+    await writeFile(judgeVerdictPath, JSON.stringify({
+      headSha: "abc1234567890abcdef000000000000000000000",
+      scopeDrift: { verdict: "within_scope", rationale: "none", driftedAreas: [] },
+      dispositions: [{ index: 0, ...defer }, { index: 1, ...act }],
+    }), "utf8");
+    await assert.rejects(writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 42,
+      gate: "draft_gate",
+      headSha: "abc1234567890abcdef000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([
+        { severity: "low", angle: "correctness", summary: "null deref (low)", files: ["src/x.mjs"], line: 10, recommendation: "add a null guard", disposition: "deferred" },
+        { severity: "high", angle: "security", summary: "null deref (high)", files: ["src/x.mjs"], line: 10, recommendation: "add a null guard", disposition: "accepted-for-fix" },
+      ]),
+      judgeVerdict: judgeVerdictPath,
+      tmpRoot: tmpDir,
+    }), /never deferred/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("writeGateFindingsLog projects the representative's judge disposition onto cluster members (PR 2905)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-cluster-"));
   try {

@@ -349,10 +349,9 @@ test("an omitted --round derives from the gate's local ledgers, so a second head
   await withDir(async (root) => {
     const first = await seed(root, { headSha: "e".repeat(40) });
     const ledger = (headSha) => path.join(root, buildLogPath({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha, tmpRoot: "tmp" }));
-    for (const headSha of ["e".repeat(40), HEAD]) {
-      await mkdir(path.dirname(ledger(headSha)), { recursive: true });
-      await writeFile(ledger(headSha), "{}");
-    }
+    // The judge runs before the current head's ledger exists: only the prior head's ledger is on disk.
+    await mkdir(path.dirname(ledger(HEAD)), { recursive: true });
+    await writeFile(ledger(HEAD), "{}");
     assert.equal((await emitJudgeWorkOrder(first)).workOrder.round, 2);
     assert.equal((await emitJudgeWorkOrder({ ...(await seed(root)), round: 5 })).workOrder.round, 5, "an explicit --round wins");
   });

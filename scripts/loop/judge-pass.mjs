@@ -8,7 +8,7 @@ import {
   GATE_CONFIG_KEY,
   applyJudgeDispositions,
   isOpenActItem,
-  neverDeferredSeverity,
+  assertNoProjectedForbiddenDefer,
   normalizeSeverity,
   validateJudgeVerdict,
 } from "@dev-loops/core/loop/gate-fanin";
@@ -486,13 +486,7 @@ export function runJudgePass(findings, judgeVerdict, headSha) {
     : clusterFindings(applied.findings, { headSha: validated.headSha }).clusters;
   const enriched = projectClusterDisposition(applied.findings, clusters);
   // The never-deferred rule also holds after projection: a defer on one member must not reach a high, a question or an all-nit cluster.
-  for (const cluster of clusters) {
-    const members = cluster.memberIndices.map((i) => enriched[i]);
-    const blocked = members.some((f) => f.judgeDisposition === "defer") ? neverDeferredSeverity(members) : null;
-    if (blocked) {
-      throw new Error(`projected judge defer reaches a cluster whose severity is ${blocked}; a high, a question or an all-nit cluster is never deferred (GATE-EXEC-THREAD-DISPOSITION) — fail closed`);
-    }
-  }
+  assertNoProjectedForbiddenDefer(enriched, clusters);
   return {
     enriched,
     act: enriched.filter((f) => f.judgeDisposition === "act"),

@@ -9,7 +9,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
+import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
@@ -804,6 +804,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       ? clustersFromStampedIds(enriched.findings)
       : clusterFindings(enriched.findings, { headSha: options.headSha }).clusters;
     findings = projectClusterDisposition(enriched.findings, clusters);
+    assertNoProjectedForbiddenDefer(findings, clusters);
     scopeDrift = enriched.scopeDrift;
     if (specAuthorityIdentity !== undefined) {
       findings = await applySiblingSpecAuthorityVerdict(findings, judgePath, specAuthorityIdentity);

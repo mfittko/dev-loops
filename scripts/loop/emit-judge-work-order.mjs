@@ -6,7 +6,7 @@
  * reader and receipt stay in _work-order-protocol.mjs.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -18,7 +18,7 @@ import { computeSpecDigest, specCriterionIds, stampSpecAuthorityIdentity } from 
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
-import { buildGateArtifactPath, buildGateContextPath } from "../github/_gate-artifact-paths.mjs";
+import { buildGateArtifactPath, buildGateContextPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
@@ -101,8 +101,15 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   // Anchor at the checkout root, never a cwd subdirectory the pull and write guard never scan.
   const checkoutRoot = resolveRepoRoot(cwd);
   const { config } = await loadDevLoopConfigStrict({ repoRoot: checkoutRoot });
-  // The round counts this gate's local findings-log ledgers (main-anchored, as close-gate-findings reads them) plus this head, so it exists before the judge runs. An explicit --round wins.
-  round ??= await resolveGateRound({ repo, pr, gate, headSha, reviews: [], issueComments: [], tmpRoot: resolveGateArtifactTmpRoot(checkoutRoot), repoRoot: checkoutRoot });
+  // The round counts this gate's local findings-log ledgers (main-anchored, as close-gate-findings reads them) plus this head.
+  // The judge runs before this head's ledger is written, so add one when it is absent. An explicit --round wins.
+  if (round === null) {
+    const ledgerTmpRoot = resolveGateArtifactTmpRoot(checkoutRoot);
+    const resolved = await resolveGateRound({ repo, pr, gate, headSha, reviews: [], issueComments: [], tmpRoot: ledgerTmpRoot, repoRoot: checkoutRoot });
+    const currentLedger = path.resolve(checkoutRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot }));
+    const prior = (await readdir(path.dirname(currentLedger)).catch(() => [])).filter((name) => name.startsWith(`${gate}-`) && name.endsWith(".json") && `${gate}-${headSha}.json` !== name).length;
+    round = Math.max(resolved, prior + 1);
+  }
   tmpRoot ??= path.join(checkoutRoot, "tmp");
   const abs = (p) => path.resolve(cwd, p);
   const dir = path.resolve(judgeDir({ repo, pr, gate, headSha, tmpRoot }));
