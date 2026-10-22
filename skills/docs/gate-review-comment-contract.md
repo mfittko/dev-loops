@@ -34,7 +34,7 @@ No separate verdict issue comment and no separate findings review is posted. Two
 the opt-in findings comment (`gates.postFindingsComments`, `GATE-COMMENT-IDENTITY-DISJOINT`) and
 the batched deferral comment (`<!-- dev-loops:deferred-summary -->`) that `judge-pass.mjs` and
 `close-gate-findings.mjs` post for a round's deferred findings, at most one per tool run, on the
-linked spec issue (ADR 0092, `GATE-EXEC-DEFERRAL-RECORD`). When the target is the PR itself no
+linked spec issue (ADR 0092, `GATE-EXEC-DEFERRAL-RECORD`) on lifecycle gates; the standalone `review` gate posts no deferral comment on any target (`REVIEW-GATE-JUDGE-PHASE`). When the target is the PR itself no
 deferral comment is posted: a folded entry is recorded by its marker in the group it renders under in `Details`, a stamped thread by its thread marker plus resolving reply, and a no-stamp thread (an immediately deferred, non-fileable low) by its resolving reply plus the ledger entry. An in-window medium has only its ledger entry and its open thread, which still blocks, until its fix window passes.
 
 `GATE-COMMENT-SUPERSEDE-OUTDATED`: When a new `draft_gate` (resp. `pre_approval_gate`) verdict
@@ -249,6 +249,24 @@ Every submit mode, including `approve`, stays a NON-evidence `review` verdict fo
 gates: the `review`-header guard reads only the comment body, never the review's
 `event`/`state`, so `detect-checkpoint-evidence.mjs`/`detect-pr-gate-coordination-state.mjs`
 report no draft/pre-approval evidence from it.
+
+<!-- rule: REVIEW-GATE-JUDGE-PHASE -->
+### `review` gate judge phase
+
+`REVIEW-GATE-JUDGE-PHASE`: the standalone `review` gate runs the judge between the Phase 3 fan-in ledger and the verdict post (Phase 3.5, ADR 0179). A ledger with zero findings skips the judge. The judge takes its spec per the precedence in [Review-gate spec source and the `pr_scope` kind](./spec-authority-contract.md#review-gate-spec-source-and-the-pr_scope-kind-adr-0179); with no spec source (`none`) the judge does not run. `judge-pass.mjs --gate review` posts no deferral comment and takes no `--out`, so the round keeps one visible surface and never feeds a fixer. The verdict and rendering code are unchanged, and the judge-spec line is the only new body element. Because the review ledger now carries `judgeDisposition`, the existing disposition-gated rules apply to review findings: `GATE-COMMENT-INLINE-SEVERITY-FLOOR` folds `reject` and `defer` findings below the blocking severities into the Details block, and the verdict follows the judged `act` items. An unjudged post (`none`, `unavailable`) keeps every finding in its normal track.
+
+`upsert-checkpoint-verdict.mjs --gate review` takes `--judge-spec-source <issue|pr_body|pr_scope|none|unavailable>` and `--judge-unavailable-reason <spec_cannot_decide|judge_failed>`. Both flags are refused on `draft_gate` and `pre_approval_gate`. The reason is required with `unavailable` and refused with every other source. When the `--findings-ledger` holds at least one finding, `--judge-spec-source` is required, and `issue`, `pr_body` and `pr_scope` need every finding to carry a `judgeDisposition`, while `none` and `unavailable` need no finding to carry one. A mismatch fails closed. A judge failure (`judge-pass.mjs` exits 1) posts the review unjudged with `unavailable`; the post is never aborted. The body renders one line:
+
+| Source | Line |
+|---|---|
+| `issue` | `**Judge spec:** linked issue` |
+| `pr_body` | `**Judge spec:** PR description` |
+| `pr_scope` | `**Judge spec:** PR description scope (no formal acceptance criteria or definition of done; informational)` |
+| `none` | `**Judge spec:** none, no usable PR scope, judge not run, every finding shown` |
+| `unavailable` with `spec_cannot_decide` | `**Judge:** unavailable, the judge could not decide against the PR scope, every finding shown` |
+| `unavailable` with `judge_failed` | `**Judge:** unavailable, judge failed, every finding shown` |
+
+The line is interim. The review body stays non-evidence: `parseGateReviewCommentFields` returns `null` for it.
 
 ## Separate chains per gate
 

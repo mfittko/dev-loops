@@ -429,6 +429,16 @@ Optional:
                                             actionable error rather than posting
                                             null size evidence; pass this flag
                                             explicitly to bypass auto-derive.
+  --judge-spec-source <issue|pr_body|pr_scope|none|unavailable>
+                                            SCOPED TO --gate review ONLY. Records which spec the
+                                            judge used (or why it did not run) as one
+                                            \`**Judge spec:**\`/\`**Judge:**\` line on the review body.
+                                            REQUIRED when the --findings-ledger holds findings;
+                                            issue|pr_body|pr_scope need every finding judged,
+                                            none|unavailable need none judged (fail closed).
+  --judge-unavailable-reason <spec_cannot_decide|judge_failed>
+                                            Required with --judge-spec-source unavailable and
+                                            refused with every other source.
   --spec-authority <path>                   JSON { specDigest, headSha, contentDigest,
                                             checkedCriteria } (issue 2008 / ADR 0061 AC1).
                                             When supplied, stamps the RETURNED result
@@ -678,6 +688,8 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       auto: { type: "boolean" },
       "interactive-confirm": { type: "boolean" },
       "spec-authority": { type: "string" },
+      "judge-spec-source": { type: "string" },
+      "judge-unavailable-reason": { type: "string" },
       "context-tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -709,6 +721,8 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     auto: false,
     interactiveConfirm: false,
     specAuthority: undefined,
+    judgeSpecSource: undefined,
+    judgeUnavailableReason: undefined,
     contextTmpRoot: undefined,
     jq: undefined,
     silent: false,
@@ -881,6 +895,14 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       options.specAuthority = requireTokenValue(token, parseError).trim();
       continue;
     }
+    if (token.name === "judge-spec-source") {
+      options.judgeSpecSource = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "judge-unavailable-reason") {
+      options.judgeUnavailableReason = requireTokenValue(token, parseError).trim();
+      continue;
+    }
     if (token.name === "context-tmp-root") {
       options.contextTmpRoot = requireTokenValue(token, parseError).trim();
       if (options.contextTmpRoot.length === 0) throw parseError("--context-tmp-root requires a non-empty path");
@@ -943,6 +965,21 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     throw parseError(
       `--submit is scoped to --gate review only (draft_gate/pre_approval_gate always submit a COMMENT review and reject --submit — GATE-COMMENT-NON-SUBSTITUTION). Pass --gate review explicitly, or omit --submit.`,
     );
+  }
+  if (options.judgeSpecSource !== undefined || options.judgeUnavailableReason !== undefined) {
+    if (options.gate !== "review") {
+      throw parseError("--judge-spec-source and --judge-unavailable-reason are scoped to --gate review only; the lifecycle gates carry no judge-spec line.");
+    }
+    if (options.judgeSpecSource !== undefined && !JUDGE_SPEC_SOURCES.includes(options.judgeSpecSource)) {
+      throw parseError(`--judge-spec-source must be one of: ${JUDGE_SPEC_SOURCES.join(", ")}`);
+    }
+    if (options.judgeSpecSource === "unavailable") {
+      if (!JUDGE_UNAVAILABLE_REASONS.includes(options.judgeUnavailableReason)) {
+        throw parseError(`--judge-spec-source unavailable requires --judge-unavailable-reason <${JUDGE_UNAVAILABLE_REASONS.join("|")}>`);
+      }
+    } else if (options.judgeUnavailableReason !== undefined) {
+      throw parseError("--judge-unavailable-reason is accepted only with --judge-spec-source unavailable");
+    }
   }
   // --new-round is the review-gate escape hatch that bypasses same-head
   // submitted-review dedup to force a fresh review; draft_gate/pre_approval_gate
@@ -1563,6 +1600,37 @@ function renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, 
     `**Size-budget waiver:** ${waiverLine}`,
   ];
 }
+const JUDGE_SPEC_SOURCES = ["issue", "pr_body", "pr_scope", "none", "unavailable"];
+const JUDGE_UNAVAILABLE_REASONS = ["spec_cannot_decide", "judge_failed"];
+const JUDGE_SPEC_LINES = {
+  issue: "**Judge spec:** linked issue",
+  pr_body: "**Judge spec:** PR description",
+  pr_scope: "**Judge spec:** PR description scope (no formal acceptance criteria or definition of done; informational)",
+  none: "**Judge spec:** none, no usable PR scope, judge not run, every finding shown",
+};
+const JUDGE_UNAVAILABLE_LINES = {
+  spec_cannot_decide: "**Judge:** unavailable, the judge could not decide against the PR scope, every finding shown",
+  judge_failed: "**Judge:** unavailable, judge failed, every finding shown",
+};
+
+// A review ledger with findings must say which spec the judge used, and the claim must match the
+// ledger: a judged source needs every finding judged, an unjudged source needs none judged.
+export function assertJudgeSpecSourceMatchesLedger(options, ledgerFindings) {
+  if (options.gate !== "review" || ledgerFindings.length === 0) return;
+  const source = options.judgeSpecSource;
+  if (source === undefined) {
+    throw new Error(`--judge-spec-source is required for --gate review with a findings ledger that holds findings (${JUDGE_SPEC_SOURCES.join("|")}); the review body records which spec the judge used or why it did not run.`);
+  }
+  const judged = ledgerFindings.filter((f) => typeof f?.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0).length;
+  const expectJudged = source === "issue" || source === "pr_body" || source === "pr_scope";
+  if (expectJudged && judged !== ledgerFindings.length) {
+    throw new Error(`--judge-spec-source ${source} requires every finding in --findings-ledger to carry a judgeDisposition, but ${ledgerFindings.length - judged} of ${ledgerFindings.length} do not (fail closed); post with --judge-spec-source unavailable|none or re-run the judge pass.`);
+  }
+  if (!expectJudged && judged > 0) {
+    throw new Error(`--judge-spec-source ${source} requires no finding in --findings-ledger to carry a judgeDisposition, but ${judged} do (fail closed); post with the judged spec source that produced them.`);
+  }
+}
+
 // `nonLocatableFindings` (present iff an array — the --findings-ledger/finding-
 // surface path) drives the VISIBLE body-only findings list directly, in full:
 // a non-locatable finding has no inline carrier, so the body is the only
@@ -1573,7 +1641,7 @@ function renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, 
 // `nonLocatableFindings` also drives an invisible fingerprint+disposition
 // marker per finding, load-bearing for GATE-EXEC-FINDING-THREADS's
 // cross-round suppression/deferral tracking.
-export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, converged, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, pr }) {
+export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, converged, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, pr, judgeSpecSource, judgeUnavailableReason }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1594,6 +1662,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     // Neither label matches a parsed field, so the parse contract is unchanged.
     ...(reviewVerdict ? [`**Review verdict:** ${reviewVerdict}`] : []),
     ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockerCounts(gateBlockers)}`] : []),
+    ...(judgeSpecSource ? [judgeSpecSource === "unavailable" ? JUDGE_UNAVAILABLE_LINES[judgeUnavailableReason] : JUDGE_SPEC_LINES[judgeSpecSource]] : []),
     ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),
     // GATE-EXEC-LOW-NIT-CONVERGENCE: rendered only for a validated converged draft_gate post.
     ...(gate === "draft_gate" && verdict === "clean" && converged ? [`**Converged:** fixer \`${converged.fixerCommit}\` delta \`${converged.deltaDigest}\``] : []),
@@ -2735,6 +2804,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let unjudgedLedgerFindings = [];
   if (options.findingsLedger) {
     preloadedFindingsLedger ??= await loadMatchingFindingsLedger(options, canonicalHeadSha);
+    assertJudgeSpecSourceMatchesLedger(options, preloadedFindingsLedger.findings ?? []);
     // A fan-out draft or pre-approval round ran a judge, so the act list must come from judge-enriched data:
     // a ledger finding without a disposition is pre-judge, and only an enriched --findings-json can stand in.
     // The angle checks, tick and recorded marker all key on options.executionMode, so a ledger-declared
@@ -2873,6 +2943,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         if (lf.followUpIssueNumber == null && judged.followUpIssueNumber) lf.followUpIssueNumber = judged.followUpIssueNumber;
       }
     }
+    // Re-check after the merge: the early check saw only the ledger's own dispositions, not the ones just copied onto it.
+    if (preloadedFindingsLedger) assertJudgeSpecSourceMatchesLedger(options, preloadedFindingsLedger.findings ?? []);
     const actItems = listOpenActItems(flatFindings);
     enrichedActItems = actItems;
     if (options.verdict === "clean" && (await guardedActItems(actItems)).length > 0) {

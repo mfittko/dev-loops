@@ -602,3 +602,85 @@ test("spec-context --help names the RATE_LIMITED result and its resetAt field", 
   assert(stdout.includes("RATE_LIMITED"));
   assert(stdout.includes("resetAt"));
 });
+
+// --- --body-file (standalone review gate spec source) ---
+
+async function extractBodyFile(body, extra = {}) {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "spec-context-body-file-"));
+  try {
+    await writeFile(path.join(tmpDir, "body.md"), body, "utf8");
+    await writeFile(path.join(tmpDir, "content.txt"), "reviewed", "utf8");
+    return await specContextExtract(
+      { repo: "mfittko/dev-loops", bodyFile: "./body.md", contentFile: "./content.txt", ...extra },
+      { repoRoot: tmpDir, tracker: stubTracker("## Acceptance criteria\n- [ ] from the closing issue\n## Definition of done\n- [ ] x\n") },
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+test("--issue reports specSource issue and --body-file on a formal body reports pr_body", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "spec-context-source-"));
+  try {
+    await writeFile(path.join(tmpDir, "content.txt"), "impl", "utf8");
+    const issue = await specContextExtract({ repo: "mfittko/dev-loops", issue: 1, contentFile: "./content.txt" }, { repoRoot: tmpDir, tracker: stubTracker() });
+    assert.equal(issue.specSource, "issue");
+    assert.deepEqual(issue.spec, { acceptanceCriteria: ["Remove repetitive A/B contrast scaffolding", "Ship a working demo"], definitionOfDone: ["npm run verify passes"], nonGoals: ["Do not flatten the decks' voice or product identity"] });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+  const body = await extractBodyFile(BODY);
+  assert.equal(body.specSource, "pr_body");
+  assert.equal(body.spec.specKind, undefined);
+});
+
+test("--body-file with prose and bullets but no AC/DoD yields a pr_scope spec with verbatim scope and nothing fabricated", async () => {
+  const result = await extractBodyFile("## Summary\nFixes the stale cache.\n\n## Changes\n- Invalidate on reload\n- Keep the build\n");
+  assert.equal(result.specSource, "pr_scope");
+  assert.equal(result.spec.specKind, "pr_scope");
+  assert.deepEqual(result.spec.scope, ["Fixes the stale cache.", "- Invalidate on reload", "- Keep the build"]);
+  assert.deepEqual(result.spec.acceptanceCriteria, []);
+  assert.deepEqual(result.spec.definitionOfDone, []);
+  assert.equal(JSON.stringify(result.spec).includes("from the closing issue"), false, "nothing is taken from the closing issue");
+  assert.deepEqual(result.criterionIds, ["scope:0", "scope:1", "scope:2"]);
+  assert.equal(result.specDigest, computeSpecDigest(result.spec));
+});
+
+test("--body-file keeps explicit AC and Non-goals verbatim when the body has no DoD", async () => {
+  const result = await extractBodyFile("Reload fix.\n## Acceptance criteria\n- [ ] reload is fresh\n## Non-goals\n- no build changes\n");
+  assert.equal(result.specSource, "pr_scope");
+  assert.deepEqual(result.spec.acceptanceCriteria, ["reload is fresh"]);
+  assert.deepEqual(result.spec.definitionOfDone, []);
+  assert.deepEqual(result.spec.nonGoals, ["no build changes"]);
+});
+
+test("--body-file with no usable text yields specSource none with reason no_usable_scope", async () => {
+  for (const body of ["", "<!-- note -->\n## Summary\n\n## Test plan\n"]) {
+    const result = await extractBodyFile(body);
+    assert.deepEqual(result, { ok: true, repo: "mfittko/dev-loops", specSource: "none", reason: "no_usable_scope" });
+  }
+});
+
+test("--body-file writes the pr_scope spec JSON a review-gate judge-pass reads", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "spec-context-body-spec-out-"));
+  try {
+    await writeFile(path.join(tmpDir, "body.md"), "Fixes the cache.\n", "utf8");
+    await writeFile(path.join(tmpDir, "content.txt"), "c", "utf8");
+    const result = await specContextExtract(
+      { repo: "mfittko/dev-loops", bodyFile: "./body.md", contentFile: "./content.txt", specOut: "./spec.json" },
+      { repoRoot: tmpDir },
+    );
+    assert.deepEqual(JSON.parse(await readFile(path.join(tmpDir, "spec.json"), "utf8")), result.spec);
+    assert.equal(result.spec.specKind, "pr_scope");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("--body-file is mutually exclusive with --issue and --pr, and an unreadable body file fails closed", async () => {
+  const base = ["--repo", "mfittko/dev-loops", "--content-file", "c.txt"];
+  assert.throws(() => parseSpecContextCliArgs([...base, "--issue", "1", "--body-file", "b.md"]), /exactly one of --issue/);
+  assert.throws(() => parseSpecContextCliArgs([...base, "--pr", "1", "--body-file", "b.md"]), /exactly one of --issue/);
+  assert.equal(parseSpecContextCliArgs([...base, "--body-file", "b.md"]).bodyFile, "b.md");
+  await assert.rejects(extractBodyFile("x", { bodyFile: "./missing.md" }), /Cannot read --body-file/);
+});
