@@ -81,43 +81,17 @@ function slugForMarker(value) {
   return bounded.length > 0 ? bounded : "unknown";
 }
 
-// Severity-to-disposition mapping for the THREAD disposition pass (a
-// locatable finding's own resolvable review thread) at the CURRENT round:
-// high never defers; medium defers past the in-gate fix window; low and nit
-// always defer immediately; question never defers (it is answered, not
-// deferred — unanswered, it blocks gate-close as an unresolved thread, like
-// an open defect). An unrecognized severity fails CLOSED (false): a
-// malformed/forged marker must surface as a dangling gate-authored thread,
-// never get silently stamped `disposition=deferred` like a genuine low/nit.
-// renderNonLocatableBlock (body-filed findings) deliberately does not call
-// this: a body-filed finding never gets a thread to fix through, so it is
-// stamped deferred unconditionally at render time regardless of round.
-export function isDeferredAtRound(severity, round, mediumFixWindow = MEDIUM_FIX_WINDOW) {
-  const sev = normalizeSeverity(severity);
-  if (!VALID_SEVERITIES.has(sev)) return false;
-  if (sev === "high" || sev === "question") return false;
-  if (sev === "medium") return round > mediumFixWindow;
-  return true; // "low" or "nit" (and any legacy spelling of either)
+// A thread or body-filed finding is deferred (and may be filed on the deferral
+// comment target) only when the judge disposed its cluster `defer`. Severity
+// and round never decide: the medium fix window is a judge input. An
+// unjudged finding, or any other judge disposition, is never deferred here.
+export function isDeferredAtRound(judgeDisposition) {
+  return judgeDisposition === "defer";
 }
 
-// The net-reduction filing bar: resolving a thread (isDeferredAtRound)
-// and FILING it on the deferral comment target are different decisions. `nit` is
-// NEVER fileable — resolved-with-rationale in-thread only, a resolved nit is
-// cosmetic, not a backlog item. `low` is fileable ONLY when its own marker
-// carries the explicit `operatorVisible` signal (`ov=1`, set from the
-// finding's own `operatorVisible: true`); the default (absent/false) is the
-// conservative, net-negative-backlog choice. `medium` past its fix window is
-// always fileable. `high`/`question` are never resolved here to begin with,
-// so never fileable. Governs whether close-gate-findings.mjs's disposition
-// pass calls commentDeferredFindings/stampDeferredDisposition, and (via
-// detectContractViolatingDeferredStamps) whether an already-stamped
-// `disposition=deferred` marker is legitimate.
-export function isFileableDeferral(severity, operatorVisible, round, mediumFixWindow = MEDIUM_FIX_WINDOW) {
-  const sev = normalizeSeverity(severity);
-  if (sev === "medium") return round > mediumFixWindow;
-  if (sev === "low") return operatorVisible === true;
-  return false; // "nit" (never fileable), "high"/"question" (never resolved here)
-}
+// Filing follows the same single rule as deferral: the judge's `defer` carries
+// its own follow-up draft, so a deferred finding is always fileable.
+export const isFileableDeferral = isDeferredAtRound;
 
 // Fold a finding out of inline threads when its severity ranks below `floor`
 // in SEVERITY_ORDER. An unknown severity or floor returns false (post inline):
@@ -157,8 +131,7 @@ const VALID_MARKER_DISPOSITIONS = new Set(["deferred"]);
 // `issue` is the number of the deferral target a `disposition=deferred`
 // finding points at (GATE-EXEC-DEFERRAL-RECORD): the linked spec issue, which
 // gets the batched deferral comment, or the PR, which gets no comment and whose
-// stamped-thread marker plus resolving reply (or a no-stamp thread's reply plus
-// ledger entry) are the record. The marker itself carries
+// stamped-thread marker plus resolving reply are the record. The marker itself carries
 // the re-attachment pointer.
 //
 // `operatorVisible` is the explicit operator-visibility signal a `low`
@@ -251,8 +224,7 @@ export function collectFingerprints(text, set) {
 // close-gate-findings.mjs per round) on the linked spec issue (the configured
 // tracker is GitHub and the PR has exactly one closing issue reference). A PR
 // target posts no comment: a folded deferral is recorded by its Details marker, a stamped
-// thread by its thread marker (issue=<pr>) plus resolving reply, a no-stamp thread by its
-// resolving reply plus the ledger entry. No tool creates an
+// thread by its thread marker (issue=<pr>) plus resolving reply. No tool creates an
 // issue here.
 
 // A finding's summary/angle is untrusted free text. The comment body is
@@ -357,8 +329,7 @@ export async function fetchListedFingerprints(
 /**
  * Post a round's deferred findings as ONE batched comment on the linked spec
  * issue (resolveDeferralCommentTarget); a PR target posts nothing and every entry
- * counts as recorded: a stamped thread by its thread marker (`issue=<pr>`) and resolving reply, a no-stamp
- * thread by its resolving reply and the ledger entry, a folded
+ * counts as recorded: a stamped thread by its thread marker (`issue=<pr>`) and resolving reply, a folded
  * entry by its Details marker in the verdict body (a Deferred-group marker also carries `issue=<pr>`), so a caller's
  * `foldedFiled` counts those folded entries again on a rerun. Entries whose fingerprint the target
  * already lists are skipped; nothing is posted when none remain. Returns
@@ -375,7 +346,7 @@ export async function commentDeferredFindings(
   }
   const target = await resolveDeferralCommentTarget({ repo, pr, trackerProvider }, { env, ghCommand, run });
   // A PR target needs no comment: a stamped thread is recorded by its thread marker (issue=<pr>)
-  // and resolving reply, a no-stamp thread by its reply and the ledger entry, a folded entry by its Details marker in the verdict body, so every entry counts as recorded.
+  // and resolving reply, a folded entry by its Details marker in the verdict body, so every entry counts as recorded.
   if (target === pr) {
     return { issueNumber: target, appendedFingerprints: new Set(entries.map((entry) => entry.fingerprint)) };
   }
@@ -595,15 +566,9 @@ export function renderInlineCommentBody(finding, { round }) {
 // gate:/head sha:/verdict:/summary: field regex — these blocks share a body
 // with the genuine verdict fields.
 //
-// A body-filed finding never gets a resolvable thread (it lives in a review
-// body, not a review comment), so it never gets the threaded medium
-// finding's round<=3 in-gate fix window. It is therefore deferred BY
-// CONSTRUCTION at render time, regardless of round: every non-high severity
-// (medium, low, nit, and question — a question also has no thread to answer
-// through here) is stamped disposition=deferred the moment it is posted.
-// high stays unstamped (a clean verdict blocks on it; it is never body-filed
-// as an accepted outcome). This keeps the finding from being suppressed by
-// its own fingerprint while tracked nowhere else.
+// A body-filed finding never gets a resolvable thread. Its marker carries
+// disposition=deferred only when the judge disposed its cluster `defer`;
+// severity and round never stamp it.
 //
 // buildNonLocatableFindingMarker is factored out on its own (GATE-COMMENT-SINGLE-SURFACE):
 // upsert-checkpoint-verdict.mjs's grouped findings table is now the sole
@@ -615,12 +580,8 @@ export function renderInlineCommentBody(finding, { round }) {
 // human-readable duplicate must never also drop this marker.
 export function buildNonLocatableFindingMarker(finding, { round, issue }) {
   const fp = fingerprintFinding(finding);
-  // Normalized ONCE and reused for both the disposition decision and the
-  // marker: deciding disposition off a raw, un-normalized legacy spelling
-  // would misclassify it (e.g. "must-fix" !== "high").
   const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
-  // An act finding goes to the fixer, so it never carries a deferral stamp.
-  const disposition = severity === "high" || finding.judgeDisposition === "act" ? undefined : "deferred";
+  const disposition = isDeferredAtRound(finding.judgeDisposition) ? "deferred" : undefined;
   // Carry the operator-visibility signal onto the marker (ov=1 only when
   // true) so a later reader (the folded-filing pass, close-gate-findings.mjs)
   // can decide fileability without re-reading the ephemeral ledger. Backward

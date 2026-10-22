@@ -110,9 +110,7 @@ Inputs:
                                spec issue target only; a PR target posts no comment and
                                followUpIssueNumber records the PR number (a folded defer
                                is recorded by its Details marker in the Deferred group, a
-                               stamped thread by its thread marker plus resolving reply,
-                               a no-stamp thread by its resolving reply plus the ledger
-                               entry). This tool never
+                               stamped thread by its thread marker plus resolving reply). This tool never
                                creates an issue. A re-run does not append a fingerprint
                                the target already lists.
   --repo-root <path>           Root used to resolve relative --findings-file /
@@ -537,8 +535,7 @@ function validateFindingsArray(parsed, flagLabel) {
  * (act/defer/reject — the one-line reject audit entry keys on it too), then
  * post every `defer` disposition as ONE batched comment on the linked spec
  * issue target. A PR target posts no comment (a folded defer is recorded by
- * its Details marker, a stamped thread by its thread marker plus resolving reply,
- * a no-stamp thread by its resolving reply plus the ledger entry).
+ * its Details marker, a stamped thread by its thread marker plus resolving reply).
  * Never creates an issue. Mutates `enriched` in place (each element
  * already the judge-pass's own fresh copy from `applyJudgeDispositions`). A
  * re-run does not append a fingerprint the target already lists.
@@ -987,7 +984,7 @@ export async function judgePassCli(
   // A `defer` disposition is recorded as one batched comment on a linked spec
   // issue target, never only the ephemeral tmp ledger, and never a new issue.
   // A PR target posts no comment: a folded defer's Details marker, a stamped
-  // thread's marker plus reply, or a no-stamp thread's reply plus ledger entry
+  // thread's marker plus reply
   // is the record. Idempotent across re-runs via the target's listed fingerprints.
   // The review gate keeps one visible surface (the review body), so its defers post no comment.
   if (options.gate === "review") {

@@ -106,7 +106,9 @@ export function mapGateToConfigKey(gate) {
   throw new Error(`Unknown gate: ${JSON.stringify(gate)} (expected draft_gate or pre_approval_gate)`);
 }
 
-const SPEC_OF_RECORD_DEPENDENT_ANGLES = ["acceptance-criteria", "pr-checklist", "pr-description", "gate-evidence"];
+const SPEC_OF_RECORD_DEPENDENT_ANGLES = ["acceptance-criteria", "pr-checklist", "pr-description"];
+// The standalone review has no lifecycle gates, so it never resolves this angle.
+const LIFECYCLE_ONLY_ANGLES = ["gate-evidence"];
 
 /**
  * `review` angle resolution — a standalone gate with no config key of
@@ -117,7 +119,7 @@ const SPEC_OF_RECORD_DEPENDENT_ANGLES = ["acceptance-criteria", "pr-checklist", 
  * never drift) — the STATIC pool; dynamic/tiered subtractive resolution is
  * deliberately not applied to review, never resolveGateAnglesDynamic.
  *
- * `acceptance-criteria`, `pr-checklist`, `pr-description`, and `gate-evidence`
+ * `acceptance-criteria`, `pr-checklist` and `pr-description`
  * — the angles that depend on a spec of record — are dropped from that union
  * only when both facts are DEFINITIVELY known false — the PR closes no issue
  * AND its own body carries no AC checklist; they are kept when either is
@@ -126,6 +128,8 @@ const SPEC_OF_RECORD_DEPENDENT_ANGLES = ["acceptance-criteria", "pr-checklist", 
  * is `undefined` (not `false`) when the caller never queried GitHub (e.g.
  * `--prefix-file` mode) — an unknown fact must never be coerced to "false",
  * so this fails CLOSED and keeps every angle.
+ *
+ * `gate-evidence` is always dropped: the standalone review has no lifecycle gates.
  *
  * `pr-checklist` is also dropped when both `hasFormalIssueSpec` (the single
  * closing issue's body passes `requireSpecFromBody`) and `hasFormalPrSpec`
@@ -140,13 +144,18 @@ export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklis
   const union = resolveOperationAnglePool(config, "review");
   const provablyNoSpecOfRecord = hasClosingIssue === false && hasAcChecklist === false;
   const provablyNoFormalSpec = hasFormalIssueSpec === false && hasFormalPrSpec === false;
-  const anglesToDrop = provablyNoSpecOfRecord
+  const specDrops = provablyNoSpecOfRecord
     ? SPEC_OF_RECORD_DEPENDENT_ANGLES.filter((a) => union.includes(a))
     : provablyNoFormalSpec && union.includes("pr-checklist") ? ["pr-checklist"] : [];
+  const lifecycleDrops = LIFECYCLE_ONLY_ANGLES.filter((a) => union.includes(a));
+  const anglesToDrop = [...specDrops, ...lifecycleDrops];
   return {
     recommendedAngles: union.filter((a) => !anglesToDrop.includes(a)),
     skippedAngles: anglesToDrop,
-    reasons: Object.fromEntries(anglesToDrop.map((a) => [a, provablyNoSpecOfRecord ? "no spec-of-record" : "no formal spec on the closing issue or PR description"])),
+    reasons: {
+      ...Object.fromEntries(specDrops.map((a) => [a, provablyNoSpecOfRecord ? "no spec-of-record" : "no formal spec on the closing issue or PR description"])),
+      ...Object.fromEntries(lifecycleDrops.map((a) => [a, "the standalone review has no lifecycle gates"])),
+    },
     fallbackToAll: false,
     dynamicAnglesActive: false,
     addedAngles: [],

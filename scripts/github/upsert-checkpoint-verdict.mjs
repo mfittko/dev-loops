@@ -2381,19 +2381,25 @@ function renderGateBlockerItemsList(blockers) {
 
 // GATE-COMMENT-DRAFT-REQUIREMENTS / GATE-COMMENT-PREAPPROVAL-REQUIREMENTS
 // (skills/docs/gate-review-comment-contract.md): a non-clean verdict must not
-// carry an advancing next action. The mandated next action for a round that
-// found blocking findings is a closed set, so the tool DERIVES it rather than
-// accepting caller prose into a machine-read evidence surface. Returns
-// null for a `clean` verdict — the caller's value is accepted unchanged.
-function deriveEffectiveNextAction(verdict, gate) {
+// carry an advancing next action. The mandated next action is a closed set, so
+// the tool DERIVES it rather than accepting caller prose into a machine-read
+// evidence surface. The standalone review derives it from the judge act list
+// (a judged round) and says that it neither approves nor blocks the PR. A
+// lifecycle gate returns null for a `clean` verdict (the caller's value is
+// accepted unchanged).
+export function deriveEffectiveNextAction(verdict, gate, actItems = []) {
+  if (gate === "review") {
+    const n = actItems.length;
+    const tail = "this review does not approve or block the PR";
+    if (n > 0) return `fix the ${n} item${n === 1 ? "" : "s"} this review lists; ${tail}`;
+    return verdict === "clean" ? `no change requested; ${tail}` : `read the findings, none was judged; ${tail}`;
+  }
   if (verdict !== "findings_present" && verdict !== "blocked") {
     return null;
   }
   // draft_gate: the PR stays draft and fixes are required before retrying.
   // pre_approval_gate: follow-up fixes are required before final approval —
-  // address the findings and re-run the gate. review: informational only —
-  // carries no re-gate obligation of its own.
-  if (gate === "review") return "none — informational review, no re-gate required";
+  // address the findings and re-run the gate.
   return gate === "draft_gate" ? "stay draft and fix" : "rerun gate";
 }
 
@@ -3024,8 +3030,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (convergedInput && (convergedMarker === null || options.verdict !== "clean")) {
     throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs a clean composed verdict over a validated low/nit act list (got verdict ${JSON.stringify(options.verdict)}); post a full round instead.`);
   }
+  // A judged round takes its verdict from the judge's act list alone, so the severity floor never overrides it.
+  const judgedRound = (preloadedFindingsLedger?.findings ?? []).some((f) => JUDGE_DISPOSITIONS.includes(f?.judgeDisposition));
   if (
     options.verdict === "clean"
+    && !judgedRound
     && activeGateConfig.blockCleanOnFindingSeverities
     && activeGateConfig.blockCleanOnFindingSeverities.length > 0
   ) {
@@ -3104,7 +3113,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // BOTH the render and the same-head idempotency compare see the derived
   // value (a render-only fix would let the compare read the raw caller
   // string against the rendered derived one).
-  const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate);
+  const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate, listOpenActItems([...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems]));
   if (derivedNextAction !== null) {
     options.nextAction = derivedNextAction;
   }
@@ -3121,6 +3130,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (
     structuredFindings
     && options.verdict === "clean"
+    && !judgedRound
     && activeGateConfig.blockCleanOnFindingSeverities
     && activeGateConfig.blockCleanOnFindingSeverities.length > 0
   ) {

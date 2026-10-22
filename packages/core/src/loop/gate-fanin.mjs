@@ -227,10 +227,9 @@ export function isValidDefectKey(value) {
   return typeof value === "string" && DEFECT_KEY_RE.test(value);
 }
 
-// The non-defect subset of SEVERITY_ORDER: a "question" is answered (see
-// deriveDisposition) and a "nit" always defers regardless of any gate's
-// blockCleanOnFindingSeverities (see isDefaultDeferrableSeverity) — neither
-// belongs in a defect-only blocking vocabulary. The single source for that
+// The non-defect subset of SEVERITY_ORDER: a "question" is answered and a
+// "nit" never blocks regardless of any gate's blockCleanOnFindingSeverities;
+// neither belongs in a defect-only blocking vocabulary. The single source for that
 // partition, so a consumer derives "defect severities" as SEVERITY_ORDER minus
 // this set. Object.freeze on a Set locks only its OWN properties, not the
 // add/delete that mutate its collection; it is applied for consistency with the
@@ -384,38 +383,6 @@ export function hasLocatableShape(finding) {
   const file = resolveFindingFile(finding);
   return typeof file === "string" && file.trim().length > 0
     && Number.isInteger(finding?.line) && /** @type {number} */ (finding.line) >= 1;
-}
-
-/**
- * Derive the ledger disposition for a finding at `severity` (already
- * normalized) — the one rule every producer shares. A LOCATABLE `question` is
- * answered ("needs-answer") regardless of `isBlocking`; severity-first so that
- * invariant holds here, not just at the config boundary. A NON-LOCATABLE
- * question is body-filed and deferred, like every other non-`high` body-filed
- * finding (GATE-EXEC-DEFERRAL-RECORD). Every other severity ignores `locatable`:
- * `isBlocking` alone decides accepted-for-fix vs deferred.
- * @param {string} severity — already normalized
- * @param {{ isBlocking?: boolean, locatable?: boolean }} [options]
- * @returns {"accepted-for-fix"|"deferred"|"needs-answer"}
- */
-export function deriveDisposition(severity, { isBlocking = false, locatable = false } = {}) {
-  if (severity === "question") return locatable ? "needs-answer" : "deferred";
-  return isBlocking ? "accepted-for-fix" : "deferred";
-}
-
-/**
- * Does `severity` (already normalized) have a default disposition
- * `deriveDisposition` can resolve WITHOUT `isBlocking` context? "low" and "nit"
- * always defer, and "question" resolves off `locatable` alone — so a CLI
- * validator with no config in scope can fill a default for these three only.
- * "high" and "medium" are excluded: whether either blocks a clean verdict
- * depends on config, so guessing "deferred" here would be wrong for a repo that
- * configures it as blocking.
- * @param {string} severity — already normalized
- * @returns {boolean}
- */
-export function isDefaultDeferrableSeverity(severity) {
-  return severity === "low" || severity === "nit" || severity === "question";
 }
 
 const VALID_VERDICTS = new Set(["clean", "findings_present"]);
@@ -1052,9 +1019,9 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
           severity,
           angle,
           summary: String(f.summary).trim(),
-          // See deriveDisposition's own doc for the full rule; the fix cycle
-          // / operator can override the disposition afterward.
-          disposition: deriveDisposition(severity, { isBlocking, locatable: hasLocatableShape(f) }),
+          // Fan-in never disposes: severity is the reviewer's input and only
+          // the judge sets a disposition.
+          disposition: UNJUDGED_DISPOSITION,
         };
         if (typeof f.file === "string" && f.file.trim().length > 0) entry.file = f.file.trim();
         if (Array.isArray(f.files)) entry.files = f.files.filter((file) => typeof file === "string" && file.trim().length > 0).map((file) => file.trim());
@@ -1095,9 +1062,12 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
   };
 }
 
+/** The ledger `disposition` of a finding no judge has disposed. */
+export const UNJUDGED_DISPOSITION = "unjudged";
+
 /**
  * The judge's relevance-based disposition vocabulary — distinct from the
- * severity-based `disposition` that `deriveDisposition` owns. The judge decides
+ * ledger `disposition`, which fan-in leaves `unjudged`. The judge decides
  * *where* a finding is acted on (this PR or a follow-up), never *whether* it is
  * real: a `reject` is a relevance verdict (out-of-scope), not a reproduction
  * verdict. The fixer retains reproduction-based rejection; the judge owns
@@ -1204,6 +1174,14 @@ export function validateJudgeVerdict(verdict) {
     if (typeof entry.rationale !== "string" || entry.rationale.trim().length === 0) {
       throw new Error(`judge verdict.dispositions[${i}].rationale must be a non-empty string naming the criterion, non-goal, or scope boundary`);
     }
+    for (const field of ["title", "detail", "fix"]) {
+      if (typeof entry[field] !== "string" || entry[field].trim().length === 0) {
+        throw new Error(`judge verdict.dispositions[${i}].${field} must be a non-empty string (the judge authors each cluster's prose)`);
+      }
+    }
+    if (entry.disposition !== "act" && (typeof entry.reason !== "string" || entry.reason.trim().length === 0)) {
+      throw new Error(`judge verdict.dispositions[${i}].reason must be a non-empty one-sentence string on a ${entry.disposition} disposition`);
+    }
     // followUpDraft is REQUIRED on a defer disposition (a deferred finding
     // carries a fileable follow-up draft). Optional otherwise.
     if (entry.disposition === "defer") {
@@ -1243,34 +1221,44 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
   const validated = validateJudgeVerdict(judgeVerdict);
   const list = Array.isArray(findings) ? findings : [];
   const enriched = list.map((f) => ({ ...f }));
+  // The judge disposes each cluster: `index` is the cluster's `clusterId` (a
+  // finding's own index when the ledger carries no stamped clusters), and the
+  // one disposition and its prose apply to every member.
+  const stamped = enriched.every((f) => Number.isInteger(f?.clusterId));
+  const clusterOf = (i) => (stamped ? enriched[i].clusterId : i);
+  const clusterIds = new Set(enriched.map((_f, i) => clusterOf(i)));
   for (const d of validated.dispositions) {
-    if (d.index >= enriched.length) {
-      throw new Error(`judge disposition index ${d.index} is out of range (findings has ${enriched.length} entries)`);
+    if (!clusterIds.has(d.index)) {
+      throw new Error(`judge disposition index ${d.index} is out of range (findings has ${enriched.length} entries) or is not a clusterId`);
     }
-    const target = enriched[d.index];
-    // Reset judge-owned fields before the re-merge so a re-disposed finding
-    // (defer -> act/reject) carries only what the current disposition provides,
-    // never stale judgeCriterion/followUpDraft from a prior round.
-    delete target.judgeCriterion;
-    delete target.followUpDraft;
-    target.judgeDisposition = d.disposition;
-    target.judgeRationale = d.rationale;
-    if (typeof d.criterion === "string" && d.criterion.trim().length > 0) {
-      target.judgeCriterion = d.criterion.trim();
-    }
-    if (d.disposition === "defer" && d.followUpDraft) {
-      target.followUpDraft = d.followUpDraft;
+    for (const [i, target] of enriched.entries()) {
+      if (clusterOf(i) !== d.index) continue;
+      // Reset judge-owned fields before the re-merge so a re-disposed finding
+      // (defer -> act/reject) carries only what the current disposition provides,
+      // never stale judgeCriterion/followUpDraft from a prior round.
+      delete target.judgeCriterion;
+      delete target.followUpDraft;
+      delete target.judgeReason;
+      target.judgeDisposition = d.disposition;
+      target.judgeRationale = d.rationale;
+      target.judgeTitle = d.title.trim();
+      target.judgeDetail = d.detail.trim();
+      target.judgeFix = d.fix.trim();
+      if (typeof d.reason === "string" && d.reason.trim().length > 0) target.judgeReason = d.reason.trim();
+      if (typeof d.criterion === "string" && d.criterion.trim().length > 0) {
+        target.judgeCriterion = d.criterion.trim();
+      }
+      if (d.disposition === "defer" && d.followUpDraft) {
+        target.followUpDraft = d.followUpDraft;
+      }
     }
   }
-  // Coverage is judged against THIS verdict's disposed-index set, not field
+  // Coverage is judged against THIS verdict's disposed-cluster set, not field
   // presence on the merged copy, so an already-enriched ledger can't let a
   // verdict that disposes nothing pass silently. validateJudgeVerdict rejects
   // duplicate indexes, so the Set is exact.
   const disposed = new Set(validated.dispositions.map((d) => d.index));
-  const uncovered = enriched.reduce((positions, _f, i) => {
-    if (!disposed.has(i)) positions.push(i);
-    return positions;
-  }, /** @type {number[]} */ ([]));
+  const uncovered = [...clusterIds].filter((id) => !disposed.has(id));
   if (uncovered.length > 0) {
     throw new Error(
       `judge verdict does not dispose ${uncovered.length} finding(s) (indexes: ${uncovered.join(", ")}) — fail closed; an undisposed finding must never be silently dropped from the fixer act list`
@@ -1292,15 +1280,18 @@ export function listOpenActItems(findings) {
 }
 
 /**
- * Compose a round's review verdict with the judge act list (ADR 0089): a
- * non-empty act list keeps a `clean` severity verdict from `clean`. Never
- * lowers a verdict; the blockCleanOnFindingSeverities floor already applied.
+ * Compose a round's review verdict from the judge's dispositions alone: a
+ * non-empty act list gives `findings_present` and an empty one gives `clean`,
+ * whatever the severities. A round with no judged finding keeps the fan-in
+ * verdict, and `blocked` is never lowered.
  * @param {"clean"|"findings_present"|"blocked"} overallVerdict
  * @param {unknown} findings
  * @returns {"clean"|"findings_present"|"blocked"}
  */
 export function composeReviewVerdict(overallVerdict, findings) {
-  return overallVerdict === "clean" && listOpenActItems(findings).length > 0 ? "findings_present" : overallVerdict;
+  const list = Array.isArray(findings) ? findings : [];
+  if (overallVerdict === "blocked" || !list.some((f) => JUDGE_DISPOSITIONS.includes(f?.judgeDisposition))) return overallVerdict;
+  return listOpenActItems(list).length > 0 ? "findings_present" : "clean";
 }
 
 /**
@@ -1351,6 +1342,9 @@ export function toFindingsLogShape(findings) {
     }
     if (f.followUpDraft && typeof f.followUpDraft === "object" && !Array.isArray(f.followUpDraft)) {
       entry.followUpDraft = f.followUpDraft;
+    }
+    for (const field of ["judgeTitle", "judgeDetail", "judgeFix", "judgeReason"]) {
+      if (typeof f[field] === "string" && f[field].trim().length > 0) entry[field] = f[field].trim();
     }
     return entry;
   });

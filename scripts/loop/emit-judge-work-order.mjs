@@ -11,7 +11,8 @@ import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
-import { loadDevLoopConfigStrict } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveGateConfig } from "@dev-loops/core/config";
+import { GATE_CONFIG_KEY } from "@dev-loops/core/loop/gate-fanin";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { computeSpecDigest, specCriterionIds, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
@@ -69,6 +70,8 @@ This permits only pinned reads and concrete dependency widening already authoriz
 ## Judgment
 
 Adjudicate every finding in the \`findings\` read per agents/judge.agent.md, against the COMPLETE spec in the \`spec\` read.
+Dispose each cluster once, never each raw finding: \`dispositions[].index\` is the cluster's \`clusterId\`, and one \`act\`, \`defer\` or \`reject\` with one rationale applies to every member. Severity, the \`round\` and the \`mediumFixWindow\` in the work order are inputs to your decision. No rule defers a finding from severity or round alone, so decide \`act\`, \`defer\` or \`reject\` for every cluster in every round.
+Each disposition carries \`title\` (the one-line defect), \`detail\` (the concrete path through the code and why it breaks), \`fix\` (the remedy and the test to add) and, for \`defer\` and \`reject\`, \`reason\` (one sentence). A disposition missing any required field fails closed. Write plain sentences with no em dashes and no arrows.
 Read every \`required\` entry below IN FULL before any judgment. If one is missing, unreadable, or its sha256 differs, stop and report which read failed; never write a verdict.
 Write exactly two artifacts: the relevance verdict to \`${verdictPath}\` and the spec-authority verdict to \`${specVerdictPath}\`.
 Widening: ${JUDGE_WIDENING_RULE}.
@@ -89,7 +92,7 @@ ${JSON.stringify(workOrder, null, 2)}
  * Emit one judge work order. Returns the plan record written beside it. Throws
  * Refusal on a missing or inconsistent source. `roundId` is injectable for tests.
  */
-export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile, specFile, identityFile, priorVerdicts = [], cwd = process.cwd(), tmpRoot, roundId = `j${Date.now()}-${randomBytes(4).toString("hex")}` }) {
+export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile, specFile, identityFile, priorVerdicts = [], round = null, cwd = process.cwd(), tmpRoot, roundId = `j${Date.now()}-${randomBytes(4).toString("hex")}` }) {
   if (!/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Refusal(`--head-sha must be a full 40- or 64-char lowercase SHA, got ${headSha}`);
   // Anchor at the checkout root, never a cwd subdirectory the pull and write guard never scan.
   const checkoutRoot = resolveRepoRoot(cwd);
@@ -124,6 +127,9 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     operation: "judge",
     roundIdentity: { gate, headSha },
     headSha,
+    // Judge inputs, never a deferral rule: the gate round and the medium fix window. The judge decides act, defer or reject for every cluster in every round.
+    round,
+    mediumFixWindow: resolveGateConfig(config, GATE_CONFIG_KEY[gate] ?? "preApproval").mediumFixWindow,
     configSha256: sha256(JSON.stringify(config ?? {})),
     authority: {
       specDigest,
@@ -246,7 +252,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   const { values } = parseArgs({ args: argv, options: {
     repo: { type: "string" }, pr: { type: "string" }, gate: { type: "string" }, "head-sha": { type: "string" },
     "findings-file": { type: "string" }, "spec-file": { type: "string" }, "identity-file": { type: "string" },
-    "prior-verdict": { type: "string", multiple: true }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" },
+    "prior-verdict": { type: "string", multiple: true }, round: { type: "string" }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" },
     ...JQ_OUTPUT_PARSE_OPTIONS,
   } });
   if (values.help) {
@@ -275,7 +281,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     const plan = await emitJudgeWorkOrder({
       repo: values.repo, pr: values.pr, gate: values.gate, headSha: values["head-sha"].toLowerCase(),
       findingsFile: values["findings-file"], specFile: values["spec-file"], identityFile: values["identity-file"],
-      priorVerdicts: values["prior-verdict"] ?? [], cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}),
+      priorVerdicts: values["prior-verdict"] ?? [], ...(values.round ? { round: Number(values.round) } : {}), cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}),
     });
     const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath });

@@ -46,7 +46,7 @@ test("GATE-EXEC-DEFERRAL-RECORD names the comment target and states no tool crea
     ["ONE batched", "deferral comment"],
     ["never selects", "`act`", "prior round"],
     ["target is the PR itself", "neither tool posts a deferral comment"],
-    ["no-stamp thread", "resolving reply", "ledger entry"],
+    ["only when the judge disposed", "`defer`"],
     ["On a linked spec issue target", "deferral comment is written for every deferral"],
   ], "GATE-EXEC-DEFERRAL-RECORD");
   assert.doesNotMatch(section, /ONE tracked (GitHub )?follow-up issue/, "the old one-follow-up-issue wording must not return");
@@ -55,7 +55,7 @@ test("GATE-EXEC-DEFERRAL-RECORD names the comment target and states no tool crea
 test("GATE-EXEC-THREAD-DISPOSITION states the act-thread exclusion and the fixer reply-and-resolve sentence", async () => {
   const section = ruleSection(await readFile(`${repoRoot}${CONTRACT}`, "utf8"), "GATE-EXEC-THREAD-DISPOSITION");
   assertClaims(section, [
-    ["never selects", "`act`", "severity", "round"],
+    ["never selects", "did not dispose", "`defer`"],
     ["current round's ledger", "decides first"],
     ["prior local ledgers", "judge: <disposition>"],
     ["`act`", "no stamp", "no reply", "no resolve", "no deferral comment entry", "fixing commit", "decline reason", "judge rerun"],
@@ -116,14 +116,14 @@ test("the help texts and the judge defer bullet state that a PR target posts no 
     return text.slice(start, text.indexOf("`.trim();", start));
   };
   assertClaims(await usage("scripts/github/close-gate-findings.mjs", "const USAGE = `"), [
-    ["A PR target posts no comment", "thread marker", "Details marker", "Deferred, Rejected or Not judged", "no-stamp thread", "ledger entry"],
+    ["A PR target posts no comment", "thread marker", "Details marker", "Deferred, Rejected or Not judged"],
   ], "close-gate-findings help");
   assertClaims(await usage("scripts/loop/judge-pass.mjs", "The round's defers go as"), [
-    ["ONE batched comment", "spec issue target only", "a PR target posts no comment", "no-stamp thread", "ledger"],
+    ["ONE batched comment", "spec issue target only", "a PR target posts no comment"],
   ], "judge-pass help");
   const judge = await readFile(`${repoRoot}agents/judge.agent.md`, "utf8");
   const start = judge.indexOf("- `defer` — ");
   assertClaims(judge.slice(start, judge.indexOf("- `reject` — ", start)), [
-    ["batched deferral comment", "linked spec issue target", "on a PR target no comment is posted", "no-stamp thread", "ledger entry"],
+    ["batched deferral comment", "linked spec issue target", "on a PR target no comment is posted"],
   ], "agents/judge.agent.md defer bullet");
 });

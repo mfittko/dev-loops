@@ -5,7 +5,7 @@ import { formatCliError, isDirectCliRun, sanitizeCopilotSummonTokens } from "../
 import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { loadDevLoopConfig, resolveGatePostFindingsComments } from "@dev-loops/core/config";
 // Severity vocabulary and its most-urgent-first ordering are owned by gate-fanin.
-import { SEVERITY_ORDER, VALID_SEVERITIES, deriveDisposition, hasLocatableShape, isDefaultDeferrableSeverity, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
+import { SEVERITY_ORDER, VALID_SEVERITIES, UNJUDGED_DISPOSITION, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
@@ -106,11 +106,8 @@ function validateFindingsArray(parsed, flagLabel) {
     }
     if ("disposition" in f && typeof f.disposition === "string" && f.disposition.trim().length > 0) {
       entry.disposition = f.disposition.trim();
-    } else if (isDefaultDeferrableSeverity(f.severity)) {
-      // Routes through the shared deriveDisposition rule (gate-fanin) also used
-      // by write-gate-findings-log.mjs. This shape has no `line` field, so it
-      // can never be proven locatable and always resolves to "deferred".
-      entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
+    } else {
+      entry.disposition = UNJUDGED_DISPOSITION;
     }
     // Preserve the judge's relevance-based dispositions: without this,
     // the judge suffix in renderFindingsCommentBody is unreachable dead code.

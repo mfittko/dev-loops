@@ -317,3 +317,18 @@ test("J6: a corrupt plan at another head is skipped; a corrupt own plan refuses 
     assert.equal(pull(await emitJudgeWorkOrder(sources), root).status, 0);
   });
 });
+
+test("the work order carries the round and the medium fix window as judge inputs and states the cluster prose schema", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const plan = await emitJudgeWorkOrder({ ...sources, round: 4 });
+    assert.equal(plan.workOrder.round, 4);
+    assert.equal(plan.workOrder.mediumFixWindow, 3);
+    const text = await readFile(plan.promptPath, "utf8");
+    assert.match(text, /Dispose each cluster once/);
+    assert.match(text, /No rule defers a finding from severity or round alone/);
+    assert.match(text, /`title`.*`detail`.*`fix`.*`reason`/s);
+    assert.match(text, /no em dashes and no arrows/);
+    assert.equal((await emitJudgeWorkOrder(sources)).workOrder.round, null);
+  });
+});

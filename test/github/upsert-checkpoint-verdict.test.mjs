@@ -16,6 +16,7 @@ import {
   parseUpsertCheckpointVerdictCliArgs,
   normalizeStructuredFindings,
   renderAngleVerdictDigest,
+  deriveEffectiveNextAction,
   renderGateReviewCommentBody,
   renderStructuredFindings,
   summarizeCheckpointVerdictText,
@@ -7734,8 +7735,8 @@ test("upsert-checkpoint-verdict --findings-ledger: at the default floor, a locat
     assert.match(posted.body, /`src\/db\.mjs:2` \*\*low\*\* \(`naming`\): inconsistent casing of a local constant/);
     assert.match(posted.body, /\*\*nit\*\* \(`style`\): trailing whitespace/);
     // Each folded finding still stamps its own invisible marker, deferred.
-    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 disposition=deferred -->$/m);
-    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=nit angle=style round=1 disposition=deferred -->$/m);
+    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 -->$/m);
+    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=nit angle=style round=1 -->$/m);
   }, { prefix: "dev-loops-upsert-fold-default-floor-" });
 });
 
@@ -8670,8 +8671,8 @@ test("#2263: --gate review --findings-ledger folds locatable low/nit findings at
     assert.match(posted.body, /^\*\*Not judged \(2\)\*\*$/m);
     assert.match(posted.body, /`src\/db\.mjs:2` \*\*low\*\* \(`naming`\): inconsistent casing of a local constant/);
     assert.match(posted.body, /\*\*nit\*\* \(`style`\): trailing whitespace/);
-    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 disposition=deferred -->$/m);
-    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=nit angle=style round=1 disposition=deferred -->$/m);
+    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 -->$/m);
+    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=nit angle=style round=1 -->$/m);
   }, { prefix: "dev-loops-upsert-review-gate-fold-" });
 });
 
@@ -11584,9 +11585,9 @@ test("#2030: --gate review same-head rerun with a body-only correction UPDATES t
       pr: 17,
       gate: "review",
       headSha: SINGLE_SURFACE_HEAD,
-      // Changed next action → the rendered body differs, but no new inline
+      // A changed judge-spec line → the rendered body differs, but no new inline
       // comment is required, so the submitted review body is updated in place.
-      nextAction: "please re-check the auth flow before merge",
+      judgeSpecSource: "none",
       findingsLedger: ledgerPath,
       executionMode: "fanout_fanin",
       submit: "comment",
@@ -11622,7 +11623,7 @@ test("#2030: --gate review same-head body-only correction surfaces a verificatio
       pr: 17,
       gate: "review",
       headSha: SINGLE_SURFACE_HEAD,
-      nextAction: "please re-check the auth flow before merge",
+      judgeSpecSource: "none",
       findingsLedger: ledgerPath,
       executionMode: "fanout_fanin",
       submit: "comment",
@@ -12103,4 +12104,18 @@ test("parseUpsertCheckpointVerdictCliArgs validates --judge-spec-source and --ju
     assert.throws(() => parse("--gate", gate, "--judge-unavailable-reason", "judge_failed"), /scoped to --gate review only/);
   }
   assert.throws(() => parse("--judge-spec-source", "none"), /scoped to --gate review only/);
+});
+
+// The next action derives from the judge act list, never from caller prose.
+test("deriveEffectiveNextAction derives from the act list on review, draft_gate and pre_approval_gate", () => {
+  const act = [{ severity: "low", summary: "a" }, { severity: "medium", summary: "b" }];
+  const tail = "this review does not approve or block the PR";
+  assert.equal(deriveEffectiveNextAction("findings_present", "review", act), `fix the 2 items this review lists; ${tail}`);
+  assert.equal(deriveEffectiveNextAction("findings_present", "review", act.slice(0, 1)), `fix the 1 item this review lists; ${tail}`);
+  assert.equal(deriveEffectiveNextAction("clean", "review", []), `no change requested; ${tail}`);
+  assert.equal(deriveEffectiveNextAction("findings_present", "review", []), `read the findings, none was judged; ${tail}`);
+  assert.equal(deriveEffectiveNextAction("findings_present", "draft_gate", act), "stay draft and fix");
+  assert.equal(deriveEffectiveNextAction("findings_present", "pre_approval_gate", act), "rerun gate");
+  assert.equal(deriveEffectiveNextAction("clean", "draft_gate", []), null);
+  assert.equal(deriveEffectiveNextAction("clean", "pre_approval_gate", []), null);
 });

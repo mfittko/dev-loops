@@ -87,23 +87,18 @@ gates:
     # rounds on one PR (72 reviewer dispatches), high per round ran
     # 1,1,7,0,1,1,3,0 while medium ran 6,11,17,14,16,9,12,7.
     #
-    # medium findings still go through the normal fan-in flow
-    # (ledger + finding-threads review) as long as that flow is followed; this key
-    # does not itself force a count or a ledger entry for medium
-    # (upsert-checkpoint-verdict only requires explicit counts for the
-    # severities listed here). They no longer count toward the ledger's clean
-    # verdict. A LOCATABLE one (in-diff file:line) stays open as an unresolved
-    # PR review thread, fixed in-gate through round 3 of this gate's chain;
-    # from round 4 on it is instead replied to, resolved, and stamped
-    # deferred. A NON-LOCATABLE one is body-filed instead: stamped deferred
-    # immediately and tracked only through the disposition ledger and its
-    # fingerprint, with no review-thread force-fix guarantee
-    # (GATE-EXEC-FINDING-THREADS, GATE-EXEC-THREAD-DISPOSITION). preApproval's
-    # own blockCleanOnFindingSeverities below is high only too, same as
-    # here — a medium finding never blocks either gate's clean
-    # verdict on its own; an in-window (round <= 3) locatable one still forces
-    # a fix round through the unresolved-feedback routing described above,
-    # regardless of severity's effect on the verdict. preApproval re-reviews
+    # The judge disposes every finding cluster (act, defer or reject) and owns
+    # the verdict: a non-empty act list gives findings_present and an empty one
+    # gives clean, whatever the severities. Severity, the round number and the
+    # medium fix window (mediumFixWindow) are inputs to the judge. No code path
+    # stamps a deferral from severity or round alone. A LOCATABLE finding
+    # (in-diff file:line) stays an open PR review thread until the fixer
+    # resolves it or the judge disposes it defer or reject. A NON-LOCATABLE one
+    # is body-filed and carries disposition=deferred only on a judge defer. An
+    # unjudged finding stays open. This key lists the severities that the
+    # fan-in verdict treats as blocking when no judge ran; a judged round does
+    # not read it. preApproval's own blockCleanOnFindingSeverities below is
+    # high only too. preApproval re-reviews
     # through its own, mostly disjoint angle pool (draft and preApproval share only
     # contradiction-lens) and does not re-raise a draft-gate finding as a
     # fresh finding of its own: fingerprint suppression across gates keeps a

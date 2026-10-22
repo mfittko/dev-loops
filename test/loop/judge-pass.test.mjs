@@ -64,7 +64,7 @@ function verdict({ headSha = HEAD, dispositions = [], scopeDrift } = {}) {
       dispositions.length > 0
         ? dispositions
         : [
-            { index: 0, disposition: "act", rationale: "fixes AC-1" },
+            { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes AC-1" },
           ],
   };
 }
@@ -78,10 +78,10 @@ test("runJudgePass derives the fixer act list and scopeDrift verdict (#1658)", (
   );
   const v = verdict({
     dispositions: [
-      { index: 0, disposition: "act", rationale: "fixes AC-1", criterion: "AC-1" },
-      { index: 1, disposition: "defer", rationale: "belongs in follow-up", followUpDraft: { title: "t", body: "b" } },
-      { index: 2, disposition: "reject", rationale: "out of non-goal NG-2", criterion: "NG-2" },
-      { index: 3, disposition: "defer", rationale: "duplicate of round 1", followUpDraft: { title: "t", body: "b" } },
+      { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes AC-1", criterion: "AC-1" },
+      { index: 1, disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "belongs in follow-up", followUpDraft: { title: "t", body: "b" } },
+      { index: 2, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "out of non-goal NG-2", criterion: "NG-2" },
+      { index: 3, disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "duplicate of round 1", followUpDraft: { title: "t", body: "b" } },
     ],
   });
   const result = runJudgePass(findings, v, HEAD);
@@ -101,8 +101,8 @@ test("runJudgePass leaves the severity-based disposition intact (relevance axis,
   const findings = ledger(finding({ disposition: "accepted-for-fix" }), finding({ disposition: "deferred" }));
   const v = verdict({
     dispositions: [
-      { index: 0, disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } },
-      { index: 1, disposition: "act", rationale: "in scope now" },
+      { index: 0, disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } },
+      { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope now" },
     ],
   });
   const result = runJudgePass(findings, v, HEAD);
@@ -130,7 +130,7 @@ test("runJudgePass fails closed on a malformed verdict artifact (validateJudgeVe
 
 test("runJudgePass fails closed on an out-of-range disposition index", () => {
   const findings = ledger(finding());
-  const v = verdict({ dispositions: [{ index: 5, disposition: "act", rationale: "nope" }] });
+  const v = verdict({ dispositions: [{ index: 5, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "nope" }] });
   assert.throws(() => runJudgePass(findings, v, HEAD), /out of range/);
 });
 
@@ -141,7 +141,7 @@ test("runJudgePass fails closed when the verdict does not dispose every finding 
   // coincide with array position, so a regression that reports the stale
   // `f.index` field instead of the 0-based array position is caught here.
   const findings = ledger(finding({ index: 7 }), finding({ index: 9, summary: "undisposed" }));
-  const v = verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "in scope" }] });
+  const v = verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" }] });
   assert.throws(() => runJudgePass(findings, v, HEAD), /does not dispose 1 finding\(s\) \(indexes: 1\)/);
 });
 
@@ -160,9 +160,9 @@ test("runJudgePass projects the representative's judge disposition onto every du
   );
   const v = verdict({
     dispositions: [
-      { index: 0, disposition: "act", rationale: "fixes AC-1", criterion: "AC-1" },
-      { index: 1, disposition: "reject", rationale: "duplicate, judge saw it independently" },
-      { index: 2, disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } },
+      { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes AC-1", criterion: "AC-1" },
+      { index: 1, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "duplicate, judge saw it independently" },
+      { index: 2, disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } },
     ],
   });
   const result = runJudgePass(findings, v, HEAD);
@@ -197,10 +197,9 @@ test("runJudgePass consumes the stamped clusterId rather than recomputing from (
   );
   const v = verdict({
     dispositions: [
-      { index: 0, disposition: "act", rationale: "fixes AC-1", criterion: "AC-1" },
-      { index: 1, disposition: "act", rationale: "fixes AC-1 too" },
-      { index: 2, disposition: "act", rationale: "fixes AC-2" },
-      { index: 3, disposition: "act", rationale: "fixes AC-2 too" },
+      { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes AC-1", criterion: "AC-1" },
+      { index: 2, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes AC-2" },
+      { index: 3, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes AC-2 too" },
     ],
   });
   const result = runJudgePass(findings, v, HEAD);
@@ -297,7 +296,7 @@ test("judgePassCli resolves a relative findings-file against repo-root (#1658)",
   );
   await writeFile(
     path.join(tmpDir, "judge-verdict.json"),
-    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "in scope" }] })),
+    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" }] })),
   );
   // Run from a cwd that is NOT tmpDir (<repo-root>); findings/judge/out are all
   // relative and must resolve against tmpDir, not the process cwd.
@@ -339,10 +338,10 @@ test("judgePassCli --out is deduped to one remediation per acted cluster; --ledg
     JSON.stringify(
       verdict({
         dispositions: [
-          { index: 0, disposition: "act", rationale: "fixes AC-1", criterion: "AC-1" },
-          { index: 1, disposition: "reject", rationale: "duplicate" },
-          { index: 2, disposition: "act", rationale: "also in scope" },
-          { index: 3, disposition: "defer", rationale: "valid but out of scope", followUpDraft: { title: "t", body: "b" } },
+          { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes AC-1", criterion: "AC-1" },
+          { index: 1, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "duplicate" },
+          { index: 2, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "also in scope" },
+          { index: 3, disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "valid but out of scope", followUpDraft: { title: "t", body: "b" } },
         ],
       }),
     ),
@@ -401,8 +400,8 @@ test("judgePassCli accepts a clean verdict whose acts are all non-blocking, prod
   await writeFile(
     path.join(tmpDir, "judge-verdict.json"),
     JSON.stringify(verdict({ dispositions: [
-      { index: 0, disposition: "act", rationale: "in the medium fix window" },
-      { index: 1, disposition: "act", rationale: "fix while touching this code" },
+      { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in the medium fix window" },
+      { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fix while touching this code" },
     ] })),
   );
   const payload = await judgePassCli(
@@ -438,7 +437,7 @@ test("judgePassCli fails closed when a clean verdict carries an act on a blockin
   );
   await writeFile(
     path.join(tmpDir, "judge-verdict.json"),
-    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "must fix now" }] })),
+    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "must fix now" }] })),
   );
   await assert.rejects(
     judgePassCli(
@@ -480,7 +479,7 @@ test("judgePassCli reads a configured widened block set and fails a clean+medium
     );
     await writeFile(
       path.join(tmpDir, "judge-verdict.json"),
-      JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "must fix now" }] })),
+      JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "must fix now" }] })),
     );
     await assert.rejects(
       judgePassCli(
@@ -527,7 +526,7 @@ test("judgePassCli fails closed when the gate config cannot be loaded (#2246)", 
   const { plan, receiptTmpRoot } = await deliverJudge(tmpDir, sources);
   await writeVerdictAfterPull(
     plan.workOrder.outputRefs[0],
-    Buffer.from(JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "y" }] }))),
+    Buffer.from(JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "y" }] }))),
   );
   await writeFile(
     path.join(tmpDir, ".devloops"),
@@ -561,8 +560,8 @@ test("judgePassCli: rejecting a clean+act round posts no deferral comment and wr
     path.join(tmpDir, "judge-verdict.json"),
     JSON.stringify(verdict({
       dispositions: [
-        { index: 0, disposition: "act", rationale: "actually needs fixing now" },
-        { index: 1, disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } },
+        { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "actually needs fixing now" },
+        { index: 1, disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } },
       ],
     })),
   );
@@ -638,7 +637,7 @@ async function runDeferRound({ findings, dispositions, deps, config, pr = "1658"
   return { payload, enriched, tmpDir };
 }
 
-const DEFER = { disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } };
+const DEFER = { disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } };
 
 function assertNoIssueCreate(runCalls) {
   assert.equal(runCalls.some((args) => args.includes("create")), false, "no gh issue-create call");
@@ -648,7 +647,7 @@ test("judgePassCli: GitHub tracker + one closing reference — one batched comme
   const { deps, runCalls, commentCalls } = stubDeferralDeps({ closing: [2425] });
   const { payload, enriched } = await runDeferRound({
     findings: [finding({ summary: "fix this" }), finding({ summary: "defer this", severity: "medium" }), finding({ summary: "defer that too", severity: "low" })],
-    dispositions: [{ index: 0, disposition: "act", rationale: "in scope" }, { index: 1, ...DEFER }, { index: 2, ...DEFER }],
+    dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" }, { index: 1, ...DEFER }, { index: 2, ...DEFER }],
     deps,
   });
   assert.equal(payload.ok, true);
@@ -706,7 +705,7 @@ test("judgePassCli reject records a fingerprint audit entry and posts no comment
   const { deps, runCalls, commentCalls } = stubDeferralDeps();
   const { enriched } = await runDeferRound({
     findings: [finding({ summary: "out of scope" })],
-    dispositions: [{ index: 0, disposition: "reject", rationale: "below the defer bar", criterion: "NG-1" }],
+    dispositions: [{ index: 0, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "below the defer bar", criterion: "NG-1" }],
     deps,
   });
   assert.equal(runCalls.length, 0);
@@ -734,9 +733,9 @@ test("runJudgePass coverage-admission rehearsal: reject an already-covered permu
   );
   const v = verdict({
     dispositions: [
-      { index: 0, disposition: "reject", rationale: "equivalent permutation of covered behavior; fails VALIDATE-COVERAGE-ADMISSION", criterion: "VALIDATE-COVERAGE-ADMISSION" },
-      { index: 1, disposition: "act", rationale: "distinct argument-parsing boundary, cheapest authoritative seam", criterion: "VALIDATE-COVERAGE-ADMISSION" },
-      { index: 2, disposition: "act", rationale: "demonstrated fail-open uncertainty defect remains actionable" },
+      { index: 0, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "equivalent permutation of covered behavior; fails VALIDATE-COVERAGE-ADMISSION", criterion: "VALIDATE-COVERAGE-ADMISSION" },
+      { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "distinct argument-parsing boundary, cheapest authoritative seam", criterion: "VALIDATE-COVERAGE-ADMISSION" },
+      { index: 2, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "demonstrated fail-open uncertainty defect remains actionable" },
     ],
   });
   const result = runJudgePass(findings, v, HEAD);
@@ -760,7 +759,7 @@ test("runJudgePass two-round rehearsal: an unchanged coverage demand stays rejec
   // Round 1: the demand is rejected (percentage-only, non-actionable).
   const round1 = runJudgePass(
     ledger(coverageDemand),
-    verdict({ dispositions: [{ index: 0, disposition: "reject", rationale: "percentage-only demand; fails VALIDATE-COVERAGE-ADMISSION", criterion: "VALIDATE-COVERAGE-ADMISSION" }] }),
+    verdict({ dispositions: [{ index: 0, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "percentage-only demand; fails VALIDATE-COVERAGE-ADMISSION", criterion: "VALIDATE-COVERAGE-ADMISSION" }] }),
     HEAD,
   );
   assert.equal(round1.act.length, 0);
@@ -771,8 +770,8 @@ test("runJudgePass two-round rehearsal: an unchanged coverage demand stays rejec
     ledger(coverageDemand, newBoundaryFinding),
     verdict({
       dispositions: [
-        { index: 0, disposition: "reject", rationale: "no new evidence since the prior-round rejection; still percentage-only", criterion: "VALIDATE-COVERAGE-ADMISSION" },
-        { index: 1, disposition: "act", rationale: "distinct serialization boundary, names the protected behavior", criterion: "VALIDATE-COVERAGE-ADMISSION" },
+        { index: 0, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "no new evidence since the prior-round rejection; still percentage-only", criterion: "VALIDATE-COVERAGE-ADMISSION" },
+        { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "distinct serialization boundary, names the protected behavior", criterion: "VALIDATE-COVERAGE-ADMISSION" },
       ],
     }),
     HEAD,
@@ -812,7 +811,7 @@ async function writeSpecAuthorityCase(tmpDir, { decisions, findings }) {
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
   await writeFile(
     path.join(tmpDir, "judge-verdict.json"),
-    JSON.stringify(verdict({ dispositions: findings.map((_f, i) => ({ index: i, disposition: "act", rationale: "in scope" })) })),
+    JSON.stringify(verdict({ dispositions: [...new Set(findings.map((f, i) => f.clusterId ?? i))].map((index) => ({ index, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" })) })),
   );
   await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
   await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ ...decisions.identity, decisions: decisions.list }));
@@ -1006,8 +1005,8 @@ test("judgePassCli drops a finding_conflicts finding from the act list even if r
   await writeFile(
     path.join(tmpDir, "judge-verdict.json"),
     JSON.stringify(verdict({ dispositions: [
-      { index: 0, disposition: "act", rationale: "relevance act" },
-      { index: 1, disposition: "act", rationale: "relevance act" },
+      { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "relevance act" },
+      { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "relevance act" },
     ] })),
   );
   await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
@@ -1030,8 +1029,8 @@ test("judgePassCli keeps an evidence-only valid_compliant finding off the fixer 
   const { specDigest, contentDigest, criterionIds } = await specDigests();
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ summary: "confirm CI" }), finding({ summary: "legit defect" })] }));
   await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [
-    { index: 0, disposition: "act", rationale: "relevance act" },
-    { index: 1, disposition: "act", rationale: "relevance act" },
+    { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "relevance act" },
+    { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "relevance act" },
   ] })));
   await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
   const base = { specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" };
@@ -1088,7 +1087,7 @@ test("judgePassCli approves the whole criterion set only on a clean round (no ac
   const findings = [finding()];
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
   // Relevance-reject the only finding so the act list is empty -> clean round.
-  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "reject", rationale: "out of scope NG" }] })));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "out of scope NG" }] })));
   await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
   await writeFile(
     path.join(tmpDir, "spec-authority.json"),
@@ -1115,7 +1114,7 @@ test("judgePassCli rejects a finding_conflicts finding even when its relevance d
   const { specDigest, contentDigest, criterionIds } = await specDigests();
   const findings = [finding({ severity: "low", summary: "would-be follow-up" })];
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
-  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "defer", rationale: "belongs in follow-up", followUpDraft: { title: "t", body: "b" } }] })));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "belongs in follow-up", followUpDraft: { title: "t", body: "b" } }] })));
   await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
   await writeFile(
     path.join(tmpDir, "spec-authority.json"),
@@ -1139,7 +1138,7 @@ test("judgePassCli flags a remediation_conflicts finding as remediationRejected 
   const { specDigest, contentDigest, criterionIds } = await specDigests();
   const findings = [finding({ summary: "valid repetition finding" })];
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
-  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "real defect" }] })));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "real defect" }] })));
   await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
   await writeFile(
     path.join(tmpDir, "spec-authority.json"),
@@ -1207,7 +1206,7 @@ test("judgePassCli --carry-forward-proof carries an unaffected criterion at the 
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-spec-carry-"));
   const { specDigest, contentDigest, criterionIds } = await specDigests();
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
-  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "reject", rationale: "out" }] })));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "out" }] })));
   await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
   await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
     { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q" },
@@ -1278,7 +1277,7 @@ test("validateCliArgs: --changed-paths/--coverage-map each require --spec-file",
 async function writeAffectedCriteriaFixture(tmpDir, { affected, coverage }) {
   const { specDigest, contentDigest, criterionIds } = await specDigests();
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
-  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "reject", rationale: "out" }] })));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "out" }] })));
   await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
   await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
     { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q" },
@@ -1456,7 +1455,7 @@ test("judgePassCli AC1: --ledger-out carries the specAuthority stamp when engage
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-ac1-stamp-"));
   const { specDigest, contentDigest, criterionIds } = await specDigests();
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
-  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "in scope" }] })));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" }] })));
   await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
   await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({
     specDigest, headSha: HEAD, contentDigest, decisions: [
@@ -1483,7 +1482,7 @@ test("judgePassCli AC1: --ledger-out carries the specAuthority stamp when engage
   // No --spec-file: byte-identical to the pre-existing (bare array / unstamped) shape.
   const tmpDir2 = await mkdtemp(path.join(os.tmpdir(), "judge-pass-ac1-noop-"));
   await writeFile(path.join(tmpDir2, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
-  await writeFile(path.join(tmpDir2, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "in scope" }] })));
+  await writeFile(path.join(tmpDir2, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" }] })));
   await judgePassCli({
     repo: "mfittko/dev-loops", pr: "2000", gate: "draft_gate", headSha: HEAD,
     findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
@@ -1807,8 +1806,8 @@ async function runPrScopeRound(gate, deps = {}) {
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
   await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({
     dispositions: [
-      { index: 0, disposition: "act", rationale: "in scope:0" },
-      { index: 1, disposition: "reject", rationale: "template-only finding on a pr_scope spec" },
+      { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope:0" },
+      { index: 1, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "template-only finding on a pr_scope spec" },
       { index: 2, ...DEFER },
     ],
   })));
