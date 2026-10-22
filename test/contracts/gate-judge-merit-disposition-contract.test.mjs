@@ -94,8 +94,8 @@ test("the operational fixer instructions exempt a judge-acted low from the round
   // copilot-pr-followup SKILL's own fixer instructions, which must carry the
   // same judge-acted-low exception or the downstream re-defer leak reopens there.
   const text = await read("skills/copilot-pr-followup/SKILL.md");
-  const matches = text.match(/low the judge disposed `act`[\s\S]{0,140}reproduction grounds/g) ?? [];
-  assert.ok(matches.length >= 2, `both fixer-instruction sites (classify-findings + Phase 5 triage) must exempt a judge-acted low as a reproduction-only-declinable fix target (found ${matches.length})`);
+  const matches = text.match(/judge (?:disposed )?`act`[\s\S]{0,140}reproduction grounds/g) ?? [];
+  assert.ok(matches.length >= 2, `both fixer-instruction sites (classify-findings + Phase 5 triage) must treat a judge-acted finding as a reproduction-only-declinable fix target (found ${matches.length})`);
 });
 
 // --- Calibration half (AC3): a real correctness/fail-open is not labeled low ---
