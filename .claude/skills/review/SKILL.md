@@ -145,12 +145,11 @@ this skill dispatches the `review` agents directly.
    same keyed plan also guards that caller-supplied reviewer provenance
    corresponds to the emitted units; for `write-gate-findings-log.mjs` the plan remains a guard, never a findings
    or provenance source. Then `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo> --pr <n>
-   --gate review --head-sha <sha> --findings-ledger <path> [--judge-spec-source <source> [--judge-unavailable-reason <reason>]] --next-action "none
-   — informational review, no re-gate required" --submit <mode> [--auto]
+   --gate review --head-sha <sha> --findings-ledger <path> [--judge-spec-source <source> [--judge-unavailable-reason <reason>]] --next-action "<ignored>" --submit <mode> [--auto]
    [...]` posts the SINGLE visible PR review surface
    (`GATE-COMMENT-SINGLE-SURFACE`) straight from that ledger — no CI wait, no
    coordination-context read, no auto-resolve, no forbidden-action check
-   (those are draft/pre-approval-only machinery `review` never touches). See
+   (those are draft/pre-approval-only machinery `review` never touches). `--next-action` is still a required flag, but the `review` gate ignores its value and derives the next action itself (`GATE-COMMENT-REQUIRED-FIELDS`). See
    [Checkpoint Verdict Comment Contract](../docs/gate-review-comment-contract.md#review-gate-submit-modes-1840)
    for the `--submit` vocabulary. `approve`/`request-changes`/`discard`
    additionally REQUIRE `--interactive-confirm` (#1888/#1912) — fail closed

@@ -4,7 +4,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
-import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isOpenActItem, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { composeConvergedDraftGate, convergedActItemKey } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
@@ -2389,9 +2389,12 @@ function renderGateBlockerItemsList(blockers) {
 // accepted unchanged).
 export function deriveEffectiveNextAction(verdict, gate, actItems = []) {
   if (gate === "review") {
-    const n = actItems.length;
+    // Count distinct act items: the ledger and --findings-json can carry the same finding, and a cluster is one item.
+    const stamped = actItems.length > 0 && actItems.every((f) => Number.isInteger(f?.clusterId));
+    const n = new Set(actItems.map((f) => (stamped ? f.clusterId : `${f?.severity}|${typeof f?.summary === "string" ? f.summary.trim() : f?.summary}`))).size;
     const tail = "this review does not approve or block the PR";
     if (n > 0) return `fix the ${n} item${n === 1 ? "" : "s"} this review lists; ${tail}`;
+    if (verdict === "blocked") return `the review could not complete; rerun it; ${tail}`;
     return verdict === "clean" ? `no change requested; ${tail}` : `read the findings, none was judged; ${tail}`;
   }
   if (verdict !== "findings_present" && verdict !== "blocked") {
@@ -3032,8 +3035,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (convergedInput && (convergedMarker === null || options.verdict !== "clean")) {
     throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs a clean composed verdict over a validated low/nit act list (got verdict ${JSON.stringify(options.verdict)}); post a full round instead.`);
   }
-  // A judged round takes its verdict from the judge's act list alone, so the severity floor never overrides it.
-  const judgedRound = (preloadedFindingsLedger?.findings ?? []).some((f) => JUDGE_DISPOSITIONS.includes(f?.judgeDisposition));
+  // A fully judged round takes its verdict from the judge's act list alone, so the severity floor never overrides it. A partly judged ledger keeps the floor.
+  const judgedRound = isFullyJudged(preloadedFindingsLedger?.findings);
   if (
     options.verdict === "clean"
     && !judgedRound

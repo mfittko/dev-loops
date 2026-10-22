@@ -306,7 +306,7 @@ A clean `pre_approval_gate` comment does **not** retroactively replace the requi
 | **Verdict** | `clean`, `findings_present`, or `blocked` |
 | **Blocking severities** | (non-clean verdicts only) Which severity levels must be clean per gate config. Renders inside an HTML comment (`GATE-COMMENT-INLINE-SEVERITY-FLOOR`). |
 | **Findings summary** | Short truthful audit summary. Use `no issues found` only when the reviewed head needed no corrective change for that gate pass. |
-| **Next action** | One of: `stay draft and fix`, `rerun gate`, `mark ready for review`, `await final human approval` |
+| **Next action** | One of: `stay draft and fix`, `rerun gate`, `mark ready for review`, `await final human approval`. The standalone `review` gate ignores the caller's `--next-action` and derives it from the judge act list: `fix the N item(s) this review lists`, `no change requested`, `the review could not complete; rerun it` (a `blocked` verdict) or `read the findings, none was judged`, each followed by `; this review does not approve or block the PR`. N counts distinct act items (one per cluster). |
 
 ## Optional size-budget fields
 

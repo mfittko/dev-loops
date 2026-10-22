@@ -394,3 +394,15 @@ test("a review-gate ledger with fan-in findings_present and a sole rejected high
     assert.match(body, /no change requested/);
   }, { prefix: "dev-loops-act-list-review-reject-high-" });
 });
+
+test("a partly judged ledger keeps the fan-in verdict: an unjudged high never composes clean", async () => {
+  await withTempDir(async (tempDir) => {
+    const unjudgedHigh = { severity: "high", angle: "correctness", summary: "high finding with no judge disposition" };
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "findings_present", findings: [unjudgedHigh, finding("low", "reject")] });
+    const derived = await post(ledgerPath, undefined, 1);
+    assert.equal(derived.error, undefined);
+    assert.match(derived.body, /\*\*Verdict:\*\* findings_present/);
+    const explicitClean = await post(ledgerPath, "clean", 1);
+    assert.match(explicitClean.error, /--verdict "clean"/);
+  }, { prefix: "dev-loops-act-list-mixed-" });
+});

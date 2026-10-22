@@ -1287,19 +1287,28 @@ export function listOpenActItems(findings) {
   return (Array.isArray(findings) ? findings : []).filter(isOpenActItem);
 }
 
+/** True when the list is non-empty and every finding carries a judge disposition. Pure. */
+export function isFullyJudged(findings) {
+  const list = Array.isArray(findings) ? findings : [];
+  return list.length > 0 && list.every((f) => JUDGE_DISPOSITIONS.includes(f?.judgeDisposition));
+}
+
 /**
  * Compose a round's review verdict from the judge's dispositions alone: a
  * non-empty act list gives `findings_present` and an empty one gives `clean`,
- * whatever the severities. A round with no judged finding keeps the fan-in
- * verdict, and `blocked` is never lowered.
+ * whatever the severities. A round is judged only when EVERY finding carries a
+ * judge disposition. A round with no judged finding or a partly judged ledger
+ * keeps the fan-in verdict unless an act item is open (fail closed: an unjudged
+ * finding never drops out), and `blocked` is never lowered.
  * @param {"clean"|"findings_present"|"blocked"} overallVerdict
  * @param {unknown} findings
  * @returns {"clean"|"findings_present"|"blocked"}
  */
 export function composeReviewVerdict(overallVerdict, findings) {
   const list = Array.isArray(findings) ? findings : [];
-  if (overallVerdict === "blocked" || !list.some((f) => JUDGE_DISPOSITIONS.includes(f?.judgeDisposition))) return overallVerdict;
-  return listOpenActItems(list).length > 0 ? "findings_present" : "clean";
+  if (overallVerdict === "blocked") return overallVerdict;
+  if (listOpenActItems(list).length > 0) return "findings_present";
+  return isFullyJudged(list) ? "clean" : overallVerdict;
 }
 
 /**

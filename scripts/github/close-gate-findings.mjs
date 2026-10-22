@@ -363,7 +363,9 @@ async function runDispositionPass({ repo, pr, gate, headSha, tmpRoot, repoRoot, 
   const targets = await selectDispositionTargets(threads, login, findings, { repo, pr, gate, headSha, tmpRoot, repoRoot });
   // Every target is a judge-deferred thread, so every target is recorded on the
   // deferral comment target and stamped disposition=deferred.
-  const fileableTargets = targets.filter((target) => isFileableDeferral(target.judgeDisposition));
+  // A nit member of a deferred mixed cluster is never stamped or filed (GATE-EXEC-THREAD-DISPOSITION); it is resolved with the cluster rationale.
+  const nitTargets = targets.filter((target) => isFileableDeferral(target.judgeDisposition) && target.severity === "nit");
+  const fileableTargets = targets.filter((target) => isFileableDeferral(target.judgeDisposition) && target.severity !== "nit");
 
   // Build (and thereby validate) every reply BEFORE any mutating GitHub call:
   // a throw after the PATCH/comment would leave a target stamped-but-unresolved
@@ -426,6 +428,18 @@ async function runDispositionPass({ repo, pr, gate, headSha, tmpRoot, repoRoot, 
     try {
       const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, repo, pr, issueNumber, body: target.body, judgeReason: target.judgeReason, judgeRationale: target.judgeRationale });
       await stampDeferredDisposition({ repo, commentId: target.commentId, judgeDisposition: target.judgeDisposition, issueNumber }, { env, ghCommand, runChild });
+      await replyAndMaybeResolve(
+        { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
+        { env, ghCommand, runChild },
+      );
+      deferredResolved += 1;
+    } catch (err) {
+      recordFailure(target, err);
+    }
+  }
+  for (const target of nitTargets) {
+    try {
+      const message = `${GATE_REJECT_CLOSE_REPLY_PREFIX}round ${round}, fingerprint ${target.fp}, severity nit, angle ${target.angle}): ${buildMeritRationale({ body: target.body, judgeReason: target.judgeReason, judgeRationale: target.judgeRationale })} A nit is never deferred or filed, so this thread closes with the cluster rationale.`;
       await replyAndMaybeResolve(
         { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
         { env, ghCommand, runChild },
@@ -557,7 +571,7 @@ function findingFingerprintMatches(finding, fp) {
 // ambiguity tier 2 already flagged would reject-close a thread that this
 // pass cannot actually resolve on the merits. A plain `null` (no matching
 // prior ledger at all) is a genuine cache miss and still falls through.
-async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate, headSha, tmpRoot, repoRoot }) {
+async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate, headSha, tmpRoot, repoRoot, allowRendered = true }) {
   // Fingerprint match FIRST, independent of whether judgeDisposition is
   // present — a current-ledger finding this round already knows about (by
   // fingerprint) is never a tier-2/3 cache miss, even when the judge hasn't
@@ -594,6 +608,8 @@ async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate,
   const prior = await findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp });
   if (prior?.ambiguous) return null;
   if (prior) return prior;
+  // The rendered suffix ends the line that carries the reviewer's untrusted summary, so it never authorizes a defer (ledger evidence only).
+  if (!allowRendered) return null;
   const rendered = parseRenderedJudgeDisposition(threadBody);
   return rendered ? { disposition: rendered, rationale: null, reason: null } : null;
 }
@@ -609,7 +625,7 @@ async function resolveThreadDisposition(wanted, { fp, threadBody, ...rest }) {
   for (const memberFp of fps) {
     // The rendered header suffix (tier 3) carries only the primary's disposition, so a
     // non-primary member never reads it: with no ledger evidence the thread leaves the reject-close path and follows the severity path.
-    const judgement = await resolveJudgeRejection({ fp: memberFp, threadBody: memberFp === fp ? threadBody : "", ...rest });
+    const judgement = await resolveJudgeRejection({ fp: memberFp, threadBody: memberFp === fp ? threadBody : "", allowRendered: wanted !== "defer", ...rest });
     if (judgement?.disposition !== wanted) return null;
     primary ??= judgement;
   }
@@ -694,6 +710,8 @@ async function runRejectClosePass({ repo, pr, gate, headSha, round, threads, sna
 function selectFoldedFileableEntries({ findings, floor }) {
   return findings
     .filter((f) => isBelowInlineFloor(f.severity, floor))
+    // A nit is never filed, even as a member of a deferred cluster.
+    .filter((f) => f.severity !== "nit")
     // An act finding goes to the fixer, never the deferral record (ADR 0089);
     // a fingerprint whose ledger entries disagree is ambiguous and fails closed.
     .filter((f) => isFileableDeferral(f.judgeDisposition))

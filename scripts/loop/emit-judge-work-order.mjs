@@ -23,7 +23,7 @@ import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
-const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--tmp-root <path>]
+const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--tmp-root <path>]
 Derives the judge's work order from the round's authoritative inputs: the consolidated
 ledger (consolidate-fanin --ledger-out), the structured spec and identity stamp
 (spec-context.mjs --spec-out/--identity-out), the gate-context evidence read and the
@@ -70,7 +70,7 @@ This permits only pinned reads and concrete dependency widening already authoriz
 ## Judgment
 
 Adjudicate every finding in the \`findings\` read per agents/judge.agent.md, against the COMPLETE spec in the \`spec\` read.
-Dispose each cluster once, never each raw finding: \`dispositions[].index\` is the cluster's \`clusterId\`, and one \`act\`, \`defer\` or \`reject\` with one rationale applies to every member. Severity, the \`round\` and the \`mediumFixWindow\` in the work order are inputs to your decision. No rule defers a finding from severity or round alone, so decide \`act\`, \`defer\` or \`reject\` for every cluster in every round.
+Dispose each cluster once, never each raw finding: \`dispositions[].index\` is the cluster's \`clusterId\`, and one \`act\`, \`defer\` or \`reject\` with one rationale applies to every member. Severity, the \`round\` and the \`mediumFixWindow\` in the work order are inputs to your decision. No rule defers a finding from severity or round alone, so decide \`act\`, \`defer\` or \`reject\` for every cluster in every round. One exception holds: a cluster that contains a \`high\` or a \`question\`, and an all-\`nit\` cluster, is never deferred, so only \`act\` or \`reject\` is valid for it and a \`defer\` fails the judge pass closed.
 Each disposition carries \`title\` (the one-line defect), \`detail\` (the concrete path through the code and why it breaks), \`fix\` (the remedy and the test to add) and, for \`defer\` and \`reject\`, \`reason\` (one sentence). A disposition missing any required field fails closed. Write plain sentences with no em dashes and no arrows.
 Read every \`required\` entry below IN FULL before any judgment. If one is missing, unreadable, or its sha256 differs, stop and report which read failed; never write a verdict.
 Write exactly two artifacts: the relevance verdict to \`${verdictPath}\` and the spec-authority verdict to \`${specVerdictPath}\`.
@@ -284,7 +284,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     const plan = await emitJudgeWorkOrder({
       repo: values.repo, pr: values.pr, gate: values.gate, headSha: values["head-sha"].toLowerCase(),
       findingsFile: values["findings-file"], specFile: values["spec-file"], identityFile: values["identity-file"],
-      priorVerdicts: values["prior-verdict"] ?? [], ...(values.round ? { round: Number(values.round) } : {}), cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}),
+      priorVerdicts: values["prior-verdict"] ?? [], ...(values.round !== undefined ? { round: /^[1-9][0-9]*$/.test(values.round) ? Number(values.round) : values.round } : {}), cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}),
     });
     const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath });

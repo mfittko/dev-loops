@@ -2885,3 +2885,17 @@ test("writeGateFindingsLog disposes a 3-member cluster by one clusterId through 
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("writeGateFindingsLog refuses a clusterId outside the array or naming an entry stamped with another id", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-clusterid-range-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const write = (findings) => writeGateFindingsLog({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha, verdict: "findings_present", findings: JSON.stringify(findings), tmpRoot: tmpDir });
+    const at = (clusterId, summary) => ({ severity: "medium", angle: "docs", summary, clusterId });
+    assert.equal((await write([at(0, "a")])).ok, true);
+    await assert.rejects(() => write([at(0, "a"), at(2, "b")]), /clusterId 2 must be less than 2/);
+    await assert.rejects(() => write([at(1, "a"), at(0, "b")]), /clusterId 1 .*own clusterId is 1/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});

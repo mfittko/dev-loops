@@ -12114,6 +12114,10 @@ test("deriveEffectiveNextAction derives from the act list on review, draft_gate 
   assert.equal(deriveEffectiveNextAction("findings_present", "review", act.slice(0, 1)), `fix the 1 item this review lists; ${tail}`);
   assert.equal(deriveEffectiveNextAction("clean", "review", []), `no change requested; ${tail}`);
   assert.equal(deriveEffectiveNextAction("findings_present", "review", []), `read the findings, none was judged; ${tail}`);
+  assert.equal(deriveEffectiveNextAction("blocked", "review", []), `the review could not complete; rerun it; ${tail}`);
+  // The same act finding carried by the ledger and by --findings-json counts once; a stamped cluster counts once.
+  assert.equal(deriveEffectiveNextAction("findings_present", "review", [act[0], { ...act[0] }]), `fix the 1 item this review lists; ${tail}`);
+  assert.equal(deriveEffectiveNextAction("findings_present", "review", [{ ...act[0], clusterId: 3 }, { ...act[1], clusterId: 3 }]), `fix the 1 item this review lists; ${tail}`);
   assert.equal(deriveEffectiveNextAction("findings_present", "draft_gate", act), "stay draft and fix");
   assert.equal(deriveEffectiveNextAction("findings_present", "pre_approval_gate", act), "rerun gate");
   assert.equal(deriveEffectiveNextAction("clean", "draft_gate", []), null);

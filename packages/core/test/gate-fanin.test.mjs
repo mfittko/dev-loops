@@ -5,6 +5,7 @@ import * as fanin from "../src/loop/gate-fanin.mjs";
 import {
   consolidateFanin,
   composeReviewVerdict,
+  isFullyJudged,
   listOpenActItems,
   toFindingsLogShape,
   planFanoutBatches,
@@ -1864,6 +1865,14 @@ describe("composeReviewVerdict / listOpenActItems", () => {
     assert.equal(composeReviewVerdict("blocked", [medium("act")]), "blocked");
     assert.equal(composeReviewVerdict("findings_present", [medium(undefined)]), "findings_present");
     assert.equal(composeReviewVerdict("clean", [medium(undefined)]), "clean");
+  });
+
+  test("a partly judged ledger keeps the fan-in verdict: an unjudged high never drops out", () => {
+    const high = { severity: "high", angle: "correctness", summary: "high issue" };
+    assert.equal(composeReviewVerdict("findings_present", [high, low("reject")]), "findings_present");
+    assert.equal(isFullyJudged([high, low("reject")]), false);
+    assert.equal(isFullyJudged([medium("act"), low("reject")]), true);
+    assert.equal(isFullyJudged([]), false);
   });
 
   test("a judged round depends only on the act list: only rejected or deferred findings give clean", () => {

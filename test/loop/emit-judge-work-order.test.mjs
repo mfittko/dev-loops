@@ -338,8 +338,37 @@ test("the work order carries the round and the medium fix window as judge inputs
     const text = await readFile(plan.promptPath, "utf8");
     assert.match(text, /Dispose each cluster once/);
     assert.match(text, /No rule defers a finding from severity or round alone/);
+    assert.match(text, /a cluster that contains a `high` or a `question`, and an all-`nit` cluster, is never deferred/);
     assert.match(text, /`title`.*`detail`.*`fix`.*`reason`/s);
     assert.match(text, /no em dashes and no arrows/);
     assert.equal((await emitJudgeWorkOrder(sources)).workOrder.round, null);
+  });
+});
+
+test("J1: the --round CLI accepts only /^[1-9][0-9]*$/ and carries it to the work order", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const run = async (extra) => {
+      const out = [];
+      const write = process.stdout.write;
+      process.stdout.write = (chunk) => (out.push(String(chunk)), true);
+      try {
+        await main(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-file", sources.findingsFile,
+          "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...extra], { cwd: root });
+      } finally {
+        process.stdout.write = write;
+      }
+      return JSON.parse(out.join(""));
+    };
+    for (const round of ["4", "12"]) {
+      const body = await run(["--round", round]);
+      assert.equal(body.ok, true, round);
+      const plan = JSON.parse(await readFile(body.planPath, "utf8"));
+      assert.equal(plan.workOrder.round, Number(round));
+    }
+    for (const round of ["", "0", "0x4", " 4 ", "1e0", "abc"]) {
+      const body = await run(["--round", round]);
+      assert.equal(body.refusal, "invalid_round", JSON.stringify(round));
+    }
   });
 });

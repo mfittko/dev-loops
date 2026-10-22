@@ -6,9 +6,9 @@ Accepted — 2026-10-22 ([issue 2903](https://github.com/mfittko/dev-loops/issue
 
 Amends [ADR 0089](./0089-judge-act-list-drives-review-verdict.md): the review verdict depends only on the judge's dispositions. A non-empty act list gives `findings_present` and an empty act list gives `clean`. The `blockCleanOnFindingSeverities` floor no longer overrides the judge on a judged round.
 
-Amends [ADR 0075](./0075-fold-sub-floor-findings-out-of-inline-threads.md): severity no longer decides which findings are visible or inline. A finding's judged disposition decides, and severity stays an input to the judge. The safety floor (a rejected `high`, a rejected `question`, or a rejected `threat-model`, `renderer-security` or `input-validation` finding) controls visibility only.
+Amends [ADR 0075](./0075-fold-sub-floor-findings-out-of-inline-threads.md), implemented by the later slices of issue 2903 (the rendering code still folds by severity at this head): severity no longer decides which findings are visible or inline. A finding's judged disposition decides, and severity stays an input to the judge. The safety floor (a rejected `high`, a rejected `question`, or a rejected `threat-model`, `renderer-security` or `input-validation` finding) controls visibility only.
 
-Amends [ADR 0179](./0179-judge-in-standalone-review.md): the sentence that the verdict composition and finding rendering code stay unchanged no longer holds. The interim judge-spec line on the review body is replaced by the summary paragraph of the single rendering contract. Spec precedence, the `pr_scope` kind and the review-gate judge wiring stay as 0179 records them.
+Amends [ADR 0179](./0179-judge-in-standalone-review.md): the sentence that the verdict composition and finding rendering code stay unchanged no longer holds. The interim judge-spec line on the review body is replaced by the summary paragraph of the single rendering contract, implemented by the later slices of issue 2903. Spec precedence, the `pr_scope` kind and the review-gate judge wiring stay as 0179 records them.
 
 ## Context
 

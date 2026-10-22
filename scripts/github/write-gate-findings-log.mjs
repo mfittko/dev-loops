@@ -111,9 +111,9 @@ function normalizeExecutionMode(value) {
 }
 // Exported so other tools (e.g. upsert-checkpoint-verdict.mjs) derive their
 // own subset from this one copy instead of hand-copying it out of sync.
-// "needs-answer" is the disposition a "question" finding gets (see
-// consolidateFanin, @dev-loops/core/loop/gate-fanin): a question is
-// answered, never deferred or fixed, so it needs its own disposition.
+// "unjudged" is the default: fan-in leaves every finding unjudged (see
+// consolidateFanin, @dev-loops/core/loop/gate-fanin). "needs-answer" is an
+// explicit caller value only, for a question that is answered rather than fixed.
 export const VALID_DISPOSITIONS = new Set(["unjudged", "accepted-for-fix", "deferred", "needs-answer", "disputed", "operator_acknowledged"]);
 // Validate + normalize a parsed --findings / --findings-file JSON array. Shared
 // by both flags so they carry identical validation — flagLabel only changes the
@@ -285,6 +285,12 @@ function validateFindingsArray(parsed, flagLabel) {
   const stampedCount = entries.filter((e) => e.clusterId !== undefined).length;
   if (stampedCount > 0 && stampedCount < entries.length) {
     throw parseError(`${flagLabel}: clusterId must be set on every finding or on none (${stampedCount} of ${entries.length} carry it)`);
+  }
+  // The representative is its own member: an id outside the array, or naming an entry stamped with another id, has no representative.
+  for (const [i, e] of entries.entries()) {
+    if (e.clusterId !== undefined && (e.clusterId >= entries.length || entries[e.clusterId].clusterId !== e.clusterId)) {
+      throw parseError(`${flagLabel}[${i}].clusterId ${e.clusterId} must be less than ${entries.length} and name an entry whose own clusterId is ${e.clusterId}`);
+    }
   }
   return entries;
 }
