@@ -935,7 +935,7 @@ test("#2381: findJudgeDispositionForFingerprint picks the disposition from the l
     },
     async (tmpRoot) => {
       const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
-      assert.deepEqual(result, { disposition: "act", rationale: "new reasoning" });
+      assert.deepEqual(result, { disposition: "act", rationale: "new reasoning", reason: null });
     },
   );
 });
@@ -955,7 +955,7 @@ test("#2381: findJudgeDispositionForFingerprint picks the GREATEST loggedAt rega
     },
     async (tmpRoot) => {
       const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headA", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
-      assert.deepEqual(result, { disposition: "act", rationale: "new reasoning" });
+      assert.deepEqual(result, { disposition: "act", rationale: "new reasoning", reason: null });
     },
   );
 });
@@ -968,7 +968,7 @@ test("#2381: findJudgeDispositionForFingerprint ignores a ledger whose own recor
     },
     async (tmpRoot) => {
       const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
-      assert.deepEqual(result, { disposition: "reject", rationale: "this PR's own reasoning" });
+      assert.deepEqual(result, { disposition: "reject", rationale: "this PR's own reasoning", reason: null });
     },
   );
 });
@@ -1045,7 +1045,7 @@ test("#2381: findJudgeDispositionForFingerprint cites a deterministic (sorted-fi
       const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
       // Alphabetically-first filename (headA) wins the citation, not
       // whatever order readdir happened to return the three files in.
-      assert.deepEqual(result, { disposition: "reject", rationale: "from headA" });
+      assert.deepEqual(result, { disposition: "reject", rationale: "from headA", reason: null });
     },
   );
 });
