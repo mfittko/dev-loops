@@ -582,7 +582,9 @@ export function renderInlineCommentBody(finding, { round }) {
 export function buildNonLocatableFindingMarker(finding, { round, issue }) {
   const fp = fingerprintFinding(finding);
   const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
-  const disposition = isDeferredAtRound(finding.judgeDisposition) ? "deferred" : undefined;
+  // A nit member of a deferred cluster gets no stamp (Nit bullet, GATE-EXEC-THREAD-DISPOSITION).
+  const stamp = isDeferredAtRound(finding.judgeDisposition) ? "deferred" : undefined;
+  const disposition = severity === "nit" ? undefined : stamp;
   // Carry the operator-visibility signal onto the marker (ov=1 only when
   // true) so a later reader (the folded-filing pass, close-gate-findings.mjs)
   // can decide fileability without re-reading the ephemeral ledger. Backward
@@ -658,7 +660,7 @@ export function renderVerdictDetailsBlock({ foldedFindings = [], cleanRosterLine
       const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
       // A deferred entry links its deferral target: the recorded followUpIssueNumber, else the PR.
       const target = Number.isInteger(finding.followUpIssueNumber) && finding.followUpIssueNumber > 0 ? finding.followUpIssueNumber : pr;
-      const issue = group === "Deferred" && Number.isInteger(target) && target > 0 ? target : undefined;
+      const issue = group === "Deferred" && severity !== "nit" && Number.isInteger(target) && target > 0 ? target : undefined;
       lines.push(buildNonLocatableFindingMarker(finding, { round, issue }));
       // Location prefix mirrors renderNonLocatableBlock's Location logic:
       // files[0] gets the :line ref, absent files renders no prefix.

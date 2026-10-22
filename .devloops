@@ -96,8 +96,9 @@ gates:
     # resolves it or the judge disposes it defer or reject. A NON-LOCATABLE one
     # is body-filed and carries disposition=deferred only on a judge defer. An
     # unjudged finding stays open. This key lists the severities that the
-    # fan-in verdict treats as blocking when no judge ran. A judged
-    # round reads it only for the clean-implies-no-blocking-act consistency
+    # fan-in verdict treats as blocking when no judge ran or a finding stays
+    # unjudged (a partly judged ledger keeps the fan-in verdict). A judged
+    # round, one where every finding carries a judge disposition, reads it only for the clean-implies-no-blocking-act consistency
     # check, never for the verdict. preApproval's own blockCleanOnFindingSeverities below is
     # high only too. preApproval re-reviews
     # through its own, mostly disjoint angle pool (draft and preApproval share only

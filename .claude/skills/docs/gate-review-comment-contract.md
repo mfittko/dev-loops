@@ -70,7 +70,7 @@ floor, because its resolvable thread blocks gate-close until answered
 (`GATE-EXEC-THREAD-DISPOSITION`). A locatable finding at or above the inline floor, or visible by the rule above, keeps its inline thread whatever its judge disposition (inline thread creation keeps its rules on a create; an update cannot add inline comments). Every other finding FOLDS into the
 verdict body's one `Details` block, grouped by disposition: `Deferred (N)`, `Rejected (N)` and
 `Not judged (N)`. Each folded entry renders as a `file:line`-prefixed (when known)
-severity/angle/summary bullet plus its own INVISIBLE fingerprint marker (`disposition=deferred` on every folded entry that is not `high` and not `act`, Rejected and Not judged included; a folded `high`, possible only when `blockCleanOnFindingSeverities` excludes `high`, carries no `disposition` field, like a body-filed `high` marker) at
+severity/angle/summary bullet plus its own INVISIBLE fingerprint marker (`disposition=deferred` only on a folded entry the judge disposed `defer`; Rejected and Not judged markers carry no `disposition` field, and neither does a folded `high`, possible only when `blockCleanOnFindingSeverities` excludes `high`, like a body-filed `high` marker) at
 line start, the same shape a body-filed marker carries, so cross-round fingerprint suppression
 still applies and a folded finding renders exactly once. A deferred finding keeps its deferral
 comment or `issue=<n>` link, so folding hides no record (a folded Deferred marker carries `issue=<n>` for its deferral target: the recorded follow-up issue (`followUpIssueNumber`), else the PR). An `act` finding never folds and its
@@ -356,8 +356,8 @@ with the fixed meaning below:
 
 | Verdict | Meaning |
 |---|---|
-| `clean` | No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain, and the judge act list is empty, except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) |
-| `findings_present` | The gate found issues at blocking severities, or the judge act list is not empty; fixes are required before the gate boundary can be crossed |
+| `clean` | A fully judged round (every finding carries a judge disposition) has an empty judge act list, whatever the severities; a round with an unjudged finding keeps the fan-in verdict, so no finding at a `blockCleanOnFindingSeverities` severity may remain. `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) is the one exception |
+| `findings_present` | A fully judged round has a non-empty judge act list; a round with an unjudged finding has an issue at a blocking severity or a non-empty act list; fixes are required before the gate boundary can be crossed |
 | `blocked` | The gate could not complete or a hard blocker prevented a verdict |
 
 Enforcement at write time and post time:
@@ -373,7 +373,7 @@ Enforcement at write time and post time:
   and never revises `overallVerdict`.
 - `upsert-checkpoint-verdict.mjs` composes the ledger's `overallVerdict` with its open judge act
   items (ADR 0089) for the same head and gate (#1616), so a non-empty act list yields
-  `findings_present` (except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168), for both ledger cases). It derives the verdict by default (passing no `--verdict` is valid),
+  `findings_present` (except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168), for both ledger cases). A fully judged round takes its verdict from the act list alone, and a round with an unjudged finding keeps the fan-in severity verdict. It derives the verdict by default (passing no `--verdict` is valid),
   accepts a matching explicit value, and refuses a contradiction citing this rule. A ledger
   without `overallVerdict` still refuses an explicit `clean` while its act list is not empty, except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168).
 - The act list for a verdict post comes from judge-enriched data: the ledger written with

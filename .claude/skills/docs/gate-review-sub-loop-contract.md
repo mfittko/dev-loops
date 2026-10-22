@@ -735,7 +735,9 @@ Consolidation:
   fan-in leaves every finding unjudged and only the judge disposes it
 - produce a merged findings artifact
 - determine the overall gate verdict. The ledger keeps the consolidator's severity
-  `overallVerdict` for a round with no judged finding. The posted review verdict of a judged round
+  `overallVerdict` for a round that is not fully judged. A judged round is one in which every
+  finding carries a judge disposition; a partly judged ledger keeps the fan-in verdict and the
+  severity floor. The posted review verdict of a judged round
   depends only on the judge act list (ADR 0089 as amended, `GATE-COMMENT-VERDICT-VALUES`):
   - `clean`: the judge act list is empty, whatever the severities (except
     `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) converges an all-low/nit act list to `clean`)
@@ -835,8 +837,7 @@ by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
   records the deferral (`GATE-EXEC-DEFERRAL-RECORD`). The defer bar is high (net-reduction policy): a `nit` MUST NOT get
   a verdict `disposition` of `defer` (merged into the ledger as `judgeDisposition`; `act` —
   only when it rides an already-planned fix pass — or `reject`, and the resolved thread note
-  is its record; this governs the relevance/filing axis only, while the severity-derived
-  `disposition` field keeps its own deferred-with-no-fixer-cycle semantics for nits), and a
+  is its record; the ledger disposition of a nit stays unjudged), and a
   `low` adjudicated as a genuine AC-relevant defect is `act` (above), never deferred or
   rejected on its severity label; a `low` that is real but out of this PR's scope MUST be
   deferred only when leaving it unfixed would change an operator-visible outcome (wrong
@@ -1072,8 +1073,9 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   sweep. The posted review verdict depends only on the judge's dispositions: a non-empty act list gives
   `findings_present` and an empty act list gives `clean`, whatever the severities (ADR 0089, amended by the ADR
   that records judge authority; the one exception is `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)).
-  `blockCleanOnFindingSeverities` no longer overrides the judge on a judged round. A round with no judged
-  finding keeps the fan-in verdict, which that key still computes. GATE-CLOSE is a stricter layer owned by
+  `blockCleanOnFindingSeverities` no longer overrides the judge on a judged round, one in which every
+  finding carries a judge disposition. A round with any unjudged finding (including a partly judged ledger)
+  keeps the fan-in verdict, which that key still computes. GATE-CLOSE is a stricter layer owned by
   `GATE-EXEC-THREAD-DISPOSITION` below: a clean verdict is NOT sufficient to close the gate, because every
   gate-authored review thread (any severity) must first be resolved.
 
@@ -1496,7 +1498,7 @@ The posted surface and the ledger both carry the finding marker's optional `disp
 
 On a lifecycle gate's linked-issue comment target, a `defer` is never parked ONLY in the thread marker and the ephemeral tmp ledger: it is ALWAYS listed in the round's deferral comment. When the target is the PR, no comment is posted; its record is: a stamped thread is recorded by its thread marker and reply, and a folded finding by its marker in whichever verdict-body group it renders under (`Deferred`, `Rejected` or `Not judged`). A round's deferred findings (every judge `defer`) go, on a linked-issue target, as ONE batched comment per tool run listing each finding's fingerprint/severity/angle. Both the thread marker (`issue=<n>`) and the durable ledger entry (`followUpIssueNumber`) record the target's number (a PR number is a valid deferral target; a PR target gets no comment), the re-attachment pointer that lets a reader recover the record after the ephemeral ledger is gone. Idempotency is per fingerprint: before posting, `commentDeferredFindings` (`scripts/github/_gate-finding-surface.mjs`) reads the target's existing deferral comments (first line `<!-- dev-loops:deferred-summary -->`; a bullet in any other comment is not counted), and a finding whose fingerprint the target already lists is not appended again. `judge-pass.mjs` and `close-gate-findings.mjs`'s judge-defer pass resolve the same target from the same PR facts, so both paths converge. The disposition pass never selects a thread whose finding the judge disposed `act` in the current or a prior round (`GATE-EXEC-THREAD-DISPOSITION`), so an open act thread is never defer-closed. A `disposition=deferred` thread marker with no linked `issue=<n>` is a `GATE-EXEC-THREAD-DISPOSITION` contract violation, refused fail-closed exactly like a stamp the judge did not dispose `defer`.
 
-A `reject` (the judge's relevance axis only, Phase 3.5) is never a deferral, and `judge-pass.mjs` writes nothing to the deferral comment for it: it records a one-line audit entry in the durable ledger (fingerprint, severity, angle, `judgeDisposition: "reject"`, rationale). `close-gate-findings.mjs` lists only judge-deferred findings in the deferral comment on a linked-issue target (a PR target posts no comment), and it reject-closes a judge-rejected `medium` or `low` defect thread per `GATE-EXEC-THREAD-DISPOSITION` with no listing and no stamp (ADR 0144).
+A `reject` (the judge's relevance axis only, Phase 3.5) is never a deferral, and `judge-pass.mjs` writes nothing to the deferral comment for it: it records a one-line audit entry in the durable ledger (fingerprint, severity, angle, `judgeDisposition: "reject"`, rationale). `close-gate-findings.mjs` lists only judge-deferred findings in the deferral comment on a linked-issue target (a PR target posts no comment), and it reject-closes a judge-rejected `medium`, `low` or `nit` defect thread per `GATE-EXEC-THREAD-DISPOSITION` with no listing and no stamp (ADR 0144).
 
 ## Execution mode and fan-out evidence enforcement
 

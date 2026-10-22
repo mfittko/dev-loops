@@ -425,6 +425,17 @@ test("renderVerdictDetailsBlock: renders a collapsed <details> with a per-findin
   }
 });
 
+test("renderVerdictDetailsBlock: a deferred nit member gets no deferred stamp and no issue link", () => {
+  const block = renderVerdictDetailsBlock({
+    foldedFindings: [{ severity: "nit", angle: "style", summary: "deferred nit", judgeDisposition: "defer" }],
+    round: 1, pr: 42,
+  });
+  const marker = block.split("\n").find((l) => l.startsWith("<!-- dev-loops:finding "));
+  assert.ok(marker);
+  assert.equal(parseFindingMarker(marker).disposition, null);
+  assert.doesNotMatch(marker, /issue=/);
+});
+
 test("renderVerdictDetailsBlock: groups folded findings by judge disposition and holds the clean roster", () => {
   const findings = [
     { severity: "medium", angle: "a", summary: "deferred one", judgeDisposition: "defer" },

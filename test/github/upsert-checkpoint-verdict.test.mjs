@@ -12142,6 +12142,9 @@ test("deriveEffectiveNextAction derives from the act list on review, draft_gate 
   // The same act finding carried by the ledger and by --findings-json counts once; a stamped cluster counts once.
   assert.equal(deriveEffectiveNextAction("findings_present", "review", [act[0], { ...act[0] }]), `fix the 1 item this review lists; ${tail}`);
   assert.equal(deriveEffectiveNextAction("findings_present", "review", [{ ...act[0], clusterId: 3 }, { ...act[1], clusterId: 3 }]), `fix the 1 item this review lists; ${tail}`);
+  // Unstamped items key on file plus normalized summary: same text on two files is two items.
+  const same = { severity: "medium", summary: "missing null guard" };
+  assert.equal(deriveEffectiveNextAction("findings_present", "review", [{ ...same, files: ["src/a.mjs"] }, { ...same, files: ["src/b.mjs"] }]), `fix the 2 items this review lists; ${tail}`);
   assert.equal(deriveEffectiveNextAction("findings_present", "draft_gate", act), "stay draft and fix");
   assert.equal(deriveEffectiveNextAction("findings_present", "pre_approval_gate", act), "rerun gate");
   assert.equal(deriveEffectiveNextAction("clean", "draft_gate", []), null);
