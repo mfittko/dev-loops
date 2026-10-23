@@ -60,7 +60,7 @@ function isMissing(error) {
   return error?.code === "ENOENT" || error?.code === "ENOTDIR";
 }
 
-function stripFencedCode(body) {
+export function stripFencedCode(body) {
   // A fence closes only on a bare run of its own character at least as long as the opener.
   let fence = null;
   return body.split(/\r?\n/).filter((line) => {
@@ -74,7 +74,7 @@ function stripFencedCode(body) {
   }).join("\n");
 }
 
-async function loadKnownRuleIds(repoRoot) {
+export async function loadKnownRuleIds(repoRoot) {
   const file = path.join(repoRoot, "skills", "docs", "required-rules.json");
   let text;
   try {
@@ -183,8 +183,17 @@ export async function indexDecisionRecords(decisionsDir) {
   return records;
 }
 
+/**
+ * The record numbers a body cites, in any of the accepted citation forms. One
+ * reader for every consumer: `BODY_ADR_RE` is global/stateful, so it is never
+ * shared as a regex.
+ */
+export function citedAdrNumbers(body) {
+  return new Set([...body.matchAll(BODY_ADR_RE)].map((match) => match[1] ?? match[2]));
+}
+
 export function lintAdrCitations(body, records) {
-  const cited = new Set([...body.matchAll(BODY_ADR_RE)].map((match) => match[1] ?? match[2]));
+  const cited = citedAdrNumbers(body);
   const findings = [];
   for (const id of cited) {
     const record = records.get(id);
