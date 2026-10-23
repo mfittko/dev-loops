@@ -65,6 +65,56 @@ test("conductor selector emits only configured native overrides and retains refu
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test("initial conductor caller qualification captures arguments and never falls back", async () => {
+  // Qualification of the documented caller protocol, not production harness telemetry.
+  const dir = await makeFixtureRepo();
+  const task = { task_name: "conductor_qualification", message: "Authorized qualification task", fork_turns: "none" };
+  try {
+    for (const [requested, emitted, selectorArgs, rejectNative] of [
+      [null, {}, ["--conductor", "--harness", "codex"], false],
+      [{ model: "native" }, { model: "native" }, ["--conductor", "--harness", "codex"], false],
+      [{ reasoningEffort: "medium" }, { reasoning_effort: "medium" }, ["--conductor", "--harness", "codex"], false],
+      [{ model: " " }, null, ["--conductor", "--harness", "codex"], false],
+      [null, null, ["--conductor"], false],
+      [{ model: "native" }, { model: "native" }, ["--conductor", "--harness", "codex"], true],
+    ]) {
+      await writeFile(path.join(dir, ".devloops"), JSON.stringify({ version: 1,
+        ...(requested === null ? {} : { models: { harnesses: { codex: { conductor: requested } } } }) }));
+      const calls = [];
+      const nativeRejection = new Error("qualification native rejection");
+      const collaboration = { spawn_agent: async (args) => {
+        calls.push(args);
+        if (rejectNative) throw nativeRejection;
+        return { agent_id: "qualification-child" };
+      } };
+      const selected = runCli(selectorArgs, { cwd: dir });
+      let failure = null;
+      if (selected.status === 0) {
+        try {
+          await collaboration.spawn_agent({ ...task, ...parseJson(selected.stdout).nativeOverrides });
+        } catch (error) { failure = error; }
+      }
+      assert.deepEqual(calls, emitted === null ? [] : [{ ...task, ...emitted }]);
+      assert.equal(failure, rejectNative ? nativeRejection : null);
+      assert.equal(selected.status, emitted === null ? (selectorArgs.length === 1 ? 2 : 1) : 0);
+      // Requested/emitted values above are known; this stub observes no effective model/effort.
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("help separates angle requirements and conductor output", async () => {
+  const dir = await makeFixtureRepo();
+  try {
+    const result = runCli(["--help"], { cwd: dir });
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /Angle mode — required:/);
+    assert.match(result.stdout, /Conductor mode — required:\s+--conductor --harness codex/);
+    assert.match(result.stdout, /Conductor output \(stdout, JSON\)/);
+    assert.match(result.stdout, /nativeOverrides.reasoning_effort/);
+    assert.match(result.stdout, /Config errors \(exit 1\)/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 // ---------------------------------------------------------------------------
 // Argument errors: exit 2, shared parse-error/usage shape.
 // ---------------------------------------------------------------------------

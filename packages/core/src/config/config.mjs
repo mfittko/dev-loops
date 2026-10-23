@@ -109,7 +109,7 @@ const CodexExecutionToken = z.string({ error: (issue) => `expected a Codex strin
 const CodexExecutionSettings = z.strictObject({
   model: CodexExecutionToken.optional(),
   reasoningEffort: CodexExecutionToken.optional(),
-}).refine((settings) => Object.keys(settings).length > 0, "conductor settings must set model or reasoningEffort (null clears a field)");
+}).refine((settings) => Object.keys(settings).length > 0, "conductor settings must set model or reasoningEffort (null clears a field)").meta({ minProperties: 1 });
 
 const ModelsConfigBase = z.strictObject({
   harnesses: z.strictObject({ codex: z.strictObject({ conductor: CodexExecutionSettings.optional() }) }).optional(),

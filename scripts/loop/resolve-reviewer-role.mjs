@@ -11,7 +11,9 @@
  * `packages/core/src/config/extension-defaults.yaml` directly — a raw grep of
  * the shipped defaults misses the config-layer merge, so it yields the wrong
  * persona/model whenever a repo overrides an angle in `.devloops`.
- * The mutually exclusive conductor selector reads Codex native settings only.
+ * The mutually exclusive conductor selector requires explicit --harness codex
+ * and returns nullable settings plus omitted-if-null nativeOverrides. Only
+ * exit 0 permits dispatch; see skills/docs/main-agent-contract.md.
  *
  * Config-only (no git, no GitHub), matching the scripts/loop/ placement of
  * pre-flight-gate / gate-coordination. ALL angle-pool/eligibility logic lives
@@ -55,18 +57,24 @@ legal candidate angle pool (the same pool dispatch/planning uses — see
 extension-defaults.yaml directly — a raw grep misses the .devloops
 config-layer merge and yields the wrong persona/model.
 
-Required:
+Angle mode — required:
   --gate <op>             Review operation: ${REVIEW_OPERATIONS.join(" | ")}
                            (standalone review is only ever selected by
                            --gate review, never inferred from an omitted flag)
   --angle <name>           Gate angle / lens name (e.g. correctness, security)
 
-Optional:
+Angle mode — optional:
   --harness <pi|claude|codex> Harness whose concrete model tier to resolve
                             (default: active CLI harness)
+
+Conductor mode — required:
+  --conductor --harness codex
+                            Cannot be combined with --gate or --angle.
+
+Both modes — optional:
   --help, -h                Show this help
 
-Output (stdout, JSON):
+Angle output (stdout, JSON):
   {
     "ok": true,
     "operation": "pre_approval_gate",
@@ -80,6 +88,22 @@ Output (stdout, JSON):
     "warnings": [],
     "configErrors": []
   }
+
+Conductor output (stdout, JSON), inherited settings (exit 0):
+  {
+    "ok": true, "harness": "codex", "kind": "conductor",
+    "settings": { "model": null, "reasoningEffort": null },
+    "nativeOverrides": {}, "configErrors": []
+  }
+Configured settings replace the corresponding null. Non-null model is emitted
+as nativeOverrides.model and non-null reasoningEffort as
+nativeOverrides.reasoning_effort; null fields are omitted from nativeOverrides.
+Config errors (exit 1) return the same shape with ok:false, both settings null,
+nativeOverrides:{}, and configErrors containing the loader's error records.
+Only exit 0 permits native dispatch. Pass nativeOverrides unchanged alongside
+the authorized task/message and fork_turns:"none"; native rejection stops the
+attempt without fallback. See skills/docs/main-agent-contract.md, Codex
+coordinator dispatch, for the canonical initial/resumed caller contract.
 
 ${JQ_OUTPUT_USAGE}
 
