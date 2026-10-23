@@ -243,11 +243,13 @@ standingAuthorizations:
 
 # Gate validation (ADR 0137, amends ADR 0105). This repo uses the ci producer
 # (ADR 0137 as amended by ADR 0172). `paths` is this repo's targeted
-# worker map for resolveTargetedValidation: first match wins, one surface per
-# change set, an empty command list pins matching paths to full validation.
+# worker map for resolveTargetedValidation: first match wins per path, then
+# union checks; an empty command list pins matching paths to full validation.
 validation:
   mode: ci-only
   paths:
+    - { match: ["skills/docs/**", "skills/*/SKILL.md"], surface: docs, commands: ["bun run test:docs", "bun run test:doc-guard", "bun scripts/run-bun-test.mjs --referencing {path}"] }
+    - { match: "changes/*.md", surface: changeset, commands: ["bun run test:docs"] }
     - { match: "packages/core/test/*.test.mjs", surface: core, commands: ["bun scripts/run-bun-test.mjs {path}"], gateSuites: [test:core] }
     - { match: "packages/core/package.json", surface: core, commands: ["bun run test:core", "bun run test:pack"] }
     - { match: "packages/core/**", surface: core, commands: ["bun run assets:check", "bun run test:core"] }
@@ -266,7 +268,7 @@ validation:
     - { match: ["scripts/loop/inspect-run-viewer.mjs", "scripts/loop/inspect-run-viewer/**", "test/playwright/inspect-run-viewer.spec.mjs"], surface: ui, commands: ["bun run test:playwright:viewer"] }
     - { match: ["docs/presentations/*.html", "docs/articles/*.html", "test/playwright/*.spec.mjs"], surface: unregistered-ui, commands: [] }
     - { match: ["scripts/**", "cli/**", "lib/**"], surface: scripts, commands: ["bun run test:scripts"] }
-    - { match: ["skills/docs/**", "skills/*/SKILL.md", "docs/**", "AGENTS.md", "README.md"], surface: docs, commands: ["bun run test:docs", "bun run test:doc-guard"] }
+    - { match: ["docs/**", "AGENTS.md", "README.md"], surface: docs, commands: ["bun run test:docs", "bun run test:doc-guard"] }
     - { match: ".github/workflows/**", surface: workflow, commands: ["bun run test:workflows"] }
     - { match: "extension/**", surface: extension, commands: ["bun run test:extension"] }
     - { match: [".claude/**", "agents/**", "commands/**", "skills/dev-loop/templates/**"], surface: generated, commands: ["bun run assets:check", "bun run test:assets"] }
