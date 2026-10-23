@@ -29,7 +29,10 @@ With --harness and --entry it also materializes the order under <tmp-root>/coord
 (default: the main checkout's tmp/) and prints {ok,workOrderRef,workOrderDigest,executionIdentity,
 dispatchPrompt,dispatchPayload,planPath}. Dispatch dispatchPayload unchanged. A changed order has a new
 digest and ref; a resume re-emits the same ref under a fresh execution identity. Any other harness refuses.
-Codex emits {task_name,message,fork_turns:"none"}; after the exact pull, verify/read codexBootstrap
+Codex emits {task_name,message,fork_turns:"none"} plus non-null native model/reasoning_effort
+from models.harnesses.codex.conductor. Config errors stop before materialization; native rejection
+must stop dispatch without dropping overrides or launching an inherited replacement.
+After the exact pull, verify/read codexBootstrap
 contracts from the emitting toolchain before scoped work. Native dispatch has no cwd argument.
 ${JQ_OUTPUT_USAGE}
 Stdout: {ok:true,workOrder,workOrderDigest} on success, {ok:false,refusal?,error} on failure (refusal is unsupported_adapter or invalid_entry for a refused emit) (nothing under --silent).

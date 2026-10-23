@@ -11,6 +11,7 @@
  * `packages/core/src/config/extension-defaults.yaml` directly — a raw grep of
  * the shipped defaults misses the config-layer merge, so it yields the wrong
  * persona/model whenever a repo overrides an angle in `.devloops`.
+ * The mutually exclusive conductor selector reads Codex native settings only.
  *
  * Config-only (no git, no GitHub), matching the scripts/loop/ placement of
  * pre-flight-gate / gate-coordination. ALL angle-pool/eligibility logic lives
@@ -87,8 +88,8 @@ Note: for this command, --silent's exit code always reflects \`ok\`, never the
 shared --jq/--silent composition described above).
 
 Exit codes:
-  0  ok: true  — config errors absent AND the angle is a legal member of the operation's pool
-  1  ok: false — config-layer errors present, or the angle is not a legal member of the operation's pool
+  0  ok: true  — config errors absent; conductor selected, or angle belongs to the operation's pool
+  1  ok: false — config-layer errors present, or angle does not belong to the operation's pool
   2  Argument/runtime error, or invalid --jq filter`;
 
 const parseError = buildParseError(USAGE);
