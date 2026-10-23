@@ -96,6 +96,11 @@ When the routed next step requires confirmation for a mutation, the status/start
 
 ## Authoritative startup/resume bundle contract
 
+An initial Codex conductor caller resolves configuration with the read-only
+`gate resolve-role --conductor --harness codex` selector before native spawn;
+the spawned actor retains startup authority. Follow the native field omission
+and no-fallback rules in [Codex coordinator dispatch](main-agent-contract.md#codex-coordinator-dispatch).
+
 Fresh-session `continue`, `inspect`, and status-style paths should compose one bounded authoritative startup/resume bundle from the existing routing/status contract fields.
 
 An optional public `intent` may be supplied when the caller needs the bundle to preserve `inspect_state` semantics without re-deriving them in a separate layer.

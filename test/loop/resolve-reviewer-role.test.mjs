@@ -43,6 +43,28 @@ function parseJson(stdout) {
   return JSON.parse(stdout.trim().split("\n").pop());
 }
 
+test("conductor selector emits only configured native overrides and retains refusal exits", async () => {
+  const dir = await makeFixtureRepo();
+  try {
+    for (const settings of [{}, { model: "native" }, { reasoningEffort: "medium" }, { model: null, reasoningEffort: null }]) {
+      await writeFile(path.join(dir, ".devloops"), JSON.stringify({ version: 1, models: { conductor: "legacy", ...(Object.keys(settings).length ? { harnesses: { codex: { conductor: settings } } } : {}) } }));
+      const r = runCli(["--conductor", "--harness", "codex"], { cwd: dir });
+      assert.equal(r.status, 0, r.stderr);
+      assert.deepEqual(parseJson(r.stdout), { ok: true, harness: "codex", kind: "conductor", settings: { model: null, reasoningEffort: null, ...settings }, nativeOverrides: { ...(settings.model ? { model: settings.model } : {}), ...(settings.reasoningEffort ? { reasoning_effort: settings.reasoningEffort } : {}) }, configErrors: [] });
+    }
+    for (const args of [["--conductor"], ["--conductor", "--harness", "pi"], ["--conductor", "--harness", "codex", "--gate", "review"], ["--conductor", "--harness", "codex", "--angle", "docs"]]) {
+      assert.equal(runCli(args, { cwd: dir, env: { CODEX_THREAD_ID: "", CLAUDECODE: "" } }).status, 2);
+    }
+    await writeFile(path.join(dir, ".devloops"), JSON.stringify({ version: 1, models: { harnesses: { codex: { conductor: { model: " " } } } } }));
+    for (const extra of [[], ["--jq", ".kind", "--silent"], ["--silent"]]) {
+      const r = runCli(["--conductor", "--harness", "codex", ...extra], { cwd: dir });
+      assert.equal(r.status, 1, r.stderr);
+      if (!extra.length) assert.match(JSON.stringify(parseJson(r.stdout).configErrors), /models.harnesses.codex.conductor.model/);
+    }
+    assert.equal(runCli(["--conductor", "--harness", "codex", "--jq", "["], { cwd: dir }).status, 2);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 // ---------------------------------------------------------------------------
 // Argument errors: exit 2, shared parse-error/usage shape.
 // ---------------------------------------------------------------------------

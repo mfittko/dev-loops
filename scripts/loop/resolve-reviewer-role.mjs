@@ -30,7 +30,7 @@
  */
 import { parseArgs } from "node:util";
 
-import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveConductorDispatch } from "@dev-loops/core/config";
 import { REVIEW_OPERATIONS, resolveOperationReviewerRole } from "@dev-loops/core/loop/review-operation";
 import { resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 
@@ -40,6 +40,10 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: resolve-reviewer-role.mjs --gate <${REVIEW_OPERATIONS.join("|")}> --angle <name> [--harness <pi|claude|codex>]
+   or: resolve-reviewer-role.mjs --conductor --harness codex
+
+--conductor selects Codex conductor settings and nativeOverrides without startup.
+It is mutually exclusive with --gate and --angle. Config errors refuse with exit 1.
 
 Resolve a gate angle's reviewer role for a review operation from the fully
 merged config (shipped extension default + the repo's .pi/dev-loop/defaults +
@@ -91,13 +95,14 @@ const parseError = buildParseError(USAGE);
 const HARNESSES = new Set(["pi", "claude", "codex"]);
 
 export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}) {
-  const options = { help: false, gate: null, angle: null, harness: null };
+  const options = { help: false, gate: null, angle: null, harness: null, conductor: false };
   const { tokens } = parseArgs({
     args: [...argv],
     options: {
       help: { type: "boolean", short: "h" },
       gate: { type: "string" },
       angle: { type: "string" },
+      conductor: { type: "boolean" },
       harness: { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -109,11 +114,17 @@ export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}
     if (token.kind === "positional") throw parseError(`Unknown argument: ${token.value}`);
     if (token.kind !== "option") continue;
     if (token.name === "help") { options.help = true; return options; }
+    if (token.name === "conductor") { options.conductor = true; continue; }
     if (token.name === "gate") { options.gate = requireTokenValue(token, parseError).trim(); continue; }
     if (token.name === "angle") { options.angle = requireTokenValue(token, parseError).trim(); continue; }
     if (token.name === "harness") { options.harness = requireTokenValue(token, parseError).trim(); continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
+  }
+  if (options.conductor) {
+    if (options.gate !== null || options.angle !== null) throw parseError("--conductor cannot be mixed with --gate or --angle");
+    if (options.harness !== "codex") throw parseError("--conductor requires --harness codex");
+    return options;
   }
   if (!options.gate) {
     throw parseError(`resolve-reviewer-role requires --gate <${REVIEW_OPERATIONS.join("|")}>`);
@@ -140,7 +151,7 @@ export async function runCli(argv = process.argv.slice(2), { repoRoot = resolveR
     return { ok: true, help: true };
   }
   const loadResult = await loadDevLoopConfig({ repoRoot });
-  const result = resolveOperationReviewerRole(loadResult, {
+  const result = options.conductor ? resolveConductorDispatch(loadResult, { harness: options.harness }) : resolveOperationReviewerRole(loadResult, {
     operation: options.gate,
     angle: options.angle,
     harness: options.harness,

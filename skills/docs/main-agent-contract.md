@@ -69,10 +69,42 @@ Generic `collaboration.spawn_agent` does not automatically load repository role 
 
 ## Codex coordinator dispatch
 
+Before an initial agent-driven Codex conductor spawn, run the config-only selector
+`node <dev-loops-package-root>/cli/index.mjs gate resolve-role --conductor --harness codex`
+from the target repository. Consume only exit 0; exit 1 reports config errors and
+exit 2 reports invalid selectors/runtime output. Neither permits a spawn. Pass the
+returned `nativeOverrides` unchanged as native `collaboration.spawn_agent` fields,
+alongside the authorized task/message and `fork_turns: "none"`. The child still
+runs startup first; this selector never runs startup in MAIN. With no overrides,
+omit `model` and `reasoning_effort`. Native rejection stops that dispatch: report
+the harness, conductor target, `.devloops` path and requested values, and correct
+the configuration before a new authorized attempt; never retry by dropping a
+field or inheriting. Native compatibility is established at launch, not by a
+shared model catalog. Do not change the root session or global settings.
+
+Opt-in example (synthetic values; use tokens supported by the native harness):
+
+```yaml
+models:
+  harnesses:
+    codex:
+      conductor: { model: example-model, reasoningEffort: medium }
+```
+
+Fields merge across config layers; omission preserves a field and explicit null
+clears it. The selected conductor object is the only source: legacy Claude/Pi
+concrete settings cannot supply Codex model or effort. Codex roles, tiers and
+angle overrides remain unsupported schema fields. Requested/emitted settings
+are distinct from observed runtime telemetry; unavailable telemetry is unknown,
+and child self-report is not proof of an effective model.
+
 For resumed direct/queue entries, emit with `--harness codex` and dispatch the printed
 `dispatchPayload` unchanged through `collaboration.spawn_agent`. Its exact fields are
 `{task_name: "coordinator_<executionIdentity with hyphens replaced by underscores>",
-message: dispatchPrompt, fork_turns: "none"}`. The emitter validates the identity as
+message: dispatchPrompt, fork_turns: "none"}`, plus non-null native `model` and
+`reasoning_effort` overrides from the same config resolver. Resolution errors stop
+before materialization; native rejection has the same no-fallback rule. These
+optional fields stay outside the semantic work order and its digest. The emitter validates the identity as
 `c<digits>-<8 lowercase hex>` and generates a fresh identity for each emission. There is
 no cwd argument; native spawn inherits the parent's shell location.
 
