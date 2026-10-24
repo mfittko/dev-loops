@@ -1362,11 +1362,15 @@ test("unitBoundaries: the validator cross-checks the boundary set against the ta
   });
   assert.equal(omitted.ok, false);
   assert.deepEqual(omitted.errors.map((e) => e.field), ["unitBoundaries.handBackAfter"]);
-  // Accepted: the same list on a target that already owns its PR, where no draft PR boundary exists.
-  assert.equal(validateHandoffEnvelope({
+  // Rejected: the mirror direction. A target that already owns its PR never opens a draft, so
+  // this first-match list would stop the unit at a boundary it cannot reach — before its gate
+  // round — while its `gate_verdict_posted` boundary stayed unreached.
+  const unreachable = validateHandoffEnvelope({
     ...prOwned,
-    unitBoundaries: { ...prOwned.unitBoundaries, handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED] },
-  }).ok, true);
+    unitBoundaries: { ...prOwned.unitBoundaries, handBackAfter: [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED] },
+  });
+  assert.equal(unreachable.ok, false);
+  assert.deepEqual(unreachable.errors.map((e) => e.field), ["unitBoundaries.handBackAfter"]);
 });
 
 // `resume` is copied FROM the target, so an identity the target does not carry resumes a

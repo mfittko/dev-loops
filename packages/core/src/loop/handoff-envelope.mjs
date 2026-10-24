@@ -1346,20 +1346,33 @@ export function validateHandoffEnvelope(envelope) {
       // A boundary set and a resume that contradict the envelope's OWN target are not
       // authoritative state: `deriveUnitBoundaries` derives both from that target, so a PR-less
       // unit whose list omits the draft PR stops nowhere (the snowball this field exists to
-      // prevent), and a resume naming another issue or PR resumes a different unit (issue 2532).
-      // Only well-typed identities are compared; the type errors above already cover a
+      // prevent), a PR-owning unit whose list carries the draft PR stops at a boundary it can
+      // never reach, and a resume naming another issue or PR resumes a different unit (issue
+      // 2532). Only well-typed identities are compared; the type errors above already cover a
       // malformed one, and a target error above already covers a missing/invalid target.
       const target = envelope.target;
       if (target && typeof target === "object" && !Array.isArray(target)) {
         const ownsPr = target.kind === DEV_LOOP_TARGET_KIND.PR
           || (Number.isInteger(target.linkedPr) && target.linkedPr > 0);
-        if (Array.isArray(ub.handBackAfter) && ub.handBackAfter.length > 0
-          && !ownsPr && ub.handBackAfter[0] !== UNIT_BOUNDARY.DRAFT_PR_OPENED) {
-          errors.push({
-            field: "unitBoundaries.handBackAfter",
-            reason: `a target that owns no PR must hand back at ${UNIT_BOUNDARY.DRAFT_PR_OPENED} first, because opening that draft PR ends its phase`,
-            got: ub.handBackAfter,
-          });
+        if (Array.isArray(ub.handBackAfter) && ub.handBackAfter.length > 0) {
+          if (!ownsPr && ub.handBackAfter[0] !== UNIT_BOUNDARY.DRAFT_PR_OPENED) {
+            errors.push({
+              field: "unitBoundaries.handBackAfter",
+              reason: `a target that owns no PR must hand back at ${UNIT_BOUNDARY.DRAFT_PR_OPENED} first, because opening that draft PR ends its phase`,
+              got: ub.handBackAfter,
+            });
+          }
+          // The mirror arm of the partition `deriveUnitBoundaries` produces: a target that owns a
+          // PR already has its draft, so it never opens one. A list carrying that boundary names
+          // a stop the unit can never reach and, being first-match, would end the unit before its
+          // gate round — so `gate_verdict_posted` is its only reachable boundary.
+          if (ownsPr && ub.handBackAfter.includes(UNIT_BOUNDARY.DRAFT_PR_OPENED)) {
+            errors.push({
+              field: "unitBoundaries.handBackAfter",
+              reason: `a target that already owns its PR must not hand back at ${UNIT_BOUNDARY.DRAFT_PR_OPENED}: that unit never opens a draft, so ${UNIT_BOUNDARY.GATE_VERDICT_POSTED} is its only boundary`,
+              got: ub.handBackAfter,
+            });
+          }
         }
         const identityText = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
         const resumeIssue = Number.isInteger(resume?.issue) && resume.issue > 0 ? resume.issue : null;

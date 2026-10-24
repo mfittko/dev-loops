@@ -87,10 +87,13 @@ brief has to restate the boundary:
   **The list is ordered and first-match**: a unit that carries both stops at the draft PR it opens,
   and the remaining verdict boundary belongs to its successor, which resumes already owning that PR.
   The validator refuses a list that reverses that order, so the first match is always the draft PR.
-  It also refuses a set that contradicts the envelope's own target (`deriveTarget`): a target that
-  owns no PR must carry `draft_pr_opened` first, because opening that draft PR is the only boundary
-  its phase can end at. Two listed paths carry `gate_verdict_posted` as a recorded naming
-  approximation
+  It also refuses a set that contradicts the envelope's own target (`deriveTarget`), in both
+  directions: a target that owns no PR must carry `draft_pr_opened` first, because opening that
+  draft PR is the only boundary its phase can end at, and a target that already owns its PR must
+  **not** carry `draft_pr_opened` at all, because such a unit never opens a draft PR — as the
+  first match it would stop the unit at a boundary it cannot reach, before its gate round, leaving
+  `gate_verdict_posted` as its only reachable boundary. Two listed paths carry
+  `gate_verdict_posted` as a recorded naming approximation
   (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`), never as a second boundary that
   unit can reach: a route that posts no verdict of its own while its unit still runs a gate round
   (`final_approval`), and an `issue_intake` unit that stops at the draft PR it opens.
