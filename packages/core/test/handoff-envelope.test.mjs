@@ -1214,9 +1214,10 @@ test("unitBoundaries: resume identity validation covers every accepted and rejec
     [{ kind: "loop_startup", issue: null, pr: 99, branch: null, phase: null }, true],
     [{ kind: "loop_startup", issue: 42, pr: null, branch: 99 }, false],
     [{ kind: "loop_startup", issue: 42, pr: null, branch: null, phase: 42 }, false],
-    // `pr` gets its own rejected form: routing every count check through `issue` alone would
-    // leave the `pr` half of the validator's integer clause unexercised.
-    [{ kind: "loop_startup", issue: null, pr: "99", branch: null, phase: null }, false],
+    // `pr` gets its own rejected form carrying a VALID issue: routing every count check
+    // through `issue` alone would leave the `pr` half of the integer clause unexercised, and
+    // a row with no other identity would be rejected by the no-identity catch-all anyway.
+    [{ kind: "loop_startup", issue: 42, pr: "99", branch: null, phase: null }, false],
     // And a whitespace-only text identity is not an identity: this is the `.trim()` half of the
     // text clause, which a non-string form cannot reach.
     [{ kind: "loop_startup", issue: 42, pr: null, branch: "   ", phase: null }, false],
