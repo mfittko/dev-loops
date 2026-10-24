@@ -129,6 +129,42 @@ test("distinct live roots sharing fingerprints retain every root and member", as
   await assert.rejects(snapshotResidualEvidence(f.options, f.deps), /member assessment/);
 }));
 
+for (const kind of ["act-list", "delta-result"]) test(`refuses repinned ${kind} with changed semantic identity`, async () => fixture(async (f) => {
+  const read = f.fixer.workOrder.requiredReads.find((r) => r.kind === kind);
+  const value = JSON.parse(await readFile(read.path));
+  if (kind === "act-list") value[0].summary = "replacement finding";
+  else value.actionableItems[0].evidence = ["replacement evidence"];
+  await put(read.path, value);
+  read.sha256 = hash(await readFile(read.path));
+  await put(f.options.fixerPlan, f.fixer);
+  f.assessment.deltaResultSha256 = f.fixer.workOrder.requiredReads[1].sha256;
+  const result = JSON.parse(await readFile(f.resultPath));
+  await put(f.resultPath, { ...result, residualEvidenceAssessment: f.assessment });
+  await assert.rejects(snapshotResidualEvidence(f.options, f.deps), /semantic authority/);
+}));
+
+for (const kind of ["evidence", "raw-diff"]) test(`refuses post-pull replacement of ${kind} and its plan pin`, async () => fixture(async (f) => {
+  for (const unit of f.plan.units) {
+    const read = unit.workOrder.requiredReads.find((r) => r.kind === kind);
+    await put(path.resolve(f.root, read.path), "replacement reviewer evidence");
+    read.sha256 = hash("replacement reviewer evidence");
+    read.bytes = Buffer.byteLength("replacement reviewer evidence");
+    assert.equal(workOrderDigest(unit.workOrder), unit.workOrderDigest);
+  }
+  await put(f.planPath, f.plan);
+  await assert.rejects(snapshotResidualEvidence(f.options, f.deps), /reviewer read.*materialization/);
+}));
+
+test("concurrent identical recordings publish one complete snapshot", async () => fixture(async (f) => {
+  f.assessment.limitations.push("Large assessment. ".repeat(16384));
+  const result = JSON.parse(await readFile(f.resultPath));
+  await put(f.resultPath, { ...result, residualEvidenceAssessment: f.assessment });
+  const records = await Promise.all(Array.from({ length: 8 }, () => snapshotResidualEvidence(f.options, f.deps)));
+  assert.equal(new Set(records.map((r) => r.snapshotPath)).size, 1);
+  assert.deepEqual(JSON.parse(await readFile(records[0].snapshotPath)).assessment, f.assessment);
+  assert.deepEqual(await readdir(path.dirname(records[0].snapshotPath)), [path.basename(records[0].snapshotPath)]);
+}));
+
 for (const harness of ["pi", "claude", "codex"]) test(`records original pulled ${harness} evidence without touching history`, async () => fixture(async (f) => {
   const paths = [f.decisionPath, f.options.fixerPlan, pullReceiptPath(f.tmpRoot, f.fixer.workOrderRef),
     ...f.fixer.workOrder.requiredReads.map((r) => r.path), ...f.fixer.workOrder.outputRefs,

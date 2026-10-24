@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { isDeepStrictEqual } from "node:util";
@@ -18,7 +18,7 @@ import { gateDeltaRecordPath } from "../loop/_gate-delta-record.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
 import { WORK_ORDER_ROLES, executionIndexPath, materializationHash, pullReceiptPath, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
 import "./pull-work-order.mjs";
-import { buildGateEmitPlanPath, buildGateReviewsDir } from "./write-gate-context.mjs";
+import { buildGateEmitPlanPath, buildGateReviewsDir, renderRequiredReadLine } from "./write-gate-context.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
 import { collectFingerprints } from "./_gate-finding-surface.mjs";
 import { selectActThreadBinding } from "./_fixer-act-thread-bindings.mjs";
@@ -94,6 +94,8 @@ export async function verifyResidualEvidenceSnapshot(options, {
     reads.set(read.kind, { read, value });
   }
   const act = reads.get("act-list")?.value, delta = reads.get("delta-result")?.value;
+  requireProof(act && delta && hash(act) === order.authority?.sourceDigest
+    && hash(delta) === order.authority?.deltaResultDigest, "changed ACT or delta semantic authority");
   const sequence = startDeltaSequence({ reviewBaselineHead: baseline, actList: act });
   requireProof(validateDeltaResult(delta, { sequence, membershipOnly: true }).length === 0
     && delta.reviewBaselineHead === baseline && delta.candidateHead === headSha, "not the exact exhausted delta result");
@@ -159,6 +161,8 @@ export async function verifyResidualEvidenceSnapshot(options, {
         requireProof(!read.required || /^[a-f0-9]{64}$/.test(read.sha256), "required reviewer read lacks pin");
         requireProof(read.sha256 === undefined || /^[a-f0-9]{64}$/.test(read.sha256), "invalid reviewer read pin");
         requireProof(read.sha256 !== undefined || read.required === false && read.kind === "context", "unpinned substantive read");
+        requireProof(prompt.toString("utf8").split("\n").includes(renderRequiredReadLine(read, repoRoot)),
+          "reviewer read differs from pulled materialization");
         const present = await lstat(readPath).then(() => true, (error) => {
           if (error.code === "ENOENT" && read.required === false) return false;
           throw error;
@@ -257,11 +261,18 @@ export async function snapshotResidualEvidence(options, deps = {}) {
       "noncanonical record ancestry");
     await mkdir(path.dirname(snapshotPath), { recursive: true });
     requireProof(await realpath(path.dirname(snapshotPath)) === path.dirname(snapshotPath), "noncanonical record directory");
-    await writeFile(snapshotPath, text, { flag: "wx" }).catch(async (error) => {
-      if (error.code !== "EEXIST") throw error;
-      requireProof(await realpath(snapshotPath) === snapshotPath && (await lstat(snapshotPath)).isFile(), "noncanonical snapshot");
-      requireProof((await readFile(snapshotPath, "utf8")) === text, "record collision");
-    });
+    const temporary = await mkdtemp(path.join(path.dirname(snapshotPath), ".snapshot-"));
+    try {
+      const pending = path.join(temporary, "snapshot.json");
+      await writeFile(pending, text, { flag: "wx" });
+      // Link only complete bytes, without replacing an existing snapshot.
+      await link(pending, snapshotPath).catch(async (error) => {
+        if (error.code !== "EEXIST") throw error;
+        requireProof(await realpath(path.dirname(snapshotPath)) === path.dirname(snapshotPath)
+          && (await lstat(snapshotPath)).isFile(), "noncanonical snapshot");
+        requireProof((await readFile(snapshotPath, "utf8")) === text, "record collision");
+      });
+    } finally { await rm(temporary, { recursive: true, force: true }); }
   }
   return { ok: true, status: "unqualified", recorded: options.record === true, applied: false,
     repo: proof.repo, pr: proof.pr, headSha: proof.headSha,
