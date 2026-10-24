@@ -89,7 +89,7 @@ brief has to restate the boundary:
   The validator refuses a list that reverses that order, so the first match is always the draft PR.
   A route that posts no verdict of its own while its unit still runs a gate round carries
   `gate_verdict_posted` as a recorded naming approximation
-  ([ADR 0181](../../docs/decisions/0181-unit-coordinator-handback-boundaries.md)), not as a second
+  (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`), not as a second
   boundary that unit can reach.
 - `resume` names the authoritative re-resolution a successor runs (`kind: loop_startup` plus the
   issue, PR, branch or phase identity), and a resume names **one** identity. `resume.phase`
