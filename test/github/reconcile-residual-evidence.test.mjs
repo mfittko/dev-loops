@@ -231,17 +231,32 @@ test("duplicate JSON assessment keys cannot smuggle a positive conclusion", asyn
 }));
 
 test("late source tampering and head movement refuse recording", async () => {
-  for (const changed of ["head", "source"]) await fixture(async (f) => {
+  for (const changed of ["head", "source", "sourceDuringHead", "retiredDuringHead", "reemittedDuringHead"]) await fixture(async (f) => {
     const inner = f.deps.runChild;
     f.deps.runChild = async (command, args) => {
       if (args.includes("headRefOid") && changed === "head") f.state.head = BASE;
       if (args.includes("graphql") && changed === "source") await put(f.supplemental, "late tamper");
+      if (args.includes("headRefOid") && changed === "sourceDuringHead") await put(f.supplemental, "late head-query tamper");
+      if (args.includes("headRefOid") && changed === "retiredDuringHead") await negatives.retired(f);
+      if (args.includes("headRefOid") && changed === "reemittedDuringHead") await negatives.superseded(f);
       return inner(command, args);
     };
-    await assert.rejects(snapshotResidualEvidence(f.options, f.deps), /source changed|candidate moved/);
+    await assert.rejects(snapshotResidualEvidence(f.options, f.deps), /source changed|candidate moved|authority retired/);
     assert.deepEqual(await readdir(path.join(f.tmpRoot, "residual-evidence")).catch(() => []), []);
   });
 });
+
+test("matching-byte existing snapshot symlink refuses idempotence", async () => fixture(async (f) => {
+  const result = await snapshotResidualEvidence(f.options, f.deps);
+  const bytes = await readFile(result.snapshotPath);
+  const target = path.join(f.root, "snapshot-target.json");
+  await writeFile(target, bytes);
+  await rm(result.snapshotPath);
+  await symlink(target, result.snapshotPath);
+  await assert.rejects(snapshotResidualEvidence(f.options, f.deps), /noncanonical snapshot/);
+  assert.equal(await realpath(result.snapshotPath), target);
+  assert.deepEqual(await readFile(target), bytes);
+}));
 
 test("record retains original reviewer bytes after later same-head emissions", async () => fixture(async (f) => {
   const result = await snapshotResidualEvidence(f.options, f.deps);

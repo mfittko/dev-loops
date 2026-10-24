@@ -228,14 +228,14 @@ export async function verifyResidualEvidenceSnapshot(options, {
         && Array.isArray(m.evidence) && m.evidence.length > 0 && m.evidence.every(nonempty)),
     "partial, contradictory or nonpositive member assessment");
   }
-  for (const source of sources.values()) await capture(source.path);
+  const live = await runChild(ghCommand, ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid"], env);
+  requireProof(live.code === 0 && JSON.parse(live.stdout).headRefOid === headSha, "live candidate moved");
   for (const unit of plan.units) {
     const current = await WORK_ORDER_ROLES.get("review").locate({ ref: unit.workOrderRef,
       digest: unit.workOrderDigest, execution: unit.executionIdentity, tmpRoots: [tmpRoot] });
     requireProof(current && !current.stale, "reviewer authority retired during verification");
   }
-  const live = await runChild(ghCommand, ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid"], env);
-  requireProof(live.code === 0 && JSON.parse(live.stdout).headRefOid === headSha, "live candidate moved");
+  for (const source of sources.values()) await capture(source.path);
   return { schemaVersion: 1, kind: "residual-evidence-snapshot", status: "unqualified", repo, pr, headSha, assessment,
     provenance: { workOrderRef: assessmentUnit.workOrderRef, executionIdentity: assessmentUnit.executionIdentity,
       workOrderDigest: assessmentUnit.workOrderDigest, roundId: plan.roundId, requiredReads: reviewerReads },
@@ -259,6 +259,7 @@ export async function snapshotResidualEvidence(options, deps = {}) {
     requireProof(await realpath(path.dirname(snapshotPath)) === path.dirname(snapshotPath), "noncanonical record directory");
     await writeFile(snapshotPath, text, { flag: "wx" }).catch(async (error) => {
       if (error.code !== "EEXIST") throw error;
+      requireProof(await realpath(snapshotPath) === snapshotPath && (await lstat(snapshotPath)).isFile(), "noncanonical snapshot");
       requireProof((await readFile(snapshotPath, "utf8")) === text, "record collision");
     });
   }
