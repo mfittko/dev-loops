@@ -9,7 +9,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, checkFanoutAngleCoverage, deriveDisposition, fanoutReviewerPairingError, hasLocatableShape, ledgerAngleNames, isDefaultDeferrableSeverity, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
+import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
@@ -111,10 +111,10 @@ function normalizeExecutionMode(value) {
 }
 // Exported so other tools (e.g. upsert-checkpoint-verdict.mjs) derive their
 // own subset from this one copy instead of hand-copying it out of sync.
-// "needs-answer" is the disposition a "question" finding gets (see
-// consolidateFanin, @dev-loops/core/loop/gate-fanin): a question is
-// answered, never deferred or fixed, so it needs its own disposition.
-export const VALID_DISPOSITIONS = new Set(["accepted-for-fix", "deferred", "needs-answer", "disputed", "operator_acknowledged"]);
+// "unjudged" is the default: fan-in leaves every finding unjudged (see
+// consolidateFanin, @dev-loops/core/loop/gate-fanin). "needs-answer" is an
+// explicit caller value only, for a question that is answered rather than fixed.
+export const VALID_DISPOSITIONS = new Set(["unjudged", "accepted-for-fix", "deferred", "needs-answer", "disputed", "operator_acknowledged"]);
 // Validate + normalize a parsed --findings / --findings-file JSON array. Shared
 // by both flags so they carry identical validation — flagLabel only changes the
 // error-message prefix (--findings vs --findings-file).
@@ -122,7 +122,7 @@ function validateFindingsArray(parsed, flagLabel) {
   if (!Array.isArray(parsed)) {
     throw parseError(`${flagLabel} must be a JSON array`);
   }
-  return parsed.map((f, i) => {
+  const entries = parsed.map((f, i) => {
     if (!f || typeof f !== "object") {
       throw parseError(`${flagLabel}[${i}] must be an object`);
     }
@@ -184,14 +184,10 @@ function validateFindingsArray(parsed, flagLabel) {
         throw parseError(`${flagLabel}[${i}].disposition must be one of: ${[...VALID_DISPOSITIONS].join(", ")}`);
       }
       entry.disposition = disp;
-    } else if (isDefaultDeferrableSeverity(f.severity)) {
-      // A non-blocking low/nit finding with no explicit disposition defaults
-      // to "deferred", so callers need not repeat the obvious per entry. A
-      // question defaults to "needs-answer" instead (LOCATABLE) via the SAME
-      // shared rule every producer uses (deriveDisposition, @dev-loops/core/
-      // loop/gate-fanin) — this producer and post-gate-findings.mjs's own
-      // validator both route through it so the two can never drift.
-      entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
+    } else {
+      // A finding with no explicit disposition is unjudged; severity never
+      // implies one.
+      entry.disposition = UNJUDGED_DISPOSITION;
     }
     // net-reduction disposition policy: the explicit operator-visibility signal for a "low" finding —
     // see buildFindingMarker's doc (_gate-finding-surface.mjs) for the full
@@ -234,6 +230,10 @@ function validateFindingsArray(parsed, flagLabel) {
     if (typeof f.judgeCriterion === "string" && f.judgeCriterion.trim().length > 0) {
       entry.judgeCriterion = f.judgeCriterion.trim();
     }
+    // The judge's per-cluster prose, carried for the renderers.
+    for (const field of ["judgeTitle", "judgeDetail", "judgeFix", "judgeReason"]) {
+      if (typeof f[field] === "string" && f[field].trim().length > 0) entry[field] = f[field].trim();
+    }
     // GATE-EXEC-DEFERRAL-RECORD: a judge-pass-enriched finding may carry a stable `fingerprint`
     // ([0-9a-f]{16}, matching the finding-marker regex) and a `defer` finding
     // additionally carries `followUpIssueNumber` (the deferral comment
@@ -272,8 +272,27 @@ function validateFindingsArray(parsed, flagLabel) {
     if (entry.judgeDisposition === "defer" && entry.followUpDraft === undefined) {
       throw parseError(`${flagLabel}[${i}].followUpDraft is required when judgeDisposition is "defer"`);
     }
+    // The fan-in cluster stamp: --judge-verdict dispositions key on it, so it must reach the judge pass.
+    if ("clusterId" in f) {
+      if (!Number.isInteger(f.clusterId) || f.clusterId < 0) {
+        throw parseError(`${flagLabel}[${i}].clusterId must be a non-negative integer`);
+      }
+      entry.clusterId = f.clusterId;
+    }
     return entry;
   });
+  // A partly stamped array would key the judge's dispositions two ways at once, so it fails closed.
+  const stampedCount = entries.filter((e) => e.clusterId !== undefined).length;
+  if (stampedCount > 0 && stampedCount < entries.length) {
+    throw parseError(`${flagLabel}: clusterId must be set on every finding or on none (${stampedCount} of ${entries.length} carry it)`);
+  }
+  // The representative is its own member: an id outside the array, or naming an entry stamped with another id, has no representative.
+  for (const [i, e] of entries.entries()) {
+    if (e.clusterId !== undefined && (e.clusterId >= entries.length || entries[e.clusterId].clusterId !== e.clusterId)) {
+      throw parseError(`${flagLabel}[${i}].clusterId ${e.clusterId} must be less than ${entries.length} and name an entry whose own clusterId is ${e.clusterId}`);
+    }
+  }
+  return entries;
 }
 // Resolve the findings array from either --findings (inline JSON) or
 // --findings-file (a path), with identical validation either way. Shared
@@ -785,6 +804,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       ? clustersFromStampedIds(enriched.findings)
       : clusterFindings(enriched.findings, { headSha: options.headSha }).clusters;
     findings = projectClusterDisposition(enriched.findings, clusters);
+    assertNoProjectedForbiddenDefer(findings, clusters);
     scopeDrift = enriched.scopeDrift;
     if (specAuthorityIdentity !== undefined) {
       findings = await applySiblingSpecAuthorityVerdict(findings, judgePath, specAuthorityIdentity);

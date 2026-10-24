@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -185,104 +186,20 @@ test("buildReviewHeaderMarker renders the gate-scoped round marker at column 0",
 // Disposition window
 // ---------------------------------------------------------------------------
 
-test("isDeferredAtRound: high never defers, medium defers from round 4, low defers immediately", () => {
-  assert.equal(isDeferredAtRound("high", 99), false);
-  assert.equal(isDeferredAtRound("medium", 3), false);
-  assert.equal(isDeferredAtRound("medium", 4), true);
-  assert.equal(isDeferredAtRound("low", 1), true);
+test("isDeferredAtRound and isFileableDeferral read only the judge disposition", () => {
+  for (const check of [isDeferredAtRound, isFileableDeferral]) {
+    assert.equal(check("defer"), true);
+    for (const other of ["act", "reject", "unjudged", "", undefined]) assert.equal(check(other), false);
+  }
 });
 
-// #1592: question is a non-defect category that is answered, never deferred —
-// an unanswered question blocks gate-close exactly like an open defect (via
-// the unresolved-thread count, since it is never selected for auto-deferral).
-// nit is a non-defect category that defers immediately, with no fixer cycle.
-test("isDeferredAtRound: question never defers (any round), nit always defers immediately", () => {
-  assert.equal(isDeferredAtRound("question", 1), false);
-  assert.equal(isDeferredAtRound("question", 99), false);
-  assert.equal(isDeferredAtRound("nit", 1), true);
-  assert.equal(isDeferredAtRound("nit", 99), true);
-});
-
-// Backward compatibility (#1592): every pre-rename severity spelling still
-// normalizes to its canonical replacement and behaves identically.
-test("isDeferredAtRound: legacy severity spellings behave identically to their canonical replacement", () => {
-  assert.equal(isDeferredAtRound("must-fix", 99), false);
-  assert.equal(isDeferredAtRound("worth-fixing-now", 3), false);
-  assert.equal(isDeferredAtRound("worth-fixing-now", 4), true);
-  assert.equal(isDeferredAtRound("nice-to-have", 1), true);
-  assert.equal(isDeferredAtRound("defer", 1), true);
-});
-
-// Fail-closed: an unrecognized severity (a malformed/forged marker) must
-// never be silently auto-deferred and resolved through the same path as a
-// genuine low/nit finding — it must stay open and surface as a dangling
-// gate-authored thread that blocks gate-close.
-test("isDeferredAtRound: an unrecognized severity fails CLOSED (never deferred)", () => {
-  assert.equal(isDeferredAtRound("bogus", 1), false);
-  assert.equal(isDeferredAtRound("bogus", 99), false);
-  assert.equal(isDeferredAtRound("", 1), false);
-  assert.equal(isDeferredAtRound(undefined, 1), false);
-});
-
-// #1581: the per-gate medium fix window overrides the built-in
-// constant. A consumer raising the window to 5 keeps a round-4 medium finding open;
-// lowering it to 1 defers a round-2 medium finding. high is always exempt.
-test("isDeferredAtRound: a per-gate window parameter overrides the built-in constant (#1581)", () => {
-  // Default (no third arg) still uses the built-in MEDIUM_FIX_WINDOW (3).
-  assert.equal(isDeferredAtRound("medium", 3), false);
-  assert.equal(isDeferredAtRound("medium", 4), true);
-  // A raised per-gate window (5): round 4 now stays open; round 6 defers.
-  assert.equal(isDeferredAtRound("medium", 4, 5), false);
-  assert.equal(isDeferredAtRound("medium", 5, 5), false);
-  assert.equal(isDeferredAtRound("medium", 6, 5), true);
-  // A lowered per-gate window (1): round 2 defers; round 1 stays open.
-  assert.equal(isDeferredAtRound("medium", 1, 1), false);
-  assert.equal(isDeferredAtRound("medium", 2, 1), true);
-  // high never defers, regardless of the per-gate window or round.
-  assert.equal(isDeferredAtRound("high", 99, 1), false);
-  assert.equal(isDeferredAtRound("high", 99, 5), false);
-  // low always defers immediately, regardless of the window.
-  assert.equal(isDeferredAtRound("low", 1, 5), true);
-  // question never defers, regardless of the window.
-  assert.equal(isDeferredAtRound("question", 99, 1), false);
-  // nit always defers immediately, regardless of the window.
-  assert.equal(isDeferredAtRound("nit", 1, 5), true);
-});
-
-// ---------------------------------------------------------------------------
-// #1846: net-reduction filing bar — resolving a thread vs. FILING it to a
-// tracked follow-up issue are separate decisions; isFileableDeferral governs
-// the latter only.
-// ---------------------------------------------------------------------------
-
-test("isFileableDeferral: a nit is NEVER fileable, any round, regardless of operatorVisible", () => {
-  assert.equal(isFileableDeferral("nit", false, 1), false);
-  assert.equal(isFileableDeferral("nit", true, 99), false, "operatorVisible never applies to nit");
-});
-
-test("isFileableDeferral: a low is fileable only when operatorVisible is exactly true (conservative default)", () => {
-  assert.equal(isFileableDeferral("low", undefined, 1), false);
-  assert.equal(isFileableDeferral("low", false, 1), false);
-  assert.equal(isFileableDeferral("low", "true", 1), false, "a truthy non-boolean never counts as the explicit signal");
-  assert.equal(isFileableDeferral("low", true, 1), true);
-});
-
-test("isFileableDeferral: medium is unchanged (fileable only past the fix window), regardless of operatorVisible", () => {
-  assert.equal(isFileableDeferral("medium", false, 3), false);
-  assert.equal(isFileableDeferral("medium", false, 4), true);
-  assert.equal(isFileableDeferral("medium", false, 4, 5), false);
-  assert.equal(isFileableDeferral("medium", false, 6, 5), true);
-});
-
-test("isFileableDeferral: high/question are never fileable (they are never resolved by the disposition pass to begin with)", () => {
-  assert.equal(isFileableDeferral("high", true, 99), false);
-  assert.equal(isFileableDeferral("question", true, 99), false);
-});
-
-test("isFileableDeferral: legacy severity spellings behave identically to their canonical replacement", () => {
-  assert.equal(isFileableDeferral("nice-to-have", true, 1), true);
-  assert.equal(isFileableDeferral("nice-to-have", false, 1), false);
-  assert.equal(isFileableDeferral("worth-fixing-now", false, 4), true);
+test("no stamping path reads severity or round without a judgeDisposition (AC21 contract)", () => {
+  assert.equal(isDeferredAtRound.length, 1);
+  assert.equal(isFileableDeferral.length, 1);
+  const surface = readFileSync(new URL("../../scripts/github/_gate-finding-surface.mjs", import.meta.url), "utf8");
+  const stampLine = surface.split("\n").find((line) => line.includes("? \"deferred\" : undefined"));
+  assert.match(stampLine, /isDeferredAtRound\(finding\.judgeDisposition\)/);
+  assert.doesNotMatch(stampLine, /severity|round/);
 });
 
 // ---------------------------------------------------------------------------
@@ -379,17 +296,21 @@ test("renderNonLocatableBlock: every content line after the marker is blockquote
   }
 });
 
-test("renderNonLocatableBlock: a non-high finding is stamped disposition=deferred at render time, high is not", () => {
+test("renderNonLocatableBlock: only a judge defer stamps disposition=deferred, whatever the severity", () => {
   const low = renderNonLocatableBlock({ severity: "low", angle: "naming", summary: "casing nit" }, { round: 1 });
   const medium = renderNonLocatableBlock({ severity: "medium", angle: "perf", summary: "n+1" }, { round: 1 });
   const nit = renderNonLocatableBlock({ severity: "nit", angle: "naming", summary: "casing nit" }, { round: 1 });
   const question = renderNonLocatableBlock({ severity: "question", angle: "scope", summary: "why this approach?" }, { round: 1 });
   const high = renderNonLocatableBlock({ severity: "high", angle: "security", summary: "injection" }, { round: 1 });
-  assert.equal(parseFindingMarker(low).disposition, "deferred");
-  assert.equal(parseFindingMarker(medium).disposition, "deferred");
-  assert.equal(parseFindingMarker(nit).disposition, "deferred");
-  assert.equal(parseFindingMarker(question).disposition, "deferred");
+  assert.equal(parseFindingMarker(low).disposition, null);
+  assert.equal(parseFindingMarker(medium).disposition, null);
+  assert.equal(parseFindingMarker(nit).disposition, null);
+  assert.equal(parseFindingMarker(question).disposition, null);
   assert.equal(parseFindingMarker(high).disposition, null);
+  const deferred = renderNonLocatableBlock({ severity: "high", angle: "security", summary: "injection", judgeDisposition: "defer" }, { round: 1 });
+  assert.equal(parseFindingMarker(deferred).disposition, "deferred");
+  const act = renderNonLocatableBlock({ severity: "low", angle: "naming", summary: "casing nit", judgeDisposition: "act" }, { round: 1 });
+  assert.equal(parseFindingMarker(act).disposition, null);
 });
 
 // The disposition decision and the rendered "> **${severity}**" line share
@@ -454,11 +375,12 @@ test("renderInlineCommentBody / renderNonLocatableBlock: a bracket/angle-bearing
   }
 });
 
-test("renderNonLocatableBlock: a legacy-spelled severity is still stamped/unstamped identically to its canonical replacement", () => {
+test("renderNonLocatableBlock: a legacy-spelled severity normalizes onto the marker and stamps nothing without a judge defer", () => {
   const legacyDefer = renderNonLocatableBlock({ severity: "nice-to-have", angle: "naming", summary: "casing nit" }, { round: 1 });
   const legacyMust = renderNonLocatableBlock({ severity: "must-fix", angle: "security", summary: "injection" }, { round: 1 });
-  assert.equal(parseFindingMarker(legacyDefer).disposition, "deferred");
-  assert.equal(parseFindingMarker(legacyMust).disposition, null);
+  assert.equal(parseFindingMarker(legacyDefer).severity, "low");
+  assert.equal(parseFindingMarker(legacyDefer).disposition, null);
+  assert.equal(parseFindingMarker(legacyMust).severity, "high");
 });
 
 // The line ref belongs to files[0] (the anchor isLocatableFinding keys on), not
@@ -493,14 +415,25 @@ test("renderVerdictDetailsBlock: renders a collapsed <details> with a per-findin
   assert.match(block, /^- `src\/a\.mjs:12` \*\*low\*\* \(`naming`\): casing nit$/m);
   assert.match(block, /^- \*\*nit\*\* \(`style`\): trailing whitespace$/m);
   // Every marker is a parseable line-start `dev-loops:finding` marker, one per
-  // finding, carrying disposition=deferred.
+  // finding, carrying no disposition (an unjudged finding is never stamped deferred).
   const markerLines = block.split("\n").filter((line) => line.startsWith("<!-- dev-loops:finding "));
   assert.equal(markerLines.length, 2);
   for (const line of markerLines) {
     const parsed = parseFindingMarker(line);
     assert.ok(parsed, `expected a parseable marker, got: ${JSON.stringify(line)}`);
-    assert.equal(parsed.disposition, "deferred");
+    assert.equal(parsed.disposition, null);
   }
+});
+
+test("renderVerdictDetailsBlock: a deferred nit member gets no deferred stamp and no issue link", () => {
+  const block = renderVerdictDetailsBlock({
+    foldedFindings: [{ severity: "nit", angle: "style", summary: "deferred nit", judgeDisposition: "defer" }],
+    round: 1, pr: 42,
+  });
+  const marker = block.split("\n").find((l) => l.startsWith("<!-- dev-loops:finding "));
+  assert.ok(marker);
+  assert.equal(parseFindingMarker(marker).disposition, null);
+  assert.doesNotMatch(marker, /issue=/);
 });
 
 test("renderVerdictDetailsBlock: groups folded findings by judge disposition and holds the clean roster", () => {
@@ -1013,7 +946,7 @@ test("#2381: findJudgeDispositionForFingerprint picks the disposition from the l
     },
     async (tmpRoot) => {
       const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
-      assert.deepEqual(result, { disposition: "act", rationale: "new reasoning" });
+      assert.deepEqual(result, { disposition: "act", rationale: "new reasoning", reason: null });
     },
   );
 });
@@ -1033,7 +966,7 @@ test("#2381: findJudgeDispositionForFingerprint picks the GREATEST loggedAt rega
     },
     async (tmpRoot) => {
       const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headA", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
-      assert.deepEqual(result, { disposition: "act", rationale: "new reasoning" });
+      assert.deepEqual(result, { disposition: "act", rationale: "new reasoning", reason: null });
     },
   );
 });
@@ -1046,7 +979,7 @@ test("#2381: findJudgeDispositionForFingerprint ignores a ledger whose own recor
     },
     async (tmpRoot) => {
       const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
-      assert.deepEqual(result, { disposition: "reject", rationale: "this PR's own reasoning" });
+      assert.deepEqual(result, { disposition: "reject", rationale: "this PR's own reasoning", reason: null });
     },
   );
 });
@@ -1123,7 +1056,7 @@ test("#2381: findJudgeDispositionForFingerprint cites a deterministic (sorted-fi
       const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
       // Alphabetically-first filename (headA) wins the citation, not
       // whatever order readdir happened to return the three files in.
-      assert.deepEqual(result, { disposition: "reject", rationale: "from headA" });
+      assert.deepEqual(result, { disposition: "reject", rationale: "from headA", reason: null });
     },
   );
 });

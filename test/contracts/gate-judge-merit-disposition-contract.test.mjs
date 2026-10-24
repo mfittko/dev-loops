@@ -80,7 +80,6 @@ const unexemptedGrants = (text) => lowDeferGrants(text).filter((s) => !(s.includ
 
 test("EVERY round-1 low-defer allowance in the sub-loop contract exempts a judge-acted low (no downstream re-defer)", async () => {
   const text = await read("skills/docs/gate-review-sub-loop-contract.md");
-  assert.ok(lowDeferGrants(text).length >= 1, "expected at least one round-1 low-defer allowance");
   assert.deepEqual(unexemptedGrants(text), []);
   // Reworded positive: the exception travels with the allowance in any phrasing.
   assert.deepEqual(unexemptedGrants("A low may be deferred from round 1, unless the judge marked it `act`; the fixer then declines only on reproduction grounds."), []);
@@ -95,8 +94,8 @@ test("the operational fixer instructions exempt a judge-acted low from the round
   // copilot-pr-followup SKILL's own fixer instructions, which must carry the
   // same judge-acted-low exception or the downstream re-defer leak reopens there.
   const text = await read("skills/copilot-pr-followup/SKILL.md");
-  const matches = text.match(/low the judge disposed `act`[\s\S]{0,140}reproduction grounds/g) ?? [];
-  assert.ok(matches.length >= 2, `both fixer-instruction sites (classify-findings + Phase 5 triage) must exempt a judge-acted low as a reproduction-only-declinable fix target (found ${matches.length})`);
+  const matches = text.match(/judge (?:disposed )?`act`[\s\S]{0,140}reproduction grounds/g) ?? [];
+  assert.ok(matches.length >= 2, `both fixer-instruction sites (classify-findings + Phase 5 triage) must treat a judge-acted finding as a reproduction-only-declinable fix target (found ${matches.length})`);
 });
 
 // --- Calibration half (AC3): a real correctness/fail-open is not labeled low ---

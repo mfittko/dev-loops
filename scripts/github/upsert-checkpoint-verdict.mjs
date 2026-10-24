@@ -4,7 +4,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
-import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { composeConvergedDraftGate, convergedActItemKey } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
@@ -2381,19 +2381,28 @@ function renderGateBlockerItemsList(blockers) {
 
 // GATE-COMMENT-DRAFT-REQUIREMENTS / GATE-COMMENT-PREAPPROVAL-REQUIREMENTS
 // (skills/docs/gate-review-comment-contract.md): a non-clean verdict must not
-// carry an advancing next action. The mandated next action for a round that
-// found blocking findings is a closed set, so the tool DERIVES it rather than
-// accepting caller prose into a machine-read evidence surface. Returns
-// null for a `clean` verdict — the caller's value is accepted unchanged.
-function deriveEffectiveNextAction(verdict, gate) {
+// carry an advancing next action. The mandated next action is a closed set, so
+// the tool DERIVES it rather than accepting caller prose into a machine-read
+// evidence surface. The standalone review derives it from the judge act list
+// (a judged round) and says that it neither approves nor blocks the PR. A
+// lifecycle gate returns null for a `clean` verdict (the caller's value is
+// accepted unchanged).
+export function deriveEffectiveNextAction(verdict, gate, actItems = []) {
+  if (gate === "review") {
+    // Count distinct act items: the ledger and --findings-json can carry the same finding, and a cluster is one item.
+    const stamped = actItems.length > 0 && actItems.every((f) => Number.isInteger(f?.clusterId));
+    const n = new Set(actItems.map((f) => (stamped ? f.clusterId : fingerprintFinding(f ?? {})))).size;
+    const tail = "this review does not approve or block the PR";
+    if (n > 0) return `fix the ${n} item${n === 1 ? "" : "s"} this review lists; ${tail}`;
+    if (verdict === "blocked") return `the review could not complete; rerun it; ${tail}`;
+    return verdict === "clean" ? `no change requested; ${tail}` : `read the findings, none was judged; ${tail}`;
+  }
   if (verdict !== "findings_present" && verdict !== "blocked") {
     return null;
   }
   // draft_gate: the PR stays draft and fixes are required before retrying.
   // pre_approval_gate: follow-up fixes are required before final approval —
-  // address the findings and re-run the gate. review: informational only —
-  // carries no re-gate obligation of its own.
-  if (gate === "review") return "none — informational review, no re-gate required";
+  // address the findings and re-run the gate.
   return gate === "draft_gate" ? "stay draft and fix" : "rerun gate";
 }
 
@@ -2426,9 +2435,10 @@ function scanBlockingFindings(structuredFindings, blocking) {
 }
 
 // GATE-EXEC-LIGHT-ESCALATION: does this round carry a finding at a
-// blocking severity? A `findings_present` verdict is DEFINED as "found issues
-// at blocking severities" (GATE-COMMENT-VERDICT-VALUES), so it always carries
-// one when blocking severities are configured. Structured per-angle findings
+// blocking severity? Without structured findings or counts, the last fallback
+// treats any `findings_present` verdict as carrying one. That is a conservative
+// over-escalation for a fully judged round with only non-blocking act items
+// (GATE-COMMENT-VERDICT-VALUES). Structured per-angle findings
 // and explicit severity counts are inspected directly so a marker-collapsed or
 // free-text round still escalates on its real blocking findings. A `blocked`
 // verdict (gate could not complete) carries no finding evidence by itself.
@@ -2975,7 +2985,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let checkpointComposition = null;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
-    const ledgerVerdict = composeReviewVerdict(preloadedFindingsLedger.overallVerdict, await guardedActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]));
+    // Judged non-act findings stay in the list so a judged round with an empty act list composes clean; the converged guard replaces only the act items.
+    const roundFindings = [...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems];
+    const ledgerVerdict = composeReviewVerdict(preloadedFindingsLedger.overallVerdict, [...roundFindings.filter((f) => !isOpenActItem(f)), ...(await guardedActItems(roundFindings))]);
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
     const gateBlockers = collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact);
@@ -2998,10 +3010,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
           ? ` No deterministic pre-approval blocker is proven, so "blocked" cannot sit over this completed ledger; the composed checkpoint verdict is "${composedVerdict}".`
           : "");
       const actNote = ledgerVerdict !== preloadedFindingsLedger.overallVerdict
-        ? ` The ledger's severity overallVerdict "${preloadedFindingsLedger.overallVerdict}" is composed with ${new Set(listOpenActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]).map((f) => `${f.severity}|${typeof f.summary === "string" ? f.summary.trim() : f.summary}`)).size} open judge act item(s) (ADR 0089).`
+        ? ` The ledger's severity overallVerdict "${preloadedFindingsLedger.overallVerdict}" is composed with ${new Set(listOpenActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems]).map((f) => fingerprintFinding(f ?? {}))).size} open judge act item(s) (ADR 0089).`
         : "";
       throw new Error(
-        `--verdict "${options.verdict}" for ${options.gate} @ ${canonicalHeadSha} contradicts the consolidated ledger's overallVerdict "${ledgerVerdict}" (from --findings-ledger "${options.findingsLedger}" for ${preloadedFindingsLedger.repo}#${preloadedFindingsLedger.pr} ${preloadedFindingsLedger.gate} @ ${preloadedFindingsLedger.headSha}).${actNote}${compositionNote} The verdict must match the fan-in consolidator's computed value composed with any deterministic gate blocker — GATE-COMMENT-VERDICT-VALUES (skills/docs/gate-review-comment-contract.md): "clean" = no findings at a blocking severity remain and the judge act list is empty; "findings_present" = the gate found issues at blocking severities or the judge act list is not empty; "blocked" = the fan-in could not complete or a proven deterministic gate blocker (unchecked AC/DoD) prevents crossing. Re-run the gate fan-in (dev-loops gate consolidate-fanin) and let its overallVerdict flow through, or omit --verdict to post the composed verdict. A contradicting posted verdict is a contract breach this script refuses to record.`,
+        `--verdict "${options.verdict}" for ${options.gate} @ ${canonicalHeadSha} contradicts the consolidated ledger's overallVerdict "${ledgerVerdict}" (from --findings-ledger "${options.findingsLedger}" for ${preloadedFindingsLedger.repo}#${preloadedFindingsLedger.pr} ${preloadedFindingsLedger.gate} @ ${preloadedFindingsLedger.headSha}).${actNote}${compositionNote} The verdict must match the fan-in consolidator's computed value composed with any deterministic gate blocker — GATE-COMMENT-VERDICT-VALUES (skills/docs/gate-review-comment-contract.md): "clean" = a fully judged round has an empty judge act list (a round with an unjudged finding also needs no blocking-severity finding); "findings_present" = a fully judged round has a non-empty judge act list, or a round with an unjudged finding has an issue at a blocking severity; "blocked" = the fan-in could not complete or a proven deterministic gate blocker (unchecked AC/DoD) prevents crossing. Re-run the gate fan-in (dev-loops gate consolidate-fanin) and let its overallVerdict flow through, or omit --verdict to post the composed verdict. A contradicting posted verdict is a contract breach this script refuses to record.`,
       );
     }
     // else: a matching explicit --verdict is accepted unchanged.
@@ -3024,8 +3036,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (convergedInput && (convergedMarker === null || options.verdict !== "clean")) {
     throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs a clean composed verdict over a validated low/nit act list (got verdict ${JSON.stringify(options.verdict)}); post a full round instead.`);
   }
+  // A fully judged round takes its verdict from the judge's act list alone, so the severity floor never overrides it. A partly judged ledger keeps the floor.
+  const judgedRound = isFullyJudged(preloadedFindingsLedger?.findings);
   if (
     options.verdict === "clean"
+    && !judgedRound
     && activeGateConfig.blockCleanOnFindingSeverities
     && activeGateConfig.blockCleanOnFindingSeverities.length > 0
   ) {
@@ -3104,7 +3119,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // BOTH the render and the same-head idempotency compare see the derived
   // value (a render-only fix would let the compare read the raw caller
   // string against the rendered derived one).
-  const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate);
+  const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate, listOpenActItems(preloadedFindingsLedger ? (preloadedFindingsLedger.findings ?? []) : enrichedActItems));
   if (derivedNextAction !== null) {
     options.nextAction = derivedNextAction;
   }
@@ -3121,6 +3136,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (
     structuredFindings
     && options.verdict === "clean"
+    && !judgedRound
     && activeGateConfig.blockCleanOnFindingSeverities
     && activeGateConfig.blockCleanOnFindingSeverities.length > 0
   ) {

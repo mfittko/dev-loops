@@ -1061,7 +1061,7 @@ test("writeGateFindingsLog rejects a missing --findings-file", async () => {
   }, /Cannot read --findings-file/);
 });
 
-test("writeGateFindingsLog derives a deferred disposition for a nice-to-have finding with no explicit disposition", async () => {
+test("writeGateFindingsLog defaults a nice-to-have finding to unjudged with no explicit disposition", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-defer-"));
   try {
     await writeGateFindingsLog({
@@ -1075,7 +1075,7 @@ test("writeGateFindingsLog derives a deferred disposition for a nice-to-have fin
     });
     const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-5", "draft_gate-eeeeeeeeeeeeeeeeeeee00000000000000000000.json");
     const parsed = JSON.parse(await readFile(fullPath, "utf8"));
-    assert.equal(parsed.findings[0].disposition, "deferred");
+    assert.equal(parsed.findings[0].disposition, "unjudged");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -1111,10 +1111,9 @@ test("writeGateFindingsLog keeps an explicit disposition on a nice-to-have findi
   }, /disposition must be one of/);
 });
 
-// #1592: a LOCATABLE question (real file + positive-integer line) is
-// answered, never deferred — it gets its own disposition ("needs-answer"),
-// because it gets a resolvable review thread to answer through.
-test("writeGateFindingsLog derives a needs-answer disposition for a LOCATABLE question finding with no explicit disposition", async () => {
+// #1592: a question finding is no exception: with no explicit disposition it
+// stays unjudged, whether or not it is locatable.
+test("writeGateFindingsLog defaults a LOCATABLE question finding to unjudged with no explicit disposition", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-question-locatable-"));
   try {
     await writeGateFindingsLog({
@@ -1128,7 +1127,7 @@ test("writeGateFindingsLog derives a needs-answer disposition for a LOCATABLE qu
     });
     const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "draft_gate-1111111111111111111100000000000000000000.json");
     const parsed = JSON.parse(await readFile(fullPath, "utf8"));
-    assert.equal(parsed.findings[0].disposition, "needs-answer");
+    assert.equal(parsed.findings[0].disposition, "unjudged");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -1137,7 +1136,7 @@ test("writeGateFindingsLog derives a needs-answer disposition for a LOCATABLE qu
 // A NON-LOCATABLE question (no file/line) has no resolvable thread to answer
 // through — it is deferred by construction, exactly like every other
 // non-blocking severity's default.
-test("writeGateFindingsLog derives a deferred disposition for a NON-LOCATABLE question finding with no explicit disposition", async () => {
+test("writeGateFindingsLog defaults a NON-LOCATABLE question finding to unjudged with no explicit disposition", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-question-nonlocatable-"));
   try {
     await writeGateFindingsLog({
@@ -1151,7 +1150,7 @@ test("writeGateFindingsLog derives a deferred disposition for a NON-LOCATABLE qu
     });
     const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "draft_gate-2222222222222222222200000000000000000000.json");
     const parsed = JSON.parse(await readFile(fullPath, "utf8"));
-    assert.equal(parsed.findings[0].disposition, "deferred");
+    assert.equal(parsed.findings[0].disposition, "unjudged");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -1179,7 +1178,7 @@ test("writeGateFindingsLog trims a padded files[] entry so it matches downstream
     const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "draft_gate-3333333333333333333300000000000000000000.json");
     const parsed = JSON.parse(await readFile(fullPath, "utf8"));
     assert.deepEqual(parsed.findings[0].files, ["src/a.mjs"]);
-    assert.equal(parsed.findings[0].disposition, "needs-answer");
+    assert.equal(parsed.findings[0].disposition, "unjudged");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -2047,7 +2046,7 @@ test("a legacy defer-severity finding normalizes to low in the written log", asy
     });
     const parsed = JSON.parse(await readFile(result.path, "utf8"));
     assert.equal(parsed.findings[0].severity, "low"); // "defer" normalizes to canonical "low"
-    assert.equal(parsed.findings[0].disposition, "deferred");
+    assert.equal(parsed.findings[0].disposition, "unjudged");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -2472,8 +2471,8 @@ test("writeGateFindingsLog enriches findings from --judge-verdict and records sc
       headSha: "abc1234567890abcdef000000000000000000000",
       scopeDrift: { verdict: "drift_detected", rationale: "diff adds a CLI flag not in any AC", driftedAreas: ["cli surface"] },
       dispositions: [
-        { index: 0, disposition: "act", rationale: "fixes the defect named in AC-1", criterion: "AC-1" },
-        { index: 1, disposition: "reject", rationale: "style churn excluded by non-goal 3", criterion: "Non-goal 3" },
+        { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes the defect named in AC-1", criterion: "AC-1" },
+        { index: 1, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "style churn excluded by non-goal 3", criterion: "Non-goal 3" },
       ],
     }), "utf8");
 
@@ -2504,6 +2503,35 @@ test("writeGateFindingsLog enriches findings from --judge-verdict and records sc
   }
 });
 
+test("writeGateFindingsLog refuses a projected judge defer that reaches a high cluster member", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-judge-"));
+  try {
+    const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+    const act = { disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" };
+    const defer = { disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } };
+    await writeFile(judgeVerdictPath, JSON.stringify({
+      headSha: "abc1234567890abcdef000000000000000000000",
+      scopeDrift: { verdict: "within_scope", rationale: "none", driftedAreas: [] },
+      dispositions: [{ index: 0, ...defer }, { index: 1, ...act }],
+    }), "utf8");
+    await assert.rejects(writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 42,
+      gate: "draft_gate",
+      headSha: "abc1234567890abcdef000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([
+        { severity: "low", angle: "correctness", summary: "null deref (low)", files: ["src/x.mjs"], line: 10, recommendation: "add a null guard", disposition: "deferred" },
+        { severity: "high", angle: "security", summary: "null deref (high)", files: ["src/x.mjs"], line: 10, recommendation: "add a null guard", disposition: "accepted-for-fix" },
+      ]),
+      judgeVerdict: judgeVerdictPath,
+      tmpRoot: tmpDir,
+    }), /never deferred/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("writeGateFindingsLog projects the representative's judge disposition onto cluster members (PR 2905)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-cluster-"));
   try {
@@ -2513,8 +2541,8 @@ test("writeGateFindingsLog projects the representative's judge disposition onto 
       headSha,
       scopeDrift: { verdict: "within_scope", rationale: "within AC", driftedAreas: [] },
       dispositions: [
-        { index: 0, disposition: "act", rationale: "root cause", criterion: "AC-1" },
-        { index: 1, disposition: "reject", rationale: "duplicate disposed separately", criterion: "Non-goal 1" },
+        { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "root cause", criterion: "AC-1" },
+        { index: 1, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "duplicate disposed separately", criterion: "Non-goal 1" },
       ],
     }), "utf8");
     await writeGateFindingsLog({
@@ -2552,8 +2580,8 @@ test("writeGateFindingsLog accepts a clean wrapper with non-blocking judge-act f
       headSha,
       scopeDrift: { verdict: "within_scope", rationale: "within AC", driftedAreas: [] },
       dispositions: [
-        { index: 0, disposition: "act", rationale: "medium in the fix window", criterion: "AC-1" },
-        { index: 1, disposition: "act", rationale: "cheap polish while here", criterion: "AC-1" },
+        { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "medium in the fix window", criterion: "AC-1" },
+        { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "cheap polish while here", criterion: "AC-1" },
       ],
     }), "utf8");
 
@@ -2598,7 +2626,7 @@ test("writeGateFindingsLog --judge-verdict fails closed when the verdict does no
       headSha,
       scopeDrift: { verdict: "within_scope", rationale: "matches the briefed AC set", driftedAreas: [] },
       dispositions: [
-        { index: 0, disposition: "act", rationale: "fixes the defect named in AC-1", criterion: "AC-1" },
+        { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes the defect named in AC-1", criterion: "AC-1" },
       ],
     }), "utf8");
 
@@ -2646,7 +2674,7 @@ test("#1745: writeGateFindingsLog with wrapper overallVerdict + --judge-verdict:
       headSha,
       scopeDrift: { verdict: "within_scope", rationale: "matches the briefed AC set", driftedAreas: [] },
       dispositions: [
-        { index: 0, disposition: "act", rationale: "fixes the defect named in AC-1", criterion: "AC-1" },
+        { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "fixes the defect named in AC-1", criterion: "AC-1" },
       ],
     }), "utf8");
     const findings = JSON.stringify({
@@ -2686,7 +2714,7 @@ test("#1745: writeGateFindingsLog with wrapper overallVerdict + --judge-verdict:
       headSha: headShaB,
       scopeDrift: { verdict: "within_scope", rationale: "matches the briefed AC set", driftedAreas: [] },
       dispositions: [
-        { index: 0, disposition: "reject", rationale: "out of scope against non-goal 3", criterion: "Non-goal 3" },
+        { index: 0, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "out of scope against non-goal 3", criterion: "Non-goal 3" },
       ],
     }), "utf8");
     await assert.rejects(
@@ -2853,5 +2881,50 @@ test("writeGateFindingsLog validates failingCase: blank or non-string throws, a 
     assert.equal(JSON.parse(await readFile(result.path, "utf8")).findings[0].failingCase, "the widget overflows");
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog disposes a 3-member cluster by one clusterId through --judge-verdict and refuses a partly stamped array", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-clusterid-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdictPath, JSON.stringify({
+      headSha,
+      scopeDrift: { verdict: "within_scope", rationale: "ok", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "noise" }, { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "one root cause" }],
+    }), "utf8");
+    const member = (angle, extra = {}) => ({ severity: "medium", angle, summary: "shared root cause", clusterId: 1, ...extra });
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate: "draft_gate", headSha, verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "low", angle: "docs", summary: "noise", clusterId: 0 }, member("correctness"), member("holistic"), member("coverage")]),
+      judgeVerdict: judgeVerdictPath, tmpRoot: tmpDir,
+    });
+    assert.equal(result.ok, true);
+    const parsed = JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", `draft_gate-${headSha}.json`), "utf8"));
+    assert.deepEqual(parsed.findings.map((f) => f.judgeDisposition), ["reject", "act", "act", "act"]);
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "owner/repo", pr: 42, gate: "draft_gate", headSha, verdict: "findings_present",
+        findings: JSON.stringify([member("correctness"), member("holistic", { clusterId: undefined })]), tmpRoot: tmpDir,
+      }),
+      /clusterId/,
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog refuses a clusterId outside the array or naming an entry stamped with another id", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-clusterid-range-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const write = (findings) => writeGateFindingsLog({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha, verdict: "findings_present", findings: JSON.stringify(findings), tmpRoot: tmpDir });
+    const at = (clusterId, summary) => ({ severity: "medium", angle: "docs", summary, clusterId });
+    assert.equal((await write([at(0, "a")])).ok, true);
+    await assert.rejects(() => write([at(0, "a"), at(2, "b")]), /clusterId 2 must be less than 2/);
+    await assert.rejects(() => write([at(1, "a"), at(0, "b")]), /clusterId 1 .*own clusterId is 1/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
