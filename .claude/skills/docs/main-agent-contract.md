@@ -154,6 +154,6 @@ context.
 Budget per unit coordinator: peak context at or below the existing **150K-token cap** (largest
 single-response input count, not cumulative traffic); on a Codex root at most 10% empty wakeups,
 measured against root turns rather than wait duration. A missing or ambiguous native measurement is
-reported as unavailable, never zero. This budget binds every harness root, so it stays outside the
-sections harness-specific mirrors drop.
+reported as unavailable, never zero. The rule binds the unit coordinator on every harness, so it
+stays outside the sections harness-specific mirrors drop.
 

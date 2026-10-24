@@ -1085,9 +1085,14 @@ test("unitBoundaries: absent where the route has no unit to hand back", () => {
   }
 });
 
-test("unitBoundaries: a local unit that already has a PR opens no draft PR", () => {
-  // `linkedPr` must be carried for every target kind, not only the issue kind: otherwise a
-  // local branch or phase whose PR already exists is told to open a draft it already has.
+test("unitBoundaries: the local-kind `linkedPr` guard opens no draft PR for a hand-written local bundle", () => {
+  // GUARD-LEVEL CASE, not producer reachability. `buildHandoffTarget`'s `linkedPr` forwarding
+  // for the local kinds is the DEFENDED EXTENSION POINT: no shipped producer emits `linkedPr`
+  // on a local target today (`buildStatusArtifactIdentity` copies only
+  // kind/issue/pr/branch/phase, and the router's `prefer_local` target hardcodes
+  // `linkedPr: null`), so this fixture supplies a shape only a test can create. It exists so
+  // that IF a producer starts emitting a local linked PR, the ownership rule already holds.
+  // The routed boundary a local unit actually receives today is pinned by the next test.
   for (const input of [
     localBranchBundle("feature/local", { issue: 2335, linkedPr: 77 }),
     localPhaseBundle("tmp/plan.md", { linkedPr: 77 }),
@@ -1095,6 +1100,32 @@ test("unitBoundaries: a local unit that already has a PR opens no draft PR", () 
     const env = buildDevLoopHandoffEnvelope(input, defaultSettings, {}, defaultOptions);
     assert.deepEqual(env.unitBoundaries.handBackAfter, [UNIT_BOUNDARY.GATE_VERDICT_POSTED], `${input.bundle.activeArtifact.kind} with a PR`);
   }
+});
+
+test("unitBoundaries: a routed local target receives the draft-PR boundary from the real producer", () => {
+  // PRODUCER REACHABILITY. The route and its identities come from the authoritative resolver,
+  // so this pins what a local unit is actually emitted at the head: the `prefer_local` target
+  // the router builds carries `linkedPr: null`, so a routed local phase owns no PR and stops
+  // at the draft PR before the gate verdict. If the forwarding the test above guards vanished,
+  // this case would stay green — which is why both exist, one per axis.
+  const bundle = resolveAuthoritativeStartupResumeBundle({
+    targetPreference: "prefer_local",
+    currentState: {
+      target: { kind: "issue", issue: 2335, pr: null, linkedPr: null, branch: null, phase: null },
+      ownership: "local", nextActor: "local",
+      status: "active", authorization: "authorized",
+    },
+    issueLinkageResolution: "resolved_no_open_pr", issueReadiness: "ready",
+    issueAssignmentState: "not_applicable", artifactState: "not_applicable", loopState: "idle",
+  });
+  assert.equal(bundle.bundleKind, "resolved", bundle.reason);
+  assert.equal(bundle.activeArtifact.kind, DEV_LOOP_TARGET_KIND.LOCAL_PHASE, "the routed local target is a phase unit");
+  assert.equal(bundle.activeArtifact.linkedPr, undefined, "the producer emits no local linked PR");
+  const env = buildDevLoopHandoffEnvelope(bundle, defaultSettings, {}, defaultOptions);
+  assert.deepEqual(env.unitBoundaries.handBackAfter, [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED]);
+  assert.deepEqual(env.unitBoundaries.resume, {
+    kind: "loop_startup", issue: 2335, pr: null, branch: null, phase: "issue-2335",
+  });
 });
 
 test("unitBoundaries: an issue target carrying a bound PR is never a routed shape", () => {
@@ -1221,6 +1252,12 @@ test("unitBoundaries: resume identity validation covers every accepted and rejec
     // And a whitespace-only text identity is not an identity: this is the `.trim()` half of the
     // text clause, which a non-string form cannot reach.
     [{ kind: "loop_startup", issue: 42, pr: null, branch: "   ", phase: null }, false],
+    // The `!resume || typeof resume !== "object"` half of the guard. Without these two rows the
+    // arm is reached only through the `kind !== "loop_startup"` mismatch, so a regression that
+    // dereferences `resume.kind` before the guard would throw a TypeError instead of returning
+    // the documented `{ ok: false }` and every suite would stay green.
+    [null, false],
+    ["x", false],
   ];
   for (const [resume, expected] of forms) assert.equal(accepts(resume), expected, JSON.stringify(resume));
 });
