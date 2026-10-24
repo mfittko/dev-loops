@@ -53,7 +53,7 @@ test("JS safe-integer sentinels are stripped from the generated schema", () => {
 
 // Minimal JSON Schema (draft 2020-12) matcher covering exactly the construct
 // subset generateConfigJsonSchema emits (type/const/enum/oneOf/properties+
-// required/items/additionalProperties/minLength) — not a general-purpose
+// required/items/additionalProperties/minLength/minProperties/null) — not a general-purpose
 // validator. No JSON-Schema validation library (e.g. ajv) is installed in
 // this repo; this is the few-lines-not-a-dependency version scoped to what
 // this generated schema actually uses, so the "does the generated schema
@@ -70,12 +70,15 @@ function matchesSchema(schema, value) {
       return typeof value === "string" && (schema.minLength === undefined || value.length >= schema.minLength);
     case "boolean":
       return typeof value === "boolean";
+    case "null":
+      return value === null;
     case "number":
       return typeof value === "number";
     case "array":
       return Array.isArray(value) && (!schema.items || value.every((v) => matchesSchema(schema.items, v)));
     case "object": {
       if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+      if (schema.minProperties !== undefined && Object.keys(value).length < schema.minProperties) return false;
       for (const key of schema.required ?? []) if (!(key in value)) return false;
       for (const [key, v] of Object.entries(value)) {
         const propSchema = schema.properties?.[key];
@@ -112,6 +115,21 @@ test("generated schema accepts a bare-string angle (gates.<gate>.angles[]) — r
   assert.ok(matchesSchema(schema, { version: 1, strategy: "tracker-first" }), "valid enum value must match");
   assert.ok(!matchesSchema(schema, { version: 1, strategy: "bogus" }), "out-of-enum strategy must NOT match");
 });
+
+for (const [conductor, accepted] of [
+  [{ model: "native" }, true],
+  [{ reasoningEffort: "medium" }, true],
+  [{ model: null }, true],
+  [{ reasoningEffort: null }, true],
+  [{}, false],
+  [{ extra: true }, false],
+]) {
+  test(`generated conductor schema agrees with runtime for ${JSON.stringify(conductor)}`, () => {
+    const config = { version: 1, models: { harnesses: { codex: { conductor } } } };
+    assert.equal(matchesSchema(generateConfigJsonSchema(), config), accepted);
+    assert.equal(FileConfigSchema.safeParse(config).success, accepted);
+  });
+}
 
 test("shipped config layers parse under the validator the schema is extracted from", async () => {
   const layers = [

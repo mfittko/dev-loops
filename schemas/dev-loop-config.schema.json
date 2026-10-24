@@ -29,6 +29,50 @@
     "models": {
       "type": "object",
       "properties": {
+        "harnesses": {
+          "type": "object",
+          "properties": {
+            "codex": {
+              "type": "object",
+              "properties": {
+                "conductor": {
+                  "type": "object",
+                  "properties": {
+                    "model": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reasoningEffort": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false,
+                  "minProperties": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "codex"
+          ],
+          "additionalProperties": false
+        },
         "conductor": {
           "type": "string",
           "minLength": 1,
