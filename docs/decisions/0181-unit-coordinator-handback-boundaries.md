@@ -51,7 +51,9 @@ re-targets that target to the PR route in `toRoutableCanonicalState`
 (`packages/core/src/loop/public-dev-loop-routing.mjs`) and `deriveTarget` keeps the issue as
 that unit's cross-link (`packages/core/src/loop/handoff-envelope.mjs`). Selecting a route is
 the resolver's job, not an XOR applied to this field, and no precedence rule is needed here:
-the validator requires only a non-empty, well-typed identity set. The phase labels an
+the validator requires a non-empty, well-typed identity set, and every identity it names
+must be one that target itself carries, so a resume can never point a successor at a
+different unit than the envelope's own target. The phase labels an
 artifact rather than a startup mode: which mode re-resolves it (`--plan-file`, `--spike`, the
 lightweight path), like the single mutually-exclusive identity flag a successor's `loop
 startup` invocation passes, is the successor's own route input, since the startup CLI has no
@@ -70,7 +72,9 @@ on any target kind, because `buildStatusArtifactIdentity` copies only the target
 `toRoutableCanonicalState` before the envelope sees it. The envelope therefore forwards
 no linked PR for `local_branch` and `local_phase`, and every routed local unit opens its
 draft PR first. The validator enforces the canonical order, so a reversed list is refused
-rather than silently inverting which boundary comes first. A route whose unit runs a gate
+rather than silently inverting which boundary comes first, and it cross-checks the set
+against the envelope's own target: a target that owns no PR must carry `draft_pr_opened`
+first, or the unit stops nowhere. A route whose unit runs a gate
 round but posts no verdict of its own carries `gate_verdict_posted` as a recorded naming
 approximation, never as a boundary it can reach.
 

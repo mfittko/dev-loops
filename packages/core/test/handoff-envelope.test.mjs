@@ -964,6 +964,50 @@ test("cwd: a non-namespaced own worktree is that root, not a nested namespace", 
   }
 });
 
+// issue 2532: ONLY the documented `tmp/worktrees/<slug>/` layout marks an own worktree. A main
+// checkout that merely sits under a directory named `worktrees` (`/home/worktrees/issue-42`) or a
+// `worktrees` directory outside the `tmp/` layout (`/repo/worktrees/issue-42`) is NOT this unit's
+// worktree: binding it would name the main checkout while still promising `worktreeRequired: true`.
+// Every accepted and rejected form the contract names is pinned here, one row each.
+test("cwd: only the documented tmp/worktrees layout is the unit's own worktree root", () => {
+  // Accepted: the documented layouts, and a main checkout that derives the nested path.
+  for (const [repoRoot, expected] of [
+    ["/repo/tmp/worktrees/issue-42", "/repo/tmp/worktrees/issue-42"],
+    ["/repo/tmp/worktrees/dev-loops/issue-42", "/repo/tmp/worktrees/dev-loops/issue-42"],
+    ["/repo", "/repo/tmp/worktrees/dev-loops/issue-42"],
+    ["/repo/issue-42", "/repo/issue-42/tmp/worktrees/dev-loops/issue-42"],
+  ]) {
+    assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot }), expected, repoRoot);
+  }
+  // Rejected: a main checkout under a `worktrees` parent, and a `worktrees` directory that is not
+  // under `tmp/`. Both keep the nested derivation, so the envelope never names a main checkout.
+  for (const mainCheckout of ["/home/worktrees/issue-42", "/repo/worktrees/issue-42"]) {
+    const derived = deriveCwd(issueBundle(42).bundle, { repoRoot: mainCheckout });
+    assert.equal(derived, `${mainCheckout}/tmp/worktrees/dev-loops/issue-42`, mainCheckout);
+    assert.notEqual(derived, mainCheckout, `${mainCheckout} is a main checkout, never the unit worktree`);
+  }
+});
+
+test("cwd: the PR and unrelated-worktrees-segment forms decide ownership the same way", () => {
+  // fingerprint 410cb4e42b686816 (accepted): the documented layouts and the main checkout.
+  for (const [input, repoRoot, expected] of [
+    [issueBundle(42), "/repo/tmp/worktrees/issue-42", "/repo/tmp/worktrees/issue-42"],
+    [prBundle(42), "/repo/tmp/worktrees/dev-loops/pr-42", "/repo/tmp/worktrees/dev-loops/pr-42"],
+    [prBundle(42), "/repo", "/repo/tmp/worktrees/dev-loops/pr-42"],
+  ]) {
+    assert.equal(deriveCwd(input.bundle, { repoRoot }), expected, repoRoot);
+  }
+  // Rejected: a main checkout under a directory named `worktrees` stays nested, never bound.
+  assert.equal(
+    deriveCwd(issueBundle(42).bundle, { repoRoot: "/home/worktrees/issue-42" }),
+    "/home/worktrees/issue-42/tmp/worktrees/dev-loops/issue-42"
+  );
+  // Rejected: an unrelated path that merely ends in a worktrees-like segment is not bound either.
+  const unrelated = "/srv/worktrees/dev-loops-issue-42";
+  assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot: unrelated }), `${unrelated}/tmp/worktrees/dev-loops/issue-42`);
+  assert.notEqual(deriveCwd(issueBundle(42).bundle, { repoRoot: unrelated }), unrelated);
+});
+
 // issue 2532: `\` is a legal POSIX filename character, so a POSIX root's backslash is part of the
 // directory NAME and must survive both the canonicalization and the join. Unifying it to `/` would
 // silently retarget `cwd` at a different directory.
@@ -1231,10 +1275,14 @@ test("unitBoundaries: validator rejects a non-object field, a reversed order and
     handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED],
     resume: { kind: "loop_startup", issue: -5, pr: null, phase: "x" },
   }).ok, false);
-  // Accepted: a valid issue plus a phase identity.
-  assert.equal(withBoundaries({
-    handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED],
-    resume: { kind: "loop_startup", issue: 42, pr: null, phase: "x" },
+  // Accepted: a valid issue plus the phase identity its own target carries.
+  const phaseWithIssue = buildDevLoopHandoffEnvelope(localPhaseBundle("x", { issue: 42 }), defaultSettings, {}, defaultOptions);
+  assert.equal(validateHandoffEnvelope({
+    ...phaseWithIssue,
+    unitBoundaries: {
+      handBackAfter: [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED],
+      resume: { kind: "loop_startup", issue: 42, pr: null, phase: "x" },
+    },
   }).ok, true);
 });
 
@@ -1253,32 +1301,37 @@ test("unitBoundaries: resume identity validation covers every accepted and rejec
   // The producer only ever emits `issue`/`pr` as a positive integer or null and
   // `branch`/`phase` as a non-empty string or null, so the validator must reject every
   // malformed form — including a bad branch/phase riding alongside a valid issue.
-  const base = buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, {}, defaultOptions);
-  const accepts = (resume) => validateHandoffEnvelope({
+  // Each row uses a base whose OWN target carries the row's identities, so a rejection is
+  // attributable to the type/whitespace arm and never to the separate target cross-check.
+  const branchWithIssue = buildDevLoopHandoffEnvelope(localBranchBundle("feature/x", { issue: 42 }), defaultSettings, {}, defaultOptions);
+  const phaseOnly = buildDevLoopHandoffEnvelope(localPhaseBundle("tmp/plan.md"), defaultSettings, {}, defaultOptions);
+  const prOwned = buildDevLoopHandoffEnvelope(prBundle(99), defaultSettings, {}, defaultOptions);
+  const issueOnly = buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, {}, defaultOptions);
+  const accepts = (base, resume) => validateHandoffEnvelope({
     ...base,
-    unitBoundaries: { handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume },
+    unitBoundaries: { ...base.unitBoundaries, resume },
   }).ok;
   const forms = [
-    [{ kind: "loop_startup", issue: 42, pr: null, branch: "feature/x", phase: null }, true],
-    [{ kind: "loop_startup", issue: null, pr: null, branch: null, phase: "tmp/plan.md" }, true],
-    [{ kind: "loop_startup", issue: null, pr: 99, branch: null, phase: null }, true],
-    [{ kind: "loop_startup", issue: 42, pr: null, branch: 99 }, false],
-    [{ kind: "loop_startup", issue: 42, pr: null, branch: null, phase: 42 }, false],
+    [branchWithIssue, { kind: "loop_startup", issue: 42, pr: null, branch: "feature/x", phase: null }, true],
+    [phaseOnly, { kind: "loop_startup", issue: null, pr: null, branch: null, phase: "tmp/plan.md" }, true],
+    [prOwned, { kind: "loop_startup", issue: null, pr: 99, branch: null, phase: null }, true],
+    [branchWithIssue, { kind: "loop_startup", issue: 42, pr: null, branch: 99 }, false],
+    [phaseOnly, { kind: "loop_startup", issue: null, pr: null, branch: null, phase: 42 }, false],
     // `pr` gets its own rejected form carrying a VALID issue: routing every count check
     // through `issue` alone would leave the `pr` half of the integer clause unexercised, and
     // a row with no other identity would be rejected by the no-identity catch-all anyway.
-    [{ kind: "loop_startup", issue: 42, pr: "99", branch: null, phase: null }, false],
+    [issueOnly, { kind: "loop_startup", issue: 42, pr: "99", branch: null, phase: null }, false],
     // And a whitespace-only text identity is not an identity: this is the `.trim()` half of the
     // text clause, which a non-string form cannot reach.
-    [{ kind: "loop_startup", issue: 42, pr: null, branch: "   ", phase: null }, false],
+    [branchWithIssue, { kind: "loop_startup", issue: 42, pr: null, branch: "   ", phase: null }, false],
     // The `!resume || typeof resume !== "object"` half of the guard. Without these two rows the
     // arm is reached only through the `kind !== "loop_startup"` mismatch, so a regression that
     // dereferences `resume.kind` before the guard would throw a TypeError instead of returning
     // the documented `{ ok: false }` and every suite would stay green.
-    [null, false],
-    ["x", false],
+    [issueOnly, null, false],
+    [issueOnly, "x", false],
   ];
-  for (const [resume, expected] of forms) assert.equal(accepts(resume), expected, JSON.stringify(resume));
+  for (const [base, resume, expected] of forms) assert.equal(accepts(base, resume), expected, JSON.stringify(resume));
 });
 
 test("unitBoundaries: validator rejects a foreign boundary name or a resume with no target", () => {
@@ -1291,6 +1344,60 @@ test("unitBoundaries: validator rejects a foreign boundary name or a resume with
   assert.equal(withBoundaries({ handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED, UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "loop_startup", issue: 42, pr: null } }).ok, false);
   assert.equal(withBoundaries({ handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "loop_startup", issue: null, pr: null } }).ok, false);
   assert.equal(withBoundaries({ handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "webhook", issue: 42, pr: null } }).ok, false);
+});
+
+// A boundary set that contradicts the envelope's OWN target is not authoritative state: the
+// producer derives it from that target, so a PR-less unit that omits the draft PR stops nowhere
+// (the snowball this field exists to prevent). One negative fixture per arm.
+test("unitBoundaries: the validator cross-checks the boundary set against the target's PR ownership", () => {
+  const prLess = buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, {}, defaultOptions);
+  const prOwned = buildDevLoopHandoffEnvelope(prBundle(99), defaultSettings, {}, defaultOptions);
+  // Accepted: the tooling-emitted sets, one per ownership arm.
+  assert.equal(validateHandoffEnvelope(prLess).ok, true);
+  assert.equal(validateHandoffEnvelope(prOwned).ok, true);
+  // Rejected: a PR-less target whose list omits the draft PR it must open.
+  const omitted = validateHandoffEnvelope({
+    ...prLess,
+    unitBoundaries: { ...prLess.unitBoundaries, handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED] },
+  });
+  assert.equal(omitted.ok, false);
+  assert.deepEqual(omitted.errors.map((e) => e.field), ["unitBoundaries.handBackAfter"]);
+  // Accepted: the same list on a target that already owns its PR, where no draft PR boundary exists.
+  assert.equal(validateHandoffEnvelope({
+    ...prOwned,
+    unitBoundaries: { ...prOwned.unitBoundaries, handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED] },
+  }).ok, true);
+});
+
+// `resume` is copied FROM the target, so an identity the target does not carry resumes a
+// different unit. One negative fixture per identity arm, plus the accepted producer shapes.
+test("unitBoundaries: the validator rejects a resume identity the target does not carry", () => {
+  const prLess = buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, {}, defaultOptions);
+  const prOwned = buildDevLoopHandoffEnvelope(prBundle(99), defaultSettings, {}, defaultOptions);
+  const branchUnit = buildDevLoopHandoffEnvelope(localBranchBundle("feature/x", { issue: 42 }), defaultSettings, {}, defaultOptions);
+  const phaseOnly = buildDevLoopHandoffEnvelope(localPhaseBundle("tmp/plan.md"), defaultSettings, {}, defaultOptions);
+  // Accepted: a PR-owning target, a PR-less issue target, and a target with neither issue nor PR
+  // whose resume carries its branch (or its phase label).
+  for (const accepted of [prOwned, prLess, branchUnit, phaseOnly]) {
+    assert.equal(validateHandoffEnvelope(accepted).ok, true, JSON.stringify(accepted.unitBoundaries));
+  }
+  const rejected = [
+    // The judge's failing case: a PR-less issue target whose resume names issue 7 and no PR.
+    [prLess, { handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "loop_startup", issue: 7, pr: null } }],
+    // A resume naming a different issue or PR than the target carries.
+    [prLess, { handBackAfter: prLess.unitBoundaries.handBackAfter, resume: { kind: "loop_startup", issue: 42, pr: 7 } }],
+    [prOwned, { handBackAfter: prOwned.unitBoundaries.handBackAfter, resume: { kind: "loop_startup", issue: null, pr: 100 } }],
+    [phaseOnly, { handBackAfter: phaseOnly.unitBoundaries.handBackAfter, resume: { kind: "loop_startup", issue: null, pr: null, phase: "tmp/other.md" } }],
+    [branchUnit, { handBackAfter: branchUnit.unitBoundaries.handBackAfter, resume: { kind: "loop_startup", issue: 42, branch: "feature/y" } }],
+  ];
+  for (const [base, unitBoundaries] of rejected) {
+    const verdict = validateHandoffEnvelope({ ...base, unitBoundaries });
+    assert.equal(verdict.ok, false, JSON.stringify(unitBoundaries));
+    assert.ok(
+      verdict.errors.some((e) => e.field === "unitBoundaries.resume" && e.reason.includes("does not carry")),
+      JSON.stringify(verdict.errors)
+    );
+  }
 });
 
 // ===========================================================================
@@ -1833,7 +1940,13 @@ test("validate: target.local_phase with valid issue but no phase is ok", () => {
 });
 
 test("validate: target.local_phase with valid phase is ok", () => {
-  const env = { ...validEnvelope(), target: { kind: "local_phase", phase: "implementation", repo: "a/b" } };
+  // The hand-back boundaries are derived FROM the target, so a swapped-target fixture keeps no
+  // stale set here: this test pins the target-kind arm, not the boundary/target cross-check.
+  const env = {
+    ...validEnvelope(),
+    target: { kind: "local_phase", phase: "implementation", repo: "a/b" },
+    unitBoundaries: undefined,
+  };
   const result = validateHandoffEnvelope(env);
   assert.equal(result.ok, true);
 });

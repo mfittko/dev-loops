@@ -87,7 +87,10 @@ brief has to restate the boundary:
   **The list is ordered and first-match**: a unit that carries both stops at the draft PR it opens,
   and the remaining verdict boundary belongs to its successor, which resumes already owning that PR.
   The validator refuses a list that reverses that order, so the first match is always the draft PR.
-  Two listed paths carry `gate_verdict_posted` as a recorded naming approximation
+  It also refuses a set that contradicts the envelope's own target (`deriveTarget`): a target that
+  owns no PR must carry `draft_pr_opened` first, because opening that draft PR is the only boundary
+  its phase can end at. Two listed paths carry `gate_verdict_posted` as a recorded naming
+  approximation
   (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`), never as a second boundary that
   unit can reach: a route that posts no verdict of its own while its unit still runs a gate round
   (`final_approval`), and an `issue_intake` unit that stops at the draft PR it opens.
@@ -99,8 +102,9 @@ brief has to restate the boundary:
   the router re-targets that target to the PR route (`toRoutableCanonicalState` in
   `packages/core/src/loop/public-dev-loop-routing.mjs`) and the envelope keeps the issue as that
   unit's cross-link (`packages/core/src/loop/handoff-envelope.mjs`), while the validator requires
-  only a non-empty, well-typed identity set. A phase-only unit is the no-number case: its resume
-  names `phase` and none of `issue`, `pr` or `branch`. `resume.phase` is that artifact identity,
+  a non-empty, well-typed identity set whose every named identity is one that target itself
+  carries. A phase-only unit is the no-number case: its resume names `phase` and none of `issue`,
+  `pr` or `branch`. `resume.phase` is that artifact identity,
   never a mode selector. `loop startup` has no `--phase` input: it selects its mode from exactly
   one of `--issue`, `--pr`, `--input`, `--plan-file` or `--spike`, and `--lightweight` is an
   optional modifier that composes with `--issue` (or the issue-less PR-first trigger when used
@@ -109,7 +113,8 @@ brief has to restate the boundary:
   (`{kind: "local_phase", issue: null, pr: null, linkedPr: null, branch: null, phase}`) for a
   validated plan file and a validated spike file, so the label cannot choose between them. The
   shipped re-resolution therefore never reads a mode from this field: no code consumes `resume`
-  (the validator only checks that it is present and well-typed) and the successor's own `loop
+  (the validator only checks that it is present, well-typed and consistent with the envelope's own
+  target) and the successor's own `loop
   startup` invocation is the re-resolution, its mode coming from that successor's route input —
   the startup-output artifact the predecessor's hand-back names and
   `emit-coordinator-work-order.mjs --input <startup-output>` turns into the successor's order,

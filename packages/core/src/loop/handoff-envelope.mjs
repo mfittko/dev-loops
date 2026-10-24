@@ -496,13 +496,19 @@ function ownedWorktreeRootFor(canonicalRoot, relative) {
   const suffix = `${WORKTREE_NAMESPACE}/${relative}`;
   if (canonicalRoot === suffix || canonicalRoot.endsWith(`/${suffix}`)) return canonicalRoot;
   // AGENTS.md documents the mutating-work layout as `tmp/worktrees/<issue-or-branch-slug>/`, so
-  // an existing worktree of that shape is the target's own root too. Recognise it by structure —
-  // the `<relative>` segment directly under a `worktrees` segment — never by bare basename, or a
-  // main checkout merely sharing the name (`/repo/issue-42`) would be mistaken for a worktree.
+  // an existing worktree of that shape is the target's own root too. Recognise the DOCUMENTED
+  // shape and nothing looser: the `<relative>` segment under a `worktrees` segment that is itself
+  // under a `tmp` segment. Never by bare basename (`/repo/issue-42`) and never by a merely
+  // `worktrees`-named ancestor (`/home/worktrees/issue-42`), or a main checkout is named as the
+  // unit worktree while the envelope still promises one — the main-branch mutation the layout
+  // exists to prevent. Every other root keeps the nested derivation below.
   const segments = canonicalRoot.split("/");
   const relativeSegment = segments.pop();
-  const parentSegment = segments.pop();
-  return relativeSegment === relative && parentSegment === "worktrees" ? canonicalRoot : null;
+  const worktreesSegment = segments.pop();
+  const tmpSegment = segments.pop();
+  return relativeSegment === relative && worktreesSegment === "worktrees" && tmpSegment === "tmp"
+    ? canonicalRoot
+    : null;
 }
 
 function deriveCwd(bundle, options = {}) {
@@ -1336,6 +1342,43 @@ export function validateHandoffEnvelope(envelope) {
       } else if (![resume.issue, resume.pr].some((n) => Number.isInteger(n) && n > 0)
         && ![resume.branch, resume.phase].some((v) => typeof v === "string" && v.trim())) {
         errors.push({ field: "unitBoundaries.resume", reason: "must name an issue, pr, branch or phase to re-resolve", got: resume });
+      }
+      // A boundary set and a resume that contradict the envelope's OWN target are not
+      // authoritative state: `deriveUnitBoundaries` derives both from that target, so a PR-less
+      // unit whose list omits the draft PR stops nowhere (the snowball this field exists to
+      // prevent), and a resume naming another issue or PR resumes a different unit (issue 2532).
+      // Only well-typed identities are compared; the type errors above already cover a
+      // malformed one, and a target error above already covers a missing/invalid target.
+      const target = envelope.target;
+      if (target && typeof target === "object" && !Array.isArray(target)) {
+        const ownsPr = target.kind === DEV_LOOP_TARGET_KIND.PR
+          || (Number.isInteger(target.linkedPr) && target.linkedPr > 0);
+        if (Array.isArray(ub.handBackAfter) && ub.handBackAfter.length > 0
+          && !ownsPr && ub.handBackAfter[0] !== UNIT_BOUNDARY.DRAFT_PR_OPENED) {
+          errors.push({
+            field: "unitBoundaries.handBackAfter",
+            reason: `a target that owns no PR must hand back at ${UNIT_BOUNDARY.DRAFT_PR_OPENED} first, because opening that draft PR ends its phase`,
+            got: ub.handBackAfter,
+          });
+        }
+        const identityText = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+        const resumeIssue = Number.isInteger(resume?.issue) && resume.issue > 0 ? resume.issue : null;
+        const resumePr = Number.isInteger(resume?.pr) && resume.pr > 0 ? resume.pr : null;
+        // Each resume identity must be one the target itself carries. An issue target's own PR
+        // arrives as `linkedPr`, so that arm counts as an owned PR identity too.
+        const foreign = [
+          ["issue", resumeIssue, Number.isInteger(target.issue) && target.issue > 0 ? [target.issue] : []],
+          ["pr", resumePr, [target.pr, target.linkedPr].filter((n) => Number.isInteger(n) && n > 0)],
+          ["branch", identityText(resume?.branch), [identityText(target.branch)].filter(Boolean)],
+          ["phase", identityText(resume?.phase), [identityText(target.phase)].filter(Boolean)],
+        ].filter(([, named, owned]) => named !== null && !owned.includes(named)).map(([name]) => name);
+        if (foreign.length > 0) {
+          errors.push({
+            field: "unitBoundaries.resume",
+            reason: `every identity must be one this ${target.kind} target carries; target does not carry: ${foreign.join(", ")}`,
+            got: resume,
+          });
+        }
       }
     }
   }
