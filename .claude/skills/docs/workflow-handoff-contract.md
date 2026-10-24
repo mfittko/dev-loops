@@ -128,6 +128,23 @@ brief has to restate the boundary:
   (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`). `resume` is derived from the
   envelope's own target, so **no successor field derives from the predecessor's
   conversation** and the predecessor never writes or summarizes the next brief.
+- `resume` has a recorded consumer and acceptance linkage even though no code reads it. Its
+  consumers are specified rather than coded: the
+  [Main Agent Contract](main-agent-contract.md#unit-coordinator-boundaries-issue-2532) and
+  `agents/dev-loop.agent.md` both name `unitBoundaries.resume` as the identity a successor
+  re-resolves, and `docs/decisions/0181-unit-coordinator-handback-boundaries.md` records why the
+  field exists. Its acceptance linkage is issue 2532's Scope row ("Startup and the existing
+  handoff envelope provide the next brief through the existing tooling producer; the previous
+  coordinator never writes or summarizes it") read with its AC/DoD row "The successor resumes
+  from authoritative state" / "no field derives from predecessor conversation": a successor has
+  to take its unit identity from tooling, never from a predecessor's prose, and this field is
+  that emission. The same AC/DoD row's `nextAction`, `requiredReads` and `stopRules` evidence
+  names the brief's other fields; it is not an exclusive field list, so the row requires an
+  emitted resume identity rather than excluding one. Which entry point a pull-dispatched
+  successor then takes stays unsettled and deliberately open here: re-running its own
+  `loop startup` (this document and the Main Agent Contract) and treating the pulled order as its
+  envelope with no new envelope built (`agents/dev-loop.agent.md`) are both stated, and this
+  field's emission and validation depend on neither. No re-resolution step is added for it.
 
 The field is absent where the route has no unit to hand back: a terminal reconciliation envelope
 (`stopRules` are already terminal), a read-only `review` or `ui_review` round (one round, no
