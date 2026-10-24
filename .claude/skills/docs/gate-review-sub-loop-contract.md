@@ -346,6 +346,44 @@ Each reviewer:
 - produces a focused findings artifact PER ANGLE it covers, each with its own verdict (clean/findings_present) and file references, stamped per the head-stamp rule below — a grouped reviewer writes as many artifacts, at the existing per-angle paths, as it has angles, never one merged artifact for the group
 - completion is detected under Claude Code by `dev-loops-run cli/index.mjs gate wait-for-units` (`GATE-EXEC-HARNESS-JOIN`), and elsewhere via the harness completion notification or the reviewer's findings artifact(s) at their deterministic output paths; the orchestrator awaits fan-in on those paths and joins via the sanctioned fan-in CLI `dev-loops-run cli/index.mjs gate consolidate-fanin` (backed by `consolidateFanin`; Phase 3). The forbidden fan-in wait improvisations (transcript-tailing, `node -e`/`python3` tool-JSON parsing, `sleep`-poll loops) and this sanctioned wait are owned by `ANTIPATTERN-FANIN-WAIT` in [anti-patterns](./anti-patterns.md).
 
+### Supplemental residual evidence: recording stage
+
+An original full draft-gate per-angle
+result MAY carry `residualEvidenceAssessment`. It is a separate explicit
+assessment, never inferred from verdict, findings, `contextWidened` or
+`verifiedItems` (which remains an exact AC/DoD checklist-label field).
+
+The assessment has exactly `repo`, `pr`, `headSha`, `reviewBaselineHead`,
+`actSetId`, `deltaResultSha256`, `decisionSha256`, `roots`,
+`supplementalFiles` and `limitations`. Digests are lowercase raw SHA-256 hex.
+Each root has `threadId`, `rootCommentId`, `rootSha256` (the original body
+bytes) and complete `members`; each member has `ref`, `conclusion: "resolved"`
+and a nonempty `evidence` string array. Supplemental files have absolute `path`
+and exact-byte `sha256`; limitations are a nonempty string array. Unknown,
+duplicate, contradictory or partial assessment fields refuse recording.
+
+Run `scripts/github/reconcile-residual-evidence.mjs --repo <owner/name> --pr <n>
+--head-sha <full-sha> --baseline <full-sha> --angle <angle> --fixer-plan <canonical-path>`
+to inspect, adding `--record` to persist. The producer authenticates the
+current canonical plan, dispatch layout, execution index, materialization,
+fresh-context sentinel, pull receipt/subject and post-pull outputs. It requires
+the unchanged live candidate, original invocation-three
+`outcome: bounded_out` / `nextStep: push_to_gate`, authenticated fixer delivery through the fixed
+read-only `--check` CLI, settled green CI and a subsequent valid full draft
+gate. Every residual root/member must be covered explicitly.
+
+Records live separately under
+`tmp/residual-evidence/<repo-slug>/pr-<n>/<headSha>/<content-sha256>.json`,
+retaining source bytes and live observations for later revalidation. Inspection
+writes nothing. Recording grants no closure authority: no apply action, reply,
+resolve, delta invocation/reset, historical-result or fixer-disposition rewrite.
+Residual threads remain open until the separately gated consumer ships; the
+parent remains open. The existing local work-order trust ceiling remains:
+these records do not isolate a malicious local writer or prove native runtime
+enforcement. Unknown effective model/effort stays unknown; configured resumed
+execution stays unqualified. The complete staged decision is
+[ADR 0180](https://github.com/mfittko/dev-loops/blob/main/docs/decisions/0180-post-delivery-residual-evidence-reconciliation.md). <!-- secret-scan:allow Public ADR documentation URL; not a credential -->
+
 <!-- rule: GATE-EXEC-FANOUT-DISPATCH-KEY -->
 `GATE-EXEC-FANOUT-DISPATCH-KEY`: Every `runs.all` / batch reviewer dispatch MUST carry a unique
 non-empty `key` on each item (angle/group slug). Missing or blank keys cause Pi's
