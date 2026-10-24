@@ -939,6 +939,41 @@ test("cwd: startup inside the target's own worktree names that root, not a neste
   assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot: "/repo/tmp/worktrees/dev-loops/issue-4" }), "/repo/tmp/worktrees/dev-loops/issue-4/tmp/worktrees/dev-loops/issue-42");
 });
 
+// issue 2532: AGENTS.md documents the mutating-work layout as the NON-namespaced
+// `tmp/worktrees/<issue-or-branch-slug>/`. A coordinator started inside such an existing worktree
+// already stands at the target's own root, so appending the namespace would name a path that does
+// not exist. A worktree of a DIFFERENT target, and a main checkout merely named like the worktree,
+// are still not this target's root.
+test("cwd: a non-namespaced own worktree is that root, not a nested namespace", () => {
+  for (const [input, ownRoot] of [
+    [issueBundle(42), "/repo/tmp/worktrees/issue-42"],
+    [prBundle(42), "/repo/tmp/worktrees/pr-42"],
+  ]) {
+    assert.equal(deriveCwd(input.bundle, { repoRoot: ownRoot }), ownRoot, input.bundle.activeArtifact.kind);
+    assert.ok(!deriveCwd(input.bundle, { repoRoot: ownRoot }).includes(`${ownRoot}/tmp/worktrees`));
+  }
+  for (const [input, foreignRoot, expected] of [
+    [issueBundle(42), "/repo/tmp/worktrees/issue-4", "/repo/tmp/worktrees/issue-4/tmp/worktrees/dev-loops/issue-42"],
+    [prBundle(42), "/repo/tmp/worktrees/pr-4", "/repo/tmp/worktrees/pr-4/tmp/worktrees/dev-loops/pr-42"],
+    // A bare basename is not the worktree layout; the main checkout still nests.
+    [issueBundle(42), "/repo/issue-42", "/repo/issue-42/tmp/worktrees/dev-loops/issue-42"],
+    // Neither is a namespaced worktree of another target.
+    [issueBundle(42), "/repo/tmp/worktrees/dev-loops/issue-4", "/repo/tmp/worktrees/dev-loops/issue-4/tmp/worktrees/dev-loops/issue-42"],
+  ]) {
+    assert.equal(deriveCwd(input.bundle, { repoRoot: foreignRoot }), expected, foreignRoot);
+  }
+});
+
+// issue 2532: `\` is a legal POSIX filename character, so a POSIX root's backslash is part of the
+// directory NAME and must survive both the canonicalization and the join. Unifying it to `/` would
+// silently retarget `cwd` at a different directory.
+test("cwd: a POSIX root keeps its literal backslash", () => {
+  const oddRoot = "/repo/name\\part";
+  assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot: "/repo", worktreeCwd: oddRoot }), oddRoot);
+  assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot: oddRoot }), `${oddRoot}/tmp/worktrees/dev-loops/issue-42`);
+  assert.notEqual(deriveCwd(issueBundle(42).bundle, { repoRoot: oddRoot }), "/repo/name/part/tmp/worktrees/dev-loops/issue-42");
+});
+
 // issue 2532: the slug fallback serves local_branch/local_phase units, whose own namespaced
 // checkout hits the same nested-namespace trap as issue-<n>/pr-<n>. And one logical repo root
 // must have exactly one spelling, or the field cannot exact-match the real worktree.

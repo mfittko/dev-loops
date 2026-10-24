@@ -451,12 +451,15 @@ function lookupAcceptanceTemplate(strategy, gate) {
 const WINDOWS_ROOT = /^(?:[A-Za-z]:[\\/]|\\\\)/u;
 
 function canonicalRepoRoot(root) {
-  const unified = root.replace(/\\/g, "/");
-  // Pick the normalizer from the root's SHAPE. A drive-rooted or UNC root keeps Windows
-  // semantics: `posix.normalize` folds a network share's significant leading `//` into a
-  // root-relative POSIX path, and the suffix logic below cannot repair it afterwards. Every
-  // other root normalizes as POSIX.
-  const normalized = WINDOWS_ROOT.test(root) || unified.startsWith("//")
+  // Decide the root's SHAPE from the raw input BEFORE touching separators: `\` is a legal
+  // POSIX filename character, so unifying it on a POSIX root names a DIFFERENT directory.
+  const windowsShaped = WINDOWS_ROOT.test(root) || root.startsWith("//");
+  const unified = windowsShaped ? root.replace(/\\/g, "/") : root;
+  // Pick the normalizer from that shape. A drive-rooted or UNC root keeps Windows semantics:
+  // `posix.normalize` folds a network share's significant leading `//` into a root-relative
+  // POSIX path, and the suffix logic below cannot repair it afterwards. Every other root
+  // normalizes as POSIX.
+  const normalized = windowsShaped
     ? win32Path.normalize(unified).replace(/\\/g, "/")
     : posixPath.normalize(unified);
   // Both normalizers PRESERVE a trailing separator, which would defeat the suffix
@@ -474,22 +477,32 @@ function canonicalRepoRoot(root) {
  * SHAPE, never string interpolation. A root that IS a separator (`/`) cannot double it, a
  * drive root (`C:/`) cannot degrade to the drive-relative `C:`, and a network share's
  * significant leading `//` survives. The unified `/` spelling this module emits is restored
- * afterwards, because `win32.join` reintroduces backslashes (issue 2532).
+ * afterwards, because `win32.join` reintroduces backslashes (issue 2532) — but ONLY for a
+ * Windows-shaped root, since a POSIX root's literal `\` is part of the directory name.
  */
 function joinUnderRoot(root, ...segments) {
   const windowsShaped = WINDOWS_ROOT.test(root) || root.startsWith("//");
-  return (windowsShaped ? win32Path : posixPath).join(root, ...segments).replace(/\\/g, "/");
+  const joined = (windowsShaped ? win32Path : posixPath).join(root, ...segments);
+  return windowsShaped ? joined.replace(/\\/g, "/") : joined;
 }
 
 /**
  * The canonical root when `root` IS already the loop-owned worktree for `relative`
- * (`<kind>-<number>` under the namespace), else null. A startup run from inside the
- * target's own worktree reports that worktree as its repo root, so appending the
- * namespace again would name a worktree nested inside itself (issue 2532).
+ * (`<kind>-<number>` under the namespace, or the non-namespaced `<slug>` layout), else null.
+ * A startup run from inside the target's own worktree reports that worktree as its repo root,
+ * so appending the namespace again would name a worktree nested inside itself (issue 2532).
  */
 function ownedWorktreeRootFor(canonicalRoot, relative) {
   const suffix = `${WORKTREE_NAMESPACE}/${relative}`;
-  return canonicalRoot === suffix || canonicalRoot.endsWith(`/${suffix}`) ? canonicalRoot : null;
+  if (canonicalRoot === suffix || canonicalRoot.endsWith(`/${suffix}`)) return canonicalRoot;
+  // AGENTS.md documents the mutating-work layout as `tmp/worktrees/<issue-or-branch-slug>/`, so
+  // an existing worktree of that shape is the target's own root too. Recognise it by structure —
+  // the `<relative>` segment directly under a `worktrees` segment — never by bare basename, or a
+  // main checkout merely sharing the name (`/repo/issue-42`) would be mistaken for a worktree.
+  const segments = canonicalRoot.split("/");
+  const relativeSegment = segments.pop();
+  const parentSegment = segments.pop();
+  return relativeSegment === relative && parentSegment === "worktrees" ? canonicalRoot : null;
 }
 
 function deriveCwd(bundle, options = {}) {
