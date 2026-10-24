@@ -444,10 +444,13 @@ function lookupAcceptanceTemplate(strategy, gate) {
 // ---------------------------------------------------------------------------
 
 /**
- * The one canonical spelling of a repo root: separators unified to `/` and every
- * redundant segment folded away (`//`, a trailing `/`, a trailing `/.`). One logical
- * repo state must yield one `cwd` byte sequence, because a consumer exact-matches
- * this path against the real worktree (issue 2532).
+ * The one canonical spelling of a repo root: separators unified to `/` and
+ * redundant segments folded away (a trailing `/`, a trailing `/.`, a doubled
+ * separator inside the path) EXCEPT where the fold would destroy the root's own
+ * shape — a network share's significant leading `//` and a drive-rooted prefix
+ * survive, because the path they name cannot be re-derived from a root-relative
+ * one. One logical repo state must yield one `cwd` byte sequence, because a
+ * consumer exact-matches this path against the real worktree (issue 2532).
  */
 const WINDOWS_ROOT = /^(?:[A-Za-z]:[\\/]|\\\\)/u;
 
@@ -579,8 +582,9 @@ function buildWorktreeSlug(artifact, kind) {
 
 /**
  * Deterministic hand-back boundaries for one unit coordinator. A unit runs one
- * phase and stops at the next boundary; the orchestrator re-resolves startup and
- * dispatches a fresh successor (never a brief authored by the predecessor).
+ * phase and stops at the next boundary; the orchestrator only emits and dispatches
+ * the successor's work order, and the successor re-resolves startup against
+ * authoritative state (never a brief authored by the predecessor).
  * The vocabulary is closed so a fixture can assert the exact set.
  */
 export const UNIT_BOUNDARY = Object.freeze({
