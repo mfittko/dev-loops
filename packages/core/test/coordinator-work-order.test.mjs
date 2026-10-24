@@ -25,7 +25,7 @@ const prEnvelope = (opts) => envelopeFor(artifact("pr", { pr: 2900, issue: null 
 test("C1 the order carries the resolver envelope's route, next action, stops, acceptance, reads and commands unchanged", () => {
   const envelope = issueEnvelope();
   const { workOrder } = buildCoordinatorWorkOrder({ envelope });
-  for (const key of ["nextAction", "currentGate", "executionMode", "acceptance", "sanctionedCommands", "target", "control"]) {
+  for (const key of ["nextAction", "currentGate", "executionMode", "acceptance", "sanctionedCommands", "target", "control", "unitBoundaries"]) {
     assert.deepEqual(workOrder.handoff[key], envelope[key], key);
   }
   assert.deepEqual(workOrder.handoff.stopRules, envelope.stopRules);

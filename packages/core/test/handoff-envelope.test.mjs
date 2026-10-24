@@ -967,6 +967,44 @@ test("cwd: a slug checkout is its own root, and one logical root keeps one spell
   assert.equal(deriveCwd(prBundle(42).bundle, { repoRoot: "/repo//tmp/worktrees/dev-loops/pr-42" }), "/repo/tmp/worktrees/dev-loops/pr-42");
 });
 
+// issue 2532: the root's SHAPE picks the normalizer. A drive root and a UNC share root keep
+// Windows semantics; `posix.normalize` alone folds a share's significant leading `//` into a
+// root-relative POSIX path, and the suffix logic cannot repair it afterwards.
+test("cwd: Windows drive and UNC roots keep their shape, and a share prefix never collapses", () => {
+  const accepted = [
+    // repoRoot 'C:/repo' (drive-letter absolute)
+    ["C:/repo", "C:/repo/tmp/worktrees/dev-loops/issue-42"],
+    // repoRoot '//fileserver/git/dev-loops' (POSIX UNC prefix)
+    ["//fileserver/git/dev-loops", "//fileserver/git/dev-loops/tmp/worktrees/dev-loops/issue-42"],
+    // repoRoot 'C:/repo/' (trailing separator)
+    ["C:/repo/", "C:/repo/tmp/worktrees/dev-loops/issue-42"],
+    // repoRoot in the backslash-separated UNC form identifying a server and share
+    ["\\\\fileserver\\git\\dev-loops", "//fileserver/git/dev-loops/tmp/worktrees/dev-loops/issue-42"],
+  ];
+  for (const [repoRoot, expected] of accepted) {
+    assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot }), expected, repoRoot);
+  }
+  // Rejected: the share root rewritten to a root-relative POSIX path names no real worktree.
+  assert.notEqual(
+    deriveCwd(issueBundle(42).bundle, { repoRoot: "//fileserver/git/dev-loops" }),
+    "/fileserver/git/dev-loops/tmp/worktrees/dev-loops/issue-42"
+  );
+  // Rejected: a doubled separator between the root and the namespace.
+  assert.notEqual(
+    deriveCwd(issueBundle(42).bundle, { repoRoot: "/repo//" }),
+    "/repo//tmp/worktrees/dev-loops/issue-42"
+  );
+});
+
+// issue 2532: the sibling `worktreeCwd` channel is canonicalized too, so one logical repo root
+// yields one `cwd` byte sequence whichever input option named it.
+test("cwd: worktreeCwd is canonicalized to the same single spelling", () => {
+  const root = "/repo/tmp/worktrees/dev-loops/issue-42";
+  for (const worktreeCwd of [`${root}/`, "/repo//tmp/worktrees/dev-loops/issue-42", root]) {
+    assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot: "/repo", worktreeCwd }), root, worktreeCwd);
+  }
+});
+
 // ===========================================================================
 // 13. Unit coordinator hand-back boundaries (issue 2532)
 // ===========================================================================
@@ -1033,6 +1071,15 @@ test("unitBoundaries: a local unit that already has a PR opens no draft PR", () 
     const env = buildDevLoopHandoffEnvelope(input, defaultSettings, {}, defaultOptions);
     assert.deepEqual(env.unitBoundaries.handBackAfter, [UNIT_BOUNDARY.GATE_VERDICT_POSTED], `${input.bundle.activeArtifact.kind} with a PR`);
   }
+});
+
+test("unitBoundaries: an issue target carrying a bound PR opens no draft PR", () => {
+  // No other fixture carries a bound PR WITHOUT `linkedPr`, so the `target.pr` arm of PR
+  // ownership has no unitBoundaries evidence without this case: losing that arm would tell
+  // a unit whose PR already exists to open a draft it already has.
+  const env = buildDevLoopHandoffEnvelope(issueBundle(2483, { pr: 2900 }), defaultSettings, {}, defaultOptions);
+  assert.deepEqual(env.unitBoundaries.handBackAfter, [UNIT_BOUNDARY.GATE_VERDICT_POSTED]);
+  assert.deepEqual(env.unitBoundaries.resume, { kind: "loop_startup", issue: 2483, pr: 2900, branch: null, phase: null });
 });
 
 test("unitBoundaries: an issue with a linked PR routes to the PR unit, never a draft-PR local unit", () => {
@@ -1118,6 +1165,25 @@ test("unitBoundaries: a phase-only unit resumes by phase", () => {
   const env = buildDevLoopHandoffEnvelope(planFile, defaultSettings, {}, defaultOptions);
   assert.deepEqual(env.unitBoundaries.resume, { kind: "loop_startup", issue: null, pr: null, branch: null, phase: "tmp/plan.md" });
   assert.equal(validateHandoffEnvelope(env).ok, true);
+});
+
+test("unitBoundaries: resume identity validation covers every accepted and rejected form", () => {
+  // The producer only ever emits `issue`/`pr` as a positive integer or null and
+  // `branch`/`phase` as a non-empty string or null, so the validator must reject every
+  // malformed form — including a bad branch/phase riding alongside a valid issue.
+  const base = buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, {}, defaultOptions);
+  const accepts = (resume) => validateHandoffEnvelope({
+    ...base,
+    unitBoundaries: { handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume },
+  }).ok;
+  const forms = [
+    [{ kind: "loop_startup", issue: 42, pr: null, branch: "feature/x", phase: null }, true],
+    [{ kind: "loop_startup", issue: null, pr: null, branch: null, phase: "tmp/plan.md" }, true],
+    [{ kind: "loop_startup", issue: null, pr: 99, branch: null, phase: null }, true],
+    [{ kind: "loop_startup", issue: 42, pr: null, branch: 99 }, false],
+    [{ kind: "loop_startup", issue: 42, pr: null, branch: null, phase: 42 }, false],
+  ];
+  for (const [resume, expected] of forms) assert.equal(accepts(resume), expected, JSON.stringify(resume));
 });
 
 test("unitBoundaries: validator rejects a foreign boundary name or a resume with no target", () => {

@@ -21,7 +21,7 @@ import {
 } from "./public-dev-loop-routing-contract.mjs";
 import { normalizeRepoSlug } from "../github/repo-slug.mjs";
 import { COPILOT_REVIEW_WAIT_TIMEOUT_MS } from "./policy-constants.mjs";
-import { posix as posixPath } from "node:path";
+import { posix as posixPath, win32 as win32Path } from "node:path";
 import { trimmedOrNull } from "./normalize.mjs";
 import { resolveEffectiveAsyncStartMode } from "./async-start-contract.mjs";
 import { resolveGateAngleContract, resolveGateAngles, resolveGateConfig, resolveHumanMergeOnly } from "../config/config.mjs";
@@ -447,11 +447,21 @@ function lookupAcceptanceTemplate(strategy, gate) {
  * repo state must yield one `cwd` byte sequence, because a consumer exact-matches
  * this path against the real worktree (issue 2532).
  */
+const WINDOWS_ROOT = /^(?:[A-Za-z]:[\\/]|\\\\)/u;
+
 function canonicalRepoRoot(root) {
-  const unified = posixPath.normalize(root.replace(/\\/g, "/"));
-  // `posix.normalize` folds `//` and `.` segments but PRESERVES a trailing separator,
-  // which would defeat the suffix comparison below, so strip it here (never `/` itself).
-  return unified.length > 1 ? unified.replace(/\/+$/u, "") : unified;
+  const unified = root.replace(/\\/g, "/");
+  // Pick the normalizer from the root's SHAPE. A drive-rooted or UNC root keeps Windows
+  // semantics: `posix.normalize` folds a network share's significant leading `//` into a
+  // root-relative POSIX path, and the suffix logic below cannot repair it afterwards. Every
+  // other root normalizes as POSIX.
+  const normalized = WINDOWS_ROOT.test(root) || unified.startsWith("//")
+    ? win32Path.normalize(unified).replace(/\\/g, "/")
+    : posixPath.normalize(unified);
+  // Both normalizers PRESERVE a trailing separator, which would defeat the suffix
+  // comparison below, so strip it here while keeping the root separator itself.
+  const stripped = normalized.replace(/\/+$/u, "");
+  return stripped.length > 0 ? stripped : normalized;
 }
 
 /**
@@ -467,7 +477,10 @@ function ownedWorktreeRootFor(canonicalRoot, relative) {
 
 function deriveCwd(bundle, options = {}) {
   if (options.worktreeCwd && typeof options.worktreeCwd === "string" && options.worktreeCwd.trim().length > 0) {
-    return options.worktreeCwd.trim();
+    // The sibling input channel gets the SAME canonicalization: one logical repo root keeps
+    // one `cwd` spelling whichever option named it, or a consumer that exact-matches `cwd`
+    // against the real worktree gets two answers for one root (issue 2532).
+    return canonicalRepoRoot(options.worktreeCwd.trim());
   }
 
   const rawRoot = options.repoRoot && typeof options.repoRoot === "string"
@@ -1267,10 +1280,17 @@ export function validateHandoffEnvelope(envelope) {
       // identity (a string or a non-positive integer) is rejected even when another
       // identity is also present; otherwise the validator would be laxer than its producer.
       const invalidCount = [resume?.issue, resume?.pr].some((n) => n !== undefined && n !== null && !(Number.isInteger(n) && n > 0));
+      // `branch`/`phase` get the same unconditional type check: testing them only inside the
+      // "any identity at all" fallback below would skip it as soon as a valid issue or PR is
+      // present, accepting `{issue: 42, branch: 99}` — malformed authoritative state on the
+      // very resume path that must be authoritative (issue 2532).
+      const invalidText = [resume?.branch, resume?.phase].some(
+        (v) => v !== undefined && v !== null && !(typeof v === "string" && v.trim()),
+      );
       if (!resume || typeof resume !== "object" || resume.kind !== "loop_startup") {
         errors.push({ field: "unitBoundaries.resume", reason: "must be an object with kind=loop_startup", got: resume });
-      } else if (invalidCount) {
-        errors.push({ field: "unitBoundaries.resume", reason: "issue and pr must be a positive integer or null", got: resume });
+      } else if (invalidCount || invalidText) {
+        errors.push({ field: "unitBoundaries.resume", reason: "issue and pr must be a positive integer or null, and branch and phase a non-empty string or null", got: resume });
       } else if (![resume.issue, resume.pr].some((n) => Number.isInteger(n) && n > 0)
         && ![resume.branch, resume.phase].some((v) => typeof v === "string" && v.trim())) {
         errors.push({ field: "unitBoundaries.resume", reason: "must name an issue, pr, branch or phase to re-resolve", got: resume });
@@ -1298,7 +1318,6 @@ export {
   acceptanceKey,
   deriveTarget,
   deriveStopRules,
-  deriveUnitBoundaries,
   deriveGateConfig,
   deriveCwd,
   deriveRequiredReads,

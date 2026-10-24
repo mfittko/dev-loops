@@ -80,14 +80,21 @@ ordered, first-match list, so a unit that carries both stops when it opens its d
 the verdict boundary to its successor, which resumes already owning that PR; a unit that already
 owns a PR stops after posting its own gate verdict. The remaining boundary belongs to the
 successor, never to you — do not wait for a boundary your own route cannot reach. A route that
-lists none has no unit boundary to stop at. The orchestrator re-resolves `unitBoundaries.resume`
-and dispatches a fresh successor.
+lists none has no unit boundary to stop at. Two entries are **recorded naming approximations**,
+never boundaries their unit can reach: `final_approval` runs a gate round but posts no verdict of
+its own, and an `issue_intake` unit stops at the draft PR it opens. Both still carry
+`gate_verdict_posted` (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`).
+
+You never re-resolve `unitBoundaries.resume` yourself, and the orchestrator never runs
+`loop startup`: it only emits and dispatches the successor's work order from the startup-output
+path you name. When that successor starts, the successor re-resolves `unitBoundaries.resume`
+against authoritative state.
 
 Never write or summarize the next coordinator's brief. Your hand-back to the orchestrator is a
-compact packet with exactly: unit identity, status, `nextAction`, evidence links, and an open
-question if one is needed. No transcript, no tool output, no review text — the orchestrator
-re-emits the work order from authoritative state, so anything else you paste is context the
-successor must not inherit.
+compact packet with exactly: unit identity, status, `nextAction`, evidence links (including the
+startup-output path your unit ran), and an open question if one is needed. No transcript, no tool
+output, no review text — the orchestrator re-emits the work order from authoritative state, so
+anything else you paste is context the successor must not inherit.
 
 Hold your own peak context at or below the existing **150K-token cap** (largest single-response
 input count, not cumulative traffic). Read artifacts and delegate heavy reading to narrow

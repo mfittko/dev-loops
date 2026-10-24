@@ -146,8 +146,9 @@ through authoritative state, not through the relay: the successor recovers round
 evidence and open findings by re-running the detectors at resume.
 
 A child hand-back is a **compact relay packet** only: unit identity, status, `nextAction`, evidence
-links, and an open question if one is needed. No transcript, tool output or review text. A relay is
-the dispatch trigger, never the successor's context.
+links (including the startup-output path that unit ran), and an open question if one is needed. No
+transcript, tool output or review text. A relay is the dispatch trigger, never the successor's
+context.
 
 Budget per unit coordinator: peak context at or below the existing **150K-token cap** (largest
 single-response input count, not cumulative traffic); on a Codex root at most 10% empty wakeups,

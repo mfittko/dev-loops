@@ -87,10 +87,10 @@ brief has to restate the boundary:
   **The list is ordered and first-match**: a unit that carries both stops at the draft PR it opens,
   and the remaining verdict boundary belongs to its successor, which resumes already owning that PR.
   The validator refuses a list that reverses that order, so the first match is always the draft PR.
-  A route that posts no verdict of its own while its unit still runs a gate round carries
-  `gate_verdict_posted` as a recorded naming approximation
-  (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`), not as a second
-  boundary that unit can reach.
+  Two listed paths carry `gate_verdict_posted` as a recorded naming approximation
+  (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`), never as a second boundary that
+  unit can reach: a route that posts no verdict of its own while its unit still runs a gate round
+  (`final_approval`), and an `issue_intake` unit that stops at the draft PR it opens.
 - `resume` names the authoritative re-resolution a successor runs (`kind: loop_startup` plus the
   issue, PR, branch or phase identity), and a resume names **one** identity. `resume.phase`
   identifies the artifact (a plan-file or spike path, or a lightweight phase label); which startup

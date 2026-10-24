@@ -45,6 +45,13 @@ test("hand-back: the successor brief derives only from authoritative state", () 
     () => buildCoordinatorWorkOrder({ envelope: { ...envelope, overrides: { customStopAt: [] } } }),
     /overrides are not a coordinator source/,
   );
+  // Tooling emits the next brief: the boundary must survive into the EMITTED work order, not
+  // only into the envelope. `coordinator-work-order.mjs` builds `handoff` by rest-spreading the
+  // envelope minus `gateState`, so a future field allowlist would drop `unitBoundaries` while
+  // every envelope-level assertion above stayed green.
+  const { workOrder } = buildCoordinatorWorkOrder({ envelope });
+  assert.ok(envelope.unitBoundaries, "fixture must carry tooling-emitted boundaries");
+  assert.deepEqual(workOrder.handoff.unitBoundaries, envelope.unitBoundaries);
 });
 
 test("hand-back: cwd names the unit's own worktree root, never a nested namespace", () => {
@@ -68,6 +75,12 @@ const RULE_PROSE = {
     "unit identity, status, `nextAction`, evidence links",
     "No transcript, no tool output, no review text",
     "150K-token cap",
+    // The successor, never the orchestrator, re-resolves the resume identity the envelope carries.
+    "the successor re-resolves `unitBoundaries.resume`",
+    // The packet's closed field list has a slot for the successor dispatch's required input.
+    "including the startup-output path your unit ran",
+    // Both listed-but-unreachable verdict entries are recorded naming approximations.
+    "recorded naming approximations",
   ],
   "skills/docs/main-agent-contract.md": [
     "fresh unit coordinator per phase",
