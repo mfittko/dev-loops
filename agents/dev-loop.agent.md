@@ -86,6 +86,27 @@ If the current issue/PR/local state is materially unclear, contradictory, off-tr
 
 If local facts, GitHub facts, and helper/state-machine output do not agree well enough to choose the next step confidently, stop and ask for human direction.
 
+## Unit coordinator hand-back (issue 2532)
+
+You are one **unit coordinator**: you run one phase, not the whole cycle. The envelope's
+`unitBoundaries` names where your unit ends — derived from the target and route, never from a
+predecessor's prose. Stop and hand back when the draft PR opens, and after each posted gate
+verdict; the orchestrator re-resolves `unitBoundaries.resume` through `loop startup` and dispatches
+a fresh successor.
+
+Never write or summarize the next coordinator's brief. Your hand-back to the orchestrator is a
+compact packet with exactly: unit identity, status, `nextAction`, evidence links, and an open
+question if one is needed. No transcript, no tool output, no review text — the orchestrator
+re-emits the work order from authoritative state, so anything else you paste is context the
+successor must not inherit.
+
+Hold your own peak context at or below the existing **150K-token cap** (largest single-response
+input count, not cumulative traffic). Read artifacts and delegate heavy reading to narrow
+subagents instead of dumping whole files; a coordinator that snowballs is the failure this
+boundary exists to prevent. On a Codex root, keep empty wakeups at most 10% of root turns and use
+the runtime's supported bounded join while child work is outstanding — a longest-timeout
+assumption is not a join.
+
 ## Subagent delegation
 
 <!-- pi-only -->

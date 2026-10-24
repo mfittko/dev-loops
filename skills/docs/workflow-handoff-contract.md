@@ -20,6 +20,7 @@ template.
 | Gate state (detectors) | `gateState.{currentHeadSha, ciStatus, unresolvedThreadCount, copilotRoundCount}` (the volatile tail — see below) |
 | Envelope builder (timestamp) | `gateState.derivedAt` (build time, not detector-derived) |
 | Canonical sanctioned-command map (`scripts/loop/sanctioned-commands.mjs`) | `sanctionedCommands` |
+| Route already carried by the envelope (target kind/identity + selected strategy) | `unitBoundaries` (issue 2532) |
 
 Tracker-backed local routing may synthesize a `local_phase` target with phase
 `issue-<number>`. When its strategy is `local_implementation` and authoritative
@@ -28,6 +29,10 @@ identity (`resolveWorktreePath`), preserving the resolver target and action.
 Explicit phases (including the same label with `not_applicable` linkage) and local
 branches retain their own slug paths. Missing or conflicting startup authority
 still requires reconciliation; a path label alone never establishes issue authority.
+
+A startup run from **inside** the target's own worktree reports that worktree as its repo
+root. `cwd` is that root itself: the derivation never appends the worktree namespace a second
+time, so an issue worktree is never named as a nested child of itself (issue 2532).
 
 For an active PR outside the `ui_review` strategy, the CLI builder binds `cwd`
 to exactly one existing registered linked checkout using the live PR's
@@ -70,6 +75,22 @@ duplicate the map into prose — reference the module.
 
 A contract test (`test/contracts/sanctioned-commands-exist.test.mjs`) asserts
 every mapped wrapper exists on disk and fails closed if one is renamed/removed.
+
+## Unit coordinator boundaries (issue 2532)
+
+One coordinator runs one phase. `unitBoundaries` tells it where its unit ends, so no orchestrator
+brief has to restate the boundary:
+
+- `handBackAfter` lists the deterministic hand-back points for this route, from the closed set
+  `draft_pr_opened` (a unit that owns no PR yet, so opening the draft PR ends its phase) and
+  `gate_verdict_posted` (every unit that runs a gate round hands back after posting the verdict).
+- `resume` names the authoritative re-resolution a successor runs (`kind: loop_startup` plus the
+  issue, PR or branch identity). It is derived from the envelope's own target, so **no successor
+  field derives from the predecessor's conversation** and the predecessor never writes or
+  summarizes the next brief.
+
+The field is absent on a terminal reconciliation envelope: `stopRules` there are already terminal.
+Because it derives only from target and strategy, it stays inside the byte-stable prefix.
 
 ## Acceptance templates
 
@@ -148,6 +169,14 @@ interface HandoffEnvelope {
 
   cwd: string | null;
   worktreeRequired: boolean;
+
+  // issue 2532: the deterministic points at which THIS unit coordinator stops and
+  // the orchestrator dispatches a fresh successor. Target+strategy derived, so it is
+  // byte-stable; absent on a terminal reconciliation envelope (its stopRules are terminal).
+  unitBoundaries?: {
+    handBackAfter: Array<"draft_pr_opened" | "gate_verdict_posted">;
+    resume: { kind: "loop_startup"; issue: number | null; pr: number | null; branch: string | null };
+  };
 
   acceptance: {
     criteria: Array<{ id: string; must: string; severity: "required" | "recommended" }>;

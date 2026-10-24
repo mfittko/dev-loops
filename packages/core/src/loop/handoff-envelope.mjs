@@ -436,6 +436,19 @@ function lookupAcceptanceTemplate(strategy, gate) {
 // cwd derivation
 // ---------------------------------------------------------------------------
 
+/**
+ * The canonical (separator-normalized) root when `root` IS already the loop-owned
+ * worktree for `relative` (`<kind>-<number>` under the namespace), else null. A
+ * startup run from inside the target's own worktree reports that worktree as its
+ * repo root, so appending the namespace again would name a worktree nested
+ * inside itself (issue 2532).
+ */
+function ownedWorktreeRootFor(root, relative) {
+  const normalized = root.replace(/\\/g, "/").replace(/\/+$/u, "");
+  const suffix = `${WORKTREE_NAMESPACE}/${relative}`;
+  return normalized === suffix || normalized.endsWith(`/${suffix}`) ? normalized : null;
+}
+
 function deriveCwd(bundle, options = {}) {
   if (options.worktreeCwd && typeof options.worktreeCwd === "string" && options.worktreeCwd.trim().length > 0) {
     return options.worktreeCwd.trim();
@@ -455,14 +468,16 @@ function deriveCwd(bundle, options = {}) {
       && bundle.issueLinkageResolution === DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.RESOLVED_NO_OPEN_PR
       && artifact.phase === `issue-${artifact.issue}`;
     if ((kind === DEV_LOOP_TARGET_KIND.ISSUE || trackerLocalIssue) && Number.isInteger(artifact.issue) && artifact.issue > 0) {
-      return resolveWorktreePath({ repoRoot: root, kind: "issue", number: artifact.issue });
+      return ownedWorktreeRootFor(root, `issue-${artifact.issue}`)
+        ?? resolveWorktreePath({ repoRoot: root, kind: "issue", number: artifact.issue });
     }
     if (kind === DEV_LOOP_TARGET_KIND.PR && Number.isInteger(artifact.pr) && artifact.pr > 0) {
-      return resolveWorktreePath({ repoRoot: root, kind: "pr", number: artifact.pr });
+      return ownedWorktreeRootFor(root, `pr-${artifact.pr}`)
+        ?? resolveWorktreePath({ repoRoot: root, kind: "pr", number: artifact.pr });
     }
     const slug = buildWorktreeSlug(artifact, kind);
     if (slug) {
-      return `${root}/${WORKTREE_NAMESPACE}/${slug}`;
+      return ownedWorktreeRootFor(root, slug) ?? `${root}/${WORKTREE_NAMESPACE}/${slug}`;
     }
   }
 
@@ -521,6 +536,47 @@ function buildWorktreeSlug(artifact, kind) {
     return null;
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// unit-boundary derivation (issue 2532)
+// ---------------------------------------------------------------------------
+
+/**
+ * Deterministic hand-back boundaries for one unit coordinator. A unit runs one
+ * phase and stops at the next boundary; the orchestrator re-resolves startup and
+ * dispatches a fresh successor (never a brief authored by the predecessor).
+ * The vocabulary is closed so a fixture can assert the exact set.
+ */
+export const UNIT_BOUNDARY = Object.freeze({
+  DRAFT_PR_OPENED: "draft_pr_opened",
+  GATE_VERDICT_POSTED: "gate_verdict_posted",
+});
+
+/**
+ * Derive the unit coordinator's hand-back boundaries from the route the envelope
+ * already carries. Nothing here comes from a predecessor: `resume` names the
+ * sanctioned re-resolution a successor runs against authoritative state.
+ * Reconciliation envelopes return undefined — their `stopRules` are already terminal.
+ */
+function deriveUnitBoundaries(strategy, target) {
+  if (strategy === null) return undefined;
+  const boundaries = [];
+  // A unit that owns no PR yet ends its phase by opening the draft PR.
+  const ownsPr = target.kind === DEV_LOOP_TARGET_KIND.PR
+    || (Number.isInteger(target.linkedPr) && target.linkedPr > 0);
+  if (!ownsPr) boundaries.push(UNIT_BOUNDARY.DRAFT_PR_OPENED);
+  // Every gate round hands back after its verdict is posted.
+  boundaries.push(UNIT_BOUNDARY.GATE_VERDICT_POSTED);
+  return {
+    handBackAfter: boundaries,
+    resume: {
+      kind: "loop_startup",
+      issue: Number.isInteger(target.issue) && target.issue > 0 ? target.issue : null,
+      pr: Number.isInteger(target.pr) && target.pr > 0 ? target.pr : null,
+      branch: typeof target.branch === "string" && target.branch.trim() ? target.branch : null,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -751,6 +807,13 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
 
   if (gateConfig) {
     envelope.gateConfig = gateConfig;
+  }
+
+  // Unit coordinator hand-back boundaries (issue 2532). Target+strategy derived,
+  // so it is byte-stable across builds for the same route.
+  const unitBoundaries = deriveUnitBoundaries(isReconciliation ? null : strategy, target);
+  if (unitBoundaries) {
+    envelope.unitBoundaries = unitBoundaries;
   }
 
   if (overrides) {
@@ -1137,6 +1200,27 @@ export function validateHandoffEnvelope(envelope) {
     }
   }
 
+  // ----- unitBoundaries (optional — coordinator hand-back boundaries, issue 2532) -----
+  if (envelope.unitBoundaries !== undefined) {
+    const ub = envelope.unitBoundaries;
+    const boundaryNames = Object.values(UNIT_BOUNDARY);
+    if (!ub || typeof ub !== "object" || Array.isArray(ub)) {
+      errors.push({ field: "unitBoundaries", reason: "if present, must be a non-array object", got: ub });
+    } else {
+      if (!Array.isArray(ub.handBackAfter) || ub.handBackAfter.length === 0
+        || ub.handBackAfter.some((b) => !boundaryNames.includes(b))) {
+        errors.push({ field: "unitBoundaries.handBackAfter", reason: `must be a non-empty array of: ${boundaryNames.join(", ")}`, got: ub.handBackAfter });
+      }
+      const resume = ub.resume;
+      if (!resume || typeof resume !== "object" || resume.kind !== "loop_startup") {
+        errors.push({ field: "unitBoundaries.resume", reason: "must be an object with kind=loop_startup", got: resume });
+      } else if (![resume.issue, resume.pr].some((n) => Number.isInteger(n) && n > 0)
+        && !(typeof resume.branch === "string" && resume.branch.trim())) {
+        errors.push({ field: "unitBoundaries.resume", reason: "must name a positive issue, a positive pr or a branch to re-resolve", got: resume });
+      }
+    }
+  }
+
   // ----- gateState.derivedAt (informational, warn on missing) — the
   // volatile timestamp lives in the gateState tail so the rest stays byte-stable -----
   if (typeof envelope.gateState?.derivedAt !== "string" || !envelope.gateState.derivedAt.trim()) {
@@ -1157,6 +1241,7 @@ export {
   acceptanceKey,
   deriveTarget,
   deriveStopRules,
+  deriveUnitBoundaries,
   deriveGateConfig,
   deriveCwd,
   deriveRequiredReads,
