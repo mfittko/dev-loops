@@ -83,18 +83,28 @@ brief has to restate the boundary:
 
 - `handBackAfter` lists the deterministic hand-back points for this route, in order, from the closed
   set `draft_pr_opened` (a unit that owns no PR yet, so opening the draft PR ends its phase) and
-  `gate_verdict_posted` (every unit that runs a gate round hands back after posting the verdict).
+  `gate_verdict_posted` (a unit that posts a gate verdict of its own hands back after it).
   **The list is ordered and first-match**: a unit that carries both stops at the draft PR it opens,
-  and the verdict boundary applies to its successor, which resumes already owning that PR.
+  and the remaining verdict boundary belongs to its successor, which resumes already owning that PR.
+  The validator refuses a list that reverses that order, so the first match is always the draft PR.
+  A route that posts no verdict of its own while its unit still runs a gate round carries
+  `gate_verdict_posted` as a recorded naming approximation
+  ([ADR 0181](../../docs/decisions/0181-unit-coordinator-handback-boundaries.md)), not as a second
+  boundary that unit can reach.
 - `resume` names the authoritative re-resolution a successor runs (`kind: loop_startup` plus the
-  issue, PR, branch or phase identity). It is derived from the envelope's own target, so **no successor
-  field derives from the predecessor's conversation** and the predecessor never writes or
-  summarizes the next brief.
+  issue, PR, branch or phase identity), and a resume names **one** identity. `resume.phase`
+  identifies the artifact (a plan-file or spike path, or a lightweight phase label); which startup
+  mode re-resolves it is the successor's own route input, so the successor selects the flag
+  (`--plan-file`, `--spike`, the lightweight path) instead of reading a mode from the envelope. It is
+  derived from the envelope's own target, so **no successor field derives from the predecessor's
+  conversation** and the predecessor never writes or summarizes the next brief.
 
 The field is absent where the route has no unit to hand back: a terminal reconciliation envelope
 (`stopRules` are already terminal), a read-only `review` or `ui_review` round (one round, no
 lifecycle gate evidence) and `wait_watch` (no unit runs). Those are exactly the routes the public
-contract classes as pure read/observe. That keeps the field from contradicting a route's own
+contract classes as pure read/observe, and the envelope builder names them in one explicit
+`STATELESS_UNIT_STRATEGIES` list that must stay in step with that classification: classifying a new
+read-only route means adding it there too. That keeps the field from contradicting a route's own
 stop rules. Because it derives only from target and strategy, it stays inside the byte-stable prefix.
 
 ## Acceptance templates

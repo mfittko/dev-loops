@@ -90,9 +90,13 @@ If local facts, GitHub facts, and helper/state-machine output do not agree well 
 
 You are one **unit coordinator**: you run one phase, not the whole cycle. The envelope's
 `unitBoundaries` names where your unit ends — derived from the target and route, never from a
-predecessor's prose. Hand back at the boundaries that field lists (opening the draft PR, and after
-posting a gate verdict); a route that lists none has no unit boundary to stop at. The orchestrator
-re-resolves `unitBoundaries.resume` and dispatches a fresh successor.
+predecessor's prose. Hand back at the **first** boundary that field lists: `handBackAfter` is an
+ordered, first-match list, so a unit that carries both stops when it opens its draft PR and leaves
+the verdict boundary to its successor, which resumes already owning that PR; a unit that already
+owns a PR stops after posting its own gate verdict. The remaining boundary belongs to the
+successor, never to you — do not wait for a boundary your own route cannot reach. A route that
+lists none has no unit boundary to stop at. The orchestrator re-resolves `unitBoundaries.resume`
+and dispatches a fresh successor.
 
 Never write or summarize the next coordinator's brief. Your hand-back to the orchestrator is a
 compact packet with exactly: unit identity, status, `nextAction`, evidence links, and an open

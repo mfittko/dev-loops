@@ -941,6 +941,32 @@ test("cwd: startup inside the target's own worktree names that root, not a neste
   assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot: "/repo/tmp/worktrees/dev-loops/issue-4" }), "/repo/tmp/worktrees/dev-loops/issue-4/tmp/worktrees/dev-loops/issue-42");
 });
 
+// issue 2532: the slug fallback serves local_branch/local_phase units, whose own namespaced
+// checkout hits the same nested-namespace trap as issue-<n>/pr-<n>. And one logical repo root
+// must have exactly one spelling, or the field cannot exact-match the real worktree.
+test("cwd: a slug checkout is its own root, and one logical root keeps one spelling", () => {
+  for (const [input, ownRoot] of [
+    [localBranchBundle("feature/local", { issue: 2335 }), "/repo/tmp/worktrees/dev-loops/feature-local"],
+    [localPhaseBundle("custom", { issue: 2335 }), "/repo/tmp/worktrees/dev-loops/phase-2335-custom"],
+  ]) {
+    assert.equal(deriveCwd(input.bundle, { repoRoot: ownRoot }), ownRoot, input.bundle.activeArtifact.kind);
+    assert.ok(!deriveCwd(input.bundle, { repoRoot: ownRoot }).includes(`${ownRoot}/tmp/worktrees`));
+  }
+  // Backslash-separated roots normalize to one spelling instead of falling through the suffix test.
+  assert.equal(
+    deriveCwd(issueBundle(42).bundle, { repoRoot: "C:\\repo\\tmp\\worktrees\\dev-loops\\issue-42" }),
+    "C:/repo/tmp/worktrees/dev-loops/issue-42"
+  );
+  // A trailing separator, a doubled separator and a `.` segment are the same root, so they
+  // neither append a second namespace nor emit a `//`-joined path.
+  for (const oddRoot of ["/repo/", "/repo//", "/repo/.", "/repo//./"]) {
+    assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot: oddRoot }), "/repo/tmp/worktrees/dev-loops/issue-42", oddRoot);
+  }
+  assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot: "/repo//tmp/worktrees/dev-loops/issue-42" }), "/repo/tmp/worktrees/dev-loops/issue-42");
+  assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot: "/repo/tmp/worktrees/dev-loops/issue-42/./" }), "/repo/tmp/worktrees/dev-loops/issue-42");
+  assert.equal(deriveCwd(prBundle(42).bundle, { repoRoot: "/repo//tmp/worktrees/dev-loops/pr-42" }), "/repo/tmp/worktrees/dev-loops/pr-42");
+});
+
 // ===========================================================================
 // 13. Unit coordinator hand-back boundaries (issue 2532)
 // ===========================================================================
@@ -1007,6 +1033,76 @@ test("unitBoundaries: a local unit that already has a PR opens no draft PR", () 
     const env = buildDevLoopHandoffEnvelope(input, defaultSettings, {}, defaultOptions);
     assert.deepEqual(env.unitBoundaries.handBackAfter, [UNIT_BOUNDARY.GATE_VERDICT_POSTED], `${input.bundle.activeArtifact.kind} with a PR`);
   }
+});
+
+test("unitBoundaries: linked PR ownership reaches the boundaries from resolver output", () => {
+  // Nothing here hand-writes the envelope's `linkedPr`: the route and its identities come
+  // from the authoritative resolver, so the assertion pins the PRODUCER of PR ownership.
+  const bundle = resolveAuthoritativeStartupResumeBundle({
+    targetPreference: "prefer_local",
+    currentState: {
+      target: { kind: "issue", issue: 2335, pr: null, linkedPr: 77, branch: null, phase: null },
+      ownership: "copilot", nextActor: "copilot",
+      status: "active", authorization: "needs_confirmation",
+    },
+    issueLinkageResolution: "resolved_linked_pr", issueReadiness: "ready",
+    issueAssignmentState: "assigned_to_copilot", artifactState: "not_applicable", loopState: "awaiting_triage",
+  });
+  assert.equal(bundle.bundleKind, "resolved", bundle.reason);
+  assert.equal(bundle.activeArtifact.kind, "local_phase");
+  assert.equal(bundle.activeArtifact.linkedPr, 77, "the local route keeps the issue's resolved PR ownership");
+  const env = buildDevLoopHandoffEnvelope(bundle, defaultSettings, {}, defaultOptions);
+  assert.deepEqual(env.unitBoundaries.handBackAfter, [UNIT_BOUNDARY.GATE_VERDICT_POSTED]);
+  assert.equal(env.unitBoundaries.resume.issue, 2335);
+});
+
+test("unitBoundaries: a branch-only unit resumes by branch and validates on that identity alone", () => {
+  // The closest existing fixture also carries an `issue`, so a dropped branch identity would
+  // still validate: pin the branch-only identity through the validator itself.
+  const env = buildDevLoopHandoffEnvelope(localBranchBundle("feature/local"), defaultSettings, {}, defaultOptions);
+  assert.deepEqual(env.unitBoundaries.resume, {
+    kind: "loop_startup", issue: null, pr: null, branch: "feature/local", phase: null,
+  });
+  const resume = env.unitBoundaries.resume;
+  assert.equal(validateHandoffEnvelope({ ...env, unitBoundaries: { ...env.unitBoundaries, resume } }).ok, true);
+  assert.equal(
+    validateHandoffEnvelope({ ...env, unitBoundaries: { ...env.unitBoundaries, resume: { ...resume, branch: null } } }).ok,
+    false
+  );
+});
+
+test("unitBoundaries: validator rejects a non-object field, a reversed order and a malformed identity", () => {
+  const base = buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, {}, defaultOptions);
+  const withBoundaries = (unitBoundaries) => validateHandoffEnvelope({ ...base, unitBoundaries });
+
+  // Accepted form: both boundaries in canonical (declaration) order.
+  assert.equal(withBoundaries({
+    handBackAfter: [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED],
+    resume: { kind: "loop_startup", issue: 42, pr: null },
+  }).ok, true);
+  // Rejected: the field is present but not an object at all.
+  assert.equal(withBoundaries([]).ok, false);
+  assert.equal(withBoundaries("x").ok, false);
+  // Rejected: the documented ordered/first-match list, reversed.
+  assert.equal(withBoundaries({
+    handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED, UNIT_BOUNDARY.DRAFT_PR_OPENED],
+    resume: { kind: "loop_startup", issue: 42, pr: null },
+  }).ok, false);
+  // Rejected: a present-but-invalid issue, even though a phase identity is also present —
+  // the builder only ever emits a positive integer or null.
+  assert.equal(withBoundaries({
+    handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED],
+    resume: { kind: "loop_startup", issue: "42", pr: null, phase: "x" },
+  }).ok, false);
+  assert.equal(withBoundaries({
+    handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED],
+    resume: { kind: "loop_startup", issue: -5, pr: null, phase: "x" },
+  }).ok, false);
+  // Accepted: a valid issue plus a phase identity.
+  assert.equal(withBoundaries({
+    handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED],
+    resume: { kind: "loop_startup", issue: 42, pr: null, phase: "x" },
+  }).ok, true);
 });
 
 test("unitBoundaries: a phase-only unit resumes by phase", () => {

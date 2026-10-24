@@ -742,7 +742,12 @@ function routeForState(
         kind: DEV_LOOP_TARGET_KIND.LOCAL_PHASE,
         issue: routableCanonicalState.target.issue,
         pr: null,
-        linkedPr: null,
+        // The route keeps the issue's resolved PR ownership: the local unit works on the
+        // same artifact, and `deriveUnitBoundaries` reads ownership from `linkedPr` for
+        // every kind. A link the resolver never established stays null — never invented.
+        linkedPr: Number.isInteger(routableCanonicalState.target.linkedPr) && routableCanonicalState.target.linkedPr > 0
+          ? routableCanonicalState.target.linkedPr
+          : null,
         branch: null,
         phase: localPhase,
       };

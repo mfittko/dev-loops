@@ -87,10 +87,21 @@ for (const [doc, claims] of Object.entries(RULE_PROSE)) {
 }
 
 test("hand-back contract carries no harness-specific drift (#1086)", async () => {
-  const sources = [await readRepo("agents/dev-loop.agent.md"), await readRepo(".claude/agents/dev-loop.md")];
-  for (const content of sources) {
-    const normalized = content.replace(/\r\n/g, "\n");
-    assert.ok(normalized.includes("## Unit coordinator hand-back"), "every harness mirror keeps the hand-back section");
-    assert.ok(normalized.includes("150K-token cap"), "every harness mirror keeps the peak-context cap");
+  // Both harness mirrors of every doc this PR changes are asserted, including the generated
+  // `.claude/skills/docs` copies: a claim kept only inside a `<!-- pi-only -->` region would
+  // otherwise disappear from the Claude baseline while every test stayed green.
+  const mirrorClaims = {
+    "agents/dev-loop.agent.md": ["## Unit coordinator hand-back", "150K-token cap", "ordered, first-match"],
+    ".claude/agents/dev-loop.md": ["## Unit coordinator hand-back", "150K-token cap", "ordered, first-match"],
+    "skills/docs/main-agent-contract.md": ["## Unit coordinator boundaries", "150K-token cap", "at most 10% empty wakeups, measured against root turns rather than wait duration"],
+    ".claude/skills/docs/main-agent-contract.md": ["## Unit coordinator boundaries", "150K-token cap", "at most 10% empty wakeups, measured against root turns rather than wait duration"],
+    "skills/docs/workflow-handoff-contract.md": ["## Unit coordinator boundaries", "handBackAfter", "ordered and first-match"],
+    ".claude/skills/docs/workflow-handoff-contract.md": ["## Unit coordinator boundaries", "handBackAfter", "ordered and first-match"],
+  };
+  for (const [doc, claims] of Object.entries(mirrorClaims)) {
+    const normalized = (await readRepo(doc)).replace(/\r\n/g, "\n");
+    for (const claim of claims) {
+      assert.ok(normalized.includes(claim), `${doc} keeps its harness-agnostic rule: ${claim}`);
+    }
   }
 });

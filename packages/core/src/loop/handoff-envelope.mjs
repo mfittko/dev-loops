@@ -21,6 +21,7 @@ import {
 } from "./public-dev-loop-routing-contract.mjs";
 import { normalizeRepoSlug } from "../github/repo-slug.mjs";
 import { COPILOT_REVIEW_WAIT_TIMEOUT_MS } from "./policy-constants.mjs";
+import { posix as posixPath } from "node:path";
 import { trimmedOrNull } from "./normalize.mjs";
 import { resolveEffectiveAsyncStartMode } from "./async-start-contract.mjs";
 import { resolveGateAngleContract, resolveGateAngles, resolveGateConfig, resolveHumanMergeOnly } from "../config/config.mjs";
@@ -441,16 +442,27 @@ function lookupAcceptanceTemplate(strategy, gate) {
 // ---------------------------------------------------------------------------
 
 /**
- * The canonical (separator-normalized) root when `root` IS already the loop-owned
- * worktree for `relative` (`<kind>-<number>` under the namespace), else null. A
- * startup run from inside the target's own worktree reports that worktree as its
- * repo root, so appending the namespace again would name a worktree nested
- * inside itself (issue 2532).
+ * The one canonical spelling of a repo root: separators unified to `/` and every
+ * redundant segment folded away (`//`, a trailing `/`, a trailing `/.`). One logical
+ * repo state must yield one `cwd` byte sequence, because a consumer exact-matches
+ * this path against the real worktree (issue 2532).
  */
-function ownedWorktreeRootFor(root, relative) {
-  const normalized = root.replace(/\\/g, "/").replace(/\/+$/u, "");
+function canonicalRepoRoot(root) {
+  const unified = posixPath.normalize(root.replace(/\\/g, "/"));
+  // `posix.normalize` folds `//` and `.` segments but PRESERVES a trailing separator,
+  // which would defeat the suffix comparison below, so strip it here (never `/` itself).
+  return unified.length > 1 ? unified.replace(/\/+$/u, "") : unified;
+}
+
+/**
+ * The canonical root when `root` IS already the loop-owned worktree for `relative`
+ * (`<kind>-<number>` under the namespace), else null. A startup run from inside the
+ * target's own worktree reports that worktree as its repo root, so appending the
+ * namespace again would name a worktree nested inside itself (issue 2532).
+ */
+function ownedWorktreeRootFor(canonicalRoot, relative) {
   const suffix = `${WORKTREE_NAMESPACE}/${relative}`;
-  return normalized === suffix || normalized.endsWith(`/${suffix}`) ? normalized : null;
+  return canonicalRoot === suffix || canonicalRoot.endsWith(`/${suffix}`) ? canonicalRoot : null;
 }
 
 function deriveCwd(bundle, options = {}) {
@@ -458,9 +470,13 @@ function deriveCwd(bundle, options = {}) {
     return options.worktreeCwd.trim();
   }
 
-  const root = options.repoRoot && typeof options.repoRoot === "string"
+  const rawRoot = options.repoRoot && typeof options.repoRoot === "string"
     ? options.repoRoot.trim()
     : null;
+  // Normalize ONCE, then hand the same value to every branch: an un-normalized but
+  // equivalent root (`/repo//tmp/...`, a trailing `/.`) must never fall through to a
+  // second appended namespace, and must never emit a `//`-joined path.
+  const root = rawRoot ? canonicalRepoRoot(rawRoot) : null;
 
   const artifact = bundle?.activeArtifact ?? bundle?.canonicalState?.target ?? {};
   const kind = normalizeTargetKind(artifact.kind);
@@ -557,10 +573,13 @@ export const UNIT_BOUNDARY = Object.freeze({
   GATE_VERDICT_POSTED: "gate_verdict_posted",
 });
 
-// Routes that own no phase to hand back from. `review` and `ui_review` run one
+// Routes that own no phase to hand back from: `review` and `ui_review` run one
 // read-only round and produce no lifecycle gate evidence, and `wait_watch`
-// produces no unit at all; the public contract classes all three as pure
-// read/observe, so a boundary here would contradict the route's stop rules.
+// produces no unit at all. This is an explicit, named list — the same three
+// read/observe strategies the routing contract's ownership map exempts
+// (`STRATEGY_OWNERSHIP_GATE` in `scripts/loop/resolve-dev-loop-startup.mjs`) — not a
+// derivation from that map, so adding a read-only route means adding it here too.
+// A boundary for one of these routes would contradict its own stop rules.
 const STATELESS_UNIT_STRATEGIES = Object.freeze([
   INTERNAL_DEV_LOOP_STRATEGY.REVIEW,
   INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW,
@@ -590,13 +609,17 @@ function deriveUnitBoundaries(strategy, target) {
   const text = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
   return {
     handBackAfter: boundaries,
+    // A resume names ONE identity (`issue` XOR `pr` XOR `branch` XOR `phase`). A phase
+    // label identifies the artifact; which startup mode re-resolves it (`--plan-file`,
+    // `--spike`, the lightweight path) is the successor's own route input, never
+    // something the predecessor decides by writing this field.
     resume: {
       kind: "loop_startup",
       issue: Number.isInteger(target.issue) && target.issue > 0 ? target.issue : null,
       pr: Number.isInteger(target.pr) && target.pr > 0 ? target.pr : null,
       branch: text(target.branch),
       // A plan-file/spike/lightweight phase carries no issue, PR or branch: the phase
-      // label IS its authoritative identity, so a successor re-resolves by phase.
+      // label IS the identity of the artifact a successor re-resolves.
       phase: text(target.phase),
     },
   };
@@ -1232,12 +1255,22 @@ export function validateHandoffEnvelope(envelope) {
     } else {
       if (!Array.isArray(ub.handBackAfter) || ub.handBackAfter.length === 0
         || ub.handBackAfter.some((b) => !boundaryNames.includes(b))
-        || new Set(ub.handBackAfter).size !== ub.handBackAfter.length) {
-        errors.push({ field: "unitBoundaries.handBackAfter", reason: `must be a non-empty array of distinct: ${boundaryNames.join(", ")}`, got: ub.handBackAfter });
+        || new Set(ub.handBackAfter).size !== ub.handBackAfter.length
+        // The contract makes the list ordered and first-match, so a reversed list
+        // would stop a unit at a boundary it cannot reach yet. Declaration order is
+        // the canonical order.
+        || ub.handBackAfter.some((b, i) => i > 0 && boundaryNames.indexOf(b) < boundaryNames.indexOf(ub.handBackAfter[i - 1]))) {
+        errors.push({ field: "unitBoundaries.handBackAfter", reason: `must be a non-empty array of distinct boundaries in canonical order: ${boundaryNames.join(" then ")}`, got: ub.handBackAfter });
       }
       const resume = ub.resume;
+      // The builder only ever emits a positive integer or null, so a present-but-invalid
+      // identity (a string or a non-positive integer) is rejected even when another
+      // identity is also present; otherwise the validator would be laxer than its producer.
+      const invalidCount = [resume?.issue, resume?.pr].some((n) => n !== undefined && n !== null && !(Number.isInteger(n) && n > 0));
       if (!resume || typeof resume !== "object" || resume.kind !== "loop_startup") {
         errors.push({ field: "unitBoundaries.resume", reason: "must be an object with kind=loop_startup", got: resume });
+      } else if (invalidCount) {
+        errors.push({ field: "unitBoundaries.resume", reason: "issue and pr must be a positive integer or null", got: resume });
       } else if (![resume.issue, resume.pr].some((n) => Number.isInteger(n) && n > 0)
         && ![resume.branch, resume.phase].some((v) => typeof v === "string" && v.trim())) {
         errors.push({ field: "unitBoundaries.resume", reason: "must name an issue, pr, branch or phase to re-resolve", got: resume });

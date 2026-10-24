@@ -137,8 +137,8 @@ the boundaries that field names.
 
 On hand-back the orchestrator dispatches the successor by emitting the work order with
 `scripts/loop/emit-coordinator-work-order.mjs --input <startup-output path> --harness <claude|pi|codex> --entry <queue|direct>`
-and dispatching the printed `dispatchPayload` unchanged. As in [Boundary examples](#boundary-examples),
-the input is the startup-output path a coordinator named in its hand-back; the orchestrator still
+and dispatching the printed `dispatchPayload` unchanged. The input is the startup-output path a
+coordinator named in its hand-back; the orchestrator still
 never runs `loop startup` itself. The successor re-resolves `unitBoundaries.resume`, so its envelope
 is resolver output for the current target — **the previous coordinator never writes or summarizes the
 next brief**, and no successor field derives from predecessor conversation. Gate state survives
@@ -148,4 +148,10 @@ evidence and open findings by re-running the detectors at resume.
 A child hand-back is a **compact relay packet** only: unit identity, status, `nextAction`, evidence
 links, and an open question if one is needed. No transcript, tool output or review text. A relay is
 the dispatch trigger, never the successor's context.
+
+Budget per unit coordinator: peak context at or below the existing **150K-token cap** (largest
+single-response input count, not cumulative traffic); on a Codex root at most 10% empty wakeups,
+measured against root turns rather than wait duration. A missing or ambiguous native measurement is
+reported as unavailable, never zero. This budget binds every harness root, so it stays outside the
+sections harness-specific mirrors drop.
 
