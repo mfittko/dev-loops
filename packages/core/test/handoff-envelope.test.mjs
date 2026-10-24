@@ -996,6 +996,23 @@ test("cwd: Windows drive and UNC roots keep their shape, and a share prefix neve
   );
 });
 
+// issue 2532: a separator-only root and a drive root are the two roots whose only content IS
+// the separator that makes them absolute. Interpolating `${root}/...` doubled it for `/` and
+// dropped it for `C:/`, so both joins (the resolveWorktreePath one and the slug fallback) go
+// through the path library for the root's shape.
+test("cwd: a separator-only root never doubles its separator and a drive root keeps it", () => {
+  const rootOnly = deriveCwd(issueBundle(42).bundle, { repoRoot: "/" });
+  assert.equal(rootOnly, "/tmp/worktrees/dev-loops/issue-42");
+  assert.ok(!rootOnly.startsWith("//"), "a separator-only root must not emit a doubled separator");
+  // The slug fallback joins the same way, so the second interpolation cannot double either.
+  assert.equal(
+    deriveCwd(localBranchBundle("feature/local", { issue: 2335 }).bundle, { repoRoot: "/" }),
+    "/tmp/worktrees/dev-loops/feature-local"
+  );
+  // A bare drive (`C:`) is drive-relative, so the drive-root form must survive as `C:/`.
+  assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot: "/repo", worktreeCwd: "C:/" }), "C:/");
+});
+
 // issue 2532: the sibling `worktreeCwd` channel is canonicalized too, so one logical repo root
 // yields one `cwd` byte sequence whichever input option named it.
 test("cwd: worktreeCwd is canonicalized to the same single spelling", () => {
@@ -1028,9 +1045,14 @@ test("unitBoundaries: a PR unit hands back only after the gate verdict", () => {
 test("unitBoundaries: both gate verdict boundaries carry the same hand-back and resume target", () => {
   // Draft and pre-approval rounds are separate units; each resumes from the same
   // authoritative PR target, so neither reads the other's conversation.
+  // "Verdict evidence" is the reviewed head plus the CI status, not only the counts: a producer
+  // regression that drops either from the recovered state must fail at BOTH boundaries.
   for (const [gateState, currentGate] of [
-    [{ copilotRoundCount: 0, currentSubGate: "draft" }, "draft"],
-    [{ copilotRoundCount: 3, unresolvedThreadCount: 2, currentSubGate: "pre-approval" }, "pre-approval"],
+    [{ copilotRoundCount: 0, currentSubGate: "draft", currentHeadSha: "a".repeat(40), ciStatus: "success" }, "draft"],
+    [{
+      copilotRoundCount: 3, unresolvedThreadCount: 2, currentSubGate: "pre-approval",
+      currentHeadSha: "b".repeat(40), ciStatus: "pending",
+    }, "pre-approval"],
   ]) {
     const env = buildDevLoopHandoffEnvelope(prBundle(99), defaultSettings, gateState, defaultOptions);
     assert.equal(env.currentGate, currentGate);
@@ -1038,6 +1060,8 @@ test("unitBoundaries: both gate verdict boundaries carry the same hand-back and 
     assert.deepEqual(env.unitBoundaries.resume, { kind: "loop_startup", issue: null, pr: 99, branch: null, phase: null });
     assert.equal(env.gateState.copilotRoundCount, gateState.copilotRoundCount ?? 0);
     assert.equal(env.gateState.unresolvedThreadCount, gateState.unresolvedThreadCount ?? 0);
+    assert.equal(env.gateState.currentHeadSha, gateState.currentHeadSha, `${currentGate} boundary keeps the reviewed head`);
+    assert.equal(env.gateState.ciStatus, gateState.ciStatus, `${currentGate} boundary keeps the CI status`);
   }
 });
 
@@ -1190,6 +1214,12 @@ test("unitBoundaries: resume identity validation covers every accepted and rejec
     [{ kind: "loop_startup", issue: null, pr: 99, branch: null, phase: null }, true],
     [{ kind: "loop_startup", issue: 42, pr: null, branch: 99 }, false],
     [{ kind: "loop_startup", issue: 42, pr: null, branch: null, phase: 42 }, false],
+    // `pr` gets its own rejected form: routing every count check through `issue` alone would
+    // leave the `pr` half of the validator's integer clause unexercised.
+    [{ kind: "loop_startup", issue: null, pr: "99", branch: null, phase: null }, false],
+    // And a whitespace-only text identity is not an identity: this is the `.trim()` half of the
+    // text clause, which a non-string form cannot reach.
+    [{ kind: "loop_startup", issue: 42, pr: null, branch: "   ", phase: null }, false],
   ];
   for (const [resume, expected] of forms) assert.equal(accepts(resume), expected, JSON.stringify(resume));
 });

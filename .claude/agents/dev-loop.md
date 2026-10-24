@@ -79,8 +79,10 @@ predecessor's prose. Hand back at the **first** boundary that field lists: `hand
 ordered, first-match list, so a unit that carries both stops when it opens its draft PR and leaves
 the verdict boundary to its successor, which resumes already owning that PR; a unit that already
 owns a PR stops after posting its own gate verdict. The remaining boundary belongs to the
-successor, never to you — do not wait for a boundary your own route cannot reach. A route that
-lists none has no unit boundary to stop at. Two entries are **recorded naming approximations**,
+successor, never to you — do not wait for a boundary your own route cannot reach. An envelope with
+no `unitBoundaries` field has no unit boundary to stop at: a terminal, read-only (`review`,
+`ui_review`) or `wait_watch` route omits the field entirely rather than sending an empty list, and
+the validator refuses an empty `handBackAfter`. Two entries are **recorded naming approximations**,
 never boundaries their unit can reach: `final_approval` runs a gate round but posts no verdict of
 its own, and an `issue_intake` unit stops at the draft PR it opens. Both still carry
 `gate_verdict_posted` (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`).

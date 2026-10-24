@@ -3,11 +3,12 @@
 // authoritative state instead of inheriting a predecessor's brief, and the hand-back packet
 // stays compact. Both harness mirrors must keep carrying the rule (#1086).
 import { buildCoordinatorWorkOrder } from "@dev-loops/core/loop/coordinator-work-order";
-import { buildDevLoopHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
+import { buildDevLoopHandoffEnvelope, STATELESS_UNIT_STRATEGIES } from "@dev-loops/core/loop/handoff-envelope";
 import {
   INTERNAL_DEV_LOOP_STRATEGY,
   DEV_LOOP_TARGET_KIND,
 } from "@dev-loops/core/loop/public-dev-loop-routing-contract";
+import { STRATEGY_OWNERSHIP_GATE } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
 
 import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
 
@@ -62,6 +63,19 @@ test("hand-back: cwd names the unit's own worktree root, never a nested namespac
   );
   assert.equal(env.cwd, root);
   assert.ok(!env.cwd.slice(root.length).includes("tmp/worktrees"));
+});
+
+// The stateless-route list is hand-maintained against the routing contract's read/observe
+// classification; ADR 0181 accepts that maintenance, not silent drift. Nothing else relates the
+// two lists, so a route newly classified read-only would keep emitting a hand-back boundary that
+// contradicts its own stop rules with every suite green.
+test("hand-back: the stateless-route list matches the routed read/observe classification", () => {
+  const readOnly = Object.entries(STRATEGY_OWNERSHIP_GATE)
+    // `none` is the terminal reconciliation sentinel, not a routed read/observe strategy.
+    .filter(([strategy, gated]) => gated === false && strategy !== "none")
+    .map(([strategy]) => strategy)
+    .sort();
+  assert.deepEqual([...STATELESS_UNIT_STRATEGIES].sort(), readOnly);
 });
 
 // Rule prose lives in the two owning docs; both harness mirrors must keep carrying it.

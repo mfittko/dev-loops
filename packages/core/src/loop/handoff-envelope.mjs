@@ -466,7 +466,23 @@ function canonicalRepoRoot(root) {
   // Both normalizers PRESERVE a trailing separator, which would defeat the suffix
   // comparison below, so strip it here while keeping the root separator itself.
   const stripped = normalized.replace(/\/+$/u, "");
-  return stripped.length > 0 ? stripped : normalized;
+  if (stripped.length === 0) return normalized;
+  // A bare drive (`C:`) is drive-RELATIVE: it names the current directory on that drive,
+  // not the drive root. Keep the separator that makes it absolute, or the join below emits
+  // a path no consumer can exact-match against the real worktree.
+  return /^[A-Za-z]:$/u.test(stripped) ? `${stripped}/` : stripped;
+}
+
+/**
+ * Join segments under an already-canonical root through the path library for the root's
+ * SHAPE, never string interpolation. A root that IS a separator (`/`) cannot double it, a
+ * drive root (`C:/`) cannot degrade to the drive-relative `C:`, and a network share's
+ * significant leading `//` survives. The unified `/` spelling this module emits is restored
+ * afterwards, because `win32.join` reintroduces backslashes (issue 2532).
+ */
+function joinUnderRoot(root, ...segments) {
+  const windowsShaped = WINDOWS_ROOT.test(root) || root.startsWith("//");
+  return (windowsShaped ? win32Path : posixPath).join(root, ...segments).replace(/\\/g, "/");
 }
 
 /**
@@ -515,7 +531,7 @@ function deriveCwd(bundle, options = {}) {
     }
     const slug = buildWorktreeSlug(artifact, kind);
     if (slug) {
-      return ownedWorktreeRootFor(root, slug) ?? `${root}/${WORKTREE_NAMESPACE}/${slug}`;
+      return ownedWorktreeRootFor(root, slug) ?? joinUnderRoot(root, WORKTREE_NAMESPACE, slug);
     }
   }
 
@@ -544,7 +560,7 @@ export function resolveWorktreePath({ repoRoot, kind, number } = {}) {
   if (!Number.isInteger(number) || number < 1) {
     throw new Error(`resolveWorktreePath: number must be a positive integer, got ${number}`);
   }
-  return `${root}/${WORKTREE_NAMESPACE}/${k}-${number}`;
+  return joinUnderRoot(canonicalRepoRoot(root), WORKTREE_NAMESPACE, `${k}-${number}`);
 }
 
 function flattenSlugSegment(s) {
@@ -599,7 +615,9 @@ export const UNIT_BOUNDARY = Object.freeze({
 // (`STRATEGY_OWNERSHIP_GATE` in `scripts/loop/resolve-dev-loop-startup.mjs`) — not a
 // derivation from that map, so adding a read-only route means adding it here too.
 // A boundary for one of these routes would contradict its own stop rules.
-const STATELESS_UNIT_STRATEGIES = Object.freeze([
+// Exported so the contract test can assert this list stays in step with that classification
+// (issue 2532): the hand-maintenance ADR 0181 accepts is only safe while drift is detectable.
+export const STATELESS_UNIT_STRATEGIES = Object.freeze([
   INTERNAL_DEV_LOOP_STRATEGY.REVIEW,
   INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW,
   INTERNAL_DEV_LOOP_STRATEGY.WAIT_WATCH,
