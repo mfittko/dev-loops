@@ -99,12 +99,25 @@ brief has to restate the boundary:
   the router re-targets that target to the PR route (`toRoutableCanonicalState` in
   `packages/core/src/loop/public-dev-loop-routing.mjs`) and the envelope keeps the issue as that
   unit's cross-link (`packages/core/src/loop/handoff-envelope.mjs`), while the validator requires
-  only a non-empty, well-typed identity set. A plan-file, spike or lightweight phase is the
-  no-number case and resumes by `phase` alone. `resume.phase` identifies the artifact (a plan-file
-  or spike path, or a lightweight phase label); which startup mode re-resolves it is the successor's
-  own route input, so the successor selects the flag (`--plan-file`, `--spike`, the lightweight
-  path) instead of reading a mode from the envelope, and the single mutually-exclusive identity flag
-  its `loop startup` invocation takes is that same route input. `resume` is derived from the
+  only a non-empty, well-typed identity set. A plan-file, spike or lightweight unit is the
+  no-number case: its resume names `phase` and none of `issue`, `pr` or `branch`, because that
+  label is the only identity its target has. `resume.phase` is that artifact identity, never a mode
+  selector. `loop startup` takes exactly one mutually exclusive mode flag (`--plan-file`, `--spike`,
+  `--lightweight`) and has no `--phase` input, and the plan-file and spike builders in
+  `scripts/loop/resolve-dev-loop-startup.mjs` emit the SAME `local_phase` shape
+  (`{kind: "local_phase", issue: null, pr: null, linkedPr: null, branch: null, phase}`) for a
+  validated plan file and a validated spike file, so the label cannot choose the mode (only the
+  issue-less lightweight label, `lightweight-issueless`, is self-describing). The shipped
+  re-resolution therefore never reads a mode from this field: no code consumes `resume` (the
+  validator only checks that it is present and well-typed) and the successor's own `loop startup`
+  invocation is the re-resolution, its mode coming from that successor's route input — the
+  startup-output artifact the predecessor's hand-back names and
+  `emit-coordinator-work-order.mjs --input <startup-output>` turns into the successor's order,
+  which distinguishes the local modes by `planFileIntakeState` / `spikeIntakeState` rather than by
+  the phase label. So the phase is the identity a successor re-resolves, not the mode that
+  resolves it; a consumer holding only the resume could not tell a plan-file from a spike, and the
+  envelope deliberately carries no mode field to close that
+  (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`). `resume` is derived from the
   envelope's own target, so **no successor field derives from the predecessor's
   conversation** and the predecessor never writes or summarizes the next brief.
 
