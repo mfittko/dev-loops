@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -39,7 +39,7 @@ test("acceptance requires an explicit canonical snapshot and rejects mixed modes
   assert.equal(typeof verifyResidualEvidenceAcceptance, "function");
 });
 
-async function fixture(fn, harness = "pi", alterReads, continuation = false) {
+async function fixture(fn, harness = "pi", alterReads, continuation = false, mixed = false) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "residual-evidence-")));
   try {
     const git = (args, input) => execFileSync("git", args, { cwd: root, input, stdio: ["pipe", "pipe", "pipe"] });
@@ -51,9 +51,10 @@ async function fixture(fn, harness = "pi", alterReads, continuation = false) {
     const tmpRoot = path.join(root, "tmp");
     const key = { ...TARGET, gate: "draft_gate", tmpRoot };
     const act = ["1".repeat(16), "2".repeat(16)].map((fingerprint) => ({ fingerprint, angle: "coverage", severity: "medium", summary: fingerprint, judgeDisposition: "act" }));
+    if (mixed) act.push({ ...act[0], fingerprint: "3".repeat(16) });
     const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: act });
     const delta = { reviewBaselineHead: BASE, candidateHead: HEAD, actSetId: sequence.actSetId, outcome: "bounded_out",
-      actionableItems: sequence.actItems.map(({ ref }) => ({ ref, status: "cannot_verify", evidence: ["qualification missing"] })),
+      actionableItems: sequence.actItems.map(({ ref }, i) => ({ ref, status: mixed && i === 2 ? "resolved" : "cannot_verify", evidence: ["qualification missing"] })),
       newFindings: [], widenedReads: [] };
     if (continuation) delta.siteCoverageDigest = hash([]);
     const decision = { ...delta, invocation: 3, nextStep: "push_to_gate", items: delta.actionableItems.map(({ ref, status }) => ({ ref, status })) };
@@ -74,7 +75,8 @@ async function fixture(fn, harness = "pi", alterReads, continuation = false) {
     await put(fixer.promptPath, prompt);
     await put(fixerPlan, fixer);
     await put(executionIndexPath(tmpRoot, fixer.executionIdentity), Object.fromEntries(["executionIdentity", "workOrderRef", "workOrderDigest"].map((k) => [k, fixer[k]])));
-    const handoff = JSON.stringify({ headSha: HEAD, siteCoverage: [], dispositions: [{ threadId: "PRRT_one", disposition: "deferred", fixingCommitSha: HEAD }] });
+    const handoff = JSON.stringify({ headSha: HEAD, siteCoverage: [], dispositions: [{ threadId: "PRRT_one", disposition: "deferred", fixingCommitSha: HEAD },
+      ...(mixed ? [{ threadId: "PRRT_fixed", disposition: "tackled", fixingCommitSha: HEAD }] : [])] });
     await pullWorkOrder({ ref: fixer.workOrderRef, digest: fixer.workOrderDigest, execution: fixer.executionIdentity, cwd: root, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
     await put(fixer.workOrder.outputRefs[0], handoff);
     await put(`${fixer.workOrder.outputRefs[0]}.constructed`, sha256Hex(handoff));
@@ -126,11 +128,11 @@ async function fixture(fn, harness = "pi", alterReads, continuation = false) {
     execFileSync(process.execPath, [new URL("../../scripts/github/emit-fanout-dispatch.mjs", import.meta.url).pathname,
       "--repo", "o/r", "--pr", "7", "--gate", "draft_gate", "--head-sha", HEAD], { cwd: root });
     const plan = JSON.parse(await readFile(planPath)), units = plan.units;
-    const rootBody = act.map((a) => `<!-- dev-loops:finding ${a.fingerprint} -->`).join("\n");
+    const rootBody = act.slice(0, 2).map((a) => `<!-- dev-loops:finding ${a.fingerprint} -->`).join("\n");
     const assessment = { ...TARGET, reviewBaselineHead: BASE, actSetId: sequence.actSetId,
       deltaResultSha256: hash(JSON.stringify(delta)), decisionSha256: hash(JSON.stringify(decision)),
       roots: [{ threadId: "PRRT_one", rootCommentId: "PRRC_one", rootSha256: hash(rootBody),
-        members: sequence.actItems.map(({ ref }) => ({ ref, conclusion: "resolved", evidence: ["qualification.json:1"] })) }],
+        members: sequence.actItems.slice(0, 2).map(({ ref }) => ({ ref, conclusion: "resolved", evidence: ["qualification.json:1"] })) }],
       supplementalFiles: [{ path: supplemental, sha256: hash(await readFile(supplemental)) }],
       limitations: ["Unknown effective model and effort; configured resumed execution unqualified."] };
     for (const unit of units) {
@@ -141,8 +143,15 @@ async function fixture(fn, harness = "pi", alterReads, continuation = false) {
     }
     const calls = [], mutations = [];
     const state = { head: HEAD };
+    if (mixed) state.extraRoots = [{ id: "PRRT_fixed", isResolved: false, comments: { nodes: [
+      { id: "PRRC_fixed", databaseId: 3, author: { login: "owner" }, body: `<!-- dev-loops:finding ${act[2].fingerprint} -->` },
+    ], pageInfo: { hasNextPage: false } } }];
     const deps = { repoRoot: root, env: runIdFreeEnv(), ghCommand: "gh", runChild: async (command, args) => {
       calls.push({ command, args });
+      if (command === "git") {
+        const result = spawnSync(command, args, { cwd: root, encoding: "utf8" });
+        return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+      }
       if (args.includes("POST") || args.includes("PATCH") || args.includes("DELETE") || args.some((a) => /mutation\s*\{/.test(a))) mutations.push(args);
       const ok = (value) => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
       if (command === process.execPath && args[0].endsWith("verify-fixer-disposition.mjs")) {
@@ -175,7 +184,7 @@ async function fixture(fn, harness = "pi", alterReads, continuation = false) {
   } finally { await rm(root, { recursive: true, force: true }); }
 }
 
-async function acceptanceFixture(fn, harness = "pi", findings = [], continuation = false) {
+async function acceptanceFixture(fn, harness = "pi", findings = [], continuation = false, mixed = false) {
   return fixture(async (f) => {
     const raw = JSON.parse(await readFile(f.resultPath));
     raw.findings = findings;
@@ -203,8 +212,23 @@ async function acceptanceFixture(fn, harness = "pi", findings = [], continuation
     const snapshot = await snapshotResidualEvidence(f.options, f.deps);
     f.options = { ...f.options, accept: true, record: false, snapshot: snapshot.snapshotPath };
     await fn({ ...f, ledgerPath });
-  }, harness, undefined, continuation);
+  }, harness, undefined, continuation, mixed);
 }
+
+test("requires completed mixed resolved/residual delivery while preserving legitimate deferral", async () => acceptanceFixture(async (f) => {
+  const delivery = await verifyFixerDisposition({ ...f.options, check: true }, f.deps);
+  assert.equal(delivery.ok, true);
+  assert.equal(delivery.complete, false);
+  assert.deepEqual(delivery.incomplete.map(({ threadId, failedStep }) => ({ threadId, failedStep })),
+    [{ threadId: "PRRT_fixed", failedStep: "reply_missing" }]);
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), /full delivery check failed/);
+  await assert.rejects(readdir(path.join(path.dirname(path.dirname(f.options.snapshot)), "accepted")), { code: "ENOENT" });
+  const fixed = f.state.extraRoots[0];
+  fixed.comments.nodes.push({ id: "PRRC_fixed_reply", databaseId: 4, author: { login: "owner" }, body: `Fixed in ${HEAD}` });
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), /full delivery check failed/);
+  fixed.isResolved = true;
+  assert.equal((await acceptResidualEvidence(f.options, f.deps)).status, "accepted");
+}, "pi", [], false, true));
 
 for (const harness of ["pi", "claude", "codex"]) test(`accepts actual pulled ${harness} proof additively and idempotently`, async () => acceptanceFixture(async (f) => {
   const paths = [f.options.snapshot, f.options.fixerPlan, f.decisionPath, ...f.fixer.workOrder.requiredReads.map((r) => r.path)];

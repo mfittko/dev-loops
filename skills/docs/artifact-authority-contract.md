@@ -123,6 +123,7 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/github/detect-checkpoint-evidence.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/emit-fanout-dispatch.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/reconcile-draft-gate.mjs` | Fail closed: `config_load_failed` |
+| `scripts/github/reconcile-residual-evidence.mjs` | Fail closed: uses `loadDevLoopConfigStrict`, so a malformed `.devloops` refuses residual-evidence acceptance |
 | `scripts/loop/emit-judge-work-order.mjs` | Fail closed: `config_load_failed` |
 | `scripts/loop/build-handoff-envelope.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/ready-for-review.mjs` | Fail closed: `config_load_failed` on its own load, plus the size budget block |
