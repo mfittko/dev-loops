@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, readdir, realpath, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -9,11 +9,9 @@ import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { pullWorkOrder, pullReceiptPath, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
 import "../../scripts/github/pull-work-order.mjs";
-import { buildGateEmitPlanPath, buildGateReviewsDir } from "../../scripts/github/write-gate-context.mjs";
-import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
-import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
+import { buildGateEmitPlanPath, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { runIdFreeEnv } from "../_helpers.mjs";
-import { parseResidualEvidenceArgs, reconcileResidualEvidence } from "../../scripts/github/reconcile-residual-evidence.mjs";
+import { parseResidualEvidenceArgs, snapshotResidualEvidence, verifyResidualEvidenceSnapshot } from "../../scripts/github/reconcile-residual-evidence.mjs";
 
 const HEAD = "b".repeat(40), BASE = "a".repeat(40);
 const TARGET = { repo: "o/r", pr: 7, headSha: HEAD };
@@ -23,7 +21,7 @@ const put = async (file, value) => {
   await writeFile(file, typeof value === "string" ? value : JSON.stringify(value));
 };
 
-async function fixture(fn, harness = "pi") {
+async function fixture(fn, harness = "pi", alterReads) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "residual-evidence-")));
   try {
     const tmpRoot = path.join(root, "tmp");
@@ -58,12 +56,19 @@ async function fixture(fn, harness = "pi") {
     const { mandatoryAngles } = resolveGateAngleContract(config, "draft");
     const names = [...new Set([...mandatoryAngles, "coverage", "threat-model"])];
     const planPath = buildGateEmitPlanPath(key);
-    const prefixPath = path.join(path.dirname(planPath), `draft_gate-${HEAD}.briefing-prefix.txt`);
-    const prefix = "# Invariant briefing\n";
-    await put(prefixPath, prefix);
-    await put(path.join(path.dirname(planPath), `draft_gate-${HEAD}.json`), {
-      fanout: { groups: names.map((name) => ({ name, angles: [name] })) }, requiredReads: [],
-    });
+    const rawDiff = "tmp/raw.diff";
+    await put(path.join(root, rawDiff), "supplemental diff\n");
+    const bundle = await writeGateContext({ ...TARGET, gate: "draft_gate", angles: names,
+      fanoutDispatch: { groups: names.map((name) => ({ name, angles: [name] })) },
+      diffPath: rawDiff, prBody: "Snapshot assessment scope", validationPosture: "targeted" }, { repoRoot: root });
+    const prefix = await readFile(path.join(root, bundle.prefixPath), "utf8");
+    assert.ok(bundle.artifact.requiredReads.some((r) => !path.isAbsolute(r.path) && r.required));
+    assert.ok(bundle.artifact.requiredReads.some((r) => r.required === false && r.sha256));
+    assert.ok(bundle.artifact.requiredReads.some((r) => r.kind === "context" && !r.sha256));
+    if (alterReads) {
+      alterReads(bundle.artifact.requiredReads);
+      await put(path.join(root, bundle.path), bundle.artifact);
+    }
     execFileSync(process.execPath, [new URL("../../scripts/github/emit-fanout-dispatch.mjs", import.meta.url).pathname,
       "--repo", "o/r", "--pr", "7", "--gate", "draft_gate", "--head-sha", HEAD], { cwd: root });
     const plan = JSON.parse(await readFile(planPath)), units = plan.units;
@@ -80,64 +85,72 @@ async function fixture(fn, harness = "pi") {
       const result = { angle: unit.angles[0], headSha: HEAD, verdict: "clean", findings: [], ...(unit.angles[0] === "coverage" ? { residualEvidenceAssessment: assessment } : {}) };
       await put(unit.workOrder.outputRefs[0], result);
     }
-    const provenance = { distinctReviewers: units.length,
-      perAngle: units.map((u) => ({ angle: u.angles[0], dispatchId: u.executionIdentity, ...(u.group ? { group: u.group } : {}) })) };
-    await put(path.join(tmpRoot, "gate-findings", "o-r", "pr-7", `draft_gate-${HEAD}.json`), {
-      repo: "o/r", pr: 7, headSha: HEAD, gate: "draft_gate", executionMode: "fanout_fanin", findings: [], provenance,
-    });
-    const body = renderGateReviewCommentBody({ ...TARGET, gate: "draft_gate", verdict: "clean",
-      executionMode: "fanout_fanin", findingsSummary: "no issues found", nextAction: "mark ready for review" });
     const calls = [], mutations = [];
-    const state = { head: HEAD, delivery: true, ci: "success", body, gateTime: "2030-01-01T00:00:00Z" };
+    const state = { head: HEAD };
     const deps = { repoRoot: root, env: runIdFreeEnv(), ghCommand: "gh", runChild: async (command, args) => {
       calls.push({ command, args });
       if (args.includes("POST") || args.includes("PATCH") || args.includes("DELETE") || args.some((a) => /mutation\s*\{/.test(a))) mutations.push(args);
       const ok = (value) => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
-      if (command === process.execPath) {
-        assert.match(args[0], /verify-fixer-disposition\.mjs$/);
-        assert.ok(args.includes("--check"));
-        assert.ok(!args.includes("--construct"));
-        if (!state.delivery) return ok({ ok: false });
-        return ok(await verifyFixerDisposition({ ...TARGET, fixerPlan, check: true }, deps));
-      }
-      if (args[0] === "pr" && args[1] === "view") return ok({ headRefOid: state.head, statusCheckRollup: [] });
-      if (args.some((a) => a.includes("/check-runs"))) return ok({ check_runs: [{ name: "test", status: state.ci === "pending" ? "in_progress" : "completed", conclusion: state.ci }] });
-      if (args.some((a) => a.includes("/status?"))) return ok({ statuses: [] });
-      if (args.some((a) => a.includes("/compare/"))) return ok({ status: "ahead" });
-      if (args.some((a) => a.includes("/comments?"))) return ok([]);
-      if (args.some((a) => a.includes("/reviews?"))) return ok([{ id: 50, body: state.body, user: { login: "owner" }, state: "COMMENTED", submitted_at: state.gateTime, commit_id: HEAD }]);
+      if (args[0] === "pr" && args[1] === "view") return ok({ headRefOid: state.head });
       if (args.includes("user")) return ok({ login: "owner" });
       if (args.includes("graphql")) return ok({ data: { repository: { pullRequest: { reviewThreads: {
         nodes: [{ id: "PRRT_one", isResolved: false, comments: {
           nodes: [{ id: "PRRC_one", databaseId: 1, author: { login: "owner" }, body: rootBody },
             { id: "PRRC_two", databaseId: 2, author: { login: "owner" }, body: `Residual delta status: cannot_verify ${HEAD}` }],
           pageInfo: { hasNextPage: false },
-        } }], pageInfo: { hasNextPage: false },
+        } }, ...(state.extraRoots ?? [])], pageInfo: { hasNextPage: false },
       } } } } });
       throw new Error(`Unexpected read: ${command} ${args.join(" ")}`);
     } };
-    deps.runCommand = async (command, args, { cwd }) => {
-      assert.equal(cwd, root);
-      return deps.runChild(command, args);
-    };
     const options = { ...TARGET, baseline: BASE, angle: "coverage", fixerPlan, record: true };
     const resultPath = units.find((u) => u.angles[0] === "coverage").workOrder.outputRefs[0];
-    await fn({ root, tmpRoot, options, deps, state, calls, mutations, plan, planPath, resultPath, assessment, decisionPath, supplemental, fixer });
+    await fn({ root, tmpRoot, options, deps, state, calls, mutations, plan, planPath, resultPath, assessment, decisionPath, supplemental, fixer, bundle, rootBody });
     assert.deepEqual(mutations, []);
   } finally { await rm(root, { recursive: true, force: true }); }
 }
 
+test("distinct live roots sharing fingerprints retain every root and member", async () => fixture(async (f) => {
+  f.state.extraRoots = [{ id: "PRRT_shared", isResolved: false, comments: {
+    nodes: [{ id: "PRRC_shared", databaseId: 3, author: { login: "owner" }, body: f.rootBody },
+      { id: "PRRC_shared_reply", databaseId: 4, author: { login: "owner" }, body: `Residual delta status: cannot_verify ${HEAD}` }], pageInfo: { hasNextPage: false },
+  } }];
+  f.assessment.roots.push({ ...f.assessment.roots[0], threadId: "PRRT_shared", rootCommentId: "PRRC_shared" });
+  const result = JSON.parse(await readFile(f.resultPath));
+  await put(f.resultPath, { ...result, residualEvidenceAssessment: f.assessment });
+  const recorded = await snapshotResidualEvidence(f.options, f.deps);
+  assert.equal(recorded.threads.length, 2);
+  const roots = [...f.assessment.roots];
+  f.assessment.roots.pop();
+  await put(f.resultPath, { ...result, residualEvidenceAssessment: f.assessment });
+  await assert.rejects(snapshotResidualEvidence(f.options, f.deps), /partial or foreign residual roots/);
+  f.assessment.roots = roots;
+  f.assessment.roots[1].members = [];
+  await put(f.resultPath, { ...result, residualEvidenceAssessment: f.assessment });
+  await assert.rejects(snapshotResidualEvidence(f.options, f.deps), /member assessment/);
+}));
+
 for (const harness of ["pi", "claude", "codex"]) test(`records original pulled ${harness} evidence without touching history`, async () => fixture(async (f) => {
-  const paths = [f.decisionPath, ...f.fixer.workOrder.requiredReads.map((r) => r.path), ...f.fixer.workOrder.outputRefs];
+  const paths = [f.decisionPath, f.options.fixerPlan, pullReceiptPath(f.tmpRoot, f.fixer.workOrderRef),
+    ...f.fixer.workOrder.requiredReads.map((r) => r.path), ...f.fixer.workOrder.outputRefs,
+    `${f.fixer.workOrder.outputRefs[0]}.constructed`];
   const before = await Promise.all(paths.map((p) => readFile(p)));
-  const result = await reconcileResidualEvidence(f.options, f.deps);
+  const result = await snapshotResidualEvidence(f.options, f.deps);
   assert.equal(result.recorded, true);
   assert.equal(result.applied, false);
-  const record = JSON.parse(await readFile(result.reconciliationPath));
+  assert.equal(result.status, "unqualified");
+  assert.equal(Object.hasOwn(result, "accepted"), false);
+  assert.equal(Object.hasOwn(result, "reconciliationPath"), false);
+  const record = JSON.parse(await readFile(result.snapshotPath));
+  assert.equal(record.kind, "residual-evidence-snapshot");
+  assert.equal(record.status, "unqualified");
+  assert.ok(record.provenance.requiredReads.some((r) => r.status === "unpinned-context"));
   assert.deepEqual(record.assessment, f.assessment);
   assert.ok(record.sources.some((s) => s.path === f.resultPath && hash(Buffer.from(s.base64, "base64")) === s.sha256));
   assert.deepEqual(await Promise.all(paths.map((p) => readFile(p))), before);
-  assert.equal((await reconcileResidualEvidence({ ...f.options, record: false }, f.deps)).recorded, false);
+  assert.equal((await snapshotResidualEvidence(f.options, f.deps)).snapshotPath, result.snapshotPath);
+  const inspect = await snapshotResidualEvidence({ ...f.options, record: false }, f.deps);
+  assert.equal(inspect.recorded, false);
+  assert.equal(inspect.snapshotPath, null);
   assert.equal(f.calls.some((c) => c.args.some((a) => a.includes("check-pre-push-delta"))), false);
 }, harness));
 
@@ -163,11 +176,17 @@ const negatives = {
   changedSupplement: async (f) => { await put(f.supplemental, "changed"); },
   changedDelta: async (f) => { await put(f.fixer.workOrder.requiredReads[1].path, "{}"); },
   changedDecision: async (f) => { await put(f.decisionPath, "{}"); },
-  noDelivery: async (f) => { f.state.delivery = false; },
-  pendingCi: async (f) => { f.state.ci = "pending"; },
-  failingCi: async (f) => { f.state.ci = "failure"; },
-  noGate: async (f) => { f.state.body = "no verdict"; },
-  oldGate: async (f) => { f.state.gateTime = "2020-01-01T00:00:00Z"; },
+  changedOptionalPin: async (f) => { await put(path.join(f.root, "tmp/raw.diff"), "tampered optional bytes"); },
+  aliasedOptionalRead: async (f) => {
+    const raw = path.join(f.root, "tmp/raw.diff");
+    await rm(raw);
+    await symlink(f.supplemental, raw);
+  },
+  missingRequiredRead: async (f) => { await rm(path.join(f.root, f.bundle.evidencePath)); },
+  contextAsSupplement: async (f) => {
+    const context = path.join(f.root, f.bundle.path);
+    f.assessment.supplementalFiles = [{ path: context, sha256: hash(await readFile(context)) }];
+  },
   noReceipt: async (f) => { await rm(pullReceiptPath(f.tmpRoot, f.plan.units.find((u) => u.angles[0] === "coverage").workOrderRef)); },
   foreignReceipt: async (f) => {
     const p = pullReceiptPath(f.tmpRoot, f.plan.units.find((u) => u.angles[0] === "coverage").workOrderRef);
@@ -179,26 +198,26 @@ const negatives = {
   retired: async (f) => { await put(path.join(f.tmpRoot, "retired-gate-rounds", HEAD, "old", "retirement.json"), { gate: "draft_gate", retiredAt: "2030-01-01T00:00:00Z" }); },
   outputOwnership: async (f) => { f.plan.units.find((u) => u.angles[0] === "coverage").workOrder.outputRefs[0] = f.supplemental; await put(f.planPath, f.plan); },
 };
-for (const [name, alter] of Object.entries(negatives)) test(`refuses ${name} without an accepted record`, async () => fixture(async (f) => {
+for (const [name, alter] of Object.entries(negatives)) test(`refuses ${name} without a snapshot`, async () => fixture(async (f) => {
   await alter(f);
   const result = JSON.parse(await readFile(f.resultPath));
   result.residualEvidenceAssessment = f.assessment;
   await put(f.resultPath, result);
-  await assert.rejects(reconcileResidualEvidence(f.options, f.deps));
+  await assert.rejects(snapshotResidualEvidence(f.options, f.deps));
   assert.deepEqual(await readdir(path.join(f.tmpRoot, "residual-evidence")).catch(() => []), []);
 }));
 
 test("refuses a carried result and a result written before its pull", async () => fixture(async (f) => {
   const result = JSON.parse(await readFile(f.resultPath));
   await put(f.resultPath, { ...result, carriedFromHead: BASE });
-  await assert.rejects(reconcileResidualEvidence(f.options, f.deps));
+  await assert.rejects(snapshotResidualEvidence(f.options, f.deps));
   await put(f.resultPath, result);
   await utimes(f.resultPath, 1, 1);
-  await assert.rejects(reconcileResidualEvidence(f.options, f.deps));
+  await assert.rejects(snapshotResidualEvidence(f.options, f.deps));
 }));
 
 test("CLI rejects apply and refuses caller-supplied delivery flags", () => {
-  for (const flag of ["--apply", "--construct", "--delivery-ok"]) assert.throws(() => parseResidualEvidenceArgs([flag]));
+  for (const flag of ["--apply", "--accept", "--unknown", "--construct", "--delivery-ok"]) assert.throws(() => parseResidualEvidenceArgs([flag]));
   const parsed = parseResidualEvidenceArgs(["--repo", "o/r", "--pr", "7", "--head-sha", HEAD,
     "--baseline", BASE, "--angle", "coverage", "--fixer-plan", "/tmp/plan", "--jq", ".ok", "--silent"]);
   assert.equal(parsed.jq, ".ok");
@@ -208,30 +227,54 @@ test("CLI rejects apply and refuses caller-supplied delivery flags", () => {
 test("duplicate JSON assessment keys cannot smuggle a positive conclusion", async () => fixture(async (f) => {
   const result = await readFile(f.resultPath, "utf8");
   await put(f.resultPath, result.replace('"conclusion":"resolved"', '"conclusion":"cannot_verify","conclusion":"resolved"'));
-  await assert.rejects(reconcileResidualEvidence(f.options, f.deps), /duplicate or ambiguous JSON keys/);
+  await assert.rejects(snapshotResidualEvidence(f.options, f.deps), /duplicate or ambiguous JSON keys/);
 }));
 
 test("late source tampering and head movement refuse recording", async () => {
   for (const changed of ["head", "source"]) await fixture(async (f) => {
     const inner = f.deps.runChild;
-    let headReads = 0;
     f.deps.runChild = async (command, args) => {
-      if (args.includes("headRefOid") && ++headReads === 2 && changed === "head") f.state.head = BASE;
-      if (args.some((a) => a.includes("/reviews?")) && changed === "source") await put(f.supplemental, "late tamper");
+      if (args.includes("headRefOid") && changed === "head") f.state.head = BASE;
+      if (args.includes("graphql") && changed === "source") await put(f.supplemental, "late tamper");
       return inner(command, args);
     };
-    await assert.rejects(reconcileResidualEvidence(f.options, f.deps), /source changed|candidate moved/);
+    await assert.rejects(snapshotResidualEvidence(f.options, f.deps), /source changed|candidate moved/);
     assert.deepEqual(await readdir(path.join(f.tmpRoot, "residual-evidence")).catch(() => []), []);
   });
 });
 
 test("record retains original reviewer bytes after later same-head emissions", async () => fixture(async (f) => {
-  const result = await reconcileResidualEvidence(f.options, f.deps);
-  const before = await readFile(result.reconciliationPath);
+  const result = await snapshotResidualEvidence(f.options, f.deps);
+  const before = await readFile(result.snapshotPath);
   const original = await readFile(f.resultPath);
   await put(f.resultPath, "later same-head output");
   await put(f.planPath, { ...f.plan, roundId: "r1800000000001-1234abcd" });
   const snapshot = JSON.parse(before).sources.find((s) => s.path === f.resultPath);
   assert.deepEqual(Buffer.from(snapshot.base64, "base64"), original);
-  assert.deepEqual(await readFile(result.reconciliationPath), before);
+  assert.deepEqual(await readFile(result.snapshotPath), before);
 }));
+
+test("available unpinned context stays qualified and missing optional reads stay absent", async () => fixture(async (f) => {
+  const context = path.join(f.root, f.bundle.path);
+  const original = await verifyResidualEvidenceSnapshot(f.options, f.deps);
+  assert.equal(original.sources.find((s) => s.path === context).qualification, "unpinned-context");
+  await rm(context);
+  await rm(path.join(f.root, "tmp/raw.diff"));
+  const snapshot = await verifyResidualEvidenceSnapshot(f.options, f.deps);
+  const absent = snapshot.provenance.requiredReads.filter((r) => r.status === "absent");
+  assert.ok(absent.some((r) => r.kind === "context"));
+  assert.ok(absent.some((r) => r.kind === "raw-diff"));
+  assert.equal(snapshot.sources.some((s) => s.path === context), false);
+  assert.deepEqual(await readdir(path.join(f.tmpRoot, "residual-evidence")).catch(() => []), []);
+}));
+
+test("malformed source JSON refuses without a snapshot", async () => fixture(async (f) => {
+  await put(f.resultPath, "{");
+  await assert.rejects(snapshotResidualEvidence(f.options, f.deps));
+  assert.deepEqual(await readdir(path.join(f.tmpRoot, "residual-evidence")).catch(() => []), []);
+}));
+
+for (const kind of ["evidence", "raw-diff"]) test(`refuses missing ${kind} pin in authenticated reviewer order`, async () => fixture(async (f) => {
+  await assert.rejects(snapshotResidualEvidence(f.options, f.deps), /lacks pin|unpinned substantive/);
+  assert.deepEqual(await readdir(path.join(f.tmpRoot, "residual-evidence")).catch(() => []), []);
+}, "pi", (reads) => { delete reads.find((r) => r.kind === kind).sha256; }));

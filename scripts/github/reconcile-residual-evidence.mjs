@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { isDeepStrictEqual } from "node:util";
 import { parseDocument } from "yaml";
@@ -9,24 +8,21 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS } from "@dev-loops/core/config";
 import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
 import { startDeltaSequence, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
-import { checkFanoutAngleCoverage, consolidateFanin, fanoutReviewerPairingError, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { consolidateFanin } from "@dev-loops/core/loop/gate-fanin";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
-import { normalizeHeadScopedCiContract } from "@dev-loops/core/loop/copilot-ci-status";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { parsePrNumber, runChild as defaultRunChild, runCommand as defaultRunCommand } from "../_cli-primitives.mjs";
+import { parsePrNumber, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { gateDeltaRecordPath } from "../loop/_gate-delta-record.mjs";
-import { buildLogPath, repoSlugFor } from "./_gate-artifact-paths.mjs";
+import { repoSlugFor } from "./_gate-artifact-paths.mjs";
 import { WORK_ORDER_ROLES, executionIndexPath, materializationHash, pullReceiptPath, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
 import "./pull-work-order.mjs";
 import { buildGateEmitPlanPath, buildGateReviewsDir } from "./write-gate-context.mjs";
-import { detectCheckpointEvidence } from "./detect-checkpoint-evidence.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
-import { collectFingerprints, fetchGateEvidenceComments } from "./_gate-finding-surface.mjs";
+import { collectFingerprints } from "./_gate-finding-surface.mjs";
 import { selectActThreadBinding } from "./_fixer-act-thread-bindings.mjs";
 import { resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
-import { observeHeadCiSignals } from "./observe-head-ci.mjs";
 import { dispatchPromptLayoutRecordPath } from "./record-dispatch-prompt-layout.mjs";
 import { verifyDispatchPromptLayoutForHead } from "./verify-dispatch-prompt-layout.mjs";
 import { sanitizeScopeSegment } from "./_dispatch-units.mjs";
@@ -57,8 +53,8 @@ export function parseResidualEvidenceArgs(argv) {
     jq: values.jq, silent: values.silent, fields: values.fields };
 }
 
-export async function verifyResidualEvidenceAssessment(options, {
-  repoRoot = process.cwd(), env = process.env, ghCommand = "gh", runChild = defaultRunChild, runCommand = defaultRunCommand,
+export async function verifyResidualEvidenceSnapshot(options, {
+  repoRoot = process.cwd(), env = process.env, ghCommand = "gh", runChild = defaultRunChild,
 } = {}) {
   const { repo, pr, headSha, baseline, angle } = options;
   parseRepoSlug(repo);
@@ -74,7 +70,7 @@ export async function verifyResidualEvidenceAssessment(options, {
     const bytes = await readFile(file), info = await lstat(file);
     const prior = sources.get(file);
     requireProof(!prior || prior.sha256 === hash(bytes) && prior.mtimeMs === info.mtimeMs, `source changed: ${file}`);
-    sources.set(file, { path: file, sha256: hash(bytes), base64: bytes.toString("base64"), mtimeMs: info.mtimeMs });
+    sources.set(file, { ...prior, path: file, sha256: hash(bytes), base64: bytes.toString("base64"), mtimeMs: info.mtimeMs });
     return bytes;
   }
   const json = async (file) => {
@@ -94,7 +90,7 @@ export async function verifyResidualEvidenceAssessment(options, {
     const bytes = await capture(read.path);
     requireProof(hash(bytes) === read.sha256, `changed ${read.kind} bytes`);
     requireProof(!reads.has(read.kind), `duplicate ${read.kind} read`);
-    const value = ["act-list", "delta-result", "completion-input"].includes(read.kind) ? JSON.parse(bytes) : null;
+    const value = ["act-list", "delta-result", "completion-input"].includes(read.kind) ? await json(read.path) : null;
     reads.set(read.kind, { read, value });
   }
   const act = reads.get("act-list")?.value, delta = reads.get("delta-result")?.value;
@@ -107,34 +103,13 @@ export async function verifyResidualEvidenceAssessment(options, {
     && decision.actSetId === sequence.actSetId && decision.invocation === 3
     && decision.outcome === "bounded_out" && decision.nextStep === "push_to_gate"
     && isDeepStrictEqual(statuses(decision.items), statuses(delta.actionableItems)), "not invocation-three bounded_out/push_to_gate");
-  const verifier = fileURLToPath(new URL("./verify-fixer-disposition.mjs", import.meta.url));
-  const delivered = await runCommand(process.execPath, [verifier, "--repo", repo, "--pr", String(pr),
-    "--head-sha", headSha, "--fixer-plan", fixerPlanPath, "--tmp-root", receiptTmpRoot, "--check"], { cwd: repoRoot, env });
-  const delivery = JSON.parse(delivered.stdout);
-  requireProof(delivery?.ok === true && delivery.complete === true
-    && delivery.repo === repo && delivery.pr === pr && delivery.headSha === headSha,
-  "authenticated fixer delivery missing or incomplete");
-  const report = path.join(path.dirname(fixerPlanPath), fixer.executionIdentity, "fixer-disposition.json");
-  await capture(report);
-  await capture(`${report}.constructed`);
-  await capture(pullReceiptPath(receiptTmpRoot, fixer.workOrderRef));
-  if (fixer.promptPath) await capture(fixer.promptPath);
-  const completion = reads.get("completion-input")?.value;
-  if (completion?.origin) {
-    const originalDir = path.join(path.dirname(fixerPlanPath), completion.origin.executionIdentity);
-    const original = await json(path.join(originalDir, "original-fixer-emit-plan.json"));
-    await capture(path.join(originalDir, "fixer-disposition.json"));
-    await capture(original.promptPath);
-    await capture(pullReceiptPath(receiptTmpRoot, original.workOrderRef));
-    for (const read of original.workOrder.requiredReads) await capture(read.path);
-  }
   const planPath = buildGateEmitPlanPath(key), plan = await json(planPath);
   requireProof(plan.ok === true && plan.repo === repo && String(plan.pr) === String(pr) && plan.gate === "draft_gate"
     && plan.headSha === headSha && /^r\d+-[a-f0-9]{8}$/.test(plan.roundId) && Array.isArray(plan.units)
     && plan.units.length >= FANOUT_PROVENANCE_MIN_REVIEWERS && plan.count === plan.units.length
     && (!plan.carried || Array.isArray(plan.carried) && plan.carried.length === 0), "not a current fresh full draft plan");
   requireProof(Number(plan.roundId.match(/^r(\d+)-/)[1]) >= sources.get(decisionPath).mtimeMs, "reviewer round predates exhausted delta");
-  const artifacts = [], resultPaths = [], expectedProvenance = [];
+  const artifacts = [], reviewerReads = [], unpinnedContext = new Set();
   const layout = await verifyDispatchPromptLayoutForHead(tmpRoot, headSha);
   requireProof(layout.verified && layout.recordCount >= plan.units.length, "missing or invalid canonical dispatch layout");
   let assessment, assessmentUnit;
@@ -178,10 +153,28 @@ export async function verifyResidualEvidenceAssessment(options, {
       requireProof(sentinelTime >= sources.get(pullReceiptPath(receiptTmpRoot, unit.workOrderRef)).mtimeMs
         && sentinelTime <= sources.get(resultPath).mtimeMs, "reviewer sentinel predates pull or follows result");
       requireProof(result.angle === name && result.headSha === headSha && !Object.hasOwn(result, "carriedFromHead"), "stale or carried result");
-      for (const read of w.requiredReads) requireProof(hash(await capture(read.path)) === read.sha256, "changed reviewer required read");
+      for (const read of w.requiredReads) {
+        const readPath = path.resolve(repoRoot, read.path);
+        requireProof(path.normalize(realpathNearestExisting(readPath)) === readPath, "noncanonical reviewer read ancestry");
+        requireProof(!read.required || /^[a-f0-9]{64}$/.test(read.sha256), "required reviewer read lacks pin");
+        requireProof(read.sha256 === undefined || /^[a-f0-9]{64}$/.test(read.sha256), "invalid reviewer read pin");
+        requireProof(read.sha256 !== undefined || read.required === false && read.kind === "context", "unpinned substantive read");
+        const present = await lstat(readPath).then(() => true, (error) => {
+          if (error.code === "ENOENT" && read.required === false) return false;
+          throw error;
+        });
+        if (present) {
+          const bytes = await capture(readPath);
+          requireProof(read.sha256 === undefined || hash(bytes) === read.sha256, "changed reviewer required read");
+        }
+        if (read.sha256 === undefined) {
+          unpinnedContext.add(readPath);
+          if (present) sources.get(readPath).qualification = "unpinned-context";
+        }
+        reviewerReads.push({ path: readPath, kind: read.kind, status: !present ? "absent"
+          : read.sha256 === undefined ? "unpinned-context" : "pinned" });
+      }
       artifacts.push(result);
-      resultPaths.push(resultPath);
-      expectedProvenance.push({ angle: name, dispatchId: unit.executionIdentity, ...(unit.group ? { group: unit.group } : {}) });
       if (name === angle) {
         requireProof(!assessmentUnit, "ambiguous assessor");
         assessment = result.residualEvidenceAssessment;
@@ -203,7 +196,7 @@ export async function verifyResidualEvidenceAssessment(options, {
     && assessment.supplementalFiles.length > 0, "explicit supplemental files and limitations required");
   requireProof(sameSet(assessment.supplementalFiles.map((f) => f.path), assessment.supplementalFiles.map((f) => f.path)), "duplicate supplemental files");
   for (const file of assessment.supplementalFiles) {
-    requireProof(keys(file, "path sha256") && hash(await capture(file.path)) === file.sha256,
+    requireProof(keys(file, "path sha256") && !unpinnedContext.has(file.path) && hash(await capture(file.path)) === file.sha256,
       "supplemental bytes changed or unknown keys");
   }
   const threadNodes = await fetchGithubReviewThreadsPayload({ repo, pr }, runtime);
@@ -224,7 +217,7 @@ export async function verifyResidualEvidenceAssessment(options, {
     expectedRoots.push({ threadId: thread.id, rootCommentId: root.id, rootSha256: hash(rawRoot.body), refs });
     covered.push(...refs.filter((r) => residual.has(r)));
   }
-  requireProof(residual.size > 0 && sameSet(covered, [...residual])
+  requireProof(residual.size > 0 && sameSet([...new Set(covered)], [...residual])
     && sameSet(assessment.roots?.map((r) => r.threadId), expectedRoots.map((r) => r.threadId)), "partial or foreign residual roots");
   for (const expected of expectedRoots) {
     const claimed = assessment.roots.find((r) => r.threadId === expected.threadId);
@@ -235,33 +228,6 @@ export async function verifyResidualEvidenceAssessment(options, {
         && Array.isArray(m.evidence) && m.evidence.length > 0 && m.evidence.every(nonempty)),
     "partial, contradictory or nonpositive member assessment");
   }
-  const ci = await observeHeadCiSignals({ repo, headSha }, runtime);
-  requireProof(ci.checkRuns.ok && ci.statuses.ok && normalizeHeadScopedCiContract({
-    checkRunsStatus: ci.checkRuns.fullSignal.status, commitStatus: ci.statuses.commitStatus,
-    checkRunsUnsupportedCompleted: ci.checkRuns.fullSignal.unsupportedCompleted,
-  }).overallStatus === "success", "CI not settled green");
-  const gate = await detectCheckpointEvidence({ repo, pr }, runtime);
-  const marker = gate.draftGateMarker, full = gate.fanoutEnforcement?.gates?.find((g) => g.name === "draft_gate");
-  requireProof(gate.currentHeadSha === headSha && marker.visible && marker.verdict === "clean"
-    && marker.contractComplete === true && marker.headSha === headSha && !marker.convergedFromHeadSha
-    && marker.executionMode === "fanout_fanin" && full?.ledgerExists, "subsequent valid full draft gate missing");
-  const gateSurface = (await fetchGateEvidenceComments({ repo, pr }, runtime))
-    .find((c) => c.id === marker.commentId && c.surface === marker.surface);
-  requireProof(nonempty(gateSurface?.body), "missing original full-gate surface bytes");
-  const ledger = await json(buildLogPath({ ...key, tmpRoot: receiptTmpRoot }));
-  requireProof(ledger.repo === repo && ledger.pr === pr && ledger.headSha === headSha
-    && ledger.gate === "draft_gate" && ledger.executionMode === "fanout_fanin", "foreign full gate ledger");
-  const provenance = ledger.provenance;
-  const coverage = checkFanoutAngleCoverage(provenance?.perAngle, { mandatoryAngles: full.mandatoryAngles, pool: full.anglePool });
-  requireProof(provenanceConsistencyError(provenance) === null && provenance.distinctReviewers >= plan.units.length
-    && isDeepStrictEqual(provenance.perAngle, expectedProvenance), "full gate provenance differs from authenticated round");
-  const pairingError = fanoutReviewerPairingError(provenance.perAngle, full.resolvedGroups, provenance.dispatchUnits);
-  requireProof(!pairingError, `full gate reviewer pairing: ${pairingError}`);
-  requireProof(coverage.missingMandatory.length === 0 && coverage.foreignAngles.length === 0,
-    `full gate coverage: ${JSON.stringify(coverage)}`);
-  const resultTimes = resultPaths.map((p) => sources.get(p).mtimeMs);
-  requireProof(Date.parse(marker.updatedAt) >= Math.max(...resultTimes)
-    && Date.parse(marker.updatedAt) > sources.get(decisionPath).mtimeMs, "gate predates assessed result or exhausted delta");
   for (const source of sources.values()) await capture(source.path);
   for (const unit of plan.units) {
     const current = await WORK_ORDER_ROLES.get("review").locate({ ref: unit.workOrderRef,
@@ -270,40 +236,42 @@ export async function verifyResidualEvidenceAssessment(options, {
   }
   const live = await runChild(ghCommand, ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid"], env);
   requireProof(live.code === 0 && JSON.parse(live.stdout).headRefOid === headSha, "live candidate moved");
-  return { schemaVersion: 1, repo, pr, headSha, assessment,
-    reviewer: { workOrderRef: assessmentUnit.workOrderRef, executionIdentity: assessmentUnit.executionIdentity,
-      workOrderDigest: assessmentUnit.workOrderDigest, roundId: plan.roundId },
-    observations: { delivery, ci, draftGate: marker, gateSurface, login,
+  return { schemaVersion: 1, kind: "residual-evidence-snapshot", status: "unqualified", repo, pr, headSha, assessment,
+    provenance: { workOrderRef: assessmentUnit.workOrderRef, executionIdentity: assessmentUnit.executionIdentity,
+      workOrderDigest: assessmentUnit.workOrderDigest, roundId: plan.roundId, requiredReads: reviewerReads },
+    observations: { login,
       threadNodes: threadNodes.filter((t) => expectedRoots.some((r) => r.threadId === t.id)) },
+    limitations: [...assessment.limitations, "Delivery, CI and full-gate validity are not established; no acceptance or closure authority.",
+      "Unpinned optional context is navigation only, never authenticated substantive proof."],
     sources: [...sources.values()] };
 }
 
-export async function reconcileResidualEvidence(options, deps = {}) {
-  const proof = await verifyResidualEvidenceAssessment(options, deps);
+export async function snapshotResidualEvidence(options, deps = {}) {
+  const proof = await verifyResidualEvidenceSnapshot(options, deps);
   const tmpRoot = path.resolve(resolveGateArtifactTmpRoot(deps.repoRoot ?? process.cwd()));
   const text = `${JSON.stringify(proof, null, 2)}\n`;
-  const reconciliationPath = path.join(tmpRoot, "residual-evidence", repoSlugFor(proof.repo),
-    `pr-${proof.pr}`, proof.headSha, `${hash(text)}.json`);
+  const snapshotPath = path.join(tmpRoot, "residual-evidence", repoSlugFor(proof.repo),
+    `pr-${proof.pr}`, proof.headSha, "snapshots", `${hash(text)}.json`);
   if (options.record) {
-    requireProof(path.normalize(realpathNearestExisting(path.dirname(reconciliationPath))) === path.dirname(reconciliationPath),
+    requireProof(path.normalize(realpathNearestExisting(path.dirname(snapshotPath))) === path.dirname(snapshotPath),
       "noncanonical record ancestry");
-    await mkdir(path.dirname(reconciliationPath), { recursive: true });
-    requireProof(await realpath(path.dirname(reconciliationPath)) === path.dirname(reconciliationPath), "noncanonical record directory");
-    await writeFile(reconciliationPath, text, { flag: "wx" }).catch(async (error) => {
+    await mkdir(path.dirname(snapshotPath), { recursive: true });
+    requireProof(await realpath(path.dirname(snapshotPath)) === path.dirname(snapshotPath), "noncanonical record directory");
+    await writeFile(snapshotPath, text, { flag: "wx" }).catch(async (error) => {
       if (error.code !== "EEXIST") throw error;
-      requireProof((await readFile(reconciliationPath, "utf8")) === text, "record collision");
+      requireProof((await readFile(snapshotPath, "utf8")) === text, "record collision");
     });
   }
-  return { ok: true, assessed: true, recorded: options.record === true, applied: false,
+  return { ok: true, status: "unqualified", recorded: options.record === true, applied: false,
     repo: proof.repo, pr: proof.pr, headSha: proof.headSha,
     threads: proof.assessment.roots.map((r) => ({ threadId: r.threadId, isResolved: false })),
-    reconciliationPath: options.record ? reconciliationPath : null };
+    snapshotPath: options.record ? snapshotPath : null };
 }
 
 if (isDirectCliRun(import.meta.url)) {
   try {
     const options = parseResidualEvidenceArgs(process.argv.slice(2));
     if (options.help) console.log(USAGE);
-    else process.exitCode = emitResult(await reconcileResidualEvidence(options), options);
+    else process.exitCode = emitResult(await snapshotResidualEvidence(options), options);
   } catch (error) { console.error(formatCliError(error)); process.exitCode = 1; }
 }
