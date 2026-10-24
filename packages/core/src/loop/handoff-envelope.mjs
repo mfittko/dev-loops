@@ -553,28 +553,41 @@ export const UNIT_BOUNDARY = Object.freeze({
   GATE_VERDICT_POSTED: "gate_verdict_posted",
 });
 
+// Routes that own no phase to hand back from: a read-only review runs one round and
+// produces no lifecycle gate evidence, and a wait route produces no unit at all.
+const STATELESS_UNIT_STRATEGIES = Object.freeze([
+  INTERNAL_DEV_LOOP_STRATEGY.REVIEW,
+  INTERNAL_DEV_LOOP_STRATEGY.WAIT_WATCH,
+]);
+
 /**
  * Derive the unit coordinator's hand-back boundaries from the route the envelope
  * already carries. Nothing here comes from a predecessor: `resume` names the
  * sanctioned re-resolution a successor runs against authoritative state.
- * Reconciliation envelopes return undefined — their `stopRules` are already terminal.
+ * Returns undefined for a route that has no unit to hand back (terminal
+ * reconciliation, read-only review, wait) so the field never contradicts the
+ * route's own stop rules.
  */
 function deriveUnitBoundaries(strategy, target) {
-  if (strategy === null) return undefined;
+  if (strategy === null || STATELESS_UNIT_STRATEGIES.includes(strategy)) return undefined;
   const boundaries = [];
   // A unit that owns no PR yet ends its phase by opening the draft PR.
   const ownsPr = target.kind === DEV_LOOP_TARGET_KIND.PR
     || (Number.isInteger(target.linkedPr) && target.linkedPr > 0);
   if (!ownsPr) boundaries.push(UNIT_BOUNDARY.DRAFT_PR_OPENED);
-  // Every gate round hands back after its verdict is posted.
+  // Every unit that runs a gate round hands back after its verdict is posted.
   boundaries.push(UNIT_BOUNDARY.GATE_VERDICT_POSTED);
+  const text = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
   return {
     handBackAfter: boundaries,
     resume: {
       kind: "loop_startup",
       issue: Number.isInteger(target.issue) && target.issue > 0 ? target.issue : null,
       pr: Number.isInteger(target.pr) && target.pr > 0 ? target.pr : null,
-      branch: typeof target.branch === "string" && target.branch.trim() ? target.branch : null,
+      branch: text(target.branch),
+      // A plan-file/spike/lightweight phase carries no issue, PR or branch: the phase
+      // label IS its authoritative identity, so a successor re-resolves by phase.
+      phase: text(target.phase),
     },
   };
 }
@@ -1208,15 +1221,16 @@ export function validateHandoffEnvelope(envelope) {
       errors.push({ field: "unitBoundaries", reason: "if present, must be a non-array object", got: ub });
     } else {
       if (!Array.isArray(ub.handBackAfter) || ub.handBackAfter.length === 0
-        || ub.handBackAfter.some((b) => !boundaryNames.includes(b))) {
-        errors.push({ field: "unitBoundaries.handBackAfter", reason: `must be a non-empty array of: ${boundaryNames.join(", ")}`, got: ub.handBackAfter });
+        || ub.handBackAfter.some((b) => !boundaryNames.includes(b))
+        || new Set(ub.handBackAfter).size !== ub.handBackAfter.length) {
+        errors.push({ field: "unitBoundaries.handBackAfter", reason: `must be a non-empty array of distinct: ${boundaryNames.join(", ")}`, got: ub.handBackAfter });
       }
       const resume = ub.resume;
       if (!resume || typeof resume !== "object" || resume.kind !== "loop_startup") {
         errors.push({ field: "unitBoundaries.resume", reason: "must be an object with kind=loop_startup", got: resume });
       } else if (![resume.issue, resume.pr].some((n) => Number.isInteger(n) && n > 0)
-        && !(typeof resume.branch === "string" && resume.branch.trim())) {
-        errors.push({ field: "unitBoundaries.resume", reason: "must name a positive issue, a positive pr or a branch to re-resolve", got: resume });
+        && ![resume.branch, resume.phase].some((v) => typeof v === "string" && v.trim())) {
+        errors.push({ field: "unitBoundaries.resume", reason: "must name an issue, pr, branch or phase to re-resolve", got: resume });
       }
     }
   }

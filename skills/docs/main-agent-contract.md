@@ -127,29 +127,31 @@ queues completion with `trigger_turn: false`; the corresponding
 requires `trigger_turn` or durable sleep to schedule pending work. This is source evidence, not proof
 of the installed binary. No watchdog, harness patch or durable-sleep experiment is authorized here.
 
-<!-- pi-only -->
-> **Absolute read-only boundary (Pi).** The main agent must never mutate files tracked by the repository.
-> All tracked-file mutations flow through the `dev-loop` async subagent.
-
 ## Unit coordinator boundaries (issue 2532)
 
 The orchestrator dispatches one **fresh unit coordinator per phase**, never one coordinator for the
 whole cycle. The boundary list is tooling-emitted: the handoff envelope carries `unitBoundaries`
 (`handBackAfter` + `resume`, derived from the target and route; see
-[Workflow Handoff Contract](workflow-handoff-contract.md#envelope-schema)). A unit hands back
-when the draft PR opens and after each posted gate verdict.
+[Workflow Handoff Contract](workflow-handoff-contract.md#envelope-schema)). The unit hands back at
+the boundaries that field names.
 
-On hand-back the orchestrator re-resolves authoritative state and dispatches the successor: it runs
-`loop startup` for the boundary's `resume` target, emits the work order with
-`scripts/loop/emit-coordinator-work-order.mjs --input <that startup-output path> --harness <claude|pi|codex> --entry <queue|direct>`,
-and dispatches the printed `dispatchPayload` unchanged. **The previous coordinator never writes or
-summarizes the next brief** — no successor field derives from predecessor conversation. Gate state
-survives through authoritative state, not through the relay: the successor recovers round count,
-verdict evidence and open findings by re-running the detectors at resume.
+On hand-back the orchestrator dispatches the successor by emitting the work order with
+`scripts/loop/emit-coordinator-work-order.mjs --input <startup-output path> --harness <claude|pi|codex> --entry <queue|direct>`
+and dispatching the printed `dispatchPayload` unchanged. As in [Boundary examples](#boundary-examples),
+the input is the startup-output path a coordinator named in its hand-back; the orchestrator still
+never runs `loop startup` itself. The successor re-resolves `unitBoundaries.resume`, so its envelope
+is resolver output for the current target — **the previous coordinator never writes or summarizes the
+next brief**, and no successor field derives from predecessor conversation. Gate state survives
+through authoritative state, not through the relay: the successor recovers round count, verdict
+evidence and open findings by re-running the detectors at resume.
 
 A child hand-back is a **compact relay packet** only: unit identity, status, `nextAction`, evidence
 links, and an open question if one is needed. No transcript, tool output or review text. A relay is
 the dispatch trigger, never the successor's context.
+
+<!-- pi-only -->
+> **Absolute read-only boundary (Pi).** The main agent must never mutate files tracked by the repository.
+> All tracked-file mutations flow through the `dev-loop` async subagent.
 
 Budget per unit coordinator: peak context at or below the existing **150K-token cap** (largest
 single-response input count, not cumulative traffic); on a Codex root at most 10% empty wakeups,

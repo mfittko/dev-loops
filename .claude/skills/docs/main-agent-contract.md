@@ -127,3 +127,25 @@ queues completion with `trigger_turn: false`; the corresponding
 requires `trigger_turn` or durable sleep to schedule pending work. This is source evidence, not proof
 of the installed binary. No watchdog, harness patch or durable-sleep experiment is authorized here.
 
+## Unit coordinator boundaries (issue 2532)
+
+The orchestrator dispatches one **fresh unit coordinator per phase**, never one coordinator for the
+whole cycle. The boundary list is tooling-emitted: the handoff envelope carries `unitBoundaries`
+(`handBackAfter` + `resume`, derived from the target and route; see
+[Workflow Handoff Contract](workflow-handoff-contract.md#envelope-schema)). The unit hands back at
+the boundaries that field names.
+
+On hand-back the orchestrator dispatches the successor by emitting the work order with
+`scripts/loop/emit-coordinator-work-order.mjs --input <startup-output path> --harness <claude|pi|codex> --entry <queue|direct>`
+and dispatching the printed `dispatchPayload` unchanged. As in [Boundary examples](#boundary-examples),
+the input is the startup-output path a coordinator named in its hand-back; the orchestrator still
+never runs `loop startup` itself. The successor re-resolves `unitBoundaries.resume`, so its envelope
+is resolver output for the current target — **the previous coordinator never writes or summarizes the
+next brief**, and no successor field derives from predecessor conversation. Gate state survives
+through authoritative state, not through the relay: the successor recovers round count, verdict
+evidence and open findings by re-running the detectors at resume.
+
+A child hand-back is a **compact relay packet** only: unit identity, status, `nextAction`, evidence
+links, and an open question if one is needed. No transcript, tool output or review text. A relay is
+the dispatch trigger, never the successor's context.
+

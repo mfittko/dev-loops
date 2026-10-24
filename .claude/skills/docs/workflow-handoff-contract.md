@@ -85,12 +85,14 @@ brief has to restate the boundary:
   `draft_pr_opened` (a unit that owns no PR yet, so opening the draft PR ends its phase) and
   `gate_verdict_posted` (every unit that runs a gate round hands back after posting the verdict).
 - `resume` names the authoritative re-resolution a successor runs (`kind: loop_startup` plus the
-  issue, PR or branch identity). It is derived from the envelope's own target, so **no successor
+  issue, PR, branch or phase identity). It is derived from the envelope's own target, so **no successor
   field derives from the predecessor's conversation** and the predecessor never writes or
   summarizes the next brief.
 
-The field is absent on a terminal reconciliation envelope: `stopRules` there are already terminal.
-Because it derives only from target and strategy, it stays inside the byte-stable prefix.
+The field is absent where the route has no unit to hand back: a terminal reconciliation envelope
+(`stopRules` are already terminal), a read-only `review` round (one round, no lifecycle gate
+evidence) and `wait_watch` (no unit runs). That keeps the field from contradicting a route's own
+stop rules. Because it derives only from target and strategy, it stays inside the byte-stable prefix.
 
 ## Acceptance templates
 
@@ -175,7 +177,7 @@ interface HandoffEnvelope {
   // byte-stable; absent on a terminal reconciliation envelope (its stopRules are terminal).
   unitBoundaries?: {
     handBackAfter: Array<"draft_pr_opened" | "gate_verdict_posted">;
-    resume: { kind: "loop_startup"; issue: number | null; pr: number | null; branch: string | null };
+    resume: { kind: "loop_startup"; issue: number | null; pr: number | null; branch: string | null; phase: string | null };
   };
 
   acceptance: {

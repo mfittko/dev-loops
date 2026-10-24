@@ -58,27 +58,31 @@ test("hand-back: cwd names the unit's own worktree root, never a nested namespac
 });
 
 // Rule prose lives in the two owning docs; both harness mirrors must keep carrying it.
+// Claims and content are whitespace-normalized: a reflow must never fail a rule that is
+// still stated, only a claim that has actually been dropped.
 const RULE_PROSE = {
   "agents/dev-loop.agent.md": [
-    "when the draft PR opens",
-    "after each posted gate\nverdict",
+    "unitBoundaries` names where your unit ends",
+    "opening the draft PR, and after posting a gate verdict",
     "unit identity, status, `nextAction`, evidence links",
     "No transcript, no tool output, no review text",
     "150K-token cap",
   ],
   "skills/docs/main-agent-contract.md": [
     "fresh unit coordinator per phase",
-    "never writes or\nsummarizes the next brief",
+    "never writes or summarizes the next brief",
     "unit identity, status, `nextAction`, evidence",
     "150K-token cap",
     "root turns",
   ],
 };
 
+const squeeze = (text) => text.replace(/\s+/g, " ");
+
 for (const [doc, claims] of Object.entries(RULE_PROSE)) {
   test(`hand-back rule prose is owned by ${doc}`, async () => {
-    const content = (await readRepo(doc)).replace(/\r\n/g, "\n");
-    for (const claim of claims) assert.ok(content.includes(claim), `${doc} must state: ${claim}`);
+    const content = squeeze(await readRepo(doc));
+    for (const claim of claims) assert.ok(content.includes(squeeze(claim)), `${doc} must state: ${claim}`);
   });
 }
 

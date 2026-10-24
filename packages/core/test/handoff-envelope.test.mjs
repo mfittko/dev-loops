@@ -929,9 +929,10 @@ test("cwd: startup inside the target's own worktree names that root, not a neste
     assert.equal(deriveCwd(input.bundle, { repoRoot: expected }), expected);
     assert.ok(!deriveCwd(input.bundle, { repoRoot: expected }).includes(`${expected}/tmp/worktrees`));
   }
-  // An issue-named checkout serving its PR is not the PR's own root: the CLI builder
-  // binds that case through the live PR checkout, never through a derived path.
-  assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot: worktreeRoot }), worktreeRoot);
+  // An issue-named checkout serving its PR is NOT the PR's own root, so the derivation still
+  // appends the PR namespace. The CLI builder never uses that path: it binds `worktreeCwd` from
+  // the live PR checkout instead. Pinned here so the boundary between the two stays explicit.
+  assert.equal(deriveCwd(prBundle(42).bundle, { repoRoot: worktreeRoot }), `${worktreeRoot}/tmp/worktrees/dev-loops/pr-42`);
   // A trailing separator is the same root, not a new one.
   assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot: `${worktreeRoot}/` }), worktreeRoot);
   // A repo root that only LOOKS related still gets its own worktree.
@@ -946,7 +947,7 @@ test("unitBoundaries: a unit without a PR hands back at the draft PR and after t
   const env = buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, {}, defaultOptions);
   assert.deepEqual(env.unitBoundaries, {
     handBackAfter: [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED],
-    resume: { kind: "loop_startup", issue: 42, pr: null, branch: null },
+    resume: { kind: "loop_startup", issue: 42, pr: null, branch: null, phase: null },
   });
 });
 
@@ -954,7 +955,7 @@ test("unitBoundaries: a PR unit hands back only after the gate verdict", () => {
   const env = buildDevLoopHandoffEnvelope(prBundle(99), defaultSettings, {}, defaultOptions);
   assert.deepEqual(env.unitBoundaries, {
     handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED],
-    resume: { kind: "loop_startup", issue: null, pr: 99, branch: null },
+    resume: { kind: "loop_startup", issue: null, pr: 99, branch: null, phase: null },
   });
 });
 
@@ -968,13 +969,13 @@ test("unitBoundaries: both gate verdict boundaries carry the same hand-back and 
     const env = buildDevLoopHandoffEnvelope(prBundle(99), defaultSettings, gateState, defaultOptions);
     assert.equal(env.currentGate, currentGate);
     assert.deepEqual(env.unitBoundaries.handBackAfter, [UNIT_BOUNDARY.GATE_VERDICT_POSTED]);
-    assert.deepEqual(env.unitBoundaries.resume, { kind: "loop_startup", issue: null, pr: 99, branch: null });
+    assert.deepEqual(env.unitBoundaries.resume, { kind: "loop_startup", issue: null, pr: 99, branch: null, phase: null });
     assert.equal(env.gateState.copilotRoundCount, gateState.copilotRoundCount ?? 0);
     assert.equal(env.gateState.unresolvedThreadCount, gateState.unresolvedThreadCount ?? 0);
   }
 });
 
-test("unitBoundaries: absent on a terminal reconciliation envelope and byte-stable otherwise", () => {
+test("unitBoundaries: absent where the route has no unit to hand back", () => {
   const reconcile = {
     bundleKind: "needs_reconcile",
     selectedStrategy: "none",
@@ -986,14 +987,23 @@ test("unitBoundaries: absent on a terminal reconciliation envelope and byte-stab
       activeArtifact: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 42 },
     },
   };
-  const reconcileEnv = buildDevLoopHandoffEnvelope(reconcile, defaultSettings, {}, defaultOptions);
-  assert.equal(reconcileEnv.unitBoundaries, undefined);
+  assert.equal(buildDevLoopHandoffEnvelope(reconcile, defaultSettings, {}, defaultOptions).unitBoundaries, undefined);
+  // A read-only round and a wait route own no phase, so the field never contradicts their stop rules.
+  for (const strategy of [INTERNAL_DEV_LOOP_STRATEGY.REVIEW, INTERNAL_DEV_LOOP_STRATEGY.WAIT_WATCH]) {
+    const env = buildDevLoopHandoffEnvelope(prBundle(99, { strategy }), defaultSettings, {}, defaultOptions);
+    assert.equal(env.unitBoundaries, undefined, `${strategy} has no unit boundary`);
+  }
+});
 
-  const first = buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, {}, defaultOptions);
-  const second = buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, { copilotRoundCount: 4 }, defaultOptions);
-  const { gateState: _a, ...stableFirst } = first;
-  const { gateState: _b, ...stableSecond } = second;
-  assert.equal(JSON.stringify(stableFirst), JSON.stringify(stableSecond));
+test("unitBoundaries: a phase-only unit resumes by phase", () => {
+  // Plan-file/spike/lightweight phases carry no issue, PR or branch: the phase label is the
+  // identity, and the builder must not emit an envelope its own validator refuses. Byte stability
+  // is owned once, for the whole prefix, by the #1462 test below; it is not re-tested here.
+  const planFile = localPhaseBundle("tmp/plan.md", { strategy: INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION });
+  planFile.bundle.activeArtifact.issue = null;
+  const env = buildDevLoopHandoffEnvelope(planFile, defaultSettings, {}, defaultOptions);
+  assert.deepEqual(env.unitBoundaries.resume, { kind: "loop_startup", issue: null, pr: null, branch: null, phase: "tmp/plan.md" });
+  assert.equal(validateHandoffEnvelope(env).ok, true);
 });
 
 test("unitBoundaries: validator rejects a foreign boundary name or a resume with no target", () => {
@@ -1003,6 +1013,7 @@ test("unitBoundaries: validator rejects a foreign boundary name or a resume with
   assert.equal(withBoundaries(base.unitBoundaries).ok, true);
   assert.equal(withBoundaries({ handBackAfter: ["merged"], resume: { kind: "loop_startup", issue: 42, pr: null } }).ok, false);
   assert.equal(withBoundaries({ handBackAfter: [], resume: { kind: "loop_startup", issue: 42, pr: null } }).ok, false);
+  assert.equal(withBoundaries({ handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED, UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "loop_startup", issue: 42, pr: null } }).ok, false);
   assert.equal(withBoundaries({ handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "loop_startup", issue: null, pr: null } }).ok, false);
   assert.equal(withBoundaries({ handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "webhook", issue: 42, pr: null } }).ok, false);
 });
