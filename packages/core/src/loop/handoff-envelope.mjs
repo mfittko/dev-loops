@@ -647,10 +647,16 @@ function deriveUnitBoundaries(strategy, target) {
   const text = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
   return {
     handBackAfter: boundaries,
-    // A resume names ONE identity (`issue` XOR `pr` XOR `branch` XOR `phase`). A phase
-    // label identifies the artifact; which startup mode re-resolves it (`--plan-file`,
-    // `--spike`, the lightweight path) is the successor's own route input, never
-    // something the predecessor decides by writing this field.
+    // A resume carries every identity the target carries, not an exclusive one: each field
+    // below is copied independently, so the dominant issue-plus-linked-PR route emits both
+    // `issue` and `pr` (the router re-targets that target to the PR route in
+    // `toRoutableCanonicalState`, and `deriveTarget` above keeps the issue as the PR unit's
+    // cross-link). There is no XOR here and no precedence rule to apply; the validator
+    // requires only a non-empty, well-typed set. A phase label identifies the artifact — the
+    // no-number case; which startup mode re-resolves it (`--plan-file`, `--spike`, the
+    // lightweight path), like the single identity flag a successor passes, is that
+    // successor's own route input, never something the predecessor decides by writing this
+    // field.
     resume: {
       kind: "loop_startup",
       issue: Number.isInteger(target.issue) && target.issue > 0 ? target.issue : null,

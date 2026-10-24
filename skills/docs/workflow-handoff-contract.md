@@ -91,12 +91,21 @@ brief has to restate the boundary:
   (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`), never as a second boundary that
   unit can reach: a route that posts no verdict of its own while its unit still runs a gate round
   (`final_approval`), and an `issue_intake` unit that stops at the draft PR it opens.
-- `resume` names the authoritative re-resolution a successor runs (`kind: loop_startup` plus the
-  issue, PR, branch or phase identity), and a resume names **one** identity. `resume.phase`
-  identifies the artifact (a plan-file or spike path, or a lightweight phase label); which startup
-  mode re-resolves it is the successor's own route input, so the successor selects the flag
-  (`--plan-file`, `--spike`, the lightweight path) instead of reading a mode from the envelope. It is
-  derived from the envelope's own target, so **no successor field derives from the predecessor's
+- `resume` names the authoritative re-resolution a successor runs (`kind: loop_startup` plus
+  whichever of the target's `issue`, `pr`, `branch` and `phase` values are set). It is **not** an
+  exclusive selector, and no XOR or precedence rule applies to it: `deriveUnitBoundaries` copies
+  each of those values the target sets, so a unit with more than one identity carries all of them,
+  and the dominant issue-plus-linked-PR route in particular resumes with both `issue` and `pr` —
+  the router re-targets that target to the PR route (`toRoutableCanonicalState` in
+  `packages/core/src/loop/public-dev-loop-routing.mjs`) and the envelope keeps the issue as that
+  unit's cross-link (`packages/core/src/loop/handoff-envelope.mjs`), while the validator requires
+  only a non-empty, well-typed identity set. A plan-file, spike or lightweight phase is the
+  no-number case and resumes by `phase` alone. `resume.phase` identifies the artifact (a plan-file
+  or spike path, or a lightweight phase label); which startup mode re-resolves it is the successor's
+  own route input, so the successor selects the flag (`--plan-file`, `--spike`, the lightweight
+  path) instead of reading a mode from the envelope, and the single mutually-exclusive identity flag
+  its `loop startup` invocation takes is that same route input. `resume` is derived from the
+  envelope's own target, so **no successor field derives from the predecessor's
   conversation** and the predecessor never writes or summarizes the next brief.
 
 The field is absent where the route has no unit to hand back: a terminal reconciliation envelope

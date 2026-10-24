@@ -40,13 +40,23 @@ the routing contract's ownership exemption (`STRATEGY_OWNERSHIP_GATE` in
 classifying a new read-only route means adding it to that list — the field is not derived
 from the classification map.
 
-**A resume identity may be a phase.** A target that carries no issue, PR or branch
-re-resolves by its phase label. The label is authoritative because it is what the
-resolver emitted; it is not a fallback for a missing number. A resume names one identity,
-and the phase labels an artifact rather than a startup mode: which mode re-resolves it
-(`--plan-file`, `--spike`, the lightweight path) is the successor's own route input, since
-the startup CLI has no `--phase` selector and a plan-file and a spike path are
-indistinguishable from the label alone.
+**A resume identity may be a phase, and a resume carries every identity the unit has.** A
+target that carries no issue, PR or branch re-resolves by its phase label. The label is
+authoritative because it is what the resolver emitted; it is not a fallback for a missing
+number, and a phase-only unit is the no-number case. `resume` is not an exclusive selector:
+`deriveUnitBoundaries` copies each of the target's `issue`, `pr`, `branch` and `phase` values
+that is set, so the unit with more than one identity carries all of them, and the dominant
+issue-plus-linked-PR route in particular resumes with both `issue` and `pr` — the router
+re-targets that target to the PR route in `toRoutableCanonicalState`
+(`packages/core/src/loop/public-dev-loop-routing.mjs`) and `deriveTarget` keeps the issue as
+that unit's cross-link (`packages/core/src/loop/handoff-envelope.mjs`). Selecting a route is
+the resolver's job, not an XOR applied to this field, and no precedence rule is needed here:
+the validator requires only a non-empty, well-typed identity set. The phase labels an
+artifact rather than a startup mode: which mode re-resolves it (`--plan-file`, `--spike`, the
+lightweight path), like the single mutually-exclusive identity flag a successor's `loop
+startup` invocation passes, is the successor's own route input, since the startup CLI has no
+`--phase` selector and a plan-file and a spike path are indistinguishable from the label
+alone.
 
 **`handBackAfter` is an ordered, first-match list.** A unit that owns no PR yet stops
 at the draft PR it opens; the verdict boundary then belongs to its successor, which
