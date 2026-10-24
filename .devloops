@@ -188,13 +188,13 @@ models:
   tiers:
     low:
       claude: sonnet
-      pi: baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017
+      pi: baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast
     high:
       claude: opus
-      pi: baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017
+      pi: baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast
     pre-pr-strong:
       claude: opus
-      pi: baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017
+      pi: baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast
   roleTiers:
     pre-push-reviewer: pre-pr-strong
     judge: high
