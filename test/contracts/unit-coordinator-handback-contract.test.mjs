@@ -63,7 +63,8 @@ test("hand-back: cwd names the unit's own worktree root, never a nested namespac
 const RULE_PROSE = {
   "agents/dev-loop.agent.md": [
     "unitBoundaries` names where your unit ends",
-    "opening the draft PR, and after posting a gate verdict",
+    "stops when it opens its draft PR",
+    "stops after posting its own gate verdict",
     "unit identity, status, `nextAction`, evidence links",
     "No transcript, no tool output, no review text",
     "150K-token cap",
@@ -99,9 +100,9 @@ test("hand-back contract carries no harness-specific drift (#1086)", async () =>
     ".claude/skills/docs/workflow-handoff-contract.md": ["## Unit coordinator boundaries", "handBackAfter", "ordered and first-match"],
   };
   for (const [doc, claims] of Object.entries(mirrorClaims)) {
-    const normalized = (await readRepo(doc)).replace(/\r\n/g, "\n");
+    const normalized = squeeze((await readRepo(doc)).replace(/\r\n/g, "\n"));
     for (const claim of claims) {
-      assert.ok(normalized.includes(claim), `${doc} keeps its harness-agnostic rule: ${claim}`);
+      assert.ok(normalized.includes(squeeze(claim)), `${doc} keeps its harness-agnostic rule: ${claim}`);
     }
   }
 });

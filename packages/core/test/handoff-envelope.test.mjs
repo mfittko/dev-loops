@@ -1035,9 +1035,11 @@ test("unitBoundaries: a local unit that already has a PR opens no draft PR", () 
   }
 });
 
-test("unitBoundaries: linked PR ownership reaches the boundaries from resolver output", () => {
-  // Nothing here hand-writes the envelope's `linkedPr`: the route and its identities come
-  // from the authoritative resolver, so the assertion pins the PRODUCER of PR ownership.
+test("unitBoundaries: an issue with a linked PR routes to the PR unit, never a draft-PR local unit", () => {
+  // Nothing here hand-writes the envelope's ownership: the route and its identities come from
+  // the authoritative resolver, so the assertion pins the PRODUCER. An issue whose linked PR
+  // resolves re-targets to the PR route before gate selection, so the `prefer_local` local-phase
+  // branch is unreachable for it and no unit is told to open a draft PR it already has.
   const bundle = resolveAuthoritativeStartupResumeBundle({
     targetPreference: "prefer_local",
     currentState: {
@@ -1046,14 +1048,16 @@ test("unitBoundaries: linked PR ownership reaches the boundaries from resolver o
       status: "active", authorization: "needs_confirmation",
     },
     issueLinkageResolution: "resolved_linked_pr", issueReadiness: "ready",
-    issueAssignmentState: "assigned_to_copilot", artifactState: "not_applicable", loopState: "awaiting_triage",
+    issueAssignmentState: "assigned_to_copilot", artifactState: "open", loopState: "awaiting_triage",
   });
   assert.equal(bundle.bundleKind, "resolved", bundle.reason);
-  assert.equal(bundle.activeArtifact.kind, "local_phase");
-  assert.equal(bundle.activeArtifact.linkedPr, 77, "the local route keeps the issue's resolved PR ownership");
+  assert.equal(bundle.activeArtifact.kind, "pr", "the linked PR stays the canonical artifact");
+  assert.equal(bundle.activeArtifact.pr, 77);
+  assert.equal(bundle.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
   const env = buildDevLoopHandoffEnvelope(bundle, defaultSettings, {}, defaultOptions);
+  // Owning the PR drops the draft-PR boundary and resumes on the PR identity it already has.
   assert.deepEqual(env.unitBoundaries.handBackAfter, [UNIT_BOUNDARY.GATE_VERDICT_POSTED]);
-  assert.equal(env.unitBoundaries.resume.issue, 2335);
+  assert.deepEqual(env.unitBoundaries.resume, { kind: "loop_startup", issue: 2335, pr: 77, branch: null, phase: null });
 });
 
 test("unitBoundaries: a branch-only unit resumes by branch and validates on that identity alone", () => {
