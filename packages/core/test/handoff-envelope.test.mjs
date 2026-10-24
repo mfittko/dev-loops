@@ -1086,7 +1086,7 @@ test("unitBoundaries: absent where the route has no unit to hand back", () => {
 });
 
 test("unitBoundaries: the local-kind `linkedPr` guard opens no draft PR for a hand-written local bundle", () => {
-  // GUARD-LEVEL CASE, not producer reachability. `buildHandoffTarget`'s `linkedPr` forwarding
+  // GUARD-LEVEL CASE, not producer reachability. `deriveTarget`'s `linkedPr` forwarding
   // for the local kinds is the DEFENDED EXTENSION POINT: no shipped producer emits `linkedPr`
   // on a local target today (`buildStatusArtifactIdentity` copies only
   // kind/issue/pr/branch/phase, and the router's `prefer_local` target hardcodes
