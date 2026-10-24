@@ -81,7 +81,6 @@ function localBranchBundle(branch, opts = {}) {
         kind: DEV_LOOP_TARGET_KIND.LOCAL_BRANCH,
         branch,
         issue: opts.issue ?? null,
-        linkedPr: opts.linkedPr ?? null,
       },
     },
   };
@@ -98,7 +97,6 @@ function localPhaseBundle(phase, opts = {}) {
         kind: DEV_LOOP_TARGET_KIND.LOCAL_PHASE,
         phase,
         issue: opts.issue ?? null,
-        linkedPr: opts.linkedPr ?? null,
       },
     },
   };
@@ -1085,29 +1083,14 @@ test("unitBoundaries: absent where the route has no unit to hand back", () => {
   }
 });
 
-test("unitBoundaries: the local-kind `linkedPr` guard opens no draft PR for a hand-written local bundle", () => {
-  // GUARD-LEVEL CASE, not producer reachability. `deriveTarget`'s `linkedPr` forwarding
-  // for the local kinds is the DEFENDED EXTENSION POINT: no shipped producer emits `linkedPr`
-  // on a local target today (`buildStatusArtifactIdentity` copies only
-  // kind/issue/pr/branch/phase, and the router's `prefer_local` target hardcodes
-  // `linkedPr: null`), so this fixture supplies a shape only a test can create. It exists so
-  // that IF a producer starts emitting a local linked PR, the ownership rule already holds.
-  // The routed boundary a local unit actually receives today is pinned by the next test.
-  for (const input of [
-    localBranchBundle("feature/local", { issue: 2335, linkedPr: 77 }),
-    localPhaseBundle("tmp/plan.md", { linkedPr: 77 }),
-  ]) {
-    const env = buildDevLoopHandoffEnvelope(input, defaultSettings, {}, defaultOptions);
-    assert.deepEqual(env.unitBoundaries.handBackAfter, [UNIT_BOUNDARY.GATE_VERDICT_POSTED], `${input.bundle.activeArtifact.kind} with a PR`);
-  }
-});
-
 test("unitBoundaries: a routed local target receives the draft-PR boundary from the real producer", () => {
-  // PRODUCER REACHABILITY. The route and its identities come from the authoritative resolver,
-  // so this pins what a local unit is actually emitted at the head: the `prefer_local` target
-  // the router builds carries `linkedPr: null`, so a routed local phase owns no PR and stops
-  // at the draft PR before the gate verdict. If the forwarding the test above guards vanished,
-  // this case would stay green — which is why both exist, one per axis.
+  // PRODUCER REACHABILITY, the only axis that ships. The route and its identities come from
+  // the authoritative resolver, so this pins what a local unit is actually emitted at the head:
+  // no shipped producer puts a linked PR on a local artifact (`buildStatusArtifactIdentity`
+  // copies only kind/issue/pr/branch/phase, and the router's `prefer_local` target hardcodes
+  // `linkedPr: null`), so a routed local unit owns no PR and stops at the draft PR it opens
+  // before the gate verdict. `deriveTarget` therefore forwards no linked PR for the local
+  // kinds: a local artifact cannot supply one, so there is no hand-written shape left to guard.
   const bundle = resolveAuthoritativeStartupResumeBundle({
     targetPreference: "prefer_local",
     currentState: {

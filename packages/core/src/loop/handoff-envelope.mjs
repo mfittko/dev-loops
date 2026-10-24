@@ -291,9 +291,6 @@ function deriveTarget(bundle, repo) {
     if (!branch) throw new Error("handoff-envelope: local_branch target must include a non-empty branch name");
     target.branch = branch;
     if (Number.isInteger(artifact.issue) && artifact.issue > 0) target.issue = artifact.issue;
-    // Carried for every kind: `deriveUnitBoundaries` classifies PR ownership from it,
-    // so dropping it here would tell a local unit with a live PR to open a draft.
-    if (Number.isInteger(artifact.linkedPr) && artifact.linkedPr > 0) target.linkedPr = artifact.linkedPr;
   } else if (kind === DEV_LOOP_TARGET_KIND.LOCAL_PHASE) {
     const phase = trimmedOrNull(artifact.phase);
     const validIssue = Number.isInteger(artifact.issue) && artifact.issue > 0;
@@ -302,7 +299,6 @@ function deriveTarget(bundle, repo) {
     }
     if (phase) target.phase = phase;
     if (validIssue) target.issue = artifact.issue;
-    if (Number.isInteger(artifact.linkedPr) && artifact.linkedPr > 0) target.linkedPr = artifact.linkedPr;
   }
 
   return target;
@@ -634,11 +630,11 @@ export const STATELESS_UNIT_STRATEGIES = Object.freeze([
 function deriveUnitBoundaries(strategy, target) {
   if (strategy === null || STATELESS_UNIT_STRATEGIES.includes(strategy)) return undefined;
   const boundaries = [];
-  // A unit that owns no PR yet ends its phase by opening the draft PR. "Owns a PR"
-  // must read every kind's linked PR, not just the issue kind's, or a local work
-  // unit that already has one is wrongly told to open a draft. `target.pr` itself is
-  // already the PR kind's identity (the router refuses an issue target that carries
-  // `pr`), so only the linked-PR arm needs spelling out.
+  // A unit that owns no PR yet ends its phase by opening the draft PR. `target.pr` is
+  // already the PR kind's identity, so the bound-PR arm needs no spelling out; the
+  // only linked-PR source the envelope can carry is an issue artifact's `linkedPr`.
+  // The local kinds forward no linked PR: no shipped producer puts one on their
+  // artifacts, so every routed local unit stops at the draft PR it opens.
   const ownsPr = target.kind === DEV_LOOP_TARGET_KIND.PR
     || (Number.isInteger(target.linkedPr) && target.linkedPr > 0);
   if (!ownsPr) boundaries.push(UNIT_BOUNDARY.DRAFT_PR_OPENED);

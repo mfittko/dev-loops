@@ -61,12 +61,18 @@ alone.
 **`handBackAfter` is an ordered, first-match list.** A unit that owns no PR yet stops
 at the draft PR it opens; the verdict boundary then belongs to its successor, which
 resumes already owning that PR. A unit that already owns a PR has only the verdict
-boundary. PR ownership is read from a bound or linked PR for every target kind, not
-only for issue targets, so no route is told to open a draft it already has. The validator
-enforces the canonical order, so a reversed list is refused rather than silently
-inverting which boundary comes first. A route whose unit runs a gate round but posts no
-verdict of its own carries `gate_verdict_posted` as a recorded naming approximation,
-never as a boundary it can reach.
+boundary. PR ownership is read from a bound PR for every target kind, so no PR-owning
+route is told to open a draft it already has. A linked PR is a separate input, and the
+envelope reads it only where an artifact supplies one: no shipped producer supplies one
+on any target kind, because `buildStatusArtifactIdentity` copies only the target's
+`kind`, `issue`, `pr`, `branch` and `phase`, the router's `prefer_local` target hardcodes
+`linkedPr: null`, and an issue target with a linked PR re-targets to the PR kind in
+`toRoutableCanonicalState` before the envelope sees it. The envelope therefore forwards
+no linked PR for `local_branch` and `local_phase`, and every routed local unit opens its
+draft PR first. The validator enforces the canonical order, so a reversed list is refused
+rather than silently inverting which boundary comes first. A route whose unit runs a gate
+round but posts no verdict of its own carries `gate_verdict_posted` as a recorded naming
+approximation, never as a boundary it can reach.
 
 The field derives only from the route and target, so it sits inside the byte-stable
 envelope prefix and a fresh successor cache-reads it instead of re-billing it. No
