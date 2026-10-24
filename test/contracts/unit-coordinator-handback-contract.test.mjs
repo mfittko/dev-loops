@@ -93,6 +93,8 @@ const RULE_PROSE = {
     "the successor re-resolves `unitBoundaries.resume`",
     // The packet's closed field list has a slot for the successor dispatch's required input.
     "including the startup-output path your unit ran",
+    // The packet's closed field list also carries the optional open question (dod:8).
+    "and an open question if one is needed",
     // Both listed-but-unreachable verdict entries are recorded naming approximations.
     "recorded naming approximations",
   ],
@@ -102,6 +104,8 @@ const RULE_PROSE = {
     "unit identity, status, `nextAction`, evidence",
     // The same dispatch input the agent-side packet pins, on the contract surface this time.
     "including the startup-output path that unit ran",
+    // The packet's closed field list also carries the optional open question (dod:8).
+    "and an open question if one is needed",
     "150K-token cap",
     "at most 10% empty wakeups, measured against root turns rather than wait duration",
   ],

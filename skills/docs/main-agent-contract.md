@@ -133,7 +133,8 @@ The orchestrator dispatches one **fresh unit coordinator per phase**, never one 
 whole cycle. The boundary list is tooling-emitted: the handoff envelope carries `unitBoundaries`
 (`handBackAfter` + `resume`, derived from the target and route; see
 [Workflow Handoff Contract](workflow-handoff-contract.md#envelope-schema)). The unit hands back at
-the boundaries that field names.
+the **first** boundary that field names: `handBackAfter` is an ordered, first-match list, so a unit
+carrying both stops when it opens its draft PR and leaves the verdict boundary to its successor.
 
 On hand-back the orchestrator dispatches the successor by emitting the work order with
 `scripts/loop/emit-coordinator-work-order.mjs --input <startup-output path> --harness <claude|pi|codex> --entry <queue|direct>`

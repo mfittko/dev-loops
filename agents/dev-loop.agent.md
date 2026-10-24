@@ -110,8 +110,8 @@ emitted them — whichever of `issue`, `pr`, `branch` and `phase` the target car
 dominant issue-plus-PR route carries both `issue` and `pr`, and a phase-only unit carries `phase`
 alone. It is not an exclusive selector: do not narrow it in your hand-back, and leave the single
 identity flag a successor passes (exactly one of `--issue`, `--pr`, `--input`, `--plan-file` or
-`--spike`, with `--lightweight` an optional modifier for `--issue`) to that successor's own route
-input.
+`--spike`, with `--lightweight` an optional modifier for `--issue`, or alone for the issue-less
+PR-first path) to that successor's own route input.
 
 Never write or summarize the next coordinator's brief. Your hand-back to the orchestrator is a
 compact packet with exactly: unit identity, status, `nextAction`, evidence links (including the
