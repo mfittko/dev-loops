@@ -275,7 +275,9 @@ function deriveTarget(bundle, repo) {
       throw new Error("handoff-envelope: issue target must include a valid positive issue number");
     }
     target.issue = issue;
-    if (Number.isInteger(artifact.pr) && artifact.pr > 0) target.pr = artifact.pr;
+    // An issue target's PR arrives as `linkedPr`, never `pr`: the router refuses an issue
+    // target carrying `pr` (and re-targets an issue with a linked PR to the PR kind), so a
+    // forwarding of `artifact.pr` here would be an unreachable input with no AC row behind it.
     if (Number.isInteger(artifact.linkedPr) && artifact.linkedPr > 0) target.linkedPr = artifact.linkedPr;
   } else if (kind === DEV_LOOP_TARGET_KIND.PR) {
     const pr = artifact.pr;
@@ -612,10 +614,11 @@ function deriveUnitBoundaries(strategy, target) {
   const boundaries = [];
   // A unit that owns no PR yet ends its phase by opening the draft PR. "Owns a PR"
   // must read every kind's linked PR, not just the issue kind's, or a local work
-  // unit that already has one is wrongly told to open a draft.
+  // unit that already has one is wrongly told to open a draft. `target.pr` itself is
+  // already the PR kind's identity (the router refuses an issue target that carries
+  // `pr`), so only the linked-PR arm needs spelling out.
   const ownsPr = target.kind === DEV_LOOP_TARGET_KIND.PR
-    || (Number.isInteger(target.linkedPr) && target.linkedPr > 0)
-    || (Number.isInteger(target.pr) && target.pr > 0);
+    || (Number.isInteger(target.linkedPr) && target.linkedPr > 0);
   if (!ownsPr) boundaries.push(UNIT_BOUNDARY.DRAFT_PR_OPENED);
   // Every unit that runs a gate round hands back after its verdict is posted.
   boundaries.push(UNIT_BOUNDARY.GATE_VERDICT_POSTED);

@@ -86,6 +86,8 @@ const RULE_PROSE = {
     "fresh unit coordinator per phase",
     "never writes or summarizes the next brief",
     "unit identity, status, `nextAction`, evidence",
+    // The same dispatch input the agent-side packet pins, on the contract surface this time.
+    "including the startup-output path that unit ran",
     "150K-token cap",
     "at most 10% empty wakeups, measured against root turns rather than wait duration",
   ],

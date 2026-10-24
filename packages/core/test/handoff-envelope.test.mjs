@@ -1073,13 +1073,21 @@ test("unitBoundaries: a local unit that already has a PR opens no draft PR", () 
   }
 });
 
-test("unitBoundaries: an issue target carrying a bound PR opens no draft PR", () => {
-  // No other fixture carries a bound PR WITHOUT `linkedPr`, so the `target.pr` arm of PR
-  // ownership has no unitBoundaries evidence without this case: losing that arm would tell
-  // a unit whose PR already exists to open a draft it already has.
-  const env = buildDevLoopHandoffEnvelope(issueBundle(2483, { pr: 2900 }), defaultSettings, {}, defaultOptions);
-  assert.deepEqual(env.unitBoundaries.handBackAfter, [UNIT_BOUNDARY.GATE_VERDICT_POSTED]);
-  assert.deepEqual(env.unitBoundaries.resume, { kind: "loop_startup", issue: 2483, pr: 2900, branch: null, phase: null });
+test("unitBoundaries: an issue target carrying a bound PR is never a routed shape", () => {
+  // PR ownership on an issue target arrives as `linkedPr` (see the two fixtures above), never
+  // as `pr`: the route refuses an issue target that carries `pr` and re-targets an issue with a
+  // linked PR to the PR kind, so the envelope derives ownership without a `target.pr` arm. This
+  // pins that producer boundary, so re-adding a `target.pr` arm needs new evidence, not a guess.
+  const bundle = resolveAuthoritativeStartupResumeBundle({
+    currentState: {
+      target: { kind: "issue", issue: 2483, pr: 2900, linkedPr: null, branch: null, phase: null },
+      ownership: "copilot", nextActor: "copilot",
+      status: "active", authorization: "needs_confirmation",
+    },
+    issueLinkageResolution: "no_pr", issueReadiness: "ready",
+    issueAssignmentState: "assigned_to_copilot", artifactState: "open", loopState: "awaiting_triage",
+  });
+  assert.equal(bundle.bundleKind, "needs_reconcile", bundle.reason);
 });
 
 test("unitBoundaries: an issue with a linked PR routes to the PR unit, never a draft-PR local unit", () => {
