@@ -73,7 +73,7 @@ const RULE_PROSE = {
     "never writes or summarizes the next brief",
     "unit identity, status, `nextAction`, evidence",
     "150K-token cap",
-    "root turns",
+    "at most 10% empty wakeups, measured against root turns rather than wait duration",
   ],
 };
 

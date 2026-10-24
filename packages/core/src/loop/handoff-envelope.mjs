@@ -288,6 +288,9 @@ function deriveTarget(bundle, repo) {
     if (!branch) throw new Error("handoff-envelope: local_branch target must include a non-empty branch name");
     target.branch = branch;
     if (Number.isInteger(artifact.issue) && artifact.issue > 0) target.issue = artifact.issue;
+    // Carried for every kind: `deriveUnitBoundaries` classifies PR ownership from it,
+    // so dropping it here would tell a local unit with a live PR to open a draft.
+    if (Number.isInteger(artifact.linkedPr) && artifact.linkedPr > 0) target.linkedPr = artifact.linkedPr;
   } else if (kind === DEV_LOOP_TARGET_KIND.LOCAL_PHASE) {
     const phase = trimmedOrNull(artifact.phase);
     const validIssue = Number.isInteger(artifact.issue) && artifact.issue > 0;
@@ -296,6 +299,7 @@ function deriveTarget(bundle, repo) {
     }
     if (phase) target.phase = phase;
     if (validIssue) target.issue = artifact.issue;
+    if (Number.isInteger(artifact.linkedPr) && artifact.linkedPr > 0) target.linkedPr = artifact.linkedPr;
   }
 
   return target;
@@ -553,10 +557,13 @@ export const UNIT_BOUNDARY = Object.freeze({
   GATE_VERDICT_POSTED: "gate_verdict_posted",
 });
 
-// Routes that own no phase to hand back from: a read-only review runs one round and
-// produces no lifecycle gate evidence, and a wait route produces no unit at all.
+// Routes that own no phase to hand back from. `review` and `ui_review` run one
+// read-only round and produce no lifecycle gate evidence, and `wait_watch`
+// produces no unit at all; the public contract classes all three as pure
+// read/observe, so a boundary here would contradict the route's stop rules.
 const STATELESS_UNIT_STRATEGIES = Object.freeze([
   INTERNAL_DEV_LOOP_STRATEGY.REVIEW,
+  INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW,
   INTERNAL_DEV_LOOP_STRATEGY.WAIT_WATCH,
 ]);
 
@@ -565,15 +572,18 @@ const STATELESS_UNIT_STRATEGIES = Object.freeze([
  * already carries. Nothing here comes from a predecessor: `resume` names the
  * sanctioned re-resolution a successor runs against authoritative state.
  * Returns undefined for a route that has no unit to hand back (terminal
- * reconciliation, read-only review, wait) so the field never contradicts the
- * route's own stop rules.
+ * reconciliation, read-only review or ui-review, wait) so the field never
+ * contradicts the route's own stop rules.
  */
 function deriveUnitBoundaries(strategy, target) {
   if (strategy === null || STATELESS_UNIT_STRATEGIES.includes(strategy)) return undefined;
   const boundaries = [];
-  // A unit that owns no PR yet ends its phase by opening the draft PR.
+  // A unit that owns no PR yet ends its phase by opening the draft PR. "Owns a PR"
+  // must read every kind's linked PR, not just the issue kind's, or a local work
+  // unit that already has one is wrongly told to open a draft.
   const ownsPr = target.kind === DEV_LOOP_TARGET_KIND.PR
-    || (Number.isInteger(target.linkedPr) && target.linkedPr > 0);
+    || (Number.isInteger(target.linkedPr) && target.linkedPr > 0)
+    || (Number.isInteger(target.pr) && target.pr > 0);
   if (!ownsPr) boundaries.push(UNIT_BOUNDARY.DRAFT_PR_OPENED);
   // Every unit that runs a gate round hands back after its verdict is posted.
   boundaries.push(UNIT_BOUNDARY.GATE_VERDICT_POSTED);

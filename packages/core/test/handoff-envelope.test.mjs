@@ -81,6 +81,7 @@ function localBranchBundle(branch, opts = {}) {
         kind: DEV_LOOP_TARGET_KIND.LOCAL_BRANCH,
         branch,
         issue: opts.issue ?? null,
+        linkedPr: opts.linkedPr ?? null,
       },
     },
   };
@@ -97,6 +98,7 @@ function localPhaseBundle(phase, opts = {}) {
         kind: DEV_LOOP_TARGET_KIND.LOCAL_PHASE,
         phase,
         issue: opts.issue ?? null,
+        linkedPr: opts.linkedPr ?? null,
       },
     },
   };
@@ -930,8 +932,8 @@ test("cwd: startup inside the target's own worktree names that root, not a neste
     assert.ok(!deriveCwd(input.bundle, { repoRoot: expected }).includes(`${expected}/tmp/worktrees`));
   }
   // An issue-named checkout serving its PR is NOT the PR's own root, so the derivation still
-  // appends the PR namespace. The CLI builder never uses that path: it binds `worktreeCwd` from
-  // the live PR checkout instead. Pinned here so the boundary between the two stays explicit.
+  // appends the PR namespace. Most routes never consume that path: the CLI builder binds
+  // `worktreeCwd` from the live PR checkout instead. Pinned here so the boundary stays explicit.
   assert.equal(deriveCwd(prBundle(42).bundle, { repoRoot: worktreeRoot }), `${worktreeRoot}/tmp/worktrees/dev-loops/pr-42`);
   // A trailing separator is the same root, not a new one.
   assert.equal(deriveCwd(issueBundle(42).bundle, { repoRoot: `${worktreeRoot}/` }), worktreeRoot);
@@ -989,9 +991,21 @@ test("unitBoundaries: absent where the route has no unit to hand back", () => {
   };
   assert.equal(buildDevLoopHandoffEnvelope(reconcile, defaultSettings, {}, defaultOptions).unitBoundaries, undefined);
   // A read-only round and a wait route own no phase, so the field never contradicts their stop rules.
-  for (const strategy of [INTERNAL_DEV_LOOP_STRATEGY.REVIEW, INTERNAL_DEV_LOOP_STRATEGY.WAIT_WATCH]) {
+  for (const strategy of [INTERNAL_DEV_LOOP_STRATEGY.REVIEW, INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW, INTERNAL_DEV_LOOP_STRATEGY.WAIT_WATCH]) {
     const env = buildDevLoopHandoffEnvelope(prBundle(99, { strategy }), defaultSettings, {}, defaultOptions);
     assert.equal(env.unitBoundaries, undefined, `${strategy} has no unit boundary`);
+  }
+});
+
+test("unitBoundaries: a local unit that already has a PR opens no draft PR", () => {
+  // `linkedPr` must be carried for every target kind, not only the issue kind: otherwise a
+  // local branch or phase whose PR already exists is told to open a draft it already has.
+  for (const input of [
+    localBranchBundle("feature/local", { issue: 2335, linkedPr: 77 }),
+    localPhaseBundle("tmp/plan.md", { linkedPr: 77 }),
+  ]) {
+    const env = buildDevLoopHandoffEnvelope(input, defaultSettings, {}, defaultOptions);
+    assert.deepEqual(env.unitBoundaries.handBackAfter, [UNIT_BOUNDARY.GATE_VERDICT_POSTED], `${input.bundle.activeArtifact.kind} with a PR`);
   }
 });
 

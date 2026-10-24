@@ -81,17 +81,20 @@ every mapped wrapper exists on disk and fails closed if one is renamed/removed.
 One coordinator runs one phase. `unitBoundaries` tells it where its unit ends, so no orchestrator
 brief has to restate the boundary:
 
-- `handBackAfter` lists the deterministic hand-back points for this route, from the closed set
-  `draft_pr_opened` (a unit that owns no PR yet, so opening the draft PR ends its phase) and
+- `handBackAfter` lists the deterministic hand-back points for this route, in order, from the closed
+  set `draft_pr_opened` (a unit that owns no PR yet, so opening the draft PR ends its phase) and
   `gate_verdict_posted` (every unit that runs a gate round hands back after posting the verdict).
+  **The list is ordered and first-match**: a unit that carries both stops at the draft PR it opens,
+  and the verdict boundary applies to its successor, which resumes already owning that PR.
 - `resume` names the authoritative re-resolution a successor runs (`kind: loop_startup` plus the
   issue, PR, branch or phase identity). It is derived from the envelope's own target, so **no successor
   field derives from the predecessor's conversation** and the predecessor never writes or
   summarizes the next brief.
 
 The field is absent where the route has no unit to hand back: a terminal reconciliation envelope
-(`stopRules` are already terminal), a read-only `review` round (one round, no lifecycle gate
-evidence) and `wait_watch` (no unit runs). That keeps the field from contradicting a route's own
+(`stopRules` are already terminal), a read-only `review` or `ui_review` round (one round, no
+lifecycle gate evidence) and `wait_watch` (no unit runs). Those are exactly the routes the public
+contract classes as pure read/observe. That keeps the field from contradicting a route's own
 stop rules. Because it derives only from target and strategy, it stays inside the byte-stable prefix.
 
 ## Acceptance templates
