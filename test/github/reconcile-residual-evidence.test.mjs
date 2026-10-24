@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,13 +7,23 @@ import { test } from "bun:test";
 import { loadDevLoopConfig, resolveGateAngleContract } from "@dev-loops/core/config";
 import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
-import { pullWorkOrder, pullReceiptPath, workOrderDigest } from "../../scripts/github/_work-order-protocol.mjs";
+import { pullWorkOrder, pullReceiptPath, workOrderDigest, executionIndexPath, materializationHash } from "../../scripts/github/_work-order-protocol.mjs";
+import { renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
+import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
+import { consolidateFanin, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
+import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
+import { consolidateGateFanin } from "../../scripts/loop/consolidate-fanin.mjs";
 import "../../scripts/github/pull-work-order.mjs";
 import { buildGateEmitPlanPath, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { runIdFreeEnv } from "../_helpers.mjs";
-import { parseResidualEvidenceArgs, snapshotResidualEvidence, verifyResidualEvidenceSnapshot } from "../../scripts/github/reconcile-residual-evidence.mjs";
+import { parseResidualEvidenceArgs, snapshotResidualEvidence, verifyResidualEvidenceSnapshot, verifyResidualEvidenceAcceptance, acceptResidualEvidence } from "../../scripts/github/reconcile-residual-evidence.mjs";
 
-const HEAD = "b".repeat(40), BASE = "a".repeat(40);
+const tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const baseCommit = `tree ${tree}\nauthor Test <test@example.com> 1700000000 +0000\ncommitter Test <test@example.com> 1700000000 +0000\n\nbaseline\n`;
+const BASE = execFileSync("git", ["hash-object", "-t", "commit", "--stdin"], { input: baseCommit }).toString().trim();
+const headCommit = baseCommit.replace(`tree ${tree}`, `tree ${tree}\nparent ${BASE}`).replace("baseline\n", "candidate\n");
+const HEAD = execFileSync("git", ["hash-object", "-t", "commit", "--stdin"], { input: headCommit }).toString().trim();
 const TARGET = { repo: "o/r", pr: 7, headSha: HEAD };
 const hash = (bytes) => sha256Hex(bytes).slice(7);
 const put = async (file, value) => {
@@ -21,33 +31,79 @@ const put = async (file, value) => {
   await writeFile(file, typeof value === "string" ? value : JSON.stringify(value));
 };
 
-async function fixture(fn, harness = "pi", alterReads) {
+test("acceptance requires an explicit canonical snapshot and rejects mixed modes", () => {
+  const args = ["--repo", "o/r", "--pr", "7", "--head-sha", HEAD, "--baseline", BASE, "--angle", "coverage", "--fixer-plan", "/plan"];
+  assert.throws(() => parseResidualEvidenceArgs([...args, "--accept"]), /snapshot/);
+  assert.throws(() => parseResidualEvidenceArgs([...args, "--snapshot", "/snapshot"]), /accept/);
+  assert.throws(() => parseResidualEvidenceArgs([...args, "--accept", "--snapshot", "/snapshot", "--record"]), /mode/);
+  assert.equal(typeof verifyResidualEvidenceAcceptance, "function");
+});
+
+async function fixture(fn, harness = "pi", alterReads, continuation = false, mixed = false) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "residual-evidence-")));
   try {
+    const git = (args, input) => execFileSync("git", args, { cwd: root, input, stdio: ["pipe", "pipe", "pipe"] });
+    git(["init", "--quiet"]);
+    git(["mktree"], "");
+    for (const input of [baseCommit, headCommit]) git(["hash-object", "-t", "commit", "-w", "--stdin"], input);
+    git(["update-ref", "refs/heads/fixture", HEAD]);
+    await put(path.join(root, ".devloops"), "version: 1\ngates:\n  fanout:\n    mode: per-angle\n");
     const tmpRoot = path.join(root, "tmp");
     const key = { ...TARGET, gate: "draft_gate", tmpRoot };
     const act = ["1".repeat(16), "2".repeat(16)].map((fingerprint) => ({ fingerprint, angle: "coverage", severity: "medium", summary: fingerprint, judgeDisposition: "act" }));
+    if (mixed) act.push({ ...act[0], fingerprint: "3".repeat(16) });
     const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: act });
     const delta = { reviewBaselineHead: BASE, candidateHead: HEAD, actSetId: sequence.actSetId, outcome: "bounded_out",
-      actionableItems: sequence.actItems.map(({ ref }) => ({ ref, status: "cannot_verify", evidence: ["qualification missing"] })),
+      actionableItems: sequence.actItems.map(({ ref }, i) => ({ ref, status: mixed && i === 2 ? "resolved" : "cannot_verify", evidence: ["qualification missing"] })),
       newFindings: [], widenedReads: [] };
+    if (continuation) delta.siteCoverageDigest = hash([]);
     const decision = { ...delta, invocation: 3, nextStep: "push_to_gate", items: delta.actionableItems.map(({ ref, status }) => ({ ref, status })) };
     const fixerDir = path.join(tmpRoot, "gate-fixer", "o-r", "pr-7");
     const fixerPlan = path.join(fixerDir, "fixer-emit-plan.json");
-    const reads = ["act-list", "delta-result"].map((kind, i) => ({ kind, path: path.join(fixerDir, `${kind}.json`), sha256: hash(JSON.stringify([act, delta][i])), required: true }));
+    const reads = ["act-list", "delta-result"].map((kind, i) => ({ kind, path: path.join(fixerDir, `${kind}.json`), sha256: hash(JSON.stringify([act, delta][i])), bytes: Buffer.byteLength(JSON.stringify([act, delta][i])), required: true }));
     for (const [i, read] of reads.entries()) await put(read.path, [act, delta][i]);
     const fixer = { executionIdentity: "f1799999999000-1234abcd",
       workOrderRef: `fixer:o/r#7:${BASE}:f1799999999000-1234abcd`,
-      workOrder: { role: "fixer", phase: "full", source: "act-list", target: { repo: "o/r", pr: 7 }, headSha: BASE,
+      workOrder: { role: "fixer", phase: continuation ? "commit_only" : "full", source: "act-list", gate: "pre_approval_gate", target: { repo: "o/r", pr: 7 }, headSha: BASE,
+        mutationAuthority: { branch: "fixture", allowedPaths: ["qualification.json"] }, executionRules: { contract: path.resolve(import.meta.dirname, "../../agents/fixer.agent.md"), mutation: "scoped", validation: "targeted" },
         requiredReads: reads, outputRefs: [path.join(fixerDir, "f1799999999000-1234abcd", "fixer-disposition.json")] } };
     fixer.workOrder.authority = { sourceDigest: sha256Hex(act).slice(7), deltaResultDigest: sha256Hex(delta).slice(7) };
     fixer.workOrderDigest = workOrderDigest(fixer.workOrder);
+    fixer.promptPath = path.join(fixerDir, "work-orders", `${fixer.executionIdentity}.md`);
+    const prompt = renderWorkOrder(fixer.workOrder);
+    fixer.materializationHash = materializationHash(prompt);
+    await put(fixer.promptPath, prompt);
     await put(fixerPlan, fixer);
-    const handoff = JSON.stringify({ headSha: HEAD, dispositions: [{ threadId: "PRRT_one", disposition: "deferred", fixingCommitSha: HEAD }] });
-    await put(pullReceiptPath(tmpRoot, fixer.workOrderRef), { role: "fixer", workOrderRef: fixer.workOrderRef,
-      workOrderDigest: fixer.workOrderDigest, executionIdentity: fixer.executionIdentity, subject: { planPath: fixerPlan } });
+    await put(executionIndexPath(tmpRoot, fixer.executionIdentity), Object.fromEntries(["executionIdentity", "workOrderRef", "workOrderDigest"].map((k) => [k, fixer[k]])));
+    const handoff = JSON.stringify({ headSha: HEAD, siteCoverage: [], dispositions: [{ threadId: "PRRT_one", disposition: "deferred", fixingCommitSha: HEAD },
+      ...(mixed ? [{ threadId: "PRRT_fixed", disposition: "tackled", fixingCommitSha: HEAD }] : [])] });
+    await pullWorkOrder({ ref: fixer.workOrderRef, digest: fixer.workOrderDigest, execution: fixer.executionIdentity, cwd: root, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
     await put(fixer.workOrder.outputRefs[0], handoff);
     await put(`${fixer.workOrder.outputRefs[0]}.constructed`, sha256Hex(handoff));
+    if (continuation) {
+      const original = structuredClone(fixer), origin = Object.fromEntries(["executionIdentity", "workOrderRef", "workOrderDigest"].map((k) => [k, fixer[k]]));
+      await put(path.join(fixerDir, original.executionIdentity, "original-fixer-emit-plan.json"), original);
+      fixer.executionIdentity = "f1799999999001-1234abcd";
+      fixer.workOrderRef = `fixer:o/r#7:${HEAD}:${fixer.executionIdentity}`;
+      const completion = { headSha: HEAD, fixingCommitSha: HEAD, siteCoverage: [], origin,
+        threadBindings: [{ threadId: "PRRT_one", fingerprints: act.map((a) => a.fingerprint) }] };
+      const input = path.join(fixerDir, fixer.executionIdentity, "completion-input.json"), bytes = JSON.stringify(completion);
+      await put(input, bytes);
+      fixer.workOrder = { ...fixer.workOrder, phase: "full", operation: "complete", headSha: HEAD,
+        mutationAuthority: { branch: "fixture", allowedPaths: [] }, requiredReads: [...reads, { kind: "completion-input", path: input, sha256: hash(bytes), bytes: Buffer.byteLength(bytes), required: true }],
+        authority: { ...fixer.workOrder.authority, completionInputDigest: hash(completion), completionInputBytesDigest: hash(bytes) },
+        outputRefs: [path.join(fixerDir, fixer.executionIdentity, "fixer-disposition.json")] };
+      fixer.workOrderDigest = workOrderDigest(fixer.workOrder);
+      fixer.promptPath = path.join(fixerDir, "work-orders", `${fixer.executionIdentity}.md`);
+      const text = renderWorkOrder(fixer.workOrder);
+      fixer.materializationHash = materializationHash(text);
+      await put(fixer.promptPath, text);
+      await put(fixerPlan, fixer);
+      await put(executionIndexPath(tmpRoot, fixer.executionIdentity), Object.fromEntries(["executionIdentity", "workOrderRef", "workOrderDigest"].map((k) => [k, fixer[k]])));
+      await pullWorkOrder({ ref: fixer.workOrderRef, digest: fixer.workOrderDigest, execution: fixer.executionIdentity, cwd: root, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
+      await put(fixer.workOrder.outputRefs[0], handoff);
+      await put(`${fixer.workOrder.outputRefs[0]}.constructed`, sha256Hex(handoff));
+    }
     const decisionPath = path.join(tmpRoot, "gate-delta", `${BASE}.json`);
     await put(decisionPath, decision);
     const supplemental = path.join(root, "qualification.json");
@@ -72,11 +128,11 @@ async function fixture(fn, harness = "pi", alterReads) {
     execFileSync(process.execPath, [new URL("../../scripts/github/emit-fanout-dispatch.mjs", import.meta.url).pathname,
       "--repo", "o/r", "--pr", "7", "--gate", "draft_gate", "--head-sha", HEAD], { cwd: root });
     const plan = JSON.parse(await readFile(planPath)), units = plan.units;
-    const rootBody = act.map((a) => `<!-- dev-loops:finding ${a.fingerprint} -->`).join("\n");
+    const rootBody = act.slice(0, 2).map((a) => `<!-- dev-loops:finding ${a.fingerprint} -->`).join("\n");
     const assessment = { ...TARGET, reviewBaselineHead: BASE, actSetId: sequence.actSetId,
       deltaResultSha256: hash(JSON.stringify(delta)), decisionSha256: hash(JSON.stringify(decision)),
       roots: [{ threadId: "PRRT_one", rootCommentId: "PRRC_one", rootSha256: hash(rootBody),
-        members: sequence.actItems.map(({ ref }) => ({ ref, conclusion: "resolved", evidence: ["qualification.json:1"] })) }],
+        members: sequence.actItems.slice(0, 2).map(({ ref }) => ({ ref, conclusion: "resolved", evidence: ["qualification.json:1"] })) }],
       supplementalFiles: [{ path: supplemental, sha256: hash(await readFile(supplemental)) }],
       limitations: ["Unknown effective model and effort; configured resumed execution unqualified."] };
     for (const unit of units) {
@@ -87,11 +143,30 @@ async function fixture(fn, harness = "pi", alterReads) {
     }
     const calls = [], mutations = [];
     const state = { head: HEAD };
+    if (mixed) state.extraRoots = [{ id: "PRRT_fixed", isResolved: false, comments: { nodes: [
+      { id: "PRRC_fixed", databaseId: 3, author: { login: "owner" }, body: `<!-- dev-loops:finding ${act[2].fingerprint} -->` },
+    ], pageInfo: { hasNextPage: false } } }];
     const deps = { repoRoot: root, env: runIdFreeEnv(), ghCommand: "gh", runChild: async (command, args) => {
       calls.push({ command, args });
+      if (command === "git") {
+        const result = spawnSync(command, args, { cwd: root, encoding: "utf8" });
+        return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+      }
       if (args.includes("POST") || args.includes("PATCH") || args.includes("DELETE") || args.some((a) => /mutation\s*\{/.test(a))) mutations.push(args);
       const ok = (value) => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
-      if (args[0] === "pr" && args[1] === "view") return ok({ headRefOid: state.head });
+      if (command === process.execPath && args[0].endsWith("verify-fixer-disposition.mjs")) {
+        if (state.legacyOk) return ok({ ok: true });
+        const verified = await verifyFixerDisposition({ ...options, check: true }, deps);
+        state.deliveryVerified = true;
+        await state.duringDelivery?.();
+        return ok(verified);
+      }
+      if (args[0] === "pr" && args[1] === "view") return ok({ headRefOid: state.head, statusCheckRollup: [{ name: "tests" }] });
+      if (args.some((a) => a.includes("/check-runs"))) return ok({ check_runs: state.checks ?? [{ name: "tests", status: "completed", conclusion: "success", head_sha: HEAD }] });
+      if (args.some((a) => a.includes("/status?"))) { await state.afterCi?.(); return ok({ statuses: [] }); }
+      if (args.some((a) => a.includes("/compare/"))) return ok({ status: "ahead" });
+      if (args.some((a) => a.includes("/comments"))) return ok(state.comments ?? []);
+      if (args.some((a) => a.includes("/reviews"))) return ok([]);
       if (args.includes("user")) return ok({ login: "owner" });
       if (args.includes("graphql")) return ok({ data: { repository: { pullRequest: { reviewThreads: {
         nodes: [{ id: "PRRT_one", isResolved: false, comments: {
@@ -108,6 +183,171 @@ async function fixture(fn, harness = "pi", alterReads) {
     assert.deepEqual(mutations, []);
   } finally { await rm(root, { recursive: true, force: true }); }
 }
+
+async function acceptanceFixture(fn, harness = "pi", findings = [], continuation = false, mixed = false) {
+  return fixture(async (f) => {
+    const raw = JSON.parse(await readFile(f.resultPath));
+    raw.findings = findings;
+    raw.verdict = findings.length ? "findings_present" : "clean";
+    await put(f.resultPath, raw);
+    const results = await Promise.all(f.plan.units.map((u) => readFile(u.workOrder.outputRefs[0]).then(JSON.parse)));
+    const consolidated = consolidateFanin({ angleResults: results });
+    const projected = structuredClone(consolidated.findings);
+    const truncate = (s, n = 2000) => s.length <= n ? s : `${s.slice(0, n - 2)} …`;
+    for (const finding of projected) {
+      for (const k of ["summary", "recommendation", "failingCase"]) if (finding[k]) finding[k] = truncate(neutralizeBareIssuePrIds(finding[k]));
+      if (finding.file) finding.file = truncate(finding.file, 300);
+    }
+    const input = path.join(f.root, "findings-input.json");
+    const provenance = { distinctReviewers: f.plan.units.length, perAngle: f.plan.units.flatMap((u) => u.angles.map((angle) => ({ angle, dispatchId: u.executionIdentity, ...(u.group ? { group: u.group } : {}) }))) };
+    await put(input, { overallVerdict: consolidated.verdict, provenance, findings: toFindingsLogShape(projected).map((v) => ({ ...v, judgeDisposition: "reject", judgeRationale: "Outside this issue scope" })) });
+    const written = await writeGateFindingsLog({ ...TARGET, gate: "draft_gate", verdict: consolidated.verdict, findingsFile: input, executionMode: "fanout_fanin", emitPlan: f.planPath }, { repoRoot: f.root });
+    const ledgerPath = path.resolve(f.root, written.path);
+    const time = new Date(Date.now() + 1000).toISOString();
+    f.state.comments = [{ id: 12, updated_at: time, body: [
+      "### Gate review: `draft_gate`", `**Reviewed head SHA:** \`${HEAD}\``, `**Verdict:** ${consolidated.verdict}`,
+      "**Findings summary:** authenticated full round", "**Next action:** residual acceptance", "**Execution mode:** fanout_fanin",
+      "**Size-budget outcome:** pass", "**Size-budget T1 slice:** not touched", "**Size-budget waiver:** none",
+    ].join("\n") }];
+    const snapshot = await snapshotResidualEvidence(f.options, f.deps);
+    f.options = { ...f.options, accept: true, record: false, snapshot: snapshot.snapshotPath };
+    await fn({ ...f, ledgerPath });
+  }, harness, undefined, continuation, mixed);
+}
+
+test("requires completed mixed resolved/residual delivery while preserving legitimate deferral", async () => acceptanceFixture(async (f) => {
+  const delivery = await verifyFixerDisposition({ ...f.options, check: true }, f.deps);
+  assert.equal(delivery.ok, true);
+  assert.equal(delivery.complete, false);
+  assert.deepEqual(delivery.incomplete.map(({ threadId, failedStep }) => ({ threadId, failedStep })),
+    [{ threadId: "PRRT_fixed", failedStep: "reply_missing" }]);
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), /full delivery check failed/);
+  await assert.rejects(readdir(path.join(path.dirname(path.dirname(f.options.snapshot)), "accepted")), { code: "ENOENT" });
+  const fixed = f.state.extraRoots[0];
+  fixed.comments.nodes.push({ id: "PRRC_fixed_reply", databaseId: 4, author: { login: "owner" }, body: `Fixed in ${HEAD}` });
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), /full delivery check failed/);
+  fixed.isResolved = true;
+  assert.equal((await acceptResidualEvidence(f.options, f.deps)).status, "accepted");
+}, "pi", [], false, true));
+
+for (const harness of ["pi", "claude", "codex"]) test(`accepts actual pulled ${harness} proof additively and idempotently`, async () => acceptanceFixture(async (f) => {
+  const paths = [f.options.snapshot, f.options.fixerPlan, f.decisionPath, ...f.fixer.workOrder.requiredReads.map((r) => r.path)];
+  const before = await Promise.all(paths.map((p) => readFile(p)));
+  const verified = await verifyResidualEvidenceAcceptance(f.options, f.deps);
+  assert.equal(verified.status, "accepted");
+  await assert.rejects(readdir(path.join(path.dirname(path.dirname(f.options.snapshot)), "accepted")), { code: "ENOENT" });
+  const accepted = await acceptResidualEvidence(f.options, f.deps);
+  assert.equal(accepted.applied, false);
+  assert.notEqual(accepted.reconciliationPath, accepted.snapshotPath);
+  assert.equal((await acceptResidualEvidence(f.options, f.deps)).reconciliationPath, accepted.reconciliationPath);
+  assert.deepEqual(await Promise.all(paths.map((p) => readFile(p))), before);
+  assert.equal(f.calls.some((c) => c.args.some((a) => a.includes("check-pre-push-delta"))), false);
+}, harness));
+
+const acceptanceNegatives = {
+  unauthenticatedLegacySuccess: async (f) => { f.state.legacyOk = true; await rm(f.fixer.promptPath); },
+  foreignFixerIndex: async (f) => { await put(executionIndexPath(f.tmpRoot, f.fixer.executionIdentity), { executionIdentity: "foreign" }); },
+  missingFixerReceipt: async (f) => { await rm(pullReceiptPath(f.tmpRoot, f.fixer.workOrderRef)); },
+  unknownLedgerField: async (f, ledger) => { ledger.coordinatorAccepted = true; },
+  cleanLedgerOverHigh: async (f, ledger) => { ledger.findings = []; ledger.overallVerdict = "clean"; ledger.verdict = "clean"; },
+  droppedMember: async (f, ledger) => { ledger.findings.pop(); },
+  duplicateMember: async (f, ledger) => { ledger.findings.push(ledger.findings[0]); },
+  inventedMember: async (f, ledger) => { ledger.findings[0].summary = "invented"; },
+  alteredSourceField: async (f, ledger) => { ledger.findings[0].disposition = "deferred"; },
+  unknownFindingField: async (f, ledger) => { ledger.findings[0].trusted = true; },
+  badClusterStamp: async (f, ledger) => { ledger.findings[0].clusterId = 999; },
+  badJudgeVocabulary: async (f, ledger) => { ledger.findings[0].judgeDisposition = "ignore"; },
+  missingDeferEvidence: async (f, ledger) => { ledger.findings[0].judgeDisposition = "defer"; },
+  openAct: async (f, ledger) => { ledger.findings[0].judgeDisposition = "act"; },
+  contradictoryOverall: async (f, ledger) => { ledger.overallVerdict = "clean"; },
+  contradictoryComposed: async (f, ledger) => { ledger.verdict = "clean"; },
+  cleanMarkerOverHigh: async (f) => { f.state.comments[0].body = f.state.comments[0].body.replace("**Verdict:** findings_present", "**Verdict:** clean"); },
+  oldGate: async (f) => { f.state.comments[0].updated_at = "2020-01-01T00:00:00Z"; },
+  wrongPairing: async (f, ledger) => { ledger.provenance.perAngle[1].dispatchId = ledger.provenance.perAngle[0].dispatchId; },
+  missingAngle: async (f) => { await rm(f.plan.units[0].workOrder.outputRefs[0]); },
+  carriedResult: async (f) => { const result = JSON.parse(await readFile(f.resultPath)); await put(f.resultPath, { ...result, carriedFromHead: BASE }); },
+  pendingCi: async (f) => { f.state.checks = [{ name: "tests", status: "in_progress", conclusion: null }]; },
+  failedCi: async (f) => { f.state.checks = [{ name: "tests", status: "completed", conclusion: "failure" }]; },
+  noChecks: async (f) => { f.state.checks = []; },
+  verifierWindowReport: async (f) => { f.state.duringDelivery = () => put(f.fixer.workOrder.outputRefs[0], { headSha: HEAD, dispositions: [] }); },
+  verifierWindowMarker: async (f) => { f.state.duringDelivery = () => put(`${f.fixer.workOrder.outputRefs[0]}.constructed`, "replacement"); },
+  verifierWindowReceipt: async (f) => { f.state.duringDelivery = () => put(pullReceiptPath(f.tmpRoot, f.fixer.workOrderRef), {}); },
+  verifierWindowSupplement: async (f) => { f.state.duringDelivery = () => put(f.supplemental, "replacement"); },
+  verifierWindowHead: async (f) => { f.state.duringDelivery = () => { f.state.head = BASE; }; },
+};
+for (const [name, alter] of Object.entries(acceptanceNegatives)) test(`acceptance refuses ${name}`, async () => acceptanceFixture(async (f) => {
+  const ledger = JSON.parse(await readFile(f.ledgerPath));
+  await alter(f, ledger);
+  await put(f.ledgerPath, ledger);
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps));
+  await assert.rejects(readdir(path.join(path.dirname(path.dirname(f.options.snapshot)), "accepted")), { code: "ENOENT" });
+  if (name.startsWith("verifierWindow")) assert.equal(f.state.deliveryVerified, true);
+}, "pi", [{ severity: "high", summary: "authenticated high", file: "a.mjs", line: 1 }, { severity: "low", summary: "all members retained" }]));
+
+for (const disposition of ["reject", "defer", "act"]) test(`preserves ${disposition} with strict severity floor and complete reordered multiset`, async () => acceptanceFixture(async (f) => {
+  const ledger = JSON.parse(await readFile(f.ledgerPath));
+  for (const finding of ledger.findings) Object.assign(finding, { judgeDisposition: disposition,
+    ...(disposition === "defer" ? { followUpDraft: { title: "Follow up", body: "Evidence retained" } } : {}),
+    ...(disposition === "act" ? { remedyKind: "evidence_only" } : {}) });
+  ledger.findings.reverse();
+  await put(f.ledgerPath, ledger);
+  const proof = await verifyResidualEvidenceAcceptance(f.options, f.deps);
+  assert.equal(proof.proof.verdict, "findings_present");
+}, "pi", [{ severity: "high", summary: "one" }, { severity: "high", summary: "one" }]));
+
+test("private projection matches lossless canonical clustering, long prose/paths and bare references", async () => acceptanceFixture(async (f) => {
+  const output = path.join(f.root, "parity-ledger.json");
+  const findingsDir = path.dirname(f.resultPath);
+  await consolidateGateFanin({ findingsDir, headSha: HEAD, ledgerOut: output, repoRoot: f.root });
+  const canonical = JSON.parse(await readFile(output));
+  const ledger = JSON.parse(await readFile(f.ledgerPath));
+  assert.equal(canonical.findings.length, ledger.findings.length);
+  for (let i = 0; i < ledger.findings.length; i++) Object.assign(ledger.findings[i], { clusterId: canonical.findings[i].clusterId });
+  await put(f.ledgerPath, ledger);
+  await verifyResidualEvidenceAcceptance(f.options, f.deps);
+  assert.equal(canonical.findings[0].summary.includes("#123"), false);
+  assert.equal(canonical.findings[0].summary.length, 2000);
+  assert.equal(canonical.findings[0].files[0].length, 300);
+  assert.notEqual(canonical.findings[0].clusterId, canonical.findings[1].clusterId);
+}, "pi", ["first", "second"].map((tail) => ({ severity: "medium", summary: `issue #123 ${"x".repeat(2200)} ${tail}`, file: "a".repeat(350), line: 1, recommendation: `${"r".repeat(2100)}${tail}`, failingCase: "c".repeat(2100) }))));
+
+test("authenticates delivery-only continuation and its original pulled commit-only execution", async () => acceptanceFixture(async (f) => {
+  const proof = await verifyResidualEvidenceAcceptance(f.options, f.deps);
+  assert.equal(proof.status, "accepted");
+  const originPath = proof.sources.find((s) => s.path.endsWith("original-fixer-emit-plan.json")).path;
+  const original = JSON.parse(await readFile(originPath));
+  await put(executionIndexPath(f.tmpRoot, original.executionIdentity), { executionIdentity: "foreign" });
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), /execution index/);
+}, "codex", [], true));
+
+for (const alter of [
+  (v) => { v.status = "accepted"; }, (v) => { v.coordinatorAccepted = true; },
+  (v) => { v.provenance.roundId = "foreign"; }, (v) => { v.sources[0].base64 = Buffer.from("forged").toString("base64"); },
+]) test("rejects content-addressed but fabricated snapshot proof", async () => acceptanceFixture(async (f) => {
+  const snapshot = JSON.parse(await readFile(f.options.snapshot));
+  alter(snapshot);
+  const text = JSON.stringify(snapshot), forged = path.join(path.dirname(f.options.snapshot), `${hash(text)}.json`);
+  await put(forged, text);
+  await assert.rejects(acceptResidualEvidence({ ...f.options, snapshot: forged }, f.deps), /snapshot/);
+}));
+
+test("final publication reauthenticates sources and refuses replacement after CI", async () => acceptanceFixture(async (f) => {
+  let observations = 0;
+  f.state.afterCi = async () => { if (++observations === 4) await put(f.supplemental, "final replacement"); };
+  // Delivery also reads CI; the fourth observation is the final acceptance pass.
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps));
+  await assert.rejects(readdir(path.join(path.dirname(path.dirname(f.options.snapshot)), "accepted")).then((files) => {
+    assert.equal(files.some((file) => file.endsWith(".json")), false);
+    throw Object.assign(new Error("no published proof"), { code: "ENOENT" });
+  }), { code: "ENOENT" });
+}));
+
+test("accepted content is immutable even when a conflicting existing record has its name", async () => acceptanceFixture(async (f) => {
+  const accepted = await acceptResidualEvidence(f.options, f.deps);
+  await put(accepted.reconciliationPath, "conflicting bytes");
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), /record collision/);
+  assert.equal(await readFile(accepted.reconciliationPath, "utf8"), "conflicting bytes");
+}));
 
 test("distinct live roots sharing fingerprints retain every root and member", async () => fixture(async (f) => {
   f.state.extraRoots = [{ id: "PRRT_shared", isResolved: false, comments: {
