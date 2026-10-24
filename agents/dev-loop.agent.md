@@ -107,9 +107,11 @@ You never re-resolve `unitBoundaries.resume` yourself, and the orchestrator neve
 path you name. When that successor starts, the successor re-resolves `unitBoundaries.resume`
 against authoritative state. That field carries the unit's own identities exactly as the producer
 emitted them — whichever of `issue`, `pr`, `branch` and `phase` the target carries — so the
-dominant issue-plus-PR route carries both `issue` and `pr` and a plan-file, spike or lightweight
-phase carries `phase` alone. It is not an exclusive selector: do not narrow it in your hand-back,
-and leave the single identity flag a successor passes to that successor's own route input.
+dominant issue-plus-PR route carries both `issue` and `pr`, and a phase-only unit carries `phase`
+alone. It is not an exclusive selector: do not narrow it in your hand-back, and leave the single
+identity flag a successor passes (exactly one of `--issue`, `--pr`, `--input`, `--plan-file` or
+`--spike`, with `--lightweight` an optional modifier for `--issue`) to that successor's own route
+input.
 
 Never write or summarize the next coordinator's brief. Your hand-back to the orchestrator is a
 compact packet with exactly: unit identity, status, `nextAction`, evidence links (including the

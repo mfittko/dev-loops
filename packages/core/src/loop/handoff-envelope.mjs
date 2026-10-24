@@ -653,17 +653,19 @@ function deriveUnitBoundaries(strategy, target) {
     // `toRoutableCanonicalState`, and `deriveTarget` above keeps the issue as the PR unit's
     // cross-link). There is no XOR here and no precedence rule to apply; the validator
     // requires only a non-empty, well-typed set. A phase label identifies the artifact — the
-    // no-number case; which startup mode re-resolves it (`--plan-file`, `--spike`, the
-    // lightweight path), like the single identity flag a successor passes, is that
-    // successor's own route input, never something the predecessor decides by writing this
-    // field.
+    // no-number case when the target carries no issue, pr or branch; which startup mode
+    // re-resolves it (`--plan-file`, `--spike`, the lightweight path), like the single identity
+    // flag a successor passes, is that successor's own route input, never something the
+    // predecessor decides by writing this field.
     resume: {
       kind: "loop_startup",
       issue: Number.isInteger(target.issue) && target.issue > 0 ? target.issue : null,
       pr: Number.isInteger(target.pr) && target.pr > 0 ? target.pr : null,
       branch: text(target.branch),
-      // A plan-file/spike/lightweight phase carries no issue, PR or branch: the phase
-      // label IS the identity of the artifact a successor re-resolves.
+      // A phase-only target carries no issue, PR or branch: the phase label IS the identity
+      // of the artifact a successor re-resolves. A `local_phase` target may also keep an
+      // issue (its label is then `issue-<n>`), so this field never implies the others are
+      // unset.
       phase: text(target.phase),
     },
   };
