@@ -1112,10 +1112,11 @@ test("unitBoundaries: a routed local target receives the draft-PR boundary from 
 });
 
 test("unitBoundaries: an issue target carrying a bound PR is never a routed shape", () => {
-  // PR ownership on an issue target arrives as `linkedPr` (see the two fixtures above), never
-  // as `pr`: the route refuses an issue target that carries `pr` and re-targets an issue with a
-  // linked PR to the PR kind, so the envelope derives ownership without a `target.pr` arm. This
-  // pins that producer boundary, so re-adding a `target.pr` arm needs new evidence, not a guess.
+  // PR ownership on an issue target arrives as `linkedPr` (forwarded by `deriveTarget`'s issue
+  // arm in `src/loop/handoff-envelope.mjs`), never as `pr`: the route refuses an issue target
+  // that carries `pr` and re-targets an issue with a linked PR to the PR kind, so the envelope
+  // derives ownership without a `target.pr` arm. This pins that producer boundary, so re-adding
+  // a `target.pr` arm needs new evidence, not a guess.
   const bundle = resolveAuthoritativeStartupResumeBundle({
     currentState: {
       target: { kind: "issue", issue: 2483, pr: 2900, linkedPr: null, branch: null, phase: null },
