@@ -120,6 +120,25 @@ test("a standalone paragraph after the non-goals list is not absorbed into the l
   assert.deepEqual(brief.nonGoals, ["No gate credit."]);
 });
 
+test("non-goals headings match the canonical forms and reject unrelated sections", async () => {
+  const root = await fixtureRepo();
+  for (const heading of ["Non-goals", "Non goals", "Explicit non-goals", "Out of scope", "Non-goals (slice 1)"]) {
+    const brief = await buildImplementationBrief({ body: `${MATRIX}\n## ${heading}\n\n- No gate credit.\n`, repoRoot: root });
+    assert.deepEqual(brief.nonGoals, ["No gate credit."], heading);
+  }
+  for (const heading of ["Goals", "In scope", "Open questions"]) {
+    const brief = await buildImplementationBrief({ body: `${MATRIX}\n## ${heading}\n\n- Not a non-goal.\n`, repoRoot: root });
+    assert.deepEqual(brief.nonGoals, [], heading);
+  }
+});
+
+test("a fenced example inside the non-goals section is not read as non-goal items", async () => {
+  const root = await fixtureRepo();
+  const body = `${MATRIX}\n## Non-goals\n\n- No gate credit.\n\`\`\`\n- example\n\`\`\`\n`;
+  const brief = await buildImplementationBrief({ body, repoRoot: root });
+  assert.deepEqual(brief.nonGoals, ["No gate credit."]);
+});
+
 test("a body without a matrix yields matrix null, a missing_ac_dod_matrix finding and exit 0", async () => {
   const root = await fixtureRepo();
   const body = "## Problem\n\nProse only.\n";
