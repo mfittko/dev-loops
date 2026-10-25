@@ -8,7 +8,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, loadDevLoopConfigStrict, resolveGateConfig, resolveGateAngleContract, resolveFanoutGroups } from "@dev-loops/core/config";
 import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
 import { startDeltaSequence, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
-import { consolidateFanin, checkResolvedAngleEvidence, fanoutReviewerPairingError, toFindingsLogShape, composeReviewVerdict, listOpenActItems, validateJudgeVerdict } from "@dev-loops/core/loop/gate-fanin";
+import { consolidateFanin, checkResolvedAngleEvidence, fanoutReviewerPairingError, toFindingsLogShape, composeReviewVerdict, listOpenActItems, validateJudgeVerdict, neverDeferredSeverity } from "@dev-loops/core/loop/gate-fanin";
 import { clusterFindings } from "@dev-loops/core/loop/finding-cluster";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { normalizeHeadScopedCiContract } from "@dev-loops/core/loop/copilot-ci-status";
@@ -55,7 +55,7 @@ export function parseResidualEvidenceArgs(argv) {
     && normalizeFullHeadSha(values.baseline) === values.baseline, "full candidate and baseline SHAs required");
   requireProof(nonempty(values.angle) && nonempty(values["fixer-plan"]), "angle and canonical fixer plan required");
   requireProof(!values.accept || nonempty(values.snapshot), "accept requires snapshot");
-  requireProof(!values.snapshot || values.accept, "snapshot requires accept");
+  requireProof(values.snapshot === undefined || values.accept, "snapshot requires accept");
   requireProof(!values.accept || !values.record, "incompatible modes");
   return { repo: values.repo, pr, headSha: values["head-sha"], baseline: values.baseline,
     angle: values.angle, fixerPlan: values["fixer-plan"], record: values.record === true,
@@ -380,7 +380,9 @@ export async function verifyResidualEvidenceAcceptance(options, deps = {}) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot });
   const plan = await json(buildGateEmitPlanPath(key)), context = await json(buildGateContextPath(key));
   const angles = plan.units.flatMap((u) => u.angles), { mandatoryAngles } = resolveGateAngleContract(config, "draft");
-  const results = await Promise.all(angles.map((a) => json(path.join(buildGateReviewsDir(key), `${sanitizeScopeSegment(a)}.json`))));
+  const results = [];
+  // Sequential: the captured Map order, hence the proof source order, must not follow I/O completion order.
+  for (const a of angles) results.push(await json(path.join(buildGateReviewsDir(key), `${sanitizeScopeSegment(a)}.json`)));
   requireProof(checkResolvedAngleEvidence([...mandatoryAngles, ...context.resolvedAngles], { recordedAngles: results }).missingAngles.length === 0, "incomplete fresh full gate angles");
   const perAngle = plan.units.flatMap((u) => u.angles.map((angle) => ({ angle, dispatchId: u.executionIdentity, ...(u.group ? { group: u.group } : {}) })));
   const dispatchUnits = await readContextDispatchUnits(key, config, repoRoot);
@@ -395,13 +397,14 @@ export async function verifyResidualEvidenceAcceptance(options, deps = {}) {
   const additive = new Set("judgeDisposition judgeRationale judgeTitle judgeDetail judgeFix judgeReason judgeCriterion fingerprint followUpIssueNumber followUpDraft remedyKind operatorVisible resolvedIn".split(" "));
   validateJudgeVerdict({ headSha, scopeDrift: ledger.scopeDrift === undefined ? { verdict: "within_scope", rationale: "acceptance", driftedAreas: [] } : ledger.scopeDrift,
     dispositions: ledger.findings.map((finding, index) => ({ index, disposition: finding.judgeDisposition, rationale: finding.judgeRationale, title: finding.judgeTitle, detail: finding.judgeDetail, fix: finding.judgeFix, reason: finding.judgeReason, followUpDraft: finding.followUpDraft })) });
-  const remaining = [...expected];
+  const remaining = [...expected], clusters = new Map();
   for (const finding of ledger.findings) {
     const source = Object.fromEntries(Object.entries(finding).filter(([k]) => !additive.has(k)));
     // The durable writer omits clusterId; every member still must match exactly once.
     const index = remaining.findIndex(({ clusterId, ...f }) => isDeepStrictEqual(f,
       Object.fromEntries(Object.entries(source).filter(([k]) => k !== "clusterId"))) && (source.clusterId === undefined || source.clusterId === clusterId));
     requireProof(index >= 0, "invented, changed or duplicate gate finding");
+    clusters.set(remaining[index].clusterId, [...(clusters.get(remaining[index].clusterId) ?? []), finding]);
     remaining.splice(index, 1);
     requireProof(finding.followUpDraft == null || typeof finding.followUpDraft === "object" && !Array.isArray(finding.followUpDraft)
       && nonempty(finding.followUpDraft.title) && typeof finding.followUpDraft.body === "string", "invalid followUpDraft");
@@ -411,6 +414,9 @@ export async function verifyResidualEvidenceAcceptance(options, deps = {}) {
     requireProof(finding.followUpIssueNumber === undefined || Number.isSafeInteger(finding.followUpIssueNumber) && finding.followUpIssueNumber > 0, "invalid deferral target");
     requireProof(finding.operatorVisible === undefined || typeof finding.operatorVisible === "boolean" && finding.severity === "low", "invalid operator visibility");
     requireProof(finding.resolvedIn === undefined || /^[a-f0-9]{7,64}$/i.test(finding.resolvedIn), "invalid resolution metadata");
+  }
+  for (const members of clusters.values()) { // GATE-EXEC-THREAD-DISPOSITION, as write-gate-findings-log enforces
+    requireProof(!members.some((f) => f.judgeDisposition === "defer") || neverDeferredSeverity(members) === null, "judge defer reaches a never-deferred cluster");
   }
   requireProof(remaining.length === 0 && listOpenActItems(ledger.findings).length === 0, "missing findings or open act item");
   const verdict = composeReviewVerdict(consolidated.verdict, ledger.findings);

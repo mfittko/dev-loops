@@ -36,6 +36,10 @@ test("acceptance requires an explicit canonical snapshot and rejects mixed modes
   const args = ["--repo", "o/r", "--pr", "7", "--head-sha", HEAD, "--baseline", BASE, "--angle", "coverage", "--fixer-plan", "/plan"];
   assert.throws(() => parseResidualEvidenceArgs([...args, "--accept"]), /snapshot/);
   assert.throws(() => parseResidualEvidenceArgs([...args, "--snapshot", "/snapshot"]), /accept/);
+  assert.throws(() => parseResidualEvidenceArgs([...args, "--snapshot", ""]), /snapshot requires accept/);
+  assert.throws(() => parseResidualEvidenceArgs([...args, "--accept", "--snapshot", ""]), /accept requires snapshot/);
+  assert.equal(parseResidualEvidenceArgs([...args, "--accept", "--snapshot", "/snapshot"]).snapshot, "/snapshot");
+  assert.equal(parseResidualEvidenceArgs(args).snapshot, undefined);
   assert.throws(() => parseResidualEvidenceArgs([...args, "--accept", "--snapshot", "/snapshot", "--record"]), /mode/);
   assert.equal(typeof verifyResidualEvidenceAcceptance, "function");
 });
@@ -87,6 +91,7 @@ async function fixture(fn, harness = "pi", alterReads, continuation = false, mix
       fixer.executionIdentity = "f1799999999001-1234abcd";
       fixer.workOrderRef = `fixer:o/r#7:${HEAD}:${fixer.executionIdentity}`;
       const completion = { headSha: HEAD, fixingCommitSha: HEAD, siteCoverage: [], origin,
+        ...(continuation === "legacy" || continuation === "foreign-legacy" ? { legacyRevalidation: { originalFull: continuation === "legacy" ? origin : { ...origin, workOrderDigest: `sha256:${"0".repeat(64)}` } } } : {}),
         threadBindings: [{ threadId: "PRRT_one", fingerprints: act.map((a) => a.fingerprint) }] };
       const input = path.join(fixerDir, fixer.executionIdentity, "completion-input.json"), bytes = JSON.stringify(completion);
       await put(input, bytes);
@@ -156,7 +161,7 @@ async function fixture(fn, harness = "pi", alterReads, continuation = false, mix
       if (args.includes("POST") || args.includes("PATCH") || args.includes("DELETE") || args.some((a) => /mutation\s*\{/.test(a))) mutations.push(args);
       const ok = (value) => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
       if (command === process.execPath && args[0].endsWith("verify-fixer-disposition.mjs")) {
-        if (state.legacyOk) return ok({ ok: true });
+        if (state.legacyOk) return ok({ ok: true, complete: true });
         const verified = await verifyFixerDisposition({ ...options, check: true }, deps);
         state.deliveryVerified = true;
         await state.duringDelivery?.();
@@ -300,10 +305,10 @@ const acceptanceNegatives = {
   missingDeferEvidence: async (f, ledger) => { ledger.findings[0].judgeDisposition = "defer"; },
   openAct: async (f, ledger) => { ledger.findings[0].judgeDisposition = "act"; },
   contradictoryOverall: async (f, ledger) => { ledger.overallVerdict = "clean"; },
-  contradictoryComposed: async (f, ledger) => { ledger.verdict = "clean"; },
-  cleanMarkerOverHigh: async (f) => { f.state.comments[0].body = f.state.comments[0].body.replace("**Verdict:** findings_present", "**Verdict:** clean"); },
+  contradictoryComposed: async (f, ledger) => { ledger.verdict = "findings_present"; },
+  cleanMarkerOverHigh: async (f) => { f.state.comments[0].body = f.state.comments[0].body.replace("**Verdict:** clean", "**Verdict:** findings_present"); },
   oldGate: async (f) => { f.state.comments[0].updated_at = "2020-01-01T00:00:00Z"; },
-  wrongPairing: async (f, ledger) => { ledger.provenance.perAngle[1].dispatchId = ledger.provenance.perAngle[0].dispatchId; },
+  foreignLedgerProvenance: async (f, ledger) => { ledger.provenance.perAngle[1].dispatchId = ledger.provenance.perAngle[0].dispatchId; },
   missingAngle: async (f) => { await rm(f.plan.units[0].workOrder.outputRefs[0]); },
   carriedResult: async (f) => { const result = JSON.parse(await readFile(f.resultPath)); await put(f.resultPath, { ...result, carriedFromHead: BASE }); },
   pendingCi: async (f) => { f.state.checks = [{ name: "tests", status: "in_progress", conclusion: null }]; },
@@ -315,27 +320,84 @@ const acceptanceNegatives = {
   verifierWindowSupplement: async (f) => { f.state.duringDelivery = () => put(f.supplemental, "replacement"); },
   verifierWindowHead: async (f) => { f.state.duringDelivery = () => { f.state.head = BASE; }; },
 };
+const acceptanceRefusals = {
+  unauthenticatedLegacySuccess: /ENOENT/,
+  foreignFixerIndex: /foreign fixer execution index/,
+  missingFixerReceipt: /ENOENT/,
+  unknownLedgerField: /unknown gate ledger field/,
+  cleanLedgerOverHigh: /missing findings or open act item/,
+  droppedMember: /missing findings or open act item/,
+  duplicateMember: /invented, changed or duplicate gate finding/,
+  inventedMember: /invented, changed or duplicate gate finding/,
+  alteredSourceField: /invented, changed or duplicate gate finding/,
+  unknownFindingField: /invented, changed or duplicate gate finding/,
+  badClusterStamp: /invented, changed or duplicate gate finding/,
+  badJudgeVocabulary: /disposition must be one of: act, defer, reject/,
+  missingDeferEvidence: /followUpDraft is required on a defer disposition/,
+  openAct: /missing findings or open act item/,
+  contradictoryOverall: /gate severity verdict mismatch/,
+  contradictoryComposed: /gate severity verdict mismatch/,
+  cleanMarkerOverHigh: /visible full gate verdict or temporal order mismatch/,
+  oldGate: /visible full gate verdict or temporal order mismatch/,
+  foreignLedgerProvenance: /foreign full gate ledger provenance/,
+  missingAngle: /ENOENT/,
+  carriedResult: /stale or carried result/,
+  pendingCi: /ci_pending/,
+  failedCi: /ci_failed/,
+  noChecks: /ci_unknown/,
+  verifierWindowReport: /acceptance source changed: .*fixer-disposition\.json$/,
+  verifierWindowMarker: /acceptance source changed: .*\.constructed$/,
+  verifierWindowReceipt: /acceptance source changed: .*work-order-receipts/,
+  verifierWindowSupplement: /supplemental bytes changed/,
+  verifierWindowHead: /live candidate moved/,
+};
+// Accepting baseline: every finding is judged reject, so the composed verdict is clean; ledger and marker carry it.
+// Each negative then mutates one input and must refuse at its own guard, not at the verdict comparison.
+const negativeFindings = [{ severity: "high", summary: "authenticated high", file: "a.mjs", line: 1 }, { severity: "low", summary: "all members retained" }];
+const acceptingBaseline = (f, ledger) => { ledger.verdict = "clean"; cleanMarker(f); };
+test("acceptance negative baseline accepts before any mutation", async () => acceptanceFixture(async (f) => {
+  const ledger = JSON.parse(await readFile(f.ledgerPath));
+  acceptingBaseline(f, ledger);
+  await put(f.ledgerPath, ledger);
+  assert.equal((await verifyResidualEvidenceAcceptance(f.options, f.deps)).proof.verdict, "clean");
+}, "pi", negativeFindings));
 for (const [name, alter] of Object.entries(acceptanceNegatives)) test(`acceptance refuses ${name}`, async () => acceptanceFixture(async (f) => {
   const ledger = JSON.parse(await readFile(f.ledgerPath));
+  acceptingBaseline(f, ledger);
   await alter(f, ledger);
   await put(f.ledgerPath, ledger);
-  await assert.rejects(acceptResidualEvidence(f.options, f.deps));
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), acceptanceRefusals[name]);
   await assert.rejects(readdir(path.join(path.dirname(path.dirname(f.options.snapshot)), "accepted")), { code: "ENOENT" });
   if (name.startsWith("verifierWindow")) assert.equal(f.state.deliveryVerified, true);
-}, "pi", [{ severity: "high", summary: "authenticated high", file: "a.mjs", line: 1 }, { severity: "low", summary: "all members retained" }]));
+}, "pi", negativeFindings));
 
-for (const disposition of ["reject", "defer", "act"]) test(`preserves ${disposition} with strict severity floor and complete reordered multiset`, async () => acceptanceFixture(async (f) => {
-  const ledger = JSON.parse(await readFile(f.ledgerPath));
+const judged = (ledger, disposition) => {
   for (const finding of ledger.findings) Object.assign(finding, { judgeDisposition: disposition, judgeRationale: "AC 1", ...JUDGE_PROSE,
     ...(disposition === "defer" ? { followUpDraft: { title: "Follow up", body: "Evidence retained" } } : {}),
     ...(disposition === "act" ? { remedyKind: "evidence_only" } : {}) });
   ledger.findings.reverse();
   ledger.verdict = "clean";
-  f.state.comments[0].body = f.state.comments[0].body.replace(/\*\*Verdict:\*\* \S+/, "**Verdict:** clean");
+};
+const cleanMarker = (f) => { f.state.comments[0].body = f.state.comments[0].body.replace(/\*\*Verdict:\*\* \S+/, "**Verdict:** clean"); };
+
+// Accepted forms: defer on a medium cluster, reject on a high cluster, act on an all-nit cluster.
+for (const [disposition, severity] of [["reject", "high"], ["defer", "medium"], ["act", "nit"]]) test(`preserves ${disposition} on ${severity} with strict severity floor and complete reordered multiset`, async () => acceptanceFixture(async (f) => {
+  const ledger = JSON.parse(await readFile(f.ledgerPath));
+  judged(ledger, disposition);
+  cleanMarker(f);
   await put(f.ledgerPath, ledger);
   const proof = await verifyResidualEvidenceAcceptance(f.options, f.deps);
   assert.equal(proof.proof.verdict, "clean");
-}, "pi", [{ severity: "high", summary: "one" }, { severity: "high", summary: "one" }]));
+}, "pi", [{ severity, summary: "one" }, { severity, summary: "one" }]));
+
+// Rejected forms: a defer reaching a high, a question or an all-nit cluster (GATE-EXEC-THREAD-DISPOSITION).
+for (const severity of ["high", "question", "nit"]) test(`acceptance refuses a ledger that defers a ${severity} cluster`, async () => acceptanceFixture(async (f) => {
+  const ledger = JSON.parse(await readFile(f.ledgerPath));
+  judged(ledger, "defer");
+  cleanMarker(f);
+  await put(f.ledgerPath, ledger);
+  await assert.rejects(verifyResidualEvidenceAcceptance(f.options, f.deps), /judge defer reaches a never-deferred cluster/);
+}, "pi", [{ severity, summary: "one" }, { severity, summary: "one" }]));
 
 test("private projection matches lossless canonical clustering, long prose/paths and bare references", async () => acceptanceFixture(async (f) => {
   const output = path.join(f.root, "parity-ledger.json");
@@ -374,10 +436,12 @@ for (const alter of [
 }));
 
 test("final publication reauthenticates sources and refuses replacement after CI", async () => acceptanceFixture(async (f) => {
-  let observations = 0;
-  f.state.afterCi = async () => { if (++observations === 4) await put(f.supplemental, "final replacement"); };
-  // Delivery also reads CI; the fourth observation is the final acceptance pass.
-  await assert.rejects(acceptResidualEvidence(f.options, f.deps));
+  // The publishRecord recheck is the second full verification: arm on its delivery check, replace after its own CI read.
+  let deliveries = 0, replaced = false;
+  f.state.duringDelivery = () => { deliveries++; };
+  f.state.afterCi = async () => { if (deliveries >= 2 && !replaced) { replaced = true; await put(f.supplemental, "final replacement"); } };
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), /supplemental bytes changed|snapshot provenance or bytes changed|source changed/);
+  assert.equal(replaced, true);
   await assert.rejects(readdir(path.join(path.dirname(path.dirname(f.options.snapshot)), "accepted")).then((files) => {
     assert.equal(files.some((file) => file.endsWith(".json")), false);
     throw Object.assign(new Error("no published proof"), { code: "ENOENT" });
@@ -611,3 +675,28 @@ for (const kind of ["evidence", "raw-diff"]) test(`refuses missing ${kind} pin i
   await assert.rejects(snapshotResidualEvidence(f.options, f.deps), /lacks pin|unpinned substantive/);
   assert.deepEqual(await readdir(path.join(f.tmpRoot, "residual-evidence")).catch(() => []), []);
 }, "pi", (reads) => { delete reads.find((r) => r.kind === kind).sha256; }));
+
+test("acceptance refuses reviewer pairing that contradicts the resolved fan-out groups", async () => acceptanceFixture(async (f) => {
+  // Group two angles in config while the recorded round dispatched them to distinct reviewers.
+  await put(path.join(f.root, ".devloops"), "version: 1\ngates:\n  fanout:\n    groups:\n      - name: merged\n        angles: [coverage, threat-model]\n");
+  await assert.rejects(verifyResidualEvidenceAcceptance(f.options, f.deps), /independent reviewer pairing/);
+}));
+
+test("acceptance proof source order follows the plan angle order, not read completion", async () => acceptanceFixture(async (f) => {
+  const resultPaths = f.plan.units.flatMap((u) => u.angles.map((a) => path.join(path.dirname(f.resultPath), `${a}.json`)));
+  for (let i = 0; i < 3; i++) {
+    const order = (await verifyResidualEvidenceAcceptance(f.options, f.deps)).sources.map((s) => s.path).filter((p) => resultPaths.includes(p));
+    assert.ok(order.length > 1);
+    assert.deepEqual(order, resultPaths.filter((p) => order.includes(p)));
+  }
+}));
+
+// The delivery verifier is stubbed: full legacy revalidation is owned by verify-fixer-disposition; this covers the binding only.
+test("continuation with legacyRevalidation.originalFull accepts when the binding matches", async () => acceptanceFixture(async (f) => {
+  f.state.legacyOk = true;
+  assert.equal((await verifyResidualEvidenceAcceptance(f.options, f.deps)).status, "accepted");
+}, "codex", [], "legacy"));
+
+test("continuation with a changed legacyRevalidation tuple field is refused", async () => acceptanceFixture(async (f) => {
+  await assert.rejects(verifyResidualEvidenceAcceptance(f.options, f.deps), /foreign legacy continuation binding/);
+}, "codex", [], "foreign-legacy"));
