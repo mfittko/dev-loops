@@ -15,7 +15,9 @@ import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, apply
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
-import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { capClosedFor, isPastRoundCap } from "@dev-loops/core/loop/gate-fanin";
+import { countCompletedRounds, listPriorActItems } from "./write-gate-context.mjs";
 import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } from "@dev-loops/core/loop/finding-cluster";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
@@ -229,6 +231,8 @@ function validateFindingsArray(parsed, flagLabel) {
       entry.judgeDisposition = jd;
     }
     if (f.remedyKind === "evidence_only") entry.remedyKind = "evidence_only";
+    // Kept in the ledger only when it names a closed prior round's act fingerprint (writeGateFindingsLog checks).
+    if (typeof f.resurfaces === "string" && /^[0-9a-f]{16}$/.test(f.resurfaces.trim())) entry.resurfaces = f.resurfaces.trim();
     if (typeof f.judgeRationale === "string" && f.judgeRationale.trim().length > 0) {
       entry.judgeRationale = f.judgeRationale.trim();
     }
@@ -877,6 +881,24 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     scopeDrift = enriched.scopeDrift;
     if (specAuthorityIdentity !== undefined) {
       findings = await applySiblingSpecAuthorityVerdict(findings, judgePath, specAuthorityIdentity);
+    }
+  }
+  // `resurfaces` stays only when it names a closed prior round's act item; every other act item is new.
+  const priorOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot };
+  if (findings.some((f) => f.resurfaces !== undefined)) {
+    const prior = new Set((await listPriorActItems(priorOptions, { repoRoot })).map((item) => item.fingerprint));
+    for (const f of findings) if (f.resurfaces !== undefined && !prior.has(f.resurfaces)) delete f.resurfaces;
+  }
+  // Past the round cap, a judge defer or reject is recorded as cap-closed (GATE-EXEC-ROUND-CAP).
+  if (options.gate === "draft_gate" && findings.some((f) => f.judgeDisposition === "defer" || f.judgeDisposition === "reject")) {
+    const { config } = await loadDevLoopConfigStrict({ repoRoot });
+    const cap = resolveGateConfig(config, "draft").maxReviewRounds;
+    const round = await countCompletedRounds(priorOptions, { repoRoot });
+    if (isPastRoundCap(round, cap)) {
+      for (const f of findings) {
+        const capClosed = capClosedFor(f, { round, cap });
+        if (capClosed) f.capClosed = capClosed;
+      }
     }
   }
   // The consolidator's own computed verdict (consolidate-fanin.mjs's

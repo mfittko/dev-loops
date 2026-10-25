@@ -31,7 +31,7 @@ import { parseArgs } from "node:util";
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { baseAngleName, orderAnglesByCatalog, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { baseAngleName, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef } from "../lib/anchor-base-ref.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";
@@ -1847,7 +1847,7 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
  *
  * @returns {Promise<object[]>}
  */
-export async function readClosedPriorRoundLogs(options, { repoRoot }) {
+export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable }) {
   let ledgerDir;
   try {
     const sampleLogPath = buildLogPath({
@@ -1872,9 +1872,13 @@ export async function readClosedPriorRoundLogs(options, { repoRoot }) {
     try {
       log = JSON.parse(await readFile(path.join(ledgerDir, name), "utf8"));
     } catch {
+      onUnreadable?.(name);
       continue;
     }
-    if (!log || typeof log !== "object") continue;
+    if (!log || typeof log !== "object") {
+      onUnreadable?.(name);
+      continue;
+    }
     const recordedHead = typeof log.headSha === "string" ? log.headSha.trim().toLowerCase() : null;
     const recordedRepo = typeof log.repo === "string" ? log.repo.trim().toLowerCase() : null;
     const recordedGate = typeof log.gate === "string" ? log.gate.trim().toLowerCase() : null;
@@ -1891,6 +1895,28 @@ export async function readClosedPriorRoundLogs(options, { repoRoot }) {
   }
   rounds.sort((a, b) => (a.loggedAt < b.loggedAt ? -1 : a.loggedAt > b.loggedAt ? 1 : a.sha < b.sha ? -1 : 1));
   return rounds.map((round) => round.log);
+}
+
+/**
+ * Completed-round count for the round cap: the closed prior rounds, plus an unreadable ledger at an
+ * in-range head, plus the round being posted. Foreign, mismatched and unclosed ledgers never count.
+ */
+export async function countCompletedRounds(options, { repoRoot }) {
+  let unreadable = 0;
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot, onUnreadable: () => { unreadable += 1; } });
+  return closed.length + unreadable + 1;
+}
+
+/** Act items of the closed prior rounds as `{ fingerprint, file, line, title }`, one per fingerprint. */
+export async function listPriorActItems(options, { repoRoot }) {
+  const items = new Map();
+  for (const log of await readClosedPriorRoundLogs(options, { repoRoot })) {
+    for (const f of listOpenActItems(log.findings)) {
+      const fingerprint = fingerprintFinding(f);
+      if (!items.has(fingerprint)) items.set(fingerprint, { fingerprint, file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary });
+    }
+  }
+  return [...items.values()];
 }
 
 /**

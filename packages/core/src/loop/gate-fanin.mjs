@@ -1273,6 +1273,8 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
       delete target.judgeCriterion;
       delete target.followUpDraft;
       delete target.judgeReason;
+      delete target.resurfaces;
+      if (typeof d.resurfaces === "string" && d.resurfaces.trim().length > 0) target.resurfaces = d.resurfaces.trim();
       target.judgeDisposition = d.disposition;
       target.judgeRationale = d.rationale;
       target.judgeTitle = d.title.trim();
@@ -1311,6 +1313,44 @@ export const isOpenActItem = (f) => Boolean(f) && f.judgeDisposition === "act" &
  */
 export function listOpenActItems(findings) {
   return (Array.isArray(findings) ? findings : []).filter(isOpenActItem);
+}
+
+/** A round is past the cap when its completed-round count (the posted round included) reaches a positive cap. */
+export const isPastRoundCap = (round, cap) => cap > 0 && round >= cap;
+
+/**
+ * The `capClosed` record of a past-cap judge defer or reject, or null for any other finding. A locatable question
+ * keeps its thread and is never cap-closed.
+ */
+export function capClosedFor(finding, { round, cap }) {
+  const judgeDisposition = finding?.judgeDisposition;
+  if (judgeDisposition !== "defer" && judgeDisposition !== "reject") return null;
+  const severity = normalizeSeverity(finding.severity);
+  if (severity === "question" && hasLocatableShape(finding)) return null;
+  return { judgeDisposition, severity, round, cap };
+}
+
+/**
+ * Blockers a past-cap draft_gate round composes into `blocked`. A new act item blocks, unless every act item is
+ * low or nit (the low/nit convergence rule applies instead). A reviewer high or medium that the judge defers or
+ * rejects, a missing disposition and an unknown severity block as `severity_disagreement`.
+ * @returns {Array<{ kind: "round_cap_reached", reason: "new_act"|"severity_disagreement", item: string }>}
+ */
+export function pastCapBlockers(findings) {
+  const list = Array.isArray(findings) ? findings : [];
+  const label = (f) => `[${normalizeSeverity(f?.severity)}] ${String(f?.summary ?? "").trim()}`;
+  const acts = list.filter(isOpenActItem);
+  const lowNitOnly = acts.every((f) => ["low", "nit"].includes(normalizeSeverity(f.severity)));
+  const blockers = lowNitOnly ? [] : acts.filter((f) => !f.resurfaces).map((f) => ({ kind: "round_cap_reached", reason: "new_act", item: label(f) }));
+  for (const f of list) {
+    if (isOpenActItem(f)) continue;
+    const severity = normalizeSeverity(f?.severity);
+    const closed = f?.judgeDisposition === "defer" || f?.judgeDisposition === "reject";
+    if (!JUDGE_DISPOSITIONS.includes(f?.judgeDisposition) || !VALID_SEVERITIES.has(severity) || (closed && (severity === "high" || severity === "medium"))) {
+      blockers.push({ kind: "round_cap_reached", reason: "severity_disagreement", item: label(f) });
+    }
+  }
+  return blockers;
 }
 
 /** True when the list is non-empty and every finding carries a judge disposition. Pure. */
