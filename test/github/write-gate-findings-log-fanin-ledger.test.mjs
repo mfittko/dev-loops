@@ -113,6 +113,20 @@ test("a findings file without verifiedItems cannot drop the fan-in ledger's 9 ve
   });
 });
 
+test("a findings file with conflicting provenance, verifiedItems and overallVerdict cannot override the fan-in ledger", async () => {
+  await withRound({ plan: true, ledger: LEDGER }, async (write, repoRoot) => {
+    const forgedPath = path.join(repoRoot, "forged.json");
+    const forgedProvenance = { distinctReviewers: 1, perAngle: [{ angle: "dry", reviewer: "forged-reviewer" }] };
+    await writeFile(forgedPath, JSON.stringify({
+      findings: [], provenance: forgedProvenance, verifiedItems: ["forged"], overallVerdict: "findings_present",
+    }), "utf8");
+    const { log } = await write({ findings: undefined, findingsFile: forgedPath });
+    assert.deepEqual(log.provenance, PROVENANCE);
+    assert.deepEqual(log.verifiedItems, NINE_ITEMS);
+    assert.equal(log.overallVerdict, "clean");
+  });
+});
+
 test("with the fan-in ledger present --verdict is optional and a contradicting --verdict is refused", async () => {
   await withRound({ plan: true, ledger: LEDGER }, async (write) => {
     assert.equal((await write()).log.overallVerdict, "clean");
