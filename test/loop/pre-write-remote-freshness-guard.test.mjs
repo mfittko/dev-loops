@@ -307,6 +307,20 @@ test("checkBaseFreshness treats a hex-only branch name as a branch and fetches i
   }
 });
 
+test("checkBaseFreshness classifies a full-length SHA as unchecked without a fetch", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "freshness-sha-"));
+  try {
+    const stub = path.join(dir, "git");
+    await writeFile(stub, "#!/bin/sh\nexit 1\n");
+    await chmod(stub, 0o755);
+    for (const base of ["a".repeat(40), "b".repeat(64)]) {
+      assert.equal((await checkBaseFreshness({ base, cwd: dir, gitCommand: stub })).error, "base_not_origin_branch", base);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("checkBaseFreshness ignores an inherited GIT_DIR and reports the cwd repository", async () => {
   const stale = await makeStaleBaseFixture({ advance: true });
   const current = await makeStaleBaseFixture({ advance: false });
