@@ -26,6 +26,7 @@ const headCommit = baseCommit.replace(`tree ${tree}`, `tree ${tree}\nparent ${BA
 const HEAD = execFileSync("git", ["hash-object", "-t", "commit", "--stdin"], { input: headCommit }).toString().trim();
 const TARGET = { repo: "o/r", pr: 7, headSha: HEAD };
 const hash = (bytes) => sha256Hex(bytes).slice(7);
+const JUDGE_PROSE = { judgeTitle: "Title", judgeDetail: "Detail", judgeFix: "Fix", judgeReason: "Reason" };
 const put = async (file, value) => {
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, typeof value === "string" ? value : JSON.stringify(value));
@@ -50,7 +51,7 @@ async function fixture(fn, harness = "pi", alterReads, continuation = false, mix
     await put(path.join(root, ".devloops"), "version: 1\ngates:\n  fanout:\n    mode: per-angle\n");
     const tmpRoot = path.join(root, "tmp");
     const key = { ...TARGET, gate: "draft_gate", tmpRoot };
-    const act = ["1".repeat(16), "2".repeat(16)].map((fingerprint) => ({ fingerprint, angle: "coverage", severity: "medium", summary: fingerprint, judgeDisposition: "act" }));
+    const act = ["1".repeat(16), "2".repeat(16)].map((fingerprint) => ({ fingerprint, angle: "coverage", severity: "medium", summary: fingerprint, judgeDisposition: "act", judgeRationale: "AC 1", ...JUDGE_PROSE }));
     if (mixed) act.push({ ...act[0], fingerprint: "3".repeat(16) });
     const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: act });
     const delta = { reviewBaselineHead: BASE, candidateHead: HEAD, actSetId: sequence.actSetId, outcome: "bounded_out",
@@ -201,7 +202,7 @@ async function acceptanceFixture(fn, harness = "pi", findings = [], continuation
     }
     const input = path.join(f.root, "findings-input.json");
     const provenance = { distinctReviewers: f.plan.units.length, perAngle: f.plan.units.flatMap((u) => u.angles.map((angle) => ({ angle, dispatchId: u.executionIdentity, ...(u.group ? { group: u.group } : {}) }))) };
-    await put(input, { overallVerdict: consolidated.verdict, provenance, findings: toFindingsLogShape(projected).map((v) => ({ ...v, judgeDisposition: "reject", judgeRationale: "Outside this issue scope" })) });
+    await put(input, { overallVerdict: consolidated.verdict, provenance, findings: toFindingsLogShape(projected).map((v) => ({ ...v, judgeDisposition: "reject", judgeRationale: "Outside this issue scope", ...JUDGE_PROSE })) });
     const written = await writeGateFindingsLog({ ...TARGET, gate: "draft_gate", verdict: consolidated.verdict, findingsFile: input, executionMode: "fanout_fanin", emitPlan: f.planPath }, { repoRoot: f.root });
     const ledgerPath = path.resolve(f.root, written.path);
     if (resultTime) {
@@ -325,13 +326,15 @@ for (const [name, alter] of Object.entries(acceptanceNegatives)) test(`acceptanc
 
 for (const disposition of ["reject", "defer", "act"]) test(`preserves ${disposition} with strict severity floor and complete reordered multiset`, async () => acceptanceFixture(async (f) => {
   const ledger = JSON.parse(await readFile(f.ledgerPath));
-  for (const finding of ledger.findings) Object.assign(finding, { judgeDisposition: disposition,
+  for (const finding of ledger.findings) Object.assign(finding, { judgeDisposition: disposition, judgeRationale: "AC 1", ...JUDGE_PROSE,
     ...(disposition === "defer" ? { followUpDraft: { title: "Follow up", body: "Evidence retained" } } : {}),
     ...(disposition === "act" ? { remedyKind: "evidence_only" } : {}) });
   ledger.findings.reverse();
+  ledger.verdict = "clean";
+  f.state.comments[0].body = f.state.comments[0].body.replace(/\*\*Verdict:\*\* \S+/, "**Verdict:** clean");
   await put(f.ledgerPath, ledger);
   const proof = await verifyResidualEvidenceAcceptance(f.options, f.deps);
-  assert.equal(proof.proof.verdict, "findings_present");
+  assert.equal(proof.proof.verdict, "clean");
 }, "pi", [{ severity: "high", summary: "one" }, { severity: "high", summary: "one" }]));
 
 test("private projection matches lossless canonical clustering, long prose/paths and bare references", async () => acceptanceFixture(async (f) => {

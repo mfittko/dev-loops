@@ -392,9 +392,9 @@ export async function verifyResidualEvidenceAcceptance(options, deps = {}) {
   requireProof(Object.keys(ledger).every((k) => "repo pr headSha gate executionMode provenance findings overallVerdict verdict loggedAt verifiedItems scopeDrift specAuthority".split(" ").includes(k)), "unknown gate ledger field");
   requireProof(ledger.repo === repo && ledger.pr === pr && ledger.headSha === headSha && ledger.gate === "draft_gate"
     && ledger.executionMode === "fanout_fanin" && isDeepStrictEqual(ledger.provenance, provenance), "foreign full gate ledger provenance");
-  const additive = new Set("judgeDisposition judgeRationale judgeCriterion fingerprint followUpIssueNumber followUpDraft remedyKind operatorVisible resolvedIn".split(" "));
+  const additive = new Set("judgeDisposition judgeRationale judgeTitle judgeDetail judgeFix judgeReason judgeCriterion fingerprint followUpIssueNumber followUpDraft remedyKind operatorVisible resolvedIn".split(" "));
   validateJudgeVerdict({ headSha, scopeDrift: ledger.scopeDrift === undefined ? { verdict: "within_scope", rationale: "acceptance", driftedAreas: [] } : ledger.scopeDrift,
-    dispositions: ledger.findings.map((finding, index) => ({ index, disposition: finding.judgeDisposition, rationale: finding.judgeRationale, followUpDraft: finding.followUpDraft })) });
+    dispositions: ledger.findings.map((finding, index) => ({ index, disposition: finding.judgeDisposition, rationale: finding.judgeRationale, title: finding.judgeTitle, detail: finding.judgeDetail, fix: finding.judgeFix, reason: finding.judgeReason, followUpDraft: finding.followUpDraft })) });
   const remaining = [...expected];
   for (const finding of ledger.findings) {
     const source = Object.fromEntries(Object.entries(finding).filter(([k]) => !additive.has(k)));
