@@ -151,7 +151,7 @@ the verdict posted at the origin head (the head of the latest clean verdict) whe
 records `carry_verdict`, and `merge-pr` and gate coordination accept the evidence only from the
 carried-heads artifact (the origin head plus each carried head with its classification, written
 by gate coordination). A carried verdict is current only while CI is green at the new head. A
-scope change (any non-base commit after the clean verdict) still invalidates the carry and
+scope change (any commit after the clean verdict that changes the mode or blob of a PR path, or adds or removes a PR path) still invalidates the carry and
 runs the full gate round. The carry needs the same mode and
 blob object id for every PR path at both heads (raw `git diff-tree` tree entries, no rendered diff),
 an empty intersection of the PR diff paths and the base delta
