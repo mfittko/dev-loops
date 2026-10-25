@@ -31,10 +31,9 @@ Required:
   --head-sha <sha>              FULL head commit SHA (40 or 64 hex chars) — a short prefix is rejected (it would write an unfindable ledger)
   --verdict <clean|findings_present|blocked>
   --findings <json>              JSON array of finding objects with severity, disposition, angle, summary, and optional positive-integer line
-                                 A "low" finding may also carry operatorVisible: true (net-reduction policy, #1846) — the
-                                 explicit signal close-gate-findings.mjs's disposition pass requires before filing a "low"
-                                 to the deferral comment; absent/false is the conservative default (resolved
-                                 in-thread, never filed). A "nit" is never filed regardless of operatorVisible.
+                                 A "low" finding may also carry operatorVisible: true — an optional marker annotation
+                                 (ov=1). It does not control filing: close-gate-findings.mjs files a deferral only
+                                 when the judge disposed the finding "defer".
                                  operatorVisible on any OTHER severity fails closed (exit 2) — it has no meaning there.
   --findings-file <path>         Read the --findings JSON array from a file instead of an inline argument
                                  (mutually exclusive with --findings; identical validation)

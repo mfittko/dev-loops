@@ -135,7 +135,7 @@ const REMOVED_FLAGS = new Set([
   "--force",
   "--force-reason",
 ]);
-const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>) --next-action <text> [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
+const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>) [--next-action <text> (required except on --gate review)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
 The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin.
 Post the gate round's SINGLE visible surface: one PR review of type COMMENT whose
 body carries the checkpoint verdict fields and, with --findings-ledger, the
@@ -941,7 +941,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     if (vIdx !== -1) missing.splice(vIdx, 1);
   }
   if (missing.length > 0) {
-    throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict (or --findings-ledger carrying the consolidator's overallVerdict), --findings-summary (or --findings-file or --findings-json), and --next-action");
+    throw parseError("upsert-checkpoint-verdict requires --repo, --pr, --head-sha, --verdict (or --findings-ledger carrying the consolidator's overallVerdict), --findings-summary (or --findings-file or --findings-json), and --next-action (except on --gate review)");
   }
   if (options.convergedJson && (options.gate !== "draft_gate" || !["clean", undefined].includes(options.verdict))) {
     throw parseError("--converged-json requires --gate draft_gate and --verdict clean (or omitted)");
@@ -3132,10 +3132,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // BOTH the render and the same-head idempotency compare see the derived
   // value (a render-only fix would let the compare read the raw caller
   // string against the rendered derived one).
-  // The same act set as the verdict: the ledger's act items plus any --findings-json act item the ledger does not already carry (same trimmed summary).
+  // The same act set as the verdict: the ledger's act items plus the --findings-json act items whose fingerprint (file plus summary) the ledger does not already carry.
   const ledgerActItems = listOpenActItems(preloadedFindingsLedger?.findings ?? []);
-  const ledgerActSummaries = new Set(ledgerActItems.map((f) => (typeof f.summary === "string" ? f.summary.trim() : f.summary)));
-  const nextActionItems = [...ledgerActItems, ...enrichedActItems.filter((f) => !ledgerActSummaries.has(f.summary))];
+  const ledgerActFingerprints = new Set(ledgerActItems.map((f) => fingerprintFinding(f ?? {})));
+  const nextActionItems = [...ledgerActItems, ...enrichedActItems.filter((f) => !ledgerActFingerprints.has(fingerprintFinding(f ?? {})))];
   const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate, nextActionItems, (preloadedFindingsLedger?.findings?.length ?? 0) > 0 && !judgedRound);
   if (derivedNextAction !== null) {
     options.nextAction = derivedNextAction;

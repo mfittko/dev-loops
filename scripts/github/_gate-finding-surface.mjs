@@ -140,9 +140,9 @@ const VALID_MARKER_DISPOSITIONS = new Set(["deferred"]);
 // operator visible. This is the ONE place the signal is defined: a producer
 // sets `operatorVisible: true` on the finding object fed through the ledger
 // (write-gate-findings-log.mjs's `--findings`/`--findings-file`); nothing
-// infers visibility from a finding's own text. The judge reads it as an input
-// when it weighs a `low` finding: it never sets a disposition by itself, and a
-// deferral is filed only when the judge disposed `defer`.
+// infers visibility from a finding's own text. It is a marker annotation only:
+// it never sets a disposition, and a deferral is filed only when the judge
+// disposed `defer`.
 export function buildFindingMarker({ fp, severity, angle, round, operatorVisible, disposition, issue }) {
   if (operatorVisible !== undefined && typeof operatorVisible !== "boolean") {
     throw new Error(`buildFindingMarker: operatorVisible must be a boolean (or omitted), got ${JSON.stringify(operatorVisible)}`);
