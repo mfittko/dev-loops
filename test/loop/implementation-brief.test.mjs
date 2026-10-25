@@ -498,6 +498,18 @@ test("ordinary prose naming existing root directories is not a touched path", as
   assert.deepEqual(brief.adrs, []);
 });
 
+test("a case-variant declared path is unresolved and contributes no rule IDs", async () => {
+  const root = await fixtureRepo({
+    files: { "a/b.mjs": "// Implements KNOWN-RULE-ID.\nexport const b = 1;\n" },
+  });
+  const variant = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["A/b.mjs"] });
+  assert.deepEqual(variant.unresolvedPaths, ["A/b.mjs"]);
+  assert.deepEqual(variant.rules, []);
+  const exact = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["a/b.mjs"] });
+  assert.deepEqual(exact.unresolvedPaths, []);
+  assert.deepEqual(exact.rules, [{ id: "KNOWN-RULE-ID", doc: null }]);
+});
+
 test("a body citation is claimed by path shape, and only for the exact on-disk spelling", async () => {
   const root = await fixtureRepo({
     files: {

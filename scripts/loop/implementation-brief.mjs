@@ -329,6 +329,10 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
     if (!found) unresolved.push(candidate);
     else if (!found.inside) {
       throw Object.assign(new Error(`--paths entry resolves outside --repo-root: ${candidate}`), { exitCode: 1 });
+    } else if (!(await entryNamesMatch(root, candidate))) {
+      // A wrong-case path resolves on a case-insensitive volume only; report it
+      // as unresolved so every host emits the same bytes.
+      unresolved.push(candidate);
     } else resolved.set(candidate, found.kind);
   }
   for (const candidate of citedPathCandidates(body)) {
