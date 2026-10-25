@@ -139,6 +139,7 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/claude/headless-dev-loop.mjs` | Fail closed: `ok: false` |
 | `scripts/loop/run-queue.mjs` | Fail closed for merge authorization |
 | `scripts/loop/resolve-reviewer-role.mjs` | Fail closed: `ok: false` |
+| `scripts/loop/emit-coordinator-work-order.mjs` | Fail closed: `ok: false` before materialization |
 | `scripts/loop/detect-change-scope.mjs` | Default `eligible=false`, no light mode |
 | `scripts/github/post-gate-findings.mjs` | Default `postFindingsComments=false`, step skipped |
 | `scripts/github/close-gate-findings.mjs` | Default `inlineSeverityFloor=medium`, `trackerProvider=null` |

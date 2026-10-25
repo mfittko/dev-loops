@@ -37,6 +37,34 @@ const emit = async ({ input, tmp, dir }, harness, entry, extra = []) => {
   return { result, out: JSON.parse(result.stdout) };
 };
 
+test("Codex coordinator overrides stay outside semantic orders and refuse invalid config before materialization", async () => {
+  await withDirs(async (ctx) => {
+    const inherited = (await emit(ctx, "codex", "direct")).out;
+    for (const settings of [{ model: "native" }, { reasoningEffort: "medium" }, { model: null, reasoningEffort: null }]) {
+      await writeFile(path.join(ctx.dir, ".devloops"), JSON.stringify({ version: 1, models: { harnesses: { codex: { conductor: settings } } } }));
+      const { result, out } = await emit(ctx, "codex", "direct");
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(out.workOrderDigest, inherited.workOrderDigest);
+      assert.equal(out.workOrderRef, inherited.workOrderRef);
+      assert.deepEqual(out.dispatchPayload, { task_name: `coordinator_${out.executionIdentity.replaceAll("-", "_")}`, message: out.dispatchPrompt, fork_turns: "none", ...(settings.model ? { model: settings.model } : {}), ...(settings.reasoningEffort ? { reasoning_effort: settings.reasoningEffort } : {}) });
+      for (const harness of ["pi", "claude"]) {
+        const { out: other } = await emit(ctx, harness, "direct");
+        assert.equal(other.ok, true);
+        assert.equal("model" in other.dispatchPayload, false);
+        assert.equal("reasoning_effort" in other.dispatchPayload, false);
+      }
+    }
+  });
+  await withDirs(async (ctx) => {
+    await writeFile(path.join(ctx.dir, ".devloops"), JSON.stringify({ version: 1, models: { harnesses: { codex: { conductor: { model: " " } } } } }));
+    const { result, out } = await emit(ctx, "codex", "direct");
+    assert.equal(result.code, 1);
+    assert.match(out.error, /codex.*conductor.*model/);
+    assert.match(out.error, /empty Codex token " "/);
+    assert.equal(existsSync(ctx.tmp), false);
+  });
+});
+
 test("tracker-local startup survives canonical coordinator emission for every harness", async () => {
   await withDirs(async (ctx) => {
     for (const issue of [2335, 2508]) {
