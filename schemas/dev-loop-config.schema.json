@@ -42,7 +42,7 @@
                       "anyOf": [
                         {
                           "type": "string",
-                          "minLength": 1
+                          "pattern": "\\S"
                         },
                         {
                           "type": "null"
@@ -53,7 +53,7 @@
                       "anyOf": [
                         {
                           "type": "string",
-                          "minLength": 1
+                          "pattern": "\\S"
                         },
                         {
                           "type": "null"

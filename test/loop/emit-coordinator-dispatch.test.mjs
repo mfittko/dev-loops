@@ -60,6 +60,7 @@ test("Codex coordinator overrides stay outside semantic orders and refuse invali
     const { result, out } = await emit(ctx, "codex", "direct");
     assert.equal(result.code, 1);
     assert.match(out.error, /codex.*conductor.*model/);
+    assert.match(out.error, /empty Codex token " "/);
     assert.equal(existsSync(ctx.tmp), false);
   });
 });

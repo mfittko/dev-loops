@@ -105,7 +105,7 @@ function refineRoleTiers(models, ctx) {
 }
 
 const CodexExecutionToken = z.string({ error: (issue) => `expected a Codex string token or null, got ${JSON.stringify(issue.input)}; correct the conductor setting` })
-  .trim().min(1, { error: (issue) => `empty Codex token ${JSON.stringify(issue.input)}; use a nonempty conductor setting or null to inherit` }).nullable();
+  .regex(/\S/, { error: (issue) => `empty Codex token ${JSON.stringify(issue.input)}; use a nonempty conductor setting or null to inherit` }).trim().nullable();
 const CodexExecutionSettings = z.strictObject({
   model: CodexExecutionToken.optional(),
   reasoningEffort: CodexExecutionToken.optional(),

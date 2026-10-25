@@ -53,13 +53,16 @@ test("conductor selector emits only configured native overrides and retains refu
       assert.deepEqual(parseJson(r.stdout), { ok: true, harness: "codex", kind: "conductor", settings: { model: null, reasoningEffort: null, ...settings }, nativeOverrides: { ...(settings.model ? { model: settings.model } : {}), ...(settings.reasoningEffort ? { reasoning_effort: settings.reasoningEffort } : {}) }, configErrors: [] });
     }
     for (const args of [["--conductor"], ["--conductor", "--harness", "pi"], ["--conductor", "--harness", "codex", "--gate", "review"], ["--conductor", "--harness", "codex", "--angle", "docs"], ["--conductor=false", "--harness", "codex"], ["--conductor=unexpected", "--harness", "codex"]]) {
-      assert.equal(runCli(args, { cwd: dir, env: { CODEX_THREAD_ID: "", CLAUDECODE: "" } }).status, 2);
+      const refused = runCli(args, { cwd: dir, env: { CODEX_THREAD_ID: "", CLAUDECODE: "" } });
+      assert.equal(refused.status, 2);
+      if (args.join(" ") === "--conductor --harness pi") assert.match(refused.stderr + refused.stdout, /--conductor requires --harness codex/);
     }
     await writeFile(path.join(dir, ".devloops"), JSON.stringify({ version: 1, models: { harnesses: { codex: { conductor: { model: " " } } } } }));
     for (const extra of [[], ["--jq", ".kind", "--silent"], ["--silent"]]) {
       const r = runCli(["--conductor", "--harness", "codex", ...extra], { cwd: dir });
       assert.equal(r.status, 1, r.stderr);
       if (!extra.length) assert.match(JSON.stringify(parseJson(r.stdout).configErrors), /models.harnesses.codex.conductor.model/);
+      if (!extra.length) assert.match(JSON.stringify(parseJson(r.stdout).configErrors), /empty Codex token \\" \\"/);
     }
     assert.equal(runCli(["--conductor", "--harness", "codex", "--jq", "["], { cwd: dir }).status, 2);
   } finally { await rm(dir, { recursive: true, force: true }); }
