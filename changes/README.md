@@ -51,5 +51,7 @@ into the `## Unreleased` section of `CHANGELOG.md` under one `### Added`, one
 entries merge into the same headings, ahead of fragment entries. Assembly stops
 with an error on a fragment that breaks the format, or on existing Unreleased
 text it cannot group. It removes the consumed fragment files and stamps
-`## Unreleased` to `## <version>`. This
+`## Unreleased` to `## <version>`. A stable bump also folds every
+`## <version>-*` prerelease section into that one section, so no consolidation
+PR is needed. This
 `README.md` is never treated as a fragment.

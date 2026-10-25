@@ -18,7 +18,8 @@
  *      `bun install --frozen-lockfile`)
  *   5. the generated `.claude` tree — `.claude/.claude-plugin/plugin.json` `version`
  *      (produced by `scripts/claude/generate-claude-assets.mjs`)
- *   6. `CHANGELOG.md` — the `## Unreleased` heading is stamped to `## <version>`
+ *   6. `CHANGELOG.md` — on a stable target, `## <version>-*` prerelease sections
+ *      fold into one `## <version>` section; the `## Unreleased` heading is stamped to `## <version>`
  *      (entries left intact) so `extract-changelog-section.mjs` finds the
  *      release section; fails closed when there is no Unreleased content to
  *      stamp (an undocumented release must not proceed)
@@ -48,7 +49,7 @@ import { isDirectCliRun } from "../lib/direct-run.mjs";
 import { emitResult } from "../lib/jq-output.mjs";
 import { extractFullVersion } from "./assert-core-dependency-version.mjs";
 import { extractChangelogSection } from "./extract-changelog-section.mjs";
-import { FRAGMENTS_DIR, assembleFragments, readFragments } from "./assemble-changelog-fragments.mjs";
+import { FRAGMENTS_DIR, FRAGMENT_SECTIONS, assembleFragments, groupUnreleasedLines, readFragments } from "./assemble-changelog-fragments.mjs";
 
 const CORE_DEP = "@dev-loops/core";
 // A bare full semver token, optionally with a prerelease suffix. Build metadata
@@ -172,6 +173,60 @@ export function writeClaudePluginPin(repoRoot, version) {
   writeJson(lockPath, lock);
 
   return [manifestPath, lockPath];
+}
+
+/**
+ * Fold every `## <version>-<prerelease>` section (optional `v`, optional trailing
+ * text) into one `## <version>` section at the `## Unreleased` position (or the
+ * first folded section's position). Pure: no I/O. Entries keep Unreleased-first,
+ * then prerelease file order; a repeated entry line keeps its first occurrence.
+ * Fails closed on an ungroupable prerelease line or an existing `## <version>`.
+ * A prerelease target folds nothing.
+ *
+ * @param {string} changelog
+ * @param {string} version - Bare full version token.
+ * @returns {string}
+ */
+export function foldPrereleaseSections(changelog, version) {
+  if (version.includes("-")) return changelog;
+  const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const preRe = new RegExp(`^##\\s+v?${escaped}-[0-9A-Za-z.-]+(?=\\s|$)`);
+  const lines = changelog.split("\n");
+  const heads = lines.flatMap((l, i) => (/^##\s/.test(l) ? [i] : []));
+  const sections = heads.map((start, k) => ({ start, end: heads[k + 1] ?? lines.length }));
+  const pre = sections.filter((s) => preRe.test(lines[s.start]));
+  if (pre.length === 0) return changelog;
+  if (new RegExp(`^##\\s+v?${escaped}(?=\\s|$)`, "m").test(changelog)) {
+    throw new Error(`CHANGELOG.md already has a "## ${version}" section and prerelease section(s) to fold into it; resolve by hand before bumping`);
+  }
+  const unreleased = sections.find((s) => /^##\s+Unreleased\b/i.test(lines[s.start]));
+  const merged = new Map(FRAGMENT_SECTIONS.map((name) => [name, []]));
+  const seen = new Set();
+  for (const s of [...(unreleased ? [unreleased] : []), ...pre]) {
+    const heading = lines[s.start].trim();
+    const { bySection, errors } = groupUnreleasedLines(lines.slice(s.start + 1, s.end), `"${heading}"`);
+    if (errors.length > 0) throw new Error(`${errors[0]}; fold it by hand before bumping`);
+    for (const name of FRAGMENT_SECTIONS) {
+      for (const entry of bySection.get(name)) {
+        if (!seen.has(entry)) {
+          seen.add(entry);
+          merged.get(name).push(entry);
+        }
+      }
+    }
+  }
+  const block = [
+    `## ${version}`,
+    ...FRAGMENT_SECTIONS.filter((n) => merged.get(n).length > 0).flatMap((n) => ["", `### ${n}`, "", ...merged.get(n)]),
+    "",
+  ];
+  const anchor = unreleased ?? pre[0];
+  const out = lines.slice(0, heads[0]);
+  for (const s of sections) {
+    if (s === anchor) out.push(...block);
+    else if (s !== unreleased && !pre.includes(s)) out.push(...lines.slice(s.start, s.end));
+  }
+  return out.join("\n");
 }
 
 /**
@@ -319,7 +374,7 @@ export function bumpVersion({ repoRoot, version, stage = true, silent = false, r
     fragments,
   });
   const consumedPaths = consumed.map((name) => path.join(repoRoot, FRAGMENTS_DIR, `${name}.md`));
-  const { changelog: stampedChangelog } = stampChangelog(assembledChangelog, version);
+  const { changelog: stampedChangelog } = stampChangelog(foldPrereleaseSections(assembledChangelog, version), version);
   writeFileSync(changelogPath, stampedChangelog);
   for (const fragmentPath of consumedPaths) rmSync(fragmentPath);
 

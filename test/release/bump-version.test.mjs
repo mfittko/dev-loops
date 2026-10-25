@@ -470,3 +470,80 @@ test("bumpVersion leaves silent falsy on injected runChild calls by default (rou
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Stable-cut prerelease fold (#2804).
+const STABLE = "2.0.0";
+function foldFixture(changelog, fragments = {}) {
+  const dir = makeFixture("1.9.0");
+  writeFileSync(path.join(dir, "CHANGELOG.md"), changelog);
+  mkdirSync(path.join(dir, "changes"));
+  for (const [name, body] of Object.entries(fragments)) writeFileSync(path.join(dir, "changes", `${name}.md`), body);
+  return dir;
+}
+function snapshot(dir) {
+  return ["CHANGELOG.md", "package.json", "changes/frag-a.md"].map((f) => (existsSync(path.join(dir, f)) ? readFileSync(path.join(dir, f), "utf8") : null));
+}
+
+test("a stable bump folds prerelease sections and fragments into one deduplicated section", () => {
+  const dir = foldFixture(
+    "# Changelog\n\n## Unreleased\n\n### Added\n\n- Existing (#1)\n\n## v2.0.0-pre.2\n\n### Fixed\n\n- Fix two (#4)\n- Shared (#5)\n\n## 2.0.0-pre.1 - 2026-01-01\n\n- Bare change (#6)\n\n### Added\n\n- Shared (#5)\n\n## 2.0.0-rc.0\n\n### Added\n\n- Added rc (#7)\n\n## 1.9.0 - 2025-12-01\n\n- Prior release.\n",
+    { "frag-a": "### Added\n\n- Frag added (#2)\n", "frag-b": "- Frag changed (#3)\n" },
+  );
+  try {
+    bumpVersion({ repoRoot: dir, version: STABLE, stage: false, run: makeRegenRunner(dir, STABLE).run });
+    const changelog = readFileSync(path.join(dir, "CHANGELOG.md"), "utf8");
+    assert.equal(
+      changelog,
+      "# Changelog\n\n## 2.0.0\n\n### Added\n\n- Existing (#1)\n- Frag added (#2)\n- Added rc (#7)\n\n### Changed\n\n- Frag changed (#3)\n- Bare change (#6)\n\n### Fixed\n\n- Fix two (#4)\n- Shared (#5)\n\n## 1.9.0 - 2025-12-01\n\n- Prior release.\n",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a stable bump with only prerelease sections succeeds and a re-run is a no-op", () => {
+  const dir = foldFixture("# Changelog\n\n## 2.0.0-pre.2\n\n- Two (#2)\n\n## 2.0.0-pre.1\n\n- One (#1)\n\n## 1.9.0\n\n- Prior.\n");
+  try {
+    bumpVersion({ repoRoot: dir, version: STABLE, stage: false, run: makeRegenRunner(dir, STABLE).run });
+    const changelog = readFileSync(path.join(dir, "CHANGELOG.md"), "utf8");
+    const section = extractChangelogSection(changelog, STABLE);
+    assert.match(section, /Two \(#2\)/);
+    assert.match(section, /One \(#1\)/);
+    bumpVersion({ repoRoot: dir, version: STABLE, stage: false, run: makeRegenRunner(dir, STABLE).run });
+    assert.equal(readFileSync(path.join(dir, "CHANGELOG.md"), "utf8"), changelog);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a prerelease bump folds nothing", () => {
+  const changelog = "# Changelog\n\n## Unreleased\n\n- New (#2)\n\n## 2.0.0-pre.1\n\n- One (#1)\n";
+  const dir = foldFixture(changelog);
+  try {
+    bumpVersion({ repoRoot: dir, version: "2.0.0-pre.2", stage: false, run: makeRegenRunner(dir, "2.0.0-pre.2").run });
+    assert.equal(
+      readFileSync(path.join(dir, "CHANGELOG.md"), "utf8"),
+      "# Changelog\n\n## 2.0.0-pre.2\n\n- New (#2)\n\n## 2.0.0-pre.1\n\n- One (#1)\n",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the fold fails closed and changes no file on a malformed prerelease section or an existing target heading", () => {
+  const cases = [
+    ["# Changelog\n\n## 2.0.0-pre.1\n\n### Removed\n\n- Gone (#1)\n", /2\.0\.0-pre\.1.*### Removed/s],
+    ["# Changelog\n\n## 2.0.0-pre.1\n\nSome prose.\n", /2\.0\.0-pre\.1.*Some prose/s],
+    ["# Changelog\n\n## 2.0.0\n\n- Done (#2)\n\n## 2.0.0-pre.1\n\n- One (#1)\n", /already has a "## 2\.0\.0" section/],
+  ];
+  for (const [changelog, expected] of cases) {
+    const dir = foldFixture(changelog, { "frag-a": "- Frag (#3)\n" });
+    try {
+      const before = snapshot(dir);
+      assert.throws(() => bumpVersion({ repoRoot: dir, version: STABLE, stage: false, run: makeRegenRunner(dir, STABLE).run }), expected);
+      assert.deepEqual(snapshot(dir), before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
