@@ -19,6 +19,7 @@ import {
   FORWARD_RULE_REFERENCES,
   NON_RULE_TOKENS,
   RULE_ID_CITATION_RE,
+  RULE_ID_SHAPE_RE,
   normalizeRuleEntry,
 } from "../docs/validate-rule-ownership.mjs";
 import { firstMeaningfulLine, isAcceptedOrSuperseded, splitStatus } from "../docs/validate-decision-records.mjs";
@@ -102,7 +103,8 @@ export function lintRuleIds(body, knownIds) {
   for (const [token] of stripFencedCode(body).matchAll(RULE_ID_CITATION_RE)) {
     if (seen.has(token)) continue;
     seen.add(token);
-    if (knownIds.has(token) || NON_RULE_TOKENS.has(token) || FORWARD_RULE_REFERENCES.has(token) || /^ADR-\d+$/.test(token)) continue;
+    // A citation-only form (one-character later segment) counts only when registered; unregistered, it is not rule-shaped (GLM-5, STEP-1).
+    if (knownIds.has(token) || ![...token.matchAll(RULE_ID_SHAPE_RE)].some((m) => m[0] === token) || NON_RULE_TOKENS.has(token) || FORWARD_RULE_REFERENCES.has(token) || /^ADR-\d+$/.test(token)) continue;
     findings.push({ kind: "unknown_rule_id", id: token, detail: { reason: "not in requiredRules or optOutRules of skills/docs/required-rules.json" } });
   }
   return findings;

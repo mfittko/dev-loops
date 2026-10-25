@@ -902,7 +902,7 @@ test("both the developer agent source and its generated mirror carry the brief i
   assert.ok(generated.includes("dev-loops-run cli/index.mjs loop implementation-brief"));
   assert.ok(!generated.includes("<dev-loops-package-root>"), "the Pi token must not reach the Claude mirror");
   for (const doc of [source, generated]) {
-    for (const fragment of ["adrTripwirePaths", "adrNeed", "first commit"]) {
+    for (const fragment of ["adrTripwirePaths", "adrNeed", "first commit", "--jq .issue.body", "--jq .pr.body"]) {
       assert.ok(doc.includes(fragment), `both agent surfaces must carry ${fragment}`);
     }
   }

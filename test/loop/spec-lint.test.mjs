@@ -417,6 +417,12 @@ test("a rule citation with a one-character later segment is read whole", async (
 
 test("ordinary tokens with a one-character later segment are not unknown rule ids", async () => {
   const root = await fixtureRepo({ rules: { requiredRules: [], optOutRules: [] } });
-  const result = await lint({ body: "Encodes as UTF-8 and hashes with SHA-1.", repoRoot: root });
+  const result = await lint({ body: "Encodes as UTF-8, hashes with SHA-1, runs GLM-5 and GPT-5 at STEP-1 with zai-org/GLM-5.3.", repoRoot: root });
   assert.deepEqual(result.findings, []);
+});
+
+test("an unregistered rule-shaped id is still an unknown rule id", async () => {
+  const root = await fixtureRepo({ rules: { requiredRules: [], optOutRules: [] } });
+  const result = await lint({ body: "Cites FOO-BAR-BAZ.", repoRoot: root });
+  assert.deepEqual(result.findings.map((f) => [f.kind, f.id]), [["unknown_rule_id", "FOO-BAR-BAZ"]]);
 });

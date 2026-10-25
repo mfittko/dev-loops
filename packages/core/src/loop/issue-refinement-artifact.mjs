@@ -1592,6 +1592,18 @@ function extractComparableItems(body) {
   return items.filter((item) => item.length > 0);
 }
 
+const NON_GOAL_PATTERNS = [...PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns, ...SPEC_SECTION_NAME_PATTERNS.nonGoals];
+const SECTION_FAMILIES = [PR_BODY_SPEC_NARRATIVE_SECTIONS.in_scope.patterns, ACCEPTANCE_SECTION_PATTERNS, DOD_SECTION_PATTERNS, NON_GOAL_PATTERNS];
+
+// Flatten deeper sub-headings into the section, skipping sub-sections another family selected.
+function sectionItems(sections, patterns, skipFamilies = SECTION_FAMILIES) {
+  const index = findSpecSectionIndex(sections, patterns);
+  if (index === -1) return [];
+  const selected = new Set(skipFamilies.map((family) => findSpecSectionIndex(sections, family)).filter((i) => i !== -1));
+  selected.delete(index);
+  return extractComparableItems(flattenSectionDeep(sections, index, (i) => selected.has(i)));
+}
+
 /**
  * The non-goal items of a spec body, read exactly as `diffPrBodyAgainstIssue` reads them:
  * the merged canonical non-goals headings, descendant headings flattened, sub-sections another
@@ -1601,14 +1613,7 @@ function extractComparableItems(body) {
  * @returns {string[]}
  */
 export function readNonGoalItems(body) {
-  const sections = parseMarkdownSections(typeof body === "string" ? body : "");
-  const nonGoalPatterns = [...PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns, ...SPEC_SECTION_NAME_PATTERNS.nonGoals];
-  const index = findSpecSectionIndex(sections, nonGoalPatterns);
-  if (index === -1) return [];
-  const families = [PR_BODY_SPEC_NARRATIVE_SECTIONS.in_scope.patterns, ACCEPTANCE_SECTION_PATTERNS, DOD_SECTION_PATTERNS];
-  const selected = new Set(families.map((family) => findSpecSectionIndex(sections, family)).filter((i) => i !== -1));
-  selected.delete(index);
-  return extractComparableItems(flattenSectionDeep(sections, index, (i) => selected.has(i)));
+  return sectionItems(parseMarkdownSections(typeof body === "string" ? body : ""), NON_GOAL_PATTERNS);
 }
 
 const normalizeSpecItem =(text) =>
@@ -1628,17 +1633,8 @@ export function diffPrBodyAgainstIssue({ prBody = "", issueBody = "" } = {}) {
   const prSections = parseMarkdownSections(prBody);
   const issueSections = parseMarkdownSections(issueBody);
   const inScopePatterns = PR_BODY_SPEC_NARRATIVE_SECTIONS.in_scope.patterns;
-  const nonGoalPatterns = [...PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns, ...SPEC_SECTION_NAME_PATTERNS.nonGoals];
-  const families = [inScopePatterns, ACCEPTANCE_SECTION_PATTERNS, DOD_SECTION_PATTERNS, nonGoalPatterns];
-  // Flatten deeper sub-headings into the section, skipping sub-sections another family selected.
+  const nonGoalPatterns = NON_GOAL_PATTERNS;
   // The issue side reads only in-scope and non-goals from sections (AC/DoD come from the matrix), so only those families are skipped there.
-  const sectionItems = (sections, patterns, skipFamilies = families) => {
-    const index = findSpecSectionIndex(sections, patterns);
-    if (index === -1) return [];
-    const selected = new Set(skipFamilies.map((family) => findSpecSectionIndex(sections, family)).filter((i) => i !== -1));
-    selected.delete(index);
-    return extractComparableItems(flattenSectionDeep(sections, index, (i) => selected.has(i)));
-  };
   const prList = (patterns) => sectionItems(prSections, patterns);
   const issueList = (patterns) => sectionItems(issueSections, patterns, [inScopePatterns, nonGoalPatterns]);
   const hits = [];
