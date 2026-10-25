@@ -742,6 +742,9 @@ function routeForState(
         kind: DEV_LOOP_TARGET_KIND.LOCAL_PHASE,
         issue: routableCanonicalState.target.issue,
         pr: null,
+        // Always null on this branch: a canonical target with a linked PR re-targets to the
+        // PR route in `toRoutableCanonicalState` before gate selection, so no PR ownership
+        // can reach this local phase target.
         linkedPr: null,
         branch: null,
         phase: localPhase,

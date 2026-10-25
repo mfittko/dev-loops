@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { runNode as runNodeHelper } from "../_helpers.mjs";
 
-import { parseBuildHandoffEnvelopeCliArgs } from "../../scripts/loop/build-handoff-envelope.mjs";
+import {
+  expectedWorktreeBranchRef,
+  parseBuildHandoffEnvelopeCliArgs,
+  selectLinkedWorktreeRoot,
+} from "../../scripts/loop/build-handoff-envelope.mjs";
 
 const scriptPath = path.resolve("scripts/loop/build-handoff-envelope.mjs");
 
@@ -116,6 +121,118 @@ test("parseBuildHandoffEnvelopeCliArgs rejects --input with missing value", () =
     () => parseBuildHandoffEnvelopeCliArgs(["--input"]),
     /Missing value for --input/i,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Local worktree binding (#2532) — pure decision, no git spawned
+// ---------------------------------------------------------------------------
+
+function registrations(mainPath, linked) {
+  return [{ path: mainPath, head: "a".repeat(40), branch: "refs/heads/main" }, ...linked];
+}
+
+function linkedWorktree(dir, branch) {
+  return { path: dir, head: "b".repeat(40), branch };
+}
+
+// Real directories so the shared containment helper's realpath normalization is exercised.
+async function withWorktreeDirs(prefix, names, fn) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), prefix));
+  try {
+    const dirs = {};
+    for (const name of names) {
+      dirs[name] = path.join(tempDir, name);
+      await mkdir(dirs[name], { recursive: true });
+    }
+    return await fn(dirs);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+test("selectLinkedWorktreeRoot binds a linked worktree on the target's branch", async () => {
+  await withWorktreeDirs("bind-local-worktree-", ["main", "issue42", "elsewhere"], async (dirs) => {
+    const entries = registrations(dirs.main, [linkedWorktree(dirs.issue42, "refs/heads/issue-42")]);
+    // A non-namespaced checkout (`/work/issue-42`) binds exactly like a tmp/worktrees one.
+    assert.equal(selectLinkedWorktreeRoot(entries, dirs.issue42, "refs/heads/issue-42"),
+      realpathSync(dirs.issue42));
+    const subdir = path.join(dirs.issue42, "packages", "core");
+    await mkdir(subdir, { recursive: true });
+    assert.equal(selectLinkedWorktreeRoot(entries, subdir, "refs/heads/issue-42"),
+      realpathSync(dirs.issue42));
+  });
+});
+
+test("selectLinkedWorktreeRoot does not bind the main worktree", async () => {
+  await withWorktreeDirs("bind-local-main-", ["main", "issue42"], async (dirs) => {
+    const entries = registrations(dirs.main, [linkedWorktree(dirs.issue42, "refs/heads/issue-42")]);
+    assert.equal(selectLinkedWorktreeRoot(entries, dirs.main, "refs/heads/issue-42"), undefined);
+    assert.equal(selectLinkedWorktreeRoot(entries, path.join(dirs.main, "scripts"), "refs/heads/main"),
+      undefined);
+  });
+});
+
+test("selectLinkedWorktreeRoot does not bind a linked worktree on another branch", async () => {
+  await withWorktreeDirs("bind-local-otherbranch-", ["main", "work", "other"], async (dirs) => {
+    const entries = registrations(dirs.main, [linkedWorktree(dirs.other, "refs/heads/issue-99")]);
+    assert.equal(selectLinkedWorktreeRoot(entries, dirs.other, "refs/heads/issue-42"), undefined);
+    // A detached registration carries no branch, so it owns no target.
+    const detached = registrations(dirs.main, [{ path: dirs.other, head: "c".repeat(40) }]);
+    assert.equal(selectLinkedWorktreeRoot(detached, dirs.other, "refs/heads/issue-42"), undefined);
+  });
+});
+
+test("selectLinkedWorktreeRoot does not bind without a derivable branch identity", async () => {
+  await withWorktreeDirs("bind-local-noidentity-", ["main", "issue42"], async (dirs) => {
+    const entries = registrations(dirs.main, [linkedWorktree(dirs.issue42, "refs/heads/issue-42")]);
+    assert.equal(selectLinkedWorktreeRoot(entries, dirs.issue42, null), undefined);
+    assert.equal(selectLinkedWorktreeRoot(entries, dirs.issue42, ""), undefined);
+    assert.equal(expectedWorktreeBranchRef({ branch: null }, "local_branch"), null);
+    assert.equal(expectedWorktreeBranchRef({ issue: null }, "local_phase"), null);
+    assert.equal(expectedWorktreeBranchRef({ pr: 7 }, "pr"), null);
+    assert.equal(expectedWorktreeBranchRef({ branch: "feat/x" }, "local_branch"), "refs/heads/feat/x");
+    assert.equal(expectedWorktreeBranchRef({ issue: 42 }, "local_phase"), "refs/heads/issue-42");
+  });
+});
+
+test("selectLinkedWorktreeRoot does not bind an unregistered cwd", async () => {
+  await withWorktreeDirs("bind-local-unregistered-", ["main", "issue42", "stray"], async (dirs) => {
+    const entries = registrations(dirs.main, [linkedWorktree(dirs.issue42, "refs/heads/issue-42")]);
+    assert.equal(selectLinkedWorktreeRoot(entries, dirs.stray, "refs/heads/issue-42"), undefined);
+    assert.equal(selectLinkedWorktreeRoot(entries, "/nonexistent/elsewhere", "refs/heads/issue-42"),
+      undefined);
+    // No registration block to reason from (git failed, or a single main entry).
+    assert.equal(selectLinkedWorktreeRoot([], dirs.issue42, "refs/heads/issue-42"), undefined);
+    assert.equal(selectLinkedWorktreeRoot([entries[0]], dirs.issue42, "refs/heads/issue-42"), undefined);
+  });
+});
+
+test("build-handoff-envelope binds cwd to an existing non-namespaced issue worktree", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "bind-local-e2e-"));
+  try {
+    const { execFileSync } = await import("node:child_process");
+    const repoDir = path.join(tempDir, "repo");
+    const worktreeDir = path.join(tempDir, "work", "issue-42");
+    await mkdir(repoDir, { recursive: true });
+    const git = (cwd, ...args) => execFileSync("git", args, { cwd, stdio: "ignore" });
+    git(repoDir, "init", "-b", "main");
+    git(repoDir, "config", "user.email", "test@example.com");
+    git(repoDir, "config", "user.name", "Test");
+    git(repoDir, "remote", "add", "origin", "https://github.com/owner/test-repo.git");
+    await writeFile(path.join(repoDir, "README.md"), "fixture\n", "utf8");
+    git(repoDir, "add", "README.md");
+    git(repoDir, "commit", "-m", "init");
+    git(repoDir, "worktree", "add", "-b", "issue-42", worktreeDir);
+
+    await writeFile(path.join(tempDir, "resolver.json"), `${JSON.stringify(makeResolverOutput())}\n`, "utf8");
+    const result = await runNode(["--input", path.join(tempDir, "resolver.json")], { cwd: worktreeDir });
+    assert.equal(result.code, 0, `expected exit 0, got stderr: ${result.stderr}`);
+    const envelope = JSON.parse(result.stdout.trim());
+    assert.equal(envelope.cwd, realpathSync(worktreeDir).replace(/\\/g, "/"),
+      `cwd must be the existing worktree root, got ${envelope.cwd}`);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------
