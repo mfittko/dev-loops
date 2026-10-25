@@ -1149,8 +1149,7 @@ test("writeGateFindingsLog defaults a LOCATABLE question finding to unjudged wit
 });
 
 // A NON-LOCATABLE question (no file/line) has no resolvable thread to answer
-// through — it is deferred by construction, exactly like every other
-// non-blocking severity's default.
+// through, so with no explicit disposition it stays unjudged.
 test("writeGateFindingsLog defaults a NON-LOCATABLE question finding to unjudged with no explicit disposition", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-question-nonlocatable-"));
   try {
