@@ -8192,9 +8192,9 @@ test("resolvePrSpecContext (review): caller-supplied spec flags leave the formal
   assert.equal(options.hasFormalPrSpec, undefined);
 });
 
-// Issue 2885: fixtures without an origin remote cannot fetch; default to a current-base stub.
+// Issue 2885: fixtures without an origin remote cannot fetch; default to an unchecked-base stub.
 // The stale-base tests below call mainImpl with a real or stale checker instead.
-const currentBase = async ({ base }) => ({ ok: true, status: "base_current", base });
+const currentBase = async ({ base }) => ({ ok: false, error: "base_not_origin_branch", base });
 function main(argv, runtime = {}) {
   return mainImpl(argv, { checkBaseFreshness: currentBase, ...runtime });
 }
