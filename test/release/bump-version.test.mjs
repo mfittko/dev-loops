@@ -534,10 +534,11 @@ test("the fold fails closed and changes no file on a malformed prerelease sectio
   const cases = [
     ["# Changelog\n\n## 2.0.0-pre.1\n\n### Removed\n\n- Gone (#1)\n", /2\.0\.0-pre\.1.*### Removed/s],
     ["# Changelog\n\n## 2.0.0-pre.1\n\nSome prose.\n", /2\.0\.0-pre\.1.*Some prose/s],
+    ["# Changelog\n\n## 2.0.0\n\n- Done (#2)\n\n## 2.0.0-pre.1\n\n- One (#1)\n", /prerelease section\(s\) to fold/, {}],
     ["# Changelog\n\n## 2.0.0\n\n- Done (#2)\n\n## 2.0.0-pre.1\n\n- One (#1)\n", /already has a "## 2\.0\.0" section/],
   ];
-  for (const [changelog, expected] of cases) {
-    const dir = foldFixture(changelog, { "frag-a": "- Frag (#3)\n" });
+  for (const [changelog, expected, fragments = { "frag-a": "- Frag (#3)\n" }] of cases) {
+    const dir = foldFixture(changelog, fragments);
     try {
       const before = snapshot(dir);
       assert.throws(() => bumpVersion({ repoRoot: dir, version: STABLE, stage: false, run: makeRegenRunner(dir, STABLE).run }), expected);

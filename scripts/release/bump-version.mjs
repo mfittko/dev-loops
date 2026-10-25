@@ -21,8 +21,9 @@
  *   6. `CHANGELOG.md` — on a stable target, `## <version>-*` prerelease sections
  *      fold into one `## <version>` section; the `## Unreleased` heading is stamped to `## <version>`
  *      (entries left intact) so `extract-changelog-section.mjs` finds the
- *      release section; fails closed when there is no Unreleased content to
- *      stamp (an undocumented release must not proceed)
+ *      release section; fails closed when there is no Unreleased content, no
+ *      pending fragment and no prerelease section to fold (an undocumented
+ *      release must not proceed)
  *   7. the Claude plugin's native dependency pin — `.claude/package.json`
  *      `dependencies["dev-loops"]` and the two first-party entries in the
  *      committed `.claude/package-lock.json` (`writeClaudePluginPin`), kept in
