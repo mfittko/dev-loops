@@ -1681,6 +1681,11 @@ Under `GATE-EXEC-GATE-COORDINATOR`, the gate coordinator returns this signal to 
 coordinator as the round's result. The dev-loop coordinator then stops for an operator's
 per-PR decision and never runs the round inline.
 
+## Draft-gate round cap
+
+<!-- rule: GATE-EXEC-ROUND-CAP -->
+`GATE-EXEC-ROUND-CAP`: `gates.draft.maxReviewRounds` (default 4, `0` disables the cap) is the backstop for `draft_gate` rounds that still do not converge. One completed round is one durable `draft_gate` ledger of the PR with verdict `clean` or `findings_present`, read with `readClosedPriorRoundLogs`. The posted round counts, an unreadable in-range ledger counts, and a sidecar file never counts. A round is past the cap when its count is at or above the cap. With the cap on, `upsert-checkpoint-verdict.mjs` refuses every `draft_gate` input except the judged findings ledger (`--findings-ledger` with `overallVerdict`): a `--findings-json` post, a verdict-only post (an inline verdict-only `clean` is the light-mode carve-out) and a ledger without `overallVerdict`. Past the cap a new act item composes `blocked` with a `round_cap_reached` blocker and no fixer runs. A past-cap round whose act items are all `low` or `nit` converges by `GATE-EXEC-LOW-NIT-CONVERGENCE` instead, and a mixed round blocks. An act item is new unless its `resurfaces` fingerprint names an act item of a closed prior round. Past the cap, `write-gate-findings-log.mjs` records `capClosed: { judgeDisposition, severity, round, cap }` on a judge `defer` or `reject`. A `question` that names a file and line keeps its thread and is not cap-closed. A reviewer `high` or `medium` that the judge defers or rejects, a missing disposition and an unknown severity join the blocker with reason `severity_disagreement`. ADR 0185 records this rule.
+
 ## See also
 
 - [Checkpoint Verdict Comment Contract](gate-review-comment-contract.md) — visible PR comment evidence format

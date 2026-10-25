@@ -2790,7 +2790,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         : !options.findingsLedger ? "a verdict-only post"
           : !preloadedFindingsLedger.overallVerdict ? "a --findings-ledger without overallVerdict" : null;
       if (refused) {
-        throw new Error(`Cannot post draft_gate @ ${canonicalHeadSha}: gates.draft.maxReviewRounds is ${draftGateConfig.maxReviewRounds}, so the judged findings ledger (--findings-ledger carrying overallVerdict) is the only accepted input; refusing ${refused}. Write the ledger with write-gate-findings-log after the judge pass, or set gates.draft.maxReviewRounds to 0.`);
+        throw new Error(`Cannot post draft_gate @ ${canonicalHeadSha} (GATE-EXEC-ROUND-CAP): gates.draft.maxReviewRounds is ${draftGateConfig.maxReviewRounds}, so the judged findings ledger (--findings-ledger carrying overallVerdict) is the only accepted input; refusing ${refused}. Write the ledger with write-gate-findings-log after the judge pass, or set gates.draft.maxReviewRounds to 0.`);
       }
     }
     postTimeFanoutEnforcement = await enforcePostTimeFanoutMode(
