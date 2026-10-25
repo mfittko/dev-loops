@@ -12126,6 +12126,8 @@ test("--gate review keeps clusterId and files from --findings-json: a JSON-only 
   assert.match(clustered, /fix the 1 item this review lists/);
   const twoFiles = await postReviewJsonRound({ ledgerFindings: [REJECT_FINDING], jsonFindings: [REJECT_FINDING, member("same", { files: ["src/a.mjs"] }), member("same", { files: ["src/b.mjs"] })] });
   assert.match(twoFiles, /fix the 2 items this review lists/);
+  const twoFileOnly = await postReviewJsonRound({ ledgerFindings: [REJECT_FINDING], jsonFindings: [REJECT_FINDING, member("same", { file: "src/a.mjs" }), member("same", { file: "src/b.mjs" })] });
+  assert.match(twoFileOnly, /fix the 2 items this review lists/);
 });
 
 test("--gate review next action and verdict agree when --findings-json adds an act item to a fully judged ledger, and when it flips a ledger reject to act", async () => {

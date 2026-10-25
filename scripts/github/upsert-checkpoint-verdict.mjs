@@ -2940,8 +2940,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...(f?.remedyKind ? { remedyKind: f.remedyKind } : {}),
       // Cluster and location survive the projection so the next-action count and fingerprints match the ledger's.
       ...(Number.isInteger(f?.clusterId) ? { clusterId: f.clusterId } : {}),
-      ...(typeof f?.file === "string" ? { file: f.file } : {}),
-      ...(Array.isArray(f?.files) ? { files: f.files } : {}),
+      ...(resolveFindingFile(f) ? { files: [resolveFindingFile(f)] } : {}),
       ...(Number.isInteger(f?.followUpIssueNumber) && f.followUpIssueNumber > 0 ? { followUpIssueNumber: f.followUpIssueNumber } : {}),
     }));
     const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
@@ -3136,7 +3135,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const ledgerActItems = listOpenActItems(preloadedFindingsLedger?.findings ?? []);
   const ledgerActSummaries = new Set(ledgerActItems.map((f) => (typeof f.summary === "string" ? f.summary.trim() : f.summary)));
   const nextActionItems = [...ledgerActItems, ...enrichedActItems.filter((f) => !ledgerActSummaries.has(f.summary))];
-  const derivedNextAction =deriveEffectiveNextAction(options.verdict, options.gate, nextActionItems, (preloadedFindingsLedger?.findings?.length ?? 0) > 0 && !judgedRound);
+  const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate, nextActionItems, (preloadedFindingsLedger?.findings?.length ?? 0) > 0 && !judgedRound);
   if (derivedNextAction !== null) {
     options.nextAction = derivedNextAction;
   }
