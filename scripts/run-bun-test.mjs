@@ -114,6 +114,7 @@ export async function discoverRepositoryTests(repoRoot = DEFAULT_ROOT) {
 }
 
 export async function resolveBunTestFiles(args, { repoRoot = DEFAULT_ROOT, discover = () => discoverRepositoryTests(repoRoot) } = {}) {
+  if (args.some((arg) => arg.startsWith("--referencing="))) throw new Error("--referencing requires a separate path value (use `--referencing <path>`)");
   const index = args.indexOf("--referencing");
   if (index !== -1) {
     if (args.lastIndexOf("--referencing") !== index) throw new Error("--referencing may be supplied only once");

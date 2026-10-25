@@ -855,6 +855,8 @@ test("referencing CLI exits safely for no matches and malformed selectors", asyn
   for (const [args, code, message] of [
     [["--referencing", missing], 0, new RegExp(missing)],
     [["--referencing"], 1, /--referencing.*value/],
+    [["--referencing=skills/loop-grill/SKILL.md"], 1, /--referencing.*value/],
+    [["--referencing="], 1, /--referencing.*value/],
     [["--referencing", "--dots"], 1, /--referencing.*value/],
     [["--all", "--referencing", "skills/docs/x.md"], 1, /--referencing.*--all/],
     [["--referencing", "x", "--referencing", "y"], 1, /--referencing.*once/],
