@@ -63,7 +63,7 @@ ADR and tripwire projection too.
 A body citation needs a path-shape signal - an explicit "./" prefix, a slash or a
 file extension - so ordinary prose ("the docs directory") is not claimed, and its
 on-disk entry names must match case-exactly, so two checkouts of one tree agree.
-"adrTripwirePaths" is the PATH-BASED ADR-tripwire candidate set: the touched
+"adrTripwirePaths" is the path-based ADR-tripwire candidate set: the touched
 paths whose shape matches the tripwire constants (a skills/docs/*-contract.md
 doc, packages/core/src/config/extension-defaults.yaml, a .devloops* config
 source). The tripwire's content-based triggers - a rule-modality (MUST/SHOULD/MAY)
