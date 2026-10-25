@@ -141,7 +141,7 @@ test("an all-low/nit act list with a clean delta updates the comment at A to cle
   }, { prefix: "dev-loops-converged-ok-" });
 });
 
-// ADR 0182: a fully judged round depends only on the act list, so an all-act round composes clean when it converges,
+// ADR 0183: a fully judged round depends only on the act list, so an all-act round composes clean when it converges,
 // even when the consolidator's severity verdict (a low blocks under blockCleanOnFindingSeverities [high, low]) is findings_present.
 test("an all-act converged round composes clean from a findings_present ledger verdict", async () => {
   await withTempDir(async (tempDir) => {

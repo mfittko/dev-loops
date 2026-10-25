@@ -1134,7 +1134,7 @@ If the judge act list is non-empty (a round with an unjudged finding and no act 
   body-filed, and it carries `disposition=deferred` only on a judge `defer` (`GATE-EXEC-DEFERRAL-RECORD`). The
   fixer receives every act cluster. `GATE-EXEC-THREAD-DISPOSITION` owns the question semantics and the closing
   sweep. The posted review verdict depends only on the judge's dispositions: a non-empty act list gives
-  `findings_present` and an empty act list gives `clean`, whatever the severities (ADR 0089, amended by [ADR 0182](https://github.com/mfittko/dev-loops/blob/main/docs/decisions/0182-judge-owns-every-disposition-verdict-and-next-action.md); the one exception is `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)). <!-- secret-scan:allow Public ADR documentation URL; not a credential -->
+  `findings_present` and an empty act list gives `clean`, whatever the severities (ADR 0089, amended by [ADR 0183](https://github.com/mfittko/dev-loops/blob/main/docs/decisions/0183-judge-owns-every-disposition-verdict-and-next-action.md); the one exception is `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168)). <!-- secret-scan:allow Public ADR documentation URL; not a credential -->
   `blockCleanOnFindingSeverities` no longer overrides the judge on a judged round, one in which every
   finding carries a judge disposition. A round with any unjudged finding (including a partly judged ledger)
   keeps the fan-in verdict, which that key still computes. GATE-CLOSE is a stricter layer owned by

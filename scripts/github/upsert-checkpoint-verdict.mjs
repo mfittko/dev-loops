@@ -2993,14 +2993,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // Set only when the posted checkpoint verdict differs from the ledger's review
   // verdict (a proven pre-approval blocker over a completed ledger), so the
   // render records both layers. The ledger object itself is never mutated.
-  // ADR 0182: judged-ness is computed once over the whole round (ledger, enriched act items, judged non-act JSON findings).
+  // ADR 0183: judged-ness is computed once over the whole round (ledger, enriched act items, judged non-act JSON findings).
   const roundFindings = [...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems, ...jsonUnactedFindings];
   const judgedRound = isFullyJudged(roundFindings);
   let checkpointComposition = null;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
     // Judged non-act findings stay in the list so a judged round with an empty act list composes clean; the converged guard replaces only the act items.
-    // ADR 0182: judged-ness is decided over the whole round, before the converged guard drops its act items.
+    // ADR 0183: judged-ness is decided over the whole round, before the converged guard drops its act items.
     const guardedRoundActs = await guardedActItems(roundFindings);
     const ledgerVerdict = judgedRound && preloadedFindingsLedger.overallVerdict !== "blocked"
       ? (guardedRoundActs.length > 0 ? "findings_present" : "clean")
