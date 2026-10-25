@@ -368,7 +368,7 @@ const GateConfig = z.strictObject({
     .array(z.enum(/** @type {[string, ...string[]]} */ (BLOCKING_SEVERITY_SPELLINGS)))
     .min(1)
     .default(["high"])
-    .describe("Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them."),
+    .describe("Defect finding severities that block a clean gate verdict only when the round is not fully judged; a fully judged round is decided by the judge's act dispositions instead (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them."),
   // No schema-level `.default()`: a default would fill this key on every config
   // LAYER independently (each is parsed before merging), permanently shadowing
   // a layer that sets only the deprecated `worthFixingNowFixWindow` alias.

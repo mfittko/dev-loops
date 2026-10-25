@@ -15,6 +15,7 @@ for (const file of ["agents/judge.agent.md", ".claude/agents/judge.md"]) {
     assert.match(text, /A section that `\.github\/pull_request_template\.md` defines .{0,100} is never covered by this rule/);
     assert.match(text, /`index` is the cluster's `clusterId`/);
     assert.match(text, /`title`, `detail` and `fix` are required on every disposition and `reason` on `defer` and `reject`/);
+    assert.doesNotMatch(text, /one decision per cluster index/);
     assert.match(text, /No code path defers or rejects a finding from severity or round alone/);
     assert.match(text, /a cluster that contains a `high` or a `question`, and an all-`nit` cluster, is never deferred/);
   });

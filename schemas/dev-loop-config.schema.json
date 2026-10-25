@@ -325,7 +325,7 @@
               "default": [
                 "high"
               ],
-              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
+              "description": "Defect finding severities that block a clean gate verdict only when the round is not fully judged; a fully judged round is decided by the judge's act dispositions instead (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {
@@ -560,7 +560,7 @@
               "default": [
                 "high"
               ],
-              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
+              "description": "Defect finding severities that block a clean gate verdict only when the round is not fully judged; a fully judged round is decided by the judge's act dispositions instead (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {
@@ -795,7 +795,7 @@
               "default": [
                 "high"
               ],
-              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
+              "description": "Defect finding severities that block a clean gate verdict only when the round is not fully judged; a fully judged round is decided by the judge's act dispositions instead (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {

@@ -110,9 +110,8 @@ Optional:
 
 Output (stdout, JSON):
   { "ok": true, "repo": "...", "pr": 42, "gate": "...", "headSha": "...", "round": N,
-    "deferredResolved": <disposition reply+resolve count>,
-    "evidenceOnlyClosed": <threads whose every marker is a judge act with remedyKind evidence_only, reply+resolved with no stamp and no filing; 0 when none qualify>,
-    "rejectClosed": <answered, judge-rejected question threads and judge-rejected medium/low defect threads reply+resolved this pass (ADR 0088, 0144); 0 when none qualify>,
+    "deferredResolved": <threads the judge deferred, plus nit members of a judge-deferred cluster, reply+resolved this pass; 0 when none qualify>,
+    "rejectClosed": <answered, judge-rejected question threads and judge-rejected medium/low/nit defect threads reply+resolved this pass (ADR 0088, 0144); 0 when none qualify>,
     "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer + reject-close passes; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585); folded findings (#2263) never create a thread, so they never enter this count>,
     "foldedFiled": <#2263: operator-visible folded (below gates.<gate>.inlineSeverityFloor) low findings newly listed in the deferral comment this pass, from the ledger directly (they carry no thread of their own); on a PR target no comment is posted and it counts the folded entries recorded in the verdict body's Details block under any group (Deferred, Rejected or Not judged; only a Deferred-group marker carries issue=<pr>); a nit or a non-operator-visible low is never filed>,
     "followUpIssueNumber"?: <the deferral target number (the linked spec issue the comment goes to, or the PR itself, which gets no comment); present when the round had a fileable thread target OR a fileable folded finding>,
@@ -155,8 +154,10 @@ async function detectContractViolatingDeferredStamps(threads, login, findings, l
     if (!marker) continue;
     if (marker.disposition !== "deferred") continue;
     // Severity floor: a nit, high or question is never deferred, whatever the ledger says.
+    // No ledger evidence (tmp wiped, other host) is not a violation: only a ledger that
+    // contradicts the stamp is.
     const belowFloor = marker.severity === "nit" || marker.severity === "high" || marker.severity === "question";
-    const notJudgeDeferred = belowFloor || !(await resolveThreadDisposition("defer", { fp: marker.fp, threadBody: thread.body, findings, ...lookup }));
+    const notJudgeDeferred = belowFloor || await ledgerContradictsDeferral(marker.fp, thread.body, findings, lookup);
     const missingIssue = !Number.isInteger(marker.issue) || marker.issue <= 0;
     if (notJudgeDeferred || missingIssue) {
       violations.push({
@@ -606,8 +607,7 @@ async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate,
       ? current.judgeRationale.trim()
       : null;
     const reason = typeof current.judgeReason === "string" && current.judgeReason.trim().length > 0 ? current.judgeReason.trim() : null;
-    const remedyKind = currentMatches.every((f) => f.remedyKind === "evidence_only") ? "evidence_only" : null;
-    return { disposition: dispositions[0], rationale, reason, ...(remedyKind ? { remedyKind } : {}) };
+    return { disposition: dispositions[0], rationale, reason };
   }
   const prior = await findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp });
   if (prior?.ambiguous) return null;
@@ -631,47 +631,23 @@ async function resolveThreadDisposition(wanted, { fp, threadBody, ...rest }) {
     // non-primary member never reads it: with no ledger evidence the thread stays open.
     const judgement = await resolveJudgeRejection({ fp: memberFp, threadBody: memberFp === fp ? threadBody : "", allowRendered: wanted !== "defer", ...rest });
     if (judgement?.disposition !== wanted) return null;
-    // An act owns a closing thread only as an evidence-only remedy; any open act keeps the thread open.
-    if (wanted === "act" && judgement.remedyKind !== "evidence_only") return null;
     primary ??= judgement;
   }
   return primary;
 }
 
-const resolveThreadRejection = (args) => resolveThreadDisposition("reject", args);
-
-// Evidence-only act close (GATE-EXEC-THREAD-DISPOSITION): a gate-authored thread whose every
-// marker the judge disposed `act` with remedyKind evidence_only never reaches the fixer (isOpenActItem),
-// so this pass replies and resolves it with no stamp and no filing.
-async function runEvidenceOnlyClosePass({ repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, allowedRefs = [] }, { env, ghCommand, runChild }) {
-  let evidenceOnlyClosed = 0;
-  const dispositionFailures = [];
-  for (const thread of threads) {
-    if (thread.isResolved || thread.author !== login) continue;
-    const marker = parseFindingMarker(thread.body);
-    if (!marker) continue;
-    const failure = (error) => dispositionFailures.push({ commentId: thread.commentId, threadId: thread.threadId, severity: marker.severity, angle: marker.angle, error: error instanceof Error ? error.message : String(error) });
-    try {
-      const judgement = await resolveThreadDisposition("act", { fp: marker.fp, threadBody: thread.body, findings, repo, pr, gate, headSha, tmpRoot, repoRoot });
-      if (!judgement) continue;
-      if (!Number.isInteger(thread.commentId) || thread.commentId <= 0) {
-        failure(`evidence-only act thread ${thread.threadId} has no valid root commentId (${String(thread.commentId)}); left open`);
-        continue;
-      }
-      const summary = sanitizeInline(extractFindingSummary(thread.body)).replace(/"/g, "'");
-      const rationale = sanitizeInline(neutralizeBareIssuePrIds(judgement.rationale ?? NO_JUDGE_RATIONALE_TEXT)).replace(/[.\s]+$/u, "");
-      const message = `${GATE_REJECT_CLOSE_REPLY_PREFIX}round ${round}, fingerprint ${marker.fp}, severity ${marker.severity}, angle ${marker.angle}): Examined on merits: "${summary}" was accepted by the judge with an evidence-only remedy, so no file change applies — ${rationale}.`;
-      await replyAndMaybeResolve(
-        { repo, pr, commentId: thread.commentId, threadId: thread.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
-        { env, ghCommand, runChild },
-      );
-      evidenceOnlyClosed += 1;
-    } catch (err) {
-      failure(err);
-    }
+// True when ledger evidence for any marker on the thread carries a disposition other than defer.
+async function ledgerContradictsDeferral(fp, threadBody, findings, lookup) {
+  const fps = new Set([fp]);
+  collectFingerprints(threadBody, fps);
+  for (const memberFp of fps) {
+    const judgement = await resolveJudgeRejection({ fp: memberFp, threadBody: "", allowRendered: false, findings, ...lookup });
+    if (judgement && judgement.disposition !== "defer") return true;
   }
-  return { evidenceOnlyClosed, dispositionFailures };
+  return false;
 }
+
+const resolveThreadRejection = (args) => resolveThreadDisposition("reject", args);
 
 const NO_JUDGE_RATIONALE_TEXT = "the judge rejected this finding on its merits; no rationale text is recorded for it";
 
@@ -880,10 +856,6 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
     { repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, allowedRefs: options.allowedRefs ?? [] },
     gh,
   );
-  const { evidenceOnlyClosed, dispositionFailures: evidenceOnlyFailures } = await runEvidenceOnlyClosePass(
-    { repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, allowedRefs: options.allowedRefs ?? [] },
-    gh,
-  );
 
   // Gate-authored threads still unresolved AFTER the defer pass: the pre-defer
   // total minus deferredResolved (only the targets runDispositionPass actually
@@ -900,10 +872,10 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // so (GATE-EXEC-FINDING-THREADS). rejectClosed (ADR 0088) subtracts the same
   // way deferredResolved does: both passes reply+resolve a thread this count
   // would otherwise still include.
-  const unresolvedGateThreadCount = countUnresolvedGateAuthoredThreads(threads, login) - deferredResolved - rejectClosed - evidenceOnlyClosed;
-  const combinedDispositionFailures = [...(dispositionFailures ?? []), ...(rejectCloseFailures ?? []), ...evidenceOnlyFailures];
+  const unresolvedGateThreadCount = countUnresolvedGateAuthoredThreads(threads, login) - deferredResolved - rejectClosed;
+  const combinedDispositionFailures = [...(dispositionFailures ?? []), ...(rejectCloseFailures ?? [])];
 
-  const result = { ok: true, repo, pr, gate, headSha, round, deferredResolved, rejectClosed, evidenceOnlyClosed, unresolvedGateThreadCount, foldedFiled };
+  const result = { ok: true, repo, pr, gate, headSha, round, deferredResolved, rejectClosed, unresolvedGateThreadCount, foldedFiled };
   // GATE-EXEC-DEFERRAL-RECORD: only present when the round had a fileable
   // deferral — the number of the comment target (linked spec issue or PR).
   if (followUpIssueNumber !== undefined) {
