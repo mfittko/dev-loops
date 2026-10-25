@@ -393,6 +393,8 @@ export async function verifyResidualEvidenceAcceptance(options, deps = {}) {
   requireProof(ledger.repo === repo && ledger.pr === pr && ledger.headSha === headSha && ledger.gate === "draft_gate"
     && ledger.executionMode === "fanout_fanin" && isDeepStrictEqual(ledger.provenance, provenance), "foreign full gate ledger provenance");
   const additive = new Set("judgeDisposition judgeRationale judgeCriterion fingerprint followUpIssueNumber followUpDraft remedyKind operatorVisible resolvedIn".split(" "));
+  validateJudgeVerdict({ headSha, scopeDrift: ledger.scopeDrift === undefined ? { verdict: "within_scope", rationale: "acceptance", driftedAreas: [] } : ledger.scopeDrift,
+    dispositions: ledger.findings.map((finding, index) => ({ index, disposition: finding.judgeDisposition, rationale: finding.judgeRationale, followUpDraft: finding.followUpDraft })) });
   const remaining = [...expected];
   for (const finding of ledger.findings) {
     const source = Object.fromEntries(Object.entries(finding).filter(([k]) => !additive.has(k)));
@@ -401,8 +403,8 @@ export async function verifyResidualEvidenceAcceptance(options, deps = {}) {
       Object.fromEntries(Object.entries(source).filter(([k]) => k !== "clusterId"))) && (source.clusterId === undefined || source.clusterId === clusterId));
     requireProof(index >= 0, "invented, changed or duplicate gate finding");
     remaining.splice(index, 1);
-    validateJudgeVerdict({ headSha, scopeDrift: ledger.scopeDrift ?? { verdict: "within_scope", rationale: "acceptance", driftedAreas: [] },
-      dispositions: [{ index: 0, disposition: finding.judgeDisposition, rationale: finding.judgeRationale, followUpDraft: finding.followUpDraft }] });
+    requireProof(finding.followUpDraft == null || typeof finding.followUpDraft === "object" && !Array.isArray(finding.followUpDraft)
+      && nonempty(finding.followUpDraft.title) && typeof finding.followUpDraft.body === "string", "invalid followUpDraft");
     requireProof(finding.remedyKind === undefined || finding.remedyKind === "evidence_only", "unknown remedy kind");
     requireProof(finding.judgeCriterion === undefined || nonempty(finding.judgeCriterion), "invalid judge criterion");
     requireProof(finding.fingerprint === undefined || /^[a-f0-9]{16}$/.test(finding.fingerprint), "invalid finding fingerprint");
@@ -423,7 +425,8 @@ export async function verifyResidualEvidenceAcceptance(options, deps = {}) {
   const marker = summarizeGateReviewCommentMarkers([...comments.flat(), ...reviews], { headSha }).draft_gate;
   const lastResult = Math.max(...results.map((_, i) => captured.get(path.join(buildGateReviewsDir(key), `${sanitizeScopeSegment(angles[i])}.json`)).identity[3]));
   requireProof(marker?.headSha === headSha && !marker.converged && marker.contractComplete && marker.executionMode === "fanout_fanin"
-    && marker.verdict === verdict && marker.updatedAtMs >= lastResult && marker.updatedAtMs >= captured.get(report).identity[3]
+    // GitHub publication timestamps have second precision; round ownership is authenticated above.
+    && marker.verdict === verdict && marker.updatedAtMs >= Math.floor(lastResult / 1000) * 1000 && marker.updatedAtMs >= Math.floor(captured.get(report).identity[3] / 1000) * 1000
     && Number(plan.roundId.match(/^r(\d+)-/)[1]) >= captured.get(report).identity[3]
     && Date.parse(ledger.loggedAt) >= lastResult, "visible full gate verdict or temporal order mismatch");
   const live = await api(["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,statusCheckRollup"]);

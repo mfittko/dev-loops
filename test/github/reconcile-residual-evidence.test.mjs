@@ -184,12 +184,13 @@ async function fixture(fn, harness = "pi", alterReads, continuation = false, mix
   } finally { await rm(root, { recursive: true, force: true }); }
 }
 
-async function acceptanceFixture(fn, harness = "pi", findings = [], continuation = false, mixed = false) {
+async function acceptanceFixture(fn, harness = "pi", findings = [], continuation = false, mixed = false, resultTime) {
   return fixture(async (f) => {
     const raw = JSON.parse(await readFile(f.resultPath));
     raw.findings = findings;
     raw.verdict = findings.length ? "findings_present" : "clean";
     await put(f.resultPath, raw);
+    if (resultTime) await utimes(f.resultPath, resultTime, resultTime);
     const results = await Promise.all(f.plan.units.map((u) => readFile(u.workOrder.outputRefs[0]).then(JSON.parse)));
     const consolidated = consolidateFanin({ angleResults: results });
     const projected = structuredClone(consolidated.findings);
@@ -203,6 +204,11 @@ async function acceptanceFixture(fn, harness = "pi", findings = [], continuation
     await put(input, { overallVerdict: consolidated.verdict, provenance, findings: toFindingsLogShape(projected).map((v) => ({ ...v, judgeDisposition: "reject", judgeRationale: "Outside this issue scope" })) });
     const written = await writeGateFindingsLog({ ...TARGET, gate: "draft_gate", verdict: consolidated.verdict, findingsFile: input, executionMode: "fanout_fanin", emitPlan: f.planPath }, { repoRoot: f.root });
     const ledgerPath = path.resolve(f.root, written.path);
+    if (resultTime) {
+      const ledger = JSON.parse(await readFile(ledgerPath));
+      ledger.loggedAt = new Date(resultTime.getTime() + 100).toISOString();
+      await put(ledgerPath, ledger);
+    }
     const time = new Date(Date.now() + 1000).toISOString();
     f.state.comments = [{ id: 12, updated_at: time, body: [
       "### Gate review: `draft_gate`", `**Reviewed head SHA:** \`${HEAD}\``, `**Verdict:** ${consolidated.verdict}`,
@@ -213,6 +219,39 @@ async function acceptanceFixture(fn, harness = "pi", findings = [], continuation
     f.options = { ...f.options, accept: true, record: false, snapshot: snapshot.snapshotPath };
     await fn({ ...f, ledgerPath });
   }, harness, undefined, continuation, mixed);
+}
+
+for (const [name, published, accepted] of [
+  ["same second", "2030-01-01T12:00:00Z", true],
+  ["later second", "2030-01-01T12:00:01Z", true],
+  ["earlier publication", "2030-01-01T11:59:59Z", false],
+  ["same-second foreign head", "2030-01-01T12:00:00Z", false],
+]) test(`acceptance orders second-precision publication: ${name}`, async () => acceptanceFixture(async (f) => {
+  f.state.comments[0].updated_at = published;
+  if (name === "same-second foreign head") f.state.comments[0].body = f.state.comments[0].body.replace(HEAD, BASE);
+  if (accepted) assert.equal((await verifyResidualEvidenceAcceptance(f.options, f.deps)).status, "accepted");
+  else await assert.rejects(verifyResidualEvidenceAcceptance(f.options, f.deps), /temporal order/);
+}, "pi", [], false, false, new Date("2030-01-01T12:00:00.200Z")));
+
+for (const draft of [undefined, null, { title: "Follow up", body: "" }, 42, [], { title: " ", body: "" }, { title: "Follow up", body: 42 }]) {
+  const valid = draft == null || !Array.isArray(draft) && typeof draft === "object" && draft.title.trim() && typeof draft.body === "string";
+  test(`acceptance validates optional reject draft ${JSON.stringify(draft)}`, async () => acceptanceFixture(async (f) => {
+    const ledger = JSON.parse(await readFile(f.ledgerPath));
+    ledger.findings[0].followUpDraft = draft;
+    await put(f.ledgerPath, ledger);
+    if (valid) await verifyResidualEvidenceAcceptance(f.options, f.deps);
+    else await assert.rejects(verifyResidualEvidenceAcceptance(f.options, f.deps), /followUpDraft/);
+  }, "pi", [{ severity: "low", summary: "retained finding" }]));
+}
+
+for (const scopeDrift of [undefined, { verdict: "within_scope", rationale: "Scoped", driftedAreas: [] }, 42, null]) {
+  test(`acceptance validates empty-round scope ${JSON.stringify(scopeDrift)}`, async () => acceptanceFixture(async (f) => {
+    const ledger = JSON.parse(await readFile(f.ledgerPath));
+    ledger.scopeDrift = scopeDrift;
+    await put(f.ledgerPath, ledger);
+    if (scopeDrift === undefined || typeof scopeDrift === "object" && scopeDrift !== null) await verifyResidualEvidenceAcceptance(f.options, f.deps);
+    else await assert.rejects(verifyResidualEvidenceAcceptance(f.options, f.deps), /scopeDrift/);
+  }));
 }
 
 test("requires completed mixed resolved/residual delivery while preserving legitimate deferral", async () => acceptanceFixture(async (f) => {
