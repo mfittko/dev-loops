@@ -12,6 +12,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { buildCoordinatorWorkOrder } from "@dev-loops/core/loop/coordinator-work-order";
+import { assertConfigLoaded, loadDevLoopConfig, resolveConductorDispatch } from "@dev-loops/core/config";
 import { workOrderDigest as digestWorkOrder } from "@dev-loops/core/loop/work-order-digest";
 import { realpathNearestExisting } from "@dev-loops/core/loop/worktree-guard";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -28,7 +29,10 @@ With --harness and --entry it also materializes the order under <tmp-root>/coord
 (default: the main checkout's tmp/) and prints {ok,workOrderRef,workOrderDigest,executionIdentity,
 dispatchPrompt,dispatchPayload,planPath}. Dispatch dispatchPayload unchanged. A changed order has a new
 digest and ref; a resume re-emits the same ref under a fresh execution identity. Any other harness refuses.
-Codex emits {task_name,message,fork_turns:"none"}; after the exact pull, verify/read codexBootstrap
+Codex emits {task_name,message,fork_turns:"none"} plus non-null native model/reasoning_effort
+from models.harnesses.codex.conductor. Config errors stop before materialization; native rejection
+must stop dispatch without dropping overrides or launching an inherited replacement.
+After the exact pull, verify/read codexBootstrap
 contracts from the emitting toolchain before scoped work. Native dispatch has no cwd argument.
 ${JQ_OUTPUT_USAGE}
 Stdout: {ok:true,workOrder,workOrderDigest} on success, {ok:false,refusal?,error} on failure (refusal is unsupported_adapter or invalid_entry for a refused emit) (nothing under --silent).
@@ -80,8 +84,9 @@ function dispatchAdapter(harness) {
   return DISPATCH_ADAPTERS[harness];
 }
 
-export function buildCoordinatorDispatchPayload({ harness, dispatchPrompt, cwd, executionIdentity }) {
-  return dispatchAdapter(harness)(dispatchPrompt, cwd, executionIdentity);
+export function buildCoordinatorDispatchPayload({ harness, dispatchPrompt, cwd, executionIdentity, nativeOverrides = {} }) {
+  const payload = dispatchAdapter(harness)(dispatchPrompt, cwd, executionIdentity);
+  return harness === "codex" ? { ...payload, ...nativeOverrides } : payload;
 }
 
 // Emitter-owned data keeps the renderer compatible with a native child's inherited checkout.
@@ -197,6 +202,8 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     if (Boolean(values.harness) !== Boolean(values.entry)) return fail("--harness and --entry go together", USAGE);
     if (values.harness) dispatchAdapter(values.harness); // refuse before input consumption or materialization
     if (values.entry && !ENTRIES.includes(values.entry)) throw new WorkOrderRefusal("invalid_entry", `--entry must be one of ${ENTRIES.join(", ")}, got ${values.entry}`);
+    const nativeOverrides = values.harness === "codex"
+      ? resolveConductorDispatch(assertConfigLoaded(await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) })), { harness: "codex" }).nativeOverrides : {};
     const envelope = await buildHandoffEnvelopeCli({ inputPath: values.input, repo: values.repo });
     const built = buildCoordinatorWorkOrder({
       envelope, allowedFiles: values["allowed-file"] ?? [],
@@ -215,7 +222,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       }
       const unit = await materializeCoordinatorWorkOrder({ workOrder, workOrderDigest, entry: values.entry, tmpRoot });
       const { workOrderRef, executionIdentity, dispatchPrompt, planPath } = unit;
-      return emitResult({ ok: true, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload: buildCoordinatorDispatchPayload({ harness: values.harness, dispatchPrompt, cwd, executionIdentity }), planPath },
+      return emitResult({ ok: true, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload: buildCoordinatorDispatchPayload({ harness: values.harness, dispatchPrompt, cwd, executionIdentity, nativeOverrides }), planPath },
         { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr });
     }
     return emitResult(out, { jq: values.jq, silent: values.silent, fields: values.fields, stdout, stderr });

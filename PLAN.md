@@ -120,6 +120,7 @@ Today the repository already includes:
 - deterministic GitHub helpers for review-thread capture, Copilot request/watch, issue-to-PR detection, and reviewer draft staging
 - deterministic loop-state helpers for Copilot, reviewer, tracker, and outer-loop orchestration
 - conductor-adjacent ownership, routing, inspection, and steering contracts in the source tree
+- opt-in Codex conductor model/effort settings at initial and resumed coordinator dispatch; worker and reviewer settings remain outside this slice
 - root and package-level tests plus CI on Node 24
 
 ## Roadmap
