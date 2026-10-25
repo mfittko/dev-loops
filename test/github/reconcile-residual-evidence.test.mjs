@@ -17,6 +17,7 @@ import { consolidateGateFanin } from "../../scripts/loop/consolidate-fanin.mjs";
 import "../../scripts/github/pull-work-order.mjs";
 import { buildGateEmitPlanPath, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { runIdFreeEnv } from "../_helpers.mjs";
+import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { parseResidualEvidenceArgs, snapshotResidualEvidence, verifyResidualEvidenceSnapshot, verifyResidualEvidenceAcceptance, acceptResidualEvidence } from "../../scripts/github/reconcile-residual-evidence.mjs";
 
 const tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -740,4 +741,14 @@ test("delivery check runs the verifier through the default runChild without a st
   // The real verifier cannot reach a live PR here; it must still run as a child and refuse, not reject on a misused argument.
   await assert.rejects(acceptResidualEvidence(f.options, f.deps), /full delivery check failed|JSON/);
   assert.deepEqual(seen, [[]]);
+}));
+
+test("delivery check passes the resolved artifact tmp root to the verifier child", async () => acceptanceFixture(async (f) => {
+  const seen = [], inner = f.deps.runChild;
+  f.deps.runChild = async (command, args, env, ...rest) => {
+    if (command === process.execPath && args[0].endsWith("verify-fixer-disposition.mjs")) seen.push(args[args.indexOf("--tmp-root") + 1]);
+    return inner(command, args, env, ...rest);
+  };
+  await verifyResidualEvidenceAcceptance(f.options, f.deps);
+  assert.deepEqual(seen, [path.resolve(resolveGateArtifactTmpRoot(f.deps.repoRoot))]);
 }));

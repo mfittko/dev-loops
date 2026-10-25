@@ -373,7 +373,7 @@ export async function verifyResidualEvidenceAcceptance(options, deps = {}) {
     }
   }
   const delivery = await runtime.runChild(process.execPath, [path.join(import.meta.dirname, "verify-fixer-disposition.mjs"),
-    "--repo", repo, "--pr", String(pr), "--head-sha", headSha, "--fixer-plan", canonical, "--check"], runtime.env);
+    "--repo", repo, "--pr", String(pr), "--head-sha", headSha, "--fixer-plan", canonical, "--check", "--tmp-root", tmpRoot], runtime.env);
   const delivered = delivery.code === 0 && JSON.parse(delivery.stdout);
   requireProof(delivered.ok === true && delivered.complete === true, "full delivery check failed");
   await reauthenticate();
