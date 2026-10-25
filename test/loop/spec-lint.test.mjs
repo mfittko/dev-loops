@@ -339,7 +339,7 @@ test("only cli/index.mjs wires the spec-lint lint surface; other files may reuse
     if (f !== HELPER_CONSUMER) return consumer.test(source);
     const imported = (IMPORT_RE.exec(source)?.[1] ?? "").split(",").map((n) => n.trim()).filter(Boolean);
     if (imported.some((n) => !PURE_HELPERS.has(n))) return true;
-    const code = source.replace(/\/\*[\s\S]*?\*\//gu, "").replace(/^\s*\/\/.*$/gmu, "").replace(IMPORT_RE, "");
+    const code = source.replace(/^\s*\/\*[\s\S]*?\*\//gmu, "").replace(/^\s*\/\/.*$/gmu, "").replace(IMPORT_RE, "");
     return consumer.test(code);
   };
   const offenders = files.filter((f) => wired(f, readFileSync(path.join(repoRoot, f), "utf8")));
@@ -350,6 +350,8 @@ test("only cli/index.mjs wires the spec-lint lint surface; other files may reuse
   // The helper-consumer carve-out stays narrow: an entry-point import or an invocation is flagged.
   assert.ok(wired(HELPER_CONSUMER, 'import { main } from "./spec-lint.mjs";'));
   assert.ok(wired(HELPER_CONSUMER, 'import { stripFencedCode } from "./spec-lint.mjs";\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
+  assert.ok(wired(HELPER_CONSUMER, 'import { stripFencedCode } from "./spec-lint.mjs";\nconst USAGE = `skills/docs/*-contract.md`;\n/** doc */\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
+  assert.ok(!wired(HELPER_CONSUMER, '/** runs `loop spec-lint` */\n  /* indented `loop spec-lint` */\nimport { stripFencedCode } from "./spec-lint.mjs";'));
   assert.ok(!wired(HELPER_CONSUMER, '// runs `loop spec-lint`\nimport { stripFencedCode } from "./spec-lint.mjs";'));
   assert.doesNotMatch("// the grill (refine-plan-file, spec-lint) reads it", consumer);
 });

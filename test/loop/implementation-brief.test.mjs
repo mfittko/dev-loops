@@ -396,6 +396,26 @@ test("a missing --body-file and an unknown flag are usage errors that exit 1", a
   }
 });
 
+test("an empty or whitespace --repo-root is a usage error that exits 1", async () => {
+  for (const value of ["", "   "]) {
+    const output = io();
+    assert.equal((await run(output, ["--body-file", "spec.md", "--repo-root", value])).code, 1);
+    assert.equal(output.stdout.read(), "");
+    assert.equal(JSON.parse(output.stderr.read().trim()).ok, false);
+  }
+});
+
+test("a touched rule registry does not count as a citing file", async () => {
+  const root = await fixtureRepo({
+    rules: { requiredRules: [{ id: "RULE-AA" }, { id: "RULE-BB" }, { id: "RULE-CC" }], optOutRules: [] },
+    files: { "skills/docs/foo-contract.md": "<!-- rule: RULE-AA -->\n`RULE-AA`: Foo.\n" },
+  });
+  const only = await buildImplementationBrief({ body: "No rules.", repoRoot: root, paths: ["skills/docs/required-rules.json"] });
+  assert.deepEqual(only.rules, []);
+  const mixed = await buildImplementationBrief({ body: "Cites RULE-BB.", repoRoot: root, paths: ["skills/docs/required-rules.json", "skills/docs/foo-contract.md"] });
+  assert.deepEqual(mixed.rules.map(({ id }) => id), ["RULE-AA", "RULE-BB"]);
+});
+
 test("an unregistered rule ID is absent and a missing registry is a finding, not silence", async () => {
   const root = await fixtureRepo({
     files: { "skills/docs/owner.md": "<!-- rule: KNOWN-RULE-ID -->\n`KNOWN-RULE-ID`: Owner doc.\n" },

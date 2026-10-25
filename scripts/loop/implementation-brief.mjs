@@ -374,7 +374,8 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
       if (registry.ids.has(token)) citedRuleIds.add(token);
     }
     for (const [relPath, kind] of resolved) {
-      if (kind !== "file") continue;
+      // The registry lists every registered ID; counting it as a citing file would bury the relevant ones.
+      if (kind !== "file" || relPath === "skills/docs/required-rules.json") continue;
       const content = await readTextOrNull(path.join(root, ...relPath.split("/")));
       if (content == null) continue;
       for (const definition of extractRuleDefinitions(content, relPath)) {
@@ -472,6 +473,7 @@ export function parseImplementationBriefArgs(argv) {
   }
   if (values.help) return { help: true };
   if (!values["body-file"]) throw Object.assign(new Error("Missing required --body-file <path>"), { usage: USAGE, exitCode: 1 });
+  if (values["repo-root"] !== undefined && !values["repo-root"].trim()) throw Object.assign(new Error("--repo-root must not be empty"), { usage: USAGE, exitCode: 1 });
   return {
     help: false,
     bodyFile: values["body-file"],
