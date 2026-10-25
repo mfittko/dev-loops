@@ -192,6 +192,11 @@ export function citedAdrNumbers(body) {
   return new Set([...body.matchAll(BODY_ADR_RE)].map((match) => match[1] ?? match[2]));
 }
 
+/** Amenders in force: later-numbered than the amended record and accepted. */
+export function inForceAmenders(id, record, records) {
+  return [...record.amendedBy].filter((amender) => Number(amender) > Number(id) && records.get(amender).state === "accepted");
+}
+
 export function lintAdrCitations(body, records) {
   const cited = citedAdrNumbers(body);
   const findings = [];
@@ -207,8 +212,7 @@ export function lintAdrCitations(body, records) {
     if (record.state === "superseded") {
       findings.push({ kind: "adr_superseded", id, detail: { supersededBy: record.supersededBy, status: record.statusLine } });
     }
-    const amenders = [...record.amendedBy]
-      .filter((amender) => Number(amender) > Number(id) && records.get(amender).state === "accepted")
+    const amenders = inForceAmenders(id, record, records)
       .sort((a, b) => Number(a) - Number(b))
       .map((amender) => ({ id: amender, file: records.get(amender).file, amenderCited: cited.has(amender) }));
     if (amenders.length > 0) findings.push({ kind: "adr_amended", id, detail: { amenders } });

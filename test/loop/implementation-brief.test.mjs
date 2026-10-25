@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
@@ -177,6 +177,57 @@ test("cited ADRs, accepted ADRs naming a touched path and amending records are a
     title: "Replacement record",
     path: "docs/decisions/0041-replacement.md",
   });
+});
+
+test("amendedBy keeps only later-numbered accepted amenders, as loop spec-lint does", async () => {
+  const amends = (status) => `${status}\n\nAmends [0010](./0010-base.md): narrows it.`;
+  const root = await fixtureRepo({
+    decisions: {
+      "0005-lower.md": record({ title: "0005. Lower amender", status: amends("Accepted — 2026-01-01") }),
+      "0010-base.md": record({ title: "0010. Base record" }),
+      "0011-accepted.md": record({ title: "0011. Accepted amender", status: amends("Accepted — 2026-01-02") }),
+      "0012-proposed.md": record({ title: "0012. Proposed amender", status: amends("Proposed") }),
+      "0013-superseded.md": record({ title: "0013. Superseded amender", status: amends("Superseded by ADR 0011") }),
+    },
+  });
+  const brief = await buildImplementationBrief({ body: "Follows ADR 0010.", repoRoot: root });
+  assert.deepEqual(brief.adrs[0].amendedBy.map(({ number }) => number), ["0011"]);
+});
+
+test("a fenced ADR need heading is not the spec's ADR need", async () => {
+  const root = await fixtureRepo();
+  const brief = await buildImplementationBrief({
+    body: "```\n## ADR need\n\nOne record for X.\n```\n",
+    repoRoot: root,
+  });
+  assert.equal(brief.adrNeed, "unstated");
+});
+
+test("a path-shaped token longer than PATH_MAX is unresolved under any root depth", async () => {
+  // One 256-char segment exceeds NAME_MAX, so stat returns ENAMETOOLONG on Linux and macOS.
+  const token = `${Array.from({ length: 5 }, () => "a".repeat(256)).join("/")}.md`;
+  const body = `${MATRIX}\nSee ${token} here.\n`;
+  const shallow = await fixtureRepo();
+  const deep = await fixtureRepo({ files: { [`${"d".repeat(100)}/x.txt`]: "x\n" } });
+  const left = await buildImplementationBrief({ body, repoRoot: shallow });
+  const right = await buildImplementationBrief({ body, repoRoot: path.join(deep, "d".repeat(100)) });
+  assert.deepEqual(left.touchedPaths, []);
+  assert.deepEqual(right.touchedPaths, []);
+  assert.deepEqual(left.unresolvedPaths, right.unresolvedPaths);
+});
+
+test("an EACCES on --repo-root itself is not treated as missing and is no usage error", async () => {
+  const parent = await fixtureRepo();
+  await mkdir(path.join(parent, "locked", "child"), { recursive: true });
+  await chmod(path.join(parent, "locked"), 0o000);
+  try {
+    await assert.rejects(
+      () => buildImplementationBrief({ body: MATRIX, repoRoot: path.join(parent, "locked", "child") }),
+      (error) => error.code === "EACCES" && error.exitCode !== 1,
+    );
+  } finally {
+    await chmod(path.join(parent, "locked"), 0o755);
+  }
 });
 
 test("adrNeed carries the ADR need section, and reads unstated when the body has none", async () => {
@@ -531,14 +582,15 @@ test("a body citation is claimed by path shape, and only for the exact on-disk s
 });
 
 test("extensionless candidates still require existence and containment, and exclude URL schemes", async () => {
-  const root = await fixtureRepo({ files: { https: "Not a citation\n" } });
+  const root = await fixtureRepo({ files: { https: "Not a citation\n", NOTICE: "Inside\n" } });
   const outside = await fixtureRepo({ files: { LICENSE: "Outside license\n" } });
   await symlink(path.join(outside, "LICENSE"), path.join(root, "LICENSE"));
   const brief = await buildImplementationBrief({
-    body: `${MATRIX}\nUpdate MISSING and LICENSE. See https://example.com/LICENSE.\n`,
+    body: `${MATRIX}\nUpdate ./MISSING and ./LICENSE and ./NOTICE. See https://example.com/LICENSE.\n`,
     repoRoot: root,
   });
-  assert.deepEqual(brief.touchedPaths, []);
+  // ./NOTICE resolves inside the root; the escaping symlink and the missing entry stay out.
+  assert.deepEqual(brief.touchedPaths, ["NOTICE"]);
   assert.deepEqual(brief.unresolvedPaths, []);
 });
 

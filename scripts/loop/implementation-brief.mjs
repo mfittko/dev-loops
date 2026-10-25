@@ -29,7 +29,7 @@ import {
   extractRuleDefinitions,
 } from "../docs/validate-rule-ownership.mjs";
 import { CONTRACT_DOC_RE, DEVLOOPS_CONFIG_PATHS, GATE_CONFIG_PATH } from "./check-adr-tripwire.mjs";
-import { citedAdrNumbers, indexDecisionRecords, loadKnownRuleIds, stripFencedCode } from "./spec-lint.mjs";
+import { citedAdrNumbers, indexDecisionRecords, inForceAmenders, loadKnownRuleIds, stripFencedCode } from "./spec-lint.mjs";
 
 const USAGE = `Usage: dev-loops loop implementation-brief --body-file <path> [--paths <p,...>] [--repo-root <path>]
 
@@ -42,8 +42,8 @@ Read-only and offline: the brief parses local files and makes no network call.
 
 Output (stdout, JSON):
   { "ok": true, "matrix": [{ "criterion", "evidence" }] | null, "nonGoals": ["..."],
-    "touchedPaths": ["..."], "unresolvedPaths": ["..."], "rules": [{ "id", "doc" }],
-    "adrs": [{ "number", "title", "path", "amendedBy": [...], "supersededBy" }],
+    "touchedPaths": ["..."], "unresolvedPaths": ["..."], "rules": [{ "id", "doc": "<path>" | null }],
+    "adrs": [{ "number", "title": "<text>" | null, "path", "amendedBy": [...], "supersededBy" }],
     "adrNeed": "<section text>" | "unstated", "adrTripwirePaths": ["..."],
     "requiredReads": ["skills/docs/structural-quality.md", "changes/README.md"],
     "findings": [{ "kind", "reason" }] }
@@ -105,7 +105,7 @@ const RECORD_TITLE_RE = /^#\s+(?:\d{4,}\.\s*)?(.*\S)\s*$/mu;
 const DEVLOOPS_CONFIG_PATH_SET = new Set(DEVLOOPS_CONFIG_PATHS);
 
 function isMissing(error) {
-  return error?.code === "ENOENT" || error?.code === "ENOTDIR";
+  return error?.code === "ENOENT" || error?.code === "ENOTDIR" || error?.code === "ENAMETOOLONG";
 }
 
 function sortedUnique(values) {
@@ -422,14 +422,14 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
       continue;
     }
     const amendedBy = [];
-    for (const amender of [...record.amendedBy].sort(byNumber)) {
+    for (const amender of inForceAmenders(id, record, records).sort(byNumber)) {
       const amendment = await recordRef(amender);
       if (amendment) amendedBy.push(amendment);
     }
     adrs.push({ ...ref, amendedBy, supersededBy: record.supersededBy ? await recordRef(record.supersededBy) : null });
   }
 
-  const adrNeed = extractSection(body, "ADR need") ?? "";
+  const adrNeed = extractSection(stripFencedCode(body), "ADR need") ?? "";
 
   return {
     ok: true,
