@@ -1259,7 +1259,7 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
       throw new Error(`judge disposition index ${d.index} is out of range (findings has ${enriched.length} entries) or is not a clusterId`);
     }
     if (d.disposition === "defer") {
-      // GATE-EXEC-THREAD-DISPOSITION: a high has no exit unless rejected, a question is never deferred, and a nit is never a judge defer.
+      // GATE-EXEC-THREAD-DISPOSITION: a high, a question and an all-nit cluster are never deferred.
       const blocked = neverDeferredSeverity(enriched.filter((_f, i) => clusterOf(i) === d.index));
       if (blocked) {
         throw new Error(`judge disposition for cluster ${d.index} defers a cluster whose severity is ${blocked}; a high, a question or an all-nit cluster is never deferred (GATE-EXEC-THREAD-DISPOSITION) — fail closed`);

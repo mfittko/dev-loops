@@ -2990,14 +2990,16 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // Set only when the posted checkpoint verdict differs from the ledger's review
   // verdict (a proven pre-approval blocker over a completed ledger), so the
   // render records both layers. The ledger object itself is never mutated.
+  // ADR 0182: judged-ness is computed once over the whole round (ledger, enriched act items, judged non-act JSON findings).
+  const roundFindings = [...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems, ...jsonUnactedFindings];
+  const judgedRound = isFullyJudged(roundFindings);
   let checkpointComposition = null;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
     // Judged non-act findings stay in the list so a judged round with an empty act list composes clean; the converged guard replaces only the act items.
-    const roundFindings = [...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems, ...jsonUnactedFindings];
     // ADR 0182: judged-ness is decided over the whole round, before the converged guard drops its act items.
     const guardedRoundActs = await guardedActItems(roundFindings);
-    const ledgerVerdict = isFullyJudged(roundFindings) && preloadedFindingsLedger.overallVerdict !== "blocked"
+    const ledgerVerdict = judgedRound && preloadedFindingsLedger.overallVerdict !== "blocked"
       ? (guardedRoundActs.length > 0 ? "findings_present" : "clean")
       : composeReviewVerdict(preloadedFindingsLedger.overallVerdict, [...roundFindings.filter((f) => !isOpenActItem(f)), ...guardedRoundActs]);
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
@@ -3049,7 +3051,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs a clean composed verdict over a validated low/nit act list (got verdict ${JSON.stringify(options.verdict)}); post a full round instead.`);
   }
   // A fully judged round takes its verdict from the judge's act list alone, so the severity floor never overrides it. A partly judged ledger keeps the floor.
-  const judgedRound = isFullyJudged(preloadedFindingsLedger?.findings) && jsonUnactedFindings.every((f) => JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
   if (
     options.verdict === "clean"
     && !judgedRound

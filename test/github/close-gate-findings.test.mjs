@@ -2562,7 +2562,7 @@ test("a judge-rejected medium past the fix window is reject-closed, never stampe
   ));
 });
 
-// A high has no exit unless rejected and a question is never deferred, even when the ledger says defer.
+// A high and a question are never deferred, even when the ledger says defer.
 for (const severity of ["high", "question"]) {
   test(`a judge-deferred ${severity} thread is never deferred: it stays open`, async () => {
     const { finding, thread } = defectThread({ severity, summary: `a ${severity} the judge wrongly deferred`, judgeDisposition: "defer", judgeRationale: "Outside scope.", commentId: 6310, id: `THREAD_${severity}_DEFER` });

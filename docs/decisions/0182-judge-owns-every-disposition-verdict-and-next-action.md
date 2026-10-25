@@ -10,6 +10,12 @@ Amends [ADR 0075](./0075-fold-sub-floor-findings-out-of-inline-threads.md), impl
 
 Amends [ADR 0179](./0179-judge-in-standalone-review.md): the sentence that the verdict composition and finding rendering code stay unchanged no longer holds. The interim judge-spec line on the review body is replaced by the summary paragraph of the single rendering contract, implemented by the later slices of issue 2903. Spec precedence, the `pr_scope` kind and the review-gate judge wiring stay as 0179 records them.
 
+Amends [ADR 0142](./0142-pr-target-deferral-posts-no-comment.md): the sentences that a no-stamp thread is recorded by its resolving reply and the ledger entry, and that `close-gate-findings.mjs` stamps `disposition=deferred` only on a thread `isFileableDeferral` files past its fix window, no longer hold. No thread is a no-stamp thread. `isFileableDeferral` reads only the judge disposition, so a thread is stamped and resolved only on a judge `defer`.
+
+Amends [ADR 0144](./0144-reject-close-judge-rejected-medium-and-low-gate-threads.md): the sentences that limit the reject-close pass to a judge-rejected medium or low defect thread no longer hold. `isRejectClosableSeverity` extends reject-close to a judge-rejected nit. A rejected `high` or `question` is still not closed by it.
+
+Amends [ADR 0092](./0092-gate-tools-comment-only-blocker-only-filing.md): the sentence that `close-gate-findings.mjs` posts the severity-based defers no longer holds. It posts a deferral only for a cluster the judge disposed `defer`.
+
 ## Context
 
 A standalone review of a consumer pull request raised 27 findings. The posted review contradicted itself. The verdict read `clean` next to 9 medium findings, because a severity floor produced it. Every marker said `deferred` under a "Not judged" heading, because fan-in derived the disposition from severity. Severity decided visibility, so a real low-severity defect was folded away. One root cause rendered as four inline comments. The next action read as "nothing to do" beside the findings.

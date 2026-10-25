@@ -1517,7 +1517,7 @@ describe("applyJudgeDispositions (#1525)", () => {
     assert.equal(scopeDrift.verdict, "within_scope");
   });
 
-  // GATE-EXEC-THREAD-DISPOSITION: a high has no exit unless rejected, a question is never deferred, a nit is never a judge defer.
+  // GATE-EXEC-THREAD-DISPOSITION: a high, a question and an all-nit cluster are never deferred.
   for (const [severity, others] of [["high", ["low"]], ["question", ["low"]], ["nit", ["nit", "nit"]]]) {
     test(`a defer on a cluster whose findings are ${severity} fails closed`, () => {
       const findings = [severity, ...others].map((s, i) => ({ severity: s, angle: `a${i}`, summary: `finding ${i}`, clusterId: 0 }));

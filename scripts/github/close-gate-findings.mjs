@@ -181,11 +181,6 @@ async function detectContractViolatingDeferredStamps(threads, login, findings, l
   }
 }
 
-// Reason named in the reply for a deferred target.
-function windowReason() {
-  return "the judge deferred this finding as outside this PR's scope";
-}
-
 // The three reply-body prefixes THIS FILE ITSELF posts (dispositionMessage,
 // rejectCloseMessage below) — the single source
 // hasAnswerReply's automation-reply exclusion (ADR 0088) reads, so that
@@ -210,7 +205,7 @@ function isGateAutomationReply(body) {
 // thread marker (issue=<pr>) on a PR target (GATE-EXEC-DEFERRAL-RECORD).
 function dispositionMessage({ fp, severity, angle, round, repo, pr, issueNumber, body, judgeReason, judgeRationale }) {
   const meritRationale = buildMeritRationale({ body, judgeReason, judgeRationale });
-  return `${GATE_DEFERRED_REPLY_PREFIX}round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} ${windowReason()}; ${issueNumber === pr ? `recorded in this thread's marker (issue=${pr}).` : `recorded in the deferral comment on https://github.com/${repo}/issues/${issueNumber}.`}`;
+  return `${GATE_DEFERRED_REPLY_PREFIX}round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} the judge deferred this finding as outside this PR's scope; ${issueNumber === pr ? `recorded in this thread's marker (issue=${pr}).` : `recorded in the deferral comment on https://github.com/${repo}/issues/${issueNumber}.`}`;
 }
 
 
@@ -280,7 +275,7 @@ async function selectDispositionTargets(threads, login, findings = [], lookup = 
     if (thread.author !== login) continue;
     const marker = parseFindingMarker(thread.body);
     if (!marker) continue; // author matches, but carries no parseable finding marker
-    // A high has no exit unless rejected and a question is never deferred (GATE-EXEC-THREAD-DISPOSITION), even if a ledger says defer.
+    // A high and a question are never deferred (GATE-EXEC-THREAD-DISPOSITION), even if a ledger says defer.
     if (marker.severity === "high" || marker.severity === "question") continue;
     // Only a thread whose every marker the judge disposed `defer` is deferred, whatever
     // its severity or round. An act, rejected, unjudged or ambiguous thread is never selected.
@@ -364,7 +359,7 @@ async function stampDeferredDisposition({ repo, commentId, judgeDisposition, iss
 // (selectFoldedFileableEntries); on a linked spec issue target they share the
 // round's batched deferral comment with the fileable thread targets (a PR
 // target posts no comment).
-async function runDispositionPass({ repo, pr, gate, headSha, tmpRoot, repoRoot, round, threads, snapshot, login, mediumFixWindow, findings = [], foldedEntries = [], trackerProvider, allowedRefs = [] }, { env, ghCommand, runChild }) {
+async function runDispositionPass({ repo, pr, gate, headSha, tmpRoot, repoRoot, round, threads, snapshot, login, findings = [], foldedEntries = [], trackerProvider, allowedRefs = [] }, { env, ghCommand, runChild }) {
   // GATE-EXEC-THREAD-DISPOSITION: Before stamping, detect any contract-violating disposition=deferred
   // stamps already present on gate-authored threads (a subagent bypass).
   await detectContractViolatingDeferredStamps(threads, login, findings, { repo, pr, gate, headSha, tmpRoot, repoRoot });
@@ -873,7 +868,6 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   const { config, errors } = await loadDevLoopConfig({ repoRoot });
   const gateConfigKey = GATE_CONFIG_KEY[gate] ?? gate;
   const resolvedGateConfig = errors.length > 0 ? null : resolveGateConfig(config, gateConfigKey);
-  const mediumFixWindow = resolvedGateConfig?.mediumFixWindow ?? MEDIUM_FIX_WINDOW;
   const inlineSeverityFloor = resolvedGateConfig?.inlineSeverityFloor ?? "medium";
 
   // 4. Thread snapshot for the disposition pass. A carried-open thread from an
@@ -887,7 +881,7 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   const foldedEntries = selectFoldedFileableEntries({ findings, floor: inlineSeverityFloor });
   const trackerProvider = errors.length > 0 ? null : resolveTrackerProvider(config);
   const { deferredResolved, foldedFiled, followUpIssueNumber, dispositionFailures } = await runDispositionPass(
-    { repo, pr, gate, headSha, tmpRoot, repoRoot, round, threads, snapshot, login, mediumFixWindow, findings, foldedEntries, trackerProvider, allowedRefs: options.allowedRefs ?? [] },
+    { repo, pr, gate, headSha, tmpRoot, repoRoot, round, threads, snapshot, login, findings, foldedEntries, trackerProvider, allowedRefs: options.allowedRefs ?? [] },
     gh,
   );
 
