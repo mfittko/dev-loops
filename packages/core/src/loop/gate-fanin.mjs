@@ -1165,7 +1165,7 @@ export function validateJudgeVerdict(verdict) {
       throw new Error(`judge verdict.dispositions[${i}].index must be a non-negative integer`);
     }
     if (seenIndices.has(entry.index)) {
-      throw new Error(`judge verdict.dispositions[${i}].index ${entry.index} is a duplicate — the contract is one disposition per finding`);
+      throw new Error(`judge verdict.dispositions[${i}].index ${entry.index} is a duplicate — the contract is one disposition per cluster`);
     }
     seenIndices.add(entry.index);
     if (!JUDGE_DISPOSITIONS.includes(entry.disposition)) {
@@ -1295,7 +1295,7 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
   const uncovered = [...clusterIds].filter((id) => !disposed.has(id));
   if (uncovered.length > 0) {
     throw new Error(
-      `judge verdict does not dispose ${uncovered.length} finding(s) (indexes: ${uncovered.join(", ")}) — fail closed; an undisposed finding must never be silently dropped from the fixer act list`
+      `judge verdict does not dispose ${uncovered.length} cluster(s) (clusterIds: ${uncovered.join(", ")}) — fail closed; an undisposed cluster must never be silently dropped from the fixer act list`
     );
   }
   return { findings: enriched, scopeDrift: validated.scopeDrift };

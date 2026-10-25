@@ -142,7 +142,7 @@ test("runJudgePass fails closed when the verdict does not dispose every finding 
   // `f.index` field instead of the 0-based array position is caught here.
   const findings = ledger(finding({ index: 7 }), finding({ index: 9, summary: "undisposed" }));
   const v = verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" }] });
-  assert.throws(() => runJudgePass(findings, v, HEAD), /does not dispose 1 finding\(s\) \(indexes: 1\)/);
+  assert.throws(() => runJudgePass(findings, v, HEAD), /does not dispose 1 cluster\(s\) \(clusterIds: 1\)/);
 });
 
 // issue 2156: duplicate root-cause findings (same file:line:recommendation at

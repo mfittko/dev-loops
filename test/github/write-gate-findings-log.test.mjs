@@ -2658,7 +2658,7 @@ test("writeGateFindingsLog --judge-verdict fails closed when the verdict does no
         judgeVerdict: judgeVerdictPath,
         tmpRoot: tmpDir,
       }),
-      /does not dispose 1 finding\(s\) \(indexes: 1\)/,
+      /does not dispose 1 cluster\(s\) \(clusterIds: 1\)/,
     );
     await assert.rejects(
       () => readFile(buildLogPath({ repo: "o/n", pr: 23, gate: "draft_gate", headSha, tmpRoot: tmpDir }), "utf8"),

@@ -1685,7 +1685,7 @@ describe("applyJudgeDispositions (#1525)", () => {
       { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in-scope", criterion: "AC-1" },
       { index: 0, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "dup", criterion: "NG-2" },
     ]);
-    assert.throws(() => applyJudgeDispositions(baseFindings, verdict), /duplicate.*one disposition per finding/);
+    assert.throws(() => applyJudgeDispositions(baseFindings, verdict), /duplicate.*one disposition per cluster/);
   });
 
   test("fails closed on a non-string driftedAreas element", () => {
@@ -1708,7 +1708,7 @@ describe("applyJudgeDispositions (#1525)", () => {
     ]);
     assert.throws(
       () => applyJudgeDispositions(baseFindings, verdict),
-      /does not dispose 1 finding\(s\) \(indexes: 1\)/,
+      /does not dispose 1 cluster\(s\) \(clusterIds: 1\)/,
     );
   });
 
@@ -1716,7 +1716,7 @@ describe("applyJudgeDispositions (#1525)", () => {
     const verdict = judgeVerdict([]);
     assert.throws(
       () => applyJudgeDispositions(baseFindings, verdict),
-      /does not dispose 2 finding\(s\) \(indexes: 0, 1\)/,
+      /does not dispose 2 cluster\(s\) \(clusterIds: 0, 1\)/,
     );
   });
 
@@ -1725,7 +1725,7 @@ describe("applyJudgeDispositions (#1525)", () => {
     const verdict = judgeVerdict([]);
     assert.throws(
       () => applyJudgeDispositions(alreadyEnriched, verdict),
-      /does not dispose 2 finding\(s\) \(indexes: 0, 1\)/,
+      /does not dispose 2 cluster\(s\) \(clusterIds: 0, 1\)/,
     );
   });
 
@@ -1929,7 +1929,7 @@ describe("fan-in never disposes; the judge disposes each cluster and authors its
     assert.equal(out[2].judgeTitle, "Shared SDK stays in consent mode");
     assert.equal(out[3].judgeReason, "Out of scope.");
     assert.throws(() => applyJudgeDispositions(findings, { headSha: "abc123", scopeDrift, dispositions: [{ index: 1, disposition: "act", rationale: "r", ...prose }] }), /not a clusterId/);
-    assert.throws(() => applyJudgeDispositions(findings, { headSha: "abc123", scopeDrift, dispositions: [{ index: 0, disposition: "act", rationale: "r", ...prose }] }), /does not dispose 1 finding/);
+    assert.throws(() => applyJudgeDispositions(findings, { headSha: "abc123", scopeDrift, dispositions: [{ index: 0, disposition: "act", rationale: "r", ...prose }] }), /does not dispose 1 cluster/);
   });
 
   test("a cluster without title, detail and fix, or a defer or reject without reason, fails closed", () => {

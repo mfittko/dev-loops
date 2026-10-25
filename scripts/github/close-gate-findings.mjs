@@ -41,9 +41,11 @@ current-ledger duplicate-fingerprint entries that disagree or prior ledgers
 that disagree, also skips) is never
 selected, at any severity and round (ADR 0089): it gets no
 stamp, no reply, no resolve, and no deferral entry, and stays open until the fixer
-replies with the fixing commit or a decline reason and resolves it. Otherwise only a thread whose every marker the judge
+replies with the fixing commit or a decline reason and resolves it. Two exceptions: a thread whose markers are all judge \`act\`
+with remedyKind evidence_only is closed with an evidence-only reply (evidenceOnlyClosed). Otherwise only a thread whose every marker the judge
 disposed \`defer\` is replied-to + resolved ("deferred at gate close"), whatever its
-severity or round. Severity and round never defer a thread: the medium fix window
+severity or round; a nit member of a judge-deferred mixed cluster closes with the cluster
+rationale ("Closed at gate close"), with no stamp and no filing. Severity and round never defer a thread: the medium fix window
 (default ${MEDIUM_FIX_WINDOW}, set per gate via gates.<gate>.mediumFixWindow) is an
 input to the judge, and an unjudged or ambiguous thread stays open. A question is
 answered, never deferred, so an unanswered question blocks gate-close exactly like an open defect — with

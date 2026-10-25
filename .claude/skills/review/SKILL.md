@@ -55,12 +55,14 @@ this skill dispatches the `review` agents directly.
    the deterministic UNION of `draft`'s and `preApproval`'s configured angle
    sets (`resolveReviewGateAngles` in `write-gate-context.mjs`). The
    spec-of-record-dependent angles — `acceptance-criteria`, `pr-checklist`,
-   `pr-description`, and `gate-evidence` — are each DROPPED (with a recorded
+   and `pr-description` — are each DROPPED (with a recorded
    rationale entry, reason `"no spec-of-record"`) only when the PR closes no
    issue AND its own body carries no AC checklist; all are KEPT when either
    is true. `pr-checklist` is also DROPPED (reason `"no formal spec on the closing
    issue or PR description"`) when neither the single closing issue nor the PR
    description passes `requireSpecFromBody`; an unknown fact keeps every angle.
+   The review gate always DROPS `gate-evidence` (reason `"the standalone review
+   has no lifecycle gates"`), with or without a spec of record.
 2. **First-wave release.** Same `GATE-EXEC-FIRST-WAVE-RELEASE` contract as any
    other gate fan-out: no primer and no lead reviewer; release the first wave
    immediately after emission.
