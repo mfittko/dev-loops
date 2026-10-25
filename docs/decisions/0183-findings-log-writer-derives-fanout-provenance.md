@@ -1,4 +1,4 @@
-# 0182. Derive fan-out provenance in the findings-log writer, not in the gate coordinator
+# 0183. Derive fan-out provenance in the findings-log writer, not in the gate coordinator
 
 ## Status
 
