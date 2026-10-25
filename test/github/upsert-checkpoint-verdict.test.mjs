@@ -12104,3 +12104,19 @@ test("parseUpsertCheckpointVerdictCliArgs validates --judge-spec-source and --ju
   }
   assert.throws(() => parse("--judge-spec-source", "none"), /scoped to --gate review only/);
 });
+
+test("tick: a writer-recorded log with nine verifiedItems and fan-in provenance composes a clean round", async () => {
+  const items = TICK_ITEMS.slice(0, 9);
+  const prBody = ["## Acceptance criteria", "", ...items.map((t) => `- [ ] ${t}`), "", "## Definition of done", "", "- [x] done", ""].join("\n");
+  const provenance = {
+    distinctReviewers: 2,
+    perAngle: [{ angle: "acceptance-criteria", reviewer: "reviewer-a" }, { angle: "pr-checklist", reviewer: "reviewer-b" }],
+  };
+  await withCompositionRound({ overallVerdict: "clean", prBody, verifiedItems: items, provenance }, async ({ post, postedBody, editedBodies }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(editedBodies.length, 1);
+    assert.doesNotMatch(editedBodies[0].body, /- \[ \]/);
+    assert.match(postedBody(), /\*\*Verdict:\*\* clean/);
+    assert.equal(result.gateBlockers, undefined);
+  });
+});
