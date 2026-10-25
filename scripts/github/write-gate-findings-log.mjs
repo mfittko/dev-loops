@@ -990,8 +990,13 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       );
     }
   }
-  if (options.emitPlan !== undefined || hasEmitPlan) {
-    await verifyEmitPlanProvenance(options.emitPlan ?? emitPlanPath, provenance, {
+  // The keyed plan is always validated when present; an explicit --emit-plan
+  // is an additional guard, never a replacement.
+  const emitPlansToVerify = [];
+  if (hasEmitPlan) emitPlansToVerify.push(emitPlanPath);
+  if (options.emitPlan !== undefined && path.resolve(repoRoot, options.emitPlan) !== emitPlanPath) emitPlansToVerify.push(options.emitPlan);
+  for (const planPath of emitPlansToVerify) {
+    await verifyEmitPlanProvenance(planPath, provenance, {
       repo: options.repo,
       pr: options.pr,
       gate: options.gate,

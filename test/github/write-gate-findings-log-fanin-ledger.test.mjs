@@ -158,3 +158,16 @@ test("a fan-in ledger that is not a JSON object is refused and names the file", 
     );
   });
 });
+
+test("an explicit --emit-plan cannot replace validation of a conflicting keyed plan", async () => {
+  const conflictingKeyed = { ...PLAN, count: 1, units: [{ angles: ["dry"], group: null }] };
+  await withRound({ plan: true, ledger: LEDGER }, async (write, repoRoot) => {
+    await putJson(repoRoot, buildGateEmitPlanPath(KEY), conflictingKeyed);
+    await putJson(repoRoot, "explicit-plan.json", PLAN);
+    await assert.rejects(() => write({ emitPlan: "explicit-plan.json" }));
+    // The agreeing explicit plan alone would have passed; the keyed plan must still be checked.
+    await putJson(repoRoot, buildGateEmitPlanPath(KEY), PLAN);
+    const { log } = await write({ emitPlan: "explicit-plan.json" });
+    assert.equal(log.executionMode, "fanout_fanin");
+  });
+});
