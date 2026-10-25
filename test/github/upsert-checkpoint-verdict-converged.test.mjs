@@ -98,10 +98,10 @@ function makeRunChild({ puts, existingReview = true, currentHead = FIX, body = e
   };
 }
 
-async function post(tempDir, { findings, converged, extraArgs = [], runChildOptions = {}, verdict }) {
+async function post(tempDir, { findings, converged, extraArgs = [], runChildOptions = {}, verdict, overallVerdict = "clean" }) {
   const ledgerPath = path.join(tempDir, "ledger.json");
   await writeFile(ledgerPath, JSON.stringify({
-    repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, verdict: "clean", overallVerdict: "clean",
+    repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, verdict: "clean", overallVerdict,
     loggedAt: "2026-10-20T00:00:00.000Z", findings,
   }), "utf8");
   const args = [
@@ -139,6 +139,18 @@ test("an all-low/nit act list with a clean delta updates the comment at A to cle
     assert.match(body, new RegExp(`\\*\\*Reviewed head SHA:\\*\\* \`${A}\``));
     assert.match(body, new RegExp(`\\*\\*Converged:\\*\\* fixer \`${FIX}\` delta \`sha256:[a-f0-9]{64}\``));
   }, { prefix: "dev-loops-converged-ok-" });
+});
+
+// ADR 0183: a fully judged round depends only on the act list, so an all-act round composes clean when it converges,
+// even when the consolidator's severity verdict (a low blocks under blockCleanOnFindingSeverities [high, low]) is findings_present.
+test("an all-act converged round composes clean from a findings_present ledger verdict", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1)];
+    const { result, body, error } = await post(tempDir, { findings, overallVerdict: "findings_present", converged: convergedInput(findings) });
+    assert.equal(error, undefined);
+    assert.equal(result.action, "updated");
+    assert.match(body, /\*\*Verdict:\*\* clean/);
+  }, { prefix: "dev-loops-converged-allact-" });
 });
 
 test("without --converged-json the same all-low/nit act list still refuses clean", async () => {

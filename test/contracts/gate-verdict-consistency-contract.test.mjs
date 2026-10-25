@@ -3,10 +3,13 @@
 // meaning, so the script-level constraint and the doc-level rule cannot drift.
 //
 // The rule (skills/docs/gate-review-comment-contract.md) defines:
-//   clean            = no findings with a severity in the gate's
-//                      blockCleanOnFindingSeverities remain
-//   findings_present = the gate found issues at blocking severities; fixes are
-//                      required before the gate boundary can be crossed
+//   clean            = a fully judged round has an empty judge act list (a round
+//                      with an unjudged finding also needs no finding at a
+//                      blockCleanOnFindingSeverities severity)
+//   findings_present = a fully judged round has a non-empty judge act list, or a
+//                      round with an unjudged finding has an issue at a blocking
+//                      severity; fixes are required before the gate boundary
+//                      can be crossed
 //
 // consolidate-fanin.mjs computes `overallVerdict` from exactly that definition.
 // upsert-checkpoint-verdict.mjs refuses a --verdict that contradicts the
@@ -31,13 +34,13 @@ test("GATE-COMMENT-VERDICT-VALUES states the clean/findings_present meanings the
   const doc = await readFile(CONTRACT_DOC, "utf8");
   // The rule ID is present and owns the verdict-value definitions.
   assert.match(doc, /<!-- rule: GATE-COMMENT-VERDICT-VALUES -->/);
-  // The stated meaning of "clean" matches what consolidate-fanin computes
-  // (no findings at a blocking severity remain), composed with the judge act
-  // list at post time (ADR 0089).
-  assert.match(doc, /\| `clean` \| No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain, and the judge act list is empty(, except [^|]*)? \|/);
+  // The stated meaning of "clean" is the judge act list for a fully judged
+  // round, and the fan-in severity verdict for a round with an unjudged
+  // finding (ADR 0089).
+  assert.match(doc, /\| `clean` \| A fully judged round[^|]*empty judge act list[^|]*\|/);
   // The stated meaning of "findings_present" matches (blocking findings found
   // or a non-empty act list).
-  assert.match(doc, /\| `findings_present` \| The gate found issues at blocking severities, or the judge act list is not empty/);
+  assert.match(doc, /\| `findings_present` \| A fully judged round has a non-empty judge act list[^|]*issue at a blocking severity[^|]*\|/);
 });
 
 test("upsert-checkpoint-verdict's refusal error cites GATE-COMMENT-VERDICT-VALUES so it points at the rule it upholds", async () => {

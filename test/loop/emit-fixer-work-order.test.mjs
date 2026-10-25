@@ -1666,7 +1666,11 @@ for (const route of ["THREAD", "ACT", "HISTORICAL_CONSTRUCT", "LEGACY", "AUTHORI
     for (const relative of ["scripts", "packages", "lib", "cli", "package.json", "skills", "agents"]) {
       await cp(path.join(checkout, relative), path.join(wt, relative), { recursive: true });
     }
-    for (const target of [root, wt]) await symlink(path.join(checkout, "node_modules"), path.join(target, "node_modules"), "dir");
+    // The historical producer resolves its own historical core.
+    await symlink(path.join(checkout, "node_modules"), path.join(wt, "node_modules"), "dir");
+    await mkdir(path.join(root, "node_modules/@dev-loops"), { recursive: true });
+    await symlink(path.join(root, "packages/core"), path.join(root, "node_modules/@dev-loops/core"), "dir");
+    for (const dep of ["yaml", "zod"]) await symlink(path.join(checkout, "node_modules", dep), path.join(root, "node_modules", dep), "dir");
     await writeFile(path.join(wt, ".gitignore"), "tmp/\nnode_modules/\n");
     git(wt, "add", ".");
     git(wt, "commit", "-qm", "committed historical feature fixture");

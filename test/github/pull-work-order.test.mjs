@@ -420,7 +420,11 @@ test("historical judge pull delegates to the index-owning new renderer and its p
     const unpack = spawnSync("tar", ["-xf", "-", "-C", old], { input: archive, encoding: "utf8" });
     assert.equal(unpack.status, 0, unpack.stderr);
     for (const file of files) await cp(path.join(checkout, file), path.join(current, file), { recursive: true });
-    for (const root of [old, current]) await symlink(path.join(checkout, "node_modules"), path.join(root, "node_modules"), "dir");
+    await symlink(path.join(checkout, "node_modules"), path.join(current, "node_modules"), "dir");
+    // The historical toolchain resolves its own historical core.
+    await mkdir(path.join(old, "node_modules/@dev-loops"), { recursive: true });
+    await symlink(path.join(old, "packages/core"), path.join(old, "node_modules/@dev-loops/core"), "dir");
+    for (const dep of ["yaml", "zod"]) await symlink(path.join(checkout, "node_modules", dep), path.join(old, "node_modules", dep), "dir");
     const emit = async (root) => {
       const sources = await seedJudgeSources(root, { headSha: HEAD, pr: 800000 + parseInt(randomBytes(3).toString("hex"), 16) });
       const result = spawnSync("node", [path.join(root, "scripts/loop/emit-judge-work-order.mjs"), "--repo", sources.repo, "--pr", String(sources.pr), "--gate", sources.gate, "--head-sha", HEAD,

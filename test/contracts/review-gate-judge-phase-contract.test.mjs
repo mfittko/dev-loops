@@ -34,7 +34,7 @@ test("the judge agent and its generated Claude asset carry the review-gate rejec
   for (const file of ["agents/judge.agent.md", ".claude/agents/judge.md"]) {
     const text = flat(await readRepo(file));
     assert.match(text, /On the review gate, a finding that is FYI-only or names no actionable defect is `reject`/, file);
-    assert.match(text, /`specKind: "pr_scope"`.*only claim is that lifecycle template sections .* are absent is `reject`/, file);
+    assert.match(text, /On every spec source, a finding whose only claim is that a section the repo.s PR template does not define .* is absent is `reject`/, file);
   }
 });
 
