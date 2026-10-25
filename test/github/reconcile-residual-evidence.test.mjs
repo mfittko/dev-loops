@@ -86,29 +86,40 @@ async function fixture(fn, harness = "pi", alterReads, continuation = false, mix
     await put(fixer.workOrder.outputRefs[0], handoff);
     await put(`${fixer.workOrder.outputRefs[0]}.constructed`, sha256Hex(handoff));
     if (continuation) {
-      const original = structuredClone(fixer), origin = Object.fromEntries(["executionIdentity", "workOrderRef", "workOrderDigest"].map((k) => [k, fixer[k]]));
+      const original = structuredClone(fixer), tuple = (p) => Object.fromEntries(["executionIdentity", "workOrderRef", "workOrderDigest"].map((k) => [k, p[k]])), origin = tuple(fixer);
       await put(path.join(fixerDir, original.executionIdentity, "original-fixer-emit-plan.json"), original);
-      fixer.executionIdentity = "f1799999999001-1234abcd";
-      fixer.workOrderRef = `fixer:o/r#7:${HEAD}:${fixer.executionIdentity}`;
-      const completion = { headSha: HEAD, fixingCommitSha: HEAD, siteCoverage: [], origin,
-        ...(continuation === "legacy" || continuation === "foreign-legacy" ? { legacyRevalidation: { originalFull: continuation === "legacy" ? origin : { ...origin, workOrderDigest: `sha256:${"0".repeat(64)}` } } } : {}),
-        threadBindings: [{ threadId: "PRRT_one", fingerprints: act.map((a) => a.fingerprint) }] };
-      const input = path.join(fixerDir, fixer.executionIdentity, "completion-input.json"), bytes = JSON.stringify(completion);
-      await put(input, bytes);
-      fixer.workOrder = { ...fixer.workOrder, phase: "full", operation: "complete", headSha: HEAD,
-        mutationAuthority: { branch: "fixture", allowedPaths: [] }, requiredReads: [...reads, { kind: "completion-input", path: input, sha256: hash(bytes), bytes: Buffer.byteLength(bytes), required: true }],
-        authority: { ...fixer.workOrder.authority, completionInputDigest: hash(completion), completionInputBytesDigest: hash(bytes) },
-        outputRefs: [path.join(fixerDir, fixer.executionIdentity, "fixer-disposition.json")] };
-      fixer.workOrderDigest = workOrderDigest(fixer.workOrder);
-      fixer.promptPath = path.join(fixerDir, "work-orders", `${fixer.executionIdentity}.md`);
-      const text = renderWorkOrder(fixer.workOrder);
-      fixer.materializationHash = materializationHash(text);
-      await put(fixer.promptPath, text);
-      await put(fixerPlan, fixer);
-      await put(executionIndexPath(tmpRoot, fixer.executionIdentity), Object.fromEntries(["executionIdentity", "workOrderRef", "workOrderDigest"].map((k) => [k, fixer[k]])));
-      await pullWorkOrder({ ref: fixer.workOrderRef, digest: fixer.workOrderDigest, execution: fixer.executionIdentity, cwd: root, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
-      await put(fixer.workOrder.outputRefs[0], handoff);
-      await put(`${fixer.workOrder.outputRefs[0]}.constructed`, sha256Hex(handoff));
+      const makeFull = async (identity, completionExtra) => {
+        fixer.executionIdentity = identity;
+        fixer.workOrderRef = `fixer:o/r#7:${HEAD}:${identity}`;
+        const completion = { headSha: HEAD, fixingCommitSha: HEAD, siteCoverage: [], origin, ...completionExtra,
+          threadBindings: [{ threadId: "PRRT_one", fingerprints: act.map((a) => a.fingerprint) }] };
+        const input = path.join(fixerDir, identity, "completion-input.json"), bytes = JSON.stringify(completion);
+        await put(input, bytes);
+        fixer.workOrder = { ...fixer.workOrder, phase: "full", operation: "complete", headSha: HEAD,
+          mutationAuthority: { branch: "fixture", allowedPaths: [] }, requiredReads: [...reads, { kind: "completion-input", path: input, sha256: hash(bytes), bytes: Buffer.byteLength(bytes), required: true }],
+          authority: { ...fixer.workOrder.authority, completionInputDigest: hash(completion), completionInputBytesDigest: hash(bytes) },
+          outputRefs: [path.join(fixerDir, identity, "fixer-disposition.json")] };
+        fixer.workOrderDigest = workOrderDigest(fixer.workOrder);
+        fixer.promptPath = path.join(fixerDir, "work-orders", `${identity}.md`);
+        const text = renderWorkOrder(fixer.workOrder);
+        fixer.materializationHash = materializationHash(text);
+        await put(fixer.promptPath, text);
+        await put(fixerPlan, fixer);
+        await put(executionIndexPath(tmpRoot, identity), tuple(fixer));
+        await pullWorkOrder({ ref: fixer.workOrderRef, digest: fixer.workOrderDigest, execution: identity, cwd: root, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
+        await put(fixer.workOrder.outputRefs[0], handoff);
+        await put(`${fixer.workOrder.outputRefs[0]}.constructed`, sha256Hex(handoff));
+      };
+      let legacy;
+      if (continuation === "legacy" || continuation === "foreign-legacy" || continuation === "legacy-bad-marker") {
+        // A distinct full-phase original: its own pulled receipt, report and .constructed marker.
+        await makeFull("f1799999999002-1234abcd");
+        const prior = structuredClone(fixer);
+        await put(path.join(fixerDir, prior.executionIdentity, "original-fixer-emit-plan.json"), prior);
+        if (continuation === "legacy-bad-marker") await put(`${prior.workOrder.outputRefs[0]}.constructed`, "altered");
+        legacy = continuation === "foreign-legacy" ? { ...tuple(prior), workOrderDigest: `sha256:${"0".repeat(64)}` } : tuple(prior);
+      }
+      await makeFull("f1799999999001-1234abcd", legacy ? { legacyRevalidation: { originalFull: legacy } } : {});
     }
     const decisionPath = path.join(tmpRoot, "gate-delta", `${BASE}.json`);
     await put(decisionPath, decision);
@@ -227,17 +238,20 @@ async function acceptanceFixture(fn, harness = "pi", findings = [], continuation
   }, harness, undefined, continuation, mixed);
 }
 
+// One base, one hour ahead of the run, so the fixer report mtime (wall clock) always precedes the pinned times.
+const ORDER_BASE_MS = Math.floor(Date.now() / 1000) * 1000 + 3_600_000;
+const orderTime = (offsetMs) => new Date(ORDER_BASE_MS + offsetMs).toISOString();
 for (const [name, published, accepted] of [
-  ["same second", "2030-01-01T12:00:00Z", true],
-  ["later second", "2030-01-01T12:00:01Z", true],
-  ["earlier publication", "2030-01-01T11:59:59Z", false],
-  ["same-second foreign head", "2030-01-01T12:00:00Z", false],
+  ["same second", orderTime(0), true],
+  ["later second", orderTime(1000), true],
+  ["earlier publication", orderTime(-1000), false],
+  ["same-second foreign head", orderTime(0), false],
 ]) test(`acceptance orders second-precision publication: ${name}`, async () => acceptanceFixture(async (f) => {
   f.state.comments[0].updated_at = published;
   if (name === "same-second foreign head") f.state.comments[0].body = f.state.comments[0].body.replace(HEAD, BASE);
   if (accepted) assert.equal((await verifyResidualEvidenceAcceptance(f.options, f.deps)).status, "accepted");
   else await assert.rejects(verifyResidualEvidenceAcceptance(f.options, f.deps), /temporal order/);
-}, "pi", [], false, false, new Date("2030-01-01T12:00:00.200Z")));
+}, "pi", [], false, false, new Date(ORDER_BASE_MS + 200)));
 
 for (const draft of [undefined, null, { title: "Follow up", body: "" }, 42, [], { title: " ", body: "" }, { title: "Follow up", body: 42 }]) {
   const valid = draft == null || !Array.isArray(draft) && typeof draft === "object" && draft.title.trim() && typeof draft.body === "string";
@@ -306,7 +320,7 @@ const acceptanceNegatives = {
   openAct: async (f, ledger) => { ledger.findings[0].judgeDisposition = "act"; },
   contradictoryOverall: async (f, ledger) => { ledger.overallVerdict = "clean"; },
   contradictoryComposed: async (f, ledger) => { ledger.verdict = "findings_present"; },
-  cleanMarkerOverHigh: async (f) => { f.state.comments[0].body = f.state.comments[0].body.replace("**Verdict:** clean", "**Verdict:** findings_present"); },
+  findingsMarkerOverCleanRound: async (f) => { f.state.comments[0].body = f.state.comments[0].body.replace("**Verdict:** clean", "**Verdict:** findings_present"); },
   oldGate: async (f) => { f.state.comments[0].updated_at = "2020-01-01T00:00:00Z"; },
   foreignLedgerProvenance: async (f, ledger) => { ledger.provenance.perAngle[1].dispatchId = ledger.provenance.perAngle[0].dispatchId; },
   missingAngle: async (f) => { await rm(f.plan.units[0].workOrder.outputRefs[0]); },
@@ -337,7 +351,7 @@ const acceptanceRefusals = {
   openAct: /missing findings or open act item/,
   contradictoryOverall: /gate severity verdict mismatch/,
   contradictoryComposed: /gate severity verdict mismatch/,
-  cleanMarkerOverHigh: /visible full gate verdict or temporal order mismatch/,
+  findingsMarkerOverCleanRound: /visible full gate verdict or temporal order mismatch/,
   oldGate: /visible full gate verdict or temporal order mismatch/,
   foreignLedgerProvenance: /foreign full gate ledger provenance/,
   missingAngle: /ENOENT/,
@@ -424,15 +438,25 @@ test("authenticates delivery-only continuation and its original pulled commit-on
   await assert.rejects(acceptResidualEvidence(f.options, f.deps), /execution index/);
 }, "codex", [], true));
 
-for (const alter of [
-  (v) => { v.status = "accepted"; }, (v) => { v.coordinatorAccepted = true; },
-  (v) => { v.provenance.roundId = "foreign"; }, (v) => { v.sources[0].base64 = Buffer.from("forged").toString("base64"); },
-]) test("rejects content-addressed but fabricated snapshot proof", async () => acceptanceFixture(async (f) => {
+for (const [name, alter] of [
+  ["forged status", (v) => { v.status = "accepted"; }], ["forged coordinatorAccepted", (v) => { v.coordinatorAccepted = true; }],
+  ["forged roundId", (v) => { v.provenance.roundId = "foreign"; }], ["forged source bytes", (v) => { v.sources[0].base64 = Buffer.from("forged").toString("base64"); }],
+]) test(`rejects content-addressed but fabricated snapshot proof: ${name}`, async () => acceptanceFixture(async (f) => {
   const snapshot = JSON.parse(await readFile(f.options.snapshot));
   alter(snapshot);
   const text = JSON.stringify(snapshot), forged = path.join(path.dirname(f.options.snapshot), `${hash(text)}.json`);
   await put(forged, text);
-  await assert.rejects(acceptResidualEvidence({ ...f.options, snapshot: forged }, f.deps), /snapshot/);
+  await assert.rejects(acceptResidualEvidence({ ...f.options, snapshot: forged }, f.deps), /snapshot provenance or bytes changed/);
+}));
+
+test("refuses a genuine snapshot copied to a misnamed file or foreign pr directory", async () => acceptanceFixture(async (f) => {
+  const text = await readFile(f.options.snapshot, "utf8"), snapshotsDir = path.dirname(f.options.snapshot);
+  const foreignPr = path.join(path.dirname(path.dirname(snapshotsDir)), "pr-8", HEAD, "snapshots", path.basename(f.options.snapshot));
+  for (const copy of [path.join(snapshotsDir, "misnamed.json"), foreignPr]) {
+    await put(copy, text);
+    await assert.rejects(acceptResidualEvidence({ ...f.options, snapshot: copy }, f.deps), /foreign snapshot path or digest/);
+  }
+  await assert.rejects(readdir(path.join(path.dirname(snapshotsDir), "accepted")), /ENOENT/);
 }));
 
 test("final publication reauthenticates sources and refuses replacement after CI", async () => acceptanceFixture(async (f) => {
@@ -700,3 +724,20 @@ test("continuation with legacyRevalidation.originalFull accepts when the binding
 test("continuation with a changed legacyRevalidation tuple field is refused", async () => acceptanceFixture(async (f) => {
   await assert.rejects(verifyResidualEvidenceAcceptance(f.options, f.deps), /foreign legacy continuation binding/);
 }, "codex", [], "foreign-legacy"));
+
+test("continuation with an altered legacy full-phase constructed marker is refused with no accepted write", async () => acceptanceFixture(async (f) => {
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), /foreign constructed report/);
+  await assert.rejects(readdir(path.join(path.dirname(path.dirname(f.options.snapshot)), "accepted")), /ENOENT/);
+}, "codex", [], "legacy-bad-marker"));
+
+test("delivery check runs the verifier through the default runChild without a stdin or cwd argument", async () => acceptanceFixture(async (f) => {
+  const { runChild } = await import("../../scripts/_cli-primitives.mjs");
+  const seen = [], inner = f.deps.runChild;
+  f.deps.runChild = async (command, args, env, ...rest) => {
+    if (command === process.execPath && args[0].endsWith("verify-fixer-disposition.mjs")) { seen.push(rest); return runChild(command, args, env, ...rest); }
+    return inner(command, args, env, ...rest);
+  };
+  // The real verifier cannot reach a live PR here; it must still run as a child and refuse, not reject on a misused argument.
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), /full delivery check failed|JSON/);
+  assert.deepEqual(seen, [[]]);
+}));
