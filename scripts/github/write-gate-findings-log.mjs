@@ -9,7 +9,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
+import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, neverDeferredSeverity, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
@@ -290,6 +290,19 @@ function validateFindingsArray(parsed, flagLabel) {
   for (const [i, e] of entries.entries()) {
     if (e.clusterId !== undefined && (e.clusterId >= entries.length || entries[e.clusterId].clusterId !== e.clusterId)) {
       throw parseError(`${flagLabel}[${i}].clusterId ${e.clusterId} must be less than ${entries.length} and name an entry whose own clusterId is ${e.clusterId}`);
+    }
+  }
+  // GATE-EXEC-THREAD-DISPOSITION: a high, a question or an all-nit cluster is never deferred, on every input path
+  // (the --judge-verdict branch re-checks the projected clusters). Unstamped findings are their own cluster.
+  const groups = new Map();
+  for (const [i, e] of entries.entries()) {
+    const key = e.clusterId ?? `solo:${i}`;
+    groups.set(key, [...(groups.get(key) ?? []), { e, i }]);
+  }
+  for (const members of groups.values()) {
+    const blocked = members.some(({ e }) => e.judgeDisposition === "defer") ? neverDeferredSeverity(members.map(({ e }) => e)) : null;
+    if (blocked) {
+      throw parseError(`${flagLabel}[${members.find(({ e }) => e.judgeDisposition === "defer").i}].judgeDisposition "defer" reaches a cluster whose severity is ${blocked}; a high, a question or an all-nit cluster is never deferred (GATE-EXEC-THREAD-DISPOSITION)`);
     }
   }
   return entries;

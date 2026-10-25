@@ -225,7 +225,8 @@ Required:
                                             interpret this finding" is
                                             distinguishable from "this finding is
                                             not blocking".
-  --next-action <text>
+  --next-action <text>                      (--gate review ignores the value and derives the next
+                                            action from the judge act list.)
 Optional:
   --converged-json <path>                   draft_gate low/nit convergence
                                             (GATE-EXEC-LOW-NIT-CONVERGENCE):

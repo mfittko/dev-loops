@@ -307,8 +307,14 @@ test("renderNonLocatableBlock: only a judge defer stamps disposition=deferred, w
   assert.equal(parseFindingMarker(nit).disposition, null);
   assert.equal(parseFindingMarker(question).disposition, null);
   assert.equal(parseFindingMarker(high).disposition, null);
-  const deferred = renderNonLocatableBlock({ severity: "high", angle: "security", summary: "injection", judgeDisposition: "defer" }, { round: 1 });
-  assert.equal(parseFindingMarker(deferred).disposition, "deferred");
+  for (const severity of ["high", "question", "nit"]) {
+    const never = renderNonLocatableBlock({ severity, angle: "security", summary: "injection", judgeDisposition: "defer" }, { round: 1 });
+    assert.equal(parseFindingMarker(never).disposition, null, `${severity} with judgeDisposition defer is never stamped`);
+  }
+  for (const severity of ["low", "medium"]) {
+    const ok = renderNonLocatableBlock({ severity, angle: "security", summary: "injection", judgeDisposition: "defer" }, { round: 1 });
+    assert.equal(parseFindingMarker(ok).disposition, "deferred");
+  }
   const act = renderNonLocatableBlock({ severity: "low", angle: "naming", summary: "casing nit", judgeDisposition: "act" }, { round: 1 });
   assert.equal(parseFindingMarker(act).disposition, null);
 });

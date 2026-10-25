@@ -327,6 +327,21 @@ test("writeGateFindingsLog rejects a defer judgeDisposition with no followUpDraf
   }, /\[0\]\.followUpDraft is required when judgeDisposition is "defer"/);
 });
 
+for (const severity of ["high", "question", "nit"]) {
+  test(`writeGateFindingsLog rejects a defer judgeDisposition on a ${severity} finding without --judge-verdict`, async () => {
+    await assert.rejects(async () => {
+      await writeGateFindingsLog({
+        repo: "a/b",
+        pr: 1,
+        gate: "draft_gate",
+        headSha: "abc1234500000000000000000000000000000000",
+        verdict: "findings_present",
+        findings: JSON.stringify([{ severity, angle: "scope", summary: "x", judgeDisposition: "defer", followUpDraft: { title: "t", body: "b" } }]),
+      });
+    }, /is never deferred \(GATE-EXEC-THREAD-DISPOSITION\)/);
+  });
+}
+
 test("writeGateFindingsLog accepts a defer judgeDisposition carrying a followUpDraft", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-defer-draft-"));
   try {

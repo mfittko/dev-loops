@@ -373,7 +373,7 @@ const GateConfig = z.strictObject({
   // LAYER independently (each is parsed before merging), permanently shadowing
   // a layer that sets only the deprecated `worthFixingNowFixWindow` alias.
   // resolveGateConfig applies the built-in fallback (3) after checking both.
-  mediumFixWindow: z.number().int().nonnegative().optional().describe("Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. high is exempt (never defers). Default 3."),
+  mediumFixWindow: z.number().int().nonnegative().optional().describe("Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain. The window is an input to the judge's act, defer or reject decision and never defers a finding by itself. high is exempt (never defers). Default 3."),
   worthFixingNowFixWindow: z.number().int().nonnegative().optional().describe("Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set."),
   // No schema-level `.default()` for the same reason as mediumFixWindow above:
   // a default would fill this key on every config layer independently and

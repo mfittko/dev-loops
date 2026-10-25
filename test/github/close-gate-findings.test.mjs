@@ -352,6 +352,7 @@ test("closeGateFindings posts no review and no comment of its own: a round with 
         round: 1,
         deferredResolved: 0,
         rejectClosed: 0,
+        evidenceOnlyClosed: 0,
         unresolvedGateThreadCount: 0,
         foldedFiled: 0,
       });
@@ -2209,6 +2210,21 @@ test("#2263: an operator-visible folded low is listed in ONE deferral comment, w
   ));
 });
 
+test("a folded deferred nit stays out of the deferral comment while a folded deferred operator-visible low enters it", async () => {
+  const low = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true, judgeDisposition: "defer" };
+  const nit = { severity: "nit", angle: "style", summary: "trailing whitespace", judgeDisposition: "defer" };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [low, nit] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [] }),
+      ...deferralCommentEntries(9600, { contains: [fingerprintFinding(low)], notContains: [fingerprintFinding(nit)] }),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.foldedFiled, 1);
+    },
+  ));
+});
+
 test("#2263: an unjudged nit and an unjudged low fold with no filing: no deferral-comment calls at all", async () => {
   const nitFinding = { severity: "nit", angle: "style", summary: "trailing whitespace" };
   const quietLowFinding = { severity: "low", angle: "naming", summary: "casing nit in a local constant" };
@@ -2298,13 +2314,15 @@ test("#2263: folded and thread deferrals of one round go in ONE batched comment"
 
 // An act with remedyKind evidence_only never reaches the fixer, but it is still
 // an act: the judge did not defer it, so the thread is never deferred.
-test("a prior-ledger act with remedyKind evidence_only is never deferred at round 4", async () => {
+test("a prior-ledger act with remedyKind evidence_only is replied to and resolved with no stamp", async () => {
   const finding = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated" };
   const fp = fingerprintFinding(finding);
   const thread = openWfnThread({ commentId: 6002, fp });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      { ...postReplyEntry(6002, { id: 7002 }), assertStdinIncludes: ["evidence-only remedy", "no file change"] },
+      resolveThreadEntry("THREAD_D"),
     ],
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
@@ -2316,12 +2334,14 @@ test("a prior-ledger act with remedyKind evidence_only is never deferred at roun
       );
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.deferredResolved, 0);
+      assert.equal(result.evidenceOnlyClosed, 1);
+      assert.equal(result.unresolvedGateThreadCount, 0);
     },
   ));
 });
 
 // The same holds for the CURRENT ledger.
-test("a current-ledger act with remedyKind evidence_only is never deferred at round 4", async () => {
+test("a current-ledger act with remedyKind evidence_only is replied to and resolved with no stamp", async () => {
   const finding = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated" };
   const fp = fingerprintFinding(finding);
   const thread = openWfnThread({ commentId: 6003, fp });
@@ -2329,13 +2349,35 @@ test("a current-ledger act with remedyKind evidence_only is never deferred at ro
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      { ...postReplyEntry(6003, { id: 7003 }), assertStdinIncludes: ["evidence-only remedy", "no file change"] },
+      resolveThreadEntry("THREAD_D"),
     ],
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.deferredResolved, 0);
+      assert.equal(result.evidenceOnlyClosed, 1);
+      assert.equal(result.unresolvedGateThreadCount, 0);
     },
   ));
 });
+
+// Rejected forms: an open act, or a mixed pair of evidence-only and open act, keeps the thread open.
+for (const [label, extra] of [["an open act", []], ["a mixed evidence-only and open act pair", [{ remedyKind: "evidence_only" }]]]) {
+  test(`${label} in the current ledger leaves the thread open: no reply, stamp or resolve`, async () => {
+    const finding = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated", judgeDisposition: "act", judgeRationale: "fix it" };
+    const fp = fingerprintFinding(finding);
+    const thread = openWfnThread({ commentId: 6004, fp });
+    const findings = [finding, ...extra.map((e) => ({ ...finding, ...e }))];
+    await withLedgerFile(makeLedger({ gate: "draft_gate", findings }), (ledgerPath) => withGhStub(
+      roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+        assert.equal(result.evidenceOnlyClosed, 0);
+        assert.equal(result.unresolvedGateThreadCount, 1);
+      },
+    ));
+  });
+}
 
 // Tier 2: same disposition but a remedyKind disagreement is ambiguous, not a cache hit.
 test("a tied prior-ledger remedyKind disagreement (same disposition) is ambiguous — the thread stays open", async () => {

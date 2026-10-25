@@ -582,9 +582,9 @@ export function renderInlineCommentBody(finding, { round }) {
 export function buildNonLocatableFindingMarker(finding, { round, issue }) {
   const fp = fingerprintFinding(finding);
   const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
-  // A nit member of a deferred cluster gets no stamp (Nit bullet, GATE-EXEC-THREAD-DISPOSITION).
+  // A nit, high or question member gets no stamp: those severities are never deferred (GATE-EXEC-THREAD-DISPOSITION).
   const stamp = isDeferredAtRound(finding.judgeDisposition) ? "deferred" : undefined;
-  const disposition = severity === "nit" ? undefined : stamp;
+  const disposition = severity === "nit" || severity === "high" || severity === "question" ? undefined : stamp;
   // Carry the operator-visibility signal onto the marker (ov=1 only when
   // true) so a later reader (the folded-filing pass, close-gate-findings.mjs)
   // can decide fileability without re-reading the ephemeral ledger. Backward
