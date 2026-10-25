@@ -35,6 +35,9 @@ Everything after the tag is hands-off.
    release files (never `git add -A`). It is idempotent and bump-only — it
    never commits, tags, pushes, or publishes.
 
+   A stable bump folds every `## <version>-*` prerelease section into one
+   `## <version>` section. No consolidation PR is needed.
+
    The generated forms carry no version pin: they run `dev-loops-run
    cli/index.mjs <ns> <sub>`, which resolves a live dev-loops checkout and
    otherwise the plugin's installed package (see
@@ -68,7 +71,7 @@ Everything after the tag is hands-off.
 2. Tag the release commit and push the tag:
 
    ```bash
-   git tag v<version>
+   git tag -a v<version> -m v<version> <sha>
    git push origin v<version>
    ```
 
@@ -195,7 +198,7 @@ manually. Local pre-flight (optional but recommended before pushing the tag):
   gh run cancel <publish-run-id>          # 1. stop the publish run first
   # 2. fix/remove the unintended commit on main (guard override as above)
   git tag -d v<version> && git push origin :refs/tags/v<version>
-  git tag v<version> && git push origin v<version>   # 3. re-cut the tag
+  git tag -a v<version> -m v<version> <sha> && git push origin v<version>   # 3. re-cut the tag
   ```
 - Tag not on `main`: the release workflow fails the on-main guard — re-tag the
   correct commit.
@@ -209,6 +212,6 @@ manually. Local pre-flight (optional but recommended before pushing the tag):
   DEVLOOPS_ALLOW_MAIN=1 git add CHANGELOG.md
   DEVLOOPS_ALLOW_MAIN=1 git commit -m "docs: add v<version> CHANGELOG section"
   DEVLOOPS_ALLOW_MAIN=1 git push origin main
-  git tag -f v<version>
+  git tag -f -a v<version> -m v<version> <sha>
   git push --force origin v<version>
   ```
