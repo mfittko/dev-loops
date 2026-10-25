@@ -3554,11 +3554,11 @@ export async function main(
       // fan-out today). Throws → caught below → exit 1, no artifact written.
       assertWorktreeAtHead(options.headSha, { repoRoot });
       // SHAs, revision expressions and non-origin remote refs (upstream/main) have no origin branch to refresh.
-      const freshness = await checkBaseFreshness({ base: normalizeBaseBranch(options.base), cwd: repoRoot, env });
+      const freshness = await checkBaseFreshness({ base: options.base, cwd: repoRoot, env });
       if (freshness.ok) {
         options.baseFreshness = { status: freshness.status, base: freshness.base };
       } else if (freshness.error === "base_not_origin_branch") {
-        options.baseFreshness = { status: "unchecked", base: options.base };
+        options.baseFreshness = { status: "unchecked", base: freshness.base };
       } else if (freshness.error !== "base_stale_integrate_first") {
         throw new Error(`${freshness.error}: ${freshness.message}`);
       } else {
@@ -3566,7 +3566,8 @@ export async function main(
         const more = freshness.newerCommits.length > 5 ? ` (+${freshness.newerCommits.length - 5} more)` : "";
         throw new Error(`${freshness.error}: origin/${freshness.base} has ${freshness.newerCommits.length} commit(s) the PR head lacks (${shown}${more}); files differing only because of the stale base: ${freshness.foreignFiles.join(", ") || "none"}. ${freshness.remedy}`);
       }
-      options.base = anchorBaseRef(options.base, { repoRoot });
+      // A base_current preflight verified origin/<base>, so diff against that ref, never a possibly stale local one.
+      options.base = options.baseFreshness.status === "base_current" ? `origin/${options.baseFreshness.base}` : anchorBaseRef(options.base, { repoRoot });
       diff = captureDiffFromBase(options.base, { repoRoot });
       const scope = await resolveDiffScope(
         { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" },

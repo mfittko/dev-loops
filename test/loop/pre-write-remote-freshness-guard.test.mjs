@@ -284,7 +284,7 @@ test("checkBaseFreshness normalizes every origin spelling of the base and reject
     }
     execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/release/1.0"], { cwd: clone });
     assert.equal((await checkBaseFreshness({ base: "release/1.0", cwd: clone })).ok, true);
-    for (const base of ["HEAD~1", "refs/heads/refs/heads/main", "upstream/main", "a".repeat(40)]) {
+    for (const base of ["HEAD~1", "refs/heads/refs/heads/main", "origin/origin/main", "upstream/main", "a".repeat(40)]) {
       const result = await checkBaseFreshness({ base, cwd: clone });
       assert.equal(result.error, "base_not_origin_branch", base);
     }
@@ -366,4 +366,17 @@ test("checkBaseFreshness returns a typed base_fetch_failed error when the fetch 
 
 test("parseRemoteFreshnessGuardCliArgs rejects --branch together with --base", () => {
   assert.throws(() => parseRemoteFreshnessGuardCliArgs(["--branch", "a", "--base", "b"]), /mutually exclusive/u);
+});
+
+test("checkBaseFreshness retries a ref-lock fetch failure and then reports base_current", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "freshness-lock-"));
+  try {
+    const stub = path.join(dir, "git");
+    const marker = path.join(dir, "locked-once");
+    await writeFile(stub, `#!/bin/sh\ncase "$1" in fetch) if [ ! -e "${marker}" ]; then : > "${marker}"; echo "fatal: cannot lock ref 'refs/remotes/origin/main'" >&2; exit 1; fi;; esac\nexit 0\n`);
+    await chmod(stub, 0o755);
+    assert.deepEqual(await checkBaseFreshness({ base: "main", cwd: dir, gitCommand: stub }), { ok: true, status: "base_current", base: "main" });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

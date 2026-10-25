@@ -399,7 +399,8 @@ binary, or leading git global options (`-C`, `-c`, `--git-dir=`, `--work-tree=`)
 
 <!-- rule: WORKTREE-STALE-BASE-REMEDY -->
 `WORKTREE-STALE-BASE-REMEDY`: When `origin/<base>` has commits the PR branch lacks, the remedy is
-merge and re-check. The merge procedure is owned by `GATE-EXEC-BASE-REFRESH` in
+merge and re-check. Never rebase a pushed branch and never force-push it: merge `origin/<base>`,
+push the merge and re-check at the new head. The merge procedure is owned by `GATE-EXEC-BASE-REFRESH` in
 [Gate review sub-loop contract](gate-review-sub-loop-contract.md#base-refresh-before-a-gate-round).
 Run `cd <worktree> && dev-loops-run scripts/loop/pre-write-remote-freshness-guard.mjs --base <base>`
 before validation, before push and before every gate dispatch. It exits nonzero with

@@ -8258,7 +8258,7 @@ test("issue 2885: write-gate-context records baseFreshness on a current base and
   }
 });
 
-test("issue 2885: a SHA, revision-expression or non-origin remote --base records unchecked without a fetch", async () => {
+test("issue 2885: a SHA, revision-expression or non-origin remote --base records unchecked", async () => {
   const { root, clone, headSha } = await makeOriginFixture();
   try {
     const sha = git(clone, ["rev-parse", "HEAD~1"]).trim();
@@ -8294,8 +8294,25 @@ test("issue 2885: a failed preflight fetch exits 1 with base_fetch_failed, the n
       process.stderr.write = realWrite;
       process.exitCode = before;
     }
-    assert.equal(received, "main");
+    assert.equal(received, "origin/main");
     assert.equal(existsSync(path.join(clone, "tmp/gate-context")), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885: a stale local refs/heads/main base diffs against origin/main, not the local ref", async () => {
+  const { root, clone, advanceOrigin } = await makeOriginFixture();
+  try {
+    await advanceOrigin();
+    git(clone, ["fetch", "-q", "origin"]);
+    git(clone, ["merge", "-q", "--no-edit", "origin/main"]);
+    const headSha = git(clone, ["rev-parse", "HEAD"]).trim();
+    const argv = ["--repo", "owner/repo", "--pr", "73", "--gate", "review", "--head-sha", headSha, "--base", "refs/heads/main", "--angles", '["correctness"]'];
+    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 73, gate: "review", headSha }, { repoRoot: clone });
+    assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
+    assert.deepEqual(artifact.scope.changedFiles, ["b.txt"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

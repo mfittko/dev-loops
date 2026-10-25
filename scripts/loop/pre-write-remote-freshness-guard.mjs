@@ -23,7 +23,7 @@ export async function checkBaseFreshness({ base: rawBase, cwd = process.cwd(), e
   const git = async (args) => lines((await runCommand(gitCommand, args, { cwd, env: gitEnv })).stdout);
   const base = normalizeBaseBranch(rawBase);
   const notBranch = (message) => ({ ok: false, error: "base_not_origin_branch", base: rawBase, message });
-  if (!isBranchName(base, { allowSlash: true }) || base.startsWith("refs/")) return notBranch(`${rawBase} is not an origin branch name`);
+  if (!isBranchName(base, { allowSlash: true }) || base.startsWith("refs/") || base.startsWith("origin/")) return notBranch(`${rawBase} is not an origin branch name`);
   // A full-length SHA is never an origin branch: classify it before any network call.
   if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(base)) return notBranch(`${rawBase} is a SHA, not an origin branch`);
   if (base.includes("/")) {
@@ -31,7 +31,16 @@ export async function checkBaseFreshness({ base: rawBase, cwd = process.cwd(), e
     if (remote !== "origin" && (await git(["remote"]).catch(() => [])).includes(remote)) return notBranch(`${rawBase} names the remote ${remote}, not an origin branch`);
   }
   try {
-    await execFileAsync(gitCommand, ["fetch", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`], { cwd, env: gitEnv, timeout: fetchTimeoutMs });
+    // Sibling worktrees share one ref store: retry a bounded number of times on a ref-lock collision.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await execFileAsync(gitCommand, ["fetch", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`], { cwd, env: gitEnv, timeout: fetchTimeoutMs });
+        break;
+      } catch (error) {
+        if (attempt >= 3 || !/cannot lock ref|Unable to create '.*\.lock'/u.test(error?.stderr ?? "")) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+      }
+    }
   } catch (error) {
     // A hex-only value with no such origin branch is an abbreviated SHA, not a stale-base failure.
     if (/^[0-9a-f]+$/iu.test(base) && /couldn't find remote ref/u.test(error?.stderr ?? "")) return notBranch(`${rawBase} is not an origin branch (looks like a SHA)`);
