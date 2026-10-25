@@ -54,7 +54,7 @@ Optional:
                                  given for a gate that configures a mandatory angle — see --execution-mode below.
   --execution-mode <fanout_fanin|inline_single_agent>
                                  How this round was executed (mirrors upsert-checkpoint-verdict.mjs's own
-                                 --execution-mode). A keyed emit plan at the head resolves an omitted mode to fanout_fanin and refuses inline_single_agent; a per-angle findings dir without an emit plan refuses an omitted mode and inline_single_agent. With neither, it defaults to inline_single_agent. In fanout_fanin mode the keyed fan-in ledger (under --context-tmp-root) supplies provenance, verifiedItems and overallVerdict (--verdict is then optional), and a differing --provenance is refused. A fanout_fanin write
+                                 --execution-mode). A keyed emit plan at the head resolves an omitted mode to fanout_fanin and refuses inline_single_agent; a per-angle findings dir without an emit plan refuses an omitted mode and inline_single_agent. With neither, it defaults to inline_single_agent. In fanout_fanin mode, when the keyed fan-in ledger (under --context-tmp-root) exists, it supplies provenance, verifiedItems and overallVerdict (--verdict is then optional), and a differing --provenance is refused. A fanout_fanin write
                                  for a gate that configures mandatory angles (gates.<gate>.angles entries
                                  with mandatory: true) FAILS CLOSED (throws, writes no ledger) when neither
                                  an explicit --provenance nor a wrapper-supplied one is present. inline_single_agent

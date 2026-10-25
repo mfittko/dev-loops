@@ -22,13 +22,13 @@ The writer refuses three inputs:
 
 - an explicit `--provenance` that differs from the derived provenance;
 - an explicit `inline_single_agent` mode beside fan-out artifacts at the head;
-- a fan-out write without the keyed fan-in ledger.
+- a fan-out write without the keyed fan-in ledger, when the keyed emit plan exists at the head.
 
 Rejected alternative: keep coordinator-composed provenance and validate its shape. Shape
 validation cannot prove that the keyed artifacts produced the block.
 
 ## Consequences
 
-Provenance that authorizes mutations now comes only from keyed round artifacts. Coordinators
-pass less input, and a missing ledger fails closed. Callers that still pass `--provenance` or
+When the keyed emit plan exists at the head, provenance that authorizes mutations comes only from keyed round artifacts and a missing ledger fails closed. The legacy explicit-provenance path with no keyed emit plan is unchanged until slice 3. Coordinators
+pass less input. Callers that still pass `--provenance` or
 `inline_single_agent` on a fan-out head must drop those flags.

@@ -23,7 +23,8 @@ import {
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { buildFanoutEnforcement, buildPreMergeGateCheck, deriveEvidenceState, detectCheckpointEvidence, EVIDENCE_STATE, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
-import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
+import { buildLogPath, writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
+import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
@@ -12105,18 +12106,42 @@ test("parseUpsertCheckpointVerdictCliArgs validates --judge-spec-source and --ju
   assert.throws(() => parse("--judge-spec-source", "none"), /scoped to --gate review only/);
 });
 
-test("tick: a log carrying nine verifiedItems and fan-in provenance composes a clean round", async () => {
+test("tick: the log writeGateFindingsLog produces from an enriched findings file without verifiedItems composes a clean round", async () => {
   const items = TICK_ITEMS.slice(0, 9);
   const prBody = ["## Acceptance criteria", "", ...items.map((t) => `- [ ] ${t}`), "", "## Definition of done", "", "- [x] done", ""].join("\n");
   const provenance = {
     distinctReviewers: 2,
-    perAngle: [{ angle: "acceptance-criteria", reviewer: "reviewer-a" }, { angle: "pr-checklist", reviewer: "reviewer-b" }],
+    perAngle: [{ angle: "dry", reviewer: "reviewer-a" }, { angle: "pr-checklist", reviewer: "reviewer-b" }],
   };
-  await withCompositionRound({ overallVerdict: "clean", prBody, verifiedItems: items, provenance }, async ({ post, postedBody, editedBodies }) => {
-    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
-    assert.equal(editedBodies.length, 1);
-    assert.doesNotMatch(editedBodies[0].body, /- \[ \]/);
-    assert.match(postedBody(), /\*\*Verdict:\*\* clean/);
-    assert.equal(result.gateBlockers, undefined);
-  });
+  const key = { repo: "owner/repo", pr: 17, gate: "pre_approval_gate", headSha: VERDICT_LEDGER_HEAD, tmpRoot: "tmp" };
+  const writerRoot = await mkdtemp(path.join(os.tmpdir(), "upsert-writer-log-"));
+  try {
+    const put = async (rel, value) => {
+      await mkdir(path.dirname(path.resolve(writerRoot, rel)), { recursive: true });
+      await writeFile(path.resolve(writerRoot, rel), JSON.stringify(value), "utf8");
+    };
+    await writeFile(path.join(writerRoot, ".devloops"), "version: 1\ngates:\n  preApproval:\n    angles:\n      - dry\n      - name: pr-checklist\n        mandatory: true\n      - name: holistic\n        enabled: false\n", "utf8");
+    await put(buildGateEmitPlanPath(key), {
+      ok: true, ...key, count: 2, tmpRoot: undefined,
+      units: [{ angles: ["dry"], group: null }, { angles: ["pr-checklist"], group: null }],
+    });
+    await put(buildGateFaninLedgerPath(key), { overallVerdict: "clean", findings: [], provenance, verifiedItems: items });
+    const enriched = path.join(writerRoot, "enriched.json");
+    await writeFile(enriched, JSON.stringify({ findings: [] }), "utf8");
+    // The writer's own output, not a hand-built log, feeds the composition.
+    const { log } = await writeGateFindingsLog({
+      repo: key.repo, pr: key.pr, gate: key.gate, headSha: key.headSha,
+      findingsFile: enriched, tmpRoot: path.join(writerRoot, "tmp"),
+    }, { repoRoot: writerRoot });
+    assert.deepEqual(log.verifiedItems, items);
+    await withCompositionRound({ overallVerdict: log.overallVerdict, prBody, verifiedItems: log.verifiedItems, provenance: log.provenance }, async ({ post, postedBody, editedBodies }) => {
+      const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+      assert.equal(editedBodies.length, 1);
+      assert.doesNotMatch(editedBodies[0].body, /- \[ \]/);
+      assert.match(postedBody(), /\*\*Verdict:\*\* clean/);
+      assert.equal(result.gateBlockers, undefined);
+    });
+  } finally {
+    await rm(writerRoot, { recursive: true, force: true });
+  }
 });
