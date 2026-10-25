@@ -382,6 +382,8 @@ const GateConfig = z.strictObject({
   // a layer that sets only the deprecated `worthFixingNowFixWindow` alias.
   // resolveGateConfig applies the built-in fallback (3) after checking both.
   mediumFixWindow: z.number().int().nonnegative().optional().describe("Per-gate medium fix window: the number of rounds the judge weighs an open medium finding for an in-gate fix. The window is an input to the judge's act, defer or reject decision, never applied by code, and never defers a finding by itself. high is exempt (never defers). Default 3."),
+  // No schema-level `.default()` (same layer-shadowing hazard); resolveGateConfig applies 4.
+  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and a new act item then blocks with round_cap_reached instead of running another fixer round. 0 disables the cap. Default 4."),
   worthFixingNowFixWindow: z.number().int().nonnegative().optional().describe("Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set."),
   // No schema-level `.default()` for the same reason as mediumFixWindow above:
   // a default would fill this key on every config layer independently and
@@ -2168,7 +2170,7 @@ function resolveBlockingSeverities(config, gate) {
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
- * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, inlineSeverityFloor: string, tiers: Array<{name: string, match: object, angles: string[]}>, angleCategoryBindings: Record<string, {categories: string[], kinds: string[]}> }}
+ * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, maxReviewRounds: number, inlineSeverityFloor: string, tiers: Array<{name: string, match: object, angles: string[]}>, angleCategoryBindings: Record<string, {categories: string[], kinds: string[]}> }}
  * @throws {Error} when ANY gate's (not only the requested one's) PRESENT
  *   `blockCleanOnFindingSeverities` is schema-invalid (non-array, empty, or an
  *   out-of-vocabulary entry). Validated EAGERLY across all three gates on every
@@ -2186,6 +2188,10 @@ export function resolveGateConfig(config, gate) {
   for (const g of GATE_KEYS_WITH_BLOCKING_SEVERITIES) {
     const resolved = resolveBlockingSeverities(config, g);
     if (g === gate) blockCleanOnFindingSeverities = resolved;
+  }
+  const maxReviewRounds = gateConfig?.maxReviewRounds ?? 4;
+  if (!Number.isInteger(maxReviewRounds) || maxReviewRounds < 0) {
+    throw new Error(`gates.${gate}.maxReviewRounds must be a non-negative integer (0 disables the cap); got ${JSON.stringify(gateConfig.maxReviewRounds)}`);
   }
   const entries = normalizeAngleEntries(gateConfig?.angles);
   // An explicitly-empty array is a real configured "no angles" — distinct from
@@ -2205,6 +2211,7 @@ export function resolveGateConfig(config, gate) {
     // mediumFixWindow wins; worthFixingNowFixWindow is the deprecated alias,
     // still honored so an unmigrated config keeps its window.
     mediumFixWindow: gateConfig?.mediumFixWindow ?? gateConfig?.worthFixingNowFixWindow ?? 3,
+    maxReviewRounds,
     inlineSeverityFloor: gateConfig?.inlineSeverityFloor ?? "medium",
     tiers: gateConfig?.tiers ?? [],
     // Per-angle category/file-kind bindings for enabled entries that declare

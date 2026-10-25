@@ -2759,6 +2759,7 @@ describe("role resolution", () => {
         additiveAngles: false,
         blockCleanOnFindingSeverities: ["high"],
         mediumFixWindow: 3,
+        maxReviewRounds: 4,
         inlineSeverityFloor: "medium",
         tiers: [],
         angleCategoryBindings: {},
@@ -2782,6 +2783,7 @@ describe("role resolution", () => {
         additiveAngles: false,
         blockCleanOnFindingSeverities: ["high"],
         mediumFixWindow: 3,
+        maxReviewRounds: 4,
         inlineSeverityFloor: "medium",
         tiers: [],
         angleCategoryBindings: {},
@@ -3201,6 +3203,34 @@ describe("role resolution", () => {
           err.message.includes("gates.spike.blockCleanOnFindingSeverities") &&
           err.message.includes('"critical"'),
       );
+    });
+
+    test("resolveGateConfig resolves maxReviewRounds: default 4, override, 0 kill switch", () => {
+      assert.equal(resolveGateConfig({ version: 1 }, "draft").maxReviewRounds, 4);
+      assert.equal(resolveGateConfig({ version: 1, gates: { draft: { maxReviewRounds: 6 } } }, "draft").maxReviewRounds, 6);
+      assert.equal(resolveGateConfig({ version: 1, gates: { draft: { maxReviewRounds: 0 } } }, "draft").maxReviewRounds, 0);
+      assert.equal(resolveGateConfig({ version: 1, gates: { draft: { maxReviewRounds: 0 } } }, "preApproval").maxReviewRounds, 4);
+    });
+
+    for (const bad of [-1, 1.5, "4"]) {
+      test(`resolveGateConfig throws on invalid maxReviewRounds ${JSON.stringify(bad)}`, () => {
+        assert.throws(
+          () => resolveGateConfig({ version: 1, gates: { draft: { maxReviewRounds: bad } } }, "draft"),
+          /gates\.draft\.maxReviewRounds/,
+        );
+      });
+    }
+
+    test("loadDevLoopConfig rejects a negative maxReviewRounds", async () => {
+      const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-maxrounds-"));
+      try {
+        await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: -1\n");
+        const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+        const { errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+        assert.ok(errors.length > 0);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
     });
 
     test("resolveGateConfig honors the deprecated worthFixingNowFixWindow alias when mediumFixWindow is absent", () => {
