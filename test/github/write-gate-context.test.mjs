@@ -8140,12 +8140,13 @@ const FORMAL_BODY = "## Acceptance criteria\n- [ ] does the thing\n## Definition
 test("resolveReviewGateAngles DROPS pr-checklist (and always gate-evidence) when neither the closing issue nor the PR description is formal", () => {
   const config = reviewAnglesConfig({
     draftAngles: ["correctness", "acceptance-criteria", "pr-checklist"],
-    preApprovalAngles: ["pr-description", "docs"],
+    preApprovalAngles: ["gate-evidence", "pr-description", "docs"],
   });
   const result = resolveReviewGateAngles(config, { hasClosingIssue: true, hasAcChecklist: false, hasFormalIssueSpec: false, hasFormalPrSpec: false });
-  assert.deepEqual(result.skippedAngles, ["pr-checklist"]);
+  assert.deepEqual(result.skippedAngles, ["pr-checklist", "gate-evidence"]);
   assert.deepEqual(result.recommendedAngles, ["correctness", "acceptance-criteria", "pr-description", "docs"]);
   assert.match(result.reasons["pr-checklist"], /no formal spec/);
+  assert.match(result.reasons["gate-evidence"], /no lifecycle gates/);
 });
 
 test("resolveReviewGateAngles KEEPS pr-checklist when either surface is formal or a fact is unknown", () => {

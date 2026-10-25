@@ -2989,7 +2989,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
     // Judged non-act findings stay in the list so a judged round with an empty act list composes clean; the converged guard replaces only the act items.
     const roundFindings = [...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems];
-    const ledgerVerdict = composeReviewVerdict(preloadedFindingsLedger.overallVerdict, [...roundFindings.filter((f) => !isOpenActItem(f)), ...(await guardedActItems(roundFindings))]);
+    // ADR 0182: judged-ness is decided over the whole round, before the converged guard drops its act items.
+    const guardedRoundActs = await guardedActItems(roundFindings);
+    const ledgerVerdict = isFullyJudged(roundFindings) && preloadedFindingsLedger.overallVerdict !== "blocked"
+      ? (guardedRoundActs.length > 0 ? "findings_present" : "clean")
+      : composeReviewVerdict(preloadedFindingsLedger.overallVerdict, [...roundFindings.filter((f) => !isOpenActItem(f)), ...guardedRoundActs]);
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
     const gateBlockers = collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact);

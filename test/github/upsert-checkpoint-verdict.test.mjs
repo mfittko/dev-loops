@@ -8616,6 +8616,33 @@ test("#1808: --gate review on a CLEAN ledger renders with no blocking-severity l
   }, { prefix: "dev-loops-upsert-review-gate-clean-" });
 });
 
+// AC6: the call site passes the unjudged flag into deriveEffectiveNextAction; a clean ledger holding an
+// unjudged finding must not render "no change requested" beside it.
+test("--gate review with --judge-spec-source none and a clean ledger holding one unjudged finding renders 'read the findings, none was judged'", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [BODY_FILED_FINDING], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["read the findings, none was judged"],
+        stdout: '{"id":903,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-903"}\n',
+      },
+    ];
+    const { runChild } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath, judgeSpecSource: "none",
+      executionMode: "fanout_fanin",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "created");
+  }, { prefix: "dev-loops-upsert-review-unjudged-" });
+});
+
 // Review-only regression guard: the review gate's hardcoded activeGateConfig
 // carried no inlineSeverityFloor, so isBelowInlineFloor failed open and every
 // locatable finding posted inline. The fold tests above all run on

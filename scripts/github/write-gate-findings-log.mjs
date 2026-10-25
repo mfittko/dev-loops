@@ -65,11 +65,14 @@ Optional:
   --full-label                   The PR carries the gate:full label: dispatch groups resolve to one angle per unit, so any reviewer identity shared across fresh angles is rejected regardless of a declared "group" (mirrors write-gate-context.mjs's --full-label). Only meaningful when --provenance is supplied. Omitted (default false) keeps current behavior.
   --judge-verdict <path>         Path to the judge agent's verdict artifact (JSON). When supplied, the findings are
                                  enriched with the judge's relevance-based dispositions (judgeDisposition /
-                                 judgeRationale / judgeCriterion / followUpDraft) via applyJudgeDispositions before
+                                 judgeRationale / judgeCriterion / followUpDraft / judgeTitle / judgeDetail / judgeFix /
+                                 judgeReason) via applyJudgeDispositions before
                                  the ledger is written, so the durable ledger and posted findings comment carry what
-                                 was consciously not acted on and why (#1525). The verdict must dispose every finding
-                                 (one disposition per 0-based ledger position) or the run FAILS CLOSED and writes no
-                                 ledger. Optional; when absent the ledger writes byte-identically to before.
+                                 was consciously not acted on and why (#1525). The verdict must dispose every cluster
+                                 (one disposition per cluster, keyed by clusterId; the 0-based ledger position only
+                                 when the ledger carries no clusterId). Each disposition requires title, detail and
+                                 fix, and defer and reject also require reason; a missing field FAILS CLOSED and
+                                 writes no ledger. Optional; when absent the ledger writes byte-identically to before.
                                  With --spec-authority, a sibling spec-authority-verdict.json next to the judge
                                  verdict is validated against that identity, and each finding_conflicts finding is
                                  written as judgeDisposition reject (ADR 0089). An invalid or mismatched sibling

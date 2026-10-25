@@ -252,7 +252,7 @@ question is likewise unresolved feedback.
    - if the guard exits non-zero (`remote_ahead`), stop writing locally, reconcile to the refreshed remote head, then restart the fixer pass
 3. classify findings by the judge's disposition of the cluster (`GATE-EXEC-THREAD-DISPOSITION` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md)); severity and round never decide:
    - judge `act`: a fix target at every severity and round; decline it only on reproduction grounds (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`)
-   - judge `defer`: resolved by the closing sweep as deferred; a high is never deferred, a question is never deferred and a nit is never a judge defer
+   - judge `defer`: resolved by the closing sweep as deferred; a high is never deferred, a question is never deferred and a nit is never a judge defer on its own; a nit member of a deferred mixed cluster closes with the cluster rationale, with no stamp and no filing
    - judge `reject`: reject-closed by the closing sweep; a medium, low or nit thread closes directly, a question closes once it carries an answer reply, and a rejected high stays open on the round-cap path
    - unjudged or ambiguous: stays open
    - high: blocks gate; fixed unless the judge rejected it

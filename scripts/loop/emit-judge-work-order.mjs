@@ -6,7 +6,7 @@
  * reader and receipt stay in _work-order-protocol.mjs.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";

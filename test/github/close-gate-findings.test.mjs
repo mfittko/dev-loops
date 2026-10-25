@@ -2420,6 +2420,30 @@ test("a current-ledger act with remedyKind evidence_only is replied to and resol
   ));
 });
 
+// GATE-EXEC-THREAD-DISPOSITION: the evidence-only close is the exit for a high and for a judge-act question;
+// copying the high/question skip into this pass would leave such a thread open (it never reaches the fixer).
+for (const severity of ["must-fix", "question"]) {
+  test(`a current-ledger evidence_only act on a ${severity} thread is closed with an evidence-only reply`, async () => {
+    const finding = { severity, angle: "perf", summary: "stale cache not invalidated" };
+    const fp = fingerprintFinding(finding);
+    const body = `${buildFindingMarker({ fp, severity, angle: "perf", round: 1 })}\n**${severity}** (\`perf\`): stale cache not invalidated — judge: act`;
+    const thread = threadNode({ id: "THREAD_D", isResolved: false, path: "src/cache.mjs", line: 9, commentId: 6004, body, author: AUTHENTICATED_LOGIN });
+    const ledger = makeLedger({ gate: "draft_gate", findings: [{ ...finding, judgeDisposition: "act", remedyKind: "evidence_only", judgeRationale: "no file change" }] });
+    await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+      [
+        ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+        { ...postReplyEntry(6004, { id: 7004 }), assertStdinIncludes: ["evidence-only remedy", "no file change"] },
+        resolveThreadEntry("THREAD_D"),
+      ],
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+        assert.equal(result.evidenceOnlyClosed, 1);
+        assert.equal(result.unresolvedGateThreadCount, 0);
+      },
+    ));
+  });
+}
+
 // With no judgeRationale, the evidence-only reply states that none was recorded.
 test("a current-ledger evidence_only act without judgeRationale replies with the no-rationale text", async () => {
   const finding = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated" };
