@@ -113,7 +113,7 @@ register(INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP, "watch", {
 register(INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP, "pre-approval", {
   criteria: [
     { id: "full-gate-chain", must: "Complete pre-approval gate chain with all configured review angles.", severity: "required" },
-    { id: "clean-verdict", must: "Pre-approval gate must return a clean verdict per GATE-COMMENT-VERDICT-VALUES (an empty judge act list on a fully judged round, and no finding at a blockCleanOnFindingSeverities severity on a round that is not fully judged).", severity: "required" },
+    { id: "clean-verdict", must: "Pre-approval gate must return a clean verdict per GATE-COMMENT-VERDICT-VALUES (an empty judge act list on a fully judged round, and an empty judge act list and no finding at a blockCleanOnFindingSeverities severity on a round that is not fully judged).", severity: "required" },
     { id: "unresolved-threads", must: "All review threads must be resolved before pre-approval gate runs.", severity: "required" },
     { id: "ci-green", must: "CI must be green on the current head SHA.", severity: "required" },
   ],

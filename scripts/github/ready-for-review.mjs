@@ -104,7 +104,7 @@ export function describeUnresolvedGateThreadReasons(breakdown, fallbackCount) {
   const reasons = [];
   if (question > 0) {
     reasons.push(
-      `${question} question thread(s): if unanswered, post a resolving answer reply, then rerun close-gate-findings — it reject-closes an answered question the judge rejected (citing the judge's rejection rationale); an answered question the judge disposed act is resolved by the fixer's own answer-and-resolve path; an answered question the judge deferred, or whose judge disposition is ambiguous or unrecorded, needs an operator decision`,
+      `${question} question thread(s): if unanswered, post a resolving answer reply, then rerun close-gate-findings — it reject-closes an answered question the judge rejected (citing the judge's rejection rationale); an answered question the judge disposed act with an evidence-only remedy is closed by a close-gate-findings rerun, and any other judge-disposed act question is resolved by the fixer's own answer-and-resolve path; an answered question whose judge disposition is ambiguous or unrecorded needs an operator decision`,
     );
   }
   if (nit > 0) {

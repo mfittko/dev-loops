@@ -683,8 +683,9 @@ test("describeUnresolvedGateThreadReasons: names all three remedies when all buc
   assert.match(all, /1 question thread\(s\)/);
   assert.match(all, /4 open nit thread\(s\): rerun close-gate-findings.*once the judge has rejected or deferred it/);
   assert.match(all, /2 open defect thread\(s\)/);
-  assert.match(all, /the judge deferred, or whose judge disposition is ambiguous or unrecorded, needs an operator decision/);
-  assert.match(all, /the judge disposed act is resolved by the fixer's own answer-and-resolve path/);
+  assert.match(all, /whose judge disposition is ambiguous or unrecorded needs an operator decision/);
+  assert.doesNotMatch(all, /question the judge deferred/);
+  assert.match(all, /disposed act with an evidence-only remedy is closed by a close-gate-findings rerun, and any other judge-disposed act question is resolved by the fixer's own answer-and-resolve path/);
   assert.doesNotMatch(all, /left undisposed/);
   const fallback = describeUnresolvedGateThreadReasons({ question: 0, nit: 0, other: 0 }, 5);
   assert.match(fallback, /5 unresolved gate-authored review thread\(s\)/);
