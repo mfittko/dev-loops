@@ -572,6 +572,9 @@ test("a declared path whose real target leaves the repository is refused", async
     () => buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["escaped.mjs"] }),
     (error) => error.exitCode === 1 && /outside --repo-root/u.test(error.message),
   );
+  // Wrong case is unresolved with exit 0 on every host, before containment.
+  const wrongCase = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["ESCAPED.mjs"] });
+  assert.deepEqual(wrongCase.unresolvedPaths, ["ESCAPED.mjs"]);
   const inside = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["linked.mjs"] });
   assert.deepEqual(inside.touchedPaths, ["linked.mjs"]);
   assert.deepEqual(inside.unresolvedPaths, []);

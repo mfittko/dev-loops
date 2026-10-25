@@ -310,8 +310,7 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
 
   const declared = [];
   for (const raw of paths) {
-    const normalized = normalizeDeclaredPath(raw);
-    if (normalized !== null) declared.push(normalized);
+    declared.push(normalizeDeclaredPath(raw));
   }
 
   const rootReal = await realpath(root);
@@ -327,12 +326,13 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
     if (resolved.has(candidate)) continue;
     const found = await pathKind(root, rootReal, candidate);
     if (!found) unresolved.push(candidate);
-    else if (!found.inside) {
-      throw Object.assign(new Error(`--paths entry resolves outside --repo-root: ${candidate}`), { exitCode: 1 });
-    } else if (!(await entryNamesMatch(root, candidate))) {
+    else if (!(await entryNamesMatch(root, candidate))) {
       // A wrong-case path resolves on a case-insensitive volume only; report it
-      // as unresolved so every host emits the same bytes.
+      // as unresolved before containment so every host emits the same bytes and
+      // exit code.
       unresolved.push(candidate);
+    } else if (!found.inside) {
+      throw Object.assign(new Error(`--paths entry resolves outside --repo-root: ${candidate}`), { exitCode: 1 });
     } else resolved.set(candidate, found.kind);
   }
   for (const candidate of citedPathCandidates(body)) {
