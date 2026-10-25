@@ -26,7 +26,8 @@ import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { escapeProse, flattenPaginatedSlurp, listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { PROBLEM_CAP, RECOMMENDATION_CAP, cutAtSentence, normalizeFindingSummary } from "./_gate-finding-text.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
+import { carryGateMarker, isCarryCandidate } from "./_carried-verdict.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -1069,9 +1070,22 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
     && preMarker.verdict === "clean" && preMarker.contractComplete === true,
   );
   const draftGate = summary ? { ...summary, visible: true } : { visible: false };
-  const draftGateMarker = marker
+  let draftGateMarker = marker
     ? { ...marker, visible: true, contractComplete: marker.contractComplete === true }
     : { visible: false, contractComplete: false };
+  // A clean marker at an earlier head may carry across a base-only merge (ADR 0186). Read-only:
+  // only a carry the coordination path already recorded counts. CI and thread checks stay with the callers.
+  if (!(marker && headSha?.startsWith(marker.headSha ?? "\0"))) {
+    const anyHead = summarizeGateReviewCommentMarkers(comments).draft_gate;
+    const candidate = anyHead ? { ...anyHead, visible: true, contractComplete: anyHead.contractComplete === true } : null;
+    if (isCarryCandidate(candidate, headSha)) {
+      const baseRef = await runGhJson(
+        ["pr", "view", String(pr), "--repo", repo, "--json", "baseRefName"],
+        { env: gh.env, ghCommand: gh.ghCommand, runChild: gh.runChild },
+      ).then((p) => (typeof p?.baseRefName === "string" && p.baseRefName.trim() ? `origin/${p.baseRefName.trim()}` : null), () => null);
+      draftGateMarker = await carryGateMarker(candidate, { gate: "draft_gate", repo, pr, currentHeadSha: headSha, baseRef, repoRoot: gh.repoRoot ?? resolveRepoRoot(process.cwd()) });
+    }
+  }
   // The verdict-clean flags below stay VERDICT-ONLY so a verdict/head mismatch
   // is reported distinctly from an unresolved-thread mismatch; the
   // unresolved-gate-authored-thread count is a SEPARATE field the callers

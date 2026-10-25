@@ -4051,7 +4051,7 @@ for (const [name, handoffHead] of [["an abbreviated", "abc9988"], ["an upper-cas
 // ---------------------------------------------------------------------------
 // #2752 / GATE-EXEC-BASE-MERGE-VERDICT-CARRY: coordination-level behaviour on a git fixture.
 // ---------------------------------------------------------------------------
-async function runCarryFixture({ nonBaseCommit = false, ci = "SUCCESS" } = {}) {
+async function runCarryFixture({ nonBaseCommit = false, ci = "SUCCESS", draft = false } = {}) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-coord-carry-"));
   try {
     const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_DIR: undefined, GIT_WORK_TREE: undefined };
@@ -4073,7 +4073,7 @@ async function runCarryFixture({ nonBaseCommit = false, ci = "SUCCESS" } = {}) {
       { id: 1, body: body("draft_gate", "mark ready for review"), updated_at: "2026-05-29T21:00:00Z" },
       { id: 2, body: body("pre_approval_gate", "await final human approval"), updated_at: "2026-05-29T22:00:00Z" },
     ];
-    const prView = { number: 2819, state: "OPEN", isDraft: false, headRefOid: headB, baseRefName: "main", mergeStateStatus: "CLEAN", mergeable: "MERGEABLE", body: "", closingIssuesReferences: [], reviews: [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: headB }, submittedAt: "2026-05-29T23:00:00Z" }], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: ci }] };
+    const prView = { number: 2819, state: "OPEN", isDraft: draft, headRefOid: headB, baseRefName: "main", mergeStateStatus: "CLEAN", mergeable: "MERGEABLE", body: draft ? "Closes #527\n" : "", closingIssuesReferences: draft ? [{ number: 527 }] : [], reviews: [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: headB }, submittedAt: "2026-05-29T23:00:00Z" }], statusCheckRollup: [{ __typename: "CheckRun", status: ci === "PENDING" ? "IN_PROGRESS" : "COMPLETED", conclusion: ci === "PENDING" ? null : ci }] };
     const runChild = async (cmd, args) => {
       const joined = args.join(" ");
       if (cmd !== "gh") return { code: 0, stdout: "", stderr: "" };
@@ -4082,6 +4082,7 @@ async function runCarryFixture({ nonBaseCommit = false, ci = "SUCCESS" } = {}) {
       if (joined.startsWith("pr view") && joined.includes("--json headRefOid")) out = { headRefOid: headB };
       else if (joined.startsWith("pr view") && joined.includes("baseRefName") && !joined.includes("statusCheckRollup")) out = { baseRefName: "main" };
       else if (joined.startsWith("pr view")) out = prView;
+      else if (joined.startsWith("issue view 527")) out = { body: "## Acceptance criteria\n\n- [ ] First AC\n\n## AC / DoD matrix\n\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the feature works end to end | a focused test proves the feature works |\n\n## Non-goals\n\n- None.\n" };
       else if (joined.includes("requested_reviewers")) out = { users: [], teams: [] };
       else if (joined.includes("graphql")) out = { data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } };
       else if (joined.includes("/issues/") && joined.includes("comments")) out = [comments];
@@ -4119,3 +4120,14 @@ test("coordination with failing CI at the new head does not treat the carried ve
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, "red CI at the new head blocks");
   assert.ok(!GATE_RUN_ACTIONS.includes(result.nextAction), `CI red must route to CI, not a gate run: ${result.nextAction}`);
 });
+
+// Review thread: a carried draft_gate verdict proves the review, not CI at the new head.
+for (const [ci, expected] of [["PENDING", PR_CHECKPOINT_ACTION.WAIT_FOR_CI], ["FAILURE", PR_CHECKPOINT_ACTION.REPORT_BLOCKED]]) {
+  test(`draft PR with a carried draft_gate verdict and ${ci} CI selects ${expected}`, async () => {
+    const { result } = await runCarryFixture({ draft: true, ci });
+    assert.equal(result.ok, true);
+    assert.equal(result.draftGate.currentHeadClean, true, JSON.stringify(result.draftGate));
+    assert.equal(result.nextAction, expected, result.reason);
+    assert.ok(!GATE_RUN_ACTIONS.includes(result.nextAction));
+  });
+}

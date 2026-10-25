@@ -6,6 +6,8 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { buildCarriedHeadsPath, carryGateMarker, readCarriedHeads } from "../../scripts/github/_carried-verdict.mjs";
+import { fetchDraftGateEvidence } from "../../scripts/github/_gate-finding-surface.mjs";
+import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 
@@ -145,4 +147,22 @@ test("re-recording an unchanged carry leaves the record file untouched and leave
   await carry(s, marker(origin), cur, { record: true });
   assert.equal(readFileSync(file, "utf8"), before);
   assert.deepEqual(readdirSync(path.dirname(file)).filter((f) => f.includes(".tmp-")), []);
+});
+
+// Review thread: the shared draft-to-ready reader (ready-for-review, pre-pr-ready-gate) must accept a recorded carry.
+test("fetchDraftGateEvidence reads a recorded base-only carry as current-head clean; an unrecorded carry stays not clean", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  s.git("update-ref", "refs/remotes/origin/main", "main");
+  const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha: origin, repo: REPO, verdict: "clean", findingsSummary: "none", nextAction: "mark ready for review" });
+  const runChild = async (_cmd, args) => {
+    if (args.some((a) => String(a).includes("issues/7/comments"))) return { code: 0, stdout: JSON.stringify([[{ id: 1, body, created_at: "2026-01-01T00:00:00Z" }]]), stderr: "" };
+    if (args.includes("baseRefName")) return { code: 0, stdout: JSON.stringify({ baseRefName: "main" }), stderr: "" };
+    return { code: 1, stdout: "", stderr: "unavailable" };
+  };
+  const read = () => fetchDraftGateEvidence({ repo: REPO, pr: 7, headSha: cur }, { env: {}, ghCommand: "gh", runChild, repoRoot: s.dir });
+  assert.equal((await read()).currentHeadClean, false, "nobody recorded the carry");
+  await carryGateMarker({ visible: true, verdict: "clean", contractComplete: true, headSha: origin }, { gate: "draft_gate", repo: REPO, pr: 7, currentHeadSha: cur, baseRef: "origin/main", repoRoot: s.dir, record: true });
+  assert.equal((await read()).currentHeadClean, true, "a recorded carry satisfies the shared reader");
 });

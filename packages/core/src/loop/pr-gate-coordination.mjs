@@ -1078,6 +1078,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
 
   const draftGate = toGateStatus(input.draftGate, input.draftGateMarker, currentHeadSha, input.unresolvedGateThreadCount);
   const preApprovalGate = toGateStatus(input.preApprovalGate, input.preApprovalGateMarker, currentHeadSha);
+  // A base-merge carried verdict (ADR 0186) proves the review, not the new head's CI.
+  const draftGateCarried = draftGate.currentHeadClean && trimmedOrNull(input.draftGateMarker?.carriedFrom) !== null;
   const draftGateAlreadySatisfied = !prDraft && (draftGate?.cleanEvidenceExists ?? false);
 
   const allowedNextActions = [];
@@ -1413,11 +1415,12 @@ function evaluatePrGateCoordinationCore(input = {}) {
       });
     }
 
-    if (!draftGate.currentHeadClean && draftGateRequireCi) {
+    if ((!draftGate.currentHeadClean || draftGateCarried) && draftGateRequireCi) {
       if (ciStatus === "failure") {
         pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
         pushUnique(forbiddenActions, [
           PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+          PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
           ...draftReviewForbidden,
         ]);
         return buildResult({
@@ -1444,6 +1447,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.WAIT_FOR_CI]);
         pushUnique(forbiddenActions, [
           PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+          PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
           ...draftReviewForbidden,
         ]);
         return buildResult({
