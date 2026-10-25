@@ -1,4 +1,4 @@
-# 0185. Consume a carried gate verdict only from a recorded, revalidated carry
+# 0186. Consume a carried gate verdict only from a recorded, revalidated carry
 
 ## Status
 
