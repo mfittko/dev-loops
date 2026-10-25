@@ -501,6 +501,29 @@ test("a stable bump folds prerelease sections and fragments into one deduplicate
   }
 });
 
+test("a stable bump deduplicates Unreleased against fragments when no prerelease section exists", () => {
+  const dir = foldFixture("# Changelog\n\n## Unreleased\n\n### Added\n\n- Shared (#1)\n\n## 1.9.0\n\n- Prior.\n", { "frag-a": "### Added\n\n- Shared (#1)\n" });
+  try {
+    bumpVersion({ repoRoot: dir, version: STABLE, stage: false, run: makeRegenRunner(dir, STABLE).run });
+    const section = extractChangelogSection(readFileSync(path.join(dir, "CHANGELOG.md"), "utf8"), STABLE);
+    assert.equal(section.match(/Shared \(#1\)/g).length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a repeated entry keeps its first document-order section within one prerelease body", () => {
+  const dir = foldFixture("# Changelog\n\n## 2.0.0-pre.1\n\n### Fixed\n\n- Shared (#5)\n\n### Added\n\n- Shared (#5)\n\n## 1.9.0\n\n- Prior.\n");
+  try {
+    bumpVersion({ repoRoot: dir, version: STABLE, stage: false, run: makeRegenRunner(dir, STABLE).run });
+    const section = extractChangelogSection(readFileSync(path.join(dir, "CHANGELOG.md"), "utf8"), STABLE);
+    assert.match(section, /### Fixed\n\n- Shared \(#5\)/);
+    assert.doesNotMatch(section, /### Added/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a stable bump with only prerelease sections succeeds and a re-run is a no-op", () => {
   const dir = foldFixture("# Changelog\n\n## 2.0.0-pre.2\n\n- Two (#2)\n\n## 2.0.0-pre.1\n\n- One (#1)\n\n## 1.9.0\n\n- Prior.\n");
   try {

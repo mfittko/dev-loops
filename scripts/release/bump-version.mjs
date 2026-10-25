@@ -196,26 +196,30 @@ export function foldPrereleaseSections(changelog, version) {
   const heads = lines.flatMap((l, i) => (/^##\s/.test(l) ? [i] : []));
   const sections = heads.map((start, k) => ({ start, end: heads[k + 1] ?? lines.length }));
   const pre = sections.filter((s) => preRe.test(lines[s.start]));
-  if (pre.length === 0) return changelog;
-  if (new RegExp(`^##\\s+v?${escaped}(?=\\s|$)`, "m").test(changelog)) {
+  const unreleased = sections.find((s) => /^##\s+Unreleased\b/i.test(lines[s.start]));
+  if (pre.length === 0 && !unreleased) return changelog;
+  if (pre.length > 0 && new RegExp(`^##\\s+v?${escaped}(?=\\s|$)`, "m").test(changelog)) {
     throw new Error(`CHANGELOG.md already has a "## ${version}" section and prerelease section(s) to fold into it; resolve by hand before bumping`);
   }
-  const unreleased = sections.find((s) => /^##\s+Unreleased\b/i.test(lines[s.start]));
   const merged = new Map(FRAGMENT_SECTIONS.map((name) => [name, []]));
   const seen = new Set();
   for (const s of [...(unreleased ? [unreleased] : []), ...pre]) {
     const heading = lines[s.start].trim();
-    const { bySection, errors } = groupUnreleasedLines(lines.slice(s.start + 1, s.end), `"${heading}"`);
+    const { errors } = groupUnreleasedLines(lines.slice(s.start + 1, s.end), `"${heading}"`);
     if (errors.length > 0) throw new Error(`${errors[0]}; fold it by hand before bumping`);
-    for (const name of FRAGMENT_SECTIONS) {
-      for (const entry of bySection.get(name)) {
-        if (!seen.has(entry)) {
-          seen.add(entry);
-          merged.get(name).push(entry);
-        }
+    // Walk the body in document order so the first occurrence wins even across sections.
+    let name = "Changed";
+    for (const raw of lines.slice(s.start + 1, s.end)) {
+      const line = raw.trimEnd();
+      const m = /^###\s+(Added|Changed|Fixed)\s*$/.exec(line);
+      if (m) name = m[1];
+      else if (line.startsWith("- ") && !seen.has(line)) {
+        seen.add(line);
+        merged.get(name).push(line);
       }
     }
   }
+  if (pre.length === 0 && FRAGMENT_SECTIONS.every((n) => merged.get(n).length === 0)) return changelog;
   const block = [
     `## ${version}`,
     ...FRAGMENT_SECTIONS.filter((n) => merged.get(n).length > 0).flatMap((n) => ["", `### ${n}`, "", ...merged.get(n)]),
