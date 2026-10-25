@@ -1592,6 +1592,25 @@ function extractComparableItems(body) {
   return items.filter((item) => item.length > 0);
 }
 
+/**
+ * The non-goal items of a spec body, read exactly as `diffPrBodyAgainstIssue` reads them:
+ * the merged canonical non-goals headings, descendant headings flattened, sub-sections another
+ * family selects skipped, checkbox and blockquote markers stripped. Pure.
+ *
+ * @param {string} body
+ * @returns {string[]}
+ */
+export function readNonGoalItems(body) {
+  const sections = parseMarkdownSections(typeof body === "string" ? body : "");
+  const nonGoalPatterns = [...PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns, ...SPEC_SECTION_NAME_PATTERNS.nonGoals];
+  const index = findSpecSectionIndex(sections, nonGoalPatterns);
+  if (index === -1) return [];
+  const families = [PR_BODY_SPEC_NARRATIVE_SECTIONS.in_scope.patterns, ACCEPTANCE_SECTION_PATTERNS, DOD_SECTION_PATTERNS];
+  const selected = new Set(families.map((family) => findSpecSectionIndex(sections, family)).filter((i) => i !== -1));
+  selected.delete(index);
+  return extractComparableItems(flattenSectionDeep(sections, index, (i) => selected.has(i)));
+}
+
 const normalizeSpecItem =(text) =>
   String(text).replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, "").replace(/^\[[ xX]\]\s*/u, "").replace(/\s+/gu, " ").trim().toLowerCase();
 

@@ -935,3 +935,10 @@ test("a registered rule ID with one-character segments is cited from the spec an
   const fromFile = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["scripts/loop/consumer.mjs"] });
   assert.deepEqual(fromFile.rules.map((r) => r.id), [id]);
 });
+
+test("a checkbox non-goal yields the same item as the canonical spec reader", async () => {
+  const root = await fixtureRepo();
+  const body = `${MATRIX}\n## Non-goals\n\n- [ ] No gate credit.\n`;
+  const brief = await buildImplementationBrief({ body, repoRoot: root });
+  assert.deepEqual(brief.nonGoals, ["No gate credit."]);
+});

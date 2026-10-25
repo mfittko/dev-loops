@@ -19,7 +19,7 @@ import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { PR_BODY_SPEC_NARRATIVE_SECTIONS, detectAcDodMatrix, parseMarkdownSections } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { detectAcDodMatrix, readNonGoalItems } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { extractSection } from "@dev-loops/core/loop/markdown-sections";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
@@ -97,9 +97,6 @@ const PATH_CANDIDATE_RE = new RegExp(
 );
 const PATH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/u;
 const MARKDOWN_FILE_RE = /\.(?:md|mdx)$/iu;
-// The canonical non-goals patterns, plus the spaced "Non goals" form the brief always read.
-const NON_GOALS_PATTERNS = [...PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns, /^non goals\b/iu];
-const BULLET_RE = /^\s*(?:[-*+]|\d+[.)])\s+(.*\S)\s*$/u;
 // A `file:line[:col]` citation is not a path; the body reader accepts that form
 // for paths it resolves, while a declared path has to name the file itself.
 const FILE_LINE_SUFFIX_RE = /:\d+(?::\d+)?$/u;
@@ -240,42 +237,6 @@ async function ruleOwnerIndex(repoRoot) {
     }
   }
   return owners;
-}
-
-function nonGoalsFromBody(body) {
-  // Same precedence as findSectionByPatterns: the exact pattern first, then the first alias match.
-  const sections = parseMarkdownSections(body);
-  const section = sections.find((entry) => NON_GOALS_PATTERNS[0].test(entry.name))
-    ?? sections.find((entry) => NON_GOALS_PATTERNS.slice(1).some((re) => re.test(entry.name)));
-  if (!section) return [];
-  // Descendant headings (`### Slice 1`) stay inside the section: gather their
-  // bodies up to the next same-level or higher-level heading.
-  const bodyLines = [...section.bodyLines];
-  for (const next of sections.slice(sections.indexOf(section) + 1)) {
-    if (next.level <= section.level) break;
-    bodyLines.push("", ...next.bodyLines);
-  }
-  const items = [];
-  // Markdown lazy continuation: the line right under a bullet, with no blank
-  // line between them, still belongs to that item's paragraph. A blank line
-  // ends the paragraph, so a following unindented line is standalone prose and
-  // must not be absorbed into the last non-goal.
-  let insideItemParagraph = false;
-  for (const line of stripFencedCode(bodyLines.join("\n")).split("\n")) {
-    if (line.trim() === "") {
-      insideItemParagraph = false;
-      continue;
-    }
-    const bullet = BULLET_RE.exec(line);
-    if (bullet) {
-      items.push(bullet[1]);
-      insideItemParagraph = true;
-      continue;
-    }
-    if (items.length === 0 || !(insideItemParagraph || /^\s+\S/u.test(line))) continue;
-    items[items.length - 1] += ` ${line.trim()}`;
-  }
-  return items;
 }
 
 const matchesAdrTripwire = (relPath) =>
@@ -452,7 +413,7 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
   return {
     ok: true,
     matrix,
-    nonGoals: nonGoalsFromBody(body),
+    nonGoals: readNonGoalItems(body),
     touchedPaths,
     unresolvedPaths: sortedUnique(unresolved),
     rules,

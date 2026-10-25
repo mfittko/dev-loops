@@ -408,3 +408,9 @@ test("a broken .devloops exits 2 instead of falling back to the default bounds",
   assert.equal(await main(["--body-file", bodyFile, "--repo-root", root], { stdout: stdout.stream, stderr: buffer().stream }), 2);
   assert.equal(stdout.read(), "");
 });
+
+test("a rule citation with a one-character later segment is read whole", async () => {
+  const root = await fixtureRepo({ rules: { requiredRules: [{ id: "LOCAL-PHASE-ONE-AT-A-TIME" }], optOutRules: [] } });
+  const result = await lint({ body: "Cites LOCAL-PHASE-ONE-AT-A-TIME.", repoRoot: root });
+  assert.deepEqual(result.findings, []);
+});

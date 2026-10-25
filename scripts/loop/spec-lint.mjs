@@ -18,7 +18,7 @@ import { resolveSizeBounds } from "./check-size-budget.mjs";
 import {
   FORWARD_RULE_REFERENCES,
   NON_RULE_TOKENS,
-  RULE_ID_SHAPE_RE,
+  RULE_ID_CITATION_RE,
   normalizeRuleEntry,
 } from "../docs/validate-rule-ownership.mjs";
 import { firstMeaningfulLine, isAcceptedOrSuperseded, splitStatus } from "../docs/validate-decision-records.mjs";
@@ -99,7 +99,7 @@ export async function loadKnownRuleIds(repoRoot) {
 export function lintRuleIds(body, knownIds) {
   const seen = new Set();
   const findings = [];
-  for (const [token] of stripFencedCode(body).matchAll(RULE_ID_SHAPE_RE)) {
+  for (const [token] of stripFencedCode(body).matchAll(RULE_ID_CITATION_RE)) {
     if (seen.has(token)) continue;
     seen.add(token);
     if (knownIds.has(token) || NON_RULE_TOKENS.has(token) || FORWARD_RULE_REFERENCES.has(token) || /^ADR-\d+$/.test(token)) continue;
