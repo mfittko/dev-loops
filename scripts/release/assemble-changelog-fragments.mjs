@@ -213,10 +213,11 @@ function locateUnreleased(lines) {
  *
  * @param {string[]} bodyLines
  * @param {string} [where] - Names the section in error messages.
- * @returns {{ bySection: Map<string, string[]>, errors: string[] }}
+ * @returns {{ bySection: Map<string, string[]>, ordered: [string, string][], errors: string[] }} ordered = (section, entry) pairs in document order
  */
 export function groupUnreleasedLines(bodyLines, where = 'the existing "## Unreleased" section') {
   const bySection = new Map(FRAGMENT_SECTIONS.map((name) => [name, []]));
+  const ordered = [];
   const errors = [];
   let section = DEFAULT_SECTION;
   for (const raw of bodyLines) {
@@ -224,14 +225,17 @@ export function groupUnreleasedLines(bodyLines, where = 'the existing "## Unrele
     if (line === "") continue;
     const match = SECTION_LINE_RE.exec(line);
     if (match) section = match[1];
-    else if (line.startsWith("- ")) bySection.get(section).push(line);
+    else if (line.startsWith("- ")) {
+      bySection.get(section).push(line);
+      ordered.push([section, line]);
+    }
     else {
       errors.push(
         `unreleased-line rule: ${where} has a line that is neither a "- " entry nor a ### Added, ### Changed or ### Fixed heading: ${line.slice(0, 60)}`,
       );
     }
   }
-  return { bySection, errors };
+  return { bySection, ordered, errors };
 }
 
 /**

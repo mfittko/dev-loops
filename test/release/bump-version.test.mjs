@@ -539,6 +539,17 @@ test("a stable bump with only prerelease sections succeeds and a re-run is a no-
   }
 });
 
+test("the fold files entries before any subheading under Changed through the shared grouping", () => {
+  const dir = foldFixture("# Changelog\n\n## 2.0.0-pre.1\n\n- Bare (#1)\n\n### Added\n\n- New (#2)\n\n## 1.9.0\n\n- Prior.\n");
+  try {
+    bumpVersion({ repoRoot: dir, version: STABLE, stage: false, run: makeRegenRunner(dir, STABLE).run });
+    const section = extractChangelogSection(readFileSync(path.join(dir, "CHANGELOG.md"), "utf8"), STABLE);
+    assert.match(section, /### Added\n\n- New \(#2\)\n\n### Changed\n\n- Bare \(#1\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a stable bump with no fragments and no prerelease sections stamps a free-form Unreleased body verbatim", () => {
   const dir = foldFixture("# Changelog\n\n## Unreleased\n\nProse line.\n\n### Security\n\n- Patched (#1)\n\n## 1.9.0\n\n- Prior.\n");
   try {

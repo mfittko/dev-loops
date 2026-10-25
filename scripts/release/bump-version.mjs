@@ -20,7 +20,7 @@
  *      (produced by `scripts/claude/generate-claude-assets.mjs`)
  *   6. `CHANGELOG.md` — on a stable target, `## <version>-*` prerelease sections
  *      fold into one `## <version>` section; the `## Unreleased` heading is stamped to `## <version>`
- *      (entries left intact) so `extract-changelog-section.mjs` finds the
+ *      (on a stable bump the fold regroups and dedups entries first; entries are left intact only when nothing folds) so `extract-changelog-section.mjs` finds the
  *      release section; fails closed when there is no Unreleased content, no
  *      pending fragment and no prerelease section to fold (an undocumented
  *      release must not proceed)
@@ -207,18 +207,13 @@ export function foldPrereleaseSections(changelog, version, hasFragments = false)
   const seen = new Set();
   for (const s of [...(unreleased ? [unreleased] : []), ...pre]) {
     const heading = lines[s.start].trim();
-    const { errors } = groupUnreleasedLines(lines.slice(s.start + 1, s.end), `"${heading}"`);
+    const { ordered, errors } = groupUnreleasedLines(lines.slice(s.start + 1, s.end), `"${heading}"`);
     if (errors.length > 0) throw new Error(`${errors[0]}; fold it by hand before bumping`);
-    // Walk the body in document order so the first occurrence wins even across sections.
-    let name = "Changed";
-    for (const raw of lines.slice(s.start + 1, s.end)) {
-      const line = raw.trimEnd();
-      const m = /^###\s+(Added|Changed|Fixed)\s*$/.exec(line);
-      if (m) name = m[1];
-      else if (line.startsWith("- ") && !seen.has(line)) {
-        seen.add(line);
-        merged.get(name).push(line);
-      }
+    // Document order, so the first occurrence wins even across sections.
+    for (const [name, line] of ordered) {
+      if (seen.has(line)) continue;
+      seen.add(line);
+      merged.get(name).push(line);
     }
   }
   if (pre.length === 0 && FRAGMENT_SECTIONS.every((n) => merged.get(n).length === 0)) return changelog;
@@ -349,7 +344,8 @@ export function bumpVersion({ repoRoot, version, stage = true, silent = false, r
   // stamp. Fragments (changes/<slug>.md, per LIFECYCLE-CHANGELOG-COMPLETENESS)
   // are the per-PR changelog
   // note; the release step folds them into Unreleased and removes the consumed
-  // files, so stampChangelog then promotes Unreleased to ## <version> unchanged.
+  // files, so a stable bump folds prerelease sections and fragments into ## <version> first,
+  // and entries are left intact only when nothing folds; stampChangelog then promotes Unreleased.
   // Assemble+stamp run first so an undocumented release fails closed before any
   // manifest/lockfile/.claude mutation.
   const changelogPath = path.join(repoRoot, "CHANGELOG.md");
