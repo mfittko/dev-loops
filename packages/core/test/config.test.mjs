@@ -3307,7 +3307,7 @@ describe("role resolution", () => {
     // #1592 follow-up: question/nit never block by severity — a config
     // blocking on either would fight the disposition pass, which
     // simultaneously closes them (question: answered/never-deferred;
-    // nit: closed only on a judge reject or defer) regardless of what blocks a clean verdict.
+    // nit: closed on a judge reject, a judge defer or an evidence-only judge act) regardless of what blocks a clean verdict.
     test("GateConfig rejects question/nit in blockCleanOnFindingSeverities (non-defect categories never block by severity)", () => {
       for (const severity of ["question", "nit"]) {
         const result = FileConfigSchema.safeParse({

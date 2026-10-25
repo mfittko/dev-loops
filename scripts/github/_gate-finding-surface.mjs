@@ -957,7 +957,7 @@ export function countUnresolvedGateAuthoredThreads(threads, login) {
  * unanswered question cannot be cleared by fixer triage alone
  * (GATE-EXEC-FINDING-THREADS, ADR 0088), and a nit is never a fixer target
  * at all — it is closed by the disposition
- * pass (close-gate-findings.mjs) only on a judge reject or defer, unlike a defect severity, which the fixer
+ * pass (close-gate-findings.mjs) on a judge reject, a judge defer or an evidence-only judge act, unlike a defect severity, which the fixer
  * DOES triage (see gate-review-sub-loop-contract.md, SEVERITY_ORDER's
  * NON_DEFECT_SEVERITIES in gate-fanin.mjs). `total` always equals
  * countUnresolvedGateAuthoredThreads's own result for the SAME
