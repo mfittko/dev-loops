@@ -1835,15 +1835,15 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
  * by SHA) for {@link resolvePriorDispositions}'s latest-wins fold.
  *
  * Filename SHAs match case-insensitively. FAIL OPEN on a path-resolution
- * error (no prior rounds). Per ledger: FAIL OPEN on an unreadable or
- * malformed file (it contributes nothing). FAIL CLOSED on identity: a ledger whose recorded headSha differs
+ * error (no prior rounds). Per ledger: an unparseable or non-object file is
+ * dropped and reported through `onUnreadable`. FAIL CLOSED on identity: a ledger whose recorded headSha differs
  * from its filename SHA, or whose recorded repo/pr/gate is absent or differs
  * from this invocation, is dropped (mirrors resolve-angle-carry-forward.mjs's own
  * recordedHead guard). FAIL CLOSED on verdict eligibility: only a `clean` or
  * `findings_present` verdict is a CLOSED round whose reject/defer
- * dispositions are settled memory; a `blocked`/other/missing verdict (a
- * truncated write, an aborted round, a hand-edited ledger) is dropped and
- * reported through `onUnreadable` when its identity matches. A
+ * dispositions are settled memory; a `blocked` verdict is skipped silently,
+ * and a missing or unknown verdict (a truncated write, a hand-edited ledger)
+ * is dropped and reported through `onUnreadable` when its identity matches. A
  * missing directory (first round) yields `[]`.
  *
  * @returns {Promise<object[]>}
