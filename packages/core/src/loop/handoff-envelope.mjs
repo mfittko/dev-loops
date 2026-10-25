@@ -21,6 +21,7 @@ import {
 } from "./public-dev-loop-routing-contract.mjs";
 import { normalizeRepoSlug } from "../github/repo-slug.mjs";
 import { COPILOT_REVIEW_WAIT_TIMEOUT_MS } from "./policy-constants.mjs";
+import { posix as posixPath, win32 as win32Path } from "node:path";
 import { trimmedOrNull } from "./normalize.mjs";
 import { resolveEffectiveAsyncStartMode } from "./async-start-contract.mjs";
 import { resolveGateAngleContract, resolveGateAngles, resolveGateConfig, resolveHumanMergeOnly } from "../config/config.mjs";
@@ -274,7 +275,9 @@ function deriveTarget(bundle, repo) {
       throw new Error("handoff-envelope: issue target must include a valid positive issue number");
     }
     target.issue = issue;
-    if (Number.isInteger(artifact.pr) && artifact.pr > 0) target.pr = artifact.pr;
+    // An issue target's PR arrives as `linkedPr`, never `pr`: the router refuses an issue
+    // target carrying `pr` (and re-targets an issue with a linked PR to the PR kind), so a
+    // forwarding of `artifact.pr` here would be an unreachable input with no AC row behind it.
     if (Number.isInteger(artifact.linkedPr) && artifact.linkedPr > 0) target.linkedPr = artifact.linkedPr;
   } else if (kind === DEV_LOOP_TARGET_KIND.PR) {
     const pr = artifact.pr;
@@ -436,14 +439,93 @@ function lookupAcceptanceTemplate(strategy, gate) {
 // cwd derivation
 // ---------------------------------------------------------------------------
 
+/**
+ * The one canonical spelling of a repo root: separators unified to `/` and
+ * redundant segments folded away (a trailing `/`, a trailing `/.`, a doubled
+ * separator inside the path) EXCEPT where the fold would destroy the root's own
+ * shape — a network share's significant leading `//` and a drive-rooted prefix
+ * survive, because the path they name cannot be re-derived from a root-relative
+ * one. One logical repo state must yield one `cwd` byte sequence, because a
+ * consumer exact-matches this path against the real worktree (issue 2532).
+ */
+const WINDOWS_ROOT = /^(?:[A-Za-z]:[\\/]|\\\\)/u;
+
+function canonicalRepoRoot(root) {
+  // Decide the root's SHAPE from the raw input BEFORE touching separators: `\` is a legal
+  // POSIX filename character, so unifying it on a POSIX root names a DIFFERENT directory.
+  const windowsShaped = WINDOWS_ROOT.test(root) || root.startsWith("//");
+  const unified = windowsShaped ? root.replace(/\\/g, "/") : root;
+  // Pick the normalizer from that shape. A drive-rooted or UNC root keeps Windows semantics:
+  // `posix.normalize` folds a network share's significant leading `//` into a root-relative
+  // POSIX path, and the suffix logic below cannot repair it afterwards. Every other root
+  // normalizes as POSIX.
+  const normalized = windowsShaped
+    ? win32Path.normalize(unified).replace(/\\/g, "/")
+    : posixPath.normalize(unified);
+  // Both normalizers PRESERVE a trailing separator, which would defeat the suffix
+  // comparison below, so strip it here while keeping the root separator itself.
+  const stripped = normalized.replace(/\/+$/u, "");
+  if (stripped.length === 0) return normalized;
+  // A bare drive (`C:`) is drive-RELATIVE: it names the current directory on that drive,
+  // not the drive root. Keep the separator that makes it absolute, or the join below emits
+  // a path no consumer can exact-match against the real worktree.
+  return /^[A-Za-z]:$/u.test(stripped) ? `${stripped}/` : stripped;
+}
+
+/**
+ * Join segments under an already-canonical root through the path library for the root's
+ * SHAPE, never string interpolation. A root that IS a separator (`/`) cannot double it, a
+ * drive root (`C:/`) cannot degrade to the drive-relative `C:`, and a network share's
+ * significant leading `//` survives. The unified `/` spelling this module emits is restored
+ * afterwards, because `win32.join` reintroduces backslashes (issue 2532) — but ONLY for a
+ * Windows-shaped root, since a POSIX root's literal `\` is part of the directory name.
+ */
+function joinUnderRoot(root, ...segments) {
+  const windowsShaped = WINDOWS_ROOT.test(root) || root.startsWith("//");
+  const joined = (windowsShaped ? win32Path : posixPath).join(root, ...segments);
+  return windowsShaped ? joined.replace(/\\/g, "/") : joined;
+}
+
+/**
+ * The canonical root when `root` IS already the loop-owned worktree for `relative`
+ * (`<kind>-<number>` under the namespace, or the non-namespaced `<slug>` layout), else null.
+ * A startup run from inside the target's own worktree reports that worktree as its repo root,
+ * so appending the namespace again would name a worktree nested inside itself (issue 2532).
+ */
+function ownedWorktreeRootFor(canonicalRoot, relative) {
+  const suffix = `${WORKTREE_NAMESPACE}/${relative}`;
+  if (canonicalRoot === suffix || canonicalRoot.endsWith(`/${suffix}`)) return canonicalRoot;
+  // AGENTS.md documents the mutating-work layout as `tmp/worktrees/<issue-or-branch-slug>/`, so
+  // an existing worktree of that shape is the target's own root too. Recognise the DOCUMENTED
+  // shape and nothing looser: the `<relative>` segment under a `worktrees` segment that is itself
+  // under a `tmp` segment. Never by bare basename (`/repo/issue-42`) and never by a merely
+  // `worktrees`-named ancestor (`/home/worktrees/issue-42`), or a main checkout is named as the
+  // unit worktree while the envelope still promises one — the main-branch mutation the layout
+  // exists to prevent. Every other root keeps the nested derivation below.
+  const segments = canonicalRoot.split("/");
+  const relativeSegment = segments.pop();
+  const worktreesSegment = segments.pop();
+  const tmpSegment = segments.pop();
+  return relativeSegment === relative && worktreesSegment === "worktrees" && tmpSegment === "tmp"
+    ? canonicalRoot
+    : null;
+}
+
 function deriveCwd(bundle, options = {}) {
   if (options.worktreeCwd && typeof options.worktreeCwd === "string" && options.worktreeCwd.trim().length > 0) {
-    return options.worktreeCwd.trim();
+    // The sibling input channel gets the SAME canonicalization: one logical repo root keeps
+    // one `cwd` spelling whichever option named it, or a consumer that exact-matches `cwd`
+    // against the real worktree gets two answers for one root (issue 2532).
+    return canonicalRepoRoot(options.worktreeCwd.trim());
   }
 
-  const root = options.repoRoot && typeof options.repoRoot === "string"
+  const rawRoot = options.repoRoot && typeof options.repoRoot === "string"
     ? options.repoRoot.trim()
     : null;
+  // Normalize ONCE, then hand the same value to every branch: an un-normalized but
+  // equivalent root (`/repo//tmp/...`, a trailing `/.`) must never fall through to a
+  // second appended namespace, and must never emit a `//`-joined path.
+  const root = rawRoot ? canonicalRepoRoot(rawRoot) : null;
 
   const artifact = bundle?.activeArtifact ?? bundle?.canonicalState?.target ?? {};
   const kind = normalizeTargetKind(artifact.kind);
@@ -455,14 +537,16 @@ function deriveCwd(bundle, options = {}) {
       && bundle.issueLinkageResolution === DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.RESOLVED_NO_OPEN_PR
       && artifact.phase === `issue-${artifact.issue}`;
     if ((kind === DEV_LOOP_TARGET_KIND.ISSUE || trackerLocalIssue) && Number.isInteger(artifact.issue) && artifact.issue > 0) {
-      return resolveWorktreePath({ repoRoot: root, kind: "issue", number: artifact.issue });
+      return ownedWorktreeRootFor(root, `issue-${artifact.issue}`)
+        ?? resolveWorktreePath({ repoRoot: root, kind: "issue", number: artifact.issue });
     }
     if (kind === DEV_LOOP_TARGET_KIND.PR && Number.isInteger(artifact.pr) && artifact.pr > 0) {
-      return resolveWorktreePath({ repoRoot: root, kind: "pr", number: artifact.pr });
+      return ownedWorktreeRootFor(root, `pr-${artifact.pr}`)
+        ?? resolveWorktreePath({ repoRoot: root, kind: "pr", number: artifact.pr });
     }
     const slug = buildWorktreeSlug(artifact, kind);
     if (slug) {
-      return `${root}/${WORKTREE_NAMESPACE}/${slug}`;
+      return ownedWorktreeRootFor(root, slug) ?? joinUnderRoot(root, WORKTREE_NAMESPACE, slug);
     }
   }
 
@@ -491,7 +575,7 @@ export function resolveWorktreePath({ repoRoot, kind, number } = {}) {
   if (!Number.isInteger(number) || number < 1) {
     throw new Error(`resolveWorktreePath: number must be a positive integer, got ${number}`);
   }
-  return `${root}/${WORKTREE_NAMESPACE}/${k}-${number}`;
+  return joinUnderRoot(canonicalRepoRoot(root), WORKTREE_NAMESPACE, `${k}-${number}`);
 }
 
 function flattenSlugSegment(s) {
@@ -521,6 +605,85 @@ function buildWorktreeSlug(artifact, kind) {
     return null;
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// unit-boundary derivation (issue 2532)
+// ---------------------------------------------------------------------------
+
+/**
+ * Deterministic hand-back boundaries for one unit coordinator. A unit runs one
+ * phase and stops at the next boundary; the orchestrator only emits and dispatches
+ * the successor's work order, and the successor re-resolves startup against
+ * authoritative state (never a brief authored by the predecessor).
+ * The vocabulary is closed so a fixture can assert the exact set.
+ */
+export const UNIT_BOUNDARY = Object.freeze({
+  DRAFT_PR_OPENED: "draft_pr_opened",
+  GATE_VERDICT_POSTED: "gate_verdict_posted",
+});
+
+// Routes that own no phase to hand back from: `review` and `ui_review` run one
+// read-only round and produce no lifecycle gate evidence, and `wait_watch`
+// produces no unit at all. This is an explicit, named list — the same three
+// read/observe strategies the routing contract's ownership map exempts
+// (`STRATEGY_OWNERSHIP_GATE` in `scripts/loop/resolve-dev-loop-startup.mjs`) — not a
+// derivation from that map, so adding a read-only route means adding it here too.
+// A boundary for one of these routes would contradict its own stop rules.
+// Exported so the contract test can assert this list stays in step with that classification
+// (issue 2532): the hand-maintenance ADR 0181 accepts is only safe while drift is detectable.
+export const STATELESS_UNIT_STRATEGIES = Object.freeze([
+  INTERNAL_DEV_LOOP_STRATEGY.REVIEW,
+  INTERNAL_DEV_LOOP_STRATEGY.UI_REVIEW,
+  INTERNAL_DEV_LOOP_STRATEGY.WAIT_WATCH,
+]);
+
+/**
+ * Derive the unit coordinator's hand-back boundaries from the route the envelope
+ * already carries. Nothing here comes from a predecessor: `resume` names the
+ * sanctioned re-resolution a successor runs against authoritative state.
+ * Returns undefined for a route that has no unit to hand back (terminal
+ * reconciliation, read-only review or ui-review, wait) so the field never
+ * contradicts the route's own stop rules.
+ */
+function deriveUnitBoundaries(strategy, target) {
+  if (strategy === null || STATELESS_UNIT_STRATEGIES.includes(strategy)) return undefined;
+  const boundaries = [];
+  // A unit that owns no PR yet ends its phase by opening the draft PR. `target.pr` is
+  // already the PR kind's identity, so the bound-PR arm needs no spelling out; the
+  // only linked-PR source the envelope can carry is an issue artifact's `linkedPr`.
+  // The local kinds forward no linked PR: no shipped producer puts one on their
+  // artifacts, so every routed local unit stops at the draft PR it opens.
+  const ownsPr = target.kind === DEV_LOOP_TARGET_KIND.PR
+    || (Number.isInteger(target.linkedPr) && target.linkedPr > 0);
+  if (!ownsPr) boundaries.push(UNIT_BOUNDARY.DRAFT_PR_OPENED);
+  // Every unit that runs a gate round hands back after its verdict is posted.
+  boundaries.push(UNIT_BOUNDARY.GATE_VERDICT_POSTED);
+  const text = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  return {
+    handBackAfter: boundaries,
+    // A resume carries every identity the target carries, not an exclusive one: each field
+    // below is copied independently, so the dominant issue-plus-linked-PR route emits both
+    // `issue` and `pr` (the router re-targets that target to the PR route in
+    // `toRoutableCanonicalState`, and `deriveTarget` above keeps the issue as the PR unit's
+    // cross-link). There is no XOR here and no precedence rule to apply; the validator
+    // requires only a non-empty, well-typed set. A phase label identifies the artifact — the
+    // no-number case when the target carries no issue, pr or branch; which startup mode
+    // re-resolves it (`--plan-file`, `--spike`, the lightweight path), like the single identity
+    // flag a successor passes, is that successor's own route input, never something the
+    // predecessor decides by writing this field.
+    resume: {
+      kind: "loop_startup",
+      issue: Number.isInteger(target.issue) && target.issue > 0 ? target.issue : null,
+      pr: Number.isInteger(target.pr) && target.pr > 0 ? target.pr : null,
+      branch: text(target.branch),
+      // A phase-only target carries no issue, PR or branch: the phase label IS the identity
+      // of the artifact a successor re-resolves. A `local_phase` target may also keep an
+      // issue (its label is then `issue-<n>`), so this field never implies the others are
+      // unset.
+      phase: text(target.phase),
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -751,6 +914,13 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
 
   if (gateConfig) {
     envelope.gateConfig = gateConfig;
+  }
+
+  // Unit coordinator hand-back boundaries (issue 2532). Target+strategy derived,
+  // so it is byte-stable across builds for the same route.
+  const unitBoundaries = deriveUnitBoundaries(isReconciliation ? null : strategy, target);
+  if (unitBoundaries) {
+    envelope.unitBoundaries = unitBoundaries;
   }
 
   if (overrides) {
@@ -1134,6 +1304,95 @@ export function validateHandoffEnvelope(envelope) {
         reason: `if present, must be one of ${validSources.join(", ")}`,
         got: envelope.specSource,
       });
+    }
+  }
+
+  // ----- unitBoundaries (optional — coordinator hand-back boundaries, issue 2532) -----
+  if (envelope.unitBoundaries !== undefined) {
+    const ub = envelope.unitBoundaries;
+    const boundaryNames = Object.values(UNIT_BOUNDARY);
+    if (!ub || typeof ub !== "object" || Array.isArray(ub)) {
+      errors.push({ field: "unitBoundaries", reason: "if present, must be a non-array object", got: ub });
+    } else {
+      if (!Array.isArray(ub.handBackAfter) || ub.handBackAfter.length === 0
+        || ub.handBackAfter.some((b) => !boundaryNames.includes(b))
+        || new Set(ub.handBackAfter).size !== ub.handBackAfter.length
+        // The contract makes the list ordered and first-match, so a reversed list
+        // would stop a unit at a boundary it cannot reach yet. Declaration order is
+        // the canonical order.
+        || ub.handBackAfter.some((b, i) => i > 0 && boundaryNames.indexOf(b) < boundaryNames.indexOf(ub.handBackAfter[i - 1]))) {
+        errors.push({ field: "unitBoundaries.handBackAfter", reason: `must be a non-empty array of distinct boundaries in canonical order: ${boundaryNames.join(" then ")}`, got: ub.handBackAfter });
+      }
+      const resume = ub.resume;
+      // The builder only ever emits a positive integer or null, so a present-but-invalid
+      // identity (a string or a non-positive integer) is rejected even when another
+      // identity is also present; otherwise the validator would be laxer than its producer.
+      const invalidCount = [resume?.issue, resume?.pr].some((n) => n !== undefined && n !== null && !(Number.isInteger(n) && n > 0));
+      // `branch`/`phase` get the same unconditional type check: testing them only inside the
+      // "any identity at all" fallback below would skip it as soon as a valid issue or PR is
+      // present, accepting `{issue: 42, branch: 99}` — malformed authoritative state on the
+      // very resume path that must be authoritative (issue 2532).
+      const invalidText = [resume?.branch, resume?.phase].some(
+        (v) => v !== undefined && v !== null && !(typeof v === "string" && v.trim()),
+      );
+      if (!resume || typeof resume !== "object" || resume.kind !== "loop_startup") {
+        errors.push({ field: "unitBoundaries.resume", reason: "must be an object with kind=loop_startup", got: resume });
+      } else if (invalidCount || invalidText) {
+        errors.push({ field: "unitBoundaries.resume", reason: "issue and pr must be a positive integer or null, and branch and phase a non-empty string or null", got: resume });
+      } else if (![resume.issue, resume.pr].some((n) => Number.isInteger(n) && n > 0)
+        && ![resume.branch, resume.phase].some((v) => typeof v === "string" && v.trim())) {
+        errors.push({ field: "unitBoundaries.resume", reason: "must name an issue, pr, branch or phase to re-resolve", got: resume });
+      }
+      // A boundary set and a resume that contradict the envelope's OWN target are not
+      // authoritative state: `deriveUnitBoundaries` derives both from that target, so a PR-less
+      // unit whose list omits the draft PR stops nowhere (the snowball this field exists to
+      // prevent), a PR-owning unit whose list carries the draft PR stops at a boundary it can
+      // never reach, and a resume naming another issue or PR resumes a different unit (issue
+      // 2532). Only well-typed identities are compared; the type errors above already cover a
+      // malformed one, and a target error above already covers a missing/invalid target.
+      const target = envelope.target;
+      if (target && typeof target === "object" && !Array.isArray(target)) {
+        const ownsPr = target.kind === DEV_LOOP_TARGET_KIND.PR
+          || (Number.isInteger(target.linkedPr) && target.linkedPr > 0);
+        if (Array.isArray(ub.handBackAfter) && ub.handBackAfter.length > 0) {
+          if (!ownsPr && ub.handBackAfter[0] !== UNIT_BOUNDARY.DRAFT_PR_OPENED) {
+            errors.push({
+              field: "unitBoundaries.handBackAfter",
+              reason: `a target that owns no PR must hand back at ${UNIT_BOUNDARY.DRAFT_PR_OPENED} first, because opening that draft PR ends its phase`,
+              got: ub.handBackAfter,
+            });
+          }
+          // The mirror arm of the partition `deriveUnitBoundaries` produces: a target that owns a
+          // PR already has its draft, so it never opens one. A list carrying that boundary names
+          // a stop the unit can never reach and, being first-match, would end the unit before its
+          // gate round — so `gate_verdict_posted` is its only reachable boundary.
+          if (ownsPr && ub.handBackAfter.includes(UNIT_BOUNDARY.DRAFT_PR_OPENED)) {
+            errors.push({
+              field: "unitBoundaries.handBackAfter",
+              reason: `a target that already owns its PR must not hand back at ${UNIT_BOUNDARY.DRAFT_PR_OPENED}: that unit never opens a draft, so ${UNIT_BOUNDARY.GATE_VERDICT_POSTED} is its only boundary`,
+              got: ub.handBackAfter,
+            });
+          }
+        }
+        const identityText = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+        const resumeIssue = Number.isInteger(resume?.issue) && resume.issue > 0 ? resume.issue : null;
+        const resumePr = Number.isInteger(resume?.pr) && resume.pr > 0 ? resume.pr : null;
+        // Each resume identity must be one the target itself carries. An issue target's own PR
+        // arrives as `linkedPr`, so that arm counts as an owned PR identity too.
+        const foreign = [
+          ["issue", resumeIssue, Number.isInteger(target.issue) && target.issue > 0 ? [target.issue] : []],
+          ["pr", resumePr, [target.pr, target.linkedPr].filter((n) => Number.isInteger(n) && n > 0)],
+          ["branch", identityText(resume?.branch), [identityText(target.branch)].filter(Boolean)],
+          ["phase", identityText(resume?.phase), [identityText(target.phase)].filter(Boolean)],
+        ].filter(([, named, owned]) => named !== null && !owned.includes(named)).map(([name]) => name);
+        if (foreign.length > 0) {
+          errors.push({
+            field: "unitBoundaries.resume",
+            reason: `every identity must be one this ${target.kind} target carries; target does not carry: ${foreign.join(", ")}`,
+            got: resume,
+          });
+        }
+      }
     }
   }
 
