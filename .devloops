@@ -87,23 +87,24 @@ gates:
     # rounds on one PR (72 reviewer dispatches), high per round ran
     # 1,1,7,0,1,1,3,0 while medium ran 6,11,17,14,16,9,12,7.
     #
-    # medium findings still go through the normal fan-in flow
-    # (ledger + finding-threads review) as long as that flow is followed; this key
-    # does not itself force a count or a ledger entry for medium
-    # (upsert-checkpoint-verdict only requires explicit counts for the
-    # severities listed here). They no longer count toward the ledger's clean
-    # verdict. A LOCATABLE one (in-diff file:line) stays open as an unresolved
-    # PR review thread, fixed in-gate through round 3 of this gate's chain;
-    # from round 4 on it is instead replied to, resolved, and stamped
-    # deferred. A NON-LOCATABLE one is body-filed instead: stamped deferred
-    # immediately and tracked only through the disposition ledger and its
-    # fingerprint, with no review-thread force-fix guarantee
-    # (GATE-EXEC-FINDING-THREADS, GATE-EXEC-THREAD-DISPOSITION). preApproval's
-    # own blockCleanOnFindingSeverities below is high only too, same as
-    # here — a medium finding never blocks either gate's clean
-    # verdict on its own; an in-window (round <= 3) locatable one still forces
-    # a fix round through the unresolved-feedback routing described above,
-    # regardless of severity's effect on the verdict. preApproval re-reviews
+    # The judge disposes every finding cluster (act, defer or reject) and owns
+    # the verdict: a non-empty act list gives findings_present and an empty one
+    # gives clean, whatever the severities. Severity, the round number and the
+    # medium fix window (mediumFixWindow) are inputs to the judge. No code path
+    # stamps a deferral from severity or round alone. A LOCATABLE finding
+    # (in-diff file:line) stays an open PR review thread until the fixer
+    # resolves it, the judge defers it, the judge rejects a medium, low or nit
+    # (a rejected question needs an answer reply first and a rejected high
+    # stays open), or the judge disposes it act with an evidence-only remedy.
+    # A NON-LOCATABLE one
+    # is body-filed and carries disposition=deferred only on a judge defer
+    # (never on a nit, which carries no stamp and no issue link). An
+    # unjudged finding stays open. This key lists the severities that the
+    # fan-in verdict treats as blocking when no judge ran or a finding stays
+    # unjudged (a partly judged ledger keeps the fan-in verdict). A judged
+    # round, one where every finding carries a judge disposition, reads it only for the clean-implies-no-blocking-act consistency
+    # check, never for the verdict. preApproval's own blockCleanOnFindingSeverities below is
+    # high only too. preApproval re-reviews
     # through its own, mostly disjoint angle pool (draft and preApproval share only
     # contradiction-lens) and does not re-raise a draft-gate finding as a
     # fresh finding of its own: fingerprint suppression across gates keeps a
@@ -173,49 +174,35 @@ localImplementation:
     maxFiles: 2
     maxLines: 40 # micro-PR ceiling (ADR 0108)
 
-# Pre-PR review model opt-in (issue #2305, skills/docs/pre-pr-review-contract.md).
-# The pre-PR review pass runs ONE fresh-context general-purpose reviewer before
-# the first push. On the Claude-Code harness this repo runs that one call on the
-# `opus` family token, which current Claude Code resolves to Opus 5.5 (underlying
-# model identity claude-opus-5-5) and which follows the Opus family alias on a
-# Claude Code upgrade. Opus 5.5 reviews code at the level of Fable at lower
-# cost. The token is a member of the Claude Code Agent-tool `model` enum
-# (sonnet|opus|haiku|fable); a full model id is rejected at dispatch. The pin is
-# explicit so a session started on another model cannot change the reviewer.
-# The tier sets `claude` to `opus` and `pi` to openai-codex/gpt-6.1-sol — a
-# native OpenAI-Codex child model served by pi's own openai-codex (Codex
-# Responses) provider. The model is never hardcoded in phase prose/tooling — it
-# is resolved via resolveRoleModel(config, { role: "pre-push-reviewer", harness }).
-#
-# Regular vs. strong split: the regular tier (`low`) runs the routine roles
-# (developer, fixer, docs, quality) on Claude's `sonnet` family token. On Pi it
-# carries the operator's free Ollama-hosted model, so those roles get a
-# deliberate cheap-model choice there instead of inheriting the conductor's
-# model. The strong tier (`high`) keeps review, judge, refiner and every gate
-# angle on `opus` on Claude. `pre-pr-strong` stays the pre-push reviewer's tier.
-# Pi pins: low = ollama-cloud/minimax-m3.1-flash; high and pre-pr-strong =
-# openai-codex/gpt-6.1-sol. The reviewers check the cheap model's output, so
-# the review tiers never use the free model.
-# On Claude the agents' `model:` frontmatter is baked from the built-in policy
-# (the judge pins `opus` through `claudeModel` in its canonical frontmatter).
-# The orchestrator's dispatch-time model parameter selects `sonnet` for the
-# developer and fixer.
+# Model tiers (skills/docs/pre-pr-review-contract.md).
+# Each tier maps to one model per harness (`claude`, `pi`). The `pi` value is
+# switchable here in `models.tiers`; no other file needs to change. The Claude
+# side is baked from built-in policy into the agent frontmatter.
+#   low           routine roles: developer, fixer, dev-loop, gate-coordinator, docs, quality.
+#   high          review, judge, refiner and every gate angle.
+#   pre-pr-strong the pre-push reviewer.
+# Roles resolve a model via resolveRoleModel(config, { role, harness }); phase
+# prose and tooling never hardcode one. The repo contract test pins the tier
+# structure (which role maps to which tier, which harness key carries a model)
+# and never pins a model id (ADR 0175).
 models:
   tiers:
     low:
       claude: sonnet
-      pi: ollama-cloud/minimax-m3.1-flash
+      pi: baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast
     high:
       claude: opus
-      pi: openai-codex/gpt-6.1-sol
+      pi: baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast
     pre-pr-strong:
       claude: opus
-      pi: openai-codex/gpt-6.1-sol
+      pi: baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast
   roleTiers:
     pre-push-reviewer: pre-pr-strong
     judge: high
     developer: low
     fixer: low
+    dev-loop: low
+    gate-coordinator: low
 
 # Extra MCP tools delivered to the Claude developer, fixer and refiner agents
 # (issue #2604). Entries must be MCP tool names; hook-guarded roles are rejected.

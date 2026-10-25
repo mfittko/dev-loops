@@ -8,6 +8,8 @@ import {
   GATE_CONFIG_KEY,
   applyJudgeDispositions,
   isOpenActItem,
+  assertNoProjectedForbiddenDefer,
+  normalizeSeverity,
   validateJudgeVerdict,
 } from "@dev-loops/core/loop/gate-fanin";
 import {
@@ -25,6 +27,7 @@ import {
   resolveAffectedCriteria,
   resolveCriterionInvalidation,
   specCriterionIds,
+  PR_SCOPE_SPEC_KIND,
   stampSpecAuthorityIdentity,
   validateSpecAuthorityVerdict,
 } from "@dev-loops/core/loop/spec-authority";
@@ -45,7 +48,7 @@ import {
   matchJqOutputToken,
 } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>]
+const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>]
 
 Bridge the judge pass between gate fan-in (Phase 3) and the fixer pass (Phase 4).
 Reads the judge agent's verdict artifact, enforces current-head freshness, applies
@@ -82,7 +85,10 @@ Inputs:
                                closed.
   --repo <owner/name>          Echoed onto the result (owner/name format checked).
   --pr <number>                Echoed onto the result.
-  --gate <name>                Echoed onto the result (draft_gate|pre_approval_gate).
+  --gate <name>                Echoed onto the result (draft_gate|pre_approval_gate|review).
+                               With review: no deferral comment is posted, --out is
+                               refused (the review gate never feeds a fixer), and a
+                               pr_scope --spec-file is accepted (lifecycle gates refuse it).
   --out <path>                 Write the fixer's ACT list (enriched findings with
                                judgeDisposition === "act", never an evidence-only
                                remedy; counts.act and actCount exclude those too) to this path as JSON. It
@@ -106,9 +112,7 @@ Inputs:
                                spec issue target only; a PR target posts no comment and
                                followUpIssueNumber records the PR number (a folded defer
                                is recorded by its Details marker in the Deferred group, a
-                               stamped thread by its thread marker plus resolving reply,
-                               a no-stamp thread by its resolving reply plus the ledger
-                               entry). This tool never
+                               stamped thread by its thread marker plus resolving reply). This tool never
                                creates an issue. A re-run does not append a fingerprint
                                the target already lists.
   --repo-root <path>           Root used to resolve relative --findings-file /
@@ -353,6 +357,9 @@ export function validateCliArgs(options) {
     throw parseError("--head-sha must be a 7-64 char hex SHA");
   }
   options.headSha = sha;
+  if (gate === "review" && options.out !== undefined) {
+    throw parseError("--out is not accepted with --gate review: the review gate never feeds a fixer, so no act list is written");
+  }
   options.findingsFile = requireValue(options.findingsFile, "--findings-file", parseError);
   options.judgeVerdict = requireValue(options.judgeVerdict, "--judge-verdict", parseError);
   // --judge-plan is enforced by judgePassCli (verifyJudgeDelivery), so an omitted flag still fails closed.
@@ -478,6 +485,8 @@ export function runJudgePass(findings, judgeVerdict, headSha) {
     ? clustersFromStampedIds(applied.findings)
     : clusterFindings(applied.findings, { headSha: validated.headSha }).clusters;
   const enriched = projectClusterDisposition(applied.findings, clusters);
+  // The never-deferred rule also holds after projection: a defer on one member must not reach a high, a question or an all-nit cluster.
+  assertNoProjectedForbiddenDefer(enriched, clusters);
   return {
     enriched,
     act: enriched.filter((f) => f.judgeDisposition === "act"),
@@ -530,8 +539,7 @@ function validateFindingsArray(parsed, flagLabel) {
  * (act/defer/reject — the one-line reject audit entry keys on it too), then
  * post every `defer` disposition as ONE batched comment on the linked spec
  * issue target. A PR target posts no comment (a folded defer is recorded by
- * its Details marker, a stamped thread by its thread marker plus resolving reply,
- * a no-stamp thread by its resolving reply plus the ledger entry).
+ * its Details marker, a stamped thread by its thread marker plus resolving reply).
  * Never creates an issue. Mutates `enriched` in place (each element
  * already the judge-pass's own fresh copy from `applyJudgeDispositions`). A
  * re-run does not append a fingerprint the target already lists.
@@ -540,7 +548,8 @@ async function applyDeferralComment(enriched, { repo, pr, trackerProvider }, dep
   for (const f of enriched) {
     f.fingerprint = fingerprintFinding(f);
   }
-  const deferred = enriched.filter((f) => f.judgeDisposition === "defer");
+  // A nit member of a deferred mixed cluster is never filed (matches selectFoldedFileableEntries).
+  const deferred = enriched.filter((f) => f.judgeDisposition === "defer" && normalizeSeverity(f.severity) !== "nit");
   if (deferred.length === 0) return;
   const entries = deferred.map((f) => ({
     fingerprint: f.fingerprint,
@@ -597,6 +606,9 @@ async function readJsonArtifact(artifactPath, label, parseErr) {
 async function enforceSpecAuthority(options, findings, resolvedRoot) {
   if (options.specFile === undefined) return null;
   const spec = await readJsonArtifact(path.resolve(resolvedRoot, options.specFile), "--spec-file", parseError);
+  if (spec?.specKind === PR_SCOPE_SPEC_KIND && options.gate !== "review") {
+    throw parseError(`--spec-file has specKind "${PR_SCOPE_SPEC_KIND}", which only the review gate accepts; ${options.gate} requires a formal spec with acceptance criteria`);
+  }
   let identity;
   let criterionIds;
   try {
@@ -977,13 +989,18 @@ export async function judgePassCli(
   // A `defer` disposition is recorded as one batched comment on a linked spec
   // issue target, never only the ephemeral tmp ledger, and never a new issue.
   // A PR target posts no comment: a folded defer's Details marker, a stamped
-  // thread's marker plus reply, or a no-stamp thread's reply plus ledger entry
+  // thread's marker plus reply
   // is the record. Idempotent across re-runs via the target's listed fingerprints.
-  await applyDeferralComment(
-    result.enriched,
-    { repo: options.repo, pr: Number(options.pr), trackerProvider },
-    { env, ghCommand, run, commentIssue },
-  );
+  // The review gate keeps one visible surface (the review body), so its defers post no comment.
+  if (options.gate === "review") {
+    for (const f of result.enriched) f.fingerprint = fingerprintFinding(f);
+  } else {
+    await applyDeferralComment(
+      result.enriched,
+      { repo: options.repo, pr: Number(options.pr), trackerProvider },
+      { env, ghCommand, run, commentIssue },
+    );
+  }
 
   // Recurrence escalation: an act item whose surface appears in act items of three counted
   // rounds is withheld from the fixer and surfaced for a human decision. The count is derived

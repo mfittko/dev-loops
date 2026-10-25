@@ -15,14 +15,15 @@
  *   <tmp-root>/gate-delta/<baseline>.json (last write wins; local evidence only,
  *   PRE-PUSH-DELTA-NOT-GATE-EVIDENCE).
  *
- * The run without --result is write-free: it reads the act list (or the
+ * The run without --result (except --handback, which writes nothing and omits patchPath and evidenceRule) writes only the cumulative patch (PRE-PUSH-DELTA-PATCH-ARTIFACT) at
+ * <tmp-root>/gate-delta/<baseline>-<candidate>.patch: it reads the act list (or the
  * unresolved-threads file of the thread route), the result file, the
  * --findings-log file and `git rev-parse HEAD`, runs the stale-surface reads
- * (`git cat-file`, `git diff`, `git grep`), and authenticates ACT coverage without writes.
+ * (`git cat-file`, `git diff`, `git grep`), and authenticates ACT coverage without further writes.
  * Pure result checks live in @dev-loops/core/loop/pre-push-delta-review.
  */
 import { execFile, spawnSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
@@ -76,7 +77,8 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
 
 Output (stdout, JSON):
-  without --result: { "ok": true, "input": { ..., "resultShape": { ... } } }
+  without --result (except --handback, which writes nothing and omits "patchPath" and "evidenceRule"): { "ok": true, "input": { ..., "patchPath", "evidenceRule", "resultShape": { ... } } }
+                    Also writes the cumulative baseline..candidate patch to input.patchPath (<tmp-root>/gate-delta/<baseline>-<candidate>.patch); the reviewer reads it with the read tool and needs no shell.
                     Fill input.resultShape; on ACT copy its binding below unchanged.
 
 Result JSON (--result, DeltaPrePushReviewResult):
@@ -174,6 +176,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
     fixerPlan: values["fixer-plan"] ?? null,
     findingsLog: values["findings-log"] ?? null,
     result: values.result ?? null,
+    handback: values.handback === true,
     invocation,
     worktree: values.worktree ?? process.cwd(),
     jq: values.jq,
@@ -188,6 +191,19 @@ function gitRevParse(worktree, rev) {
   });
   if (out.status !== 0) throw new Error(`git rev-parse ${rev} failed in ${worktree}: ${out.stderr.trim()}`);
   return out.stdout.trim();
+}
+
+export const DELTA_EVIDENCE_RULE = "Read patchPath with the read tool. Evidence is a file:line, or a test's path:line, read from disk. Run no tests, builds, or other command that mutates or executes anything; for a site query use only the shell-inert read/search commands the reviewer read-only gate allows (git grep, grep, rg).";
+
+export const deltaPatchPath = (tmpRoot, baseline, candidate) => path.join(tmpRoot, "gate-delta", `${baseline}-${candidate}.patch`);
+
+// The cumulative baseline..head patch the reviewer reads; formats pinned against operator git config.
+function gitDiffPatch(worktree, baseline, head) {
+  const out = spawnSync("git", ["-C", worktree, "-c", "core.quotePath=false", "diff", "--unified=3", "--diff-algorithm=myers", "-O/dev/null", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-renames", "--no-relative", "--ignore-submodules=none", `${baseline}..${head}`], {
+    env: gitEnvNoDirOverrides(), maxBuffer: 1024 * 1024 * 1024,
+  });
+  if (out.status !== 0) throw new Error(`git diff ${baseline}..${head} failed in ${worktree}: ${out.error?.message ?? out.stderr.toString().trim()}`);
+  return out.stdout;
 }
 
 function gitIsAncestor(worktree, ancestor, descendant) {
@@ -296,7 +312,7 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
 
 export async function runCli(
   argv = process.argv.slice(2),
-  { revParse = gitRevParse, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, stdout = process.stdout, tmpRoot } = {},
+  { revParse = gitRevParse, diffPatch = gitDiffPatch, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, stdout = process.stdout, tmpRoot } = {},
 ) {
   const options = parseCheckPrePushDeltaArgs(argv);
   if (options.help) {
@@ -385,7 +401,12 @@ export async function runCli(
     });
     payload = { ok: true, ...decision };
   } else {
-    payload = { ok: true, input: buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) };
+    const patchPath = deltaPatchPath(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sequence.reviewBaselineHead, currentHead);
+    if (!options.handback) { // the fixer handbackCheck stays write-free
+      mkdirSync(path.dirname(patchPath), { recursive: true });
+      writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead));
+    }
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;

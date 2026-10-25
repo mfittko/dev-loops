@@ -30,8 +30,8 @@ async function withCase({ siblingVerdict, identity = { specDigest, headSha: HEAD
       headSha: HEAD,
       scopeDrift: { verdict: "within_scope", rationale: "in scope", driftedAreas: [] },
       dispositions: [
-        { index: 0, disposition: "act", rationale: "relevant" },
-        { index: 1, disposition: "act", rationale: "relevant" },
+        { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "relevant" },
+        { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "relevant" },
       ],
     }), "utf8");
     if (siblingVerdict !== undefined) {
@@ -68,6 +68,28 @@ test("a finding_conflicts finding judged act lands in the ledger as reject", asy
     assert.deepEqual(findings.map((f) => f.judgeDisposition), ["reject", "act"]);
     assert.match(findings[0].judgeRationale, /^spec-authority finding_conflicts: rejected against the spec \(was relevance-act\)/);
     assert.equal(composeReviewVerdict("clean", [findings[0]]), "clean");
+  });
+});
+
+test("a pr_scope identity with a finding_conflicts sibling on scope:1 persists every finding with its judgeDisposition", async () => {
+  const scopeSpec = { acceptanceCriteria: [], definitionOfDone: [], nonGoals: [], specKind: "pr_scope", scope: ["Fixes reload.", "- keep the build"] };
+  const scopeIds = specCriterionIds(scopeSpec);
+  assert.deepEqual(scopeIds, ["scope:0", "scope:1"]);
+  const scopeDigest = computeSpecDigest(scopeSpec);
+  const scopeDecision = (index, outcome, extra = {}) => ({ index, outcome, specDigest: scopeDigest, headSha: HEAD, contentDigest, checkedCriteria: scopeIds, rationale: "r", ...extra });
+  const siblingVerdict = {
+    specDigest: scopeDigest, headSha: HEAD, contentDigest,
+    decisions: [
+      scopeDecision(0, "valid_compliant", { authorizedRemediation: "fix it", defectClass: "c", siteQuery: "q" }),
+      scopeDecision(1, "finding_conflicts", { conflictingCriteria: ["scope:1"] }),
+    ],
+  };
+  await withCase({ siblingVerdict, identity: { specDigest: scopeDigest, headSha: HEAD, contentDigest, checkedCriteria: scopeIds } }, async ({ run, ledgerPath }) => {
+    await run();
+    const { findings } = JSON.parse(await readFile(ledgerPath, "utf8"));
+    assert.equal(findings.length, 2, "every finding is persisted");
+    assert.deepEqual(findings.map((f) => f.judgeDisposition), ["act", "reject"]);
+    assert.match(findings[1].judgeRationale, /^spec-authority finding_conflicts/);
   });
 });
 

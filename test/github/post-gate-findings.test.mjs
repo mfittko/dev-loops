@@ -176,9 +176,9 @@ test("parseFindings rejects missing summary", () => {
   assert.throws(() => parseFindings(JSON.stringify([{ severity: "must-fix", angle: "scope" }])), /summary/);
 });
 
-test("parseFindings derives a deferred disposition for a nice-to-have finding with no explicit disposition", () => {
+test("parseFindings defaults a nice-to-have finding to unjudged with no explicit disposition", () => {
   const findings = parseFindings(JSON.stringify([{ severity: "nice-to-have", angle: "naming", summary: "Style nit" }]));
-  assert.equal(findings[0].disposition, "deferred");
+  assert.equal(findings[0].disposition, "unjudged");
 });
 
 test("parseFindings keeps an explicit disposition on a nice-to-have finding", () => {
@@ -379,7 +379,7 @@ test("renderFindingsCommentBody sanitizes an angle containing a backtick + newli
   assert.ok(listLine, "expected a single list line for the finding");
   // Backtick is stripped (cannot break out of the code span) and the newline is
   // collapsed to a single space, yielding one clean inline span.
-  assert.equal(listLine, "- `scope injection`: Scope too broad");
+  assert.equal(listLine, "- `scope injection`: Scope too broad — _unjudged_");
   // No stray backtick leaked from the angle into the rendered body beyond the
   // two that delimit the code span (and the colon/summary that follow).
   assert.ok(!body.includes("sco`pe"));
@@ -468,7 +468,7 @@ test("angle bracketed-path legibility pin: sanitizeCodeSpan leaves a bracketed-p
   const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
   const angleLine = body.split("\n").find(line => line.startsWith("- `"));
   assert.ok(angleLine, "expected a rendered list line for the finding");
-  assert.equal(angleLine, "- `app/[id]/page.tsx`: Route param mismatch");
+  assert.equal(angleLine, "- `app/[id]/page.tsx`: Route param mismatch — _unjudged_");
 });
 
 // ---------------------------------------------------------------------------
@@ -875,7 +875,7 @@ test("renderFindingsCommentBody states that only the latest round is shown (#AC2
 test("a legacy defer-severity finding parses, normalizes, and renders the new label", () => {
   const findings = parseFindings(JSON.stringify([{ severity: "defer", angle: "docs", summary: "legacy entry" }]));
   assert.equal(findings[0].severity, "low");
-  assert.equal(findings[0].disposition, "deferred");
+  assert.equal(findings[0].disposition, "unjudged");
   const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
   assert.ok(body.includes("Low (1)"));
   assert.ok(!body.includes("[`defer`]"));
@@ -924,11 +924,8 @@ test("renderFindingsCommentBody never renders a heading for a severity with zero
   }
 });
 
-// A low/nit finding with no explicit disposition defaults to "deferred".
-// This shape carries no `line` field at all, so a question here can never be
-// proven LOCATABLE — it defaults to "deferred" too (never "needs-answer",
-// which is reserved for a locatable question elsewhere in the pipeline —
-// see write-gate-findings-log.mjs/consolidateFanin, which do carry `line`).
+// A finding with no explicit disposition defaults to "unjudged", whatever its
+// severity: severity never implies a disposition.
 
 // ---------------------------------------------------------------------------
 // Sanitisation parity with upsert-checkpoint-verdict.mjs's renderer
@@ -1746,17 +1743,17 @@ test("postGateFindings rejects (fails closed) instead of reporting a false succe
   }
 });
 
-test("parseFindings defaults disposition: low/nit/question all default to deferred (no line field in this shape)", () => {
+test("parseFindings defaults disposition: low/nit/question all default to unjudged", () => {
   const findings = parseFindings(JSON.stringify([
     { severity: "low", angle: "naming", summary: "a" },
     { severity: "nit", angle: "naming", summary: "b" },
     { severity: "question", angle: "scope", summary: "c" },
   ]));
-  assert.deepEqual(findings.map((f) => f.disposition), ["deferred", "deferred", "deferred"]);
+  assert.deepEqual(findings.map((f) => f.disposition), ["unjudged", "unjudged", "unjudged"]);
   const body = renderFindingsCommentBody({ gate: "draft_gate", headSha: "abc1234", findings });
   const questionLine = body.split("\n").find((line) => line.includes("`scope`"));
   assert.ok(questionLine, "expected a rendered line for the scope (question) finding");
-  assert.ok(questionLine.includes("deferred"), `question finding line should render "deferred" (non-locatable, this shape has no line field): ${questionLine}`);
+  assert.ok(questionLine.includes("unjudged"), `question finding line should render "unjudged": ${questionLine}`);
 });
 
 // #1525: the judge disposition suffix renders in the posted findings comment

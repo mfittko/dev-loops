@@ -216,7 +216,7 @@ export function startDeltaSequence({ reviewBaselineHead, actList } = {}) {
 /**
  * Build the reviewer input for one invocation. The range is always
  * `reviewBaselineHead..candidateHead` (cumulative), never the last fix only.
- * The reviewer reads the diff from the worktree; the input carries no diff.
+ * The reviewer reads the diff from the patch the CLI writes (`input.patchPath`); the input carries no diff bytes.
  * `siteCoverage` retains the fixer's raw site coverage record from the `commit_only` handback;
  * the reviewer reads the recorded skip reasons from it.
  * @param {{ sequence: ReturnType<typeof startDeltaSequence>, candidateHead: string, specIdentity?: string|null, siteCoverage?: object[] }} input

@@ -705,6 +705,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "PRE-PUSH-DELTA-PATCH-ARTIFACT",
+      "enforcement": "doc"
+    },
+    {
       "id": "PRE-PUSH-DELTA-NOT-GATE-EVIDENCE",
       "enforcement": "doc"
     },
@@ -806,6 +810,10 @@
     },
     {
       "id": "RETRO-SIZE-WAIVER-COUNT",
+      "enforcement": "doc"
+    },
+    {
+      "id": "REVIEW-GATE-JUDGE-PHASE",
       "enforcement": "doc"
     },
     {

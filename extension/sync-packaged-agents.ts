@@ -7,6 +7,7 @@ import { PROJECT_AGENTS_SUBPATH, TOOLS_LINE_RE, parseToolList, syncProjectAgents
 export { TOOL_NAME_MAP_PI, mapAgentToolsForPi, renderPiAgent, renderProjectAgents, syncProjectAgentsDir } from "./pi-agent-render.mjs";
 
 const PACKAGED_AGENTS_ROOT = new URL("../agents/", import.meta.url);
+const PROJECT_TRUST_CEILING = "This preflight cannot read Pi's project-trust state, so it cannot tell whether Pi loads the project agents in `.pi/agents`.";
 
 /** A dev-loops checkout: `package.json` names `dev-loops` and an `agents/` directory exists (same guard as `provision-worktree.mjs`). */
 export function isDevLoopsAgentsCheckout(dir: string): boolean {
@@ -109,7 +110,7 @@ export function checkAgentSetRendered(
   try {
     names = fs.readdirSync(sourceRoot).filter((n) => n.endsWith(".agent.md")).sort();
   } catch {
-    return `agent_set_not_rendered: the packaged agents source ${sourceRoot} cannot be read, so the rendered set cannot be verified.`;
+    return `agent_set_not_rendered: the packaged agents source ${sourceRoot} cannot be read, so the rendered set cannot be verified. ${PROJECT_TRUST_CEILING}`;
   }
   const offenders: string[] = [];
   for (const name of names) {
@@ -138,5 +139,5 @@ export function checkAgentSetRendered(
   const remedy = isSymlink
     ? `\`${dir}\` is a symlink to the raw agent sources and provisioning skips it. Rebase or merge the branch onto main first (this untracks \`.pi/agents\`), then run \`dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>\`. Never restore a \`.pi/agents\` symlink to the raw agent sources.`
     : `Render the project set: in a worktree run \`dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>\`; in the main checkout restart the Pi session (the session-start sync re-renders \`${dir}\`). Never restore a \`.pi/agents\` symlink to the raw agent sources.`;
-  return `agent_set_not_rendered: the rendered agent set carries non-Pi tool names or unreadable files: ${offenders.join("; ")}. ${remedy}`;
+  return `agent_set_not_rendered: the rendered agent set carries non-Pi tool names or unreadable files: ${offenders.join("; ")}. ${remedy} ${PROJECT_TRUST_CEILING}`;
 }

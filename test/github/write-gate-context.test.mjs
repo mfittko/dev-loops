@@ -745,60 +745,44 @@ test("resolveReviewGateAngles is a no-op when acceptance-criteria was never in t
 });
 
 // #2201: provablyNoSpecOfRecord also drops the process angles that depend on
-// a spec of record (pr-checklist, pr-description, gate-evidence), not just
+// a spec of record (pr-checklist, pr-description), not just
 // acceptance-criteria — REVIEW GATE ONLY, mirroring the acceptance-criteria
 // drop above with the same "no spec-of-record" rationale.
-test("resolveReviewGateAngles DROPS pr-checklist, pr-description, and gate-evidence (alongside acceptance-criteria) when the PR has no spec-of-record", () => {
+test("resolveReviewGateAngles DROPS pr-checklist and pr-description (alongside acceptance-criteria) when the PR has no spec-of-record", () => {
   const config = reviewAnglesConfig({
     draftAngles: ["correctness", "acceptance-criteria", "pr-checklist"],
-    preApprovalAngles: ["pr-description", "gate-evidence", "docs"],
+    preApprovalAngles: ["pr-description", "docs"],
   });
   const result = resolveReviewGateAngles(config, { hasClosingIssue: false, hasAcChecklist: false });
   assert.deepEqual(result.recommendedAngles, ["correctness", "docs"]);
-  assert.deepEqual(
-    [...result.skippedAngles].sort(),
-    ["acceptance-criteria", "gate-evidence", "pr-checklist", "pr-description"],
-  );
+  assert.deepEqual([...result.skippedAngles].sort(), ["acceptance-criteria", "pr-checklist", "pr-description"]);
   assert.deepEqual(result.reasons, {
     "acceptance-criteria": "no spec-of-record",
     "pr-checklist": "no spec-of-record",
     "pr-description": "no spec-of-record",
-    "gate-evidence": "no spec-of-record",
   });
 });
 
-test("resolveReviewGateAngles KEEPS pr-checklist, pr-description, and gate-evidence when the PR closes an issue", () => {
-  const config = reviewAnglesConfig({
-    draftAngles: ["correctness", "acceptance-criteria", "pr-checklist"],
-    preApprovalAngles: ["pr-description", "gate-evidence"],
+// The standalone review has no lifecycle gates, so gate-evidence never
+// resolves, with or without a spec of record or a closing issue.
+for (const [label, facts] of [
+  ["a closing issue", { hasClosingIssue: true, hasAcChecklist: false }],
+  ["an AC checklist in the PR body", { hasClosingIssue: false, hasAcChecklist: true }],
+  ["an unknown closing-issue fact", { hasClosingIssue: undefined, hasAcChecklist: false }],
+  ["no spec of record", { hasClosingIssue: false, hasAcChecklist: false }],
+]) {
+  test(`resolveReviewGateAngles always drops gate-evidence and keeps the spec-dependent angles it should (${label})`, () => {
+    const config = reviewAnglesConfig({
+      draftAngles: ["correctness", "acceptance-criteria", "pr-checklist"],
+      preApprovalAngles: ["pr-description", "gate-evidence"],
+    });
+    const result = resolveReviewGateAngles(config, facts);
+    assert.equal(result.recommendedAngles.includes("gate-evidence"), false);
+    assert.equal(result.skippedAngles.includes("gate-evidence"), true);
+    assert.equal(result.reasons["gate-evidence"], "the standalone review has no lifecycle gates");
+    assert.equal(result.recommendedAngles.includes("pr-description"), facts.hasClosingIssue !== false || facts.hasAcChecklist !== false);
   });
-  const result = resolveReviewGateAngles(config, { hasClosingIssue: true, hasAcChecklist: false });
-  assert.deepEqual(result.recommendedAngles, ["correctness", "acceptance-criteria", "pr-checklist", "pr-description", "gate-evidence"]);
-  assert.deepEqual(result.skippedAngles, []);
-  assert.deepEqual(result.reasons, {});
-});
-
-test("resolveReviewGateAngles KEEPS pr-checklist, pr-description, and gate-evidence when the PR's own body carries an AC checklist", () => {
-  const config = reviewAnglesConfig({
-    draftAngles: ["correctness", "acceptance-criteria", "pr-checklist"],
-    preApprovalAngles: ["pr-description", "gate-evidence"],
-  });
-  const result = resolveReviewGateAngles(config, { hasClosingIssue: false, hasAcChecklist: true });
-  assert.deepEqual(result.recommendedAngles, ["correctness", "acceptance-criteria", "pr-checklist", "pr-description", "gate-evidence"]);
-  assert.deepEqual(result.skippedAngles, []);
-  assert.deepEqual(result.reasons, {});
-});
-
-test("resolveReviewGateAngles KEEPS pr-checklist, pr-description, and gate-evidence (fail-closed) when hasClosingIssue is UNKNOWN", () => {
-  const config = reviewAnglesConfig({
-    draftAngles: ["correctness", "acceptance-criteria", "pr-checklist"],
-    preApprovalAngles: ["pr-description", "gate-evidence"],
-  });
-  const result = resolveReviewGateAngles(config, { hasClosingIssue: undefined, hasAcChecklist: false });
-  assert.deepEqual(result.recommendedAngles, ["correctness", "acceptance-criteria", "pr-checklist", "pr-description", "gate-evidence"]);
-  assert.deepEqual(result.skippedAngles, []);
-  assert.deepEqual(result.reasons, {});
-});
+}
 
 test("resolveReviewGateAngles records no spurious skip entries when none of the spec-of-record-dependent process angles are in the union", () => {
   const config = reviewAnglesConfig({ draftAngles: ["correctness"], preApprovalAngles: ["docs"] });
@@ -8147,4 +8131,63 @@ test("issue 2511 per-angle dispatch counts angles: carried angles are never disp
 test("issue 2511 a mandatory angle in a mixed unit is never stripped (carry refused)", () => {
   const config = { version: 1, gates: { fanout: { groups: [{ name: "g", angles: ["scope", "gate-evidence"] }] } } };
   assert.throws(() => resolveFanoutDispatch(config, "draft", ["scope", "gate-evidence"], { carriedAngles: ["gate-evidence"] }), /can never legitimately carry forward/);
+});
+
+// --- review gate: pr-checklist needs a formal spec on the closing issue or the PR description ---
+
+const FORMAL_BODY = "## Acceptance criteria\n- [ ] does the thing\n## Definition of done\n- [ ] tests pass\n";
+
+test("resolveReviewGateAngles DROPS pr-checklist (and always gate-evidence) when neither the closing issue nor the PR description is formal", () => {
+  const config = reviewAnglesConfig({
+    draftAngles: ["correctness", "acceptance-criteria", "pr-checklist"],
+    preApprovalAngles: ["gate-evidence", "pr-description", "docs"],
+  });
+  const result = resolveReviewGateAngles(config, { hasClosingIssue: true, hasAcChecklist: false, hasFormalIssueSpec: false, hasFormalPrSpec: false });
+  assert.deepEqual(result.skippedAngles, ["pr-checklist", "gate-evidence"]);
+  assert.deepEqual(result.recommendedAngles, ["correctness", "acceptance-criteria", "pr-description", "docs"]);
+  assert.match(result.reasons["pr-checklist"], /no formal spec/);
+  assert.match(result.reasons["gate-evidence"], /no lifecycle gates/);
+});
+
+test("resolveReviewGateAngles KEEPS pr-checklist when either surface is formal or a fact is unknown", () => {
+  const config = reviewAnglesConfig({ draftAngles: ["correctness", "pr-checklist"], preApprovalAngles: ["docs"] });
+  for (const facts of [
+    { hasFormalIssueSpec: true, hasFormalPrSpec: false },
+    { hasFormalIssueSpec: false, hasFormalPrSpec: true },
+    { hasFormalIssueSpec: undefined, hasFormalPrSpec: false },
+    { hasFormalIssueSpec: false, hasFormalPrSpec: undefined },
+  ]) {
+    const result = resolveReviewGateAngles(config, { hasClosingIssue: true, hasAcChecklist: false, ...facts });
+    assert.deepEqual(result.skippedAngles, [], JSON.stringify(facts));
+    assert.ok(result.recommendedAngles.includes("pr-checklist"), JSON.stringify(facts));
+  }
+});
+
+test("resolvePrSpecContext (review): a single closing issue with a formal body and an informal PR description are recorded", async () => {
+  const options = { gate: "review", repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await resolvePrSpecContext(options, { run: specStubRun({ prBody: "Fixes the cache.", closing: [{ number: 42 }], issueBody: FORMAL_BODY }) });
+  assert.equal(options.hasFormalIssueSpec, true);
+  assert.equal(options.hasFormalPrSpec, false);
+});
+
+test("resolvePrSpecContext (review): a closing issue whose body is not formal, several closing issues and no closing issue are all not formal", async () => {
+  const informal = { gate: "review", repo: "owner/repo", pr: 7, prBody: FORMAL_BODY, issueBody: null, acceptanceCriteria: null };
+  await resolvePrSpecContext(informal, { run: specStubRun({ closing: [{ number: 42 }], issueBody: "prose only" }) });
+  assert.equal(informal.hasFormalIssueSpec, false);
+  assert.equal(informal.hasFormalPrSpec, true);
+
+  const several = { gate: "review", repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await resolvePrSpecContext(several, { run: specStubRun({ closing: [{ number: 1 }, { number: 2 }], issueBodies: { "owner/repo#1": FORMAL_BODY, "owner/repo#2": FORMAL_BODY } }) });
+  assert.equal(several.hasFormalIssueSpec, false, "specs of several closing issues are never merged");
+
+  const none = { gate: "review", repo: "owner/repo", pr: 7, prBody: null, issueBody: null, acceptanceCriteria: null };
+  await resolvePrSpecContext(none, { run: specStubRun({ closing: [] }) });
+  assert.equal(none.hasFormalIssueSpec, false);
+});
+
+test("resolvePrSpecContext (review): caller-supplied spec flags leave the formal-spec facts unknown", async () => {
+  const options = { gate: "review", repo: "owner/repo", pr: 7, prBody: "flag body", issueBody: "flag issue", acceptanceCriteria: "docs/plan.md" };
+  await resolvePrSpecContext(options, { run: async () => { throw new Error("must not call gh"); } });
+  assert.equal(options.hasFormalIssueSpec, undefined);
+  assert.equal(options.hasFormalPrSpec, undefined);
 });

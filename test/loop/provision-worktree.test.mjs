@@ -11,6 +11,7 @@ import {
   existsSync,
   symlinkSync,
   cpSync,
+  copyFileSync,
   realpathSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -558,6 +559,40 @@ test("provision-worktree CLI under Node from a node_modules package layout rende
     assert.ok(JSON.parse(out).actions.some((a) => a.entry === ".pi/agents" && a.mode === "render"), out);
     const tools = readFileSync(path.join(wt, ".pi", "agents", "x.agent.md"), "utf8").match(/^tools: (.+)$/m)[1];
     assert.equal(tools, "read, grep, find, ls, bash");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// #2854 slice 3: provisioning threads the repo's config into the Pi render.
+test("provisionWorktree: the .pi/agents render pins the model the repo config resolves for the agent's role", async () => {
+  const fx = makeFixture("version: 1\nmodels:\n  tiers:\n    low:\n      claude: sonnet\n      pi: fixture/pinned-model\n  roleTiers:\n    developer: low\n");
+  try {
+    copyFileSync(path.join(fx.repoRoot, ".devloops"), path.join(fx.worktreePath, ".devloops"));
+    writeFileSync(path.join(fx.worktreePath, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    mkdirSync(path.join(fx.worktreePath, "agents"));
+    for (const name of ["developer", "judge"]) {
+      writeFileSync(path.join(fx.worktreePath, "agents", `${name}.agent.md`), `---\nname: ${name}\ndescription: x\ntools: read\n---\nbody\n`);
+    }
+    await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    const rendered = (name) => readFileSync(path.join(fx.worktreePath, ".pi", "agents", `${name}.agent.md`), "utf8");
+    assert.match(rendered("developer"), /^model: "fixture\/pinned-model"$/m);
+    assert.doesNotMatch(rendered("judge"), /^model:/m);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provisionWorktree: pins .pi/agents models from the worktree's config, not the main checkout's", async () => {
+  const cfg = (m) => `version: 1\nmodels:\n  tiers:\n    low:\n      claude: sonnet\n      pi: ${m}\n  roleTiers:\n    x: low\n`;
+  const fx = makeFixture(cfg("main/model"));
+  try {
+    writeFileSync(path.join(fx.worktreePath, ".devloops"), cfg("worktree/model"));
+    writeFileSync(path.join(fx.worktreePath, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    mkdirSync(path.join(fx.worktreePath, "agents"));
+    writeFileSync(path.join(fx.worktreePath, "agents", "x.agent.md"), "---\nname: x\ndescription: x\ntools: read\n---\nbody\n");
+    await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    assert.match(readFileSync(path.join(fx.worktreePath, ".pi", "agents", "x.agent.md"), "utf8"), /^model: "worktree\/model"$/m);
   } finally {
     fx.cleanup();
   }

@@ -19,6 +19,8 @@ Do **not** use `PLAN.md` for one-off issue execution plans, PR-specific checklis
 
 ## Current repo posture
 
+- Supplemental residual-evidence reconciliation has three stages: unqualified assessment snapshots (#2918), accepted records (#2920), then thread closure (#2919). Only snapshots are available; parent #2917's acceptance criteria remain unchanged. See [ADR 0180](./docs/decisions/0180-post-delivery-residual-evidence-reconciliation.md).
+
 - This repo is currently a **source-loaded workspace**, not a published npm-package workflow.
 - `dev-loop` is the single public workflow entrypoint; see [Public Dev Loop Contract](./skills/docs/public-dev-loop-contract.md) for the canonical public routing/shorthand contract.
 - For active implementation and release work in this repo, the default routed path should still prefer the GitHub-first internal strategies when practical.
@@ -118,6 +120,7 @@ Today the repository already includes:
 - deterministic GitHub helpers for review-thread capture, Copilot request/watch, issue-to-PR detection, and reviewer draft staging
 - deterministic loop-state helpers for Copilot, reviewer, tracker, and outer-loop orchestration
 - conductor-adjacent ownership, routing, inspection, and steering contracts in the source tree
+- opt-in Codex conductor model/effort settings at initial and resumed coordinator dispatch; worker and reviewer settings remain outside this slice
 - root and package-level tests plus CI on Node 24
 
 ## Roadmap

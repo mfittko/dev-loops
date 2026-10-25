@@ -118,7 +118,7 @@ test("judge fixture writes both valid verdicts with read, search, write and a pu
     tools.write(paths[0], {
       headSha,
       scopeDrift: { verdict: "within_scope", rationale: "The finding matches the acceptance criterion", driftedAreas: [] },
-      dispositions: checkedFindings.map((_, index) => ({ index, disposition: "act", rationale: "Fix the finding", criterion: "ac:0" })),
+      dispositions: checkedFindings.map((_, index) => ({ index, disposition: "act", rationale: "Fix the finding", title: "t", detail: "d", fix: "f", criterion: "ac:0" })),
     });
     tools.write(paths[1], {
       specDigest, headSha, contentDigest,

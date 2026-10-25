@@ -48,7 +48,12 @@ export const CATEGORY_ID_PREFIX = Object.freeze({
   acceptanceCriteria: "ac",
   definitionOfDone: "dod",
   nonGoals: "ng",
+  scope: "scope",
 });
+
+/** The one spec kind that may omit acceptance criteria: a PR description with
+ * readable scope but no formal AC/DoD. Only the standalone review gate uses it. */
+export const PR_SCOPE_SPEC_KIND = "pr_scope";
 
 /** Digest domain separators so the same bytes can never collide across the two
  * identity namespaces (a spec that happens to equal reviewed content still
@@ -143,10 +148,12 @@ export function normalizeCriterionText(text) {
  *
  * Fail-closed: a spec with no acceptance criteria is not an authoritative spec
  * (there is nothing the work is required to do), so it throws rather than
- * digesting an empty authority.
+ * digesting an empty authority. The one exception is a `pr_scope` spec
+ * (`specKind: "pr_scope"`) with a non-empty `scope` list: the scope items are
+ * normalized into a fourth `scope` category and stand in as the authority.
  *
- * @param {{ acceptanceCriteria?: unknown, definitionOfDone?: unknown, nonGoals?: unknown }} spec
- * @returns {{ acceptanceCriteria: string[], definitionOfDone: string[], nonGoals: string[] }}
+ * @param {{ acceptanceCriteria?: unknown, definitionOfDone?: unknown, nonGoals?: unknown, specKind?: unknown, scope?: unknown }} spec
+ * @returns {{ acceptanceCriteria: string[], definitionOfDone: string[], nonGoals: string[], specKind?: "pr_scope", scope?: string[] }}
  */
 export function normalizeSpec(spec) {
   if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
@@ -166,6 +173,13 @@ export function normalizeSpec(spec) {
     definitionOfDone: normalizeList(spec.definitionOfDone, "definitionOfDone"),
     nonGoals: normalizeList(spec.nonGoals, "nonGoals"),
   };
+  const scope = normalizeList(spec.scope, "scope");
+  if (spec.specKind === PR_SCOPE_SPEC_KIND && scope.length > 0) {
+    return { ...normalized, specKind: PR_SCOPE_SPEC_KIND, scope };
+  }
+  if (scope.length > 0) {
+    throw new Error(`spec.scope requires specKind "${PR_SCOPE_SPEC_KIND}" (fail closed)`);
+  }
   if (normalized.acceptanceCriteria.length === 0) {
     throw new Error("spec has no acceptance criteria — not an authoritative spec (fail closed)");
   }
@@ -188,8 +202,8 @@ export function specCriterionIds(spec) {
   // not, so the two revision-identity views would disagree on the same input.
   const normalized = normalizeSpec(spec);
   const ids = [];
-  for (const category of SPEC_CATEGORIES) {
-    normalized[category].forEach((_item, index) => {
+  for (const category of [...SPEC_CATEGORIES, "scope"]) {
+    (normalized[category] ?? []).forEach((_item, index) => {
       ids.push(`${CATEGORY_ID_PREFIX[category]}:${index}`);
     });
   }
@@ -211,6 +225,7 @@ export function computeSpecDigest(spec) {
     acceptanceCriteria: normalized.acceptanceCriteria,
     definitionOfDone: normalized.definitionOfDone,
     nonGoals: normalized.nonGoals,
+    ...(normalized.scope ? { specKind: normalized.specKind, scope: normalized.scope } : {}),
   });
 }
 
@@ -847,4 +862,59 @@ export function requireSpecFromBody(body) {
     throw new Error(`spec body has no ${missing.join(" and no ")}; expected ${EXPECTED_SPEC_SHAPE}`);
   }
   return spec;
+}
+
+// Verbatim paragraph and top-level-bullet excerpts of a PR description, in source order.
+// Headings and blank lines end an excerpt and are never excerpts themselves, so a template
+// of empty headings yields none. Indented lines continue the open bullet.
+function extractScopeExcerpts(body) {
+  const excerpts = [];
+  let open = null;
+  const flush = () => {
+    if (open) excerpts.push(open.join("\n"));
+    open = null;
+  };
+  for (const line of body.replace(/<!--[\s\S]*?-->/gu, "").split(/\r?\n/u)) {
+    if (line.trim() === "" || /^\s{0,3}#{1,6}(?:\s|$)/u.test(line)) {
+      flush();
+    } else if (open && !/^(?:[-*+]|\d+[.)])\s/u.test(open[0]) && /^\s{0,3}(?:-{3,}|={3,})\s*$/u.test(line)) {
+      // Setext underline: the paragraph above is a heading, so it is not an excerpt.
+      // A list item is never a setext heading; there `---` is a thematic break.
+      open.pop();
+      flush();
+    } else if (/^(?:[-*+]|\d+[.)])\s/u.test(line)) {
+      flush();
+      open = [line];
+    } else if (open) {
+      open.push(line);
+    } else {
+      open = [line];
+    }
+  }
+  flush();
+  // Template boilerplate (empty checkboxes, rules, fences) carries no scope text.
+  const boilerplate = /^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:\[[ xX]\]|-{3,}|\*{3,}|_{3,}|`{3,}[\w-]*|~{3,}[\w-]*)?\s*$/u;
+  return excerpts
+    .map((excerpt) => excerpt.split("\n").filter((line) => !boilerplate.test(line)).join("\n"))
+    .filter((excerpt) => normalizeCriterionText(excerpt).length > 0);
+}
+
+/**
+ * Resolve a PR description into the review gate's spec: a formal spec when it passes
+ * {@link requireSpecFromBody} (`pr_body`), else a `pr_scope` spec built from its readable text,
+ * else `none` (no usable text after HTML comments and empty template headings are stripped).
+ * Explicit AC/DoD/Non-goals items are carried verbatim into their own categories; nothing is
+ * fabricated and scope text is never projected into `acceptanceCriteria`.
+ * @param {string} body
+ * @returns {{ specSource: "pr_body"|"pr_scope", spec: object } | { specSource: "none", reason: "no_usable_scope" }}
+ */
+export function resolvePrDescriptionSpec(body) {
+  try {
+    return { specSource: "pr_body", spec: requireSpecFromBody(body) };
+  } catch {
+    // not a formal spec; fall through to the scope resolution below
+  }
+  const scope = extractScopeExcerpts(body);
+  if (scope.length === 0) return { specSource: "none", reason: "no_usable_scope" };
+  return { specSource: "pr_scope", spec: { ...extractSpecFromBody(body), specKind: PR_SCOPE_SPEC_KIND, scope } };
 }

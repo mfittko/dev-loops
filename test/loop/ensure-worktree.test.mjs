@@ -1470,8 +1470,69 @@ test("ensure: provisioning renders .pi/agents as a real Pi-valid dir and keeps t
       for (const t of ["grep", "find", "ls", "bash"]) assert.ok(tools.includes(t), `${pass}: ${t}`);
       for (const t of ["search", "execute"]) assert.ok(!tools.includes(t), `${pass}: no ${t}`);
       assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: res.path, encoding: "utf8", env: REPO_GIT_ENV }), "");
+      assert.equal(res.warning, undefined, `${pass}: no dirty warning on a clean tree`);
     }
   } finally {
+    repo.cleanup();
+  }
+});
+
+// #2854 slice 3: a worktree dirtied by provisioning is reported, never silent.
+test("ensure: a dirty tree after provisioning yields a typed dirty_after_provision warning (create + reuse)", async () => {
+  const repo = makeRepo();
+  try {
+    const provision = ({ worktreePath }) => {
+      writeFileSync(path.join(worktreePath, "provision-leftover.txt"), "x\n");
+      return { ok: true, actions: [], summary: {} };
+    };
+    for (const pass of ["create", "reuse"]) {
+      const res = await ensureWorktree({ repoRoot: repo.root, issue: 2854 }, { provision });
+      assert.equal(res.created, pass === "create", pass);
+      assert.deepEqual(res.warning, { code: "dirty_after_provision", paths: ["provision-leftover.txt"] }, pass);
+    }
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// #2854 slice 3: paths are NUL-delimited and untracked files are always listed, whatever quoting/status config applies.
+test("ensure: dirty_after_provision paths survive spaces, renames and status.showUntrackedFiles=no", async () => {
+  const repo = makeRepo();
+  try {
+    const run = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: REPO_GIT_ENV });
+    const provision = ({ worktreePath }) => {
+      run(worktreePath, "config", "status.showUntrackedFiles", "no");
+      writeFileSync(path.join(worktreePath, "my file.txt"), "x\n");
+      return { ok: true, actions: [], summary: {} };
+    };
+    const created = await ensureWorktree({ repoRoot: repo.root, issue: 2854 }, { provision });
+    assert.deepEqual(created.warning, { code: "dirty_after_provision", paths: ["my file.txt"] });
+    run(created.path, "add", "my file.txt");
+    run(created.path, "commit", "-q", "-m", "test(loop): add file");
+    run(created.path, "mv", "my file.txt", "new name.txt");
+    const reused = await ensureWorktree({ repoRoot: repo.root, issue: 2854 }, { provision: () => ({ ok: true, actions: [], summary: {} }) });
+    assert.equal(reused.created, false);
+    assert.deepEqual(reused.warning, { code: "dirty_after_provision", paths: ["my file.txt", "new name.txt"] });
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// A GIT_DIR pointing at the main checkout must not hide the target worktree's dirt.
+test("ensure: dirty_after_provision ignores an inherited GIT_DIR", async () => {
+  const repo = makeRepo();
+  const saved = { dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE };
+  try {
+    process.env.GIT_DIR = path.join(repo.root, ".git");
+    process.env.GIT_WORK_TREE = repo.root;
+    const provision = ({ worktreePath }) => {
+      writeFileSync(path.join(worktreePath, "provision-leftover.txt"), "x\n");
+      return { ok: true, actions: [], summary: {} };
+    };
+    const res = await ensureWorktree({ repoRoot: repo.root, issue: 2854 }, { provision });
+    assert.deepEqual(res.warning, { code: "dirty_after_provision", paths: ["provision-leftover.txt"] });
+  } finally {
+    for (const [k, v] of [["GIT_DIR", saved.dir], ["GIT_WORK_TREE", saved.tree]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     repo.cleanup();
   }
 });

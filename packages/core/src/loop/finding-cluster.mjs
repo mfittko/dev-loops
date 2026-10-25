@@ -197,6 +197,10 @@ export function projectClusterDisposition(enrichedFindings, clusters) {
       else delete target.judgeCriterion;
       if (representative.followUpDraft !== undefined) target.followUpDraft = representative.followUpDraft;
       else delete target.followUpDraft;
+      for (const field of ["judgeTitle", "judgeDetail", "judgeFix", "judgeReason"]) {
+        if (representative[field] !== undefined) target[field] = representative[field];
+        else delete target[field];
+      }
     }
   }
   return result;

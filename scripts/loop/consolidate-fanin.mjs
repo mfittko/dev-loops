@@ -16,8 +16,8 @@
  *     headSha: string,   // required whenever --head-sha is given (exempt: blocked / declared-carried)
  *     findings: [{ severity, summary, file?, line?, disposition?, recommendation? }]
  *   }
- * An input finding's `disposition` is IGNORED — consolidateFanin() always
- * DERIVES it from severity. A reviewer-provided `recommendation` IS carried
+ * An input finding's `disposition` is IGNORED: consolidateFanin() leaves every output
+ * finding `unjudged` and only the judge sets a disposition. A reviewer-provided `recommendation` IS carried
  * through to both output shapes unchanged (truncated only past the length cap
  * below).
  *
@@ -72,7 +72,7 @@ Required:
                                  artifact: { angle, verdict, headSha, findings: [{ severity, summary, file?, line?, disposition?, recommendation? }] }
                                  (headSha required whenever --head-sha is given; exempt for blocked or declared-carried angles).
                                  An input finding's "disposition" (if present) is IGNORED — the
-                                 output disposition is always DERIVED from severity (see below).
+                                 output disposition is always "unjudged" (see below).
                                  An input finding's "recommendation" (if present) is carried through.
                                  Two artifacts naming the SAME angle fail closed (ambiguous fan-out).
 Optional:
@@ -301,8 +301,8 @@ Output (stdout, JSON):
   unwrap it; write-gate-findings-log.mjs threads overallVerdict into the
   durable ledger, post-gate-findings.mjs ignores it), and is ALWAYS complete (never budgeted). "severityCounts" is likewise ALWAYS the
   true, unbudgeted totals across every finding, independent of any marking applied to "findingsJson"
-  below. Every output finding's "disposition" is DERIVED from severity (accepted-for-fix for a
-  blocking severity, needs-answer for a LOCATABLE question, deferred otherwise) — an input finding's own "disposition" is never honored,
+  below. Every output finding's "disposition" is "unjudged" (fan-in never disposes; only the judge does, and severity is the reviewer's input)
+  — an input finding's own "disposition" is never honored,
   including on a budget-marker finding (below). A reviewer-provided "recommendation" is carried
   through to both shapes unchanged. A finding "summary" or "recommendation" longer than 2000 chars,
   or "file" longer than 300 chars, is truncated with a plain " …" suffix (never a "[truncated N

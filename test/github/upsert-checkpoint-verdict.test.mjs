@@ -8,6 +8,7 @@ import { DEFAULT_TEST_PR_BODY, makeGhMock, runIdFreeEnv, runNode as runNodeHelpe
 
 import {
   assertGateValidationArtifact,
+  assertJudgeSpecSourceMatchesLedger,
   buildCoordinationEvaluatorInput,
   buildInlineExecutionWarning,
   collectPreApprovalGateBlockers,
@@ -15,6 +16,7 @@ import {
   parseUpsertCheckpointVerdictCliArgs,
   normalizeStructuredFindings,
   renderAngleVerdictDigest,
+  deriveEffectiveNextAction,
   renderGateReviewCommentBody,
   renderStructuredFindings,
   summarizeCheckpointVerdictText,
@@ -418,6 +420,12 @@ test("upsert refuses to post when the worktree config failed schema validation",
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /could not be fully loaded\/validated; refusing to post a gate verdict/);
   }, { prefix: "dev-loops-upsert-invalid-config-" });
+});
+
+test("parseUpsertCheckpointVerdictCliArgs requires --next-action except on --gate review", () => {
+  const base = ["--repo", "owner/repo", "--pr", "7", "--head-sha", "a".repeat(40), "--verdict", "clean", "--findings-summary", "none", "--inline-reason", "test"];
+  assert.doesNotThrow(() => parseUpsertCheckpointVerdictCliArgs([...base, "--gate", "review"]));
+  assert.throws(() => parseUpsertCheckpointVerdictCliArgs([...base, "--gate", "draft_gate"]), /--next-action/);
 });
 
 test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments deterministically", () => {
@@ -6062,7 +6070,7 @@ test("renderGateReviewCommentBody sorts unknown/missing severities LAST, never b
 
 // #1592: SEVERITY_ORDER ranks "question" right after "high" (both keep
 // gate-close blocked — a high via the fix loop, a question via never
-// auto-deferring) — ahead of "medium"/"low" (both eventually defer).
+// auto-deferring) — ahead of "medium"/"low" (both defer only on a judge defer).
 test("renderGateReviewCommentBody sorts a question finding between high and medium (#1592)", () => {
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
@@ -7733,8 +7741,8 @@ test("upsert-checkpoint-verdict --findings-ledger: at the default floor, a locat
     assert.match(posted.body, /`src\/db\.mjs:2` \*\*low\*\* \(`naming`\): inconsistent casing of a local constant/);
     assert.match(posted.body, /\*\*nit\*\* \(`style`\): trailing whitespace/);
     // Each folded finding still stamps its own invisible marker, deferred.
-    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 disposition=deferred -->$/m);
-    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=nit angle=style round=1 disposition=deferred -->$/m);
+    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 -->$/m);
+    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=nit angle=style round=1 -->$/m);
   }, { prefix: "dev-loops-upsert-fold-default-floor-" });
 });
 
@@ -8568,7 +8576,7 @@ test("#1808: --gate review posts a created PR review straight from --findings-le
       // --verdict omitted on purpose: derived from the ledger's overallVerdict,
       // same contract as draft_gate/pre_approval_gate (#1616).
       nextAction: "none — informational review, no re-gate required",
-      findingsLedger: ledgerPath,
+      findingsLedger: ledgerPath, judgeSpecSource: "none",
       executionMode: "fanout_fanin",
     }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
 
@@ -8614,6 +8622,33 @@ test("#1808: --gate review on a CLEAN ledger renders with no blocking-severity l
   }, { prefix: "dev-loops-upsert-review-gate-clean-" });
 });
 
+// AC6: the call site passes the unjudged flag into deriveEffectiveNextAction; a clean ledger holding an
+// unjudged finding must not render "no change requested" beside it.
+test("--gate review with --judge-spec-source none and a clean ledger holding one unjudged finding renders 'read the findings, none was judged'", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [BODY_FILED_FINDING], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["read the findings, none was judged"],
+        stdout: '{"id":903,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-903"}\n',
+      },
+    ];
+    const { runChild } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath, judgeSpecSource: "none",
+      executionMode: "fanout_fanin",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "created");
+  }, { prefix: "dev-loops-upsert-review-unjudged-" });
+});
+
 // Review-only regression guard: the review gate's hardcoded activeGateConfig
 // carried no inlineSeverityFloor, so isBelowInlineFloor failed open and every
 // locatable finding posted inline. The fold tests above all run on
@@ -8642,7 +8677,7 @@ test("#2263: --gate review --findings-ledger folds locatable low/nit findings at
       gate: "review",
       headSha: SINGLE_SURFACE_HEAD,
       nextAction: "none — informational review, no re-gate required",
-      findingsLedger: ledgerPath,
+      findingsLedger: ledgerPath, judgeSpecSource: "none",
       executionMode: "fanout_fanin",
     }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
 
@@ -8669,8 +8704,8 @@ test("#2263: --gate review --findings-ledger folds locatable low/nit findings at
     assert.match(posted.body, /^\*\*Not judged \(2\)\*\*$/m);
     assert.match(posted.body, /`src\/db\.mjs:2` \*\*low\*\* \(`naming`\): inconsistent casing of a local constant/);
     assert.match(posted.body, /\*\*nit\*\* \(`style`\): trailing whitespace/);
-    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 disposition=deferred -->$/m);
-    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=nit angle=style round=1 disposition=deferred -->$/m);
+    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 -->$/m);
+    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=nit angle=style round=1 -->$/m);
   }, { prefix: "dev-loops-upsert-review-gate-fold-" });
 });
 
@@ -11583,9 +11618,9 @@ test("#2030: --gate review same-head rerun with a body-only correction UPDATES t
       pr: 17,
       gate: "review",
       headSha: SINGLE_SURFACE_HEAD,
-      // Changed next action → the rendered body differs, but no new inline
+      // A changed judge-spec line → the rendered body differs, but no new inline
       // comment is required, so the submitted review body is updated in place.
-      nextAction: "please re-check the auth flow before merge",
+      judgeSpecSource: "none",
       findingsLedger: ledgerPath,
       executionMode: "fanout_fanin",
       submit: "comment",
@@ -11621,7 +11656,7 @@ test("#2030: --gate review same-head body-only correction surfaces a verificatio
       pr: 17,
       gate: "review",
       headSha: SINGLE_SURFACE_HEAD,
-      nextAction: "please re-check the auth flow before merge",
+      judgeSpecSource: "none",
       findingsLedger: ledgerPath,
       executionMode: "fanout_fanin",
       submit: "comment",
@@ -11659,7 +11694,7 @@ test("#2030: --gate review correction that needs a NEW inline comment on a submi
         verdict: "findings_present",
         findingsSummary: "one locatable finding",
         nextAction: "stay draft and fix",
-        findingsLedger: ledgerPath,
+        findingsLedger: ledgerPath, judgeSpecSource: "none",
         executionMode: "fanout_fanin",
         submit: "comment",
       }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }),
@@ -11981,4 +12016,219 @@ test("upsert-checkpoint-verdict --findings-ledger: a judged --findings-json defe
     assert.match(body, /disposition=deferred issue=500 -->/);
     assert.doesNotMatch(body, /disposition=deferred issue=17 -->/);
   }, { prefix: "dev-loops-upsert-findings-json-followup-" });
+});
+
+// ---------------------------------------------------------------------------
+// Standalone review judge phase: --judge-spec-source / --judge-unavailable-reason
+// ---------------------------------------------------------------------------
+
+const JUDGE_LINES = {
+  issue: "**Judge spec:** linked issue",
+  pr_body: "**Judge spec:** PR description",
+  pr_scope: "**Judge spec:** PR description scope (no formal acceptance criteria or definition of done; informational)",
+  none: "**Judge spec:** none, no usable PR scope, judge not run, every finding shown",
+  spec_cannot_decide: "**Judge:** unavailable, the judge could not decide against the PR scope, every finding shown",
+  judge_failed: "**Judge:** unavailable, judge failed, every finding shown",
+};
+const ACT_FINDING = { ...BODY_FILED_FINDING, summary: "runtime defect in reload", judgeDisposition: "act", judgeRationale: "in scope" };
+const REJECT_FINDING = { ...BODY_FILED_FINDING, summary: "template sections missing", judgeDisposition: "reject", judgeRationale: "template-only" };
+
+async function postReviewWithJudgeFlags(findings, judgeFlags, callsOut = []) {
+  let posted;
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, findings, { overallVerdict: "findings_present" });
+    const { runChild, calls } = makeGhMock([
+      ...reviewGateFindingSurfaceEntries(),
+      { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":910,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-910"}\n' },
+    ]);
+    callsOut.push(calls);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath, executionMode: "fanout_fanin", ...judgeFlags,
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    const posts = calls.filter((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    posted = { result, posts, body: JSON.parse(posts[0].stdinText).body };
+  }, { prefix: "dev-loops-upsert-judge-spec-" });
+  return posted;
+}
+
+for (const [flags, findings, line] of [
+  [{ judgeSpecSource: "issue" }, [ACT_FINDING, REJECT_FINDING], JUDGE_LINES.issue],
+  [{ judgeSpecSource: "pr_body" }, [ACT_FINDING, REJECT_FINDING], JUDGE_LINES.pr_body],
+  [{ judgeSpecSource: "pr_scope" }, [ACT_FINDING, REJECT_FINDING], JUDGE_LINES.pr_scope],
+  [{ judgeSpecSource: "none" }, [BODY_FILED_FINDING], JUDGE_LINES.none],
+  [{ judgeSpecSource: "unavailable", judgeUnavailableReason: "spec_cannot_decide" }, [BODY_FILED_FINDING], JUDGE_LINES.spec_cannot_decide],
+  [{ judgeSpecSource: "unavailable", judgeUnavailableReason: "judge_failed" }, [BODY_FILED_FINDING], JUDGE_LINES.judge_failed],
+]) {
+  test(`--gate review renders the judge line for ${flags.judgeSpecSource}${flags.judgeUnavailableReason ? ` (${flags.judgeUnavailableReason})` : ""} with every finding present in one review body`, async () => {
+    const { posts, body } = await postReviewWithJudgeFlags(findings, flags);
+    assert.equal(posts.length, 1, "exactly one review body is posted");
+    assert.equal(body.split("\n").filter((l) => l.startsWith("**Judge")).join("\n"), line);
+    for (const f of findings) assert.ok(body.includes(f.summary), `${f.summary} is present`);
+    if (["none", "unavailable"].includes(flags.judgeSpecSource)) {
+      const open = body.indexOf("<details>");
+      for (const f of findings) assert.ok(body.slice(0, open === -1 ? undefined : open).includes(f.summary), `${f.summary} is outside the Details block`);
+    }
+    assert.equal(parseGateReviewCommentBody(body), null, "a judged review body is never lifecycle gate evidence");
+  });
+}
+
+test("--gate review with a pr_scope judge and an in-scope defect plus a template-only finding posts one body with the pr_scope line", async () => {
+  const { posts, body } = await postReviewWithJudgeFlags([ACT_FINDING, REJECT_FINDING], { judgeSpecSource: "pr_scope" });
+  assert.equal(posts.length, 1);
+  assert.ok(body.includes(JUDGE_LINES.pr_scope));
+  assert.ok(body.includes(ACT_FINDING.summary) && body.includes(REJECT_FINDING.summary));
+});
+
+test("--gate review counts one 3-member act cluster as one item, with a ledger alone or a ledger plus --findings-json", async () => {
+  const members = ["first", "second", "third"].map((word) => ({ ...ACT_FINDING, summary: `${word} member of one cluster`, clusterId: 0 }));
+  const bodies = [];
+  for (const withJson of [false, true]) {
+    await withTempDir(async (tempDir) => {
+      const ledgerPath = await writeReviewGateLedger(tempDir, members, { overallVerdict: "findings_present" });
+      const findingsJson = path.join(tempDir, "judged-findings.json");
+      await writeFile(findingsJson, JSON.stringify(members.map(({ clusterId, ...rest }) => rest)), "utf8");
+      const { runChild, calls } = makeGhMock([
+        ...reviewGateFindingSurfaceEntries(),
+        { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":910,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-910"}\n' },
+      ]);
+      await upsertCheckpointVerdict({
+        repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+        nextAction: "none — informational review, no re-gate required",
+        findingsLedger: ledgerPath, ...(withJson ? { findingsJson } : {}), executionMode: "fanout_fanin", judgeSpecSource: "pr_body",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+      const post = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+      bodies.push(JSON.parse(post.stdinText).body);
+    }, { prefix: "dev-loops-upsert-cluster-count-" });
+  }
+  for (const body of bodies) assert.match(body, /fix the 1 item this review lists/);
+});
+
+async function postReviewJsonRound({ ledgerFindings, jsonFindings }) {
+  let body;
+  await withTempDir(async (tempDir) => {
+    const findingsJson = path.join(tempDir, "judged-findings.json");
+    await writeFile(findingsJson, JSON.stringify(jsonFindings), "utf8");
+    const ledgerPath = await writeReviewGateLedger(tempDir, ledgerFindings, { overallVerdict: "findings_present" });
+    const { runChild, calls } = makeGhMock([
+      ...reviewGateFindingSurfaceEntries(),
+      { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":910,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-910"}\n' },
+    ]);
+    await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsJson, findingsLedger: ledgerPath, executionMode: "fanout_fanin", judgeSpecSource: "pr_body",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    const post = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    body = JSON.parse(post.stdinText).body;
+  }, { prefix: "dev-loops-upsert-json-round-" });
+  return body;
+}
+
+test("--gate review keeps clusterId and files from --findings-json: a JSON-only act cluster counts as one item and a same-text pair on two files as two", async () => {
+  const member = (word, extra) => ({ ...ACT_FINDING, summary: `${word} member of one cluster`, ...extra });
+  const clustered = await postReviewJsonRound({ ledgerFindings: [{ ...REJECT_FINDING, clusterId: 1 }], jsonFindings: [REJECT_FINDING, member("first", { clusterId: 0 }), member("second", { clusterId: 0 })] });
+  assert.match(clustered, /fix the 1 item this review lists/);
+  const twoFiles = await postReviewJsonRound({ ledgerFindings: [REJECT_FINDING], jsonFindings: [REJECT_FINDING, member("same", { files: ["src/a.mjs"] }), member("same", { files: ["src/b.mjs"] })] });
+  assert.match(twoFiles, /fix the 2 items this review lists/);
+  const twoFileOnly = await postReviewJsonRound({ ledgerFindings: [REJECT_FINDING], jsonFindings: [REJECT_FINDING, member("same", { file: "src/a.mjs" }), member("same", { file: "src/b.mjs" })] });
+  assert.match(twoFileOnly, /fix the 2 items this review lists/);
+});
+
+test("--gate review next action counts a ledger act item and a --findings-json act item that share a summary on two files as two", async () => {
+  const body = await postReviewJsonRound({
+    ledgerFindings: [{ ...ACT_FINDING, summary: "missing null guard", files: ["src/a.mjs"] }],
+    jsonFindings: [{ ...ACT_FINDING, summary: "missing null guard", files: ["src/b.mjs"] }],
+  });
+  assert.match(body, /fix the 2 items this review lists/);
+});
+
+test("--gate review next action and verdict agree when --findings-json adds an act item to a fully judged ledger, and when it flips a ledger reject to act", async () => {
+  const extra = await postReviewJsonRound({ ledgerFindings: [REJECT_FINDING], jsonFindings: [REJECT_FINDING, ACT_FINDING] });
+  assert.match(extra, /\*\*Verdict:\*\* findings_present/);
+  assert.match(extra, /fix the 1 item this review lists/);
+  const conflict = await postReviewJsonRound({ ledgerFindings: [REJECT_FINDING], jsonFindings: [{ ...REJECT_FINDING, judgeDisposition: "act" }] });
+  assert.match(conflict, /\*\*Verdict:\*\* findings_present/);
+  assert.match(conflict, /fix the 1 item this review lists/);
+});
+
+test("assertJudgeSpecSourceMatchesLedger fails closed on every ledger and source mismatch, naming the flag", () => {
+  const options = (judgeSpecSource) => ({ gate: "review", judgeSpecSource });
+  const judged = [ACT_FINDING, REJECT_FINDING];
+  const unjudged = [BODY_FILED_FINDING];
+  for (const source of ["issue", "pr_body", "pr_scope"]) {
+    assert.doesNotThrow(() => assertJudgeSpecSourceMatchesLedger(options(source), judged));
+    assert.throws(() => assertJudgeSpecSourceMatchesLedger(options(source), unjudged), new RegExp(`--judge-spec-source ${source} requires every finding`));
+    assert.throws(() => assertJudgeSpecSourceMatchesLedger(options(source), [ACT_FINDING, BODY_FILED_FINDING]), /requires every finding/);
+  }
+  for (const source of ["none", "unavailable"]) {
+    assert.doesNotThrow(() => assertJudgeSpecSourceMatchesLedger(options(source), unjudged));
+    assert.throws(() => assertJudgeSpecSourceMatchesLedger(options(source), judged), new RegExp(`--judge-spec-source ${source} requires no finding`));
+  }
+  assert.throws(() => assertJudgeSpecSourceMatchesLedger(options(undefined), unjudged), /--judge-spec-source is required/);
+  assert.doesNotThrow(() => assertJudgeSpecSourceMatchesLedger(options(undefined), []), "a zero-finding round needs no flag");
+  assert.doesNotThrow(() => assertJudgeSpecSourceMatchesLedger({ gate: "draft_gate" }, unjudged), "lifecycle gates are unaffected");
+});
+
+test("upsertCheckpointVerdict --gate review refuses a pr_scope post whose ledger holds unjudged findings, before any post", async () => {
+  const callsOut = [];
+  await assert.rejects(postReviewWithJudgeFlags([BODY_FILED_FINDING], { judgeSpecSource: "pr_scope" }, callsOut), /requires every finding in --findings-ledger to carry a judgeDisposition/);
+  const posts = callsOut[0].filter((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+  assert.equal(posts.length, 0, "no review POST happens before the ledger refusal");
+});
+
+test("upsertCheckpointVerdict --gate review refuses --judge-spec-source none when --findings-json merges judge dispositions onto an unjudged ledger", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [BODY_FILED_FINDING], { overallVerdict: "findings_present" });
+    const findingsJson = path.join(tempDir, "judged-findings.json");
+    await writeFile(findingsJson, JSON.stringify([ACT_FINDING_FOR(BODY_FILED_FINDING)]), "utf8");
+    const { runChild } = makeGhMock([...reviewGateFindingSurfaceEntries()]);
+    await assert.rejects(upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath, findingsJson, executionMode: "fanout_fanin", judgeSpecSource: "none",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }), /--judge-spec-source none requires no finding/);
+  }, { prefix: "dev-loops-upsert-judge-spec-merge-" });
+});
+const ACT_FINDING_FOR = (f) => ({ ...f, judgeDisposition: "act", judgeRationale: "in scope" });
+
+test("parseUpsertCheckpointVerdictCliArgs validates --judge-spec-source and --judge-unavailable-reason", () => {
+  const base = ["--repo", "owner/repo", "--pr", "17", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--execution-mode", "fanout_fanin"];
+  const parse = (...extra) => parseUpsertCheckpointVerdictCliArgs([...base, ...extra]);
+  const parsed = parse("--gate", "review", "--judge-spec-source", "unavailable", "--judge-unavailable-reason", "judge_failed");
+  assert.equal(parsed.judgeSpecSource, "unavailable");
+  assert.equal(parsed.judgeUnavailableReason, "judge_failed");
+  assert.equal(parse("--gate", "review", "--judge-spec-source", "pr_scope").judgeSpecSource, "pr_scope");
+  assert.throws(() => parse("--gate", "review", "--judge-spec-source", "unavailable"), /requires --judge-unavailable-reason/);
+  assert.throws(() => parse("--gate", "review", "--judge-spec-source", "unavailable", "--judge-unavailable-reason", "nope"), /requires --judge-unavailable-reason/);
+  assert.throws(() => parse("--gate", "review", "--judge-spec-source", "none", "--judge-unavailable-reason", "judge_failed"), /only with --judge-spec-source unavailable/);
+  assert.throws(() => parse("--gate", "review", "--judge-spec-source", "bogus"), /--judge-spec-source must be one of/);
+  for (const gate of ["draft_gate", "pre_approval_gate"]) {
+    assert.throws(() => parse("--gate", gate, "--judge-spec-source", "none"), /scoped to --gate review only/);
+    assert.throws(() => parse("--gate", gate, "--judge-unavailable-reason", "judge_failed"), /scoped to --gate review only/);
+  }
+  assert.throws(() => parse("--judge-spec-source", "none"), /scoped to --gate review only/);
+});
+
+// The next action derives from the judge act list, never from caller prose.
+test("deriveEffectiveNextAction derives from the act list on review, draft_gate and pre_approval_gate", () => {
+  const act = [{ severity: "low", summary: "a" }, { severity: "medium", summary: "b" }];
+  const tail = "this review does not approve or block the PR";
+  assert.equal(deriveEffectiveNextAction("findings_present", "review", act), `fix the 2 items this review lists; ${tail}`);
+  assert.equal(deriveEffectiveNextAction("findings_present", "review", act.slice(0, 1)), `fix the 1 item this review lists; ${tail}`);
+  assert.equal(deriveEffectiveNextAction("clean", "review", []), `no change requested; ${tail}`);
+  assert.equal(deriveEffectiveNextAction("findings_present", "review", []), `read the findings, none was judged; ${tail}`);
+  assert.equal(deriveEffectiveNextAction("clean", "review", [], true), `read the findings, none was judged; ${tail}`);
+  assert.equal(deriveEffectiveNextAction("blocked", "review", []), `the review could not complete; rerun it; ${tail}`);
+  // The same act finding carried by the ledger and by --findings-json counts once; a stamped cluster counts once.
+  assert.equal(deriveEffectiveNextAction("findings_present", "review", [act[0], { ...act[0] }]), `fix the 1 item this review lists; ${tail}`);
+  assert.equal(deriveEffectiveNextAction("findings_present", "review", [{ ...act[0], clusterId: 3 }, { ...act[1], clusterId: 3 }]), `fix the 1 item this review lists; ${tail}`);
+  // Unstamped items key on file plus normalized summary: same text on two files is two items.
+  const same = { severity: "medium", summary: "missing null guard" };
+  assert.equal(deriveEffectiveNextAction("findings_present", "review", [{ ...same, files: ["src/a.mjs"] }, { ...same, files: ["src/b.mjs"] }]), `fix the 2 items this review lists; ${tail}`);
+  assert.equal(deriveEffectiveNextAction("findings_present", "draft_gate", act), "stay draft and fix");
+  assert.equal(deriveEffectiveNextAction("findings_present", "pre_approval_gate", act), "rerun gate");
+  assert.equal(deriveEffectiveNextAction("clean", "draft_gate", []), null);
+  assert.equal(deriveEffectiveNextAction("clean", "pre_approval_gate", []), null);
 });
