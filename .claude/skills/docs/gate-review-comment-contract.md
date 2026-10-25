@@ -365,8 +365,10 @@ Enforcement at write time and post time:
 - The consolidator (`consolidate-fanin.mjs`) computes the severity `overallVerdict`. It threads
   through `--ledger-out`'s `{ overallVerdict, findings, verifiedItems?, provenance? }` wrapper (`provenance?` is present only with `--emit-plan`) into the durable ledger
   (`write-gate-findings-log.mjs`).
-- `write-gate-findings-log.mjs` refuses a `--verdict` that contradicts the
-  `--findings`/`--findings-file` wrapper's `overallVerdict` before any ledger is written. The
+- `write-gate-findings-log.mjs` refuses a `--verdict` that contradicts the `overallVerdict` it
+  resolves before any ledger is written. With the keyed fan-in ledger present, that is the ledger's
+  `overallVerdict` (the wrapper's value is ignored and `--verdict` is optional); otherwise it is the
+  `--findings`/`--findings-file` wrapper's `overallVerdict`. The
   check is the same whether or not `--judge-verdict` was supplied: the judge only adds
   `act`/`defer`/`reject` dispositions
   ([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525))
