@@ -126,6 +126,7 @@ test("copilot-pr-followup SKILL's Phase 3 step's writer invocation derives prove
     `${SKILL} Phase 3 step must not attach --provenance to the post-gate-findings.mjs comment post`,
   );
   assert.doesNotMatch(line, WRITER_FORBIDDEN_FLAGS, `${SKILL} Phase 3 writer must pass no --provenance, --emit-plan or --verdict`);
+  assert.match(line, /write-gate-findings-log\.mjs[^`]*--execution-mode fanout_fanin/, `${SKILL} Phase 3 writer must pass --execution-mode fanout_fanin`);
   const sanctioned = (await readRepo(SUB_LOOP_CONTRACT)).split("`GATE-EXEC-DISPOSITION-LEDGER`: Every gate pass")[1].match(/```sh\n([\s\S]*?)```/)[1];
   assert.match(sanctioned, /write-gate-findings-log\.mjs/);
   assert.doesNotMatch(sanctioned.replace(/\\\n/g, " ").replace(/#.*$/gm, ""), /--(provenance|emit-plan|verdict)\b/);
