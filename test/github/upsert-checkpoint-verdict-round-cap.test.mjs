@@ -141,13 +141,13 @@ test("the choke point refuses every draft_gate input shape except the judged led
       }
     }
     await seedPrior(repoRoot, priorHeads);
-    // An inline clean post with no findings flag holds no finding and stays accepted (a parsed post always
-    // carries --findings-summary, so the accepted form is a programmatic call without it); a fan-out one does not,
-    // and an inline clean post carrying --findings-file or --findings-summary is refused.
+    // An inline clean post with no findings flag, or only --findings-summary (the reconcile-draft-gate shape),
+    // holds no finding and stays accepted; a fan-out one does not, and an inline clean post carrying
+    // --findings-file is refused.
     assert.equal(verdictOf(await post(["--verdict", "clean"], { noSummary: true })), "clean");
+    assert.equal(verdictOf(await post(["--verdict", "clean", "--execution-mode", "inline_single_agent"])), "clean");
     assert.match((await post(["--verdict", "clean", "--execution-mode", "fanout_fanin"])).error, /refusing a post without --findings-ledger/);
     assert.match((await post(["--verdict", "clean", "--execution-mode", "inline_single_agent", "--findings-file", flat])).error, /refusing a post without --findings-ledger/);
-    assert.match((await post(["--verdict", "clean", "--execution-mode", "inline_single_agent"])).error, /refusing a post without --findings-ledger/);
     const ok = await post(["--findings-ledger", judged]);
     assert.equal(ok.error, undefined);
     assert.equal(verdictOf(ok), "clean", "the valid judged ledger posts");
