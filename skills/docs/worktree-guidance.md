@@ -395,6 +395,18 @@ repo — including behind an env-assignment, a `command`/`env`/`exec` wrapper, a
 binary, or leading git global options (`-C`, `-c`, `--git-dir=`, `--work-tree=`) between `git` and
 `stash`.
 
+## Stale base remedy
+
+<!-- rule: WORKTREE-STALE-BASE-REMEDY -->
+`WORKTREE-STALE-BASE-REMEDY`: When `origin/<base>` has commits the PR branch lacks, the remedy is
+merge and re-check. Merge `origin/<base>` through `scripts/loop/resolve-pr-conflicts.mjs`, push,
+re-derive the spec identity and re-validate at the new head. Never rebase or force-push a pushed
+branch. Run `node scripts/loop/pre-write-remote-freshness-guard.mjs --base <base>` before
+validation, before push and before every gate dispatch. It exits nonzero with
+`base_stale_integrate_first`, the newer commits and any `foreignFiles` (files that differ from
+`origin/<base>` only because the base moved). `write-gate-context.mjs --base` runs the same check
+and writes no artifact on a stale base.
+
 ## Fallback when worktrees are unavailable
 
 <!-- rule: WORKTREE-FALLBACK -->

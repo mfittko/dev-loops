@@ -31,7 +31,7 @@ import {
   collapsePureSubstitutionRuns,
   prematureGateOrderingRefusal,
   ISSUE_BODY_ABSENT_SENTINEL,
-  main,
+  main as mainImpl,
   mapGateToConfigKey,
   parseChangedFiles,
   parseWriteGateContextCliArgs,
@@ -8190,4 +8190,67 @@ test("resolvePrSpecContext (review): caller-supplied spec flags leave the formal
   await resolvePrSpecContext(options, { run: async () => { throw new Error("must not call gh"); } });
   assert.equal(options.hasFormalIssueSpec, undefined);
   assert.equal(options.hasFormalPrSpec, undefined);
+});
+
+// Issue 2885: fixtures without an origin remote cannot fetch; default to a current-base stub.
+// The stale-base tests below call mainImpl with a real or stale checker instead.
+const currentBase = async ({ base }) => ({ ok: true, status: "base_current", base });
+function main(argv, runtime = {}) {
+  return mainImpl(argv, { checkBaseFreshness: currentBase, ...runtime });
+}
+
+// Real throwaway repos: bare origin, a clone at the PR head, then origin/main advances.
+async function makeOriginFixture() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "gate-context-stale-base-"));
+  const origin = path.join(root, "origin.git");
+  const clone = path.join(root, "clone");
+  const other = path.join(root, "other");
+  git(root, ["init", "-q", "--bare", "-b", "main", origin]);
+  git(root, ["clone", "-q", origin, other]);
+  git(other, ["config", "user.email", "t@example.com"]);
+  git(other, ["config", "user.name", "t"]);
+  await writeFile(path.join(other, "a.txt"), "a\n");
+  git(other, ["add", "a.txt"]);
+  git(other, ["commit", "-qm", "init"]);
+  git(other, ["push", "-q", "origin", "main"]);
+  git(root, ["clone", "-q", origin, clone]);
+  git(clone, ["config", "user.email", "t@example.com"]);
+  git(clone, ["config", "user.name", "t"]);
+  git(clone, ["checkout", "-q", "-b", "feature"]);
+  await writeFile(path.join(clone, "b.txt"), "b\n");
+  git(clone, ["add", "b.txt"]);
+  git(clone, ["commit", "-qm", "feature"]);
+  const headSha = git(clone, ["rev-parse", "HEAD"]).trim();
+  const advanceOrigin = async () => {
+    await writeFile(path.join(other, "c.txt"), "c\n");
+    git(other, ["add", "c.txt"]);
+    git(other, ["commit", "-qm", "newer base commit"]);
+    git(other, ["push", "-q", "origin", "main"]);
+  };
+  return { root, clone, headSha, advanceOrigin };
+}
+
+test("issue 2885: write-gate-context records baseFreshness on a current base and refuses once origin advanced", async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    const argv = ["--repo", "owner/repo", "--pr", "70", "--gate", "review", "--head-sha", headSha, "--base", "main", "--angles", '["correctness"]'];
+    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 70, gate: "review", headSha }, { repoRoot: clone });
+    assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
+    await advanceOrigin();
+    // The caller never fetches: the preflight itself must see the advanced origin.
+    await rm(path.join(clone, "tmp"), { recursive: true, force: true });
+    const before = process.exitCode;
+    const realWrite = process.stderr.write.bind(process.stderr);
+    let errText = "";
+    process.stderr.write = (chunk) => { errText += String(chunk); return true; };
+    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+    process.stderr.write = realWrite;
+    assert.equal(process.exitCode, 1);
+    assert.match(errText, /base_stale_integrate_first[^]*newer base commit[^]*resolve-pr-conflicts/u);
+    process.exitCode = before;
+    assert.equal(existsSync(path.join(clone, "tmp/gate-context")), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

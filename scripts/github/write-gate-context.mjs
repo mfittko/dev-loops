@@ -33,6 +33,7 @@ import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName, orderAnglesByCatalog, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef } from "../lib/anchor-base-ref.mjs";
+import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -2257,6 +2258,8 @@ export function buildGateContextArtifact(options) {
   if (options.fanoutDispatch && typeof options.fanoutDispatch === "object") {
     artifact.fanout = options.fanoutDispatch;
   }
+  // Stale-base preflight result (issue 2885); only set by the CLI --base path.
+  if (options.baseFreshness) artifact.baseFreshness = options.baseFreshness;
   return artifact;
 }
 
@@ -3464,6 +3467,7 @@ export async function main(
     // post. Consuming only the raw ordering facts is what keeps this check
     // impossible-to-false-block.
     loadCoordination = (opts) => loadPrGateCoordinationContext(opts, { runChild: run, repoRoot, cwd: repoRoot }),
+    checkBaseFreshness = checkBaseFreshnessDefault,
   } = {},
 ) {
   let options;
@@ -3549,6 +3553,9 @@ export async function main(
       // Otherwise a stale CWD silently yields the wrong diff (caught only after
       // fan-out today). Throws → caught below → exit 1, no artifact written.
       assertWorktreeAtHead(options.headSha, { repoRoot });
+      const freshness = await checkBaseFreshness({ base: options.base.replace(/^origin\//u, ""), cwd: repoRoot, env });
+      if (!freshness.ok) throw new Error(`${freshness.error}: origin/${freshness.base} has ${freshness.newerCommits.length} commit(s) the PR head lacks (${freshness.newerCommits.join("; ")}); files differing only because of the stale base: ${freshness.foreignFiles.join(", ") || "none"}. ${freshness.remedy}`);
+      options.baseFreshness = { status: freshness.status, base: freshness.base };
       options.base = anchorBaseRef(options.base, { repoRoot });
       diff = captureDiffFromBase(options.base, { repoRoot });
       const scope = await resolveDiffScope(
