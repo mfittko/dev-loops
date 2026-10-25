@@ -2377,6 +2377,25 @@ test("a current-ledger act with remedyKind evidence_only is replied to and resol
   ));
 });
 
+// With no judgeRationale, the evidence-only reply states that none was recorded.
+test("a current-ledger evidence_only act without judgeRationale replies with the no-rationale text", async () => {
+  const finding = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated" };
+  const fp = fingerprintFinding(finding);
+  const thread = openWfnThread({ commentId: 6005, fp });
+  const ledger = makeLedger({ gate: "draft_gate", findings: [{ ...finding, judgeDisposition: "act", remedyKind: "evidence_only" }] });
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      { ...postReplyEntry(6005, { id: 7005 }), assertStdinIncludes: ["evidence-only remedy", "the judge recorded no rationale text for this evidence-only remedy"] },
+      resolveThreadEntry("THREAD_D"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.evidenceOnlyClosed, 1);
+    },
+  ));
+});
+
 // Rejected forms: an open act, or a mixed pair of evidence-only and open act, keeps the thread open.
 for (const [label, extra] of [["an open act", []], ["a mixed evidence-only and open act pair", [{ remedyKind: "evidence_only" }]]]) {
   test(`${label} in the current ledger leaves the thread open: no reply, stamp or resolve`, async () => {
