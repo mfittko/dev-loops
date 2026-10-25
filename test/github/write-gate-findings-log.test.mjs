@@ -2394,7 +2394,7 @@ test("writeGateFindingsLog canonicalizes a non-canonical caller --verdict on a b
     const result = await writeGateFindingsLog({
       repo: "o/n",
       pr: 7,
-      gate: "draft_gate",
+      gate: "pre_approval_gate",
       headSha: "a1".repeat(20),
       verdict: " Clean ",
       findings: "[]",
@@ -2463,7 +2463,7 @@ test("#1616: writeGateFindingsLog omits overallVerdict for a bare-array input (l
     const result = await writeGateFindingsLog({
       repo: "o/n",
       pr: 7,
-      gate: "draft_gate",
+      gate: "pre_approval_gate",
       headSha: "a1".repeat(20),
       verdict: "clean",
       findings: JSON.stringify([]),
@@ -2611,6 +2611,35 @@ test("writeGateFindingsLog records capClosed on a past-cap defer or reject, neve
       { judgeDisposition: "reject", severity: "question", round: 4, cap: 4 },
       undefined,
     ]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog records capClosed on a past-cap medium reject and refuses a high defer or a missing disposition", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-capclosed-sev-"));
+  try {
+    for (const head of capPriorHeads) await writeCapPrior(tmpDir, { head, findings: [] });
+    const medium = { severity: "medium", angle: "correctness", summary: "medium rejected" };
+    const past = await writeCapRound(tmpDir, [medium], [{ disposition: "reject" }]);
+    assert.deepEqual(past.map((f) => f.capClosed), [{ judgeDisposition: "reject", severity: "medium", round: 4, cap: 4 }]);
+    const high = { severity: "high", angle: "correctness", summary: "high deferred" };
+    await assert.rejects(writeCapRound(tmpDir, [high], [{ disposition: "defer", followUpDraft: { title: "t", body: "b" } }]), /high|defer/i);
+    await assert.rejects(writeCapRound(tmpDir, [medium], []), /disposition|judge/i);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog persists the caller verdict as overallVerdict on a draft_gate inline write from a bare array", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-inline-overall-"));
+  try {
+    const head = "abc1234567890abcdef000000000000000000000";
+    const write = (gate, executionMode) => writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate, headSha: head, verdict: "clean", findings: "[]", executionMode, tmpRoot: tmpDir,
+    }, { repoRoot: tmpDir }).then(() => readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", `${gate}-${head}.json`), "utf8")).then(JSON.parse);
+    assert.equal((await write("draft_gate", "inline_single_agent")).overallVerdict, "clean");
+    assert.equal((await write("pre_approval_gate", "inline_single_agent")).overallVerdict, undefined);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

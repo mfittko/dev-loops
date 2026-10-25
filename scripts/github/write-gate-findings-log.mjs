@@ -1055,6 +1055,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // `verdict` above is always the canonical normalized caller value (GATE-COMMENT-VERDICT-VALUES).
   if (normalizedOverallVerdict !== undefined) {
     log.overallVerdict = normalizedOverallVerdict;
+  } else if (options.gate === "draft_gate" && executionMode === "inline_single_agent") {
+    // A light-mode inline round has no consolidator: the caller's verdict is its round verdict, and the
+    // GATE-EXEC-ROUND-CAP choke point requires the ledger it posts with to carry overallVerdict.
+    log.overallVerdict = persistedVerdict;
   }
   // Provenance is optional and additive: absent keeps the ledger byte-
   // identical to before; present records fan-out provenance for

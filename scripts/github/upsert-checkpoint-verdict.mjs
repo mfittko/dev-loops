@@ -135,6 +135,12 @@ const REMOVED_FLAGS = new Set([
   "--force",
   "--force-reason",
 ]);
+// The writer's --tmp-root of a ledger at <root>/gate-findings/<slug>/pr-N/<file>; undefined for any other layout (default root).
+function ledgerTmpRoot(ledgerPath) {
+  const parts = path.resolve(ledgerPath).split(path.sep);
+  return parts.length > 4 && parts.at(-4) === "gate-findings" && /^pr-\d+$/.test(parts.at(-2)) ? parts.slice(0, -4).join(path.sep) || path.sep : undefined;
+}
+
 const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>; a draft_gate post requires --findings-ledger carrying overallVerdict while gates.draft.maxReviewRounds > 0) [--next-action <text> (required except on --gate review)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
 The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin, except on --gate draft_gate while gates.draft.maxReviewRounds > 0 (GATE-EXEC-ROUND-CAP): there --findings-ledger carrying overallVerdict is the only accepted input, and --findings-json and --findings-file posts are refused (an inline clean with only --findings-summary stays accepted, as reconcile-draft-gate posts it).
 Post the gate round's SINGLE visible surface: one PR review of type COMMENT whose
@@ -3030,7 +3036,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // Past the round cap a new act item blocks (round_cap_reached) and no fixer runs; an all-low/nit act list converges by the 0168 rule.
     const cap = draftGateConfig?.maxReviewRounds ?? 0;
     const completedRound = options.gate === "draft_gate" && !convergedInput && cap > 0
-      ? await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha }, { repoRoot })
+      ? await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot })
       : 0;
     const gateBlockers = [
       ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),

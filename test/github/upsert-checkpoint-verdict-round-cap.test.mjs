@@ -229,6 +229,27 @@ for (const [name, findings] of [
   });
 }
 
+test("the count reads the ledger's own gate-findings root, so a relocated --tmp-root still reaches the cap", async () => {
+  await withTempDir(async (tempDir) => {
+    const root = path.join(tempDir, "relocated");
+    await seedPrior(repoRoot, []); // the default root holds no prior ledger
+    await seedPrior(root, priorHeads);
+    const dir = path.join(root, "tmp", "gate-findings", "owner-repo", "pr-17");
+    const ledger = await writeLedger(dir, { findings: [finding("high", "act")], name: `draft_gate-${HEAD}.json` });
+    const out = await post(["--findings-ledger", ledger]);
+    assert.equal(verdictOf(out), "blocked");
+    assert.match(out.body, /round_cap_reached/);
+  }, { prefix: "dev-loops-round-cap-relocated-" });
+});
+
+test("an inline clean post with a bare-array-written ledger carrying overallVerdict succeeds under the cap", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await post(["--verdict", "clean", "--findings-ledger", await writeLedger(tempDir, { overallVerdict: "clean", findings: [] })]);
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "clean");
+  }, { prefix: "dev-loops-round-cap-inline-ledger-" });
+});
+
 test("the count includes an unreadable in-range ledger and ignores sidecars", async () => {
   await withTempDir(async (tempDir) => {
     const ledger = await writeLedger(tempDir, { findings: [finding("high", "act")] });
