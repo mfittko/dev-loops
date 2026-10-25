@@ -27,5 +27,6 @@ test("normalizeBaseBranch strips one origin prefix; isBranchName keeps short hex
   for (const ref of ["main", "origin/main", "refs/heads/main", "refs/remotes/origin/main"]) assert.equal(normalizeBaseBranch(ref), "main");
   assert.equal(normalizeBaseBranch("upstream/main"), "upstream/main");
   assert.equal(isBranchName("beef"), true);
-  assert.equal(isBranchName("a".repeat(40)), false);
+  assert.equal(isBranchName("abc12"), true);
+  assert.equal(isBranchName("HEAD~1"), false);
 });

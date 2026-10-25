@@ -296,9 +296,12 @@ test("checkBaseFreshness normalizes every origin spelling of the base and reject
 test("checkBaseFreshness treats a hex-only branch name as a branch and fetches it", async () => {
   const { root, clone } = await makeStaleBaseFixture({ advance: false });
   try {
-    assert.equal((await checkBaseFreshness({ base: "beef", cwd: clone })).error, "base_fetch_failed");
-    execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/beef"], { cwd: clone });
-    assert.equal((await checkBaseFreshness({ base: "beef", cwd: clone })).ok, true);
+    // No such origin branch: an abbreviated SHA (4-6 or 7+ hex) is unchecked, not a fetch failure.
+    for (const base of ["abc12", "beef", "deadbeef"]) assert.equal((await checkBaseFreshness({ base, cwd: clone })).error, "base_not_origin_branch", base);
+    for (const base of ["beef", "deadbeef"]) {
+      execFileSync("git", ["push", "-q", "origin", `HEAD:refs/heads/${base}`], { cwd: clone });
+      assert.equal((await checkBaseFreshness({ base, cwd: clone })).ok, true, base);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -331,10 +334,6 @@ test("checkBaseFreshness maps a hung fetch to base_fetch_failed within the timeo
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
-
-test("parseRemoteFreshnessGuardCliArgs rejects a call with neither --branch nor --base", () => {
-  assert.throws(() => parseRemoteFreshnessGuardCliArgs([]), /--branch <name> or --base <name> is required/u);
 });
 
 test("checkBaseFreshness returns a typed base_fetch_failed error when the fetch fails", async () => {

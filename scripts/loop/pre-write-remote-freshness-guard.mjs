@@ -31,6 +31,8 @@ export async function checkBaseFreshness({ base: rawBase, cwd = process.cwd(), e
   try {
     await execFileAsync(gitCommand, ["fetch", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`], { cwd, env: gitEnv, timeout: fetchTimeoutMs });
   } catch (error) {
+    // A hex-only value with no such origin branch is an abbreviated SHA, not a stale-base failure.
+    if (/^[0-9a-f]+$/iu.test(base) && /couldn't find remote ref/u.test(error?.stderr ?? "")) return notBranch(`${rawBase} is not an origin branch (looks like a SHA)`);
     return { ok: false, error: "base_fetch_failed", base, message: error?.killed ? `git fetch timed out after ${fetchTimeoutMs}ms` : (error?.stderr?.trim() || error?.message || String(error)) };
   }
   const newerCommits = await git(["log", `HEAD..origin/${base}`, "--no-decorate", "--no-show-signature", "--format=%h %s"]);
