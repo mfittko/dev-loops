@@ -29,7 +29,6 @@ Required:
   --pr <number>
   --gate <draft_gate|pre_approval_gate|review>
   --head-sha <sha>              FULL head commit SHA (40 or 64 hex chars) — a short prefix is rejected (it would write an unfindable ledger)
-  --verdict <clean|findings_present|blocked>
   --findings <json>              JSON array of finding objects with severity, disposition, angle, summary, and optional positive-integer line
                                  A "low" finding may also carry operatorVisible: true (net-reduction policy, #1846) — the
                                  explicit signal close-gate-findings.mjs's disposition pass requires before filing a "low"
@@ -39,6 +38,7 @@ Required:
   --findings-file <path>         Read the --findings JSON array from a file instead of an inline argument
                                  (mutually exclusive with --findings; identical validation)
 Optional:
+  --verdict <clean|findings_present|blocked>
   --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model?, carriedFromHead?, carriedVerdict?, group? }] }
                                  carriedFromHead (7-64 hex) marks an angle whose verdict was carried forward from that prior head (reviewer stays the prior reviewer)
                                  carriedVerdict ("clean"|"findings_present", requires carriedFromHead) records WHICH verdict was carried (issue #2017): "findings_present"
@@ -785,10 +785,15 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     } catch (error) {
       throw parseError(`fan-in ledger ${faninLedgerPath} could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
     }
+    if (faninLedger === null || typeof faninLedger !== "object" || Array.isArray(faninLedger)) {
+      throw parseError(`fan-in ledger ${faninLedgerPath} could not be read/parsed: expected a JSON object`);
+    }
     if (options.provenance !== undefined) {
       let explicit;
-      try { explicit = JSON.parse(options.provenance); } catch { /* the validator below reports malformed JSON */ }
-      if (explicit !== undefined && !isDeepStrictEqual(explicit, faninLedger.provenance)) {
+      try { explicit = JSON.parse(options.provenance); } catch (error) {
+        throw parseError(`--provenance is not valid JSON: ${error instanceof Error ? error.message : String(error)}; omit --provenance, the fan-in ledger supplies it`);
+      }
+      if (!isDeepStrictEqual(explicit, faninLedger.provenance)) {
         throw parseError(`--provenance differs from the fan-in ledger's provenance (${faninLedgerPath}); omit --provenance, the ledger supplies it`);
       }
     }

@@ -763,15 +763,16 @@ A gate with no mandatory angles does not require either proof artifact, but vali
 supplied provenance still undergoes angle-name and pool checks. Every check uses the
 gate's resolved pool; the independent merge-evidence read remains a backstop.
 
-A withheld round MUST write the complete log with `write-gate-findings-log.mjs
---provenance` and pass `--findings-ledger` to the verdict post. Independently of
+A withheld round MUST write the complete log with `write-gate-findings-log.mjs`
+(provenance is derived from the keyed fan-in ledger) and pass `--findings-ledger` to the verdict post. Independently of
 `gates.requireFanoutProvenance` (default `false`), gates with mandatory angles have these guards:
 
 - `upsert-checkpoint-verdict.mjs` refuses a `fanout_fanin` post lacking BOTH
   `--findings-json` and `--findings-ledger`, naming the missing proof flags.
 - `write-gate-findings-log.mjs` refuses a `fanout_fanin` write lacking both explicit
   and wrapper-supplied provenance, writes no ledger, and names the mandatory angles.
-  Its default `inline_single_agent` mode is exempt from that absence guard. Whenever
+  Its default `inline_single_agent` mode (applies only when neither an emit plan nor a
+  reviews dir exists at the head) is exempt from that absence guard. Whenever
   explicit or `--findings`/`--findings-file` wrapper provenance is supplied, coverage is checked.
 - `detect-checkpoint-evidence.mjs` rejects absent/invalid mandatory-angle provenance
   by default. Only the CI verifier uses `--skip-fanout-ledger-check`; sanctioned
@@ -1634,7 +1635,7 @@ findings-log ledger can additionally record **fan-out provenance**:
 }
 ```
 
-Provenance is written via `write-gate-findings-log.mjs --provenance <json>` (validated on write; malformed OR self-inconsistent provenance fails the write). It is **optional and additive**: when omitted, the ledger is byte-identical to before and no enforcement changes. **Internal-consistency rule** (enforced on both the write path and the enforcement read path): `perAngle` must be non-empty when `distinctReviewers > 0`, and `distinctReviewers` must be `<=` the count of DISTINCT reviewer identities recorded in `perAngle` (distinct by `reviewer`, else `dispatchId`; a bare `{angle}` is not a countable reviewer).
+Provenance is derived by `write-gate-findings-log.mjs` from the keyed fan-in ledger on a fan-out round (validated on write; malformed OR self-inconsistent provenance fails the write). It is **optional and additive**: when omitted, the ledger is byte-identical to before and no enforcement changes. **Internal-consistency rule** (enforced on both the write path and the enforcement read path): `perAngle` must be non-empty when `distinctReviewers > 0`, and `distinctReviewers` must be `<=` the count of DISTINCT reviewer identities recorded in `perAngle` (distinct by `reviewer`, else `dispatchId`; a bare `{angle}` is not a countable reviewer).
 
 **One scoped reviewer per fresh dispatch unit (always-on write-time floor).** `fanout_fanin` execution mandates one independent reviewer per emitted dispatch unit (including grouped `gate:full` dispatch under `GATE-EXEC-FANOUT-DISPATCH-EMIT`). The write path rejects, unconditionally (not gated by `requireFanoutProvenance`), any `perAngle` where two **fresh** angles (WITHOUT `carriedFromHead`) share one reviewer identity, and any fresh angle recording no reviewer identity (a bare `{angle}` entry is permitted only as a carried entry; a fresh entry must carry `reviewer` or `dispatchId`), naming the colliding or anonymous angle(s). A `carriedFromHead` angle is exempt from this pairing check (see [Angle carry-forward](#angle-carry-forward-fail-closed)): recording the prior head's reviewer identity on it is preferred (honest attribution) but optional, and reusing that identity is never a collision. The sanctioned non-fan-out path for a single-reviewer run is `executionMode: inline_single_agent` with a recorded `--inline-reason`. **Grouped fan-out dispatch** (`gates.fanout.mode: grouped`, the shipped default) is the second sanctioned exception: a `perAngle` entry may declare a `group` name, and fresh angles sharing one reviewer identity are valid exactly when every entry sharing that identity declares the SAME `group` name AND, whenever the caller supplies the round's resolved dispatch groups (both call sites do), every one of those fresh angles is a member of that SAME dispatch unit: the recorded `provenance.dispatchUnits` unit or, for a ledger without recorded membership, the same base unit (`GATE-EXEC-FANOUT-CAPACITY`). A self-attested `group` label spanning angles the re-derived base units split apart (or never group together) fails closed, and `gates.fanout.mode: per-angle` (one-angle singletons) rejects ANY shared identity. Fresh angles sharing a reviewer under differing or missing `group` values still violate the contract. The shared helper is `fanoutReviewerPairingError` (paired with `countFreshDispatchUnits`) in `@dev-loops/core/loop/gate-fanin`.
 

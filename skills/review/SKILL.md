@@ -141,15 +141,11 @@ this skill dispatches the `review` agents directly.
 
    After Phase 3.5 and before posting,
    write the durable ledger through `node scripts/github/write-gate-findings-log.mjs` with
-   `--findings-file <ledger-out-path> --emit-plan <emit-plan-path>`, plus
-   `--judge-verdict <path> --spec-authority <identity-path>` on a judged round,
-   `--execution-mode fanout_fanin` (this IS a fan-out/fan-in write, so the ledger
-   records the real execution mode — omitting it defaults to `inline_single_agent`
-   and mis-records the round), and
-   `--provenance <json>` so the
-   same keyed plan also guards that caller-supplied reviewer provenance
-   corresponds to the emitted units; for `write-gate-findings-log.mjs` the plan remains a guard, never a findings
-   or provenance source. Then `node
+   `--findings-file <ledger-out-path>`, plus
+   `--judge-verdict <path> --spec-authority <identity-path>` on a judged round.
+   With the keyed emit plan present at the head, an omitted `--execution-mode`
+   records `fanout_fanin`, and the writer derives provenance from the keyed
+   fan-in ledger (pass no `--emit-plan` or `--provenance`). Then `node
    scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo> --pr <n>
    --gate review --head-sha <sha> --findings-ledger <path> [--judge-spec-source <source> [--judge-unavailable-reason <reason>]] --next-action "none
    — informational review, no re-gate required" --submit <mode> [--auto]

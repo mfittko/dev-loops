@@ -128,3 +128,19 @@ test("an explicit --provenance that differs from the fan-in ledger's provenance 
     assert.deepEqual((await write({ provenance: JSON.stringify(PROVENANCE) })).log.provenance, PROVENANCE);
   });
 });
+
+test("with the fan-in ledger present an unparseable --provenance is refused", async () => {
+  await withRound({ plan: true, ledger: LEDGER }, async (write) => {
+    await assert.rejects(() => write({ provenance: "{not json" }), /--provenance is not valid JSON/);
+  });
+});
+
+test("a fan-in ledger that is not a JSON object is refused and names the file", async () => {
+  await withRound({ plan: true, ledger: null }, async (write, repoRoot) => {
+    await putJson(repoRoot, buildGateFaninLedgerPath(KEY), []);
+    await assert.rejects(
+      () => write(),
+      (err) => err.message.includes(path.resolve(repoRoot, buildGateFaninLedgerPath(KEY))),
+    );
+  });
+});

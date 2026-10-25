@@ -380,12 +380,10 @@ Reuse `check-size-budget.mjs`; never reimplement `computeSizeBudget`/`evaluatePr
 
 Before executing this procedure, read and follow the complete [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md). Its phases, branches and evidence requirements are mandatory; the checklist below is not a substitute for that owner.
 
-Every sanctioned fan-out round passes the emitter's keyed plan to BOTH Phase 3
-consumers: use `--emit-plan <emit-plan-path>` on `consolidate-fanin.mjs` and the
-later `write-gate-findings-log.mjs --provenance <json>` call. At the shared
-provenance-write seam the plan only guards correspondence to emitted units; it
-never supplies findings or provenance. Omission stays backward-compatible for
-callers outside this sanctioned path.
+Every sanctioned fan-out round passes the emitter's keyed plan to
+`consolidate-fanin.mjs` via `--emit-plan <emit-plan-path>`. The later
+`write-gate-findings-log.mjs` call derives provenance from the keyed fan-in
+ledger and takes no `--emit-plan` or `--provenance`.
 
 Both gates run this same checkpoint review chain, owned end-to-end by [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) (`GATE-EXEC-BUILD-ONCE-SEED`, `GATE-EXEC-BRIEFING-PREFIX`, `GATE-EXEC-SEPARATE-CHAINS`, `GATE-EXEC-POST-BEFORE-FIX`, `GATE-EXEC-REGATE-MANDATORY`, `GATE-EXEC-ANGLE-CARRY-FORWARD`, `GATE-EXEC-LIGHT-ESCALATION`); this section owns only this skill's dispatch of that chain. It is an **agent-orchestrated skill procedure** — a node script cannot spawn the per-angle reviewers, so a dedicated `gate-coordinator` agent (`GATE-EXEC-GATE-COORDINATOR`) drives the fan-out and uses the pure `@dev-loops/core/loop/gate-fanin` helpers only for consolidation, batching, and ledger mapping.
 
