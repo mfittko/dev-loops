@@ -6,7 +6,7 @@ import {
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { fetchDraftGateEvidence } from "../github/_gate-finding-surface.mjs";
-import { describeUnresolvedGateThreadReasons } from "../github/ready-for-review.mjs";
+import { describeUnresolvedGateThreadReasons, fetchCiStatus } from "../github/ready-for-review.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { parseArgs } from "node:util";
@@ -131,7 +131,7 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
   const headSha = prState.headRefOid;
   if (!headSha) throw new Error(`Could not resolve PR head SHA`);
 
-  const gate = await fetchDraftGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand, runChild });
+  const gate = await fetchDraftGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand, runChild, repoRoot });
 
   // When the PR is no longer draft, a visible clean draft_gate comment that
   // exists at all (one-time transition record) satisfies the VERDICT check
@@ -148,6 +148,14 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
   // boundary.
   const threadsResolved = gate.unresolvedGateThreadCount === 0;
   const gateSatisfied = verdictClean && threadsResolved;
+
+  // A carried verdict (ADR 0186) was never CI-checked at the current head.
+  if (gateSatisfied && prState.isDraft && gate.draftGateMarker?.carriedFrom) {
+    const ci = await fetchCiStatus({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
+    if (ci.status !== "success") {
+      return { ok: false, error: `PR #${options.pr} draft_gate verdict is carried from an earlier head and current-head CI is not green (${ci.status}). Wait for green CI before marking ready for review.`, repo: options.repo, pr: options.pr, currentHeadSha: headSha, draftGateSatisfied: false, unresolvedGateThreadCount: gate.unresolvedGateThreadCount, draftGate: gate.draftGate, draftGateMarker: gate.draftGateMarker };
+    }
+  }
 
   if (!gateSatisfied) {
     const shortSha = headSha.slice(0, 7);

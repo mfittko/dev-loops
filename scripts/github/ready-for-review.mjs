@@ -150,7 +150,7 @@ async function fetchPrState({ repo, pr }, { env, ghCommand, runChild: runChildIm
   return { id: d.id, isDraft: d.isDraft === true, headRefOid: typeof d.headRefOid === "string" ? d.headRefOid.trim() : null, baseRefName: typeof d.baseRefName === "string" ? d.baseRefName.trim() : null, state: typeof d.state === "string" ? d.state.trim() : null, mergeStateStatus: typeof d.mergeStateStatus === "string" ? d.mergeStateStatus.trim() : null, title: typeof d.title === "string" ? d.title : null, body: typeof d.body === "string" ? d.body : "", closingIssues };
 }
 
-async function fetchCiStatus({ repo, pr }, { env, ghCommand, runChild: runChildImpl }) {
+export async function fetchCiStatus({ repo, pr }, { env, ghCommand, runChild: runChildImpl }) {
   const result = await runChildImpl(ghCommand, ["pr", "checks", String(pr), "--repo", repo, "--json", "bucket,state,name,workflow"], env);
   if (result.code !== 0 && result.code !== 1 && result.code !== 8) throw new Error(`gh pr checks failed`);
   const stdout = result.stdout.trim();
@@ -203,8 +203,11 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   if (!prState.isDraft) throw new Error(`PR #${options.pr} is not in draft state`);
   const titleMarkers = findBlockingTitleMarkers(prState.title);
   if (titleMarkers.length > 0) throw new Error(`PR #${options.pr} cannot be marked ready: title contains merge-blocking marker(s): ${titleMarkers.join(", ")}. Remove them from the title first.`);
-  if (requireCi) { const ci = await fetchCiStatus({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild: runChildImpl }); if (ci.status === "blocked") throw new Error(`PR #${options.pr} has blocking CI checks`); if (ci.status !== "success") throw new Error(`PR #${options.pr} CI is not green`); }
-  const gate = await fetchDraftGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand, runChild: runChildImpl });
+  const assertCiGreen = async () => { const ci = await fetchCiStatus({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild: runChildImpl }); if (ci.status === "blocked") throw new Error(`PR #${options.pr} has blocking CI checks`); if (ci.status !== "success") throw new Error(`PR #${options.pr} CI is not green`); };
+  if (requireCi) await assertCiGreen();
+  const gate = await fetchDraftGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand, runChild: runChildImpl, repoRoot });
+  // A carried verdict (ADR 0186) was never CI-checked at the current head: restore-ready's CI skip does not hold for it.
+  if (skipCiPrecondition === true && gate.draftGateMarker?.carriedFrom) await assertCiGreen();
   // skipCiPrecondition (restore-ready's seam) requires the STRICT marker
   // verdict (currentHeadClean), never the legacy plain-text fallback
   // (legacyHeadMatch, folded into effectiveHeadClean): currentHeadClean is an
