@@ -18,14 +18,14 @@ function envelopeFor(activeArtifact, { repoRoot = "/checkout-a", requiredReads, 
   const options = { repoSlug: "o/r", repoRoot, sanctionedCommands: { merge: "scripts/github/merge-pr.mjs", ready: "scripts/github/ready.mjs" } };
   return buildDevLoopHandoffEnvelope(resolved, settings, { currentHeadSha: "a".repeat(40) }, options, now);
 }
-const issueEnvelope = (opts) => envelopeFor(artifact("issue", { issue: 2483, pr: 2900, linkedPr: null }), opts);
+const issueEnvelope = (opts) => envelopeFor(artifact("issue", { issue: 2483, pr: null, linkedPr: null }), opts);
 const prEnvelope = (opts) => envelopeFor(artifact("pr", { pr: 2900, issue: null }), opts);
 
 // C1
 test("C1 the order carries the resolver envelope's route, next action, stops, acceptance, reads and commands unchanged", () => {
   const envelope = issueEnvelope();
   const { workOrder } = buildCoordinatorWorkOrder({ envelope });
-  for (const key of ["nextAction", "currentGate", "executionMode", "acceptance", "sanctionedCommands", "target", "control"]) {
+  for (const key of ["nextAction", "currentGate", "executionMode", "acceptance", "sanctionedCommands", "target", "control", "unitBoundaries"]) {
     assert.deepEqual(workOrder.handoff[key], envelope[key], key);
   }
   assert.deepEqual(workOrder.handoff.stopRules, envelope.stopRules);
