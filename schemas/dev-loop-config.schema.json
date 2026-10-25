@@ -390,11 +390,6 @@
               "type": "integer",
               "minimum": 0
             },
-            "maxReviewRounds": {
-              "description": "Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and a new act item then blocks with round_cap_reached instead of running another fixer round. 0 disables the cap. Default 4.",
-              "type": "integer",
-              "minimum": 0
-            },
             "worthFixingNowFixWindow": {
               "description": "Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set.",
               "type": "integer",
@@ -472,6 +467,11 @@
                 "additionalProperties": false
               },
               "description": "Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class."
+            },
+            "maxReviewRounds": {
+              "description": "Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and a new act item then blocks with round_cap_reached instead of running another fixer round. 0 disables the cap. Default 4.",
+              "type": "integer",
+              "minimum": 0
             }
           },
           "additionalProperties": false,
@@ -627,11 +627,6 @@
             },
             "mediumFixWindow": {
               "description": "Per-gate medium fix window: the number of rounds the judge weighs an open medium finding for an in-gate fix. The window is an input to the judge's act, defer or reject decision, never applied by code, and never defers a finding by itself. high is exempt (never defers). Default 3.",
-              "type": "integer",
-              "minimum": 0
-            },
-            "maxReviewRounds": {
-              "description": "Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and a new act item then blocks with round_cap_reached instead of running another fixer round. 0 disables the cap. Default 4.",
               "type": "integer",
               "minimum": 0
             },
@@ -867,11 +862,6 @@
             },
             "mediumFixWindow": {
               "description": "Per-gate medium fix window: the number of rounds the judge weighs an open medium finding for an in-gate fix. The window is an input to the judge's act, defer or reject decision, never applied by code, and never defers a finding by itself. high is exempt (never defers). Default 3.",
-              "type": "integer",
-              "minimum": 0
-            },
-            "maxReviewRounds": {
-              "description": "Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and a new act item then blocks with round_cap_reached instead of running another fixer round. 0 disables the cap. Default 4.",
               "type": "integer",
               "minimum": 0
             },

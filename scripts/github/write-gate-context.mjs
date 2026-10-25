@@ -1891,6 +1891,8 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
       || log.pr === undefined || log.pr === null || Number(log.pr) !== Number(options.pr);
     if (identityMismatch) continue;
     const verdict = typeof log.verdict === "string" ? log.verdict.trim() : "";
+    // A readable `blocked` ledger is a well-formed unclosed round: neither completed nor unreadable.
+    if (verdict === "blocked") continue;
     if (verdict !== "clean" && verdict !== "findings_present") {
       onUnreadable?.(name);
       continue;

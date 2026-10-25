@@ -3221,6 +3221,20 @@ describe("role resolution", () => {
       });
     }
 
+    for (const gate of ["preApproval", "spike"]) {
+      test(`loadDevLoopConfig rejects maxReviewRounds on gates.${gate}`, async () => {
+        const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-maxrounds-nondraft-"));
+        try {
+          await writeFile(path.join(tmpDir, ".devloops"), `version: 1\ngates:\n  ${gate}:\n    maxReviewRounds: 2\n`);
+          const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+          const { errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+          assert.ok(errors.length > 0);
+        } finally {
+          await rm(tmpDir, { recursive: true, force: true });
+        }
+      });
+    }
+
     test("loadDevLoopConfig rejects a negative maxReviewRounds", async () => {
       const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-maxrounds-"));
       try {

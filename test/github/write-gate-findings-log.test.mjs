@@ -2536,10 +2536,12 @@ async function writeCapRound(tmpDir, rawFindings, dispositions) {
     scopeDrift: { verdict: "within_scope", rationale: "r", driftedAreas: [] },
     dispositions: dispositions.map((d, index) => ({ index, title: "t", detail: "d", fix: "f", reason: "r", rationale: "why", ...d })),
   }), "utf8");
+  // Pin the cap so the checked-in .devloops cannot change the round numbers asserted below.
+  await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 4\n", "utf8");
   await writeGateFindingsLog({
     repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: CAP_HEAD, verdict: "findings_present",
     findings: JSON.stringify(rawFindings), judgeVerdict, tmpRoot: tmpDir,
-  });
+  }, { repoRoot: tmpDir });
   return JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", `draft_gate-${CAP_HEAD}.json`), "utf8")).findings;
 }
 

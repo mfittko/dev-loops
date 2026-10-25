@@ -87,7 +87,7 @@ function makeRunChild(posted) {
   };
 }
 
-async function post(extraArgs, { root = repoRoot } = {}) {
+async function post(extraArgs, { root = repoRoot, noSummary = false } = {}) {
   const args = [
     "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
     "--findings-summary", "round cap test", "--next-action", "follow the verdict", "--inline-reason", "round cap test",
@@ -96,7 +96,9 @@ async function post(extraArgs, { root = repoRoot } = {}) {
   ];
   const posted = [];
   try {
-    const result = await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+    const options = parseUpsertCheckpointVerdictCliArgs(args);
+    if (noSummary) options.findingsSummary = undefined;
+    const result = await upsertCheckpointVerdict(options, {
       env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild(posted),
     });
     return { result, body: posted.join("\n") };
@@ -139,9 +141,13 @@ test("the choke point refuses every draft_gate input shape except the judged led
       }
     }
     await seedPrior(repoRoot, priorHeads);
-    // An inline verdict-only clean holds no finding and stays accepted; a fan-out one does not.
-    assert.equal(verdictOf(await post(["--verdict", "clean"])), "clean");
+    // An inline clean post with no findings flag holds no finding and stays accepted (a parsed post always
+    // carries --findings-summary, so the accepted form is a programmatic call without it); a fan-out one does not,
+    // and an inline clean post carrying --findings-file or --findings-summary is refused.
+    assert.equal(verdictOf(await post(["--verdict", "clean"], { noSummary: true })), "clean");
     assert.match((await post(["--verdict", "clean", "--execution-mode", "fanout_fanin"])).error, /refusing a post without --findings-ledger/);
+    assert.match((await post(["--verdict", "clean", "--execution-mode", "inline_single_agent", "--findings-file", flat])).error, /refusing a post without --findings-ledger/);
+    assert.match((await post(["--verdict", "clean", "--execution-mode", "inline_single_agent"])).error, /refusing a post without --findings-ledger/);
     const ok = await post(["--findings-ledger", judged]);
     assert.equal(ok.error, undefined);
     assert.equal(verdictOf(ok), "clean", "the valid judged ledger posts");

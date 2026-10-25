@@ -4,7 +4,7 @@
 
 Accepted — 2026-10-25 ([issue 2462](https://github.com/mfittko/dev-loops/issues/2462))
 
-Amends [ADR 0168](./0168-draft-gate-low-nit-convergence.md): after a `draft_gate` round converges under 0168, tooling refuses a code commit on that head. The one `commit_only` fixer pass that 0168 allows for an all-low/nit act list no longer runs. The records that introduced 0168 stay unedited.
+Amends [ADR 0168](./0168-draft-gate-low-nit-convergence.md): after a `draft_gate` round converges under 0168, tooling will refuse a code commit on that head. Enforcement ships in a later slice of issue 2462. Until then `GATE-EXEC-LOW-NIT-CONVERGENCE` is unchanged and still prescribes the one `commit_only` fixer pass for an all-low/nit act list. The records that introduced 0168 stay unedited.
 
 ## Context
 

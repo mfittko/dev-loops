@@ -135,8 +135,8 @@ const REMOVED_FLAGS = new Set([
   "--force",
   "--force-reason",
 ]);
-const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>) [--next-action <text> (required except on --gate review)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
-The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin.
+const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>; a draft_gate post requires --findings-ledger carrying overallVerdict while gates.draft.maxReviewRounds > 0) [--next-action <text> (required except on --gate review)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
+The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin, except on --gate draft_gate while gates.draft.maxReviewRounds > 0 (GATE-EXEC-ROUND-CAP): there --findings-ledger carrying overallVerdict is the only accepted input, and --findings-json, --findings-file and --findings-summary posts are refused.
 Post the gate round's SINGLE visible surface: one PR review of type COMMENT whose
 body carries the checkpoint verdict fields and, with --findings-ledger, the
 round's body-filed findings, while every locatable finding becomes one of that
@@ -174,11 +174,17 @@ Required:
   --findings-summary <text>                 Findings summary as a single argument
                                             (use --findings-file for multi-line)
   --findings-file <path>                    Read findings summary from file;
-                                            alternative to --findings-summary
+                                            alternative to --findings-summary.
+                                            Refused on draft_gate while
+                                            gates.draft.maxReviewRounds > 0
+                                            (use --findings-ledger)
                                             (preserves newlines; takes precedence
                                             when both are present)
   --findings-json <path>                    Read STRUCTURED fan-out review
-                                            findings from a JSON file. PRIMARY
+                                            findings from a JSON file. Refused
+                                            on draft_gate while
+                                            gates.draft.maxReviewRounds > 0
+                                            (use --findings-ledger). PRIMARY
                                             shape is the per-angle review-results
                                             array (array of { angle, verdict?,
                                             findings:[{severity, summary, file?,
@@ -2784,7 +2790,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // refuses every other shape before any cap logic runs. The one exception is an inline verdict-only clean:
     // it holds no finding, so the cap has nothing to count or block.
     if (options.gate === "draft_gate" && draftGateConfig.maxReviewRounds > 0) {
-      const inlineVerdictOnlyClean =!options.findingsJson && !options.findingsLedger && options.verdict === "clean"
+      const inlineVerdictOnlyClean = !options.findingsJson && !options.findingsLedger && !options.findingsFile && !options.findingsSummary && options.verdict === "clean"
         && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent";
       const refused = inlineVerdictOnlyClean ? null : options.findingsJson ? "--findings-json"
         : !options.findingsLedger ? "a post without --findings-ledger (a --findings-file or --findings-summary post is refused)"

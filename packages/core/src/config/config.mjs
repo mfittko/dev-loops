@@ -382,8 +382,6 @@ const GateConfig = z.strictObject({
   // a layer that sets only the deprecated `worthFixingNowFixWindow` alias.
   // resolveGateConfig applies the built-in fallback (3) after checking both.
   mediumFixWindow: z.number().int().nonnegative().optional().describe("Per-gate medium fix window: the number of rounds the judge weighs an open medium finding for an in-gate fix. The window is an input to the judge's act, defer or reject decision, never applied by code, and never defers a finding by itself. high is exempt (never defers). Default 3."),
-  // No schema-level `.default()` (same layer-shadowing hazard); resolveGateConfig applies 4.
-  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and a new act item then blocks with round_cap_reached instead of running another fixer round. 0 disables the cap. Default 4."),
   worthFixingNowFixWindow: z.number().int().nonnegative().optional().describe("Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set."),
   // No schema-level `.default()` for the same reason as mediumFixWindow above:
   // a default would fill this key on every config layer independently and
@@ -395,6 +393,12 @@ const GateConfig = z.strictObject({
   // Ordered, first-match-wins diff-class angle tiers (see resolveGateTier).
   // Absent/empty = tiers never apply.
   tiers: z.array(GateTier).min(1).describe("Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class.").optional(),
+});
+
+// Only the draft gate reads maxReviewRounds, so only gates.draft accepts it.
+// No schema-level `.default()` (same layer-shadowing hazard); resolveGateConfig applies 4.
+const DraftGateConfig = GateConfig.extend({
+  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and a new act item then blocks with round_cap_reached instead of running another fixer round. 0 disables the cap. Default 4."),
 });
 
 // One named group of angles dispatched together onto a single reviewer under
@@ -514,7 +518,7 @@ const SizeConfig = z.strictObject({
 });
 
 const GatesConfig = z.strictObject({
-  draft: GateConfig.optional(),
+  draft: DraftGateConfig.optional(),
   // Fail-closed PR size/tier budget (active by default); computation lives in
   // scripts/loop/check-size-budget.mjs.
   size: SizeConfig.optional(),
@@ -963,7 +967,7 @@ const FileGatesConfig = z.strictObject({
   // Each gate gets its own GateConfig.partial() instance rather than three
   // .describe() clones of one shared partial, so no underlying def is shared
   // and per-gate metadata renders unambiguously.
-  draft: GateConfig.partial().describe("Draft gate config (runs before a PR leaves draft).").optional(),
+  draft: DraftGateConfig.partial().describe("Draft gate config (runs before a PR leaves draft).").optional(),
   preApproval: GateConfig.partial().describe("Pre-approval gate config (final re-review before the merge handoff).").optional(),
   spike: GateConfig.partial().describe("Relaxed spike gate profile; applies only to spike-mode work.").optional(),
   size: SizeConfig.partial().describe("Fail-closed PR size/tier budget: testDiscount, absoluteHardLoc, and per-tier soft/waiver/slice thresholds + patterns.").optional(),

@@ -18,6 +18,7 @@ let FIX = "b".repeat(40);
 let gitStubDir = null;
 let originalPath = null;
 let repoRoot = null;
+let capOnRoot = null;
 before(async () => {
   gitStubDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-converged-gitstub-"));
   await writeFile(path.join(gitStubDir, "git"), "#!/bin/sh\n[ \"$1\" = cat-file ] && exit 1\nexit 0\n", "utf8");
@@ -29,8 +30,12 @@ before(async () => {
   const patched = real.replace("requireFanoutEvidence: true", "requireFanoutEvidence: false").replace("\n  draft:\n", "\n  draft:\n    maxReviewRounds: 0\n");
   assert.notEqual(patched, real);
   await writeFile(path.join(repoRoot, ".devloops"), patched, "utf8");
+  // Cap on at the default of 4 (GATE-EXEC-ROUND-CAP), pinned so the repo's own .devloops cannot change the rows.
+  capOnRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-converged-capon-"));
+  await writeFile(path.join(capOnRoot, ".devloops"), real.replace("requireFanoutEvidence: true", "requireFanoutEvidence: false").replace("\n  draft:\n", "\n  draft:\n    maxReviewRounds: 4\n"), "utf8");
 });
 after(async () => {
+  if (capOnRoot) await rm(capOnRoot, { recursive: true, force: true });
   if (originalPath !== null) process.env.PATH = originalPath;
   if (gitStubDir) await rm(gitStubDir, { recursive: true, force: true });
   if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
@@ -98,7 +103,7 @@ function makeRunChild({ puts, existingReview = true, currentHead = FIX, body = e
   };
 }
 
-async function post(tempDir, { findings, converged, extraArgs = [], runChildOptions = {}, verdict, overallVerdict = "clean" }) {
+async function post(tempDir, { findings, converged, extraArgs = [], runChildOptions = {}, verdict, overallVerdict = "clean", root = repoRoot }) {
   const ledgerPath = path.join(tempDir, "ledger.json");
   await writeFile(ledgerPath, JSON.stringify({
     repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: A, verdict: "clean", overallVerdict,
@@ -120,7 +125,7 @@ async function post(tempDir, { findings, converged, extraArgs = [], runChildOpti
   const puts = [];
   try {
     const result = await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
-      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild({ puts, ...runChildOptions }),
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot: root, runChild: makeRunChild({ puts, ...runChildOptions }),
     });
     return { result, body: puts.join("\n") };
   } catch (error) {
@@ -151,6 +156,29 @@ test("an all-act converged round composes clean from a findings_present ledger v
     assert.equal(result.action, "updated");
     assert.match(body, /\*\*Verdict:\*\* clean/);
   }, { prefix: "dev-loops-converged-allact-" });
+});
+
+// GATE-EXEC-ROUND-CAP choke point with the cap on (default 4): the converged post carries only the judged ledger.
+test("with the round cap on, a converged post with --findings-ledger only posts clean", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1), finding("nit", 2)];
+    const { result, body, error } = await post(tempDir, { findings, converged: convergedInput(findings), root: capOnRoot });
+    assert.equal(error, undefined);
+    assert.equal(result.action, "updated");
+    assert.match(body, /\*\*Verdict:\*\* clean/);
+    assert.match(body, /\*\*Converged:\*\*/);
+  }, { prefix: "dev-loops-converged-capon-ok-" });
+});
+
+test("with the round cap on, a converged post with --findings-json is refused by GATE-EXEC-ROUND-CAP", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", 1), finding("nit", 2)];
+    const findingsJson = path.join(tempDir, "findings.json");
+    await writeFile(findingsJson, JSON.stringify(findings), "utf8");
+    const out = await post(tempDir, { findings, converged: convergedInput(findings), extraArgs: ["--findings-json", findingsJson], root: capOnRoot });
+    assert.match(out.error ?? "", /GATE-EXEC-ROUND-CAP.*refusing --findings-json/);
+    assert.equal(out.puts.length, 0, "nothing is posted");
+  }, { prefix: "dev-loops-converged-capon-json-" });
 });
 
 test("without --converged-json the same all-low/nit act list still refuses clean", async () => {
