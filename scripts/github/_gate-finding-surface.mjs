@@ -61,10 +61,6 @@ export function normalizePrReviewsPayload(payload) {
 const VALID_LEDGER_VERDICTS = new Set(GATE_VERDICTS);
 const VALID_GATES = new Set(GATE_NAMES);
 
-// Findings at round <= this stay in the standard fix loop; from the next round
-// on, an open medium finding is deferred instead of re-fixed in-gate.
-export const MEDIUM_FIX_WINDOW = 3;
-
 // ---------------------------------------------------------------------------
 // Markers
 // ---------------------------------------------------------------------------

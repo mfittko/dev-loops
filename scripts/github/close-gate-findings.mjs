@@ -6,7 +6,6 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeInline } from "./post-gate-findings.mjs";
 import {
   FINDING_MARKER_RE,
-  MEDIUM_FIX_WINDOW,
   countUnresolvedGateAuthoredThreads,
   collectFingerprints,
   commentDeferredFindings,
@@ -47,7 +46,7 @@ of a judge-deferred mixed cluster closes with the cluster rationale ("Closed at 
 with no stamp and no filing. Otherwise only a thread whose every marker the judge
 disposed \`defer\` is replied-to + resolved ("deferred at gate close"), whatever its
 severity or round. Severity and round never defer a thread: the medium fix window
-(default ${MEDIUM_FIX_WINDOW}, set per gate via gates.<gate>.mediumFixWindow) is an
+(default 3, set per gate via gates.<gate>.mediumFixWindow) is an
 input to the judge, and an unjudged or ambiguous thread stays open. A question is
 answered, never deferred, so an unanswered question blocks gate-close exactly like an open defect — with
 ONE reject-close exception (ADR 0088): a question thread is closed here when BOTH
