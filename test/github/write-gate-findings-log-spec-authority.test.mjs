@@ -30,8 +30,8 @@ async function withCase({ siblingVerdict, identity = { specDigest, headSha: HEAD
       headSha: HEAD,
       scopeDrift: { verdict: "within_scope", rationale: "in scope", driftedAreas: [] },
       dispositions: [
-        { index: 0, disposition: "act", rationale: "relevant" },
-        { index: 1, disposition: "act", rationale: "relevant" },
+        { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "relevant" },
+        { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "relevant" },
       ],
     }), "utf8");
     if (siblingVerdict !== undefined) {

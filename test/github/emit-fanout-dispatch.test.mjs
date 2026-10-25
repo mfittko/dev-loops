@@ -273,7 +273,7 @@ test("all-carried rounds consume the real emitter's keyed zero-unit plan through
     assert.equal(fanin.overallVerdict, "findings_present");
     assert.equal(fanin.findingsJson[0].angle, "coverage");
     const consolidatedFindings = toFindingsLogShape(fanin.findings);
-    assert.deepEqual(consolidatedFindings[0], { ...findings[0], disposition: "accepted-for-fix" });
+    assert.deepEqual(consolidatedFindings[0], { ...findings[0], disposition: "unjudged" });
     const provenance = { distinctReviewers: 1, perAngle: plan.carried.map(({ angle, reviewer, model, carriedFromHead, prevVerdict }) =>
       ({ angle, reviewer, model, carriedFromHead, carriedVerdict: prevVerdict })) };
     const writeOptions = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA,

@@ -55,12 +55,14 @@ this skill dispatches the `review` agents directly.
    the deterministic UNION of `draft`'s and `preApproval`'s configured angle
    sets (`resolveReviewGateAngles` in `write-gate-context.mjs`). The
    spec-of-record-dependent angles — `acceptance-criteria`, `pr-checklist`,
-   `pr-description`, and `gate-evidence` — are each DROPPED (with a recorded
+   and `pr-description` — are each DROPPED (with a recorded
    rationale entry, reason `"no spec-of-record"`) only when the PR closes no
    issue AND its own body carries no AC checklist; all are KEPT when either
    is true. `pr-checklist` is also DROPPED (reason `"no formal spec on the closing
    issue or PR description"`) when neither the single closing issue nor the PR
    description passes `requireSpecFromBody`; an unknown fact keeps every angle.
+   The review gate always DROPS `gate-evidence` (reason `"the standalone review
+   has no lifecycle gates"`), with or without a spec of record.
 2. **First-wave release.** Same `GATE-EXEC-FIRST-WAVE-RELEASE` contract as any
    other gate fan-out: no primer and no lead reviewer; release the first wave
    immediately after emission.
@@ -140,12 +142,11 @@ this skill dispatches the `review` agents directly.
    `--judge-verdict <path> --spec-authority <identity-path>` on a judged round.
    The writer derives provenance from the keyed
    fan-in ledger (pass no `--emit-plan` or `--provenance`). Then `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo> --pr <n>
-   --gate review --head-sha <sha> --findings-ledger <path> [--judge-spec-source <source> [--judge-unavailable-reason <reason>]] --next-action "none
-   — informational review, no re-gate required" --submit <mode> [--auto]
+   --gate review --head-sha <sha> --findings-ledger <path> [--judge-spec-source <source> [--judge-unavailable-reason <reason>]] --submit <mode> [--auto]
    [...]` posts the SINGLE visible PR review surface
    (`GATE-COMMENT-SINGLE-SURFACE`) straight from that ledger — no CI wait, no
    coordination-context read, no auto-resolve, no forbidden-action check
-   (those are draft/pre-approval-only machinery `review` never touches). See
+   (those are draft/pre-approval-only machinery `review` never touches). `--next-action` is optional on the `review` gate; any value passed is ignored, and the gate derives the next action from the judge act list (`GATE-COMMENT-REQUIRED-FIELDS`). See
    [Checkpoint Verdict Comment Contract](../docs/gate-review-comment-contract.md#review-gate-submit-modes-1840)
    for the `--submit` vocabulary. `approve`/`request-changes`/`discard`
    additionally REQUIRE `--interactive-confirm` (#1888/#1912) — fail closed

@@ -322,9 +322,9 @@ test("consolidateGateFanin under-budget output is byte-identical to the pre-spli
         findingsJson: [{
           angle: "scope",
           verdict: "findings_present",
-          findings: [{ severity: "high", summary: "x", disposition: "accepted-for-fix" }],
+          findings: [{ severity: "high", summary: "x", disposition: "unjudged" }],
         }],
-        findings: [{ severity: "high", angle: "scope", summary: "x", disposition: "accepted-for-fix", clusterId: 0 }],
+        findings: [{ severity: "high", angle: "scope", summary: "x", disposition: "unjudged", clusterId: 0 }],
         severityCounts: { high: 1, medium: 0, low: 0, question: 0, nit: 0 },
         overallVerdict: "findings_present",
       });
@@ -2578,7 +2578,7 @@ test("e2e: a legitimately carried, non-mandatory angle fills a gate's pool cover
 // defer -> deferred disposition derivation
 // ---------------------------------------------------------------------------
 
-test("consolidateGateFanin derives a deferred disposition for nice-to-have findings", async () => {
+test("consolidateGateFanin leaves nice-to-have findings unjudged", async () => {
   await withFindingsDir(
     {
       "naming.json": {
@@ -2591,7 +2591,7 @@ test("consolidateGateFanin derives a deferred disposition for nice-to-have findi
       const result = await consolidateGateFanin({ findingsDir: dir });
       assert.equal(result.findings.length, 1);
       assert.equal(result.findings[0].severity, "low"); // "nice-to-have" input normalizes to canonical "low"
-      assert.equal(result.findings[0].disposition, "deferred");
+      assert.equal(result.findings[0].disposition, "unjudged");
     },
   );
 });
