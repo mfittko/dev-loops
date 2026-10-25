@@ -60,8 +60,8 @@ body cites, so a tripwire-shaped path the spec only mentions is still reported.
 that does not resolve yet is in BOTH lists, because the touch set is the declared
 set plus existing body citations and a planned new file has to reach the rule,
 ADR and tripwire projection too.
-A body citation needs a path-shape signal - an explicit "./" prefix, a slash or a
-file extension - so ordinary prose ("the docs directory") is not claimed, and its
+A body citation needs a path-shape signal - an explicit "./" prefix, a slash (one
+trailing slash spells a directory) or a file extension - so ordinary prose ("the docs directory") is not claimed, and its
 on-disk entry names must match case-exactly, so two checkouts of one tree agree.
 "adrTripwirePaths" is the path-based ADR-tripwire candidate set: the touched
 paths whose shape matches the tripwire constants (a skills/docs/*-contract.md
@@ -91,7 +91,7 @@ const ADR_NEED_UNSTATED = "unstated";
 // excludes a URL scheme when followed by a slash, not prose or file:line cites.
 // Every candidate still requires existence and containment before it is claimed.
 const PATH_CANDIDATE_RE = new RegExp(
-  `(?<![\\w./:-])((?:\\.\\/)?(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]*[A-Za-z0-9_-])(?![\\w/-]|:\\/)`,
+  `(?<![\\w./:-])((?:\\.\\/)?(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]*[A-Za-z0-9_-]\\/?)(?![\\w/-]|:\\/)`,
   "gu",
 );
 const PATH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/u;
@@ -166,9 +166,11 @@ function citedPathCandidates(body) {
   const candidates = new Set();
   for (const [raw] of body.matchAll(PATH_CANDIDATE_RE)) {
     const explicit = raw.startsWith("./");
-    const token = explicit ? raw.slice(2) : raw;
-    if (token.includes(":")) continue;
-    if (!explicit && !token.includes("/") && !EXTENSION_RE.test(token)) continue;
+    // One trailing "/" spells a directory citation the way `--paths` accepts it;
+    // it is a path-shape signal and is stripped before resolution.
+    const token = (explicit ? raw.slice(2) : raw).replace(/\/$/u, "");
+    if (token === "" || token.includes(":")) continue;
+    if (!explicit && !raw.includes("/") && !EXTENSION_RE.test(token)) continue;
     if (!token.split("/").every((segment) => PATH_SEGMENT_RE.test(segment) && segment !== "." && segment !== "..")) continue;
     candidates.add(token);
   }

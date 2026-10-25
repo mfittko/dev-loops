@@ -552,6 +552,14 @@ test("ordinary prose naming existing root directories is not a touched path", as
   assert.deepEqual(brief.adrs, []);
 });
 
+test("a directory citation is claimed only when spelled with its trailing slash", async () => {
+  const root = await fixtureRepo({ files: { "docs/decisions/x.md": "# X\n", "changes/n.md": "# N\n" } });
+  const spelled = await buildImplementationBrief({ body: `${MATRIX}\nUpdate docs/decisions/ next, then changes/.\n`, repoRoot: root });
+  assert.deepEqual(spelled.touchedPaths, ["changes", "docs/decisions"]);
+  const prose = await buildImplementationBrief({ body: `${MATRIX}\nMake the changes and update the docs.\n`, repoRoot: root });
+  assert.deepEqual(prose.touchedPaths, []);
+});
+
 test("a case-variant declared path is unresolved and contributes no rule IDs", async () => {
   const root = await fixtureRepo({
     files: { "a/b.mjs": "// Implements KNOWN-RULE-ID.\nexport const b = 1;\n" },
@@ -835,9 +843,16 @@ test("no gate, judge or reviewer surface consumes the brief", async () => {
   ]) {
     assert.ok(surfaces.includes(path.join(repoRoot, relPath)), `the scan must cover ${relPath}`);
   }
+  // The rule-ownership validator lists agent docs as contract files to parse for
+  // rule markers; it is the brief's own import and no gate input.
+  const AGENT_DOC_LISTERS = new Set([path.join("scripts", "docs", "validate-rule-ownership.mjs")]);
   for (const file of surfaces) {
     const content = await readFile(file, "utf8");
     assert.ok(!content.includes("implementation-brief"), `${path.relative(repoRoot, file)} must not consume the brief`);
+    // The brief's instruction lives in the developer agent doc, so a surface that
+    // reads that doc also consumes the brief indirectly.
+    if (AGENT_DOC_LISTERS.has(path.relative(repoRoot, file))) continue;
+    assert.ok(!content.includes("developer.agent"), `${path.relative(repoRoot, file)} must not read the developer instruction`);
   }
 });
 
