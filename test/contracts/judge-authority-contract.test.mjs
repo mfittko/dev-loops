@@ -13,6 +13,7 @@ for (const file of ["agents/judge.agent.md", ".claude/agents/judge.md"]) {
     const text = (await readFile(`${repoRoot}${file}`, "utf8")).replace(/\s+/g, " ");
     assert.match(text, /On every spec source, a finding whose only claim is that a section the repo's PR template does not define .{0,160} is absent is `reject`/);
     assert.match(text, /A section that `\.github\/pull_request_template\.md` defines .{0,100} is never covered by this rule/);
+    assert.match(text, /`specKind: "pr_scope"` .{0,120} a finding whose only claim is that an Acceptance criteria or Definition of done section is absent is `reject`/);
     assert.match(text, /`index` is the cluster's `clusterId`/);
     assert.match(text, /`title`, `detail` and `fix` are required on every disposition and `reason` on `defer` and `reject`/);
     assert.doesNotMatch(text, /one decision per cluster index/);

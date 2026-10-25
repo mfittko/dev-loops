@@ -20,11 +20,11 @@
  * VALID_SEVERITIES / normalizeSeverity):
  *   "high" | "medium" | "low" (defects) | "question" | "nit" (non-defects)
  * Severity is the reviewer's advisory weight. Deferral is a DISPOSITION
- * (derived at fan-in, finalized by the fix cycle / gate close), never a
- * severity; pre-rename spellings are accepted on read and normalized (see
+ * (fan-in leaves every finding unjudged; only a judge `defer` defers a
+ * finding), never a severity; pre-rename spellings are accepted on read and normalized (see
  * LEGACY_SEVERITY_ALIASES / normalizeSeverity). A question is answered (never
- * deferred) and an unanswered one blocks gate-close; a nit defers immediately,
- * with no fixer cycle.
+ * deferred) and an unanswered one blocks gate-close; a nit is never deferred
+ * (the judge disposes it act or reject).
  */
 
 import { scheduleParallelWaves } from "./queue-parallel.mjs";
@@ -216,8 +216,8 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
 // (consolidate-fanin.mjs, upsert-checkpoint-verdict.mjs) rank against it rather
 // than each re-listing — ORDER is part of the contract, not just membership.
 // Ranked by gate-close urgency: "question" sits right after "high" because BOTH
-// force gate-close to stay blocked; "medium"/"low" eventually defer. "nit"
-// trails last: it defers immediately, with no fixer cycle.
+// force gate-close to stay blocked; "medium"/"low" defer only on a judge defer. "nit"
+// trails last: it is never deferred (the judge disposes it act or reject).
 export const SEVERITY_ORDER = Object.freeze(["high", "question", "medium", "low", "nit"]);
 
 // A reviewer's optional `defectKey`: the rule ID or AC row label the finding

@@ -600,7 +600,7 @@ test("#2381: the refusal text for an open defect (non-question) thread names the
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
     assert.equal(result.code, 1);
-    assert.match(result.stderr, /1 open defect thread\(s\).*fixer fix-close.*disposition pass's defer-close/i);
+    assert.match(result.stderr, /1 open defect thread\(s\).*fixer fix-close.*rerun close-gate-findings once the judge has deferred/i);
     assert.doesNotMatch(result.stderr, /question thread\(s\)/i);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -637,7 +637,7 @@ test("#2381: the refusal text for an open nit thread names the close-gate-findin
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
     assert.equal(result.code, 1);
-    assert.match(result.stderr, /1 open nit thread\(s\): rerun close-gate-findings.*resolves a nit unconditionally/i);
+    assert.match(result.stderr, /1 open nit thread\(s\): rerun close-gate-findings.*once the judge has rejected or deferred it/i);
     assert.doesNotMatch(result.stderr, /open defect thread\(s\)/i);
     assert.doesNotMatch(result.stderr, /question thread\(s\)/i);
   } finally {
@@ -681,7 +681,7 @@ test("#2381: the refusal text for a question thread names the answer-reply/rejec
 test("describeUnresolvedGateThreadReasons: names all three remedies when all buckets are non-zero, and falls back on an all-zero breakdown", () => {
   const all = describeUnresolvedGateThreadReasons({ question: 1, nit: 4, other: 2 }, 7);
   assert.match(all, /1 question thread\(s\)/);
-  assert.match(all, /4 open nit thread\(s\): rerun close-gate-findings.*resolves a nit unconditionally/);
+  assert.match(all, /4 open nit thread\(s\): rerun close-gate-findings.*once the judge has rejected or deferred it/);
   assert.match(all, /2 open defect thread\(s\)/);
   assert.match(all, /the judge deferred, or whose judge disposition is ambiguous or unrecorded, needs an operator decision/);
   assert.match(all, /the judge disposed act is resolved by the fixer's own answer-and-resolve path/);

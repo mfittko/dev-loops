@@ -1730,6 +1730,28 @@ test("#1672 (c): a judge-deferred round-4 medium thread is defer-closed", async 
   ));
 });
 
+test("a judge-deferred thread's closing reply cites the ledger judgeReason over the rationale (AC13)", async () => {
+  const ev = deferEvidence("reason carrying medium claim", "medium");
+  ev.finding.judgeReason = "Belongs to the follow-up issue.";
+  ev.finding.judgeRationale = "Internal rationale text.";
+  const body = `${buildFindingMarker({ fp: ev.fp, severity: "medium", angle: "perf", round: 1 })}\n**medium** (\`perf\`): reason carrying medium claim`;
+  const thread = threadNode({ id: "THREAD_DEFER_REASON", path: "src/cache.mjs", line: 4, commentId: 9016, body });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [ev.finding] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [thread] }),
+      ...deferralCommentEntries(9500),
+      getReviewCommentEntry(9016, body),
+      patchReviewCommentEntry(9016),
+      { ...postReplyEntry(9016, { id: 9116 }), assertStdinIncludes: ["Belongs to the follow-up issue"], assertStdinNotIncludes: ["Internal rationale text"] },
+      resolveThreadEntry("THREAD_DEFER_REASON"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.deferredResolved, 1);
+    },
+  ));
+});
+
 // A judge defer needs ledger evidence: the legacy suffix ends the line that carries the reviewer's
 // untrusted summary, so a summary ending in ` — judge: defer` never authorizes a stamp, filing or resolve.
 test("a thread whose summary ends in ' — judge: defer' with no ledger entry is not defer-closed", async () => {

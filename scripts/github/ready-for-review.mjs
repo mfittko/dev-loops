@@ -108,22 +108,24 @@ export function describeUnresolvedGateThreadReasons(breakdown, fallbackCount) {
     );
   }
   if (nit > 0) {
-    // A nit is never a fixer target (unlike high/medium/low below): the
-    // disposition pass resolves it with an in-thread rationale
-    // unconditionally, at round 1, with no eligibility wait and no fixer
-    // triage cycle (gate-review-sub-loop-contract.md; NON_DEFECT_SEVERITIES,
+    // A nit is never a fixer target (unlike high/medium/low below) and is
+    // never closed from severity or round alone: close-gate-findings closes
+    // it only on a judge reject, a judge defer, or an evidence-only judge
+    // act (gate-review-sub-loop-contract.md; NON_DEFECT_SEVERITIES,
     // gate-fanin.mjs) — naming fixer fix-close here would send operators to
     // a remedy that cannot clear this count.
     reasons.push(
-      `${nit} open nit thread(s): rerun close-gate-findings — the disposition pass resolves a nit unconditionally with an in-thread rationale, no fixer triage or eligibility wait required`,
+      `${nit} open nit thread(s): rerun close-gate-findings once the judge has rejected or deferred it (or disposed it act with an evidence-only remedy); an unjudged or act nit needs the fixer or a judge rerun`,
     );
   }
   if (other > 0) {
-    // A judge-rejected medium or low is reject-closed by a close-gate-findings
-    // rerun (ADR 0144). Only a judge-rejected high is cleared by neither
-    // remedy and stays on the operator path.
+    // A judge-rejected or judge-deferred medium or low, and an evidence-only
+    // judge act, is closed by a close-gate-findings rerun (ADR 0144). An
+    // unjudged or act thread needs the fixer or a judge rerun. Only a
+    // judge-rejected high is cleared by neither remedy and stays on the
+    // operator path.
     reasons.push(
-      `${other} open defect thread(s) (high/medium/low): resolve via fixer fix-close, or the disposition pass's defer-close (close-gate-findings) once it is eligible (medium past its fix window, low at gate close) — a judge-rejected medium or low is reject-closed by a close-gate-findings rerun (ADR 0144); a judge-rejected high is cleared by neither and needs an operator decision`,
+      `${other} open defect thread(s) (high/medium/low): resolve via fixer fix-close, or rerun close-gate-findings once the judge has deferred or rejected a medium or low (ADR 0144) or disposed it act with an evidence-only remedy; an unjudged or act thread needs the fixer or a judge rerun; a judge-rejected high is cleared by neither and needs an operator decision`,
     );
   }
   if (reasons.length === 0) {

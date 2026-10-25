@@ -2917,6 +2917,9 @@ test("writeGateFindingsLog disposes a 3-member cluster by one clusterId through 
     assert.equal(result.ok, true);
     const parsed = JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", `draft_gate-${headSha}.json`), "utf8"));
     assert.deepEqual(parsed.findings.map((f) => f.judgeDisposition), ["reject", "act", "act", "act"]);
+    // AC13: the judge's cluster prose survives into the written ledger on every member.
+    assert.deepEqual(parsed.findings.map((f) => f.judgeTitle), ["t", "t", "t", "t"]);
+    assert.deepEqual(parsed.findings.map((f) => f.judgeReason), ["r", "r", "r", "r"]);
     await assert.rejects(
       () => writeGateFindingsLog({
         repo: "owner/repo", pr: 42, gate: "draft_gate", headSha, verdict: "findings_present",

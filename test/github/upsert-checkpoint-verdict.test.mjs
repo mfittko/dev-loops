@@ -6064,7 +6064,7 @@ test("renderGateReviewCommentBody sorts unknown/missing severities LAST, never b
 
 // #1592: SEVERITY_ORDER ranks "question" right after "high" (both keep
 // gate-close blocked — a high via the fix loop, a question via never
-// auto-deferring) — ahead of "medium"/"low" (both eventually defer).
+// auto-deferring) — ahead of "medium"/"low" (both defer only on a judge defer).
 test("renderGateReviewCommentBody sorts a question finding between high and medium (#1592)", () => {
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
