@@ -204,7 +204,7 @@ export function rationaleFromResolver(resolverResult) {
 
   const rationale = [];
   for (const angle of recommended) {
-    if (added.has(angle) && dynamicActive) {
+    if (added.has(angle)) {
       rationale.push({
         angle,
         action: "added",

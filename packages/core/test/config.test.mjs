@@ -5576,8 +5576,40 @@ describe("resolveGateAnglesDynamic: SECURITY_SENSITIVE_SEAM threat-model overrid
     const result = await resolveGateAnglesDynamic(staticConfig, "draft", { diff: seamDiff });
     assert.ok(result.recommendedAngles.includes("threat-model"));
     assert.deepEqual(result.addedAngles, ["threat-model"]);
+    const { rationaleFromResolver } = await import("../../../scripts/github/write-gate-context.mjs");
+    assert.deepEqual(
+      rationaleFromResolver(result).rationale.find((r) => r.angle === "threat-model"),
+      { angle: "threat-model", action: "added", reason: "SECURITY_SENSITIVE_SEAM" },
+    );
     const plain = await resolveGateAnglesDynamic(staticConfig, "draft", { diff: plainDiff });
     assert.ok(!plain.recommendedAngles.includes("threat-model"));
+  });
+
+  test("a code-kind tier match still runs threat-model on a seam diff", async () => {
+    const tierConfig = {
+      ...config,
+      gates: { draft: { ...config.gates.draft, tiers: [{ name: "small-code", match: { kinds: ["code"], maxLines: 50 }, angles: ["correctness"] }] } },
+    };
+    const result = await resolveGateAnglesDynamic(tierConfig, "draft", { diff: seamDiff });
+    assert.ok(result.recommendedAngles.includes("correctness"));
+    assert.ok(result.recommendedAngles.includes("threat-model"));
+    assert.deepEqual(result.addedAngles, ["threat-model"]);
+    assert.equal(result.addedReasons["threat-model"], "SECURITY_SENSITIVE_SEAM");
+    const plain = await resolveGateAnglesDynamic(tierConfig, "draft", { diff: plainDiff });
+    assert.ok(!plain.recommendedAngles.includes("threat-model"));
+  });
+
+  test("a degenerate pool on a seam diff resolves to the static pool plus threat-model, never threat-model alone", async () => {
+    const degenerate = { version: 1, gates: { draft: { angles: ["kiss", { name: "threat-model", enabled: false }] } } };
+    const result = await resolveGateAnglesDynamic(degenerate, "draft", { diff: seamDiff });
+    assert.ok(result.recommendedAngles.includes("kiss"));
+    assert.ok(result.recommendedAngles.includes("threat-model"));
+  });
+
+  test("preApproval under the default requireDraftFirst:true does not re-add threat-model at the same head", async () => {
+    const pre = { version: 1, workflow: { requireDraftFirst: true }, gates: { preApproval: { angles: ["scope", { name: "threat-model", enabled: false }] } } };
+    const result = await resolveGateAnglesDynamic(pre, "preApproval", { diff: seamDiff });
+    assert.ok(!result.recommendedAngles.includes("threat-model"));
   });
 
   test("with requireDraftFirst:false the preApproval override fires only where threat-model is in the contract pool", async () => {

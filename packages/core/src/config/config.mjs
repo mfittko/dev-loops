@@ -3168,15 +3168,35 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
     if (recommendedAngles.includes("deslop") && prosePresent === false) {
       recommendedAngles = recommendedAngles.filter((a) => a !== "deslop");
     }
-    const skippedAngles = configuredAngles.filter((a) => !recommendedAngles.includes(a));
+    let skippedAngles = configuredAngles.filter((a) => !recommendedAngles.includes(a));
+    const reasons = Object.fromEntries(skippedAngles.map((a) => [a, `tier:${tierResult.tier}`]));
+    let addedAngles = [];
+    let addedReasons = {};
+    // Security-seam override: a tier never drops threat-model on a seam diff.
+    if (diff && seamFirstRound && !recommendedAngles.includes(SECURITY_SEAM_ANGLE)
+      && (resolveGateConfig(config, gate).excludeAngles.includes(SECURITY_SEAM_ANGLE) || configuredAngles.includes(SECURITY_SEAM_ANGLE))) {
+      const { analyzeDiff } = await import("../analysis/diff-analyzer.mjs");
+      const seamCategories = analyzeDiff({
+        nameStatusOutput: diff.nameStatusOutput,
+        diffOutput: diff.diffOutput,
+        rules: resolveClassifyRules(config),
+      }).t1?.changeCategories ?? [];
+      if (seamCategories.includes("SECURITY_SENSITIVE_SEAM")) {
+        recommendedAngles = [...recommendedAngles, SECURITY_SEAM_ANGLE];
+        skippedAngles = skippedAngles.filter((a) => a !== SECURITY_SEAM_ANGLE);
+        delete reasons[SECURITY_SEAM_ANGLE];
+        addedAngles = [SECURITY_SEAM_ANGLE];
+        addedReasons = { [SECURITY_SEAM_ANGLE]: "SECURITY_SENSITIVE_SEAM" };
+      }
+    }
     return {
       recommendedAngles,
       skippedAngles,
-      reasons: Object.fromEntries(skippedAngles.map((a) => [a, `tier:${tierResult.tier}`])),
+      reasons,
       fallbackToAll: false,
       dynamicAnglesActive: true,
-      addedAngles: [],
-      addedReasons: {},
+      addedAngles,
+      addedReasons,
     };
   }
 

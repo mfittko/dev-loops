@@ -885,11 +885,10 @@ test("rationaleFromResolver marks addedAngles entries as 'added' with their adde
   });
 });
 
-test("rationaleFromResolver treats addedAngles entries as 'kept' when dynamicAnglesActive is not true (defensive guard)", () => {
-  // resolveGateAnglesDynamic never produces a non-empty addedAngles with
-  // dynamicAnglesActive false, but a hand-constructed/malformed resolverResult
-  // could. The "added" classification must stay gated on dynamicActive so
-  // rationale semantics remain internally consistent.
+test("rationaleFromResolver records addedAngles entries as 'added' even when dynamicAnglesActive is false (static-path seam override)", () => {
+  // The static path (dynamic subtractive off) can add threat-model for a
+  // SECURITY_SENSITIVE_SEAM diff with dynamicAnglesActive false; the override
+  // must be recorded as added, never silent.
   const { rationale } = rationaleFromResolver({
     recommendedAngles: ["some-angle"],
     skippedAngles: [],
@@ -899,7 +898,7 @@ test("rationaleFromResolver treats addedAngles entries as 'kept' when dynamicAng
     dynamicAnglesActive: false,
   });
   assert.deepEqual(rationale, [
-    { angle: "some-angle", action: "kept", reason: "static pool (dynamic angle resolution inactive)" },
+    { angle: "some-angle", action: "added", reason: "Added: triggered by change category CI_ONLY" },
   ]);
 });
 
