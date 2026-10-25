@@ -50,6 +50,20 @@ export function buildGateContextPath({ repo, pr, gate, headSha, tmpRoot = "tmp" 
   return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".json" });
 }
 
+// Keyed per-angle findings directory, emit plan and fan-in ledger of one gate
+// round. Defined here so the findings writer can resolve them without
+// importing write-gate-context.mjs (which would close an import cycle);
+// write-gate-context.mjs re-exports them.
+export function buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, dir: "gate-reviews" });
+}
+export function buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".emit-plan.json" });
+}
+export function buildGateFaninLedgerPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".fanin-ledger.json" });
+}
+
 // Deterministic artifact path for the durable per-round findings log. Mirrors
 // buildGateContextPath's scheme in the "gate-findings" family, keyed by the
 // FULL head SHA so a new head never reuses a prior head's ledger. Validates the

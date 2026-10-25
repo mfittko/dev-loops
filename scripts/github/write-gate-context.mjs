@@ -53,7 +53,7 @@ import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, norm
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { buildGateArtifactPath, buildGateContextPath, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
+import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 
@@ -592,9 +592,7 @@ export { buildGateContextPath };
 // writes to (one `<angle>.json` per angle). Mirrors the path
 // `consolidate-fanin.mjs` reads from. Exported for reuse by the same-head
 // skip-completed resume scan.
-export function buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
-  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, dir: "gate-reviews" });
-}
+export { buildGateReviewsDir };
 
 /**
  * AC3 — same-head skip-completed resume. Scan the per-angle findings
@@ -688,15 +686,11 @@ export function buildGateBriefingScopePath({ repo, pr, gate, headSha, scope, tmp
 // across gates. Mirrors buildGateContextPath (same path-segment params); the
 // body is the emitter's own result object, so the artifact is self-describing
 // and key-stamped.
-export function buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
-  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".emit-plan.json" });
-}
+export { buildGateEmitPlanPath };
 
 // Keyed sibling of the emit plan: consolidate-fanin.mjs's ledger object
 // (verdict, findings, derived fan-out provenance) at the same round key.
-export function buildGateFaninLedgerPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
-  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".fanin-ledger.json" });
-}
+export { buildGateFaninLedgerPath };
 
 // Deterministic path for the keyed carry-forward plan artifact
 // (GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED, `resolve-angle-carry-forward.mjs`):

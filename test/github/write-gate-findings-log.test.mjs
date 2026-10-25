@@ -84,7 +84,7 @@ test("parseWriteGateFindingsLogCliArgs parses all required args", () => {
     findings: '[{"severity":"must-fix","angle":"scope","summary":"bad scope"}]',
     findingsFile: undefined,
     fullLabel: false,
-    executionMode: "inline_single_agent",
+    executionMode: undefined,
     // default left undefined so writeGateFindingsLog anchors the ledger
     // at the MAIN worktree tmp; an explicit --tmp-root still overrides.
     tmpRoot: undefined,
@@ -149,22 +149,24 @@ test("carry-forward uses the real emitter's pending plan for fresh-only provenan
     assert.equal(emitted.code, 0, emitted.stderr);
     const planPath = path.join(contextDir, `draft_gate-${headSha}.emit-plan.json`);
     assert.deepEqual(JSON.parse(await readFile(planPath, "utf8")).units.map((unit) => unit.angles), [["scope"], ["pr-description"]]);
-    const result = await writeGateFindingsLog({
-      repo: "owner/repo",
-      pr: 42,
-      gate: "draft_gate",
-      headSha,
-      verdict: "clean",
-      findings: "[]",
-      provenance: JSON.stringify({
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.fanin-ledger.json`), JSON.stringify({
+      overallVerdict: "clean",
+      findings: [],
+      provenance: {
         distinctReviewers: 2,
         perAngle: [
           { angle: "scope", reviewer: "review-a" },
           { angle: "pr-description", reviewer: "review-b" },
           { angle: "coverage", reviewer: "review-c", carriedFromHead: "b".repeat(40) },
         ],
-      }),
-      emitPlan: planPath,
+      },
+    }), "utf8");
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 42,
+      gate: "draft_gate",
+      headSha,
+      findings: "[]",
       tmpRoot,
     }, { repoRoot });
     assert.equal(result.ok, true);

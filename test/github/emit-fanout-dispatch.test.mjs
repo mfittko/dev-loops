@@ -6,12 +6,12 @@ import path from "node:path";
 import { test } from "bun:test";
 import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, listPriorFindingsLogHeads, main, unitBudgetBasis } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
-import { buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { consolidateGateFanin, parseConsolidateFaninCliArgs } from "../../scripts/loop/consolidate-fanin.mjs";
-import { verifyEmitPlanProvenance, writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
+import { verifyEmitPlanProvenance, writeGateFindingsLog as writeGateFindingsLogRaw } from "../../scripts/github/write-gate-findings-log.mjs";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { VALID_SCOPE_RE } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
 import { verifyDispatchPromptLayoutForHead } from "../../scripts/github/verify-dispatch-prompt-layout.mjs";
@@ -21,6 +21,18 @@ import { createHash } from "node:crypto";
 import { executionIndexPath, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
+
+// The writer takes provenance from the keyed fan-in ledger, so these guard tests
+// place their hand-built provenance there and write without --provenance.
+async function writeGateFindingsLog(options, ctx) {
+  if (options.provenance === undefined) return writeGateFindingsLogRaw(options, ctx);
+  const { provenance, emitPlan, ...rest } = options;
+  const ledgerPath = path.resolve(ctx.repoRoot, buildGateFaninLedgerPath({ repo: rest.repo, pr: rest.pr, gate: rest.gate, headSha: rest.headSha, tmpRoot: "tmp" }));
+  const ledger = JSON.parse(await readFile(ledgerPath, "utf8").catch(() => "{}"));
+  await mkdir(path.dirname(ledgerPath), { recursive: true });
+  await writeFile(ledgerPath, JSON.stringify({ ...ledger, overallVerdict: rest.verdict, provenance: JSON.parse(provenance) }), "utf8");
+  return writeGateFindingsLogRaw(rest, ctx);
+}
 
 function runEmitCli(args = [], opts = {}) {
   return spawnSync("node", [emitCliPath, ...args], { encoding: "utf8", ...opts });

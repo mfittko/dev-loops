@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
 import { expandDispatchUnits } from "./_dispatch-units.mjs";
@@ -20,9 +20,9 @@ import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } fr
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
-import { buildGateContextPath, buildLogPath } from "./_gate-artifact-paths.mjs";
+import { buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
-const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>] [--context-tmp-root <path>]
+const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--verdict <clean|findings_present|blocked>] (--findings <json> | --findings-file <path>) [--tmp-root <path>] [--context-tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
 Required:
   --repo <owner/name>
@@ -54,7 +54,7 @@ Optional:
                                  given for a gate that configures a mandatory angle — see --execution-mode below.
   --execution-mode <fanout_fanin|inline_single_agent>
                                  How this round was executed (mirrors upsert-checkpoint-verdict.mjs's own
-                                 --execution-mode). Defaults to inline_single_agent. A fanout_fanin write
+                                 --execution-mode). A keyed emit plan at the head resolves an omitted mode to fanout_fanin and refuses inline_single_agent; a per-angle findings dir without an emit plan refuses an omitted mode and inline_single_agent. With neither, it defaults to inline_single_agent. In fanout_fanin mode the keyed fan-in ledger (under --context-tmp-root) supplies provenance, verifiedItems and overallVerdict (--verdict is then optional), and a differing --provenance is refused. A fanout_fanin write
                                  for a gate that configures mandatory angles (gates.<gate>.angles entries
                                  with mandatory: true) FAILS CLOSED (throws, writes no ledger) when neither
                                  an explicit --provenance nor a wrapper-supplied one is present. inline_single_agent
@@ -637,10 +637,8 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  // Default execution mode to inline_single_agent when omitted, same default
-  // as upsert-checkpoint-verdict.mjs's own --execution-mode.
-  options.executionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
-  const missing = ["repo", "pr", "gate", "headSha", "verdict"]
+  // An omitted mode stays undefined: writeGateFindingsLog resolves it from the round artifacts.
+  const missing = ["repo", "pr", "gate", "headSha"]
     .filter(k => options[k] === undefined);
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
@@ -749,7 +747,55 @@ export async function readContextDispatchUnits({ repo, pr, gate, headSha, contex
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
   // The ledger write resolves against repoRoot (process.cwd() on the CLI), so the guard does too.
   if (options.tmpRoot) assertTmpRootOutsideLinkedWorktree(path.resolve(repoRoot, options.tmpRoot), repoRoot);
-  const { findings: rawFindings, overallVerdict, provenance: wrapperProvenance, verifiedItems: rawVerifiedItems } = await resolveFindings(options);
+  let { findings: rawFindings, overallVerdict, provenance: wrapperProvenance, verifiedItems: rawVerifiedItems } = await resolveFindings(options);
+  // Default the ledger tmp root to the MAIN worktree: a coordinator
+  // runs the gate inside an ephemeral linked worktree, but the orchestrator's
+  // merge reads this ledger from the main checkout. Anchoring at the primary
+  // worktree lands it in the ONE stable per-repo location both reach, and it
+  // survives linked-worktree pruning. An explicit --tmp-root still wins.
+  const logPath = buildLogPath({
+    repo: options.repo,
+    pr: options.pr,
+    gate: options.gate,
+    headSha: options.headSha,
+    tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot),
+  });
+  const fullPath = path.resolve(repoRoot, logPath);
+  // The round's keyed artifacts under the context root decide the execution
+  // mode and, in fanout_fanin mode, supply provenance, verifiedItems and the
+  // verdict from the fan-in ledger instead of the caller.
+  const roundKey = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.contextTmpRoot || "tmp" };
+  const emitPlanPath = path.resolve(repoRoot, buildGateEmitPlanPath(roundKey));
+  const faninLedgerPath = path.resolve(repoRoot, buildGateFaninLedgerPath(roundKey));
+  const reviewsDir = path.resolve(repoRoot, buildGateReviewsDir(roundKey));
+  const exists = (p) => access(p).then(() => true, () => false);
+  const [hasEmitPlan, hasReviewsDir] = await Promise.all([exists(emitPlanPath), exists(reviewsDir)]);
+  const fanoutEvidence = hasEmitPlan ? `emit plan ${emitPlanPath}` : hasReviewsDir ? `per-angle findings dir ${reviewsDir}` : null;
+  if (fanoutEvidence && options.executionMode === "inline_single_agent") {
+    throw parseError(`--execution-mode inline_single_agent is refused: ${fanoutEvidence} exists at this head, so the round is fanout_fanin`);
+  }
+  if (hasReviewsDir && !hasEmitPlan && options.executionMode === undefined) {
+    throw parseError(`--execution-mode is required: per-angle findings dir ${reviewsDir} exists at this head but no emit plan does, so pass --execution-mode fanout_fanin`);
+  }
+  const executionMode = options.executionMode ?? (hasEmitPlan ? "fanout_fanin" : DEFAULT_EXECUTION_MODE);
+  let faninLedger;
+  if (executionMode === "fanout_fanin" && await exists(faninLedgerPath)) {
+    try {
+      faninLedger = JSON.parse(await readFile(faninLedgerPath, "utf8"));
+    } catch (error) {
+      throw parseError(`fan-in ledger ${faninLedgerPath} could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (options.provenance !== undefined) {
+      let explicit;
+      try { explicit = JSON.parse(options.provenance); } catch { /* the validator below reports malformed JSON */ }
+      if (explicit !== undefined && !isDeepStrictEqual(explicit, faninLedger.provenance)) {
+        throw parseError(`--provenance differs from the fan-in ledger's provenance (${faninLedgerPath}); omit --provenance, the ledger supplies it`);
+      }
+    }
+    ({ overallVerdict, provenance: wrapperProvenance, verifiedItems: rawVerifiedItems } = faninLedger);
+  } else if (executionMode === "fanout_fanin" && hasEmitPlan) {
+    throw parseError(`Cannot write a fanout_fanin findings log: emit plan ${emitPlanPath} exists but the keyed fan-in ledger ${faninLedgerPath} does not. Run consolidate-fanin with --emit-plan and --ledger-out first.`);
+  }
   // The wrapper's reviewer-verified AC/DoD labels (consolidate-fanin's union).
   // Fail closed on a malformed value; persisted trimmed and deduplicated.
   let verifiedItems;
@@ -803,14 +849,15 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // load-bearing — it ensures a bare-array input never persists a
   // null/undefined/out-of-domain verdict un-normalized.
   const callerVerdict = typeof options.verdict === "string" ? normalizeVerdict(options.verdict) : null;
-  if (!callerVerdict) {
+  // --verdict is optional only when the fan-in ledger supplies the verdict.
+  if (options.verdict === undefined ? faninLedger === undefined : !callerVerdict) {
     throw parseError("--verdict must be clean, findings_present, or blocked");
   }
   let normalizedOverallVerdict;
   // Persist the canonical (normalized) verdict on both input paths, in a
   // local rather than mutating `options` (which programmatic callers may
   // reuse across calls).
-  let persistedVerdict = callerVerdict;
+  let persistedVerdict;
   if (overallVerdict !== undefined) {
     // Same redundant defense-in-depth as above: normalizeVerdict already
     // rejects non-strings.
@@ -830,12 +877,14 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     // with or without --judge-verdict. A --judge-verdict run can still fail
     // earlier: an unreadable, malformed, or incomplete-coverage judge
     // artifact throws its own error before this contradiction check runs.
-    if (callerVerdict !== normalizedOverallVerdict) {
+    if (callerVerdict !== null && callerVerdict !== normalizedOverallVerdict) {
       throw parseError(
         `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict (the severity verdict), which judge dispositions from --judge-verdict never alter; the posted review verdict is composed with the judge act list (ADR 0089)`,
       );
     }
   }
+  persistedVerdict = callerVerdict ?? normalizedOverallVerdict;
+  if (!persistedVerdict) throw parseError("the fan-in ledger carries no overallVerdict; pass --verdict");
   // Resolve + validate a candidate provenance JSON STRING through the exact
   // same path an explicit --provenance takes: resolve this round's dispatch
   // groups first (so a claimed `group` is cross-checked against the gate's
@@ -864,7 +913,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     return parseProvenanceJson(rawProvenanceJson, resolvedGroups, dispatchUnits);
   };
   let provenance;
-  if (options.provenance !== undefined) {
+  if (faninLedger === undefined && options.provenance !== undefined) {
     provenance = await resolveAndValidateProvenance(options.provenance);
   } else if (wrapperProvenance !== undefined && wrapperProvenance !== null) {
     // No explicit --provenance flag, but the --findings/--findings-file
@@ -888,7 +937,6 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // legitimately carries no provenance; the ledger still records executionMode),
   // and a gate with no mandatory angles configured has no coverage obligation to
   // prove either way.
-  const executionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
   if (executionMode === "fanout_fanin" && provenance === undefined) {
     const gateKey = GATE_CONFIG_KEY[options.gate];
     const { config } = await loadDevLoopConfigStrict({ repoRoot });
@@ -899,8 +947,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       );
     }
   }
-  if (options.emitPlan !== undefined) {
-    await verifyEmitPlanProvenance(options.emitPlan, provenance, {
+  if (options.emitPlan !== undefined || hasEmitPlan) {
+    await verifyEmitPlanProvenance(options.emitPlan ?? emitPlanPath, provenance, {
       repo: options.repo,
       pr: options.pr,
       gate: options.gate,
@@ -913,19 +961,6 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   const angleCoverage = provenance !== undefined
     ? await checkProvenanceAngleCoverage(provenance, options.gate, { repoRoot })
     : { warning: null };
-  // Default the ledger tmp root to the MAIN worktree: a coordinator
-  // runs the gate inside an ephemeral linked worktree, but the orchestrator's
-  // merge reads this ledger from the main checkout. Anchoring at the primary
-  // worktree lands it in the ONE stable per-repo location both reach, and it
-  // survives linked-worktree pruning. An explicit --tmp-root still wins.
-  const logPath = buildLogPath({
-    repo: options.repo,
-    pr: options.pr,
-    gate: options.gate,
-    headSha: options.headSha,
-    tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot),
-  });
-  const fullPath = path.resolve(repoRoot, logPath);
   const log = {
     repo: options.repo,
     pr: options.pr,

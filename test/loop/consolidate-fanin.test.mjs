@@ -4527,13 +4527,18 @@ test("issue 2511: a mixed-unit carry round-trips through consolidateGateFanin an
       async (dir) => {
         const ledger = await consolidateLedger(dir, { headSha, gate, repoRoot, repo, pr: 7, carriedAngles: ["dry"], carryForwardPlan: carried, resolvedAngles: ["dry", "kiss"] });
         assert.equal(ledger.overallVerdict, "clean");
-        const written = await writeGateFindingsLog({
-          repo, pr: 7, gate, headSha, verdict: "clean", findings: "[]", executionMode: "fanout_fanin", emitPlan,
-          tmpRoot: path.join(repoRoot, "tmp"),
-          provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [
+        // The writer reads provenance from the keyed fan-in ledger.
+        await writeFile(buildGateFaninLedgerPath({ repo, pr: 7, gate, headSha, tmpRoot: path.join(repoRoot, "tmp") }), JSON.stringify({
+          overallVerdict: "clean",
+          findings: [],
+          provenance: { distinctReviewers: 1, perAngle: [
             { angle: "kiss", reviewer: "fresh-reviewer" },
             { angle: "dry", reviewer: "prior-reviewer", carriedFromHead: STALE_HEAD, carriedVerdict: "clean" },
-          ] }),
+          ] },
+        }), "utf8");
+        const written = await writeGateFindingsLog({
+          repo, pr: 7, gate, headSha, verdict: "clean", findings: "[]", executionMode: "fanout_fanin",
+          tmpRoot: path.join(repoRoot, "tmp"),
         }, { repoRoot });
         assert.equal(written.ok, true);
         assert.deepEqual(written.log.provenance.perAngle.map((e) => e.angle).sort(), ["dry", "kiss"]);

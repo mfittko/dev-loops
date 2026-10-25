@@ -717,15 +717,9 @@ same ledger is also written to the keyed `<gate>-<headSha>.fanin-ledger.json`
 records of its gate at the head FAILS CLOSED. Fan-in refuses (exit 1, no write) an `--emit-plan` that is not the canonical emit-plan path (`buildGateEmitPlanPath`) for the resolved `--tmp-root`, and a verified `--emit-plan` lifts the over-budget `--ledger-out` requirement because the keyed ledger is the durable record. The gate-context bundle's
 `fanout.groups` stays authoritative. The plan names the freshly dispatched
 units whose pull receipts fan-in requires. On the sanctioned fan-out
-path, pass the same keyed plan to the later `write-gate-findings-log.mjs` call
-with `--emit-plan <path> --provenance <json>`. That shared provenance-write seam
-additionally verifies the full round key (`repo`, `pr`, `gate`, `headSha`) and
-that the caller-supplied fresh provenance corresponds exactly to the emitted
-units: the same angle set and group per angle, one reviewer identity per emitted
+path, `write-gate-findings-log.mjs` resolves the keyed emit plan and the keyed fan-in ledger under `--context-tmp-root` (default `tmp`) and needs no `--emit-plan`, `--provenance` or manual provenance step. With the emit plan present, an omitted `--execution-mode` records `fanout_fanin`, an explicit `inline_single_agent` is refused, and a missing fan-in ledger is refused (the refusal names `buildGateFaninLedgerPath`). With only the per-angle findings dir present, an omitted `--execution-mode` and `inline_single_agent` are both refused. In `fanout_fanin` mode the writer takes `provenance`, `verifiedItems` and `overallVerdict` from the fan-in ledger, never from `--findings-file`, and refuses an explicit `--provenance` that differs from the ledger's. The writer applies the correspondence guard of `GATE-EXEC-EMIT-PLAN-KEY` to the keyed plan: the full round key (`repo`, `pr`, `gate`, `headSha`), the same angle set and group per angle, one reviewer identity per emitted
 unit, and no under-reported `distinctReviewers` count. Carried rows are outside
-the fresh emit plan and remain governed by the carry-forward proof. For `write-gate-findings-log.mjs` the plan
-is a guard only: it never derives provenance or findings from the
-plan, and omitting it preserves the findings-log writer's current behavior.
+the fresh emit plan and remain governed by the carry-forward proof. An explicit `--emit-plan <path> --provenance <json>` remains valid for legacy callers, and the plan is a guard only: it never supplies findings.
 
 Merge the parallel reviewer findings into one consolidated fix plan with the
 sanctioned fan-in CLI:
@@ -1278,17 +1272,14 @@ node scripts/github/write-gate-findings-log.mjs \
   --pr <number> \
   --gate <draft_gate|pre_approval_gate> \
   --head-sha <sha> \
-  --verdict <clean|findings_present|blocked> \
   --spec-authority <identity-path> \
-  --emit-plan <emit-plan-path> \
-  --provenance <json> \
   --execution-mode fanout_fanin \
   --findings-file <path>   # or inline: --findings '[{"severity":"high","angle":"scope","summary":"...","files":["path.mjs"],"line":42,"disposition":"accepted-for-fix"}]'
 ```
 
 The conductor's fan-out round passes `--execution-mode fanout_fanin` on this call, activating the CLI's own write-time provenance fail-closed guard (distinct from `detect-checkpoint-evidence.mjs`'s read-time `requireFanoutProvenance` check described above).
 
-`--findings-file` reads the same JSON from a file (identical validation); use it for any non-trivial ledger so the array never rides a shell string, and pass the `consolidate-fanin` CLI's `--ledger-out <path>` wrapper (`{ overallVerdict, findings, verifiedItems?, provenance? }`; `provenance?` is present only with `--emit-plan`) straight to `--findings-file` on both `write-gate-findings-log.mjs` and `post-gate-findings.mjs`, with no hand extraction. `verifiedItems` is present only when non-empty: it holds the head-bound union of the `acceptance-criteria` and `pr-checklist` artifacts' `verifiedItems`, and the ledger carries it to the tick in step 5 of [Acceptance Criteria Verification](acceptance-criteria-verification.md). The sanctioned fan-out path also passes the emitter's keyed plan via `--emit-plan`, which requires `--provenance` and applies the correspondence guard owned by `GATE-EXEC-EMIT-PLAN-KEY` (additive for legacy/inline callers). `write-gate-findings-log.mjs` threads the wrapper's `overallVerdict` (the consolidator's computed verdict, never revised by the judge's `--judge-verdict` enrichment) into the durable ledger, so a `--verdict` that contradicts it is refused at write time and by `upsert-checkpoint-verdict.mjs` (#1616, `GATE-COMMENT-VERDICT-VALUES`), and the verdict is derived from the ledger by default (passing no `--verdict` is valid). `post-gate-findings.mjs` unwraps and ignores `overallVerdict`. Both tools derive a missing `disposition` (`deferred` for a `low` or `nit`; for a `question`, `needs-answer` when it is locatable and `deferred` otherwise, and `post-gate-findings.mjs` never carries `line`, so a question there resolves `deferred`).
+`--findings-file` reads the same JSON from a file (identical validation); use it for any non-trivial ledger so the array never rides a shell string, and pass the `consolidate-fanin` CLI's `--ledger-out <path>` wrapper (`{ overallVerdict, findings, verifiedItems?, provenance? }`; `provenance?` is present only with `--emit-plan`) straight to `--findings-file` on both `write-gate-findings-log.mjs` and `post-gate-findings.mjs`, with no hand extraction. `verifiedItems` is present only when non-empty: it holds the head-bound union of the `acceptance-criteria` and `pr-checklist` artifacts' `verifiedItems`, and the ledger carries it to the tick in step 5 of [Acceptance Criteria Verification](acceptance-criteria-verification.md). On the sanctioned fan-out path the writer reads provenance, `verifiedItems` and `overallVerdict` from the keyed fan-in ledger and applies the correspondence guard owned by `GATE-EXEC-EMIT-PLAN-KEY` to the keyed emit plan, so a `--findings-file` wrapper cannot override them. `write-gate-findings-log.mjs` threads the ledger/wrapper `overallVerdict` (the consolidator's computed verdict, never revised by the judge's `--judge-verdict` enrichment) into the durable ledger, so a `--verdict` that contradicts it is refused at write time and by `upsert-checkpoint-verdict.mjs` (#1616, `GATE-COMMENT-VERDICT-VALUES`), and with the keyed fan-in ledger present the verdict is derived from it (passing no `--verdict` is valid). `post-gate-findings.mjs` unwraps and ignores `overallVerdict`. Both tools derive a missing `disposition` (`deferred` for a `low` or `nit`; for a `question`, `needs-answer` when it is locatable and `deferred` otherwise, and `post-gate-findings.mjs` never carries `line`, so a question there resolves `deferred`).
 
 The log is written under `tmp/gate-findings/<repo-slug>/pr-<N>/<gate>-<headSha>.json`.
 Each log entry records the full disposition: severity, angle, summary, affected files, optional
