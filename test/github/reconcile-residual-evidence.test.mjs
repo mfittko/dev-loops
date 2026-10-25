@@ -206,9 +206,9 @@ async function acceptanceFixture(fn, harness = "pi", findings = [], continuation
       if (finding.file) finding.file = truncate(finding.file, 300);
     }
     const input = path.join(f.root, "findings-input.json");
-    const provenance = { distinctReviewers: f.plan.units.length, perAngle: f.plan.units.flatMap((u) => u.angles.map((angle) => ({ angle, dispatchId: u.executionIdentity, ...(u.group ? { group: u.group } : {}) }))) };
-    await put(input, { overallVerdict: consolidated.verdict, provenance, findings: toFindingsLogShape(projected).map((v) => ({ ...v, judgeDisposition: "reject", judgeRationale: "Outside this issue scope", ...JUDGE_PROSE })) });
-    const written = await writeGateFindingsLog({ ...TARGET, gate: "draft_gate", verdict: consolidated.verdict, findingsFile: input, executionMode: "fanout_fanin", emitPlan: f.planPath }, { repoRoot: f.root });
+    await put(input, { overallVerdict: consolidated.verdict, findings: toFindingsLogShape(projected).map((v) => ({ ...v, judgeDisposition: "reject", judgeRationale: "Outside this issue scope", ...JUDGE_PROSE })) });
+    await consolidateGateFanin({ findingsDir: path.dirname(f.resultPath), headSha: HEAD, gate: "draft_gate", emitPlan: f.planPath, tmpRoot: f.tmpRoot, repoRoot: f.root });
+    const written = await writeGateFindingsLog({ ...TARGET, gate: "draft_gate", verdict: consolidated.verdict, findingsFile: input, executionMode: "fanout_fanin" }, { repoRoot: f.root });
     const ledgerPath = path.resolve(f.root, written.path);
     if (resultTime) {
       const ledger = JSON.parse(await readFile(ledgerPath));
