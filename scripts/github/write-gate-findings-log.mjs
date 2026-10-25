@@ -61,7 +61,7 @@ Optional:
                                  writes stay exempt from the provenance requirement (they carry no provenance);
                                  the ledger still records the executionMode field either way, so it is no longer
                                  byte-identical to the pre-executionMode shape.
-  --emit-plan <path>             Optional keyed emit-fanout-dispatch plan. When supplied, requires --provenance and fails closed unless that caller-supplied provenance matches the plan's round key and emitted fresh units exactly. The plan is a guard only; it never supplies provenance or findings. Omitted preserves current behavior.
+  --emit-plan <path>             Legacy guard only. The keyed emit-fanout-dispatch plan under --context-tmp-root is verified automatically, so the sanctioned path omits this flag. When supplied, it fails closed unless the provenance matches the plan's round key and emitted fresh units exactly. An explicit --provenance must equal the keyed fan-in ledger provenance when that ledger exists. The plan is a guard only; it never supplies findings.
   --full-label                   The PR carries the gate:full label: dispatch groups resolve to one angle per unit, so any reviewer identity shared across fresh angles is rejected regardless of a declared "group" (mirrors write-gate-context.mjs's --full-label). Only meaningful when --provenance is supplied. Omitted (default false) keeps current behavior.
   --judge-verdict <path>         Path to the judge agent's verdict artifact (JSON). When supplied, the findings are
                                  enriched with the judge's relevance-based dispositions (judgeDisposition /
@@ -81,8 +81,11 @@ Optional:
                                  A path inside a linked (non-main) worktree is refused
                                  (exit 1, no file written): the ledger would be lost on
                                  prune and unreadable by the merge.
-  --context-tmp-root <path>      Root tmp directory containing this round's gate-context
-                                 bundle. Default: this worktree's tmp/. When
+  --context-tmp-root <path>      Root tmp directory for this round's artifacts: the gate-context
+                                 bundle, and also the keyed emit plan, per-angle findings dir
+                                 and fan-in ledger that decide execution mode and provenance
+                                 (omitting it on a relocated round records inline_single_agent).
+                                 Default: this worktree's tmp/. When
                                  write-gate-context.mjs and emit-fanout-dispatch.mjs used
                                  an explicit --tmp-root, pass that same path here. This
                                  does not change the ledger --tmp-root semantics above.
