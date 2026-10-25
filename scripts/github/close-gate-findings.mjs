@@ -181,8 +181,9 @@ async function detectContractViolatingDeferredStamps(threads, login, findings, l
   }
 }
 
-// The three reply-body prefixes THIS FILE ITSELF posts (dispositionMessage,
-// rejectCloseMessage below) — the single source
+// The reply-body prefixes this file posts are two (dispositionMessage and
+// rejectCloseMessage below); the third ("Resolved at gate close (") is kept only
+// to recognize historical unfiled-resolution replies. This is the single source
 // hasAnswerReply's automation-reply exclusion (ADR 0088) reads, so that
 // exclusion can never drift from what these builders actually emit.
 const GATE_DEFERRED_REPLY_PREFIX = "Deferred at gate close (";
@@ -297,10 +298,6 @@ async function selectDispositionTargets(threads, login, findings = [], lookup = 
       judgeDisposition: judgement.disposition,
       judgeReason: judgement.reason ?? null,
       judgeRationale: judgement.rationale ?? null,
-      // The finding's own operator-visibility signal, carried from the marker
-      // so runDispositionPass can FILE only the subset that clears the
-      // net-reduction bar, while resolving every selected thread here.
-      operatorVisible: marker.operatorVisible === true,
       body: thread.body,
     });
   }
@@ -364,8 +361,8 @@ async function runDispositionPass({ repo, pr, gate, headSha, tmpRoot, repoRoot, 
   // stamps already present on gate-authored threads (a subagent bypass).
   await detectContractViolatingDeferredStamps(threads, login, findings, { repo, pr, gate, headSha, tmpRoot, repoRoot });
   const targets = await selectDispositionTargets(threads, login, findings, { repo, pr, gate, headSha, tmpRoot, repoRoot });
-  // Every target is a judge-deferred thread, so every target is recorded on the
-  // deferral comment target and stamped disposition=deferred.
+  // Every target is a judge-deferred thread. Every non-nit target is recorded on the
+  // deferral comment target and stamped disposition=deferred; a nit is the one no-stamp thread.
   // A nit member of a deferred mixed cluster is never stamped or filed (GATE-EXEC-THREAD-DISPOSITION); it is resolved with the cluster rationale.
   const nitTargets = targets.filter((target) => isFileableDeferral(target.judgeDisposition) && target.severity === "nit");
   const fileableTargets = targets.filter((target) => isFileableDeferral(target.judgeDisposition) && target.severity !== "nit");

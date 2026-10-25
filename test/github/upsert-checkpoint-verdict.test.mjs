@@ -422,6 +422,12 @@ test("upsert refuses to post when the worktree config failed schema validation",
   }, { prefix: "dev-loops-upsert-invalid-config-" });
 });
 
+test("parseUpsertCheckpointVerdictCliArgs requires --next-action except on --gate review", () => {
+  const base = ["--repo", "owner/repo", "--pr", "7", "--head-sha", "a".repeat(40), "--verdict", "clean", "--findings-summary", "none", "--inline-reason", "test"];
+  assert.doesNotThrow(() => parseUpsertCheckpointVerdictCliArgs([...base, "--gate", "review"]));
+  assert.throws(() => parseUpsertCheckpointVerdictCliArgs([...base, "--gate", "draft_gate"]), /--next-action/);
+});
+
 test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments deterministically", () => {
   assert.throws(
     () => parseUpsertCheckpointVerdictCliArgs([]),

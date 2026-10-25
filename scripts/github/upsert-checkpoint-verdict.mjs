@@ -225,8 +225,8 @@ Required:
                                             interpret this finding" is
                                             distinguishable from "this finding is
                                             not blocking".
-  --next-action <text>                      (--gate review ignores the value and derives the next
-                                            action from the judge act list.)
+  --next-action <text>                      (Required except on --gate review, which derives the next
+                                            action from the judge act list and ignores any value.)
 Optional:
   --converged-json <path>                   draft_gate low/nit convergence
                                             (GATE-EXEC-LOW-NIT-CONVERGENCE):
@@ -920,7 +920,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   if (options.executionMode !== "inline_single_agent") {
     options.inlineReason = undefined;
   }
-  const missing = ["repo", "pr", "headSha", "verdict", "findingsSummary", "nextAction"]
+  const missing = ["repo", "pr", "headSha", "verdict", "findingsSummary", ...(options.gate === "review" ? [] : ["nextAction"])]
     .filter((key) => options[key] === undefined);
   // --findings-file and --findings-json each provide the findings body, so either
   // satisfies the findingsSummary requirement.

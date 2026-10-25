@@ -153,7 +153,7 @@ this skill dispatches the `review` agents directly.
    corresponds to the emitted units; for `write-gate-findings-log.mjs` the plan remains a guard, never a findings
    or provenance source. Then `node
    scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo> --pr <n>
-   --gate review --head-sha <sha> --findings-ledger <path> [--judge-spec-source <source> [--judge-unavailable-reason <reason>]] --next-action "<ignored>" --submit <mode> [--auto]
+   --gate review --head-sha <sha> --findings-ledger <path> [--judge-spec-source <source> [--judge-unavailable-reason <reason>]] --submit <mode> [--auto]
    [...]` posts the SINGLE visible PR review surface
    (`GATE-COMMENT-SINGLE-SURFACE`) straight from that ledger — no CI wait, no
    coordination-context read, no auto-resolve, no forbidden-action check
