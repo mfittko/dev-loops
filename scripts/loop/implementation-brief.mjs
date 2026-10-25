@@ -24,7 +24,7 @@ import { extractSection } from "@dev-loops/core/loop/markdown-sections";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import {
-  RULE_ID_SHAPE_RE,
+  RULE_ID_CITATION_RE,
   collectContractMarkdownFiles,
   extractRuleDefinitions,
 } from "../docs/validate-rule-ownership.mjs";
@@ -248,13 +248,20 @@ function nonGoalsFromBody(body) {
   const section = sections.find((entry) => NON_GOALS_PATTERNS[0].test(entry.name))
     ?? sections.find((entry) => NON_GOALS_PATTERNS.slice(1).some((re) => re.test(entry.name)));
   if (!section) return [];
+  // Descendant headings (`### Slice 1`) stay inside the section: gather their
+  // bodies up to the next same-level or higher-level heading.
+  const bodyLines = [...section.bodyLines];
+  for (const next of sections.slice(sections.indexOf(section) + 1)) {
+    if (next.level <= section.level) break;
+    bodyLines.push("", ...next.bodyLines);
+  }
   const items = [];
   // Markdown lazy continuation: the line right under a bullet, with no blank
   // line between them, still belongs to that item's paragraph. A blank line
   // ends the paragraph, so a following unindented line is standalone prose and
   // must not be absorbed into the last non-goal.
   let insideItemParagraph = false;
-  for (const line of stripFencedCode(section.bodyLines.join("\n")).split("\n")) {
+  for (const line of stripFencedCode(bodyLines.join("\n")).split("\n")) {
     if (line.trim() === "") {
       insideItemParagraph = false;
       continue;
@@ -285,12 +292,15 @@ const PATH_TOKEN_ESCAPE_RE = /[.*+?^${}()|[\]\\]/gu;
 function namesTouchedPath(text, relPath, kind) {
   const token = kind === "directory" ? `${relPath}/` : relPath;
   const escaped = token.replace(PATH_TOKEN_ESCAPE_RE, "\\$&");
-  if (new RegExp(`(?<![\\w/.-])${escaped}(?![\\w/-])(?!\\.[\\w/-])`, "u").test(text)) return true;
+  // Link destinations are excluded from the raw scan: `[f](src/a.mjs)` points
+  // at docs/decisions/src/a.mjs and is resolved only by the branch below.
+  const linkRe = /\]\(\s*(?:<([^<>\n]+)>|([^\s)]+))(?:\s+["'][^"'\n]*["'])?\s*\)/gu;
+  if (new RegExp(`(?<![\\w/.-])${escaped}(?![\\w/-])(?!\\.[\\w/-])`, "u").test(text.replace(linkRe, "]()"))) return true;
 
   // Markdown destinations name files relative to the ADR (docs/decisions), not
   // the repository root. Resolve them rather than loosening the token boundary:
   // ../src/a.mjs and ../../src/a.mjs.bak must not claim src/a.mjs.
-  for (const [, angled, plain] of text.matchAll(/\]\(\s*(?:<([^<>\n]+)>|([^\s)]+))(?:\s+["'][^"'\n]*["'])?\s*\)/gu)) {
+  for (const [, angled, plain] of text.matchAll(linkRe)) {
     const destination = (angled ?? plain).split(/[?#]/u)[0];
     if (!destination || /^(?:[A-Za-z][A-Za-z0-9+.-]*:|\/)/u.test(destination)) continue;
     if (kind === "directory" && !destination.endsWith("/")) continue;
@@ -370,7 +380,7 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
     // The brief and `loop spec-lint` must agree on what counts as a citation:
     // both read prose through the SAME fence-stripping helper, so an ID that
     // only appears inside a fenced example is not reported as cited.
-    for (const [token] of stripFencedCode(body).matchAll(RULE_ID_SHAPE_RE)) {
+    for (const [token] of stripFencedCode(body).matchAll(RULE_ID_CITATION_RE)) {
       if (registry.ids.has(token)) citedRuleIds.add(token);
     }
     for (const [relPath, kind] of resolved) {
@@ -382,7 +392,7 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
         if (registry.ids.has(definition.id)) citedRuleIds.add(definition.id);
       }
       const prose = MARKDOWN_FILE_RE.test(relPath) ? stripFencedCode(content) : content;
-      for (const [token] of prose.matchAll(RULE_ID_SHAPE_RE)) {
+      for (const [token] of prose.matchAll(RULE_ID_CITATION_RE)) {
         if (registry.ids.has(token)) citedRuleIds.add(token);
       }
     }

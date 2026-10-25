@@ -907,3 +907,31 @@ test("both the developer agent source and its generated mirror carry the brief i
     }
   }
 });
+
+test("a non-goals section organized under nested headings keeps every item", async () => {
+  const root = await fixtureRepo();
+  const body = `${MATRIX}\n## Non-goals\n\n### Slice 1\n\n- No reuse map.\n\n### Slice 2\n\n- No gate credit.\n\n## Other\n\n- Not a non-goal.\n`;
+  const brief = await buildImplementationBrief({ body, repoRoot: root });
+  assert.deepEqual(brief.nonGoals, ["No reuse map.", "No gate credit."]);
+});
+
+test("an ADR whose only link is a root-style destination does not claim the root file", async () => {
+  const root = await fixtureRepo({
+    decisions: { "0010-root-style.md": record({ title: "0010. Root style", body: "See [file](src/a.mjs)." }) },
+    files: { "src/a.mjs": "// A\n" },
+  });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
+  assert.deepEqual(brief.adrs, []);
+});
+
+test("a registered rule ID with one-character segments is cited from the spec and a touched file", async () => {
+  const id = "LOCAL-PHASE-ONE-AT-A-TIME";
+  const root = await fixtureRepo({
+    rules: { requiredRules: [{ id }], optOutRules: [] },
+    files: { "scripts/loop/consumer.mjs": `// Implements ${id}.\n` },
+  });
+  const fromSpec = await buildImplementationBrief({ body: `Cites ${id}.`, repoRoot: root });
+  assert.deepEqual(fromSpec.rules.map((r) => r.id), [id]);
+  const fromFile = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["scripts/loop/consumer.mjs"] });
+  assert.deepEqual(fromFile.rules.map((r) => r.id), [id]);
+});
