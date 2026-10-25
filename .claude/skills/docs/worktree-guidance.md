@@ -399,13 +399,14 @@ binary, or leading git global options (`-C`, `-c`, `--git-dir=`, `--work-tree=`)
 
 <!-- rule: WORKTREE-STALE-BASE-REMEDY -->
 `WORKTREE-STALE-BASE-REMEDY`: When `origin/<base>` has commits the PR branch lacks, the remedy is
-merge and re-check. Merge `origin/<base>` through `scripts/loop/resolve-pr-conflicts.mjs`, push,
-re-derive the spec identity and re-validate at the new head. Never rebase or force-push a pushed
-branch. Run `node scripts/loop/pre-write-remote-freshness-guard.mjs --base <base>` before
-validation, before push and before every gate dispatch. It exits nonzero with
+merge and re-check. The merge procedure is owned by `GATE-EXEC-BASE-REFRESH` in
+[Gate review sub-loop contract](gate-review-sub-loop-contract.md#base-refresh-before-a-gate-round).
+Run `cd <worktree> && dev-loops-run scripts/loop/pre-write-remote-freshness-guard.mjs --base <base>`
+before validation, before push and before every gate dispatch. It exits nonzero with
 `base_stale_integrate_first`, the newer commits and any `foreignFiles` (files that differ from
-`origin/<base>` only because the base moved). `write-gate-context.mjs --base` runs the same check
-and writes no artifact on a stale base.
+`origin/<base>` only because the base moved), with `base_fetch_failed` when the fetch fails or times
+out, or with `base_not_origin_branch` for a SHA, revision expression or non-origin remote ref.
+`write-gate-context.mjs --base` runs the same check and writes no artifact on a stale base.
 
 ## Fallback when worktrees are unavailable
 

@@ -261,19 +261,80 @@ test("checkBaseFreshness refuses a behind-base branch, names the newer commit an
   }
 });
 
-test("runCli --base exits nonzero when stale and rejects a call with neither --branch nor --base", async () => {
+test("runCli --base exits nonzero when the base is stale", async () => {
   const { root, clone } = await makeStaleBaseFixture({ advance: true });
+  const saved = process.exitCode;
   try {
     const sink = { write: () => {} };
-    const saved = process.exitCode;
     const result = await runCli(["--base", "main"], { stdout: sink, stderr: sink, cwd: clone });
     assert.equal(result.error, "base_stale_integrate_first");
     assert.equal(process.exitCode, 1);
+  } finally {
     process.exitCode = saved;
-    assert.throws(() => parseRemoteFreshnessGuardCliArgs([]), /--branch <name> or --base <name> is required/u);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness normalizes every origin spelling of the base and rejects non-branch values with a typed error", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: false });
+  try {
+    execFileSync("git", ["remote", "add", "upstream", "/nonexistent"], { cwd: clone });
+    for (const base of ["main", "origin/main", "refs/heads/main", "refs/remotes/origin/main"]) {
+      assert.deepEqual(await checkBaseFreshness({ base, cwd: clone }), { ok: true, status: "base_current", base: "main" }, base);
+    }
+    execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/release/1.0"], { cwd: clone });
+    assert.equal((await checkBaseFreshness({ base: "release/1.0", cwd: clone })).ok, true);
+    for (const base of ["HEAD~1", "refs/heads/refs/heads/main", "upstream/main", "a".repeat(40)]) {
+      const result = await checkBaseFreshness({ base, cwd: clone });
+      assert.equal(result.error, "base_not_origin_branch", base);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("checkBaseFreshness treats a hex-only branch name as a branch and fetches it", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: false });
+  try {
+    assert.equal((await checkBaseFreshness({ base: "beef", cwd: clone })).error, "base_fetch_failed");
+    execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/beef"], { cwd: clone });
+    assert.equal((await checkBaseFreshness({ base: "beef", cwd: clone })).ok, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness ignores an inherited GIT_DIR and reports the cwd repository", async () => {
+  const stale = await makeStaleBaseFixture({ advance: true });
+  const current = await makeStaleBaseFixture({ advance: false });
+  try {
+    const env = { ...process.env, GIT_DIR: path.join(current.clone, ".git"), GIT_WORK_TREE: current.clone };
+    const result = await checkBaseFreshness({ base: "main", cwd: stale.clone, env });
+    assert.equal(result.error, "base_stale_integrate_first");
+  } finally {
+    await rm(stale.root, { recursive: true, force: true });
+    await rm(current.root, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness maps a hung fetch to base_fetch_failed within the timeout", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "freshness-hang-"));
+  try {
+    const stub = path.join(dir, "git");
+    await writeFile(stub, "#!/bin/sh\ncase \"$1\" in fetch) exec sleep 30;; *) exit 0;; esac\n");
+    await chmod(stub, 0o755);
+    const started = Date.now();
+    const result = await checkBaseFreshness({ base: "main", cwd: dir, gitCommand: stub, fetchTimeoutMs: 200 });
+    assert.equal(result.error, "base_fetch_failed");
+    assert.match(result.message, /timed out/u);
+    assert.ok(Date.now() - started < 10_000);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseRemoteFreshnessGuardCliArgs rejects a call with neither --branch nor --base", () => {
+  assert.throws(() => parseRemoteFreshnessGuardCliArgs([]), /--branch <name> or --base <name> is required/u);
 });
 
 test("checkBaseFreshness returns a typed base_fetch_failed error when the fetch fails", async () => {

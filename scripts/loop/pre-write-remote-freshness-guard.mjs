@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue, runCommand } from "../_cli-primitives.mjs";
-import { parseArgs } from "node:util";
+import { execFile } from "node:child_process";
+import { parseArgs, promisify } from "node:util";
+import { isBranchName, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: pre-write-remote-freshness-guard.mjs (--branch <name> | --base <name>)\nRefresh remote branch state before starting local file writes (--branch), or check that HEAD contains the current origin/<base> (--base; exits nonzero with base_stale_integrate_first when stale).\n\n${JQ_OUTPUT_USAGE}`;
+const USAGE = `Usage: pre-write-remote-freshness-guard.mjs (--branch <name> | --base <name>)\nRefresh remote branch state before starting local file writes (--branch), or check that HEAD contains the current origin/<base> (--base; exits nonzero with base_stale_integrate_first when stale, base_fetch_failed when the fetch fails or times out, or base_not_origin_branch for a SHA, revision expression or non-origin remote ref).\n\n${JQ_OUTPUT_USAGE}`;
+const execFileAsync = promisify(execFile);
 const parseError = buildParseError(USAGE);
 const lines = (s) => s.split(/\r?\n/u).map((l) => l.trim()).filter((l) => l.length > 0);
 
@@ -13,14 +16,24 @@ const lines = (s) => s.split(/\r?\n/u).map((l) => l.trim()).filter((l) => l.leng
  * commits on it that HEAD lacks. `foreignFiles` are files whose content differs from origin/<base>
  * (two-dot) but that the branch never touched (three-dot), the stale-base signature.
  */
-export async function checkBaseFreshness({ base, cwd = process.cwd(), env = process.env, gitCommand = "git" }) {
-  const git = async (args) => lines((await runCommand(gitCommand, args, { cwd, env })).stdout);
-  try {
-    await runCommand(gitCommand, ["fetch", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`], { cwd, env });
-  } catch (error) {
-    return { ok: false, error: "base_fetch_failed", base, message: error?.message ?? String(error) };
+export async function checkBaseFreshness({ base: rawBase, cwd = process.cwd(), env = process.env, gitCommand = "git", fetchTimeoutMs = 60_000 }) {
+  // Scrub the git-dir overrides so every spawn targets cwd, never an inherited repository.
+  const gitEnv = { ...env, GIT_TERMINAL_PROMPT: "0" };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"]) delete gitEnv[key];
+  const git = async (args) => lines((await runCommand(gitCommand, args, { cwd, env: gitEnv })).stdout);
+  const base = normalizeBaseBranch(rawBase);
+  const notBranch = (message) => ({ ok: false, error: "base_not_origin_branch", base: rawBase, message });
+  if (!isBranchName(base, { allowSlash: true }) || base.startsWith("refs/")) return notBranch(`${rawBase} is not an origin branch name`);
+  if (base.includes("/")) {
+    const remote = base.split("/")[0];
+    if (remote !== "origin" && (await git(["remote"]).catch(() => [])).includes(remote)) return notBranch(`${rawBase} names the remote ${remote}, not an origin branch`);
   }
-  const newerCommits = await git(["log", `HEAD..origin/${base}`, "--oneline"]);
+  try {
+    await execFileAsync(gitCommand, ["fetch", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`], { cwd, env: gitEnv, timeout: fetchTimeoutMs });
+  } catch (error) {
+    return { ok: false, error: "base_fetch_failed", base, message: error?.killed ? `git fetch timed out after ${fetchTimeoutMs}ms` : (error?.stderr?.trim() || error?.message || String(error)) };
+  }
+  const newerCommits = await git(["log", `HEAD..origin/${base}`, "--no-decorate", "--no-show-signature", "--format=%h %s"]);
   if (newerCommits.length === 0) return { ok: true, status: "base_current", base };
   const touched = new Set(await git(["diff", "--name-only", `origin/${base}...HEAD`]));
   const foreignFiles = (await git(["diff", "--name-only", `origin/${base}..HEAD`])).filter((f) => !touched.has(f));
