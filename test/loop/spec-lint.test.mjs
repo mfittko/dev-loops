@@ -421,6 +421,12 @@ test("ordinary tokens with a one-character later segment are not unknown rule id
   assert.deepEqual(result.findings, []);
 });
 
+test("an unregistered id with a one-character later segment reports its rule-shaped prefix", async () => {
+  const root = await fixtureRepo({ rules: { requiredRules: [], optOutRules: [] } });
+  const result = await lint({ body: "Cites FOO-BAR-BAZ-2 and LOCAL-PHASE-ONE-AT-A-TIMES.", repoRoot: root });
+  assert.deepEqual(result.findings.map((f) => [f.kind, f.id]), [["unknown_rule_id", "FOO-BAR-BAZ"], ["unknown_rule_id", "LOCAL-PHASE-ONE-AT"]]);
+});
+
 test("an unregistered rule-shaped id is still an unknown rule id", async () => {
   const root = await fixtureRepo({ rules: { requiredRules: [], optOutRules: [] } });
   const result = await lint({ body: "Cites FOO-BAR-BAZ.", repoRoot: root });

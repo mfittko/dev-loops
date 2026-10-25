@@ -101,11 +101,14 @@ export function lintRuleIds(body, knownIds) {
   const seen = new Set();
   const findings = [];
   for (const [token] of stripFencedCode(body).matchAll(RULE_ID_CITATION_RE)) {
-    if (seen.has(token)) continue;
-    seen.add(token);
-    // A citation-only form (one-character later segment) counts only when registered; unregistered, it is not rule-shaped (GLM-5, STEP-1).
-    if (knownIds.has(token) || ![...token.matchAll(RULE_ID_SHAPE_RE)].some((m) => m[0] === token) || NON_RULE_TOKENS.has(token) || FORWARD_RULE_REFERENCES.has(token) || /^ADR-\d+$/.test(token)) continue;
-    findings.push({ kind: "unknown_rule_id", id: token, detail: { reason: "not in requiredRules or optOutRules of skills/docs/required-rules.json" } });
+    // A registered token is known. An unregistered one reports the rule-shaped matches inside it (GLM-5 and STEP-1 hold none; FOO-BAR-BAZ-2 holds FOO-BAR-BAZ).
+    if (knownIds.has(token)) continue;
+    for (const [id] of token.matchAll(RULE_ID_SHAPE_RE)) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (knownIds.has(id) || NON_RULE_TOKENS.has(id) || FORWARD_RULE_REFERENCES.has(id) || /^ADR-\d+$/.test(id)) continue;
+      findings.push({ kind: "unknown_rule_id", id, detail: { reason: "not in requiredRules or optOutRules of skills/docs/required-rules.json" } });
+    }
   }
   return findings;
 }

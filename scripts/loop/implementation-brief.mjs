@@ -67,10 +67,9 @@ on-disk entry names must match case-exactly, so two checkouts of one tree agree.
 "adrTripwirePaths" is the path-based ADR-tripwire candidate set: the touched
 paths whose shape matches the tripwire constants (a skills/docs/*-contract.md
 doc, packages/core/src/config/extension-defaults.yaml, a .devloops* config
-source). The tripwire's content-based triggers - a rule-modality (MUST/SHOULD/MAY)
-reversal in a touched skills/docs markdown file, an unresolvable rule or devloops
-scan, a standing-authorizations change and commit-msg-guard loosening - are NOT
-projected here; the tripwire evaluates those against the diff.
+source). The tripwire's content-based triggers (the trigger classes in
+scripts/loop/check-adr-tripwire.mjs) are NOT projected here; the tripwire evaluates
+those against the diff.
 "nonGoals" joins a wrapped continuation line into its item and accepts numbered
 list markers. "findings" carries missing_decision_records when the checkout has
 no docs/decisions directory and missing_adr_record for a cited ADR with no record.
