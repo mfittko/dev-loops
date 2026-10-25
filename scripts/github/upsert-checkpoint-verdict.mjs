@@ -200,7 +200,8 @@ Required:
                                             --findings-summary/--findings-file for
                                             the rendered body. Intended for
                                             --execution-mode fanout_fanin.
-                                            --verdict clean is REJECTED when these
+                                            --verdict clean is REJECTED, for a round that
+                                            is not fully judged only, when these
                                             per-angle findings carry a finding at a
                                             severity in the gate's
                                             blockCleanOnFindingSeverities — regardless

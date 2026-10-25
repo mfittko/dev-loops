@@ -1894,6 +1894,21 @@ test("#1846 guard: a deferred stamp on a nit thread the judge did not dispose de
   ));
 });
 
+test("severity floor: a deferred stamp on a nit is refused even when the ledger carries a judge defer", async () => {
+  const nit = deferEvidence("floor nit", "nit");
+  const stamped = `${buildFindingMarker({ fp: nit.fp, severity: "nit", angle: "perf", round: 1, disposition: "deferred", issue: 42 })}\n**nit** (\`perf\`): floor nit`;
+  const thread = threadNode({ id: "THREAD_NIT_FLOOR", path: "src/floor.mjs", line: 4, commentId: 9009, body: stamped });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [nit.finding] }), (ledgerPath) => withGhStub(
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      await assert.rejects(
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
+        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=nit.*reason=not-judge-deferred/s,
+      );
+    },
+  ));
+});
+
 // #1846 guard: a disposition=deferred stamp on a low with NO operatorVisible
 // signal (or ov absent/false) on its own marker is rejected the same way — a
 // subagent that manually stamped a non-visible low bypassing

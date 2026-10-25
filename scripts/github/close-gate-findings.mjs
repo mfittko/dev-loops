@@ -153,7 +153,9 @@ async function detectContractViolatingDeferredStamps(threads, login, findings, l
     const marker = parseFindingMarker(thread.body);
     if (!marker) continue;
     if (marker.disposition !== "deferred") continue;
-    const notJudgeDeferred = !(await resolveThreadDisposition("defer", { fp: marker.fp, threadBody: thread.body, findings, ...lookup }));
+    // Severity floor: a nit, high or question is never deferred, whatever the ledger says.
+    const belowFloor = marker.severity === "nit" || marker.severity === "high" || marker.severity === "question";
+    const notJudgeDeferred = belowFloor || !(await resolveThreadDisposition("defer", { fp: marker.fp, threadBody: thread.body, findings, ...lookup }));
     const missingIssue = !Number.isInteger(marker.issue) || marker.issue <= 0;
     if (notJudgeDeferred || missingIssue) {
       violations.push({
