@@ -65,7 +65,7 @@ Purpose:
 
 Boundary note:
 - `draft_gate` governs only the draft -> ready-for-review boundary for the reviewed head
-- a clean verdict requires no findings at any severity in the gate's `blockCleanOnFindingSeverities` (resolved from config via `resolveGateConfig(config, "draft").blockCleanOnFindingSeverities`)
+- a clean verdict on a fully judged round requires an empty judge act list, and on a round with an unjudged finding requires no finding at a severity in the gate's `blockCleanOnFindingSeverities` (resolved from config via `resolveGateConfig(config, "draft").blockCleanOnFindingSeverities`)
 - `gates.draft.requireCi=false` does **not** relax `pre_approval_gate` — that boundary has its own separate `gates.preApproval.requireCi` knob (default `true`). A repo may opt the pre-approval boundary out independently; this does not waive the sanctioned merge wrapper's green-CI precondition in [Merge Preconditions](merge-preconditions.md#required-before-merge).
 
 ### 2. `pre_approval_gate`
@@ -77,7 +77,7 @@ This gate uses review angles resolved from config (`resolveGateAngles(config, "p
 Boundary note:
 - `pre_approval_gate` governs only final approval readiness for the reviewed head
 - CI precondition: `resolveGateConfig(config, "preApproval").requireCi` (default `true`) requires green current-head CI at this gate boundary; `gates.preApproval.requireCi: false` opts this boundary out. Gate readiness is not merge permission: [Merge Preconditions](merge-preconditions.md#required-before-merge) still governs the merge wrapper.
-- a clean verdict requires no findings at any severity in the gate's `blockCleanOnFindingSeverities` (resolved from config via `resolveGateConfig(config, "preApproval").blockCleanOnFindingSeverities`)
+- a clean verdict on a fully judged round requires an empty judge act list, and on a round with an unjudged finding requires no finding at a severity in the gate's `blockCleanOnFindingSeverities` (resolved from config via `resolveGateConfig(config, "preApproval").blockCleanOnFindingSeverities`)
 - non-draft PRs do not need *per-head* `draft_gate` evidence to enter the post-draft review / `pre_approval_gate` lifecycle — the one-time draft -> ready transition record still applies; a non-draft PR with no clean `draft_gate` evidence at all fails closed and must reconcile that missing evidence first (see the current-head `draft_gate` evidence bullet under [Fail-closed rules](#fail-closed-rules))
 
 ## Lifecycle states

@@ -6,7 +6,7 @@ import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, pullWorkOrder, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
-import { buildGateContextPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import { seedJudgeSources } from "./_judge-delivery-fixture.mjs";
@@ -255,6 +255,17 @@ test("J4: a colliding execution index entry for the next identity refuses the em
   });
 });
 
+test("J1: --round must be a positive integer, else the emission refuses as invalid_round", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    for (const round of [0, -1, 1.5, Number.NaN]) {
+      await assert.rejects(emitJudgeWorkOrder({ ...sources, round }), (err) => err.refusal === "invalid_round" && /positive integer/.test(err.message));
+    }
+    const plan = await emitJudgeWorkOrder({ ...sources, round: 2 });
+    assert.equal(plan.workOrder.round, 2);
+  });
+});
+
 test("J1: a truncated identity stamp or a partial checkedCriteria refuses", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
@@ -315,5 +326,75 @@ test("J6: a corrupt plan at another head is skipped; a corrupt own plan refuses 
     await writeFile(current.planPath, "{ truncated");
     assert.equal(refusal(pull(current, root)), "local_materialization_integrity_failure");
     assert.equal(pull(await emitJudgeWorkOrder(sources), root).status, 0);
+  });
+});
+
+test("the work order carries the round and the medium fix window as judge inputs and states the cluster prose schema", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const plan = await emitJudgeWorkOrder({ ...sources, round: 4 });
+    assert.equal(plan.workOrder.round, 4);
+    assert.equal(plan.workOrder.mediumFixWindow, 3);
+    const text = await readFile(plan.promptPath, "utf8");
+    assert.match(text, /Dispose each cluster once/);
+    assert.match(text, /No rule defers a finding from severity or round alone/);
+    assert.match(text, /a cluster that contains a `high` or a `question`, and an all-`nit` cluster, is never deferred/);
+    assert.match(text, /`title`.*`detail`.*`fix`.*`reason`/s);
+    assert.match(text, /no em dashes and no arrows/);
+    assert.equal((await emitJudgeWorkOrder(sources)).workOrder.round, 1);
+  });
+});
+
+test("an omitted --round derives from the gate's local ledgers, so a second head emits round 2", async () => {
+  await withDir(async (root) => {
+    const first = await seed(root, { headSha: "e".repeat(40) });
+    const ledger = (headSha) => path.join(root, buildLogPath({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha, tmpRoot: "tmp" }));
+    // The judge runs before the current head's ledger exists: only the prior head's ledger is on disk.
+    await mkdir(path.dirname(ledger(HEAD)), { recursive: true });
+    await writeFile(ledger(HEAD), "{}");
+    assert.equal((await emitJudgeWorkOrder(first)).workOrder.round, 2);
+    assert.equal((await emitJudgeWorkOrder({ ...(await seed(root)), round: 5 })).workOrder.round, 5, "an explicit --round wins");
+  });
+});
+
+test("a configured mediumFixWindow, or only the deprecated alias, reaches a draft_gate work order", async () => {
+  for (const [yaml, expected] of [
+    ["version: 1\ngates:\n  draft:\n    mediumFixWindow: 2\n", 2],
+    ["version: 1\ngates:\n  draft:\n    worthFixingNowFixWindow: 5\n", 5],
+    ["version: 1\ngates:\n  preApproval:\n    mediumFixWindow: 4\n", 3],
+  ]) {
+    await withDir(async (root) => {
+      await writeFile(path.join(root, ".devloops"), yaml, "utf8");
+      const plan = await emitJudgeWorkOrder(await seed(root, { gate: "draft_gate" }));
+      assert.equal(plan.workOrder.mediumFixWindow, expected, yaml);
+    });
+  }
+});
+
+test("J1: the --round CLI accepts only /^[1-9][0-9]*$/ and carries it to the work order", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const run = async (extra) => {
+      const out = [];
+      const write = process.stdout.write;
+      process.stdout.write = (chunk) => (out.push(String(chunk)), true);
+      try {
+        await main(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-file", sources.findingsFile,
+          "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...extra], { cwd: root });
+      } finally {
+        process.stdout.write = write;
+      }
+      return JSON.parse(out.join(""));
+    };
+    for (const round of ["4", "12"]) {
+      const body = await run(["--round", round]);
+      assert.equal(body.ok, true, round);
+      const plan = JSON.parse(await readFile(body.planPath, "utf8"));
+      assert.equal(plan.workOrder.round, Number(round));
+    }
+    for (const round of ["", "0", "0x4", " 4 ", "1e0", "abc"]) {
+      const body = await run(["--round", round]);
+      assert.equal(body.refusal, "invalid_round", JSON.stringify(round));
+    }
   });
 });

@@ -38,6 +38,12 @@ After async dispatch, follow [Async dispatch posture](../docs/main-agent-contrac
 
 ### Resolve authoritative state
 
+For an initial Codex conductor spawn, MAIN first consumes the config-only
+`gate resolve-role --conductor --harness codex` result and applies its native
+overrides per [Codex coordinator dispatch](../docs/main-agent-contract.md#codex-coordinator-dispatch).
+Startup remains the child's first workflow action; configuration/native refusal
+stops dispatch without an inherited replacement.
+
 > Under the Claude Code harness the dev-loop runs as a single agent: run these steps directly — no separate async-subagent dispatch. The coordinator has an opt-in read-only boundary for tracked repo files and code-verification/build commands (`DEVLOOPS_COORDINATOR_READONLY=1`, enforced by the guard hooks). See [Main Agent Contract](../docs/main-agent-contract.md).
 
 <!-- pi-only -->

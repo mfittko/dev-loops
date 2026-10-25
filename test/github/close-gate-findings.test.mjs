@@ -352,6 +352,7 @@ test("closeGateFindings posts no review and no comment of its own: a round with 
         round: 1,
         deferredResolved: 0,
         rejectClosed: 0,
+        evidenceOnlyClosed: 0,
         unresolvedGateThreadCount: 0,
         foldedFiled: 0,
       });
@@ -516,73 +517,84 @@ test("round source (C): real <gate>-*.json findings-log files under --tmp-root c
 
 test("buildMeritRationale requires per-finding engagement, not severity-only closure text", () => {
   const body = `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity: "low", angle: "correctness", round: 1 })}\n**low** (\`correctness\`): wrong guidance reaches operators`;
-  const rationale = buildMeritRationale({ body, severity: "low", operatorVisible: false, round: 1, mediumFixWindow: 3 });
+  const rationale = buildMeritRationale({ body, judgeReason: "Out of scope for this PR." });
   assert.match(rationale, /^Examined on merits:/);
   assert.match(rationale, /wrong guidance reaches operators/);
   assert.match(rationale, /scope and acceptance criteria/);
   assert.throws(
-    () => buildMeritRationale({ body: "<!-- dev-loops:finding aaaaaaaaaaaaaaaa severity=low angle=correctness round=1 -->", severity: "low", operatorVisible: false, round: 1, mediumFixWindow: 3 }),
+    () => buildMeritRationale({ body: "<!-- dev-loops:finding aaaaaaaaaaaaaaaa severity=low angle=correctness round=1 -->", judgeReason: "x" }),
     /finding summary/,
   );
 });
 
-test("buildMeritRationale pins each severity/visibility reason branch by content (#1882)", () => {
-  const bodyFor = (severity, summary = "wrong guidance reaches operators") =>
-    `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity, angle: "correctness", round: 1 })}\n**${severity}** (\`correctness\`): ${summary}`;
-  // medium: names the fix window it aged out of
-  assert.match(
-    buildMeritRationale({ body: bodyFor("medium"), severity: "medium", operatorVisible: false, round: 4, mediumFixWindow: 3 }),
-    /remained open past the round-3 fix window and no in-scope fix was selected/,
-  );
-  // low + operator-visible: tracking preserves the operator-visible concern
-  assert.match(
-    buildMeritRationale({ body: bodyFor("low"), severity: "low", operatorVisible: true, round: 1, mediumFixWindow: 3 }),
-    /tracking preserves the operator-visible concern/,
-  );
-  // low + not visible: below the operator-visibility filing bar
-  assert.match(
-    buildMeritRationale({ body: bodyFor("low"), severity: "low", operatorVisible: false, round: 1, mediumFixWindow: 3 }),
-    /does not clear the operator-visibility filing bar/,
-  );
-  // nit / default: cosmetic
-  assert.match(
-    buildMeritRationale({ body: bodyFor("nit"), severity: "nit", operatorVisible: false, round: 1, mediumFixWindow: 3 }),
-    /it is cosmetic and does not warrant a fixer cycle or tracked follow-up/,
-  );
+test("buildMeritRationale states the judge's reason, else its rationale, never a severity or round text", () => {
+  const bodyFor = (severity) =>
+    `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity, angle: "correctness", round: 1 })}\n**${severity}** (\`correctness\`): wrong guidance reaches operators`;
+  for (const severity of ["medium", "low", "nit"]) {
+    assert.match(buildMeritRationale({ body: bodyFor(severity), judgeReason: "Belongs to the follow-up.", judgeRationale: "ignored" }), /; Belongs to the follow-up\.$/);
+    assert.match(buildMeritRationale({ body: bodyFor(severity), judgeRationale: "Only the rationale." }), /; Only the rationale\.$/);
+    assert.match(buildMeritRationale({ body: bodyFor(severity) }), /the judge recorded no reason text/);
+  }
+  assert.doesNotMatch(buildMeritRationale({ body: bodyFor("medium"), judgeReason: "r" }), /fix window|cosmetic|filing bar/);
 });
 
 test("buildMeritRationale collapses embedded double quotes so the wrapped summary stays legible (#1882)", () => {
   const body = `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity: "low", angle: "correctness", round: 1 })}\n**low** (\`correctness\`): the "foo" bug bites`;
-  const rationale = buildMeritRationale({ body, severity: "low", operatorVisible: false, round: 1, mediumFixWindow: 3 });
+  const rationale = buildMeritRationale({ body, judgeReason: "r" });
   assert.match(rationale, /"the 'foo' bug bites"/);
   assert.doesNotMatch(rationale, /"foo"/);
 });
 
-const wfnBody = (fp, round = 1) => `${buildFindingMarker({ fp, severity: "worth-fixing-now", angle: "perf", round })}\n**worth-fixing-now** (\`perf\`): stale cache not invalidated`;
+// A judge defer is authorized by ledger evidence only (the rendered suffix ends the untrusted summary line), so a deferred fixture carries a ledger finding and uses its real fingerprint.
+function deferEvidence(summary, severity = "high") {
+  const finding = { severity, angle: "perf", summary, judgeDisposition: "defer", followUpDraft: { title: "t", body: "b" } };
+  return { finding, fp: fingerprintFinding(finding) };
+}
+const WFN = deferEvidence("stale cache not invalidated");
+const VLOW = deferEvidence("wrong guidance a conductor executes");
+const GOVREF = deferEvidence("mirror the guard fix for #1951 governing issue");
+const MEDCFG = deferEvidence("missing schema validation");
+const BAD = deferEvidence("malformed target");
+const CASING = deferEvidence("casing nit");
+const CASING_B = deferEvidence("casing nit B");
+const QUOTE = deferEvidence("the fix must stamp disposition=deferred before resolving");
+const STALE = deferEvidence("stale cache");
+const STALE_A = deferEvidence("stale cache A");
+const STALE_C = deferEvidence("stale cache C");
+const SHORT = deferEvidence("short body");
+const NPLUS1 = deferEvidence("n+1 query");
+const LONG = deferEvidence(`${"x".repeat(220)}`);
+const wfnBody = (fp = WFN.fp, round = 1, judgeDisposition = "defer") => `${buildFindingMarker({ fp, severity: "worth-fixing-now", angle: "perf", round })}\n**worth-fixing-now** (\`perf\`): stale cache not invalidated${judgeDisposition ? ` — judge: ${judgeDisposition}` : ""}`;
 
-function openWfnThread({ commentId, fp = "1111111111111111", id = "THREAD_D", author = AUTHENTICATED_LOGIN } = {}) {
-  return threadNode({ id, isResolved: false, path: "src/cache.mjs", line: 9, commentId, body: wfnBody(fp), author });
+function openWfnThread({ commentId, fp = WFN.fp, id = "THREAD_D", author = AUTHENTICATED_LOGIN, judgeDisposition = "defer" } = {}) {
+  return threadNode({ id, isResolved: false, path: "src/cache.mjs", line: 9, commentId, body: wfnBody(fp, 1, judgeDisposition), author });
 }
 
-test("an open worth-fixing-now thread stays unresolved AT ROUND 3 EXACTLY (the fix-window boundary)", async () => {
-  const thread = openWfnThread({ commentId: 6002 });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
-    roundEntries({ issueComments: roundHistory("draft_gate", 3), threads: [thread] }),
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.round, 3);
-      assert.equal(result.deferredResolved, 0);
-    },
-  ));
-});
+// AC21: no deferral is stamped from severity or round alone. At round 4, past
+// the default medium fix window, an unjudged medium stays open and a judge
+// `act` medium stays an open act thread; only a judge `defer` is deferred.
+for (const judgeDisposition of [null, "act"]) {
+  test(`a round-4 medium thread with judgeDisposition ${judgeDisposition ?? "unjudged"} is never deferred`, async () => {
+    const thread = openWfnThread({ commentId: 6002, judgeDisposition });
+    await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+      roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+        assert.equal(result.round, 4);
+        assert.equal(result.deferredResolved, 0);
+        assert.equal(result.unresolvedGateThreadCount, 1);
+      },
+    ));
+  });
+}
 
-test("an open worth-fixing-now thread is replied-to + resolved FROM ROUND 4", async () => {
+test("a judge-defer thread is replied-to + resolved (round 4 here, though the round never decides)", async () => {
   const thread = openWfnThread({ commentId: 6002 });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [WFN.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
       ...deferralCommentEntries(9500),
-      getReviewCommentEntry(6002, wfnBody("1111111111111111")),
+      getReviewCommentEntry(6002, wfnBody()),
       patchReviewCommentEntry(6002),
       postReplyEntry(6002, { id: 7001 }),
       resolveThreadEntry("THREAD_D"),
@@ -596,42 +608,13 @@ test("an open worth-fixing-now thread is replied-to + resolved FROM ROUND 4", as
   ));
 });
 
-// #1846: a plain "nice-to-have" (low) marker carries no operatorVisible
-// signal — the conservative default — so it is resolved-with-rationale
-// in-thread, NEVER filed: no GET/PATCH round-trip, no deferral comment. A
-// regression that files it would overflow the stub (no
-// deferralCommentEntries/getReviewCommentEntry/
-// patchReviewCommentEntry here) and fail the run.
-test("an unresolved nice-to-have thread with no operatorVisible signal is resolved in-thread, NOT filed", async () => {
-  const niceToHaveBody = `${buildFindingMarker({ fp: "7777777777777777", severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): casing nit`;
-  const thread = threadNode({ id: "THREAD_DEFER", path: "src/naming.mjs", line: 4, commentId: 6200, body: niceToHaveBody });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
-    [
-      ...roundEntries({ threads: [thread] }),
-      {
-        assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6200/replies`, "--input", "-"],
-        assertStdinIncludes: ["severity low", "this low finding carries no operator-visibility signal", "net-reduction disposition policy"],
-        stdout: `${JSON.stringify({ id: 7100, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7100` })}\n`,
-      },
-      resolveThreadEntry("THREAD_DEFER"),
-    ],
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.round, 1);
-      assert.equal(result.deferredResolved, 1);
-      assert.equal(result.unresolvedGateThreadCount, 0);
-      assert.equal(result.followUpIssueNumber, undefined, "an all-unfileable round creates no follow-up issue");
-    },
-  ));
-});
-
 // #1846: an OPERATOR-VISIBLE low (operatorVisible: true on the finding, ov=1
 // on the marker) is unchanged from the pre-#1846 low behavior — it still
 // files to the round's ONE batched deferral comment.
 test("an unresolved OPERATOR-VISIBLE low thread is replied-to + resolved AND filed to the deferral comment", async () => {
-  const visibleLowBody = `${buildFindingMarker({ fp: "6666666666666666", severity: "low", angle: "correctness", round: 1, operatorVisible: true })}\n**low** (\`correctness\`): wrong guidance a conductor executes`;
+  const visibleLowBody = `${buildFindingMarker({ fp: VLOW.fp, severity: "low", angle: "correctness", round: 1, operatorVisible: true })}\n**low** (\`correctness\`): wrong guidance a conductor executes — judge: defer`;
   const thread = threadNode({ id: "THREAD_VISIBLE_LOW", path: "src/x.mjs", line: 4, commentId: 6210, body: visibleLowBody });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [VLOW.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ threads: [thread] }),
       ...deferralCommentEntries(9500),
@@ -661,11 +644,11 @@ test("an unresolved OPERATOR-VISIBLE low thread is replied-to + resolved AND fil
 // re-throw on every retry. The stub deliberately provides NO get/patch/reply for
 // the malformed comment id 9301: a regression that mutates it first would fail.
 test("#1882: a malformed fileable target is isolated (no partial stamp) and does not abort the well-formed batch", async () => {
-  const okBody = `${buildFindingMarker({ fp: "eeee0000eeee0000", severity: "low", angle: "correctness", round: 1, operatorVisible: true })}\n**low** (\`correctness\`): wrong guidance a conductor executes`;
-  const badBody = `${buildFindingMarker({ fp: "ffff0000ffff0000", severity: "low", angle: "correctness", round: 1, operatorVisible: true })}\nthis line carries no parseable finding shape at all`;
+  const okBody = `${buildFindingMarker({ fp: VLOW.fp, severity: "low", angle: "correctness", round: 1, operatorVisible: true })}\n**low** (\`correctness\`): wrong guidance a conductor executes — judge: defer`;
+  const badBody = `${buildFindingMarker({ fp: BAD.fp, severity: "low", angle: "correctness", round: 1, operatorVisible: true })}\n**low** · correctness · judge: defer\nthis line carries no parseable finding shape at all`;
   const okThread = threadNode({ id: "THREAD_OK", path: "src/x.mjs", line: 4, commentId: 9300, body: okBody });
   const badThread = threadNode({ id: "THREAD_BAD", path: "src/y.mjs", line: 4, commentId: 9301, body: badBody });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [VLOW.finding, BAD.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ threads: [okThread, badThread] }),
       ...deferralCommentEntries(9500),
@@ -687,32 +670,6 @@ test("#1882: a malformed fileable target is isolated (no partial stamp) and does
   ));
 });
 
-// #1592/#1846: a nit thread is resolved immediately at round 1, exactly like
-// a non-operator-visible low, but NEVER filed to a follow-up issue — no
-// GET/PATCH round-trip, no marker stamp, regardless of round.
-test("an unresolved nit thread is resolved in-thread immediately, at round 1, and is NEVER filed", async () => {
-  const nitBody = `${buildFindingMarker({ fp: "9999999999999999", severity: "nit", angle: "naming", round: 1 })}\n**nit** (\`naming\`): casing nit`;
-  const thread = threadNode({ id: "THREAD_NIT", path: "src/naming.mjs", line: 4, commentId: 6250, body: nitBody });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
-    [
-      ...roundEntries({ threads: [thread] }),
-      {
-        assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6250/replies`, "--input", "-"],
-        assertStdinIncludes: ["severity nit", "nit findings are resolved with rationale at gate close, with no fixer cycle and no deferral comment entry"],
-        stdout: `${JSON.stringify({ id: 7150, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7150` })}\n`,
-      },
-      resolveThreadEntry("THREAD_NIT"),
-    ],
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.round, 1);
-      assert.equal(result.deferredResolved, 1);
-      assert.equal(result.unresolvedGateThreadCount, 0);
-      assert.equal(result.followUpIssueNumber, undefined, "a nit-only round creates no follow-up issue");
-    },
-  ));
-});
-
 // #1973: the disposition reply body embeds the finding's own summary
 // (buildMeritRationale), so a finding that legitimately cites the PR's own
 // governing issue as a bare `#N` trips the comment-id guard when the reply is
@@ -720,11 +677,16 @@ test("an unresolved nit thread is resolved in-thread immediately, at round 1, an
 // refused, the target is recorded in dispositionFailures, and the thread stays
 // unresolved (mirroring reply-resolve-review-thread's no-ids rule).
 test("#1973: a bare governing-issue ref in a finding summary is fail-closed without --allowed-refs", async () => {
-  const govRefBody = `${buildFindingMarker({ fp: "abcabcabcabcabc0", severity: "nit", angle: "naming", round: 1 })}\n**nit** (\`naming\`): mirror the guard fix for #1951 governing issue`;
+  const govRefBody = `${buildFindingMarker({ fp: GOVREF.fp, severity: "low", angle: "naming", round: 1, operatorVisible: true })}\n**low** (\`naming\`): mirror the guard fix for #1951 governing issue — judge: defer`;
   const thread = threadNode({ id: "THREAD_GOVREF", path: "src/x.mjs", line: 4, commentId: 6270, body: govRefBody });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
-    // No POST/resolve entries: the guard refuses BEFORE any mutating gh call.
-    roundEntries({ threads: [thread] }),
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [GOVREF.finding] }), (ledgerPath) => withGhStub(
+    // No POST/resolve entries: the guard refuses the reply, so the thread stays unresolved.
+    [
+      ...roundEntries({ threads: [thread] }),
+      ...deferralCommentEntries(9500),
+      getReviewCommentEntry(6270, govRefBody),
+      patchReviewCommentEntry(6270),
+    ],
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.deferredResolved, 0);
@@ -736,40 +698,15 @@ test("#1973: a bare governing-issue ref in a finding summary is fail-closed with
   ));
 });
 
-// #1973: the SAME finding passes once its governing-issue id is whitelisted via
-// --allowed-refs — same shape/semantics as reply-resolve-review-thread. The
-// reply posts and the thread resolves normally.
-test("#1973: a whitelisted governing-issue ref passes with --allowed-refs", async () => {
-  const govRefBody = `${buildFindingMarker({ fp: "abcabcabcabcabc0", severity: "nit", angle: "naming", round: 1 })}\n**nit** (\`naming\`): mirror the guard fix for #1951 governing issue`;
-  const thread = threadNode({ id: "THREAD_GOVREF_OK", path: "src/x.mjs", line: 4, commentId: 6280, body: govRefBody });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
-    [
-      ...roundEntries({ threads: [thread] }),
-      {
-        assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6280/replies`, "--input", "-"],
-        assertStdinIncludes: ["#1951"],
-        stdout: `${JSON.stringify({ id: 7160, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7160` })}\n`,
-      },
-      resolveThreadEntry("THREAD_GOVREF_OK"),
-    ],
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath, allowedRefs: ["1951"] }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.deferredResolved, 1);
-      assert.equal(result.unresolvedGateThreadCount, 0);
-      assert.equal(result.dispositionFailures, undefined);
-    },
-  ));
-});
-
 // #1973: the FILEABLE reply site (operator-visible low -> follow-up issue) also
 // threads --allowed-refs. Same governing-issue ref, but now the disposition
 // reply that names the follow-up issue also embeds the finding summary's bare
-// ref; --allowed-refs must open the guard for the filed path exactly like the
+// ref; --allowed-refs must open the guard for the filed path, so the
 // unfiled one, so the stamp+file+reply+resolve completes.
 test("#1973: --allowed-refs also opens the guard on the fileable (filed-to-follow-up) reply path", async () => {
-  const visibleLowBody = `${buildFindingMarker({ fp: "abcabcabcabcfff0", severity: "low", angle: "correctness", round: 1, operatorVisible: true })}\n**low** (\`correctness\`): mirror the guard fix for #1951 governing issue`;
+  const visibleLowBody = `${buildFindingMarker({ fp: GOVREF.fp, severity: "low", angle: "correctness", round: 1, operatorVisible: true })}\n**low** (\`correctness\`): mirror the guard fix for #1951 governing issue — judge: defer`;
   const thread = threadNode({ id: "THREAD_GOVREF_FILE", path: "src/x.mjs", line: 4, commentId: 6290, body: visibleLowBody });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [GOVREF.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ threads: [thread] }),
       ...deferralCommentEntries(9500),
@@ -792,14 +729,12 @@ test("#1973: --allowed-refs also opens the guard on the fileable (filed-to-follo
   ));
 });
 
-// #1846: a MIXED round — an out-of-window medium (fileable), an
-// operator-visible low (fileable), a nit (never fileable), and a
-// non-operator-visible low (not fileable) — posts ONE deferral comment
-// carrying ONLY the two fileable fingerprints; the nit and the non-visible
-// low are resolved in-thread and never reach the comment.
-test("#1846: a mixed round files ONLY the fileable subset into ONE deferral comment", async () => {
-  const mediumBody = `${buildFindingMarker({ fp: "aaaa0000aaaa0000", severity: "medium", angle: "config-drift", round: 1 })}\n**medium** (\`config-drift\`): missing schema validation`;
-  const visibleLowBody = `${buildFindingMarker({ fp: "bbbb0000bbbb0000", severity: "low", angle: "correctness", round: 1, operatorVisible: true })}\n**low** (\`correctness\`): wrong guidance a conductor executes`;
+// A MIXED round: a judge-deferred medium and a judge-deferred low are filed in
+// ONE deferral comment. An unjudged nit and an unjudged low are never deferred:
+// they stay open and never reach the comment, whatever their severity.
+test("a mixed round files ONLY the judge-deferred subset into ONE deferral comment", async () => {
+  const mediumBody = `${buildFindingMarker({ fp: MEDCFG.fp, severity: "medium", angle: "config-drift", round: 1 })}\n**medium** (\`config-drift\`): missing schema validation — judge: defer`;
+  const visibleLowBody = `${buildFindingMarker({ fp: VLOW.fp, severity: "low", angle: "correctness", round: 1, operatorVisible: true })}\n**low** (\`correctness\`): wrong guidance a conductor executes — judge: defer`;
   const nitBody = `${buildFindingMarker({ fp: "cccc0000cccc0000", severity: "nit", angle: "naming", round: 1 })}\n**nit** (\`naming\`): casing nit`;
   const invisibleLowBody = `${buildFindingMarker({ fp: "dddd0000dddd0000", severity: "low", angle: "naming", round: 1 })}\n**low** (\`naming\`): unused local variable`;
   const mediumThread = threadNode({ id: "THREAD_MIX_MED", path: "src/config.mjs", line: 4, commentId: 9101, body: mediumBody });
@@ -807,13 +742,13 @@ test("#1846: a mixed round files ONLY the fileable subset into ONE deferral comm
   const nitThread = threadNode({ id: "THREAD_MIX_NIT", path: "src/naming.mjs", line: 4, commentId: 9103, body: nitBody });
   const invisibleLowThread = threadNode({ id: "THREAD_MIX_ILOW", path: "src/naming.mjs", line: 9, commentId: 9104, body: invisibleLowBody });
 
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [MEDCFG.finding, VLOW.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({
         issueComments: roundHistory("draft_gate", 4),
         threads: [mediumThread, visibleLowThread, nitThread, invisibleLowThread],
       }),
-      ...deferralCommentEntries(9500, { contains: ["aaaa0000aaaa0000", "bbbb0000bbbb0000"], notContains: ["cccc0000cccc0000", "dddd0000dddd0000"] }),
+      ...deferralCommentEntries(9500, { contains: [MEDCFG.fp, VLOW.fp], notContains: ["cccc0000cccc0000", "dddd0000dddd0000"] }),
       getReviewCommentEntry(9101, mediumBody),
       patchReviewCommentEntry(9101),
       postReplyEntry(9101, { id: 9201 }),
@@ -822,16 +757,12 @@ test("#1846: a mixed round files ONLY the fileable subset into ONE deferral comm
       patchReviewCommentEntry(9102),
       postReplyEntry(9102, { id: 9202 }),
       resolveThreadEntry("THREAD_MIX_VLOW"),
-      postReplyEntry(9103, { id: 9203 }),
-      resolveThreadEntry("THREAD_MIX_NIT"),
-      postReplyEntry(9104, { id: 9204 }),
-      resolveThreadEntry("THREAD_MIX_ILOW"),
     ],
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 4);
-      assert.equal(result.deferredResolved, 4);
-      assert.equal(result.unresolvedGateThreadCount, 0);
+      assert.equal(result.deferredResolved, 2);
+      assert.equal(result.unresolvedGateThreadCount, 2);
       assert.equal(result.followUpIssueNumber, 9500);
     },
   ));
@@ -1354,17 +1285,19 @@ test("a body-filed (non-locatable) question produces no blocking count regardles
 
 // A pre-rename thread stamped severity=defer normalizes on read: the posted
 // reply names the canonical tier, never the retired spelling. No ov=1 field
-// on this hand-authored legacy marker, so (#1846) it is the conservative
-// not-operator-visible default — resolved in-thread, never filed.
+// on this hand-authored legacy marker, and the judge deferred its cluster.
 test("a legacy severity=defer marker posts a reply in the canonical vocabulary", async () => {
-  const legacyBody = `<!-- dev-loops:finding 8888888888888888 severity=defer angle=naming round=1 -->\n**defer** (\`naming\`): casing nit`;
+  const legacyBody = `<!-- dev-loops:finding ${CASING.fp} severity=defer angle=naming round=1 -->\n**defer** (\`naming\`): casing nit — judge: defer`;
   const thread = threadNode({ id: "THREAD_LEGACY", path: "src/naming.mjs", line: 4, commentId: 6300, body: legacyBody });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [CASING.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ threads: [thread] }),
+      ...deferralCommentEntries(9500),
+      getReviewCommentEntry(6300, legacyBody),
+      patchReviewCommentEntry(6300),
       {
         assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6300/replies`, "--input", "-"],
-        assertStdinIncludes: ["severity low", "this low finding carries no operator-visibility signal"],
+        assertStdinIncludes: ["severity low"],
         assertStdinNotIncludes: ["severity defer,", "defer-severity"],
         stdout: `${JSON.stringify({ id: 7200, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7200` })}\n`,
       },
@@ -1374,7 +1307,7 @@ test("a legacy severity=defer marker posts a reply in the canonical vocabulary",
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 1);
       assert.equal(result.deferredResolved, 1);
-      assert.equal(result.followUpIssueNumber, undefined);
+      assert.equal(result.followUpIssueNumber, 9500);
     },
   ));
 });
@@ -1400,12 +1333,12 @@ test("marker provenance: a FOREIGN-authored thread past the fix window, carrying
 // padded body must still parse and get PATCHed, not silently skip the stamp
 // while reply+resolve proceeds unstamped.
 test("a deferral target whose REST-fetched body has LEADING WHITESPACE before the marker is still stamped", async () => {
-  const thread = openWfnThread({ commentId: 6600, fp: "5555555555555555", id: "THREAD_WS" });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  const thread = openWfnThread({ commentId: 6600, id: "THREAD_WS" });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [WFN.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
       ...deferralCommentEntries(9500),
-      getReviewCommentEntry(6600, ` ${wfnBody("5555555555555555")}`),
+      getReviewCommentEntry(6600, ` ${wfnBody()}`),
       patchReviewCommentEntry(6600),
       postReplyEntry(6600, { id: 7600 }),
       resolveThreadEntry("THREAD_WS"),
@@ -1419,9 +1352,9 @@ test("a deferral target whose REST-fetched body has LEADING WHITESPACE before th
 // The already-stamped guard parses the marker's OWN disposition field, never a
 // free-text search: a finding quoting the literal token must still be stamped.
 test("a finding whose own text quotes the literal 'disposition=deferred' token still gets stamped and resolved", async () => {
-  const body = `${buildFindingMarker({ fp: "1010101010101010", severity: "worth-fixing-now", angle: "perf", round: 1 })}\n**worth-fixing-now** (\`perf\`): the fix must stamp disposition=deferred before resolving`;
+  const body = `${buildFindingMarker({ fp: QUOTE.fp, severity: "worth-fixing-now", angle: "perf", round: 1 })}\n**worth-fixing-now** (\`perf\`): the fix must stamp disposition=deferred before resolving — judge: defer`;
   const thread = threadNode({ id: "THREAD_D", path: "src/cache.mjs", line: 9, commentId: 6500, body });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [QUOTE.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
       ...deferralCommentEntries(9500),
@@ -1439,14 +1372,14 @@ test("a finding whose own text quotes the literal 'disposition=deferred' token s
 test("stampDeferredDisposition skips the PATCH when the marker's OWN disposition field is already deferred", async () => {
   // Already carries its deferral target link: a legitimately-stamped,
   // still-unresolved marker (e.g. an interrupted retry) always does.
-  const alreadyStamped = `${buildFindingMarker({ fp: "1111000011110000", severity: "worth-fixing-now", angle: "perf", round: 1, disposition: "deferred", issue: 9500 })}\n**worth-fixing-now** (\`perf\`): stale cache`;
+  const alreadyStamped = `${buildFindingMarker({ fp: STALE.fp, severity: "worth-fixing-now", angle: "perf", round: 1, disposition: "deferred", issue: 9500 })}\n**worth-fixing-now** (\`perf\`): stale cache — judge: defer`;
   const thread = threadNode({ id: "THREAD_D", path: "src/cache.mjs", line: 9, commentId: 6501, body: alreadyStamped });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [STALE.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
       // The target already lists this fingerprint, so no comment is posted.
       prViewEntry([9500]),
-      targetCommentsEntry(9500, [{ body: "<!-- dev-loops:deferred-summary -->\n- `1111000011110000` **medium** (`perf`): stale cache" }]),
+      targetCommentsEntry(9500, [{ body: "<!-- dev-loops:deferred-summary -->\n- `" + STALE.fp + "` **medium** (`perf`): stale cache" }]),
       getReviewCommentEntry(6501, alreadyStamped),
       // No patchReviewCommentEntry: a PATCH here would overflow the stub and
       // fail the test — the already-stamped guard must skip straight to
@@ -1466,9 +1399,9 @@ test("stampDeferredDisposition skips the PATCH when the marker's OWN disposition
 // target now resolves elsewhere fails closed: isolated into
 // dispositionFailures, no PATCH, reply or resolve, the thread stays unresolved.
 test("stampDeferredDisposition fails closed when an already-stamped issue= differs from the resolved target", async () => {
-  const legacyStamped = `${buildFindingMarker({ fp: "1111000011110000", severity: "worth-fixing-now", angle: "perf", round: 1, disposition: "deferred", issue: 9500 })}\n**worth-fixing-now** (\`perf\`): stale cache`;
+  const legacyStamped = `${buildFindingMarker({ fp: STALE.fp, severity: "worth-fixing-now", angle: "perf", round: 1, disposition: "deferred", issue: 9500 })}\n**worth-fixing-now** (\`perf\`): stale cache — judge: defer`;
   const thread = threadNode({ id: "THREAD_LEGACY", path: "src/cache.mjs", line: 9, commentId: 6502, body: legacyStamped });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [STALE.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
       // No closing reference: the target resolves to the PR, not 9500.
@@ -1491,18 +1424,18 @@ test("stampDeferredDisposition fails closed when an already-stamped issue= diffe
 // lists posts NO comment (and never creates an issue); it only finishes the
 // reply+resolve.
 test("a disposition pass whose every fingerprint the target already lists posts no comment (pure retry)", async () => {
-  const first = `${buildFindingMarker({ fp: "aaaa1111aaaa1111", severity: "worth-fixing-now", angle: "perf", round: 1, disposition: "deferred", issue: 9500 })}\n**worth-fixing-now** (\`perf\`): stale cache A`;
+  const first = `${buildFindingMarker({ fp: STALE_A.fp, severity: "worth-fixing-now", angle: "perf", round: 1, disposition: "deferred", issue: 9500 })}\n**worth-fixing-now** (\`perf\`): stale cache A — judge: defer`;
   // #1846: a stamped low must carry operatorVisible: true to be a legitimate
   // (fileable) already-stamped target — a plain low stamp would now itself be
   // the contract violation detectContractViolatingDeferredStamps rejects.
-  const second = `${buildFindingMarker({ fp: "bbbb2222bbbb2222", severity: "nice-to-have", angle: "naming", round: 1, operatorVisible: true, disposition: "deferred", issue: 9500 })}\n**nice-to-have** (\`naming\`): casing nit B`;
+  const second = `${buildFindingMarker({ fp: CASING_B.fp, severity: "nice-to-have", angle: "naming", round: 1, operatorVisible: true, disposition: "deferred", issue: 9500 })}\n**nice-to-have** (\`naming\`): casing nit B — judge: defer`;
   const threadA = threadNode({ id: "THREAD_A", path: "src/cache.mjs", line: 9, commentId: 6801, body: first });
   const threadB = threadNode({ id: "THREAD_B", path: "src/naming.mjs", line: 4, commentId: 6802, body: second });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [STALE_A.finding, CASING_B.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [threadA, threadB] }),
       prViewEntry([9500]),
-      targetCommentsEntry(9500, [{ body: "<!-- dev-loops:deferred-summary -->\nGate findings deferred:\n\n- `aaaa1111aaaa1111` **medium** (`perf`): A\n- `bbbb2222bbbb2222` **low** (`naming`): B" }]),
+      targetCommentsEntry(9500, [{ body: "<!-- dev-loops:deferred-summary -->\nGate findings deferred:\n\n- `" + STALE_A.fp + "` **medium** (`perf`): A\n- `" + CASING_B.fp + "` **low** (`naming`): B" }]),
       getReviewCommentEntry(6801, first),
       postReplyEntry(6801, { id: 7801 }),
       resolveThreadEntry("THREAD_A"),
@@ -1522,17 +1455,17 @@ test("a disposition pass whose every fingerprint the target already lists posts 
 // (a carried-over retry), one not — posts ONE comment carrying only the
 // not-yet-listed entry.
 test("a mixed disposition pass comments once, for only the not-yet-listed fingerprint", async () => {
-  const stamped = `${buildFindingMarker({ fp: "cccc3333cccc3333", severity: "worth-fixing-now", angle: "perf", round: 1, disposition: "deferred", issue: 9500 })}\n**worth-fixing-now** (\`perf\`): stale cache C`;
-  const unstamped = wfnBody("dddd4444dddd4444");
+  const stamped = `${buildFindingMarker({ fp: STALE_C.fp, severity: "worth-fixing-now", angle: "perf", round: 1, disposition: "deferred", issue: 9500 })}\n**worth-fixing-now** (\`perf\`): stale cache C — judge: defer`;
+  const unstamped = wfnBody(WFN.fp);
   const threadStamped = threadNode({ id: "THREAD_STAMPED", path: "src/cache.mjs", line: 9, commentId: 6901, body: stamped });
   const threadUnstamped = threadNode({ id: "THREAD_UNSTAMPED", path: "src/cache.mjs", line: 11, commentId: 6902, body: unstamped });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [STALE_C.finding, WFN.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [threadStamped, threadUnstamped] }),
       ...deferralCommentEntries(9500, {
-        listed: [{ body: "<!-- dev-loops:deferred-summary -->\n- `cccc3333cccc3333` **medium** (`perf`): stale cache C" }],
-        contains: ["dddd4444dddd4444"],
-        notContains: ["cccc3333cccc3333"],
+        listed: [{ body: "<!-- dev-loops:deferred-summary -->\n- `" + STALE_C.fp + "` **medium** (`perf`): stale cache C" }],
+        contains: [WFN.fp],
+        notContains: [STALE_C.fp],
       }),
       getReviewCommentEntry(6901, stamped),
       postReplyEntry(6901, { id: 7901 }),
@@ -1554,12 +1487,12 @@ test("a mixed disposition pass comments once, for only the not-yet-listed finger
 // target: no deferral comment is posted and the stamp records the PR number.
 for (const [label, closing] of [["no closing reference", []], ["more than one closing reference", [9500, 9501]]]) {
   test(`deferral comment target: ${label} — posts no comment, followUpIssueNumber is the PR number`, async () => {
-    const thread = openWfnThread({ commentId: 6700, fp: "2222222222222222", id: "THREAD_PR_TARGET" });
-    await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    const thread = openWfnThread({ commentId: 6700, id: "THREAD_PR_TARGET" });
+    await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [WFN.finding] }), (ledgerPath) => withGhStub(
       [
         ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
         prViewEntry(closing),
-        getReviewCommentEntry(6700, wfnBody("2222222222222222")),
+        getReviewCommentEntry(6700, wfnBody()),
         { ...patchReviewCommentEntry(6700), assertArgContains: [`disposition=deferred issue=${PR}`] },
         { ...postReplyEntry(6700, { id: 7700 }), assertStdinIncludes: ["recorded in this thread's marker", `issue=${PR}`] },
         resolveThreadEntry("THREAD_PR_TARGET"),
@@ -1577,11 +1510,11 @@ for (const [label, closing] of [["no closing reference", []], ["more than one cl
 // with no closing reference lookup at all (a prViewEntry here would be the next stub entry and
 // its args would not match the comments read, failing the run).
 test("deferral comment target: tracker.provider other than github — no comment, no closing-reference lookup", async () => {
-  const thread = openWfnThread({ commentId: 6710, fp: "3333333333333333", id: "THREAD_NON_GITHUB" });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  const thread = openWfnThread({ commentId: 6710, id: "THREAD_NON_GITHUB" });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [WFN.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
-      getReviewCommentEntry(6710, wfnBody("3333333333333333")),
+      getReviewCommentEntry(6710, wfnBody()),
       patchReviewCommentEntry(6710),
       postReplyEntry(6710, { id: 7710 }),
       resolveThreadEntry("THREAD_NON_GITHUB"),
@@ -1615,6 +1548,8 @@ function actExclusionFixtures(mediumDisposition, lowDisposition) {
     findings: [mediumFinding, lowFinding],
     mediumFp,
     mediumBody,
+    lowFp,
+    lowBody,
     threads: [
       threadNode({ id: "THREAD_ACT_MED", path: "src/cache.mjs", line: 9, commentId: 6601, body: mediumBody }),
       threadNode({ id: "THREAD_ACT_LOW", path: "src/naming.mjs", line: 4, commentId: 6602, body: lowBody }),
@@ -1668,7 +1603,7 @@ test("a round-4 medium thread with an empty current ledger and a rendered 'judge
   ));
 });
 
-// Tier 2 of isJudgeActThread: with an empty current ledger and NO rendered
+// Tier 2 of resolveThreadDisposition: with an empty current ledger and NO rendered
 // judge suffix, the prior local ledgers decide. A prior `act` keeps the thread
 // open; a tied act-vs-defer disagreement is ambiguous and also keeps it open
 // (fail closed). No stamp/reply/resolve/comment entry is stubbed, so selecting
@@ -1680,7 +1615,7 @@ for (const [label, priorDispositions] of [
   test(`a round-4 medium thread with an empty current ledger, no judge suffix and ${label} is NOT selected`, async () => {
     const finding = { severity: "medium", angle: "perf", summary: "stale cache not invalidated" };
     const fp = fingerprintFinding(finding);
-    const body = `${buildFindingMarker({ fp, severity: "medium", angle: "perf", round: 1 })}\n**medium** (\`perf\`): stale cache not invalidated`;
+    const body = `${buildFindingMarker({ fp, severity: "medium", angle: "perf", round: 1 })}\n**medium** (\`perf\`): stale cache not invalidated — judge: defer`;
     const thread = threadNode({ id: "THREAD_PRIOR_LEDGER_ACT", path: "src/cache.mjs", line: 9, commentId: 6604, body });
     await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
       roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
@@ -1707,15 +1642,17 @@ for (const [label, priorDispositions] of [
 // A judge-rejected medium or low is reject-closed instead (ADR 0144).
 for (const [mediumDisposition, lowDisposition] of [["defer", "defer"]]) {
   test(`the same threads with a ${mediumDisposition} medium and a ${lowDisposition} low ARE still selected`, async () => {
-    const { findings, threads, mediumFp, mediumBody } = actExclusionFixtures(mediumDisposition, lowDisposition);
+    const { findings, threads, mediumFp, mediumBody, lowFp, lowBody } = actExclusionFixtures(mediumDisposition, lowDisposition);
     await withLedgerFile(makeLedger({ gate: "draft_gate", findings }), (ledgerPath) => withGhStub(
       [
         ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads }),
-        ...deferralCommentEntries(9500, { contains: [mediumFp] }),
+        ...deferralCommentEntries(9500, { contains: [mediumFp, lowFp] }),
         getReviewCommentEntry(6601, mediumBody),
         patchReviewCommentEntry(6601),
         postReplyEntry(6601, { id: 7601 }),
         resolveThreadEntry("THREAD_ACT_MED"),
+        getReviewCommentEntry(6602, lowBody),
+        patchReviewCommentEntry(6602),
         postReplyEntry(6602, { id: 7602 }),
         resolveThreadEntry("THREAD_ACT_LOW"),
       ],
@@ -1737,7 +1674,7 @@ for (const [mediumDisposition, lowDisposition] of [["defer", "defer"]]) {
 
 // (a) round-1 medium NOT defer-closed (default window=3): the disposition pass
 // must leave an in-window medium thread unresolved (it forces a fix round).
-test("#1672 (a): a round-1 medium thread is NOT defer-closed (stays unresolved, forces a fix round)", async () => {
+test("#1672 (a): a round-1 unjudged medium thread is NOT defer-closed (stays unresolved, forces a fix round)", async () => {
   const mediumBody = `${buildFindingMarker({ fp: "aaaaaaaaaaaaaaaa", severity: "medium", angle: "config-drift", round: 1 })}\n**medium** (\`config-drift\`): missing schema validation`;
   const thread = threadNode({ id: "THREAD_MED_R1", path: "src/config.mjs", line: 4, commentId: 9001, body: mediumBody });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
@@ -1773,10 +1710,10 @@ test("#1672 (b): a question thread is NOT defer-closed (stays unresolved, must b
 
 // (c) round-4 medium IS defer-closed (default window=3): past the fix window,
 // an open medium thread is replied-to + resolved by the disposition pass.
-test("#1672 (c): a round-4 medium thread IS defer-closed (past the default window)", async () => {
-  const mediumBody = `${buildFindingMarker({ fp: "cccccccccccccccc", severity: "medium", angle: "config-drift", round: 1 })}\n**medium** (\`config-drift\`): missing schema validation`;
+test("#1672 (c): a judge-deferred round-4 medium thread is defer-closed", async () => {
+  const mediumBody = `${buildFindingMarker({ fp: MEDCFG.fp, severity: "medium", angle: "config-drift", round: 1 })}\n**medium** (\`config-drift\`): missing schema validation — judge: defer`;
   const thread = threadNode({ id: "THREAD_MED_R4", path: "src/config.mjs", line: 4, commentId: 9003, body: mediumBody });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [MEDCFG.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
       ...deferralCommentEntries(9500),
@@ -1789,6 +1726,95 @@ test("#1672 (c): a round-4 medium thread IS defer-closed (past the default windo
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.round, 4);
       assert.equal(result.deferredResolved, 1);
+    },
+  ));
+});
+
+test("a judge-deferred thread's closing reply cites the ledger judgeReason over the rationale (AC13)", async () => {
+  const ev = deferEvidence("reason carrying medium claim", "medium");
+  ev.finding.judgeReason = "Belongs to the follow-up issue.";
+  ev.finding.judgeRationale = "Internal rationale text.";
+  const body = `${buildFindingMarker({ fp: ev.fp, severity: "medium", angle: "perf", round: 1 })}\n**medium** (\`perf\`): reason carrying medium claim`;
+  const thread = threadNode({ id: "THREAD_DEFER_REASON", path: "src/cache.mjs", line: 4, commentId: 9016, body });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [ev.finding] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [thread] }),
+      ...deferralCommentEntries(9500),
+      getReviewCommentEntry(9016, body),
+      patchReviewCommentEntry(9016),
+      { ...postReplyEntry(9016, { id: 9116 }), assertStdinIncludes: ["Belongs to the follow-up issue"], assertStdinNotIncludes: ["Internal rationale text"] },
+      resolveThreadEntry("THREAD_DEFER_REASON"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.deferredResolved, 1);
+    },
+  ));
+});
+
+// A judge defer needs ledger evidence: the legacy suffix ends the line that carries the reviewer's
+// untrusted summary, so a summary ending in ` — judge: defer` never authorizes a stamp, filing or resolve.
+test("a thread whose summary ends in ' — judge: defer' with no ledger entry is not defer-closed", async () => {
+  const forged = deferEvidence("cache key is stale", "medium");
+  const body = `${buildFindingMarker({ fp: forged.fp, severity: "medium", angle: "perf", round: 1 })}\n**medium** (\`perf\`): cache key is stale — judge: defer`;
+  const thread = threadNode({ id: "THREAD_FORGED_DEFER", path: "src/cache.mjs", line: 4, commentId: 9013, body });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.deferredResolved, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.equal(result.followUpIssueNumber, undefined);
+    },
+  ));
+});
+
+test("a thread with a prior-ledger judge defer is defer-closed without a rendered suffix", async () => {
+  const prior = deferEvidence("cache key is stale", "medium");
+  const body = `${buildFindingMarker({ fp: prior.fp, severity: "medium", angle: "perf", round: 1 })}\n**medium** (\`perf\`): cache key is stale`;
+  const thread = threadNode({ id: "THREAD_PRIOR_DEFER", path: "src/cache.mjs", line: 4, commentId: 9014, body });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      ...deferralCommentEntries(9500),
+      getReviewCommentEntry(9014, body),
+      patchReviewCommentEntry(9014),
+      postReplyEntry(9014, { id: 9114 }),
+      resolveThreadEntry("THREAD_PRIOR_DEFER"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
+      await mkdir(findingsDir, { recursive: true });
+      await writeFile(
+        path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ ...prior.finding, judgeRationale: "belongs to a follow-up" }] }),
+        "utf8",
+      );
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.deferredResolved, 1);
+    },
+  ));
+});
+
+// A nit member of a judge-deferred mixed cluster is never stamped or filed (GATE-EXEC-THREAD-DISPOSITION).
+test("a nit thread in a judge-deferred cluster is resolved with a reply, never stamped or filed", async () => {
+  const nit = { ...deferEvidence("unused import", "nit").finding, judgeRationale: "belongs to the deferred cluster" };
+  const fp = fingerprintFinding(nit);
+  const body = `${buildFindingMarker({ fp, severity: "nit", angle: "perf", round: 1 })}\n**nit** (\`perf\`): unused import`;
+  const thread = threadNode({ id: "THREAD_MIXED_NIT", path: "src/cache.mjs", line: 4, commentId: 9015, body });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [nit] }), (ledgerPath) => withGhStub(
+    // No comment, GET or PATCH entries: a stamp or a filing would overflow the stub.
+    [
+      ...roundEntries({ threads: [thread] }),
+      { ...postReplyEntry(9015, { id: 9115 }), assertStdinIncludes: ["A nit is never deferred or filed"] },
+      resolveThreadEntry("THREAD_MIXED_NIT"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.deferredResolved, 1);
+      assert.equal(result.unresolvedGateThreadCount, 0);
+      assert.equal(result.foldedFiled, 0);
+      assert.equal(result.followUpIssueNumber, undefined);
     },
   ));
 });
@@ -1823,7 +1849,7 @@ test("#1672 guard: a disposition=deferred stamp on a question thread is rejected
     async ({ env, ghCommand, runChild, repoRoot }) => {
       await assert.rejects(
         () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
-        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=question.*reason=out-of-window/s,
+        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=question.*reason=not-judge-deferred/s,
       );
     },
   ));
@@ -1832,19 +1858,41 @@ test("#1672 guard: a disposition=deferred stamp on a question thread is rejected
 // #1672 guard: a contract-violating disposition=deferred stamp on an IN-WINDOW
 // medium thread (round 1, default window 3 — manually stamped by a subagent)
 // is detected and rejected BEFORE the disposition pass proceeds.
-test("#1672 guard: a disposition=deferred stamp on an in-window medium thread is rejected (throws, does not silently skip)", async () => {
-  const stampedMedium = `${buildFindingMarker({ fp: "ffffffffffffffff", severity: "medium", angle: "config-drift", round: 1, disposition: "deferred" })}\n**medium** (\`config-drift\`): missing schema validation`;
+test("#1672 guard: a disposition=deferred stamp the judge did not dispose defer is rejected (throws, does not silently skip)", async () => {
+  const mediumFinding = { severity: "medium", angle: "config-drift", summary: "missing schema validation", judgeDisposition: "reject" };
+  const stampedMedium = `${buildFindingMarker({ fp: fingerprintFinding(mediumFinding), severity: "medium", angle: "config-drift", round: 1, disposition: "deferred", issue: 42 })}\n**medium** (\`config-drift\`): missing schema validation`;
   const thread = threadNode({ id: "THREAD_MED_STAMPED", path: "src/config.mjs", line: 4, commentId: 9006, body: stampedMedium });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [mediumFinding] }),(ledgerPath) => withGhStub(
     // No GET/PATCH/reply/resolve entries: the scan runs before any of those.
     roundEntries({ threads: [thread] }),
     async ({ env, ghCommand, runChild, repoRoot }) => {
       await assert.rejects(
         () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
-        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=medium.*round=1.*reason=out-of-window/s,
+        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=medium.*reason=not-judge-deferred/s,
       );
     },
   ));
+});
+
+// A current ledger that holds the fingerprint with disagreeing or missing dispositions never supports a deferred stamp.
+test("a disposition=deferred stamp is rejected when the current ledger holds the fingerprint as act plus defer or unjudged", async () => {
+  const base = { severity: "medium", angle: "config-drift", summary: "missing schema validation" };
+  const stampedMedium = `${buildFindingMarker({ fp: fingerprintFinding(base), severity: "medium", angle: "config-drift", round: 1, disposition: "deferred", issue: 42 })}\n**medium** (\`config-drift\`): missing schema validation`;
+  for (const findings of [
+    [{ ...base, judgeDisposition: "act" }, { ...base, angle: "correctness", judgeDisposition: "defer" }],
+    [{ ...base }],
+  ]) {
+    const thread = threadNode({ id: "THREAD_MED_AMBIG", path: "src/config.mjs", line: 4, commentId: 9006, body: stampedMedium });
+    await withLedgerFile(makeLedger({ gate: "draft_gate", findings }), (ledgerPath) => withGhStub(
+      roundEntries({ threads: [thread] }),
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        await assert.rejects(
+          () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
+          /GATE-EXEC-THREAD-DISPOSITION violation.*severity=medium.*reason=not-judge-deferred/s,
+        );
+      },
+    ));
+  }
 });
 
 // #1807 AC6: GATE-EXEC-THREAD-DISPOSITION also refuses a disposition=deferred
@@ -1856,9 +1904,9 @@ test("#1672 guard: a disposition=deferred stamp on an in-window medium thread is
 // (not-fileable) first, not "missing-issue-link" — that reason needs a
 // genuinely FILEABLE severity/context (an operator-visible low) to isolate.
 test("#1807 guard: a disposition=deferred stamp with no linked follow-up issue number is rejected (throws, does not silently skip)", async () => {
-  const stampedNoIssue = `${buildFindingMarker({ fp: "0101010101010101", severity: "low", angle: "naming", round: 1, operatorVisible: true, disposition: "deferred" })}\n**low** (\`naming\`): casing nit`;
+  const stampedNoIssue = `${buildFindingMarker({ fp: CASING.fp, severity: "low", angle: "naming", round: 1, operatorVisible: true, disposition: "deferred" })}\n**low** (\`naming\`): casing nit — judge: defer`;
   const thread = threadNode({ id: "THREAD_LOW_NO_ISSUE", path: "src/naming.mjs", line: 4, commentId: 9007, body: stampedNoIssue });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [CASING.finding] }), (ledgerPath) => withGhStub(
     // No issue-create/GET/PATCH/reply/resolve entries: the scan runs before
     // any of those, and a regression that proceeded would overflow the stub.
     roundEntries({ threads: [thread] }),
@@ -1874,7 +1922,7 @@ test("#1807 guard: a disposition=deferred stamp with no linked follow-up issue n
 // #1846: a nit stamped disposition=deferred is ALWAYS a contract violation
 // ("out-of-window"/not-fileable), regardless of whether it also links an
 // issue — a nit is never fileable at any round.
-test("#1846 guard: a disposition=deferred stamp on a nit thread is rejected (nit is never fileable)", async () => {
+test("#1846 guard: a deferred stamp on a nit thread the judge did not dispose defer is rejected (not-judge-deferred)", async () => {
   const stampedNit = `${buildFindingMarker({ fp: "0202020202020202", severity: "nit", angle: "naming", round: 1, disposition: "deferred", issue: 42 })}\n**nit** (\`naming\`): casing nit`;
   const thread = threadNode({ id: "THREAD_NIT_STAMPED", path: "src/naming.mjs", line: 4, commentId: 9008, body: stampedNit });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
@@ -1885,7 +1933,22 @@ test("#1846 guard: a disposition=deferred stamp on a nit thread is rejected (nit
         // #1853 hygiene: the error message itself names the nit rejection
         // case (diagnosable without cross-referencing the code), in addition
         // to the per-thread detail already asserted.
-        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=nit.*reason=out-of-window.*a nit must never be stamped deferred/s,
+        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=nit.*reason=not-judge-deferred/s,
+      );
+    },
+  ));
+});
+
+test("severity floor: a deferred stamp on a nit is refused even when the ledger carries a judge defer", async () => {
+  const nit = deferEvidence("floor nit", "nit");
+  const stamped = `${buildFindingMarker({ fp: nit.fp, severity: "nit", angle: "perf", round: 1, disposition: "deferred", issue: 42 })}\n**nit** (\`perf\`): floor nit`;
+  const thread = threadNode({ id: "THREAD_NIT_FLOOR", path: "src/floor.mjs", line: 4, commentId: 9009, body: stamped });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [nit.finding] }), (ledgerPath) => withGhStub(
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      await assert.rejects(
+        () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
+        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=nit.*reason=not-judge-deferred/s,
       );
     },
   ));
@@ -1895,18 +1958,33 @@ test("#1846 guard: a disposition=deferred stamp on a nit thread is rejected (nit
 // signal (or ov absent/false) on its own marker is rejected the same way — a
 // subagent that manually stamped a non-visible low bypassing
 // selectDispositionTargets/isFileableDeferral.
-test("#1846 guard: a disposition=deferred stamp on a NON-operator-visible low thread is rejected", async () => {
-  const stampedLow = `${buildFindingMarker({ fp: "0303030303030303", severity: "low", angle: "naming", round: 1, disposition: "deferred", issue: 42 })}\n**low** (\`naming\`): casing nit`;
+test("#1846 guard: a deferred stamp on a low thread the judge did not dispose defer is rejected (not-judge-deferred)", async () => {
+  const lowFinding = { severity: "low", angle: "naming", summary: "casing nit", judgeDisposition: "reject" };
+  const stampedLow = `${buildFindingMarker({ fp: fingerprintFinding(lowFinding), severity: "low", angle: "naming", round: 1, disposition: "deferred", issue: 42 })}\n**low** (\`naming\`): casing nit`;
   const thread = threadNode({ id: "THREAD_LOW_STAMPED", path: "src/naming.mjs", line: 4, commentId: 9009, body: stampedLow });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [lowFinding] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [thread] }),
     async ({ env, ghCommand, runChild, repoRoot }) => {
       await assert.rejects(
         () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
         // #1853 hygiene: the error message names the low/operatorVisible
         // rejection case explicitly, in addition to the per-thread detail.
-        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=low.*reason=out-of-window.*a low must carry operatorVisible=true/s,
+        /GATE-EXEC-THREAD-DISPOSITION violation.*severity=low.*reason=not-judge-deferred/s,
       );
+    },
+  ));
+});
+
+// A deferred stamp with no ledger evidence at all (tmp wiped, other host) is not a violation.
+test("a deferred stamp with an issue link and an empty ledger directory does not abort the rerun", async () => {
+  const lowFinding = { severity: "low", angle: "naming", summary: "casing nit" };
+  const stampedLow = `${buildFindingMarker({ fp: fingerprintFinding(lowFinding), severity: "low", angle: "naming", round: 1, disposition: "deferred", issue: 42 })}\n**low** (\`naming\`): casing nit`;
+  const thread = threadNode({ id: "THREAD_LOW_NO_EVIDENCE", path: "src/naming.mjs", line: 4, commentId: 9010, body: stampedLow });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.ok, true);
     },
   ));
 });
@@ -1914,9 +1992,9 @@ test("#1846 guard: a disposition=deferred stamp on a NON-operator-visible low th
 // commentId is validated BEFORE it is ever interpolated into a
 // `pulls/comments/{commentId}` API path.
 test("a gate-authored thread selected for deferral with no resolvable comment id fails closed, named by threadId", async () => {
-  const shortBody = `${buildFindingMarker({ fp: "4444444444444444", severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): short body`;
+  const shortBody = `${buildFindingMarker({ fp: SHORT.fp, severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): short body — judge: defer`;
   const thread = threadNode({ id: "THREAD_NO_COMMENT_ID", path: "src/naming.mjs", line: 3, commentId: null, body: shortBody });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [SHORT.finding] }), (ledgerPath) => withGhStub(
     roundEntries({ threads: [thread] }),
     async ({ env, ghCommand, runChild, repoRoot }) => {
       await assert.rejects(
@@ -1986,9 +2064,9 @@ test("a join miss on a SHORT body that legitimately ends with its own ellipsis c
 // excerpt must survive the full-body join intact, or the disposition pass would
 // read a body cut mid-marker.
 test("a thread whose body exceeds the 200-char listing excerpt is disposed from its FULL joined body", async () => {
-  const longBody = `${buildFindingMarker({ fp: "9999999999999999", severity: "worth-fixing-now", angle: "perf", round: 2 })}\n**worth-fixing-now** (\`perf\`): ${"x".repeat(220)}`;
+  const longBody = `${buildFindingMarker({ fp: LONG.fp, severity: "worth-fixing-now", angle: "perf", round: 2 })}\n**worth-fixing-now** (\`perf\`): ${"x".repeat(220)} — judge: defer`;
   const thread = threadNode({ id: "THREAD_LONG", path: "src/cache.mjs", line: 9, commentId: 6400, body: longBody });
-  await withLedgerFile(makeLedger({ findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ findings: [LONG.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("pre_approval_gate", 4), threads: [thread] }),
       ...deferralCommentEntries(9500),
@@ -2084,49 +2162,11 @@ async function withGhStubAndConfig(entries, config, fn) {
   }
 }
 
-// (a) per-gate window honored: a draft gate configured with window=2 defers an
-// open worth-fixing-now thread at round 3 (3 > 2), where the default window 3
-// would have kept it open.
-test("#1581 (a): a per-gate worthFixingNowFixWindow is honored by the disposition pass", async () => {
-  const thread = openWfnThread({ commentId: 7100 });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStubAndConfig(
-    [
-      ...roundEntries({ issueComments: roundHistory("draft_gate", 3), threads: [thread] }),
-      ...deferralCommentEntries(9500),
-      getReviewCommentEntry(7100, wfnBody("1111111111111111")),
-      patchReviewCommentEntry(7100),
-      postReplyEntry(7100, { id: 8100 }),
-      resolveThreadEntry("THREAD_D"),
-    ],
-    { version: 1, gates: { draft: { worthFixingNowFixWindow: 2 } } },
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.round, 3);
-      assert.equal(result.deferredResolved, 1);
-    },
-  ));
-});
-
-// A config load error keeps the built-in window (3): the configured window 2
-// is dropped with the whole layer, so the thread stays open at round 3.
-test("a config load error keeps the default worthFixingNowFixWindow in the disposition pass", async () => {
-  const thread = openWfnThread({ commentId: 7102 });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStubAndConfig(
-    roundEntries({ issueComments: roundHistory("draft_gate", 3), threads: [thread] }),
-    { version: 1, futureKnob: true, gates: { draft: { worthFixingNowFixWindow: 2 } } },
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.round, 3);
-      assert.equal(result.deferredResolved, 0);
-    },
-  ));
-});
-
 test("a config load error keeps the default inlineSeverityFloor and a null trackerProvider", async () => {
   // Configured floor "nit" would keep the low inline; the error falls back to
   // "medium" and a null tracker provider, so the low folds and the PR is the
   // target. A PR target posts no comment, so the stub list has no comment entry.
-  const finding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true };
+  const finding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true, judgeDisposition: "defer" };
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStubAndConfig(
     [...roundEntries({ threads: [] })],
     { version: 1, futureKnob: true, tracker: { provider: "linear" }, gates: { draft: { inlineSeverityFloor: "nit" } } },
@@ -2137,40 +2177,6 @@ test("a config load error keeps the default inlineSeverityFloor and a null track
     },
   ));
 });
-
-// (a cont.) the SAME gate at round 2 with window 2 keeps the WFN thread open —
-// the window boundary is inclusive (round <= window stays open).
-test("#1581 (a): a WFN thread stays open at round == window (boundary is inclusive)", async () => {
-  const thread = openWfnThread({ commentId: 7101 });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStubAndConfig(
-    roundEntries({ issueComments: roundHistory("draft_gate", 2), threads: [thread] }),
-    { version: 1, gates: { draft: { worthFixingNowFixWindow: 2 } } },
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.round, 2);
-      assert.equal(result.deferredResolved, 0);
-    },
-  ));
-});
-
-// (b) cross-gate isolation: a high draft_gate round count does NOT deplete
-// pre_approval_gate's window. pre_approval_gate at its own round 2 keeps a WFN
-// thread open, even though draft_gate has already run 9 rounds.
-test("#1581 (b): draft_gate rounds do not consume pre_approval_gate's worth-fixing-now window", async () => {
-  const thread = openWfnThread({ commentId: 7200 });
-  await withLedgerFile(makeLedger({ gate: "pre_approval_gate", findings: [] }), (ledgerPath) => withGhStub(
-    roundEntries({
-      issueComments: [...roundHistory("draft_gate", 9), ...roundHistory("pre_approval_gate", 2)],
-      threads: [thread],
-    }),
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.round, 2);
-      assert.equal(result.deferredResolved, 0);
-    },
-  ));
-});
-
 // (c) must-fix-if-present continuation: an open must-fix finding forces another
 // fix round — it is NEVER deferred, even past the worth-fixing-now window.
 test("#1581 (c): an open must-fix finding forces continuation (never deferred past the WFN window)", async () => {
@@ -2209,21 +2215,22 @@ test("#1581 (d): must-fix escalates (not defers) at round-cap exhaustion", async
 // ---------------------------------------------------------------------------
 
 test("#1585: unresolvedGateThreadCount reflects the subtraction (must-fix stays, nice-to-have resolved)", async () => {
-  // A must-fix thread (never deferred) + a nice-to-have thread (resolved at
-  // round 1; #1846: no operatorVisible signal, so resolved in-thread, NOT
-  // filed) => pre-defer count is 2, deferredResolved is 1, reported
+  // A must-fix thread (never deferred) + a judge-deferred nice-to-have thread
+  // => pre-defer count is 2, deferredResolved is 1, reported
   // unresolvedGateThreadCount is 1 (the must-fix the fixer has not yet closed).
   const mustFixBodyStr = `${buildFindingMarker({ fp: "2222222222222222", severity: "must-fix", angle: "security", round: 1 })}\n**must-fix** (\`security\`): SQL injection`;
-  const niceToHaveBodyStr = `${buildFindingMarker({ fp: "7777777777777777", severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): casing nit`;
+  const niceToHaveBodyStr = `${buildFindingMarker({ fp: CASING.fp, severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): casing nit — judge: defer`;
   const mustFix = threadNode({ id: "THREAD_MUST", path: "src/db.mjs", line: 2, commentId: 8001, body: mustFixBodyStr });
   const niceToHave = threadNode({ id: "THREAD_NTH", path: "src/naming.mjs", line: 4, commentId: 8002, body: niceToHaveBodyStr });
 
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [CASING.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ threads: [mustFix, niceToHave] }),
-      // The disposition pass resolves ONLY the nice-to-have (must-fix never
-      // defers) — no follow-up-issue calls: a non-operator-visible low is
-      // never filed (#1846).
+      // The disposition pass resolves ONLY the judge-deferred nice-to-have
+      // (the must-fix is unjudged and never defers).
+      ...deferralCommentEntries(9500),
+      getReviewCommentEntry(8002, niceToHaveBodyStr),
+      patchReviewCommentEntry(8002),
       postReplyEntry(8002, { id: 7800 }),
       resolveThreadEntry("THREAD_NTH"),
     ],
@@ -2232,7 +2239,7 @@ test("#1585: unresolvedGateThreadCount reflects the subtraction (must-fix stays,
       assert.equal(result.deferredResolved, 1);
       // 2 unresolved gate-authored threads pre-defer, 1 resolved => 1 remains.
       assert.equal(result.unresolvedGateThreadCount, 1);
-      assert.equal(result.followUpIssueNumber, undefined);
+      assert.equal(result.followUpIssueNumber, 9500);
     },
   ));
 });
@@ -2246,7 +2253,7 @@ test("#1585: unresolvedGateThreadCount reflects the subtraction (must-fix stays,
 // ---------------------------------------------------------------------------
 
 test("#2263: an operator-visible folded low is listed in ONE deferral comment, with no gate-authored thread of its own", async () => {
-  const finding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true };
+  const finding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true, judgeDisposition: "defer" };
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ threads: [] }),
@@ -2262,7 +2269,22 @@ test("#2263: an operator-visible folded low is listed in ONE deferral comment, w
   ));
 });
 
-test("#2263: a nit and a non-operator-visible low fold with no filing (net-reduction disposition policy) — no deferral-comment calls at all", async () => {
+test("a folded deferred nit stays out of the deferral comment while a folded deferred operator-visible low enters it", async () => {
+  const low = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true, judgeDisposition: "defer" };
+  const nit = { severity: "nit", angle: "style", summary: "trailing whitespace", judgeDisposition: "defer" };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [low, nit] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [] }),
+      ...deferralCommentEntries(9600, { contains: [fingerprintFinding(low)], notContains: [fingerprintFinding(nit)] }),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.foldedFiled, 1);
+    },
+  ));
+});
+
+test("#2263: an unjudged nit and an unjudged low fold with no filing: no deferral-comment calls at all", async () => {
   const nitFinding = { severity: "nit", angle: "style", summary: "trailing whitespace" };
   const quietLowFinding = { severity: "low", angle: "naming", summary: "casing nit in a local constant" };
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [nitFinding, quietLowFinding] }), (ledgerPath) => withGhStub(
@@ -2308,7 +2330,7 @@ for (const [label, dispositions] of [["act + defer", ["act", "defer"]], ["missin
 }
 
 test("#2263: re-running the folded filing does not re-append a fingerprint the target already lists (idempotency)", async () => {
-  const finding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true };
+  const finding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true, judgeDisposition: "defer" };
   const fp = fingerprintFinding(finding);
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
     [
@@ -2327,13 +2349,13 @@ test("#2263: re-running the folded filing does not re-append a fingerprint the t
 
 // Folded and thread deferrals of one round share ONE batched comment.
 test("#2263: folded and thread deferrals of one round go in ONE batched comment", async () => {
-  const wfnBody2 = `${buildFindingMarker({ fp: "3333333333333333", severity: "worth-fixing-now", angle: "perf", round: 4 })}\n**medium** (\`perf\`): n+1 query`;
+  const wfnBody2 = `${buildFindingMarker({ fp: NPLUS1.fp, severity: "worth-fixing-now", angle: "perf", round: 4 })}\n**medium** (\`perf\`): n+1 query — judge: defer`;
   const threadFinding = threadNode({ id: "THREAD_MEDIUM", path: "src/perf.mjs", line: 9, commentId: 6300, body: wfnBody2 });
-  const foldedFinding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true };
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [foldedFinding] }), (ledgerPath) => withGhStub(
+  const foldedFinding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true, judgeDisposition: "defer" };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [foldedFinding, NPLUS1.finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [threadFinding] }),
-      ...deferralCommentEntries(9700, { contains: ["3333333333333333", fingerprintFinding(foldedFinding)] }),
+      ...deferralCommentEntries(9700, { contains: [NPLUS1.fp, fingerprintFinding(foldedFinding)] }),
       getReviewCommentEntry(6300, wfnBody2),
       patchReviewCommentEntry(6300),
       postReplyEntry(6300, { id: 7400 }),
@@ -2349,19 +2371,16 @@ test("#2263: folded and thread deferrals of one round go in ONE batched comment"
 });
 
 
-// A prior-ledger `act` with remedyKind evidence_only is non-act (no fixer cycle):
-// the round-4 thread is selected for disposition like any deferred finding.
-test("a prior-ledger act with remedyKind evidence_only does not keep a round-4 thread open", async () => {
+// An act with remedyKind evidence_only never reaches the fixer, but it is still
+// an act: the judge did not defer it, so the thread is never deferred.
+test("a prior-ledger act with remedyKind evidence_only is replied to and resolved with no stamp", async () => {
   const finding = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated" };
   const fp = fingerprintFinding(finding);
   const thread = openWfnThread({ commentId: 6002, fp });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
-      ...deferralCommentEntries(9500),
-      getReviewCommentEntry(6002, wfnBody(fp)),
-      patchReviewCommentEntry(6002),
-      postReplyEntry(6002, { id: 7001 }),
+      { ...postReplyEntry(6002, { id: 7002 }), assertStdinIncludes: ["evidence-only remedy", "no file change"] },
       resolveThreadEntry("THREAD_D"),
     ],
     async ({ env, ghCommand, runChild, repoRoot }) => {
@@ -2373,13 +2392,15 @@ test("a prior-ledger act with remedyKind evidence_only does not keep a round-4 t
         "utf8",
       );
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.deferredResolved, 1);
+      assert.equal(result.deferredResolved, 0);
+      assert.equal(result.evidenceOnlyClosed, 1);
+      assert.equal(result.unresolvedGateThreadCount, 0);
     },
   ));
 });
 
-// An act with remedyKind evidence_only in the CURRENT ledger is non-act too.
-test("a current-ledger act with remedyKind evidence_only does not keep a round-4 thread open", async () => {
+// The same holds for the CURRENT ledger.
+test("a current-ledger act with remedyKind evidence_only is replied to and resolved with no stamp", async () => {
   const finding = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated" };
   const fp = fingerprintFinding(finding);
   const thread = openWfnThread({ commentId: 6003, fp });
@@ -2387,18 +2408,78 @@ test("a current-ledger act with remedyKind evidence_only does not keep a round-4
   await withLedgerFile(ledger, (ledgerPath) => withGhStub(
     [
       ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
-      ...deferralCommentEntries(9501),
-      getReviewCommentEntry(6003, wfnBody(fp)),
-      patchReviewCommentEntry(6003),
-      postReplyEntry(6003, { id: 7002 }),
+      { ...postReplyEntry(6003, { id: 7003 }), assertStdinIncludes: ["evidence-only remedy", "no file change"] },
       resolveThreadEntry("THREAD_D"),
     ],
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.deferredResolved, 1);
+      assert.equal(result.deferredResolved, 0);
+      assert.equal(result.evidenceOnlyClosed, 1);
+      assert.equal(result.unresolvedGateThreadCount, 0);
     },
   ));
 });
+
+// GATE-EXEC-THREAD-DISPOSITION: the evidence-only close is the exit for a high and for a judge-act question;
+// copying the high/question skip into this pass would leave such a thread open (it never reaches the fixer).
+for (const severity of ["must-fix", "question"]) {
+  test(`a current-ledger evidence_only act on a ${severity} thread is closed with an evidence-only reply`, async () => {
+    const finding = { severity, angle: "perf", summary: "stale cache not invalidated" };
+    const fp = fingerprintFinding(finding);
+    const body = `${buildFindingMarker({ fp, severity, angle: "perf", round: 1 })}\n**${severity}** (\`perf\`): stale cache not invalidated — judge: act`;
+    const thread = threadNode({ id: "THREAD_D", isResolved: false, path: "src/cache.mjs", line: 9, commentId: 6004, body, author: AUTHENTICATED_LOGIN });
+    const ledger = makeLedger({ gate: "draft_gate", findings: [{ ...finding, judgeDisposition: "act", remedyKind: "evidence_only", judgeRationale: "no file change" }] });
+    await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+      [
+        ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+        { ...postReplyEntry(6004, { id: 7004 }), assertStdinIncludes: ["evidence-only remedy", "no file change"] },
+        resolveThreadEntry("THREAD_D"),
+      ],
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+        assert.equal(result.evidenceOnlyClosed, 1);
+        assert.equal(result.unresolvedGateThreadCount, 0);
+      },
+    ));
+  });
+}
+
+// With no judgeRationale, the evidence-only reply states that none was recorded.
+test("a current-ledger evidence_only act without judgeRationale replies with the no-rationale text", async () => {
+  const finding = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated" };
+  const fp = fingerprintFinding(finding);
+  const thread = openWfnThread({ commentId: 6005, fp });
+  const ledger = makeLedger({ gate: "draft_gate", findings: [{ ...finding, judgeDisposition: "act", remedyKind: "evidence_only" }] });
+  await withLedgerFile(ledger, (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      { ...postReplyEntry(6005, { id: 7005 }), assertStdinIncludes: ["evidence-only remedy", "the judge recorded no rationale text for this evidence-only remedy"] },
+      resolveThreadEntry("THREAD_D"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.evidenceOnlyClosed, 1);
+    },
+  ));
+});
+
+// Rejected forms: an open act, or a mixed pair of evidence-only and open act, keeps the thread open.
+for (const [label, extra] of [["an open act", []], ["a mixed evidence-only and open act pair", [{ remedyKind: "evidence_only" }]]]) {
+  test(`${label} in the current ledger leaves the thread open: no reply, stamp or resolve`, async () => {
+    const finding = { severity: "worth-fixing-now", angle: "perf", summary: "stale cache not invalidated", judgeDisposition: "act", judgeRationale: "fix it" };
+    const fp = fingerprintFinding(finding);
+    const thread = openWfnThread({ commentId: 6004, fp });
+    const findings = [finding, ...extra.map((e) => ({ ...finding, ...e }))];
+    await withLedgerFile(makeLedger({ gate: "draft_gate", findings }), (ledgerPath) => withGhStub(
+      roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [thread] }),
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+        assert.equal(result.evidenceOnlyClosed, 0);
+        assert.equal(result.unresolvedGateThreadCount, 1);
+      },
+    ));
+  });
+}
 
 // Tier 2: same disposition but a remedyKind disagreement is ambiguous, not a cache hit.
 test("a tied prior-ledger remedyKind disagreement (same disposition) is ambiguous — the thread stays open", async () => {
@@ -2435,7 +2516,7 @@ function defectThread({ severity, summary, judgeDisposition, judgeRationale, com
   return { finding, fp, thread: threadNode({ id, commentId, body }) };
 }
 
-for (const severity of ["medium", "low"]) {
+for (const severity of ["medium", "low", "nit"]) {
   test(`a judge-rejected ${severity} defect thread is reply-resolved with the summary and judge rationale, never deferred or filed`, async () => {
     const { finding, thread } = defectThread({ severity, summary: `the ${severity} claim about parsing`, judgeDisposition: "reject", judgeRationale: "The claim contradicts the spec.", commentId: 6300, id: `THREAD_${severity}_REJECTED` });
     await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
@@ -2480,6 +2561,22 @@ test("a judge-rejected medium past the fix window is reject-closed, never stampe
     },
   ));
 });
+
+// A high and a question are never deferred, even when the ledger says defer.
+for (const severity of ["high", "question"]) {
+  test(`a judge-deferred ${severity} thread is never deferred: it stays open`, async () => {
+    const { finding, thread } = defectThread({ severity, summary: `a ${severity} the judge wrongly deferred`, judgeDisposition: "defer", judgeRationale: "Outside scope.", commentId: 6310, id: `THREAD_${severity}_DEFER` });
+    await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+      // No stamp, reply or resolve entries: a regression that defers it overflows the stub.
+      roundEntries({ threads: [thread] }),
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+        assert.equal(result.deferredResolved, 0);
+        assert.equal(result.unresolvedGateThreadCount, 1);
+      },
+    ));
+  });
+}
 
 function mergedThread(primary, member, { id, commentId }) {
   const body = `${buildFindingMarker({ fp: primary.fp, severity: "medium", angle: "correctness", round: 1 })}\n${buildFindingMarker({ fp: member.fp, severity: "medium", angle: "correctness", round: 1 })}\n**Problem:** merged`;
@@ -2586,18 +2683,6 @@ test("a judge-rejected high thread is never reject-closed and still counts as un
   ));
 });
 
-test("a judge-deferred in-window medium stays open", async () => {
-  const { finding, thread } = defectThread({ severity: "medium", summary: "a deferred medium claim", judgeDisposition: "defer", judgeRationale: "Later.", commentId: 6320, id: "THREAD_MEDIUM_DEFERRED" });
-  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
-    roundEntries({ threads: [thread] }),
-    async ({ env, ghCommand, runChild, repoRoot }) => {
-      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.rejectClosed, 0);
-      assert.equal(result.unresolvedGateThreadCount, 1);
-      assert.equal(result.dispositionFailures, undefined);
-    },
-  ));
-});
 
 test("disagreeing current-ledger dispositions for one fingerprint leave a medium thread open", async () => {
   const { finding, thread } = defectThread({ severity: "medium", summary: "an ambiguous medium claim", judgeDisposition: "reject", judgeRationale: "No.", commentId: 6330, id: "THREAD_MEDIUM_AMBIGUOUS" });

@@ -75,7 +75,7 @@ When the conductor hands you a judge verdict artifact (the `judge` agent's outpu
 
 You retain **reproduction-based rejection** as your sole scope authority over a finding the judge marked `act`: a finding that does not reproduce is dead regardless of what the judge decided, and you may decline to fix it on those grounds (reply with the decline reason and resolve the thread before `close-gate-findings.mjs` runs). But you stop being the actor that decides *relevance* — whether this PR is the place to act on a finding is the judge's call, not yours.
 
-When no judge verdict is present (a gate that has not yet wired the judge phase), fall back to the existing severity-based disposition: act on every finding whose severity is in the gate's `blockCleanOnFindingSeverities` set, as before.
+When no judge verdict is present, the findings stay unjudged. You derive no disposition from severity (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`) and receive only the judge `act` list.
 
 ## Review Workflow
 1. Read unresolved review threads and any general review comments.

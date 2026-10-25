@@ -170,8 +170,8 @@ test("a reviewer angle cannot forge the header judge disposition on the rendered
 
 test("buildMeritRationale reads the summary from the Problem line and from a legacy body", () => {
   const inline = renderInlineCommentBody({ severity: "medium", angle: "dry", summary: "Dup logic.", judgeDisposition: "act" }, { round: 1 });
-  assert.match(buildMeritRationale({ body: inline, severity: "medium", round: 4, mediumFixWindow: 3 }), /"Dup logic\."/);
-  assert.match(buildMeritRationale({ body: "**low** (`dry`): Old form. — judge: reject", severity: "low", round: 4, mediumFixWindow: 3 }), /"Old form\."/);
+  assert.match(buildMeritRationale({ body: inline, judgeReason: "r" }), /"Dup logic\."/);
+  assert.match(buildMeritRationale({ body: "**low** (`dry`): Old form. — judge: reject", judgeReason: "r" }), /"Old form\."/);
 });
 
 test("escapeProse keeps a balanced code span and escapes stray backticks instead of deleting them", () => {

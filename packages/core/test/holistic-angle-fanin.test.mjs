@@ -16,7 +16,7 @@ import { loadDevLoopConfig, resolveGateAngleContract } from "../src/config/confi
 const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
 describe("holistic reviewer angle — fan-in participation (#2307, AC3)", () => {
-  test("a holistic finding flows through consolidateFanin like any angle, with a DERIVED (not input-set) disposition", () => {
+  test("a holistic finding flows through consolidateFanin like any angle, left unjudged by fan-in", () => {
     const angleResults = [
       { angle: "correctness", verdict: "clean", findings: [] },
       { angle: "scope", verdict: "clean", findings: [] },
@@ -30,13 +30,10 @@ describe("holistic reviewer angle — fan-in participation (#2307, AC3)", () => 
     const holisticFinding = result.findings.find((f) => f.angle === "holistic");
     assert.ok(holisticFinding, "the holistic angle's finding must appear in the consolidated flat findings");
     assert.equal(holisticFinding.summary, "cross-cutting: X and Y disagree");
-    // Dispositions are DERIVED from severity (deriveDisposition), never set on
-    // the input: this finding's input carries no `disposition` field at all,
-    // yet the consolidated entry has one — proving it was computed, not passed
-    // through. medium sits outside the default blockCleanOnFindingSeverities
-    // (["high"]), so deriveDisposition resolves it to "deferred".
+    // Fan-in never disposes: this finding's input carries no `disposition`
+    // field, and the consolidated entry is `unjudged` whatever its severity.
     assert.equal(Object.prototype.hasOwnProperty.call(angleResults[2].findings[0], "disposition"), false);
-    assert.equal(holisticFinding.disposition, "deferred");
+    assert.equal(holisticFinding.disposition, "unjudged");
   });
 
   test("a holistic finding gets a judge disposition (act/defer/reject) on merits, same as any other angle (#2307, AC3/DoD)", () => {
@@ -60,9 +57,9 @@ describe("holistic reviewer angle — fan-in participation (#2307, AC3)", () => 
       headSha: "abc123",
       scopeDrift: { verdict: "within_scope", rationale: "diff matches the stated AC", driftedAreas: [] },
       dispositions: [
-        { index: 0, disposition: "act", rationale: "the missing write is a real AC-relevant defect named in criterion 1", criterion: "AC-1" },
+        { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "the missing write is a real AC-relevant defect named in criterion 1", criterion: "AC-1" },
         {
-          index: 1,
+          index: 1, title: "t", detail: "d", fix: "f", reason: "r",
           disposition: "defer",
           rationale: "valid but out of this PR's scope; track separately",
           criterion: "Non-goal 2",
@@ -78,16 +75,15 @@ describe("holistic reviewer angle — fan-in participation (#2307, AC3)", () => 
     assert.equal(enriched[0].judgeDisposition, "act");
     assert.equal(typeof enriched[0].judgeRationale, "string");
     assert.ok(enriched[0].judgeRationale.length > 0);
-    // the severity-derived disposition is LEFT INTACT — the judge axis is
-    // complementary, not a replacement (high sits in the default
-    // blockCleanOnFindingSeverities, so it derived to "accepted-for-fix").
-    assert.equal(enriched[0].disposition, "accepted-for-fix");
+    // the ledger disposition stays unjudged — the judge axis is
+    // separate from it (a high finding is no exception).
+    assert.equal(enriched[0].disposition, "unjudged");
 
     // The defer-disposed holistic finding: same axis, different merit-based
     // outcome, carrying the required follow-up draft.
     assert.equal(enriched[1].judgeDisposition, "defer");
     assert.ok(enriched[1].judgeRationale.length > 0);
-    assert.equal(enriched[1].disposition, "deferred");
+    assert.equal(enriched[1].disposition, "unjudged");
     assert.deepEqual(enriched[1].followUpDraft, {
       title: "Align naming across b.mjs and its counterpart",
       body: "## Summary\nFollow up on the holistic naming-drift finding.",
@@ -142,7 +138,7 @@ describe("holistic reviewer angle — catches a cross-cutting class the fixed an
     const holisticFinding = result.findings.find((f) => f.angle === "holistic");
     assert.ok(holisticFinding, "the holistic finding must be present in the consolidated flat findings");
     assert.equal(holisticFinding.severity, "high");
-    assert.equal(holisticFinding.disposition, "accepted-for-fix");
+    assert.equal(holisticFinding.disposition, "unjudged");
     // Every other angle stays clean — pins that holistic alone drove the verdict.
     assert.deepEqual(
       result.findings.filter((f) => f.angle !== "holistic"),

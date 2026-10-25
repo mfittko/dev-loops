@@ -69,10 +69,42 @@ Generic `collaboration.spawn_agent` does not automatically load repository role 
 
 ## Codex coordinator dispatch
 
+Before an initial agent-driven Codex conductor spawn, run the config-only selector
+`dev-loops-run cli/index.mjs gate resolve-role --conductor --harness codex`
+from the target repository. Consume only exit 0; exit 1 reports config errors and
+exit 2 reports invalid selectors/runtime output. Neither permits a spawn. Pass the
+returned `nativeOverrides` unchanged as native `collaboration.spawn_agent` fields,
+alongside the authorized task/message and `fork_turns: "none"`. The child still
+runs startup first; this selector never runs startup in MAIN. With no overrides,
+omit `model` and `reasoning_effort`. Native rejection stops that dispatch: report
+the harness, conductor target, `.devloops` path and requested values, and correct
+the configuration before a new authorized attempt; never retry by dropping a
+field or inheriting. Native compatibility is established at launch, not by a
+shared model catalog. Do not change the root session or global settings.
+
+Opt-in example (synthetic values; use tokens supported by the native harness):
+
+```yaml
+models:
+  harnesses:
+    codex:
+      conductor: { model: example-model, reasoningEffort: medium }
+```
+
+Fields merge across config layers; omission preserves a field and explicit null
+clears it. The selected conductor object is the only source: legacy Claude/Pi
+concrete settings cannot supply Codex model or effort. Codex roles, tiers and
+angle overrides remain unsupported schema fields. Requested/emitted settings
+are distinct from observed runtime telemetry; unavailable telemetry is unknown,
+and child self-report is not proof of an effective model.
+
 For resumed direct/queue entries, emit with `--harness codex` and dispatch the printed
 `dispatchPayload` unchanged through `collaboration.spawn_agent`. Its exact fields are
 `{task_name: "coordinator_<executionIdentity with hyphens replaced by underscores>",
-message: dispatchPrompt, fork_turns: "none"}`. The emitter validates the identity as
+message: dispatchPrompt, fork_turns: "none"}`, plus non-null native `model` and
+`reasoning_effort` overrides from the same config resolver. Resolution errors stop
+before materialization; native rejection has the same no-fallback rule. These
+optional fields stay outside the semantic work order and its digest. The emitter validates the identity as
 `c<digits>-<8 lowercase hex>` and generates a fresh identity for each emission. There is
 no cwd argument; native spawn inherits the parent's shell location.
 
@@ -126,4 +158,34 @@ queues completion with `trigger_turn: false`; the corresponding
 [`session/handlers.rs`](https://github.com/openai/codex/blob/a9b0815167c27ab13719dd12d13b63e02b70d221/codex-rs/core/src/session/handlers.rs) <!-- secret-scan:allow Verified public upstream commit reference; not a credential -->
 requires `trigger_turn` or durable sleep to schedule pending work. This is source evidence, not proof
 of the installed binary. No watchdog, harness patch or durable-sleep experiment is authorized here.
+
+## Unit coordinator boundaries (issue 2532)
+
+The orchestrator dispatches one **fresh unit coordinator per phase**, never one coordinator for the
+whole cycle. The boundary list is tooling-emitted: the handoff envelope carries `unitBoundaries`
+(`handBackAfter` + `resume`, derived from the target and route; see
+[Workflow Handoff Contract](workflow-handoff-contract.md#envelope-schema)). The unit hands back at
+the **first** boundary that field names: `handBackAfter` is an ordered, first-match list, so a unit
+carrying both stops when it opens its draft PR and leaves the verdict boundary to its successor.
+
+On hand-back the orchestrator dispatches the successor by emitting the work order with
+`scripts/loop/emit-coordinator-work-order.mjs --input <startup-output path> --harness <claude|pi|codex> --entry <queue|direct>`
+and dispatching the printed `dispatchPayload` unchanged. The input is the startup-output path a
+coordinator named in its hand-back; the orchestrator still
+never runs `loop startup` itself. The successor re-resolves `unitBoundaries.resume`, so its envelope
+is resolver output for the current target — **the previous coordinator never writes or summarizes the
+next brief**, and no successor field derives from predecessor conversation. Gate state survives
+through authoritative state, not through the relay: the successor recovers round count, verdict
+evidence and open findings by re-running the detectors at resume.
+
+A child hand-back is a **compact relay packet** only: unit identity, status, `nextAction`, evidence
+links (including the startup-output path that unit ran), and an open question if one is needed. No
+transcript, tool output or review text. A relay is the dispatch trigger, never the successor's
+context.
+
+Budget per unit coordinator: peak context at or below the existing **150K-token cap** (largest
+single-response input count, not cumulative traffic); on a Codex root at most 10% empty wakeups,
+measured against root turns rather than wait duration. A missing or ambiguous native measurement is
+reported as unavailable, never zero. The rule binds the unit coordinator on every harness, so it
+stays outside the sections harness-specific mirrors drop.
 
