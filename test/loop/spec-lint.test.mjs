@@ -414,3 +414,9 @@ test("a rule citation with a one-character later segment is read whole", async (
   const result = await lint({ body: "Cites LOCAL-PHASE-ONE-AT-A-TIME.", repoRoot: root });
   assert.deepEqual(result.findings, []);
 });
+
+test("ordinary tokens with a one-character later segment are not unknown rule ids", async () => {
+  const root = await fixtureRepo({ rules: { requiredRules: [], optOutRules: [] } });
+  const result = await lint({ body: "Encodes as UTF-8 and hashes with SHA-1.", repoRoot: root });
+  assert.deepEqual(result.findings, []);
+});

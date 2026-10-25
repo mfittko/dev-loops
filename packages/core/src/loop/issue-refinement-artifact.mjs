@@ -1663,6 +1663,6 @@ export function diffPrBodyAgainstIssue({ prBody = "", issueBody = "" } = {}) {
   } catch (error) {
     hits.push({ kind: "pr-body", side: "issue", needle: error.message, file: "issue-body/issue-matrix", line: 0, site: "issue-body/issue-matrix" });
   }
-  compare("non-goals", prList(nonGoalPatterns), issueList(nonGoalPatterns));
+  compare("non-goals", readNonGoalItems(prBody), issueList(nonGoalPatterns));
   return hits;
 }
