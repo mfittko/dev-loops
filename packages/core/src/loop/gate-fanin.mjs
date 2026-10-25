@@ -1338,16 +1338,16 @@ export function capClosedFor(finding, { round, cap }) {
  */
 export function pastCapBlockers(findings) {
   const list = Array.isArray(findings) ? findings : [];
-  const label = (f) => `[${normalizeSeverity(f?.severity)}] ${String(f?.summary ?? "").trim()}`;
+  const label = (f, reason) => `[${normalizeSeverity(f?.severity)}] ${String(f?.summary ?? "").trim()} (${reason})`;
   const acts = list.filter(isOpenActItem);
   const lowNitOnly = acts.every((f) => ["low", "nit"].includes(normalizeSeverity(f.severity)));
-  const blockers = lowNitOnly ? [] : acts.filter((f) => !f.resurfaces).map((f) => ({ kind: "round_cap_reached", reason: "new_act", item: label(f) }));
+  const blockers = lowNitOnly ? [] : acts.filter((f) => !f.resurfaces).map((f) => ({ kind: "round_cap_reached", reason: "new_act", item: label(f, "new_act") }));
   for (const f of list) {
     if (isOpenActItem(f)) continue;
     const severity = normalizeSeverity(f?.severity);
     const closed = f?.judgeDisposition === "defer" || f?.judgeDisposition === "reject";
     if (!JUDGE_DISPOSITIONS.includes(f?.judgeDisposition) || !VALID_SEVERITIES.has(severity) || (closed && (severity === "high" || severity === "medium"))) {
-      blockers.push({ kind: "round_cap_reached", reason: "severity_disagreement", item: label(f) });
+      blockers.push({ kind: "round_cap_reached", reason: "severity_disagreement", item: label(f, "severity_disagreement") });
     }
   }
   return blockers;

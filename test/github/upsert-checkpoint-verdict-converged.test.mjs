@@ -26,7 +26,7 @@ before(async () => {
   process.env.PATH = [gitStubDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter);
   repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-converged-repo-"));
   const real = await readFile(path.resolve(".devloops"), "utf8");
-  const patched = real.replace("requireFanoutEvidence: true", "requireFanoutEvidence: false");
+  const patched = real.replace("requireFanoutEvidence: true", "requireFanoutEvidence: false").replace("\n  draft:\n", "\n  draft:\n    maxReviewRounds: 0\n");
   assert.notEqual(patched, real);
   await writeFile(path.join(repoRoot, ".devloops"), patched, "utf8");
 });
@@ -322,7 +322,7 @@ async function postWithoutLedger(tempDir, { ledgerArgs = [], devloops = "version
 
 for (const requireFanoutEvidence of [true, false]) test(`a converged post without --findings-ledger is refused (requireFanoutEvidence ${requireFanoutEvidence})`, async () => {
   await withTempDir(async (tempDir) => {
-    const { error, puts } = await postWithoutLedger(tempDir, { devloops: `version: 1\ngates:\n  requireFanoutEvidence: ${requireFanoutEvidence}\n` });
+    const { error, puts } = await postWithoutLedger(tempDir, { devloops: `version: 1\ngates:\n  requireFanoutEvidence: ${requireFanoutEvidence}\n  draft:\n    maxReviewRounds: 0\n` });
     assert.match(error, /needs --findings-ledger/);
     assert.deepEqual(puts, []);
   }, { prefix: "dev-loops-converged-noledger-" });

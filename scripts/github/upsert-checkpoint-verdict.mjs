@@ -4,7 +4,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
-import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
+import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, isPastRoundCap, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, pastCapBlockers, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { composeConvergedDraftGate, convergedActItemKey } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
@@ -58,7 +58,7 @@ import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
-import { buildValidationResultsPath } from "./write-gate-context.mjs";
+import { buildValidationResultsPath, countCompletedRounds } from "./write-gate-context.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -2780,6 +2780,19 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
       promoteLedgerFanout(options, preloadedFindingsLedger);
     }
+    // GATE-EXEC-ROUND-CAP: with the cap on, the judged ledger is the only draft_gate input. One choke point
+    // refuses every other shape before any cap logic runs. The one exception is the light-mode inline carve-out:
+    // an inline verdict-only clean holds no finding, so the cap has nothing to count or block.
+    if (options.gate === "draft_gate" && draftGateConfig.maxReviewRounds > 0) {
+      const lightModeClean = !options.findingsJson && !options.findingsLedger && options.verdict === "clean"
+        && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent";
+      const refused = lightModeClean ? null : options.findingsJson ? "--findings-json"
+        : !options.findingsLedger ? "a verdict-only post"
+          : !preloadedFindingsLedger.overallVerdict ? "a --findings-ledger without overallVerdict" : null;
+      if (refused) {
+        throw new Error(`Cannot post draft_gate @ ${canonicalHeadSha}: gates.draft.maxReviewRounds is ${draftGateConfig.maxReviewRounds}, so the judged findings ledger (--findings-ledger carrying overallVerdict) is the only accepted input; refusing ${refused}. Write the ledger with write-gate-findings-log after the judge pass, or set gates.draft.maxReviewRounds to 0.`);
+      }
+    }
     postTimeFanoutEnforcement = await enforcePostTimeFanoutMode(
       {
         repo: options.repo,
@@ -3008,7 +3021,15 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       : composeReviewVerdict(preloadedFindingsLedger.overallVerdict, [...roundFindings.filter((f) => !isOpenActItem(f)), ...guardedRoundActs]);
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
-    const gateBlockers = collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact);
+    // Past the round cap a new act item blocks (round_cap_reached) and no fixer runs; an all-low/nit act list converges by the 0168 rule.
+    const cap = draftGateConfig?.maxReviewRounds ?? 0;
+    const completedRound = options.gate === "draft_gate" && !convergedInput && cap > 0
+      ? await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha }, { repoRoot })
+      : 0;
+    const gateBlockers = [
+      ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),
+      ...(isPastRoundCap(completedRound, cap) ? pastCapBlockers(roundFindings) : []),
+    ];
     const composedVerdict = composeCheckpointVerdict({ reviewVerdict: ledgerVerdict, blockers: gateBlockers });
     if (options.verdict === undefined) {
       // Derive: the caller need not pass --verdict at all when the ledger
