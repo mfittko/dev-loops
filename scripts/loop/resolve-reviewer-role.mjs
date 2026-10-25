@@ -139,7 +139,7 @@ export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}
     if (token.kind === "positional") throw parseError(`Unknown argument: ${token.value}`);
     if (token.kind !== "option") continue;
     if (token.name === "help") { options.help = true; return options; }
-    if (token.name === "conductor") { options.conductor = true; continue; }
+    if (token.name === "conductor") { if (token.inlineValue !== undefined) throw parseError("--conductor does not accept a value"); options.conductor = true; continue; }
     if (token.name === "gate") { options.gate = requireTokenValue(token, parseError).trim(); continue; }
     if (token.name === "angle") { options.angle = requireTokenValue(token, parseError).trim(); continue; }
     if (token.name === "harness") { options.harness = requireTokenValue(token, parseError).trim(); continue; }
