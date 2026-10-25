@@ -71,8 +71,8 @@ const PHASE_2_REBUILD_NO_PREV_HEAD = /`[^`]*--carried-angles[^`]*--prev-head[^`]
 // (`[^`]*`), which stops at the first closing backtick and so cannot reach past
 // the ledger-write command into a later, separately-quoted mention.
 const PHASE_3_ROUTING = [
-  /write-gate-findings-log\.mjs[^`]*--provenance/,
-  /carriedFromHead/,
+  /write-gate-findings-log\.mjs[^`]*--judge-verdict/,
+  /writer derives mode and provenance/,
 ];
 // --provenance must NOT be reachable, within one code span, from the comment-post
 // command — this is the exact defect round 3 fixed and pins it from reintroduction.
@@ -116,7 +116,7 @@ test("copilot-pr-followup Phase 2 routes to the owned fan-out procedure and pend
   assert.doesNotMatch(line, PHASE_2_REBUILD_NO_PREV_HEAD);
 });
 
-test("copilot-pr-followup SKILL's Phase 3 step attaches --provenance to the ledger write, not the comment post", async () => {
+test("copilot-pr-followup SKILL's Phase 3 step's writer invocation derives provenance (no --provenance on the writer or the comment post)", async () => {
   const skill = await readRepo(SKILL);
   const line = extractStep(skill, "3", SKILL);
   assertMatchesAll(line, PHASE_3_ROUTING, `${SKILL} Phase 3 step`);
@@ -157,13 +157,13 @@ test("fan-in routes judged findings through the spec-bound act-list bridge", asy
 
 test("phase routing checks accept wrapped prose but cannot borrow a sibling's command", () => {
   const heading = "**Fan-in (Phase 3):**";
-  const command = "`write-gate-findings-log.mjs --provenance '<json>'`";
+  const command = "`write-gate-findings-log.mjs --judge-verdict <path>`";
   for (const prose of ["Record the carry.", "Preserve the prior\n   review identity."]) {
-    const content = `5. ${heading} ${prose}\n\n   ${command} with \`carriedFromHead\`.\n6. **Verdict:** Next step.\n`;
+    const content = `5. ${heading} ${prose}\n\n   ${command} with the writer derives mode and provenance.\n6. **Verdict:** Next step.\n`;
     assertMatchesAll(extractStep(content.replace("Fan-in", "Consolidation"), "3", "fixture"), PHASE_3_ROUTING);
   }
   for (const boundary of ["6. **Verdict:**", "## Next section"]) {
-    const content = `5. ${heading} \`carriedFromHead\`.\n${boundary}\n${command}`;
+    const content = `5. ${heading} the writer derives mode and provenance.\n${boundary}\n${command}`;
     assert.throws(() => assertMatchesAll(extractStep(content, "3", "fixture"), PHASE_3_ROUTING));
   }
   assert.throws(() => extractStep(`6. **Verdict:** Mentions ${heading}`, "3", "fixture"));
