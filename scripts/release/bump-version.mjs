@@ -182,13 +182,15 @@ export function writeClaudePluginPin(repoRoot, version) {
  * first folded section's position). Pure: no I/O. Entries keep Unreleased-first,
  * then prerelease file order; a repeated entry line keeps its first occurrence.
  * Fails closed on an ungroupable prerelease line or an existing `## <version>`.
- * A prerelease target folds nothing.
+ * A prerelease target folds nothing. With no prerelease sections and no pending
+ * fragments the changelog is returned unchanged (any Unreleased body is stamped as-is).
  *
  * @param {string} changelog
  * @param {string} version - Bare full version token.
+ * @param {boolean} [hasFragments] - True when fragments were assembled into Unreleased.
  * @returns {string}
  */
-export function foldPrereleaseSections(changelog, version) {
+export function foldPrereleaseSections(changelog, version, hasFragments = false) {
   if (version.includes("-")) return changelog;
   const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const preRe = new RegExp(`^##\\s+v?${escaped}-[0-9A-Za-z.-]+(?=\\s|$)`);
@@ -197,7 +199,7 @@ export function foldPrereleaseSections(changelog, version) {
   const sections = heads.map((start, k) => ({ start, end: heads[k + 1] ?? lines.length }));
   const pre = sections.filter((s) => preRe.test(lines[s.start]));
   const unreleased = sections.find((s) => /^##\s+Unreleased\b/i.test(lines[s.start]));
-  if (pre.length === 0 && !unreleased) return changelog;
+  if (pre.length === 0 && (!unreleased || !hasFragments)) return changelog;
   if (pre.length > 0 && new RegExp(`^##\\s+v?${escaped}(?=\\s|$)`, "m").test(changelog)) {
     throw new Error(`CHANGELOG.md already has a "## ${version}" section and prerelease section(s) to fold into it; resolve by hand before bumping`);
   }
@@ -379,7 +381,7 @@ export function bumpVersion({ repoRoot, version, stage = true, silent = false, r
     fragments,
   });
   const consumedPaths = consumed.map((name) => path.join(repoRoot, FRAGMENTS_DIR, `${name}.md`));
-  const { changelog: stampedChangelog } = stampChangelog(foldPrereleaseSections(assembledChangelog, version), version);
+  const { changelog: stampedChangelog } = stampChangelog(foldPrereleaseSections(assembledChangelog, version, fragments.length > 0), version);
   writeFileSync(changelogPath, stampedChangelog);
   for (const fragmentPath of consumedPaths) rmSync(fragmentPath);
 

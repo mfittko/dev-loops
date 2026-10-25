@@ -539,6 +539,19 @@ test("a stable bump with only prerelease sections succeeds and a re-run is a no-
   }
 });
 
+test("a stable bump with no fragments and no prerelease sections stamps a free-form Unreleased body verbatim", () => {
+  const dir = foldFixture("# Changelog\n\n## Unreleased\n\nProse line.\n\n### Security\n\n- Patched (#1)\n\n## 1.9.0\n\n- Prior.\n");
+  try {
+    bumpVersion({ repoRoot: dir, version: STABLE, stage: false, run: makeRegenRunner(dir, STABLE).run });
+    assert.equal(
+      readFileSync(path.join(dir, "CHANGELOG.md"), "utf8"),
+      "# Changelog\n\n## 2.0.0\n\nProse line.\n\n### Security\n\n- Patched (#1)\n\n## 1.9.0\n\n- Prior.\n",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a prerelease bump folds nothing", () => {
   const changelog = "# Changelog\n\n## Unreleased\n\n- New (#2)\n\n## 2.0.0-pre.1\n\n- One (#1)\n";
   const dir = foldFixture(changelog);
