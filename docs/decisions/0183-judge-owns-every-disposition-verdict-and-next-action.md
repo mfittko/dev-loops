@@ -22,7 +22,7 @@ A standalone review of a consumer pull request raised 27 findings. The posted re
 
 ## Decision
 
-- The judge is the only authority for a finding's disposition (`act`, `defer`, `reject`), for the verdict and for the next action. Severity is an input to the judge. No code path derives a disposition, a verdict, a visibility track or a next action from severity alone.
+- The judge is the only authority for a finding's disposition (`act`, `defer`, `reject`), for the verdict and for the next action. Severity is an input to the judge. On a fully judged round no code path derives a disposition, a verdict, a visibility track or a next action from severity alone. A round that is not fully judged keeps the fan-in verdict and the severity fold until the later slices of issue 2903 land.
 - Fan-in leaves every finding `unjudged` and keeps its severity as the reviewer's input. The ledger default for a missing disposition is `unjudged`.
 - The judge disposes each cluster once, by `clusterId`. One disposition and one rationale apply to every member. The judge authors a `title`, a `detail` and a `fix` for every cluster and a one-sentence `reason` for each `defer` and `reject`. A cluster without those fields fails closed.
 - The medium fix window (`gates.<gate>.mediumFixWindow`) and the round number are judge inputs. No path stamps `disposition=deferred` from severity or round. A thread, a folded finding or a body-filed finding is deferred only on a judge `defer`.

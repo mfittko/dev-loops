@@ -487,3 +487,32 @@ test("an extra unjudged high in --findings-json keeps the severity guards active
     );
   }, { prefix: "dev-loops-act-list-extra-high-" });
 });
+
+// ADR 0183: a JSON finding matches a judged ledger finding by fingerprint (first file plus normalized summary) only.
+const duplicateForms = [
+  { name: "same first file and summary", ledger: { files: ["src/a.mjs"] }, json: { files: ["src/a.mjs"] }, refused: false },
+  { name: "same summary, different file", ledger: { files: ["src/a.mjs"] }, json: { files: ["src/b.mjs"] }, refused: true },
+  { name: "same clusterId only", ledger: { files: ["src/a.mjs"], clusterId: 1 }, json: { files: ["src/b.mjs"], clusterId: 1, summary: "other summary" }, refused: true },
+];
+for (const form of duplicateForms) {
+  test(`an unjudged high with ${form.name} ${form.refused ? "keeps the severity guards active" : "is a judged ledger duplicate"}`, async () => {
+    await withTempDir(async (tempDir) => {
+      const judged = { ...finding("medium", "reject"), ...form.ledger };
+      const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [judged] });
+      const jsonPath = path.join(tempDir, "findings.json");
+      const { judgeDisposition: _omit, judgeRationale: _omit2, ...unjudged } = { ...judged, severity: "high", ...form.json };
+      await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [unjudged] }]), "utf8");
+      const args = [
+        "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
+        "--findings-summary", "act list test", "--findings-ledger", ledgerPath, "--findings-json", jsonPath,
+        "--next-action", "follow the verdict", "--inline-reason", "act list test", "--verdict", "clean",
+        "--findings-severity-counts", JSON.stringify({ high: 1, medium: 0, low: 0, question: 0, nit: 0 }),
+      ];
+      const run = () => upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+        env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild([]),
+      });
+      if (form.refused) await assert.rejects(run, /blocking severities \[high\]/);
+      else await run();
+    }, { prefix: "dev-loops-act-list-dup-form-" });
+  });
+}

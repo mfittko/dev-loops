@@ -2964,9 +2964,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     if (preloadedFindingsLedger) assertJudgeSpecSourceMatchesLedger(options, preloadedFindingsLedger.findings ?? []);
     const actItems = listOpenActItems(flatFindings);
     enrichedActItems = actItems;
-    // An unjudged JSON finding that duplicates a judged ledger finding (same cluster or trimmed summary) is dropped, so fan-in's unjudged --out cannot un-judge the round.
-    const isJudgedLedgerDuplicate = (f) => !f.judgeDisposition && (preloadedFindingsLedger?.findings ?? []).some((lf) => lf?.judgeDisposition
-      && ((Number.isInteger(f.clusterId) && f.clusterId === lf.clusterId) || f.summary === (typeof lf.summary === "string" ? lf.summary.trim() : lf.summary)));
+    // An unjudged JSON finding that duplicates a judged ledger finding (same fingerprint: first file plus normalized summary) is dropped, so fan-in's unjudged --out cannot un-judge the round.
+    const judgedLedgerFingerprints = new Set((preloadedFindingsLedger?.findings ?? []).filter((lf) => lf?.judgeDisposition).map((lf) => fingerprintFinding(lf)));
+    const isJudgedLedgerDuplicate = (f) => !f.judgeDisposition && judgedLedgerFingerprints.has(fingerprintFinding(f));
     jsonUnactedFindings = flatFindings.filter((f) => !isOpenActItem(f) && !isJudgedLedgerDuplicate(f));
     if (options.verdict === "clean" && (await guardedActItems(actItems)).length > 0) {
       throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
