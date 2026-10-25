@@ -1874,6 +1874,27 @@ test("#1672 guard: a disposition=deferred stamp the judge did not dispose defer 
   ));
 });
 
+// A current ledger that holds the fingerprint with disagreeing or missing dispositions never supports a deferred stamp.
+test("a disposition=deferred stamp is rejected when the current ledger holds the fingerprint as act plus defer or unjudged", async () => {
+  const base = { severity: "medium", angle: "config-drift", summary: "missing schema validation" };
+  const stampedMedium = `${buildFindingMarker({ fp: fingerprintFinding(base), severity: "medium", angle: "config-drift", round: 1, disposition: "deferred", issue: 42 })}\n**medium** (\`config-drift\`): missing schema validation`;
+  for (const findings of [
+    [{ ...base, judgeDisposition: "act" }, { ...base, angle: "correctness", judgeDisposition: "defer" }],
+    [{ ...base }],
+  ]) {
+    const thread = threadNode({ id: "THREAD_MED_AMBIG", path: "src/config.mjs", line: 4, commentId: 9006, body: stampedMedium });
+    await withLedgerFile(makeLedger({ gate: "draft_gate", findings }), (ledgerPath) => withGhStub(
+      roundEntries({ threads: [thread] }),
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        await assert.rejects(
+          () => closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot }),
+          /GATE-EXEC-THREAD-DISPOSITION violation.*severity=medium.*reason=not-judge-deferred/s,
+        );
+      },
+    ));
+  }
+});
+
 // #1807 AC6: GATE-EXEC-THREAD-DISPOSITION also refuses a disposition=deferred
 // stamp that carries no linked follow-up issue number — an in-window
 // deferral is otherwise legitimate (a nit at round 1), so only the missing

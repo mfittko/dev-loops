@@ -648,6 +648,9 @@ async function ledgerContradictsDeferral(fp, threadBody, findings, lookup) {
   const fps = new Set([fp]);
   collectFingerprints(threadBody, fps);
   for (const memberFp of fps) {
+    // The current ledger is authoritative: a match that is unjudged or not uniformly defer contradicts the stamp.
+    const currentDispositions = findings.filter((f) => f && findingFingerprintMatches(f, memberFp)).map((f) => (typeof f.judgeDisposition === "string" ? f.judgeDisposition.trim() : ""));
+    if (currentDispositions.length > 0 && currentDispositions.some((d) => d !== "defer")) return true;
     const judgement = await resolveJudgeRejection({ fp: memberFp, threadBody: "", allowRendered: false, findings, ...lookup });
     if (judgement && judgement.disposition !== "defer") return true;
   }

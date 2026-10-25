@@ -2389,7 +2389,7 @@ function renderGateBlockerItemsList(blockers) {
 // (a judged round) and says that it neither approves nor blocks the PR. A
 // lifecycle gate returns null for a `clean` verdict (the caller's value is
 // accepted unchanged).
-export function deriveEffectiveNextAction(verdict, gate, actItems = []) {
+export function deriveEffectiveNextAction(verdict, gate, actItems = [], unjudgedFindings = false) {
   if (gate === "review") {
     // Count distinct act items: the ledger and --findings-json can carry the same finding, and a cluster is one item.
     const stamped = actItems.length > 0 && actItems.every((f) => Number.isInteger(f?.clusterId));
@@ -2397,7 +2397,7 @@ export function deriveEffectiveNextAction(verdict, gate, actItems = []) {
     const tail = "this review does not approve or block the PR";
     if (n > 0) return `fix the ${n} item${n === 1 ? "" : "s"} this review lists; ${tail}`;
     if (verdict === "blocked") return `the review could not complete; rerun it; ${tail}`;
-    return verdict === "clean" ? `no change requested; ${tail}` : `read the findings, none was judged; ${tail}`;
+    return verdict === "clean" && !unjudgedFindings ? `no change requested; ${tail}` : `read the findings, none was judged; ${tail}`;
   }
   if (verdict !== "findings_present" && verdict !== "blocked") {
     return null;
@@ -3121,7 +3121,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // BOTH the render and the same-head idempotency compare see the derived
   // value (a render-only fix would let the compare read the raw caller
   // string against the rendered derived one).
-  const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate, listOpenActItems(preloadedFindingsLedger ? (preloadedFindingsLedger.findings ?? []) : enrichedActItems));
+  const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate, listOpenActItems(preloadedFindingsLedger ? (preloadedFindingsLedger.findings ?? []) : enrichedActItems), (preloadedFindingsLedger?.findings?.length ?? 0) > 0 && !judgedRound);
   if (derivedNextAction !== null) {
     options.nextAction = derivedNextAction;
   }

@@ -78,8 +78,9 @@ test("the Phase 3.5 judge contract states no severity auto-defer and adjudicates
 const lowDeferGrants = (text) => sentences(text).filter((s) => /from round 1/i.test(s) && /\blow\b/i.test(s) && /defer/i.test(s));
 const unexemptedGrants = (text) => lowDeferGrants(text).filter((s) => !(s.includes("`act`") && s.includes("reproduction")));
 
-test("EVERY round-1 low-defer allowance in the sub-loop contract exempts a judge-acted low (no downstream re-defer)", async () => {
+test("the sub-loop contract carries no round-1 low-defer grant (any reintroduced grant must exempt a judge-acted low)", async () => {
   const text = await read("skills/docs/gate-review-sub-loop-contract.md");
+  assert.deepEqual(lowDeferGrants(text), []);
   assert.deepEqual(unexemptedGrants(text), []);
   // Reworded positive: the exception travels with the allowance in any phrasing.
   assert.deepEqual(unexemptedGrants("A low may be deferred from round 1, unless the judge marked it `act`; the fixer then declines only on reproduction grounds."), []);
