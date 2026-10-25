@@ -125,7 +125,10 @@ export async function resolveBunTestFiles(args, { repoRoot = DEFAULT_ROOT, disco
     // (false exit 0). Only flags and the values of known value-taking flags may remain.
     for (let i = 0; i < args.length; i += 1) {
       if (i === index) { i += 1; continue; }
-      if (["--timeout", "--reporter", "--path-ignore-patterns"].includes(args[i])) { i += 1; continue; }
+      // Skip a flag's value only when buildBunTestArgs consumes it; otherwise it stays a positional.
+      const value = args[i + 1];
+      if ((args[i] === "--timeout" && /^\d+$/.test(value ?? "")) || (args[i] === "--reporter" && value === "dots")
+        || (args[i] === "--path-ignore-patterns" && PATH_IGNORE_PATTERNS.includes(value))) { i += 1; continue; }
       if (!args[i].startsWith("-")) throw new Error("--referencing cannot be combined with positional test files");
     }
     const matches = [];
