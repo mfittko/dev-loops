@@ -12099,6 +12099,44 @@ test("--gate review counts one 3-member act cluster as one item, with a ledger a
   for (const body of bodies) assert.match(body, /fix the 1 item this review lists/);
 });
 
+async function postReviewJsonRound({ ledgerFindings, jsonFindings }) {
+  let body;
+  await withTempDir(async (tempDir) => {
+    const findingsJson = path.join(tempDir, "judged-findings.json");
+    await writeFile(findingsJson, JSON.stringify(jsonFindings), "utf8");
+    const ledgerPath = await writeReviewGateLedger(tempDir, ledgerFindings, { overallVerdict: "findings_present" });
+    const { runChild, calls } = makeGhMock([
+      ...reviewGateFindingSurfaceEntries(),
+      { assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"], stdout: '{"id":910,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-910"}\n' },
+    ]);
+    await upsertCheckpointVerdict({
+      repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsJson, findingsLedger: ledgerPath, executionMode: "fanout_fanin", judgeSpecSource: "pr_body",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    const post = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    body = JSON.parse(post.stdinText).body;
+  }, { prefix: "dev-loops-upsert-json-round-" });
+  return body;
+}
+
+test("--gate review keeps clusterId and files from --findings-json: a JSON-only act cluster counts as one item and a same-text pair on two files as two", async () => {
+  const member = (word, extra) => ({ ...ACT_FINDING, summary: `${word} member of one cluster`, ...extra });
+  const clustered = await postReviewJsonRound({ ledgerFindings: [{ ...REJECT_FINDING, clusterId: 1 }], jsonFindings: [REJECT_FINDING, member("first", { clusterId: 0 }), member("second", { clusterId: 0 })] });
+  assert.match(clustered, /fix the 1 item this review lists/);
+  const twoFiles = await postReviewJsonRound({ ledgerFindings: [REJECT_FINDING], jsonFindings: [REJECT_FINDING, member("same", { files: ["src/a.mjs"] }), member("same", { files: ["src/b.mjs"] })] });
+  assert.match(twoFiles, /fix the 2 items this review lists/);
+});
+
+test("--gate review next action and verdict agree when --findings-json adds an act item to a fully judged ledger, and when it flips a ledger reject to act", async () => {
+  const extra = await postReviewJsonRound({ ledgerFindings: [REJECT_FINDING], jsonFindings: [REJECT_FINDING, ACT_FINDING] });
+  assert.match(extra, /\*\*Verdict:\*\* findings_present/);
+  assert.match(extra, /fix the 1 item this review lists/);
+  const conflict = await postReviewJsonRound({ ledgerFindings: [REJECT_FINDING], jsonFindings: [{ ...REJECT_FINDING, judgeDisposition: "act" }] });
+  assert.match(conflict, /\*\*Verdict:\*\* findings_present/);
+  assert.match(conflict, /fix the 1 item this review lists/);
+});
+
 test("assertJudgeSpecSourceMatchesLedger fails closed on every ledger and source mismatch, naming the flag", () => {
   const options = (judgeSpecSource) => ({ gate: "review", judgeSpecSource });
   const judged = [ACT_FINDING, REJECT_FINDING];

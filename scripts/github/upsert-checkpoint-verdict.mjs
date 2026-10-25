@@ -2832,6 +2832,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   }
   // Open act items from an enriched --findings-json posted alongside a ledger.
   let enrichedActItems = [];
+  // The --findings-json findings that are not open act items; an unjudged one keeps the round from counting as fully judged.
+  let jsonUnactedFindings = [];
   // Fan-out angle-coverage enforcement for a ledger-only round (no
   // --findings-json): runs BEFORE the tick below, so a ledger this post refuses
   // never leaves ticked boxes behind. The --findings-json coverage refusal runs
@@ -2936,6 +2938,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       summary: (typeof f?.summary === "string" && f.summary.trim()) || "(unparseable)",
       judgeDisposition: typeof f?.judgeDisposition === "string" ? f.judgeDisposition.trim() : f?.judgeDisposition,
       ...(f?.remedyKind ? { remedyKind: f.remedyKind } : {}),
+      // Cluster and location survive the projection so the next-action count and fingerprints match the ledger's.
+      ...(Number.isInteger(f?.clusterId) ? { clusterId: f.clusterId } : {}),
+      ...(typeof f?.file === "string" ? { file: f.file } : {}),
+      ...(Array.isArray(f?.files) ? { files: f.files } : {}),
       ...(Number.isInteger(f?.followUpIssueNumber) && f.followUpIssueNumber > 0 ? { followUpIssueNumber: f.followUpIssueNumber } : {}),
     }));
     const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
@@ -2959,6 +2965,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     if (preloadedFindingsLedger) assertJudgeSpecSourceMatchesLedger(options, preloadedFindingsLedger.findings ?? []);
     const actItems = listOpenActItems(flatFindings);
     enrichedActItems = actItems;
+    jsonUnactedFindings = flatFindings.filter((f) => !isOpenActItem(f));
     if (options.verdict === "clean" && (await guardedActItems(actItems)).length > 0) {
       throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
     }
@@ -2988,7 +2995,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
     // Judged non-act findings stay in the list so a judged round with an empty act list composes clean; the converged guard replaces only the act items.
-    const roundFindings = [...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems];
+    const roundFindings = [...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems, ...jsonUnactedFindings];
     // ADR 0182: judged-ness is decided over the whole round, before the converged guard drops its act items.
     const guardedRoundActs = await guardedActItems(roundFindings);
     const ledgerVerdict = isFullyJudged(roundFindings) && preloadedFindingsLedger.overallVerdict !== "blocked"
@@ -3043,7 +3050,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     throw new Error(`--converged-json for ${options.gate} @ ${canonicalHeadSha} needs a clean composed verdict over a validated low/nit act list (got verdict ${JSON.stringify(options.verdict)}); post a full round instead.`);
   }
   // A fully judged round takes its verdict from the judge's act list alone, so the severity floor never overrides it. A partly judged ledger keeps the floor.
-  const judgedRound = isFullyJudged(preloadedFindingsLedger?.findings);
+  const judgedRound = isFullyJudged(preloadedFindingsLedger?.findings) && jsonUnactedFindings.every((f) => JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
   if (
     options.verdict === "clean"
     && !judgedRound
@@ -3125,7 +3132,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // BOTH the render and the same-head idempotency compare see the derived
   // value (a render-only fix would let the compare read the raw caller
   // string against the rendered derived one).
-  const derivedNextAction = deriveEffectiveNextAction(options.verdict, options.gate, listOpenActItems(preloadedFindingsLedger ? (preloadedFindingsLedger.findings ?? []) : enrichedActItems), (preloadedFindingsLedger?.findings?.length ?? 0) > 0 && !judgedRound);
+  // The same act set as the verdict: the ledger's act items plus any --findings-json act item the ledger does not already carry (same trimmed summary).
+  const ledgerActItems = listOpenActItems(preloadedFindingsLedger?.findings ?? []);
+  const ledgerActSummaries = new Set(ledgerActItems.map((f) => (typeof f.summary === "string" ? f.summary.trim() : f.summary)));
+  const nextActionItems = [...ledgerActItems, ...enrichedActItems.filter((f) => !ledgerActSummaries.has(f.summary))];
+  const derivedNextAction =deriveEffectiveNextAction(options.verdict, options.gate, nextActionItems, (preloadedFindingsLedger?.findings?.length ?? 0) > 0 && !judgedRound);
   if (derivedNextAction !== null) {
     options.nextAction = derivedNextAction;
   }

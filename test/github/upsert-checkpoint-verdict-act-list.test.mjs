@@ -426,3 +426,24 @@ test("a partly judged ledger keeps the fan-in verdict: an unjudged high never co
     assert.match(explicitClean.error, /--verdict "clean"/);
   }, { prefix: "dev-loops-act-list-mixed-" });
 });
+
+test("an extra unjudged high in --findings-json keeps the severity guards active over a fully judged ledger", async () => {
+  await withTempDir(async (tempDir) => {
+    const judged = finding("low", "reject");
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [judged] });
+    const jsonPath = path.join(tempDir, "findings.json");
+    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [judged, { severity: "high", summary: "unjudged extra high" }] }]), "utf8");
+    const args = [
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
+      "--findings-summary", "act list test", "--findings-ledger", ledgerPath, "--findings-json", jsonPath,
+      "--next-action", "follow the verdict", "--inline-reason", "act list test", "--verdict", "clean",
+      "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 1, question: 0, nit: 0 }),
+    ];
+    await assert.rejects(
+      () => upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+        env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild([]),
+      }),
+      /blocking severities \[high\]/,
+    );
+  }, { prefix: "dev-loops-act-list-extra-high-" });
+});
