@@ -216,7 +216,10 @@ test("a path-shaped token longer than PATH_MAX is unresolved under any root dept
   assert.deepEqual(left.unresolvedPaths, right.unresolvedPaths);
 });
 
-test("an EACCES on --repo-root itself is not treated as missing and is no usage error", async () => {
+// uid 0 ignores directory permission bits, so stat never throws EACCES.
+const SKIP_UNDER_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
+
+test("an EACCES on --repo-root itself is not treated as missing and is no usage error", { skip: SKIP_UNDER_ROOT }, async () => {
   const parent = await fixtureRepo();
   await mkdir(path.join(parent, "locked", "child"), { recursive: true });
   await chmod(path.join(parent, "locked"), 0o000);
