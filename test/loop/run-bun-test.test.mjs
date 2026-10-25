@@ -863,6 +863,11 @@ test("referencing CLI exits safely for no matches and malformed selectors", asyn
     [["test/loop/a.test.mjs", "--referencing", "no/such/path"], 1, /--referencing.*positional/],
     [["test/loop/a.test.mjs", "--referencing", "skills/loop-grill/SKILL.md"], 1, /--referencing.*positional/],
     [["--referencing", "skills/loop-grill/SKILL.md", "--all"], 1, /--referencing.*--all/],
+    [["--referencing", "no/such/path", "test/loop"], 1, /--referencing.*positional/],
+    [["--referencing", "no/such/path", "packages/core/test"], 1, /--referencing.*positional/],
+    [["--referencing", missing, "--timeout", "5000"], 0, new RegExp(missing)],
+    [["--referencing", missing, "--reporter", "dots"], 0, new RegExp(missing)],
+    [["--referencing", missing, "--dots"], 0, new RegExp(missing)],
   ]) {
     const child = Bun.spawn([process.execPath, "scripts/run-bun-test.mjs", ...args], {
       cwd: path.resolve(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe",

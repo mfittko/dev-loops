@@ -121,9 +121,12 @@ export async function resolveBunTestFiles(args, { repoRoot = DEFAULT_ROOT, disco
     const reference = args[index + 1];
     if (!reference || reference.startsWith("-")) throw new Error("--referencing requires a path value");
     if (args.includes("--all")) throw new Error("--referencing cannot be combined with --all");
-    // Positional test files would be silently dropped on zero matches (false exit 0).
-    if (args.some((arg, i) => i !== index && i !== index + 1 && /\.(test|spec)\.[cm]?[jt]sx?$/.test(arg))) {
-      throw new Error("--referencing cannot be combined with positional test files");
+    // Positionals (files or directories) would be silently dropped on zero matches
+    // (false exit 0). Only flags and the values of known value-taking flags may remain.
+    for (let i = 0; i < args.length; i += 1) {
+      if (i === index) { i += 1; continue; }
+      if (["--timeout", "--reporter", "--path-ignore-patterns"].includes(args[i])) { i += 1; continue; }
+      if (!args[i].startsWith("-")) throw new Error("--referencing cannot be combined with positional test files");
     }
     const matches = [];
     for (const file of await discover()) {
