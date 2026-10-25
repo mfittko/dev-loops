@@ -64,15 +64,15 @@ const PHASE_2_ROUTING = [
 // has no --prev-head (issue 2528, ADR 0109).
 const PHASE_2_REBUILD_NO_PREV_HEAD = /`[^`]*--carried-angles[^`]*--prev-head[^`]*`/;
 
-// Phase 3 (Fan-in): --provenance belongs to the LEDGER WRITE, not the comment
-// post — pinned on this line specifically so a reworded sentence that reattaches
-// the flag to the wrong command (the exact defect this pins) fails here. The
-// step may span paragraphs; anchor inside the backtick-delimited code span
+// Phase 3 (Fan-in): the writer derives mode and provenance from the keyed
+// artifacts, so neither the writer nor the comment post carries --provenance,
+// --emit-plan or --verdict. Anchor inside the backtick-delimited code span
 // (`[^`]*`), which stops at the first closing backtick and so cannot reach past
-// the ledger-write command into a later, separately-quoted mention.
+// the command into a later, separately-quoted mention.
+const WRITER_FORBIDDEN_FLAGS = /write-gate-findings-log\.mjs[^`]*--(provenance|emit-plan|verdict)\b/;
 const PHASE_3_ROUTING = [
-  /write-gate-findings-log\.mjs[^`]*--provenance/,
-  /carriedFromHead/,
+  /write-gate-findings-log\.mjs[^`]*--judge-verdict/,
+  /writer derives mode and provenance/,
 ];
 // --provenance must NOT be reachable, within one code span, from the comment-post
 // command — this is the exact defect round 3 fixed and pins it from reintroduction.
@@ -116,7 +116,7 @@ test("copilot-pr-followup Phase 2 routes to the owned fan-out procedure and pend
   assert.doesNotMatch(line, PHASE_2_REBUILD_NO_PREV_HEAD);
 });
 
-test("copilot-pr-followup SKILL's Phase 3 step attaches --provenance to the ledger write, not the comment post", async () => {
+test("copilot-pr-followup SKILL's Phase 3 step's writer invocation derives provenance (no --provenance on the writer or the comment post)", async () => {
   const skill = await readRepo(SKILL);
   const line = extractStep(skill, "3", SKILL);
   assertMatchesAll(line, PHASE_3_ROUTING, `${SKILL} Phase 3 step`);
@@ -125,6 +125,23 @@ test("copilot-pr-followup SKILL's Phase 3 step attaches --provenance to the ledg
     PHASE_3_PROVENANCE_NOT_ON_COMMENT_POST,
     `${SKILL} Phase 3 step must not attach --provenance to the post-gate-findings.mjs comment post`,
   );
+  assert.doesNotMatch(line, WRITER_FORBIDDEN_FLAGS, `${SKILL} Phase 3 writer must pass no --provenance, --emit-plan or --verdict`);
+  assert.match(line, /write-gate-findings-log\.mjs[^`]*--execution-mode fanout_fanin/, `${SKILL} Phase 3 writer must pass --execution-mode fanout_fanin`);
+  const sanctioned = (await readRepo(SUB_LOOP_CONTRACT)).split("`GATE-EXEC-DISPOSITION-LEDGER`: Every gate pass")[1].match(/```sh\n([\s\S]*?)```/)[1];
+  assert.match(sanctioned, /write-gate-findings-log\.mjs/);
+  assert.doesNotMatch(sanctioned.replace(/\\\n/g, " ").replace(/#.*$/gm, ""), /--(provenance|emit-plan|verdict)\b/);
+});
+
+test("Phase 3 writer-flag matcher accepts sanctioned forms and rejects --provenance, --emit-plan and --verdict", () => {
+  for (const ok of [
+    "`write-gate-findings-log.mjs --findings-file <ledger-path> --judge-verdict <judge-verdict-path>`",
+    "`write-gate-findings-log.mjs --findings-file <ledger-path> --judge-verdict <judge-verdict-path> --context-tmp-root <path> --full-label`",
+  ]) assert.doesNotMatch(ok, WRITER_FORBIDDEN_FLAGS);
+  for (const bad of [
+    "`write-gate-findings-log.mjs --findings-file <p> --provenance '<json>'`",
+    "`write-gate-findings-log.mjs --findings-file <p> --emit-plan <path>`",
+    "`write-gate-findings-log.mjs --findings-file <p> --verdict clean`",
+  ]) assert.match(bad, WRITER_FORBIDDEN_FLAGS);
 });
 
 function assertJudgeBridge(step) {
@@ -165,13 +182,13 @@ test("the fixer persona derives no disposition from severity without a judge ver
 
 test("phase routing checks accept wrapped prose but cannot borrow a sibling's command", () => {
   const heading = "**Fan-in (Phase 3):**";
-  const command = "`write-gate-findings-log.mjs --provenance '<json>'`";
+  const command = "`write-gate-findings-log.mjs --judge-verdict <path>`";
   for (const prose of ["Record the carry.", "Preserve the prior\n   review identity."]) {
-    const content = `5. ${heading} ${prose}\n\n   ${command} with \`carriedFromHead\`.\n6. **Verdict:** Next step.\n`;
+    const content = `5. ${heading} ${prose}\n\n   ${command} with the writer derives mode and provenance.\n6. **Verdict:** Next step.\n`;
     assertMatchesAll(extractStep(content.replace("Fan-in", "Consolidation"), "3", "fixture"), PHASE_3_ROUTING);
   }
   for (const boundary of ["6. **Verdict:**", "## Next section"]) {
-    const content = `5. ${heading} \`carriedFromHead\`.\n${boundary}\n${command}`;
+    const content = `5. ${heading} the writer derives mode and provenance.\n${boundary}\n${command}`;
     assert.throws(() => assertMatchesAll(extractStep(content, "3", "fixture"), PHASE_3_ROUTING));
   }
   assert.throws(() => extractStep(`6. **Verdict:** Mentions ${heading}`, "3", "fixture"));
