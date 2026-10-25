@@ -276,7 +276,7 @@ test("#2381 shared fixture: an UNANSWERED, judge-rejected question — close-gat
 
 // #2381 item 9: a defect (high) thread never auto-resolves — close-gate-findings
 // and ready-for-review must agree it stays unresolved, and the refusal names
-// the defect remedy (fixer fix-close / disposition-pass defer-close), never
+// the defect remedy (fixer fix-close / close-gate-findings rerun on a judge defer or evidence-only act), never
 // the question remedy.
 test("#2381 shared fixture: a defect (high) thread — close-gate-findings never auto-resolves it, and ready-for-review agrees it stays unresolved", async () => {
   const threadState = {

@@ -1,8 +1,10 @@
 import { executeDevLoopsCommand, inspectResultSeverity } from '../lib/dev-loops-core.mjs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createExtensionCoreRuntime } from './checks.ts';
 import { createPostMergeUpdateHook } from './post-merge-update.ts';
 import { createPiExtensionAdapter, type ExtensionAPI } from './pi-extension-adapter.ts';
+import { loadDevLoopConfig, resolveRoleModel } from '@dev-loops/core/config';
 import {
   createChildRoleGateRegistrar,
   loadRegisterRequiredChildExtensions,
@@ -31,7 +33,7 @@ const WIDGET_KEY = 'dev-loops.setup';
 // builtins at session-start sync time (#1583); the pure transform + IO live in
 // a dedicated module so they stay testable offline. Import for local use AND
 // re-export so tests can reach the same binding the session_start handler calls.
-import { syncPackagedAgents } from './sync-packaged-agents.ts';
+import { checkAgentSetRendered, findProjectRoot, isDevLoopsAgentsCheckout, renderProjectAgents, syncPackagedAgents } from './sync-packaged-agents.ts';
 export { syncPackagedAgents };
 import { decidePiToolCall, isReadOnlyPiRole, resolvePiRole } from './readonly-role-gate.ts';
 
@@ -62,7 +64,17 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
   adapter.on('session_start', async (_event, ctx) => {
     postMergeUpdateHook.onSessionStart();
     try {
-      syncPackagedAgents({ projectRoot: ctx.cwd });
+      const projectRoot = ctx.cwd ? findProjectRoot(ctx.cwd) : undefined;
+      const devLoopsCheckout = !!projectRoot && isDevLoopsAgentsCheckout(projectRoot);
+      // The unpinned project sync would strip provisioned `model:` pins in a dev-loops checkout; render there instead.
+      syncPackagedAgents({ projectRoot: devLoopsCheckout ? undefined : projectRoot });
+      // A fresh dev-loops clone has no `.pi/agents`; render it from the checkout's own agents/ (decision record 0173).
+      if (projectRoot && devLoopsCheckout) {
+        // Same pinned-model resolution as provisioning; an invalid config pins nothing; children inherit.
+        const { config, errors } = await loadDevLoopConfig({ repoRoot: projectRoot });
+        const safeConfig = errors && errors.length > 0 ? null : config;
+        renderProjectAgents(projectRoot, path.join(projectRoot, 'agents'), (role: string) => resolveRoleModel(safeConfig, { role, harness: 'pi' }));
+      }
     } catch {
       // Best-effort agent sync — do not break session start
     }
@@ -82,6 +94,15 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
   // read-only roles; Pi honours `{ block, reason }` from `tool_call`.
   adapter.on('tool_call', (event, ctx) => {
     const { toolName, input } = event as { toolName?: string; input?: { command?: unknown } };
+    if (toolName === 'subagent' && ctx.cwd) {
+      // refuse a child launch when a rendered dev-loops agent file carries raw non-Pi tools;
+      // the launch cwd may sit at the top level or inside `options`.
+      type Sub = { cwd?: unknown; options?: Sub };
+      const sub = (input ?? {}) as Sub;
+      const launchCwd = [sub.options?.cwd, sub.cwd].find((c): c is string => typeof c === 'string' && c.length > 0);
+      const reason = checkAgentSetRendered(launchCwd ? path.resolve(ctx.cwd, launchCwd) : ctx.cwd);
+      if (reason) return { block: true, reason };
+    }
     return decidePiToolCall({ toolName, input, agentType: resolveSessionRole(ctx) });
   });
 

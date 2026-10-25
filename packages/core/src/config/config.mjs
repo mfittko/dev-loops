@@ -104,7 +104,15 @@ function refineRoleTiers(models, ctx) {
   }
 }
 
+const CodexExecutionToken = z.string({ error: (issue) => `expected a Codex string token or null, got ${JSON.stringify(issue.input)}; correct the conductor setting` })
+  .regex(/\S/, { error: (issue) => `empty Codex token ${JSON.stringify(issue.input)}; use a nonempty conductor setting or null to inherit` }).trim().nullable();
+const CodexExecutionSettings = z.strictObject({
+  model: CodexExecutionToken.optional(),
+  reasoningEffort: CodexExecutionToken.optional(),
+}).refine((settings) => Object.keys(settings).length > 0, "conductor settings must set model or reasoningEffort (null clears a field)").meta({ minProperties: 1 });
+
 const ModelsConfigBase = z.strictObject({
+  harnesses: z.strictObject({ codex: z.strictObject({ conductor: CodexExecutionSettings.optional() }) }).optional(),
   conductor: z.string().trim().min(1).describe("Model override for the conductor (dev-loop) session; absent = inherit the session model.").optional(),
   roles: z.record(z.string(), z.string().trim().min(1)).describe("Concrete per-role/angle model overrides (highest precedence, above tiers).").optional(),
   tiers: z.record(z.string().min(1), ModelTierMapping).describe("Tier alias → per-harness concrete model; null on a harness means inherit (no override).").optional(),
@@ -274,10 +282,10 @@ export const ValidationConfig = z
     fullCommand: ValidationCommand.describe("Optional full-validation command for `local` mode, run through `sh -c` at the repo root (for example `cargo test`). Without it, `local` mode runs the package.json `verify` script through Bun.").optional(),
     paths: z.array(z.strictObject({
       match: z.union([RepoRelativeGlob, z.array(RepoRelativeGlob).min(1)]).describe("Glob or globs this rule covers."),
-      surface: z.string().min(1).describe("Surface name. A change set that spans surfaces, or an unmapped path, needs full validation."),
+      surface: z.string().min(1).describe("Surface name. Fully mapped change sets combine checks across surfaces."),
       commands: z.array(ValidationCommand).describe("Targeted worker commands. `{path}` expands to each matching changed path, which must use only [A-Za-z0-9._/-]. An empty list pins matching paths to full validation."),
       gateSuites: z.array(z.string().min(1)).describe("Explicit gate `--suite` names; `bun run <name>` commands add theirs.").optional(),
-    })).describe("Ordered, first-match-wins path-to-command map for targeted worker checks (`resolveTargetedValidation`).").optional(),
+    })).describe("Ordered, first-match-wins path-to-command map for targeted worker checks (`resolveTargetedValidation`). When every path maps to non-empty commands, use the sorted, deduplicated union of commands and gateSuites across surfaces. An unmapped, empty-command or unsafe templated path needs full validation.").optional(),
   })
   .describe("Validation resolution: gate mode, optional full command, and a path-to-command map. Only the `.devloops` family file is read; the key has no effect in `.pi/dev-loop/defaults.*`. Requires a dev-loops CLI that knows the `validation` key.");
 
@@ -368,12 +376,12 @@ const GateConfig = z.strictObject({
     .array(z.enum(/** @type {[string, ...string[]]} */ (BLOCKING_SEVERITY_SPELLINGS)))
     .min(1)
     .default(["high"])
-    .describe("Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them."),
+    .describe("Defect finding severities that block a clean gate verdict only when the round is not fully judged; a fully judged round is decided by the judge's act dispositions instead (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them."),
   // No schema-level `.default()`: a default would fill this key on every config
   // LAYER independently (each is parsed before merging), permanently shadowing
   // a layer that sets only the deprecated `worthFixingNowFixWindow` alias.
   // resolveGateConfig applies the built-in fallback (3) after checking both.
-  mediumFixWindow: z.number().int().nonnegative().optional().describe("Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. high is exempt (never defers). Default 3."),
+  mediumFixWindow: z.number().int().nonnegative().optional().describe("Per-gate medium fix window: the number of rounds the judge weighs an open medium finding for an in-gate fix. The window is an input to the judge's act, defer or reject decision, never applied by code, and never defers a finding by itself. high is exempt (never defers). Default 3."),
   worthFixingNowFixWindow: z.number().int().nonnegative().optional().describe("Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set."),
   // No schema-level `.default()` for the same reason as mediumFixWindow above:
   // a default would fill this key on every config layer independently and
@@ -1492,6 +1500,14 @@ function mergeConfigLayers(target, source) {
       result[key] = key === "gates"
         ? mergeGatesFamily(result[key], source[key])
         : { ...(result[key] || {}), ...(source[key] || {}) };
+      if (key === "models" && source.models.harnesses?.codex?.conductor) {
+        result.models.harnesses = { codex: { conductor: {
+          ...target.models?.harnesses?.codex?.conductor,
+          ...source.models.harnesses.codex.conductor,
+        } } };
+      } else if (key === "models" && target.models?.harnesses) {
+        result.models.harnesses = target.models.harnesses;
+      }
     } else {
       result[key] = source[key];
     }
@@ -1944,6 +1960,24 @@ export function resolveConductorModel(config) {
     return raw.trim();
   }
   return null;
+}
+
+/** Codex selects only its conductor object; legacy concrete model policy stays isolated. */
+export function resolveConductorSettings(config, { harness } = {}) {
+  if (harness !== "codex") throw new Error(`Conductor execution settings require harness codex; got ${JSON.stringify(harness)}`);
+  const settings = config?.models?.harnesses?.codex?.conductor;
+  return { model: settings?.model ?? null, reasoningEffort: settings?.reasoningEffort ?? null };
+}
+
+/** Shared config-only selection for initial native dispatch and emitted coordinators. */
+export function resolveConductorDispatch(loadResult, { harness } = {}) {
+  const configErrors = loadResult.errors ?? [];
+  const settings = resolveConductorSettings(configErrors.length ? null : loadResult.config, { harness });
+  return { ok: configErrors.length === 0, harness, kind: "conductor", settings,
+    nativeOverrides: configErrors.length ? {} : {
+      ...(settings.model !== null ? { model: settings.model } : {}),
+      ...(settings.reasoningEffort !== null ? { reasoning_effort: settings.reasoningEffort } : {}),
+    }, configErrors };
 }
 
 /**

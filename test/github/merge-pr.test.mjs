@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { mergePr, parseMergePrCliArgs, main } from "../../scripts/github/merge-pr.mjs";
+import { mergePr, parseMergePrCliArgs, main, defaultIsAncestor, defaultFetchPrHead } from "../../scripts/github/merge-pr.mjs";
 import { captureStream } from "../_helpers.mjs";
 
 const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
@@ -117,6 +117,7 @@ function makeRuntime({
       },
       detectEvidence: async () => ({ ...evidence, currentHeadSha: evidenceHead }),
       fetchPrHead: () => {},
+      isAncestor: () => true,
       detectOriginSlug: () => "mfittko/dev-loops",
       evaluateAdrTripwire: async () => ({ outcome: "pass" }),
       detectInternalOnlyPr: async () => (prFilesCode ? { ok: false, error: "files read failed" } : { ok: true, internalOnly: detectorInternalOnly, files: prFiles }),
@@ -157,13 +158,11 @@ test("adr_tripwire refuses a block that is not a stale waiver, never merging", a
   assert.equal(mergeCalls(calls).length, 0);
 });
 
-test("adr_tripwire fails closed when the evaluator throws or the head fetch fails", async () => {
-  for (const key of ["evaluateAdrTripwire", "fetchPrHead"]) {
-    const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
-    runtime[key] = () => { throw new Error("git exploded"); };
-    await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*git exploded/);
-    assert.equal(mergeCalls(calls).length, 0);
-  }
+test("adr_tripwire fails closed when the evaluator throws", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
+  runtime.evaluateAdrTripwire = () => { throw new Error("git exploded"); };
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*git exploded/);
+  assert.equal(mergeCalls(calls).length, 0);
 });
 
 test("adr_tripwire re-issues a stale covered waiver through the writer, re-reads the body, and merges", async () => {
@@ -181,7 +180,7 @@ test("adr_tripwire re-issues a stale covered waiver through the writer, re-reads
   assert.equal(mergeCalls(calls).length, 1);
 });
 
-test("adr_tripwire evaluates origin/<base> at the PR head after fetching it", async () => {
+test("the merge fetches the base and PR head once and the tripwire evaluates origin/<base> at the PR head", async () => {
   const { runtime } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
   const fetched = [];
   const evaluated = [];
@@ -192,19 +191,19 @@ test("adr_tripwire evaluates origin/<base> at the PR head after fetching it", as
   assert.deepEqual(evaluated, [{ base: "origin/main", head: HEAD }]);
 });
 
-test("adr_tripwire refuses as unevaluable when the PR base branch is unreadable", async () => {
+test("base_not_integrated refuses as unevaluable when the PR base branch is unreadable", async () => {
   const { runtime, calls } = makeRuntime({ prView: { baseRefName: "" } });
-  await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*base branch is unreadable/);
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /base_not_integrated \(.*base branch is unreadable/);
   assert.equal(mergeCalls(calls).length, 0);
 });
 
-test("adr_tripwire refuses as unevaluable when the checkout origin is not --repo or unreadable", async () => {
+test("base_not_integrated refuses when the checkout origin is not --repo or unreadable", async () => {
   for (const slug of ["someone/fork", null]) {
     const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
     runtime.detectOriginSlug = () => slug;
     let fetched = false;
     runtime.fetchPrHead = () => { fetched = true; };
-    await assert.rejects(() => mergePr(baseOptions(), runtime), /adr_tripwire \(.*unevaluable.*checkout origin/);
+    await assert.rejects(() => mergePr(baseOptions(), runtime), /base_not_integrated \(.*checkout origin/);
     assert.equal(fetched, false);
     assert.equal(mergeCalls(calls).length, 0);
   }
@@ -642,6 +641,15 @@ test("under autonomy.humanMergeOnly the wrapper refuses outright, even with a fr
   assert.equal(calls.runChild.length, 0, "no merge under humanMergeOnly");
 });
 
+test("humanMergeOnly refuses before the base fetch, even when the fetch would throw", async () => {
+  const { runtime } = makeRuntime({ humanMergeOnly: true });
+  let fetched = false;
+  runtime.fetchPrHead = () => { fetched = true; throw new Error("fetch must not run"); };
+  const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.equal(threw.mergePrFailure.humanMergeOnly, true);
+  assert.equal(fetched, false);
+});
+
 test("a drain merge without --standing-authorization requires a fresh operator approval", async () => {
   // No standing flag, no fresh approval -> refused.
   const noApproval = makeRuntime();
@@ -983,7 +991,7 @@ test("merge-pr default evidence probe shells the same detect-checkpoint-evidence
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { buildResolveDevLoopStartupResult, resolvePendingRetrospectives } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
-import { resolverTestEnv } from "../_helpers.mjs";
+import { resolverTestEnv, runGitFixture } from "../_helpers.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1146,11 +1154,12 @@ test("adr_number_collision: a 404 on the tip directory is an empty tip", async (
   assert.equal((await mergePr(baseOptions(), runtime)).merged, true);
 });
 
-test("adr_number_collision: refuses fail-closed when the base branch name is unknown or blank and a record is added", async () => {
+test("adr_number_collision: a blank base branch name refuses before any ADR number read", async () => {
   for (const baseRefName of ["", "  "]) {
     const { runtime, calls } = makeRuntime({ prView: { baseRefName }, adrPrFiles: [adrFile("docs/decisions/0001-a.md")] });
     const threw = await mergePr(baseOptions(), runtime).catch((e) => e);
-    assert.match(threw.mergePrFailure.failures.find((f) => f.precondition === "adr_number_collision").reason, /base branch name is unknown/);
+    // An unreadable base now refuses at the top as base_not_integrated, before any ADR number read.
+    assert.match(threw.mergePrFailure.failures.find((f) => f.precondition === "base_not_integrated").reason, /base branch is unreadable/);
     assert.equal(contentsCalls(calls).length, 0);
     assert.equal(mergeCalls(calls).length, 0);
   }
@@ -1206,4 +1215,100 @@ test("adr_number_collision: a collision-repair rename merges", async () => {
     adrTip: ["0095-a.md", "0095-b.md"],
   });
   assert.equal((await mergePr(baseOptions(), runtime)).merged, true);
+});
+
+test("base_not_integrated refuses a head that does not contain origin/<base> and merges one that does", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
+  const asked = [];
+  runtime.isAncestor = (opts) => { asked.push({ base: opts.base, head: opts.head }); return false; };
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /base_not_integrated \(.*GATE-EXEC-BASE-REFRESH/);
+  assert.deepEqual(asked, [{ base: "origin/main", head: HEAD }]);
+  assert.equal(mergeCalls(calls).length, 0);
+
+  const ok = makeRuntime({ prView: { baseRefName: "main" } });
+  ok.runtime.isAncestor = () => true;
+  assert.equal((await mergePr(baseOptions(), ok.runtime)).merged, true);
+  assert.equal(mergeCalls(ok.calls).length, 1);
+});
+
+test("base_not_integrated shapes mergePrFailure like the other refusals", async () => {
+  const { runtime } = makeRuntime({ prView: { baseRefName: "main" } });
+  runtime.isAncestor = () => false;
+  const error = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.equal(error.mergePrFailure.ok, false);
+  assert.equal(error.mergePrFailure.merged, false);
+  assert.equal(error.mergePrFailure.headSha, HEAD);
+  assert.equal(error.mergePrFailure.failures[0].precondition, "base_not_integrated");
+});
+
+test("base_not_integrated fails closed when the fetch or the ancestry check throws", async () => {
+  for (const key of ["fetchPrHead", "isAncestor"]) {
+    const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
+    runtime[key] = () => { throw new Error("git exploded"); };
+    await assert.rejects(() => mergePr(baseOptions(), runtime), /base_not_integrated \(could not verify.*git exploded/);
+    assert.equal(mergeCalls(calls).length, 0);
+  }
+});
+
+test("base_not_integrated fails closed when the checkout origin stops matching --repo", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main" } });
+  runtime.detectOriginSlug = () => "someone/fork";
+  await assert.rejects(() => mergePr(baseOptions(), runtime), /base_not_integrated \(could not verify.*checkout origin/);
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("defaultIsAncestor answers true, false, and throws on a bad ref in a real repo", () => {
+  const dir = mkdtempSync(join(tmpdir(), "is-ancestor-"));
+  try {
+  const git = (...args) => runGitFixture(dir, ["-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@t", ...args]);
+  git("init", "-q", "-b", "main");
+  writeFileSync(join(dir, "a"), "1");
+  git("add", "a");
+  git("commit", "-q", "-m", "one");
+  const first = git("rev-parse", "HEAD");
+  git("checkout", "-q", "-b", "side");
+  writeFileSync(join(dir, "b"), "2");
+  git("add", "b");
+  git("commit", "-q", "-m", "two");
+  const side = git("rev-parse", "HEAD");
+  assert.equal(defaultIsAncestor({ base: first, head: side, repoRoot: dir }), true);
+  assert.equal(defaultIsAncestor({ base: side, head: side, repoRoot: dir }), true);
+  assert.equal(defaultIsAncestor({ base: side, head: first, repoRoot: dir }), false);
+  assert.throws(() => defaultIsAncestor({ base: "no-such-ref", head: side, repoRoot: dir }));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("defaultFetchPrHead fetches the base with an explicit refspec so a restricted remote.origin.fetch cannot leave a stale ref", () => {
+  const calls = [];
+  defaultFetchPrHead({ pr: 7, baseRefName: "main", repoRoot: "/repo" }, (cmd, args) => { calls.push([cmd, ...args]); });
+  assert.deepEqual(calls[0], ["git", "fetch", "origin", "--", "+refs/heads/main:refs/remotes/origin/main"]);
+  assert.deepEqual(calls[1], ["git", "fetch", "origin", "--", "pull/7/head"]);
+});
+
+test("ancestry is rechecked after the ADR tripwire base refresh", async () => {
+  // The waiver writer refreshes the base and advances it past the head; the single post-ADR ancestry check must refuse.
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main", body: "old" } });
+  let advanced = false;
+  runtime.isAncestor = () => !advanced;
+  runtime.evaluateAdrTripwire = async ({ prBody }) => (prBody === "old" ? STALE_BLOCK : { outcome: "pass" });
+  runtime.waiveAdrTripwire = async () => { advanced = true; return { ok: true, action: "waiver_written" }; };
+  const base = runtime.ghJson;
+  runtime.ghJson = async (args) => (args.join(" ").endsWith("--json body") ? { body: "new" } : base(args));
+  const error = await mergePr(baseOptions(), runtime).catch((e) => e);
+  assert.match(error.message, /base_not_integrated \(.*does not contain origin\/main/);
+  assert.equal(error.mergePrFailure.failures[0].precondition, "base_not_integrated");
+  assert.equal(advanced, true);
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("the ancestry check runs once, after the ADR step and the single fetch", async () => {
+  const { runtime } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+  const order = [];
+  runtime.fetchPrHead = () => { order.push("fetch"); };
+  runtime.evaluateAdrTripwire = async () => { order.push("adr"); return { outcome: "pass" }; };
+  runtime.isAncestor = () => { order.push("ancestry"); return true; };
+  await mergePr(baseOptions(), runtime);
+  assert.deepEqual(order, ["fetch", "adr", "ancestry"]);
 });

@@ -11,6 +11,8 @@ import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, pullReceiptPath, pull
 import { RULE_REFERENCES } from "../../packages/core/src/loop/coordinator-work-order.mjs";
 import { buildCoordinatorDispatchPayload, renderCoordinatorWorkOrder } from "../../scripts/loop/emit-coordinator-work-order.mjs";
 import { workOrderDigest } from "../../packages/core/src/loop/work-order-digest.mjs";
+import { resolveAuthoritativeStartupResumeBundle } from "../../packages/core/src/loop/public-dev-loop-routing.mjs";
+import { resolveWorktreePath } from "../../packages/core/src/loop/handoff-envelope.mjs";
 
 const script = path.resolve("scripts/loop/emit-coordinator-work-order.mjs");
 const resolverOutput = { ok: true, bundle: {
@@ -34,6 +36,65 @@ const emit = async ({ input, tmp, dir }, harness, entry, extra = []) => {
   const result = await runNode(script, ["--input", input, "--repo", "o/r", "--harness", harness, "--entry", entry, "--tmp-root", tmp, ...extra], { cwd: dir });
   return { result, out: JSON.parse(result.stdout) };
 };
+
+test("Codex coordinator overrides stay outside semantic orders and refuse invalid config before materialization", async () => {
+  await withDirs(async (ctx) => {
+    const inherited = (await emit(ctx, "codex", "direct")).out;
+    for (const settings of [{ model: "native" }, { reasoningEffort: "medium" }, { model: null, reasoningEffort: null }]) {
+      await writeFile(path.join(ctx.dir, ".devloops"), JSON.stringify({ version: 1, models: { harnesses: { codex: { conductor: settings } } } }));
+      const { result, out } = await emit(ctx, "codex", "direct");
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(out.workOrderDigest, inherited.workOrderDigest);
+      assert.equal(out.workOrderRef, inherited.workOrderRef);
+      assert.deepEqual(out.dispatchPayload, { task_name: `coordinator_${out.executionIdentity.replaceAll("-", "_")}`, message: out.dispatchPrompt, fork_turns: "none", ...(settings.model ? { model: settings.model } : {}), ...(settings.reasoningEffort ? { reasoning_effort: settings.reasoningEffort } : {}) });
+      for (const harness of ["pi", "claude"]) {
+        const { out: other } = await emit(ctx, harness, "direct");
+        assert.equal(other.ok, true);
+        assert.equal("model" in other.dispatchPayload, false);
+        assert.equal("reasoning_effort" in other.dispatchPayload, false);
+      }
+    }
+  });
+  await withDirs(async (ctx) => {
+    await writeFile(path.join(ctx.dir, ".devloops"), JSON.stringify({ version: 1, models: { harnesses: { codex: { conductor: { model: " " } } } } }));
+    const { result, out } = await emit(ctx, "codex", "direct");
+    assert.equal(result.code, 1);
+    assert.match(out.error, /codex.*conductor.*model/);
+    assert.match(out.error, /empty Codex token " "/);
+    assert.equal(existsSync(ctx.tmp), false);
+  });
+});
+
+test("tracker-local startup survives canonical coordinator emission for every harness", async () => {
+  await withDirs(async (ctx) => {
+    for (const issue of [2335, 2508]) {
+      const bundle = resolveAuthoritativeStartupResumeBundle({
+        targetPreference: "prefer_local",
+        currentState: {
+          target: { kind: "issue", issue }, ownership: "copilot", nextActor: "copilot",
+          status: "active", authorization: "needs_confirmation",
+        },
+        issueLinkageResolution: "resolved_no_open_pr", issueReadiness: "ready",
+        issueAssignmentState: "assigned_to_copilot", artifactState: "not_applicable", loopState: "awaiting_triage",
+      });
+      assert.equal(bundle.bundleKind, "resolved");
+      const startup = JSON.stringify({ ok: true, bundle });
+      await writeFile(ctx.input, startup);
+      for (const harness of ["pi", "claude", "codex"]) {
+        const { result, out } = await emit(ctx, harness, "direct");
+        assert.equal(result.code, 0, result.stderr);
+        const { workOrder } = JSON.parse(await readFile(out.planPath, "utf8"));
+        assert.equal(workOrder.handoff.cwd, resolveWorktreePath({ repoRoot: await realpath(ctx.dir), kind: "issue", number: issue }));
+        assert.equal(workOrder.handoff.target.kind, "local_phase");
+        assert.equal(workOrder.handoff.target.phase, `issue-${issue}`);
+        assert.equal(workOrder.handoff.nextAction, bundle.nextAction);
+        assert.deepEqual(workOrder.handoff.requiredReads, bundle.requiredReads ?? []);
+        assert.equal(out.dispatchPrompt, buildDispatchPointer(out));
+        assert.equal(await readFile(ctx.input, "utf8"), startup);
+      }
+    }
+  });
+});
 
 for (const harness of ["claude", "pi", "codex"]) {
   for (const entry of ["queue", "direct"]) {

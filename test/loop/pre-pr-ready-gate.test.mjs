@@ -366,7 +366,7 @@ test("#1584 reproduction: a draft_gate with a clean verdict + an unresolved nice
   // remedy text — the old assertion above (matching only /close-gate-findings/)
   // could not tell the two apart, since the question remedy text also
   // contains that substring.
-  assert.match(stderrParsed.error, /1 open defect thread\(s\).*fixer fix-close.*disposition pass's defer-close/i);
+  assert.match(stderrParsed.error, /1 open defect thread\(s\).*fixer fix-close.*rerun close-gate-findings once the judge has deferred/i);
   assert.doesNotMatch(stderrParsed.error, /question thread\(s\)/i);
 });
 
@@ -450,7 +450,7 @@ test("#2381: the raw `gh pr ready` path names the nit-specific close-gate-findin
   const stderrParsed = JSON.parse(result.stderr);
   assert.equal(stderrParsed.ok, false);
   assert.equal(stderrParsed.unresolvedGateThreadCount, 1);
-  assert.match(stderrParsed.error, /1 open nit thread\(s\): rerun close-gate-findings.*resolves a nit unconditionally/i);
+  assert.match(stderrParsed.error, /1 open nit thread\(s\): rerun close-gate-findings.*once the judge has rejected or deferred it/i);
   assert.doesNotMatch(stderrParsed.error, /open defect thread\(s\)/i);
   assert.doesNotMatch(stderrParsed.error, /question thread\(s\)/i);
 });

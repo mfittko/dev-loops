@@ -17,6 +17,7 @@ import { backoffMaxConcurrent, LEGACY_SEVERITY_ALIASES } from "../src/loop/gate-
 import { NEUTRAL_RUN_ID_VAR, RUN_ID_MARKERS } from "../src/loop/run-context.mjs";
 import {
   resolveConductorModel,
+  resolveConductorSettings,
   resolveAutonomyStopAt,
   resolveHumanMergeOnly,
   resolveEffectiveMergeAuthorized,
@@ -66,6 +67,33 @@ import {
   resolvePostMergeActions,
 } from "../src/config/config.mjs";
 import { analyzeDiff } from "../src/analysis/diff-analyzer.mjs";
+
+test("Codex conductor settings are strict, isolated, and merged field by field", async () => {
+  const legacy = { conductor: "legacy", roles: { "dev-loop": "legacy-role" } };
+  assert.deepEqual(resolveConductorSettings({ models: legacy }, { harness: "codex" }), { model: null, reasoningEffort: null });
+  for (const conductor of [{ model: " native " }, { reasoningEffort: " medium " }, { model: null, reasoningEffort: null }]) {
+    const parsed = FileConfigSchema.parse({ version: 1, models: { ...legacy, harnesses: { codex: { conductor } } } });
+    assert.deepEqual(resolveConductorSettings(parsed, { harness: "codex" }), {
+      model: conductor.model?.trim() ?? null, reasoningEffort: conductor.reasoningEffort?.trim() ?? null,
+    });
+    assert.equal(resolveConductorModel(parsed), "legacy");
+    for (const harness of ["pi", "claude"]) assert.equal(resolveRoleModel(parsed, { role: "dev-loop", harness }), "legacy-role");
+  }
+  for (const codex of [{ conductor: {} }, { conductor: { model: " " } }, { conductor: { reasoningEffort: 1 } }, { conductor: { extra: true } }, { roles: {} }, { tiers: {} }, { angles: {} }]) {
+    assert.equal(FileConfigSchema.safeParse({ version: 1, models: { harnesses: { codex } } }).success, false, JSON.stringify(codex));
+  }
+  const dir = await mkdtemp(path.join(os.tmpdir(), "codex-conductor-"));
+  try {
+    await mkdir(path.join(dir, ".pi/dev-loop"), { recursive: true });
+    await writeFile(path.join(dir, ".pi/dev-loop/defaults.json"), JSON.stringify({ version: 1, models: { harnesses: { codex: { conductor: { model: "native", reasoningEffort: "medium" } } } } }));
+    for (const conductor of [{ model: null }, { reasoningEffort: null }, { model: "other" }]) {
+      await writeFile(path.join(dir, ".devloops"), JSON.stringify({ version: 1, models: { harnesses: { codex: { conductor } } } }));
+      const loaded = await loadDevLoopConfig({ repoRoot: dir });
+      assert.deepEqual(loaded.errors, []);
+      assert.deepEqual(resolveConductorSettings(loaded.config, { harness: "codex" }), { model: "native", reasoningEffort: "medium", ...conductor });
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
 // #1592: a few fixtures below deliberately keep pre-rename severity spellings
 // ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
 // intentional backward-compat coverage (normalizeSeverity normalizes them on
@@ -3306,8 +3334,8 @@ describe("role resolution", () => {
 
     // #1592 follow-up: question/nit never block by severity — a config
     // blocking on either would fight the disposition pass, which
-    // simultaneously auto-resolves them (question: answered/never-deferred;
-    // nit: deferred immediately) regardless of what blocks a clean verdict.
+    // simultaneously closes them (question: answered/never-deferred;
+    // nit: closed on a judge reject, a judge defer or an evidence-only judge act) regardless of what blocks a clean verdict.
     test("GateConfig rejects question/nit in blockCleanOnFindingSeverities (non-defect categories never block by severity)", () => {
       for (const severity of ["question", "nit"]) {
         const result = FileConfigSchema.safeParse({

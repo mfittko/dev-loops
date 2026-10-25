@@ -19,6 +19,7 @@ function fixtureRepo() {
   git(dir, "config", "user.name", "t");
   git(dir, "config", "commit.gpgsign", "false");
   commit(dir, "src/a.mjs", "export const a = 1;\n");
+  git(dir, "remote", "add", "origin", dir);
   return dir;
 }
 
@@ -135,6 +136,7 @@ test("pr create refuses before gh when no record exists, and a failing validator
 test("pr create proceeds past the guard with a valid record, and the --lightweight path needs one too", async () => {
   const dir = fixtureRepo();
   try {
+    git(dir, "branch", "feature");
     let calls = 0;
     const validatePrePrReview = () => { calls += 1; return { ok: true }; };
     // gh is the no-op `true`, so create succeeds once the guard passes.

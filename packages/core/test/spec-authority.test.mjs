@@ -19,6 +19,7 @@ import {
   stampSpecAuthorityIdentity,
   extractSpecFromBody,
   requireSpecFromBody,
+  resolvePrDescriptionSpec,
   EXPECTED_SPEC_SHAPE,
 } from "@dev-loops/core/loop/spec-authority";
 import { detectAcDodMatrix, validatePrBodySpec, extractChecklistItems } from "../src/loop/issue-refinement-artifact.mjs";
@@ -188,6 +189,16 @@ describe("whole-spec judge disposition", () => {
       const out = validate({ defectKind: "matcher", acceptedForms: ["--ref x", "--ref=x"], rejectedForms: ["prose mention"] });
       assert.deepEqual(out.acceptedForms, ["--ref x", "--ref=x"]);
       assert.deepEqual(out.rejectedForms, ["prose mention"]);
+    });
+
+    test("input forms stay verbatim: empty string allowed, no trim", () => {
+      const out = validate({ defectKind: "matcher", acceptedForms: [" 1 ", "2"], rejectedForms: ["", "abc"] });
+      assert.deepEqual(out.rejectedForms, ["", "abc"]);
+      assert.deepEqual(out.acceptedForms, [" 1 ", "2"]);
+      assert.deepEqual(validate({ defectKind: "matcher", acceptedForms: ["1"], rejectedForms: [" 12 "] }).rejectedForms, [" 12 "]);
+      assert.throws(() => validate({ defectKind: "matcher", acceptedForms: ["1"], rejectedForms: [] }), /rejectedForms/);
+      assert.throws(() => validate({ defectKind: "matcher", acceptedForms: ["1"], rejectedForms: ["a", 5] }), /rejectedForms/);
+      assert.throws(() => validate({ defectKind: "matcher", acceptedForms: [], rejectedForms: ["a"] }), /acceptedForms/);
     });
 
     test("doc lag lists every stated surface of the changed rule", () => {
@@ -1055,5 +1066,90 @@ describe("deduplication-vs-voice regression fixture", () => {
       { findingsCount: 1, criterionIds: specCriterionIds(contradictory) },
     );
     assert.equal(out.humanDecisionRequired, true);
+  });
+});
+
+describe("pr_scope spec kind (review gate)", () => {
+  const SCOPE_SPEC = { specKind: "pr_scope", scope: ["Fix the stale cache in reload()", "Leave the build alone"] };
+
+  test("normalizeSpec and specCriterionIds accept a pr_scope spec with no acceptance criteria and emit scope:<n> ids", () => {
+    assert.deepEqual(normalizeSpec(SCOPE_SPEC).acceptanceCriteria, []);
+    assert.deepEqual(specCriterionIds(SCOPE_SPEC), ["scope:0", "scope:1"]);
+    assert.deepEqual(
+      specCriterionIds({ ...SCOPE_SPEC, acceptanceCriteria: ["Ship it"] }),
+      ["ac:0", "scope:0", "scope:1"],
+    );
+  });
+
+  test("computeSpecDigest changes when a scope item changes", () => {
+    const changed = { ...SCOPE_SPEC, scope: ["Fix the stale cache in reload()", "Leave the build scripts alone"] };
+    assert.notEqual(computeSpecDigest(SCOPE_SPEC), computeSpecDigest(changed));
+  });
+
+  test("a spec with no acceptance criteria and no pr_scope kind still fails closed", () => {
+    assert.throws(() => normalizeSpec({ acceptanceCriteria: [], definitionOfDone: ["x"] }), /no acceptance criteria/);
+    assert.throws(() => normalizeSpec({ specKind: "pr_scope", scope: [] }), /no acceptance criteria/);
+    assert.throws(() => normalizeSpec({ scope: ["x"], acceptanceCriteria: ["y"] }), /requires specKind "pr_scope"/);
+  });
+
+  test("a spec without scope keeps its existing digest and normalized shape", () => {
+    assert.deepEqual(Object.keys(normalizeSpec(SPEC)).sort(), ["acceptanceCriteria", "definitionOfDone", "nonGoals"]);
+  });
+
+  test("resolvePrDescriptionSpec: formal body is pr_body, prose is pr_scope with verbatim excerpts, no usable text is none", () => {
+    const formal = resolvePrDescriptionSpec("## Acceptance criteria\n- [ ] a\n## Definition of done\n- [ ] b\n");
+    assert.equal(formal.specSource, "pr_body");
+    assert.deepEqual(formal.spec.acceptanceCriteria, ["a"]);
+
+    const prose = resolvePrDescriptionSpec([
+      "<!-- template note -->",
+      "## Summary",
+      "Fixes the stale cache in reload().",
+      "",
+      "## Changes",
+      "- Invalidate on reload",
+      "  continued detail",
+      "- Keep the build untouched",
+      "## Test plan",
+    ].join("\n"));
+    assert.equal(prose.specSource, "pr_scope");
+    assert.equal(prose.spec.specKind, "pr_scope");
+    assert.deepEqual(prose.spec.scope, [
+      "Fixes the stale cache in reload().",
+      "- Invalidate on reload\n  continued detail",
+      "- Keep the build untouched",
+    ]);
+    assert.deepEqual(prose.spec.acceptanceCriteria, []);
+    assert.deepEqual(prose.spec.definitionOfDone, []);
+
+    assert.deepEqual(resolvePrDescriptionSpec("<!-- only a comment -->\n## Summary\n\n## Test plan\n"), { specSource: "none", reason: "no_usable_scope" });
+    assert.deepEqual(resolvePrDescriptionSpec(""), { specSource: "none", reason: "no_usable_scope" });
+  });
+
+  test("resolvePrDescriptionSpec: template boilerplate is not usable scope", () => {
+    for (const body of ["- [ ]\n- [ ] \n", "## Test plan\n- [ ]\n", "---\n", "```\n```", "Summary\n-------\n\nTest plan\n---------\n", "Summary\n=======\n"]) {
+      assert.deepEqual(resolvePrDescriptionSpec(body), { specSource: "none", reason: "no_usable_scope" }, JSON.stringify(body));
+    }
+    assert.deepEqual(resolvePrDescriptionSpec("Summary\n-------\nAdds the X flag.\n").spec.scope, ["Adds the X flag."]);
+    assert.deepEqual(resolvePrDescriptionSpec("Adds the X flag.\n\n---\n").spec.scope, ["Adds the X flag."]);
+    assert.deepEqual(resolvePrDescriptionSpec("## Summary\nAdds the X flag.\n").spec.scope, ["Adds the X flag."]);
+    assert.deepEqual(resolvePrDescriptionSpec("- Fixes reload\n---\n").spec.scope, ["- Fixes reload"]);
+    const mixed = resolvePrDescriptionSpec("Fixes reload.\n- [ ]\n- [ ] keep build\n");
+    assert.equal(mixed.specSource, "pr_scope");
+    assert.deepEqual(mixed.spec.scope, ["Fixes reload.", "- [ ] keep build"]);
+  });
+
+  test("resolvePrDescriptionSpec: ordered-list items are their own scope excerpts", () => {
+    const { spec } = resolvePrDescriptionSpec("Fixes reload.\n1. Invalidate cache\n  1. indented continues\n2) Keep build\n10. Ten\n1.nospace\n");
+    assert.deepEqual(spec.scope, ["Fixes reload.", "1. Invalidate cache\n  1. indented continues", "2) Keep build", "10. Ten\n1.nospace"]);
+  });
+
+  test("resolvePrDescriptionSpec keeps explicit AC and non-goals verbatim without a DoD", () => {
+    const { specSource, spec } = resolvePrDescriptionSpec("Handles reload.\n## Acceptance criteria\n- [ ] reload is fresh\n## Non-goals\n- no build changes\n");
+    assert.equal(specSource, "pr_scope");
+    assert.deepEqual(spec.acceptanceCriteria, ["reload is fresh"]);
+    assert.deepEqual(spec.definitionOfDone, []);
+    assert.deepEqual(spec.nonGoals, ["no build changes"]);
+    assert.ok(spec.scope.includes("Handles reload."));
   });
 });

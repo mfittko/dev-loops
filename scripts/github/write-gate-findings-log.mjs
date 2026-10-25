@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
 import { expandDispatchUnits } from "./_dispatch-units.mjs";
@@ -9,35 +9,35 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, checkFanoutAngleCoverage, deriveDisposition, fanoutReviewerPairingError, hasLocatableShape, ledgerAngleNames, isDefaultDeferrableSeverity, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
+import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, neverDeferredSeverity, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } from "@dev-loops/core/loop/finding-cluster";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
-import { buildGateContextPath, buildLogPath } from "./_gate-artifact-paths.mjs";
+import { buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath } from "./_gate-artifact-paths.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
-const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>] [--context-tmp-root <path>]
+const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--verdict <clean|findings_present|blocked>] (--findings <json> | --findings-file <path>) [--tmp-root <path>] [--context-tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
 Required:
   --repo <owner/name>
   --pr <number>
   --gate <draft_gate|pre_approval_gate|review>
   --head-sha <sha>              FULL head commit SHA (40 or 64 hex chars) — a short prefix is rejected (it would write an unfindable ledger)
-  --verdict <clean|findings_present|blocked>
   --findings <json>              JSON array of finding objects with severity, disposition, angle, summary, and optional positive-integer line
-                                 A "low" finding may also carry operatorVisible: true (net-reduction policy, #1846) — the
-                                 explicit signal close-gate-findings.mjs's disposition pass requires before filing a "low"
-                                 to the deferral comment; absent/false is the conservative default (resolved
-                                 in-thread, never filed). A "nit" is never filed regardless of operatorVisible.
+                                 A "low" finding may also carry operatorVisible: true — an optional marker annotation
+                                 (ov=1). It does not control filing: close-gate-findings.mjs files a deferral only
+                                 when the judge disposed the finding "defer".
                                  operatorVisible on any OTHER severity fails closed (exit 2) — it has no meaning there.
   --findings-file <path>         Read the --findings JSON array from a file instead of an inline argument
                                  (mutually exclusive with --findings; identical validation)
 Optional:
+  --verdict <clean|findings_present|blocked>
   --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model?, carriedFromHead?, carriedVerdict?, group? }] }
                                  carriedFromHead (7-64 hex) marks an angle whose verdict was carried forward from that prior head (reviewer stays the prior reviewer)
                                  carriedVerdict ("clean"|"findings_present", requires carriedFromHead) records WHICH verdict was carried (issue #2017): "findings_present"
@@ -53,22 +53,25 @@ Optional:
                                  given for a gate that configures a mandatory angle — see --execution-mode below.
   --execution-mode <fanout_fanin|inline_single_agent>
                                  How this round was executed (mirrors upsert-checkpoint-verdict.mjs's own
-                                 --execution-mode). Defaults to inline_single_agent. A fanout_fanin write
+                                 --execution-mode). A keyed emit plan at the head resolves an omitted mode to fanout_fanin and refuses inline_single_agent; a per-angle findings dir without an emit plan refuses an omitted mode and inline_single_agent. With neither, it defaults to inline_single_agent. In fanout_fanin mode, when the keyed fan-in ledger (under --context-tmp-root) exists, it supplies provenance, verifiedItems and overallVerdict (--verdict is then optional), and a differing --provenance is refused. A fanout_fanin write
                                  for a gate that configures mandatory angles (gates.<gate>.angles entries
                                  with mandatory: true) FAILS CLOSED (throws, writes no ledger) when neither
                                  an explicit --provenance nor a wrapper-supplied one is present. inline_single_agent
                                  writes stay exempt from the provenance requirement (they carry no provenance);
                                  the ledger still records the executionMode field either way, so it is no longer
                                  byte-identical to the pre-executionMode shape.
-  --emit-plan <path>             Optional keyed emit-fanout-dispatch plan. When supplied, requires --provenance and fails closed unless that caller-supplied provenance matches the plan's round key and emitted fresh units exactly. The plan is a guard only; it never supplies provenance or findings. Omitted preserves current behavior.
+  --emit-plan <path>             Legacy guard only. The keyed emit-fanout-dispatch plan under --context-tmp-root is verified automatically, so the sanctioned path omits this flag. When supplied, it fails closed unless the provenance matches the plan's round key and emitted fresh units exactly. An explicit --provenance must equal the keyed fan-in ledger provenance when that ledger exists. The plan is a guard only; it never supplies findings.
   --full-label                   The PR carries the gate:full label: dispatch groups resolve to one angle per unit, so any reviewer identity shared across fresh angles is rejected regardless of a declared "group" (mirrors write-gate-context.mjs's --full-label). Only meaningful when --provenance is supplied. Omitted (default false) keeps current behavior.
   --judge-verdict <path>         Path to the judge agent's verdict artifact (JSON). When supplied, the findings are
                                  enriched with the judge's relevance-based dispositions (judgeDisposition /
-                                 judgeRationale / judgeCriterion / followUpDraft) via applyJudgeDispositions before
+                                 judgeRationale / judgeCriterion / followUpDraft / judgeTitle / judgeDetail / judgeFix /
+                                 judgeReason) via applyJudgeDispositions before
                                  the ledger is written, so the durable ledger and posted findings comment carry what
-                                 was consciously not acted on and why (#1525). The verdict must dispose every finding
-                                 (one disposition per 0-based ledger position) or the run FAILS CLOSED and writes no
-                                 ledger. Optional; when absent the ledger writes byte-identically to before.
+                                 was consciously not acted on and why (#1525). The verdict must dispose every cluster
+                                 (one disposition per cluster, keyed by clusterId; the 0-based ledger position only
+                                 when the ledger carries no clusterId). Each disposition requires title, detail and
+                                 fix, and defer and reject also require reason; a missing field FAILS CLOSED and
+                                 writes no ledger. Optional; when absent the ledger writes byte-identically to before.
                                  With --spec-authority, a sibling spec-authority-verdict.json next to the judge
                                  verdict is validated against that identity, and each finding_conflicts finding is
                                  written as judgeDisposition reject (ADR 0089). An invalid or mismatched sibling
@@ -80,8 +83,11 @@ Optional:
                                  A path inside a linked (non-main) worktree is refused
                                  (exit 1, no file written): the ledger would be lost on
                                  prune and unreadable by the merge.
-  --context-tmp-root <path>      Root tmp directory containing this round's gate-context
-                                 bundle. Default: this worktree's tmp/. When
+  --context-tmp-root <path>      Root tmp directory for this round's artifacts: the gate-context
+                                 bundle, and also the keyed emit plan, per-angle findings dir
+                                 and fan-in ledger that decide execution mode and provenance
+                                 (omitting it on a relocated round records inline_single_agent).
+                                 Default: this worktree's tmp/. When
                                  write-gate-context.mjs and emit-fanout-dispatch.mjs used
                                  an explicit --tmp-root, pass that same path here. This
                                  does not change the ledger --tmp-root semantics above.
@@ -110,10 +116,10 @@ function normalizeExecutionMode(value) {
 }
 // Exported so other tools (e.g. upsert-checkpoint-verdict.mjs) derive their
 // own subset from this one copy instead of hand-copying it out of sync.
-// "needs-answer" is the disposition a "question" finding gets (see
-// consolidateFanin, @dev-loops/core/loop/gate-fanin): a question is
-// answered, never deferred or fixed, so it needs its own disposition.
-export const VALID_DISPOSITIONS = new Set(["accepted-for-fix", "deferred", "needs-answer", "disputed", "operator_acknowledged"]);
+// "unjudged" is the default: fan-in leaves every finding unjudged (see
+// consolidateFanin, @dev-loops/core/loop/gate-fanin). "needs-answer" is an
+// explicit caller value only, for a question that is answered rather than fixed.
+export const VALID_DISPOSITIONS = new Set(["unjudged", "accepted-for-fix", "deferred", "needs-answer", "disputed", "operator_acknowledged"]);
 // Validate + normalize a parsed --findings / --findings-file JSON array. Shared
 // by both flags so they carry identical validation — flagLabel only changes the
 // error-message prefix (--findings vs --findings-file).
@@ -121,7 +127,7 @@ function validateFindingsArray(parsed, flagLabel) {
   if (!Array.isArray(parsed)) {
     throw parseError(`${flagLabel} must be a JSON array`);
   }
-  return parsed.map((f, i) => {
+  const entries = parsed.map((f, i) => {
     if (!f || typeof f !== "object") {
       throw parseError(`${flagLabel}[${i}] must be an object`);
     }
@@ -183,14 +189,10 @@ function validateFindingsArray(parsed, flagLabel) {
         throw parseError(`${flagLabel}[${i}].disposition must be one of: ${[...VALID_DISPOSITIONS].join(", ")}`);
       }
       entry.disposition = disp;
-    } else if (isDefaultDeferrableSeverity(f.severity)) {
-      // A non-blocking low/nit finding with no explicit disposition defaults
-      // to "deferred", so callers need not repeat the obvious per entry. A
-      // question defaults to "needs-answer" instead (LOCATABLE) via the SAME
-      // shared rule every producer uses (deriveDisposition, @dev-loops/core/
-      // loop/gate-fanin) — this producer and post-gate-findings.mjs's own
-      // validator both route through it so the two can never drift.
-      entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
+    } else {
+      // A finding with no explicit disposition is unjudged; severity never
+      // implies one.
+      entry.disposition = UNJUDGED_DISPOSITION;
     }
     // net-reduction disposition policy: the explicit operator-visibility signal for a "low" finding —
     // see buildFindingMarker's doc (_gate-finding-surface.mjs) for the full
@@ -233,6 +235,10 @@ function validateFindingsArray(parsed, flagLabel) {
     if (typeof f.judgeCriterion === "string" && f.judgeCriterion.trim().length > 0) {
       entry.judgeCriterion = f.judgeCriterion.trim();
     }
+    // The judge's per-cluster prose, carried for the renderers.
+    for (const field of ["judgeTitle", "judgeDetail", "judgeFix", "judgeReason"]) {
+      if (typeof f[field] === "string" && f[field].trim().length > 0) entry[field] = f[field].trim();
+    }
     // GATE-EXEC-DEFERRAL-RECORD: a judge-pass-enriched finding may carry a stable `fingerprint`
     // ([0-9a-f]{16}, matching the finding-marker regex) and a `defer` finding
     // additionally carries `followUpIssueNumber` (the deferral comment
@@ -271,8 +277,40 @@ function validateFindingsArray(parsed, flagLabel) {
     if (entry.judgeDisposition === "defer" && entry.followUpDraft === undefined) {
       throw parseError(`${flagLabel}[${i}].followUpDraft is required when judgeDisposition is "defer"`);
     }
+    // The fan-in cluster stamp: --judge-verdict dispositions key on it, so it must reach the judge pass.
+    if ("clusterId" in f) {
+      if (!Number.isInteger(f.clusterId) || f.clusterId < 0) {
+        throw parseError(`${flagLabel}[${i}].clusterId must be a non-negative integer`);
+      }
+      entry.clusterId = f.clusterId;
+    }
     return entry;
   });
+  // A partly stamped array would key the judge's dispositions two ways at once, so it fails closed.
+  const stampedCount = entries.filter((e) => e.clusterId !== undefined).length;
+  if (stampedCount > 0 && stampedCount < entries.length) {
+    throw parseError(`${flagLabel}: clusterId must be set on every finding or on none (${stampedCount} of ${entries.length} carry it)`);
+  }
+  // The representative is its own member: an id outside the array, or naming an entry stamped with another id, has no representative.
+  for (const [i, e] of entries.entries()) {
+    if (e.clusterId !== undefined && (e.clusterId >= entries.length || entries[e.clusterId].clusterId !== e.clusterId)) {
+      throw parseError(`${flagLabel}[${i}].clusterId ${e.clusterId} must be less than ${entries.length} and name an entry whose own clusterId is ${e.clusterId}`);
+    }
+  }
+  // GATE-EXEC-THREAD-DISPOSITION: a high, a question or an all-nit cluster is never deferred, on every input path
+  // (the --judge-verdict branch re-checks the projected clusters). Unstamped findings are their own cluster.
+  const groups = new Map();
+  for (const [i, e] of entries.entries()) {
+    const key = e.clusterId ?? `solo:${i}`;
+    groups.set(key, [...(groups.get(key) ?? []), { e, i }]);
+  }
+  for (const members of groups.values()) {
+    const blocked = members.some(({ e }) => e.judgeDisposition === "defer") ? neverDeferredSeverity(members.map(({ e }) => e)) : null;
+    if (blocked) {
+      throw parseError(`${flagLabel}[${members.find(({ e }) => e.judgeDisposition === "defer").i}].judgeDisposition "defer" reaches a cluster whose severity is ${blocked}; a high, a question or an all-nit cluster is never deferred (GATE-EXEC-THREAD-DISPOSITION)`);
+    }
+  }
+  return entries;
 }
 // Resolve the findings array from either --findings (inline JSON) or
 // --findings-file (a path), with identical validation either way. Shared
@@ -636,10 +674,8 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  // Default execution mode to inline_single_agent when omitted, same default
-  // as upsert-checkpoint-verdict.mjs's own --execution-mode.
-  options.executionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
-  const missing = ["repo", "pr", "gate", "headSha", "verdict"]
+  // An omitted mode stays undefined: writeGateFindingsLog resolves it from the round artifacts.
+  const missing = ["repo", "pr", "gate", "headSha"]
     .filter(k => options[k] === undefined);
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
@@ -748,7 +784,60 @@ export async function readContextDispatchUnits({ repo, pr, gate, headSha, contex
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
   // The ledger write resolves against repoRoot (process.cwd() on the CLI), so the guard does too.
   if (options.tmpRoot) assertTmpRootOutsideLinkedWorktree(path.resolve(repoRoot, options.tmpRoot), repoRoot);
-  const { findings: rawFindings, overallVerdict, provenance: wrapperProvenance, verifiedItems: rawVerifiedItems } = await resolveFindings(options);
+  let { findings: rawFindings, overallVerdict, provenance: wrapperProvenance, verifiedItems: rawVerifiedItems } = await resolveFindings(options);
+  // Default the ledger tmp root to the MAIN worktree: a coordinator
+  // runs the gate inside an ephemeral linked worktree, but the orchestrator's
+  // merge reads this ledger from the main checkout. Anchoring at the primary
+  // worktree lands it in the ONE stable per-repo location both reach, and it
+  // survives linked-worktree pruning. An explicit --tmp-root still wins.
+  const logPath = buildLogPath({
+    repo: options.repo,
+    pr: options.pr,
+    gate: options.gate,
+    headSha: options.headSha,
+    tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot),
+  });
+  const fullPath = path.resolve(repoRoot, logPath);
+  // The round's keyed artifacts under the context root decide the execution
+  // mode and, in fanout_fanin mode, supply provenance, verifiedItems and the
+  // verdict from the fan-in ledger instead of the caller.
+  const roundKey = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.contextTmpRoot || "tmp" };
+  const emitPlanPath = path.resolve(repoRoot, buildGateEmitPlanPath(roundKey));
+  const faninLedgerPath = path.resolve(repoRoot, buildGateFaninLedgerPath(roundKey));
+  const reviewsDir = path.resolve(repoRoot, buildGateReviewsDir(roundKey));
+  const exists = (p) => access(p).then(() => true, () => false);
+  const [hasEmitPlan, hasReviewsDir] = await Promise.all([exists(emitPlanPath), exists(reviewsDir)]);
+  const fanoutEvidence = hasEmitPlan ? `emit plan ${emitPlanPath}` : hasReviewsDir ? `per-angle findings dir ${reviewsDir}` : null;
+  if (fanoutEvidence && options.executionMode === "inline_single_agent") {
+    throw parseError(`--execution-mode inline_single_agent is refused: ${fanoutEvidence} exists at this head, so the round is fanout_fanin`);
+  }
+  if (hasReviewsDir && !hasEmitPlan && options.executionMode === undefined) {
+    throw parseError(`--execution-mode is required: per-angle findings dir ${reviewsDir} exists at this head but no emit plan does, so pass --execution-mode fanout_fanin`);
+  }
+  const executionMode = options.executionMode ?? (hasEmitPlan ? "fanout_fanin" : DEFAULT_EXECUTION_MODE);
+  let faninLedger;
+  if (executionMode === "fanout_fanin" && await exists(faninLedgerPath)) {
+    try {
+      faninLedger = JSON.parse(await readFile(faninLedgerPath, "utf8"));
+    } catch (error) {
+      throw parseError(`fan-in ledger ${faninLedgerPath} could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (faninLedger === null || typeof faninLedger !== "object" || Array.isArray(faninLedger)) {
+      throw parseError(`fan-in ledger ${faninLedgerPath} could not be read/parsed: expected a JSON object`);
+    }
+    if (options.provenance !== undefined) {
+      let explicit;
+      try { explicit = JSON.parse(options.provenance); } catch (error) {
+        throw parseError(`--provenance is not valid JSON: ${error instanceof Error ? error.message : String(error)}; omit --provenance, the fan-in ledger supplies it`);
+      }
+      if (!isDeepStrictEqual(explicit, faninLedger.provenance)) {
+        throw parseError(`--provenance differs from the fan-in ledger's provenance (${faninLedgerPath}); omit --provenance, the ledger supplies it`);
+      }
+    }
+    ({ overallVerdict, provenance: wrapperProvenance, verifiedItems: rawVerifiedItems } = faninLedger);
+  } else if (executionMode === "fanout_fanin" && hasEmitPlan) {
+    throw parseError(`Cannot write a fanout_fanin findings log: emit plan ${emitPlanPath} exists but the keyed fan-in ledger ${faninLedgerPath} does not. Run consolidate-fanin with --emit-plan and --ledger-out first.`);
+  }
   // The wrapper's reviewer-verified AC/DoD labels (consolidate-fanin's union).
   // Fail closed on a malformed value; persisted trimmed and deduplicated.
   let verifiedItems;
@@ -777,7 +866,14 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       throw parseError(`--judge-verdict could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
     }
     const enriched = applyJudgeDispositions(rawFindings, judgeVerdict);
-    findings = enriched.findings;
+    // Same cluster projection judge-pass applies: one judge decision per root cause, so the durable ledger
+    // matches judge-pass's --ledger-out instead of dropping the cluster-normalized dispositions.
+    const stamped = enriched.findings.every((f) => Number.isInteger(f?.clusterId));
+    const clusters = stamped
+      ? clustersFromStampedIds(enriched.findings)
+      : clusterFindings(enriched.findings, { headSha: options.headSha }).clusters;
+    findings = projectClusterDisposition(enriched.findings, clusters);
+    assertNoProjectedForbiddenDefer(findings, clusters);
     scopeDrift = enriched.scopeDrift;
     if (specAuthorityIdentity !== undefined) {
       findings = await applySiblingSpecAuthorityVerdict(findings, judgePath, specAuthorityIdentity);
@@ -796,14 +892,15 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // load-bearing — it ensures a bare-array input never persists a
   // null/undefined/out-of-domain verdict un-normalized.
   const callerVerdict = typeof options.verdict === "string" ? normalizeVerdict(options.verdict) : null;
-  if (!callerVerdict) {
+  // --verdict is optional only when the fan-in ledger supplies the verdict.
+  if (options.verdict === undefined ? faninLedger === undefined : !callerVerdict) {
     throw parseError("--verdict must be clean, findings_present, or blocked");
   }
   let normalizedOverallVerdict;
   // Persist the canonical (normalized) verdict on both input paths, in a
   // local rather than mutating `options` (which programmatic callers may
   // reuse across calls).
-  let persistedVerdict = callerVerdict;
+  let persistedVerdict;
   if (overallVerdict !== undefined) {
     // Same redundant defense-in-depth as above: normalizeVerdict already
     // rejects non-strings.
@@ -823,12 +920,14 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     // with or without --judge-verdict. A --judge-verdict run can still fail
     // earlier: an unreadable, malformed, or incomplete-coverage judge
     // artifact throws its own error before this contradiction check runs.
-    if (callerVerdict !== normalizedOverallVerdict) {
+    if (callerVerdict !== null && callerVerdict !== normalizedOverallVerdict) {
       throw parseError(
         `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict (the severity verdict), which judge dispositions from --judge-verdict never alter; the posted review verdict is composed with the judge act list (ADR 0089)`,
       );
     }
   }
+  persistedVerdict = callerVerdict ?? normalizedOverallVerdict;
+  if (!persistedVerdict) throw parseError("the fan-in ledger carries no overallVerdict; pass --verdict");
   // Resolve + validate a candidate provenance JSON STRING through the exact
   // same path an explicit --provenance takes: resolve this round's dispatch
   // groups first (so a claimed `group` is cross-checked against the gate's
@@ -857,7 +956,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     return parseProvenanceJson(rawProvenanceJson, resolvedGroups, dispatchUnits);
   };
   let provenance;
-  if (options.provenance !== undefined) {
+  if (faninLedger === undefined && options.provenance !== undefined) {
     provenance = await resolveAndValidateProvenance(options.provenance);
   } else if (wrapperProvenance !== undefined && wrapperProvenance !== null) {
     // No explicit --provenance flag, but the --findings/--findings-file
@@ -881,7 +980,6 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // legitimately carries no provenance; the ledger still records executionMode),
   // and a gate with no mandatory angles configured has no coverage obligation to
   // prove either way.
-  const executionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
   if (executionMode === "fanout_fanin" && provenance === undefined) {
     const gateKey = GATE_CONFIG_KEY[options.gate];
     const { config } = await loadDevLoopConfigStrict({ repoRoot });
@@ -892,8 +990,13 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       );
     }
   }
-  if (options.emitPlan !== undefined) {
-    await verifyEmitPlanProvenance(options.emitPlan, provenance, {
+  // The keyed plan is always validated when present; an explicit --emit-plan
+  // is an additional guard, never a replacement.
+  const emitPlansToVerify = [];
+  if (hasEmitPlan) emitPlansToVerify.push(emitPlanPath);
+  if (options.emitPlan !== undefined && path.resolve(repoRoot, options.emitPlan) !== emitPlanPath) emitPlansToVerify.push(options.emitPlan);
+  for (const planPath of emitPlansToVerify) {
+    await verifyEmitPlanProvenance(planPath, provenance, {
       repo: options.repo,
       pr: options.pr,
       gate: options.gate,
@@ -906,19 +1009,6 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   const angleCoverage = provenance !== undefined
     ? await checkProvenanceAngleCoverage(provenance, options.gate, { repoRoot })
     : { warning: null };
-  // Default the ledger tmp root to the MAIN worktree: a coordinator
-  // runs the gate inside an ephemeral linked worktree, but the orchestrator's
-  // merge reads this ledger from the main checkout. Anchoring at the primary
-  // worktree lands it in the ONE stable per-repo location both reach, and it
-  // survives linked-worktree pruning. An explicit --tmp-root still wins.
-  const logPath = buildLogPath({
-    repo: options.repo,
-    pr: options.pr,
-    gate: options.gate,
-    headSha: options.headSha,
-    tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot),
-  });
-  const fullPath = path.resolve(repoRoot, logPath);
   const log = {
     repo: options.repo,
     pr: options.pr,

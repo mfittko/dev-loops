@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
@@ -7,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, test } from "bun:test";
 
 import { runCli } from "../../cli/index.mjs";
-import { indexDecisionRecords, lintSizeForecast, lintSpec, main } from "../../scripts/loop/spec-lint.mjs";
+import { indexDecisionRecords, lintSimplestDesign, lintSizeForecast, lintSpec, main } from "../../scripts/loop/spec-lint.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const tempDirs = [];
@@ -17,7 +19,7 @@ afterEach(async () => {
 });
 
 // A valid forecast line, so the citation tests see only their own findings.
-const FORECAST = "\n\n## Size forecast\n\n- forecast: slice=1 wloc=200 files=a.mjs\n";
+const FORECAST = "\n\n## Simplest design\n\nMinimal.\n\n## Size forecast\n\n- forecast: slice=1 wloc=200 files=a.mjs\n";
 const lint = ({ body, repoRoot }) => lintSpec({ body: `${body}${FORECAST}`, repoRoot });
 
 function record(status) {
@@ -305,6 +307,83 @@ test("size forecast: a malformed forecast bullet next to a valid one is a size_f
   assert.deepEqual(sizeKinds((await run("- forecast: slice=2 wloc=1800 files=a.mjs, b.mjs")).findings), ["size_forecast_missing:size-forecast", "size_forecast_malformed:size-forecast"]);
 });
 
+test("simplest design: a Size forecast body without the section gives simplest_design_missing; the section, a fenced heading, or no forecast section behave as stated", () => {
+  const forecast = "## Size forecast\n\n- forecast: slice=1 wloc=10 files=a.mjs";
+  assert.deepEqual(lintSimplestDesign(forecast).map((f) => f.kind), ["simplest_design_missing"]);
+  assert.deepEqual(lintSimplestDesign(`${forecast}\n\n## Simplest design\n\nMinimal approach.`), []);
+  assert.deepEqual(lintSimplestDesign(`## Simplest design\n\nx\n\n${forecast}`), []);
+  assert.deepEqual(lintSimplestDesign(`${forecast}\n\n\`\`\`\n## Simplest design\n\`\`\``).map((f) => f.kind), ["simplest_design_missing"]);
+  assert.deepEqual(lintSimplestDesign("## Objective\n\nNo forecast here."), []);
+  assert.deepEqual(lintSimplestDesign(`${forecast}\n\n## Simplest design\n\n`).map((f) => f.kind), ["simplest_design_missing"]);
+});
+
+test("only cli/index.mjs wires the spec-lint lint surface; other files may reuse its pure helpers", () => {
+  const files = execFileSync("git", ["ls-files", "scripts", "packages", "cli"], { cwd: repoRoot, encoding: "utf8" })
+    .split("\n").filter((f) => /\.mjs$/u.test(f) && !f.includes("node_modules") && !/\.test\.mjs$/u.test(f) && f !== "cli/index.mjs" && f !== "scripts/loop/spec-lint.mjs");
+  // The guard forbids a SECOND LINT ENTRY POINT (authority drift), not helper reuse:
+  // `lintSpec` and the `loop spec-lint` argv are the lint surface, while e.g.
+  // scripts/loop/implementation-brief.mjs imports only pure parsers (citedAdrNumbers,
+  // indexDecisionRecords, loadKnownRuleIds, stripFencedCode), which is not an entry point.
+  // Match the entry symbol, a quoted spec-lint argv/module-path token (runCli / execFile /
+  // spawn / import), and a `[dev-loops] loop spec-lint` shell invocation (including the
+  // `cli/index.mjs loop spec-lint` forms) — a prose mention of the subcommand is not
+  // wiring. If spec-lint's entry export is ever renamed, update the `lintSpec` token here
+  // together with the export.
+  const consumer = /lintSpec\b|["'`](?:[^"'`\s]*\/)?spec-lint(?:\.mjs)?["'`]|\b(?:dev-loops\s+)?loop\s+spec-lint\b|cli\/index\.mjs\s+loop\s+spec-lint\b/u;
+  // The one declared pure-helper consumer: it may import only these parsers, never the
+  // entry points `lintSpec` or `main`, and its comments may name the subcommand.
+  const HELPER_CONSUMER = "scripts/loop/implementation-brief.mjs";
+  const PURE_HELPERS = new Set(["citedAdrNumbers", "indexDecisionRecords", "inForceAmenders", "loadKnownRuleIds", "stripFencedCode"]);
+  const IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*"\.\/spec-lint\.mjs";/u;
+  const wired = (f, source) => {
+    if (f !== HELPER_CONSUMER) return consumer.test(source);
+    const imported = (IMPORT_RE.exec(source)?.[1] ?? "").split(",").map((n) => n.trim()).filter(Boolean);
+    if (imported.some((n) => !PURE_HELPERS.has(n))) return true;
+    const code = source.replace(/^\s*\/\*[\s\S]*?\*\//gmu, "").replace(/^\s*\/\/.*$/gmu, "").replace(IMPORT_RE, "");
+    return consumer.test(code);
+  };
+  const offenders = files.filter((f) => wired(f, readFileSync(path.join(repoRoot, f), "utf8")));
+  assert.deepEqual(offenders, []);
+  for (const form of ['import { lintSpec } from "../loop/spec-lint.mjs";', 'import { main } from "../loop/spec-lint.mjs";', "lintSpec(x)", 'runCli(["loop", "spec-lint", "--body-file", p])', "execFile('dev-loops', ['loop', 'spec-lint'])", "execSync(`dev-loops loop spec-lint --body-file ${p}`)", "execSync(`dev-loops-run cli/index.mjs loop spec-lint --body-file ${p}`)", "execSync(`node <dev-loops-package-root>/cli/index.mjs loop spec-lint ${p}`)", 'execFileSync("node", ["scripts/loop/spec-lint.mjs", "--body-file", p])']) {
+    assert.match(form, consumer, form);
+  }
+  // The helper-consumer carve-out stays narrow: an entry-point import or an invocation is flagged.
+  assert.ok(wired(HELPER_CONSUMER, 'import { main } from "./spec-lint.mjs";'));
+  assert.ok(wired(HELPER_CONSUMER, 'import { stripFencedCode } from "./spec-lint.mjs";\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
+  assert.ok(wired(HELPER_CONSUMER, 'import { stripFencedCode } from "./spec-lint.mjs";\nconst USAGE = `skills/docs/*-contract.md`;\n/** doc */\nspawn("node", ["scripts/loop/spec-lint.mjs"]);'));
+  assert.ok(!wired(HELPER_CONSUMER, '/** runs `loop spec-lint` */\n  /* indented `loop spec-lint` */\nimport { stripFencedCode } from "./spec-lint.mjs";'));
+  assert.ok(!wired(HELPER_CONSUMER, '// runs `loop spec-lint`\nimport { stripFencedCode } from "./spec-lint.mjs";'));
+  assert.doesNotMatch("// the grill (refine-plan-file, spec-lint) reads it", consumer);
+});
+
+test("lintSpec reports simplest_design_missing for a Size forecast body without the section, and none with it", async () => {
+  const root = await fixtureRepo();
+  const forecast = "## Size forecast\n\n- forecast: slice=1 wloc=10 files=a.mjs";
+  const kinds = async (body) => (await lintSpec({ body, repoRoot: root })).findings.map((f) => f.kind);
+  assert.deepEqual(await kinds(forecast), ["simplest_design_missing"]);
+  assert.deepEqual(await kinds(`${forecast}\n\n## Simplest design\n\nMinimal approach.`), []);
+});
+
+test("DESIGN-SIMPLEST-FIRST is registered, owned by structural-quality, and cited by the grill, refiner and four agents", async () => {
+  const read = (rel) => readFile(path.join(repoRoot, rel), "utf8");
+  assert.match(await read("skills/docs/structural-quality.md"), /<!-- rule: DESIGN-SIMPLEST-FIRST -->\n`DESIGN-SIMPLEST-FIRST`: before any code[\s\S]{0,400}rejects[\s\S]{0,200}cost/);
+  assert.ok(JSON.parse(await read("skills/docs/required-rules.json")).requiredRules.some((r) => r.id === "DESIGN-SIMPLEST-FIRST"));
+  for (const file of ["skills/loop-grill/SKILL.md", "agents/refiner.agent.md"]) {
+    assert.match(await read(file), /`## Simplest design` section[\s\S]{0,300}minimal approach[\s\S]{0,100}rejected[\s\S]{0,200}cost comparison/, file);
+  }
+  assert.match(await read("agents/refiner.agent.md"), /`## Simplest design` section per issue and per slice/);
+  assert.match(await read("skills/loop-grill/SKILL.md"), /The synthesized body and every slice also carry a `## Simplest design` section/);
+  assert.match(await read("skills/loop-grill/SKILL.md"), /`simplest_design_missing`[\s\S]{0,120}grill or a re-grill[\s\S]{0,200}`size_forecast_\*` findings only/);
+  assert.match(await read("skills/loop-grill/SKILL.md"), /`simplest_design_missing` is also not disposable[\s\S]{0,80}only by writing/);
+  assert.match(await read("skills/loop-grill/SKILL.md"), /`size_forecast_malformed` or `simplest_design_missing` finding blocks `grill-clean`/);
+  for (const file of ["developer", "fixer", "review", "judge"]) {
+    assert.match(await read(`agents/${file}.agent.md`), /DESIGN-SIMPLEST-FIRST/, file);
+  }
+  for (const file of ["review", "judge"]) {
+    assert.match(await read(`agents/${file}.agent.md`), /no AC row[\s\S]{0,40}at least `medium`/, file);
+  }
+});
+
 test("size forecast: a null waiverLoc never reports size_forecast_split_required", () => {
   assert.deepEqual(lintSizeForecast("## Size forecast\n\n- forecast: slice=1 wloc=10 files=a.mjs", { waiverLoc: null }), []);
   assert.deepEqual(lintSizeForecast("## Size forecast\n\n- forecast: slice=1 wloc=1800 files=a.mjs", { waiverLoc: 1500 }).map((f) => f.kind), ["size_forecast_split_required"]);
@@ -328,4 +407,28 @@ test("a broken .devloops exits 2 instead of falling back to the default bounds",
   const stdout = buffer();
   assert.equal(await main(["--body-file", bodyFile, "--repo-root", root], { stdout: stdout.stream, stderr: buffer().stream }), 2);
   assert.equal(stdout.read(), "");
+});
+
+test("a rule citation with a one-character later segment is read whole", async () => {
+  const root = await fixtureRepo({ rules: { requiredRules: [{ id: "LOCAL-PHASE-ONE-AT-A-TIME" }], optOutRules: [] } });
+  const result = await lint({ body: "Cites LOCAL-PHASE-ONE-AT-A-TIME.", repoRoot: root });
+  assert.deepEqual(result.findings, []);
+});
+
+test("ordinary tokens with a one-character later segment are not unknown rule ids", async () => {
+  const root = await fixtureRepo({ rules: { requiredRules: [], optOutRules: [] } });
+  const result = await lint({ body: "Encodes as UTF-8, hashes with SHA-1, runs GLM-5 and GPT-5 at STEP-1 with zai-org/GLM-5.3.", repoRoot: root });
+  assert.deepEqual(result.findings, []);
+});
+
+test("an unregistered id with a one-character later segment reports its rule-shaped prefix", async () => {
+  const root = await fixtureRepo({ rules: { requiredRules: [], optOutRules: [] } });
+  const result = await lint({ body: "Cites FOO-BAR-BAZ-2 and LOCAL-PHASE-ONE-AT-A-TIMES.", repoRoot: root });
+  assert.deepEqual(result.findings.map((f) => [f.kind, f.id]), [["unknown_rule_id", "FOO-BAR-BAZ"], ["unknown_rule_id", "LOCAL-PHASE-ONE-AT"]]);
+});
+
+test("an unregistered rule-shaped id is still an unknown rule id", async () => {
+  const root = await fixtureRepo({ rules: { requiredRules: [], optOutRules: [] } });
+  const result = await lint({ body: "Cites FOO-BAR-BAZ.", repoRoot: root });
+  assert.deepEqual(result.findings.map((f) => [f.kind, f.id]), [["unknown_rule_id", "FOO-BAR-BAZ"]]);
 });

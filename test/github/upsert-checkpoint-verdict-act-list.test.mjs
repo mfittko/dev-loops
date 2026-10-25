@@ -135,15 +135,76 @@ test("a ledger without overallVerdict refuses an explicit clean over an open act
   }, { prefix: "dev-loops-act-list-bare-" });
 });
 
-test("a high finding judged reject still keeps the round from clean", async () => {
+test("a high finding judged reject posts clean over a fan-in findings_present verdict", async () => {
   await withTempDir(async (tempDir) => {
-    // The consolidator's blockCleanOnFindingSeverities floor made this findings_present.
+    // The consolidator's blockCleanOnFindingSeverities floor made the fan-in verdict findings_present; the judge's empty act list wins.
     const ledgerPath = await writeLedger(tempDir, { overallVerdict: "findings_present", findings: [finding("high", "reject")] });
     const derived = await post(ledgerPath, undefined, 1);
     assert.equal(derived.error, undefined);
-    assert.match(derived.body, /\*\*Verdict:\*\* findings_present/);
-    assert.match((await post(ledgerPath, "clean", 1)).error, /--verdict "clean"/);
+    assert.match(derived.body, /\*\*Verdict:\*\* clean/);
+    assert.equal((await post(ledgerPath, "clean", 1)).error, undefined);
+    assert.match((await post(ledgerPath, "findings_present", 1)).error, /--verdict "findings_present"/);
   }, { prefix: "dev-loops-act-list-high-" });
+});
+
+test("a fully judged rejected high posts clean on the sanctioned ledger plus --findings-json shape", async () => {
+  await withTempDir(async (tempDir) => {
+    const high = finding("high", "reject");
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "findings_present", findings: [high] });
+    const jsonPath = path.join(tempDir, "findings.json");
+    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [high] }]), "utf8");
+    const args = [
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
+      "--findings-summary", "act list test", "--findings-ledger", ledgerPath, "--findings-json", jsonPath,
+      "--next-action", "follow the verdict", "--inline-reason", "act list test",
+      "--findings-severity-counts", JSON.stringify({ high: 1, medium: 0, low: 0, question: 0, nit: 0 }),
+    ];
+    const posted = [];
+    await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild(posted),
+    });
+    assert.match(posted.join("\n"), /\*\*Verdict:\*\* clean/);
+  }, { prefix: "dev-loops-act-list-high-json-" });
+});
+
+test("a judged ledger with a sole rejected high posts clean when --findings-json is the unjudged fan-in --out shape", async () => {
+  await withTempDir(async (tempDir) => {
+    const high = finding("high", "reject");
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "findings_present", findings: [high] });
+    const jsonPath = path.join(tempDir, "findings.json");
+    const { judgeDisposition: _omit, ...unjudged } = high;
+    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [unjudged] }]), "utf8");
+    const args = [
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
+      "--findings-summary", "act list test", "--findings-ledger", ledgerPath, "--findings-json", jsonPath,
+      "--next-action", "follow the verdict", "--inline-reason", "act list test", "--verdict", "clean",
+      "--findings-severity-counts", JSON.stringify({ high: 1, medium: 0, low: 0, question: 0, nit: 0 }),
+    ];
+    const posted = [];
+    await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild(posted),
+    });
+    assert.match(posted.join("\n"), /\*\*Verdict:\*\* clean/);
+  }, { prefix: "dev-loops-act-list-unjudged-dup-" });
+});
+
+test("an empty ledger with a judged rejected high in --findings-json posts clean without a severity-floor refusal", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "findings_present", findings: [] });
+    const jsonPath = path.join(tempDir, "findings.json");
+    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [finding("high", "reject")] }]), "utf8");
+    const args = [
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
+      "--findings-summary", "act list test", "--findings-ledger", ledgerPath, "--findings-json", jsonPath,
+      "--next-action", "follow the verdict", "--inline-reason", "act list test",
+      "--findings-severity-counts", JSON.stringify({ high: 1, medium: 0, low: 0, question: 0, nit: 0 }),
+    ];
+    const posted = [];
+    await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild(posted),
+    });
+    assert.match(posted.join("\n"), /\*\*Verdict:\*\* clean/);
+  }, { prefix: "dev-loops-act-list-empty-ledger-high-" });
 });
 
 test("--findings-json without a ledger refuses an explicit clean over an open act item", async () => {
@@ -370,3 +431,106 @@ test("a fan-out ledger with no --execution-mode is not refused as an inline post
     assert.doesNotMatch(message, /Cannot post a inline_single_agent/);
   }, { prefix: "dev-loops-act-list-real-config-" });
 });
+
+test("a review-gate ledger with fan-in findings_present and a sole rejected high posts clean with the no-change-requested next action", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = path.join(tempDir, "review-ledger.json");
+    await writeFile(ledgerPath, JSON.stringify({
+      repo: "owner/repo", pr: 17, gate: "review", headSha: HEAD, verdict: "findings_present", overallVerdict: "findings_present",
+      loggedAt: "2026-09-23T00:00:00.000Z", findings: [finding("high", "reject")],
+    }), "utf8");
+    const args = [
+      "--repo", "owner/repo", "--pr", "17", "--gate", "review", "--head-sha", HEAD, "--submit", "comment",
+      "--inline-reason", "review gate judged", "--judge-spec-source", "pr_body",
+      "--findings-ledger", ledgerPath, "--findings-summary", "act list test", "--next-action", "follow the verdict",
+      "--findings-severity-counts", JSON.stringify({ high: 1, medium: 0, low: 0, question: 0, nit: 0 }),
+    ];
+    const posted = [];
+    await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild(posted),
+    });
+    const body = posted.join("\n");
+    assert.match(body, /\*\*Verdict:\*\* clean/);
+    assert.match(body, /no change requested/);
+  }, { prefix: "dev-loops-act-list-review-reject-high-" });
+});
+
+test("a partly judged ledger keeps the fan-in verdict: an unjudged high never composes clean", async () => {
+  await withTempDir(async (tempDir) => {
+    const unjudgedHigh = { severity: "high", angle: "correctness", summary: "high finding with no judge disposition" };
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "findings_present", findings: [unjudgedHigh, finding("low", "reject")] });
+    const derived = await post(ledgerPath, undefined, 1);
+    assert.equal(derived.error, undefined);
+    assert.match(derived.body, /\*\*Verdict:\*\* findings_present/);
+    const explicitClean = await post(ledgerPath, "clean", 1);
+    assert.match(explicitClean.error, /--verdict "clean"/);
+  }, { prefix: "dev-loops-act-list-mixed-" });
+});
+
+test("an extra unjudged high in --findings-json keeps the severity guards active over a fully judged ledger", async () => {
+  await withTempDir(async (tempDir) => {
+    const judged = finding("low", "reject");
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [judged] });
+    const jsonPath = path.join(tempDir, "findings.json");
+    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [judged, { severity: "high", summary: "unjudged extra high" }] }]), "utf8");
+    const args = [
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
+      "--findings-summary", "act list test", "--findings-ledger", ledgerPath, "--findings-json", jsonPath,
+      "--next-action", "follow the verdict", "--inline-reason", "act list test", "--verdict", "clean",
+      "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 1, question: 0, nit: 0 }),
+    ];
+    await assert.rejects(
+      () => upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+        env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild([]),
+      }),
+      /blocking severities \[high\]/,
+    );
+  }, { prefix: "dev-loops-act-list-extra-high-" });
+});
+
+// ADR 0183: a JSON finding matches a judged ledger finding by fingerprint (first file plus normalized summary) only.
+const duplicateForms = [
+  { name: "same first file and summary", ledger: { files: ["src/a.mjs"] }, json: { files: ["src/a.mjs"] }, refused: false },
+  { name: "same summary, different file", ledger: { files: ["src/a.mjs"] }, json: { files: ["src/b.mjs"] }, refused: true },
+  { name: "no files and the same summary", ledger: {}, json: {}, refused: false },
+  { name: "same clusterId only", ledger: { files: ["src/a.mjs"], clusterId: 1 }, json: { files: ["src/b.mjs"], clusterId: 1, summary: "other summary" }, refused: true },
+];
+for (const form of duplicateForms) {
+  test(`an unjudged high with ${form.name} ${form.refused ? "keeps the severity guards active" : "is a judged ledger duplicate"}`, async () => {
+    await withTempDir(async (tempDir) => {
+      const judged = { ...finding("medium", "reject"), ...form.ledger };
+      const ledgerPath = await writeLedger(tempDir, { overallVerdict: "clean", findings: [judged] });
+      const jsonPath = path.join(tempDir, "findings.json");
+      const { judgeDisposition: _omit, judgeRationale: _omit2, ...unjudged } = { ...judged, severity: "high", ...form.json };
+      await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [unjudged] }]), "utf8");
+      const args = [
+        "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
+        "--findings-summary", "act list test", "--findings-ledger", ledgerPath, "--findings-json", jsonPath,
+        "--next-action", "follow the verdict", "--inline-reason", "act list test", "--verdict", "clean",
+        "--findings-severity-counts", JSON.stringify({ high: 1, medium: 0, low: 0, question: 0, nit: 0 }),
+      ];
+      const run = () => upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+        env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild([]),
+      });
+      if (form.refused) await assert.rejects(run, /blocking severities \[high\]/);
+      else await run();
+    }, { prefix: "dev-loops-act-list-dup-form-" });
+  });
+}
+
+for (const { name, jsonFile, refused } of [
+  { name: "a judge-rejected --findings-json finding on another file does not cover an unjudged ledger finding", jsonFile: "src/a.mjs", refused: true },
+  { name: "a judge-rejected --findings-json finding on the same file covers the unjudged ledger finding", jsonFile: "src/b.mjs", refused: false },
+]) {
+  test(name, async () => {
+    await withTempDir(async (tempDir) => {
+      const ledgerFinding = { severity: "high", angle: "correctness", summary: "shared summary", files: ["src/b.mjs"] };
+      const ledgerPath = await writeLedger(tempDir, { overallVerdict: "findings_present", findings: [ledgerFinding], executionMode: "fanout_fanin" });
+      const jsonPath = path.join(tempDir, "rejected.json");
+      await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ severity: "high", angle: "correctness", summary: "shared summary", file: jsonFile, judgeDisposition: "reject", judgeRationale: "r" }] }, { angle: "pr-description", verdict: "clean", findings: [] }, { angle: "holistic", verdict: "clean", findings: [] }]), "utf8");
+      const out = await postWithJson(ledgerPath, jsonPath, ["--verdict", "clean"]);
+      if (refused) assert.match(out.error, unjudgedLedgerMsg);
+      else assert.equal(out.error, undefined);
+    }, { prefix: "dev-loops-act-list-fingerprint-" });
+  });
+}

@@ -11,6 +11,9 @@
  * `packages/core/src/config/extension-defaults.yaml` directly — a raw grep of
  * the shipped defaults misses the config-layer merge, so it yields the wrong
  * persona/model whenever a repo overrides an angle in `.devloops`.
+ * The mutually exclusive conductor selector requires explicit --harness codex
+ * and returns nullable settings plus omitted-if-null nativeOverrides. Only
+ * exit 0 permits dispatch; see skills/docs/main-agent-contract.md.
  *
  * Config-only (no git, no GitHub), matching the scripts/loop/ placement of
  * pre-flight-gate / gate-coordination. ALL angle-pool/eligibility logic lives
@@ -30,7 +33,7 @@
  */
 import { parseArgs } from "node:util";
 
-import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveConductorDispatch } from "@dev-loops/core/config";
 import { REVIEW_OPERATIONS, resolveOperationReviewerRole } from "@dev-loops/core/loop/review-operation";
 import { resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 
@@ -40,6 +43,10 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: resolve-reviewer-role.mjs --gate <${REVIEW_OPERATIONS.join("|")}> --angle <name> [--harness <pi|claude|codex>]
+   or: resolve-reviewer-role.mjs --conductor --harness codex
+
+--conductor selects Codex conductor settings and nativeOverrides without startup.
+It is mutually exclusive with --gate and --angle. Config errors refuse with exit 1.
 
 Resolve a gate angle's reviewer role for a review operation from the fully
 merged config (shipped extension default + the repo's .pi/dev-loop/defaults +
@@ -50,18 +57,24 @@ legal candidate angle pool (the same pool dispatch/planning uses — see
 extension-defaults.yaml directly — a raw grep misses the .devloops
 config-layer merge and yields the wrong persona/model.
 
-Required:
+Angle mode — required:
   --gate <op>             Review operation: ${REVIEW_OPERATIONS.join(" | ")}
                            (standalone review is only ever selected by
                            --gate review, never inferred from an omitted flag)
   --angle <name>           Gate angle / lens name (e.g. correctness, security)
 
-Optional:
+Angle mode — optional:
   --harness <pi|claude|codex> Harness whose concrete model tier to resolve
                             (default: active CLI harness)
+
+Conductor mode — required:
+  --conductor --harness codex
+                            Cannot be combined with --gate or --angle.
+
+Both modes — optional:
   --help, -h                Show this help
 
-Output (stdout, JSON):
+Angle output (stdout, JSON):
   {
     "ok": true,
     "operation": "pre_approval_gate",
@@ -76,6 +89,22 @@ Output (stdout, JSON):
     "configErrors": []
   }
 
+Conductor output (stdout, JSON), inherited settings (exit 0):
+  {
+    "ok": true, "harness": "codex", "kind": "conductor",
+    "settings": { "model": null, "reasoningEffort": null },
+    "nativeOverrides": {}, "configErrors": []
+  }
+Configured settings replace the corresponding null. Non-null model is emitted
+as nativeOverrides.model and non-null reasoningEffort as
+nativeOverrides.reasoning_effort; null fields are omitted from nativeOverrides.
+Config errors (exit 1) return the same shape with ok:false, both settings null,
+nativeOverrides:{}, and configErrors containing the loader's error records.
+Only exit 0 permits native dispatch. Pass nativeOverrides unchanged alongside
+the authorized task/message and fork_turns:"none"; native rejection stops the
+attempt without fallback. See skills/docs/main-agent-contract.md, Codex
+coordinator dispatch, for the canonical initial/resumed caller contract.
+
 ${JQ_OUTPUT_USAGE}
 
 Note: for this command, --silent's exit code always reflects \`ok\`, never the
@@ -83,21 +112,22 @@ Note: for this command, --silent's exit code always reflects \`ok\`, never the
 shared --jq/--silent composition described above).
 
 Exit codes:
-  0  ok: true  — config errors absent AND the angle is a legal member of the operation's pool
-  1  ok: false — config-layer errors present, or the angle is not a legal member of the operation's pool
+  0  ok: true  — config errors absent; conductor selected, or angle belongs to the operation's pool
+  1  ok: false — config-layer errors present, or angle does not belong to the operation's pool
   2  Argument/runtime error, or invalid --jq filter`;
 
 const parseError = buildParseError(USAGE);
 const HARNESSES = new Set(["pi", "claude", "codex"]);
 
 export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}) {
-  const options = { help: false, gate: null, angle: null, harness: null };
+  const options = { help: false, gate: null, angle: null, harness: null, conductor: false };
   const { tokens } = parseArgs({
     args: [...argv],
     options: {
       help: { type: "boolean", short: "h" },
       gate: { type: "string" },
       angle: { type: "string" },
+      conductor: { type: "boolean" },
       harness: { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -109,11 +139,17 @@ export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}
     if (token.kind === "positional") throw parseError(`Unknown argument: ${token.value}`);
     if (token.kind !== "option") continue;
     if (token.name === "help") { options.help = true; return options; }
+    if (token.name === "conductor") { if (token.inlineValue !== undefined) throw parseError("--conductor does not accept a value"); options.conductor = true; continue; }
     if (token.name === "gate") { options.gate = requireTokenValue(token, parseError).trim(); continue; }
     if (token.name === "angle") { options.angle = requireTokenValue(token, parseError).trim(); continue; }
     if (token.name === "harness") { options.harness = requireTokenValue(token, parseError).trim(); continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
+  }
+  if (options.conductor) {
+    if (options.gate !== null || options.angle !== null) throw parseError("--conductor cannot be mixed with --gate or --angle");
+    if (options.harness !== "codex") throw parseError("--conductor requires --harness codex");
+    return options;
   }
   if (!options.gate) {
     throw parseError(`resolve-reviewer-role requires --gate <${REVIEW_OPERATIONS.join("|")}>`);
@@ -140,7 +176,7 @@ export async function runCli(argv = process.argv.slice(2), { repoRoot = resolveR
     return { ok: true, help: true };
   }
   const loadResult = await loadDevLoopConfig({ repoRoot });
-  const result = resolveOperationReviewerRole(loadResult, {
+  const result = options.conductor ? resolveConductorDispatch(loadResult, { harness: options.harness }) : resolveOperationReviewerRole(loadResult, {
     operation: options.gate,
     angle: options.angle,
     harness: options.harness,

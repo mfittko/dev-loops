@@ -224,6 +224,40 @@ test("the delta check requires a skipReason to equal the recorded reason for tha
   assert.equal(run(residue({ site: undefined })).outcome, "needs_fix");
 });
 
+test("a padded input_form residue site matches only its verbatim recorded skip", () => {
+  const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: [actEntry()] });
+  const reason = "the padded form is out of scope";
+  const run = (recorded) => decideDeltaNextStep({
+    sequence,
+    result: deltaResult(sequence, { newFindings: [{ severity: "low", summary: "same guard", evidence: ["src/c.mjs:12"], residueOf: "fp1", site: " 12 ", skipReason: reason }] }),
+    invocation: 1,
+    currentHead: CANDIDATE,
+    siteCoverage: record([coverageItem({ returnedSites: [recorded], sites: [{ site: recorded, status: "skipped", kind: "input_form", reason }] })]),
+  });
+  assert.equal(run(" 12 ").outcome, "locally_clear");
+  const borrowed = run("12");
+  assert.equal(borrowed.outcome, "needs_fix");
+  assert.ok(borrowed.errors.some((e) => /PRE-PUSH-DELTA-RESIDUE/.test(e)));
+});
+
+test("an omitted residue site never matches a recorded skipped empty input_form site", () => {
+  const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: [actEntry()] });
+  const reason = "the empty form is out of scope";
+  const run = (extra) => decideDeltaNextStep({
+    sequence,
+    result: deltaResult(sequence, { newFindings: [{ severity: "low", summary: "same guard", evidence: ["src/c.mjs:12"], residueOf: "fp1", skipReason: reason, ...extra }] }),
+    invocation: 1,
+    currentHead: CANDIDATE,
+    siteCoverage: record([coverageItem({ returnedSites: [""], sites: [{ site: "", status: "skipped", kind: "input_form", reason }] })]),
+  });
+  assert.equal(run({ site: "" }).outcome, "locally_clear");
+  for (const extra of [{}, { site: undefined }, { site: null }, { site: 0 }]) {
+    const out = run(extra);
+    assert.equal(out.outcome, "needs_fix");
+    assert.ok(out.errors.some((e) => /PRE-PUSH-DELTA-RESIDUE/.test(e)));
+  }
+});
+
 test("the delta check reports a coverage gap for an act item with no record", () => {
   const sequence = startDeltaSequence({ reviewBaselineHead: BASE, actList: [actEntry()] });
   const next = decideDeltaNextStep({ sequence, result: deltaResult(sequence), invocation: 1, currentHead: CANDIDATE, siteCoverage: [] });
@@ -244,7 +278,7 @@ test("a duplicate site name in one coverage record is rejected", () => {
     { site: "--ref x", status: "fixed", kind: "input_form", test: "t1" },
     { site: "--ref x", status: "skipped", reason: "r" },
   ];
-  assert.throws(() => record([coverageItem({ returnedSites: ["--ref x"], sites })]), /records site --ref x more than once/);
+  assert.throws(() => record([coverageItem({ returnedSites: ["--ref x"], sites })]), /records site "--ref x" more than once/);
 });
 
 test("matcher input forms survive startDeltaSequence into the delta coverage check", () => {

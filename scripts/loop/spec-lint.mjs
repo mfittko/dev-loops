@@ -18,6 +18,7 @@ import { resolveSizeBounds } from "./check-size-budget.mjs";
 import {
   FORWARD_RULE_REFERENCES,
   NON_RULE_TOKENS,
+  RULE_ID_CITATION_RE,
   RULE_ID_SHAPE_RE,
   normalizeRuleEntry,
 } from "../docs/validate-rule-ownership.mjs";
@@ -42,7 +43,8 @@ size_forecast_missing, size_forecast_malformed, size_forecast_split_required (PL
 "- forecast: slice=<id> wloc=<n> files=<path>,<path>" line per slice under "## Size forecast";
 a line at or above the resolved default-tier waiverLoc must be split, not disposed;
 a list item that starts with the word "forecast" or contains "wloc=" and does not parse is
-size_forecast_malformed, also not disposable; non-list lines are never claimed).
+size_forecast_malformed, also not disposable; non-list lines are never claimed),
+simplest_design_missing (DESIGN-SIMPLEST-FIRST; a body with a "## Size forecast" section and no "## Simplest design" section).
 ADR citation forms: "ADR NNNN", "ADR-<digits>" and docs/decisions/NNNN-*.md links.
 
 ${JQ_OUTPUT_USAGE}
@@ -59,7 +61,7 @@ function isMissing(error) {
   return error?.code === "ENOENT" || error?.code === "ENOTDIR";
 }
 
-function stripFencedCode(body) {
+export function stripFencedCode(body) {
   // A fence closes only on a bare run of its own character at least as long as the opener.
   let fence = null;
   return body.split(/\r?\n/).filter((line) => {
@@ -73,7 +75,7 @@ function stripFencedCode(body) {
   }).join("\n");
 }
 
-async function loadKnownRuleIds(repoRoot) {
+export async function loadKnownRuleIds(repoRoot) {
   const file = path.join(repoRoot, "skills", "docs", "required-rules.json");
   let text;
   try {
@@ -98,11 +100,15 @@ async function loadKnownRuleIds(repoRoot) {
 export function lintRuleIds(body, knownIds) {
   const seen = new Set();
   const findings = [];
-  for (const [token] of stripFencedCode(body).matchAll(RULE_ID_SHAPE_RE)) {
-    if (seen.has(token)) continue;
-    seen.add(token);
-    if (knownIds.has(token) || NON_RULE_TOKENS.has(token) || FORWARD_RULE_REFERENCES.has(token) || /^ADR-\d+$/.test(token)) continue;
-    findings.push({ kind: "unknown_rule_id", id: token, detail: { reason: "not in requiredRules or optOutRules of skills/docs/required-rules.json" } });
+  for (const [token] of stripFencedCode(body).matchAll(RULE_ID_CITATION_RE)) {
+    // A registered token is known. An unregistered one reports the rule-shaped matches inside it (GLM-5 and STEP-1 hold none; FOO-BAR-BAZ-2 holds FOO-BAR-BAZ).
+    if (knownIds.has(token)) continue;
+    for (const [id] of token.matchAll(RULE_ID_SHAPE_RE)) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (knownIds.has(id) || NON_RULE_TOKENS.has(id) || FORWARD_RULE_REFERENCES.has(id) || /^ADR-\d+$/.test(id)) continue;
+      findings.push({ kind: "unknown_rule_id", id, detail: { reason: "not in requiredRules or optOutRules of skills/docs/required-rules.json" } });
+    }
   }
   return findings;
 }
@@ -182,8 +188,22 @@ export async function indexDecisionRecords(decisionsDir) {
   return records;
 }
 
+/**
+ * The record numbers a body cites, in any of the accepted citation forms. One
+ * reader for every consumer: `BODY_ADR_RE` is global/stateful, so it is never
+ * shared as a regex.
+ */
+export function citedAdrNumbers(body) {
+  return new Set([...body.matchAll(BODY_ADR_RE)].map((match) => match[1] ?? match[2]));
+}
+
+/** Amenders in force: later-numbered than the amended record and accepted. */
+export function inForceAmenders(id, record, records) {
+  return [...record.amendedBy].filter((amender) => Number(amender) > Number(id) && records.get(amender).state === "accepted");
+}
+
 export function lintAdrCitations(body, records) {
-  const cited = new Set([...body.matchAll(BODY_ADR_RE)].map((match) => match[1] ?? match[2]));
+  const cited = citedAdrNumbers(body);
   const findings = [];
   for (const id of cited) {
     const record = records.get(id);
@@ -197,8 +217,7 @@ export function lintAdrCitations(body, records) {
     if (record.state === "superseded") {
       findings.push({ kind: "adr_superseded", id, detail: { supersededBy: record.supersededBy, status: record.statusLine } });
     }
-    const amenders = [...record.amendedBy]
-      .filter((amender) => Number(amender) > Number(id) && records.get(amender).state === "accepted")
+    const amenders = inForceAmenders(id, record, records)
       .sort((a, b) => Number(a) - Number(b))
       .map((amender) => ({ id: amender, file: records.get(amender).file, amenderCited: cited.has(amender) }));
     if (amenders.length > 0) findings.push({ kind: "adr_amended", id, detail: { amenders } });
@@ -235,6 +254,13 @@ export function lintSizeForecast(body, { waiverLoc }) {
   ];
 }
 
+/** DESIGN-SIMPLEST-FIRST: a grilled body (one with `## Size forecast`) needs a `## Simplest design` section. */
+export function lintSimplestDesign(body) {
+  const stripped = stripFencedCode(body);
+  if (extractSection(stripped, "Size forecast") === null || extractSection(stripped, "Simplest design")?.trim()) return [];
+  return [{ kind: "simplest_design_missing", id: "simplest-design", detail: { reason: "no `## Simplest design` section (minimal approach, rejected alternatives, cost comparison)" } }];
+}
+
 export async function lintSpec({ body, repoRoot }) {
   const rootStat = await stat(repoRoot).catch((error) => {
     if (isMissing(error)) return null;
@@ -253,6 +279,7 @@ export async function lintSpec({ body, repoRoot }) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot });
   findings.push(...lintSizeForecast(body, resolveSizeBounds(config)));
   checks.sizeForecast = { status: "ran" };
+  findings.push(...lintSimplestDesign(body));
   const decisionsDir = path.join(repoRoot, "docs", "decisions");
   const records = await indexDecisionRecords(decisionsDir);
   if (records) {

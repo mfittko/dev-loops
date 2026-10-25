@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { initSizeBudgetFixtureRepo, runGitFixture, repeatedLinesContent } from "../_helpers.mjs";
 
 import {
   computeSizeBudget,
@@ -9,7 +13,30 @@ import {
   parseNumstatZ,
   resolveFileTier,
   resolveSizeBounds,
+  evaluatePrSizeBudget,
+  runCli,
 } from "../../scripts/loop/check-size-budget.mjs";
+
+test("CLI and evaluator anchor stale main to origin/main without false size escalation", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "size-anchor-"));
+  try {
+    await initSizeBudgetFixtureRepo(repoRoot, { headFiles: [{ path: "scripts/upstream.mjs", content: repeatedLinesContent(1600) }] });
+    runGitFixture(repoRoot, ["branch", "-f", "stale", "origin/main"]);
+    runGitFixture(repoRoot, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    runGitFixture(repoRoot, ["checkout", "--detach", "-q"]);
+    runGitFixture(repoRoot, ["branch", "-f", "main", "stale"]);
+    runGitFixture(repoRoot, ["commit", "--allow-empty", "-qm", "chore: feature"]);
+    const remote = await evaluatePrSizeBudget({ base: "origin/main", repoRoot });
+    const local = await evaluatePrSizeBudget({ base: "main", repoRoot });
+    assert.equal(local.wholeLogicLoc, remote.wholeLogicLoc);
+    assert.equal(local.outcome, remote.outcome);
+    assert.equal(local.wholeLogicLoc, 0);
+    const cli = await runCli(["--base", "main", "--silent"], { repoRoot });
+    assert.equal(cli.wholeLogicLoc, remote.wholeLogicLoc);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures — small, realistic diff/name-status/numstat inputs. A MIXED diff

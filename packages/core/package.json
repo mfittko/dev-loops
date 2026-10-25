@@ -1,6 +1,6 @@
 {
   "name": "@dev-loops/core",
-  "version": "1.0.8-pre.1",
+  "version": "1.0.8-pre.2",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -89,6 +89,7 @@
     "./loop/steering": "./src/loop/steering.mjs",
     "./loop/timeout-policy": "./src/loop/timeout-policy.mjs",
     "./loop/validation-classify": "./src/loop/validation-classify.mjs",
+    "./loop/validation-record": "./src/loop/validation-record.mjs",
     "./loop/tracker-pr-state": "./src/loop/tracker-pr-state.mjs",
     "./loop/watcher-exclusivity": "./src/loop/watcher-exclusivity.mjs",
     "./loop/ui-e2e-scoping": "./src/loop/ui-e2e-scoping.mjs",

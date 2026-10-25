@@ -321,6 +321,8 @@ export const SUBCOMMAND_ROUTES = {
     "pre-push-delta":       "scripts/loop/check-pre-push-delta.mjs",
     "pre-pr-review":        "scripts/loop/record-pre-pr-review.mjs",
     "spec-lint":            "scripts/loop/spec-lint.mjs",
+    "implementation-brief": "scripts/loop/implementation-brief.mjs",
+    "validation-record":    "scripts/loop/validation-record.mjs",
   },
   pr: {
     create:             "scripts/github/create-pr.mjs",
@@ -407,7 +409,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "reply-resolve": "Reply and resolve review threads",
     "offer-human-handoff": "Offer to assign PR to a human reviewer/assignee",
     "size-budget": "Compute PR size/tier budget outcome (pass/escalate/block; pure computation, no enforcement)",
-    "resolve-role": "Resolve a review-operation angle's authoritative reviewer role (persona/prompt/model)",
+    "resolve-role": "Resolve a review angle's role or Codex conductor native settings",
     "resolve-validation": "Resolve gate validation at an exact head (ci-only CI evidence, declared full command, or the pinned-Bun verify script)",
     "wait-for-units": "Block until a gate round's dispatched reviewer or judge units are done (read-only)",
   },
@@ -440,6 +442,8 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "pre-push-delta": "Build the delta-mode pre-push review input or check its result before an act-list or thread-route fix push",
     "pre-pr-review": "Write the pre-PR review record for the current head after the stale-surface sweep (required by pr create); --scan prints the sweep only",
     "spec-lint": "Lint an issue body offline against required-rules.json and docs/decisions",
+    "implementation-brief": "Print the canonical review expectations of a spec body, offline and read-only",
+    "validation-record": "Run the validation profile at a clean head and write the head-pinned validation record (foreground, bounded timeout)",
   },
   pr: {
     create: "Create PR (always draft, self-assigned by default)",

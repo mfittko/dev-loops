@@ -2,181 +2,35 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PROJECT_AGENTS_SUBPATH, TOOLS_LINE_RE, parseToolList, syncProjectAgentsDir, writeSyncedAgents } from "./pi-agent-render.mjs";
+
+export { TOOL_NAME_MAP_PI, mapAgentToolsForPi, renderPiAgent, renderProjectAgents, syncProjectAgentsDir } from "./pi-agent-render.mjs";
 
 const PACKAGED_AGENTS_ROOT = new URL("../agents/", import.meta.url);
+const PROJECT_TRUST_CEILING = "This preflight cannot read Pi's project-trust state, so it cannot tell whether Pi loads the project agents in `.pi/agents`.";
 
-/**
- * The project-local agents directory, relative to the session's project root.
- * Pi resolves project role agents from here with precedence over the global
- * `~/.agents/` (#1606): when a repo symlinks `.pi/agents` -> the package source
- * (the dev-loops repo dogfooding convention), the dispatch reads the raw neutral
- * templates and Pi strict-rejects `search`/`execute`. The project-local sync
- * replaces that symlink with a real directory of Pi-valid copies.
- */
-const PROJECT_AGENTS_SUBPATH = path.join(".pi", "agents");
-
-/**
- * Pi tool-name map — mirrors the Claude `TOOL_NAME_MAP`
- * (`packages/core/src/claude/asset-generation.mjs`) but maps the harness-neutral
- * agent tool vocabulary to Pi builtins. Applied at session-start sync time so
- * `~/.agents/*.agent.md` lists only valid Pi builtin tool names (#1583).
- *
- *   read→read, search→grep+find+ls, execute→bash, bash→bash, edit→edit, write→write,
- *   agent→subagent, subagent→subagent, todo→(drop), review_loop→review_loop
- *
- * `todo` has no Pi builtin (Claude keeps `TodoWrite`); the dev-loop acceptance
- * checklist falls back to prose/bash under Pi — documented in
- * `agents/dev-loop.agent.md`. This is a #1086 cross-harness regression fix: the
- * Pi path had no equivalent map, so Pi rejected `search`/`execute`/`agent`/`todo`
- * as unavailable child tools and ended runs with a `failed` status.
- */
-export const TOOL_NAME_MAP_PI: Readonly<Record<string, string | readonly string[] | null>> = Object.freeze({
-  read: "read",
-  search: ["grep", "find", "ls"], // shell-free builtins: a search-only role keeps no unrestricted shell (#2582)
-  execute: "bash",
-  bash: "bash",
-  edit: "edit",
-  write: "write",
-  agent: "subagent",
-  subagent: "subagent",
-  todo: null, // dropped — no Pi todo builtin
-  review_loop: "review_loop",
-});
-
-/** Map a list of harness-neutral tool names to deduped Pi builtin names (first-seen order). */
-export function mapAgentToolsForPi(tools: string[]): string[] {
-  const out: string[] = [];
-  for (const tool of tools ?? []) {
-    const mapped = TOOL_NAME_MAP_PI[String(tool).trim()];
-    for (const name of [mapped ?? []].flat()) {
-      if (!out.includes(name)) out.push(name);
-    }
-  }
-  return out;
-}
-
-/** Parse a comma- or whitespace-separated `tools:` value into a name list. */
-function parseToolList(value: string): string[] {
-  return value
-    .split(/[\s,]+/)
-    .map((v) => v.trim())
-    .filter(Boolean);
-}
-
-const FRONTMATTER_RE = /^(---\n)([\s\S]*?)(\n---\n?)([\s\S]*)$/;
-const TOOLS_LINE_RE = /^tools:\s*(.*)$/m;
-
-/**
- * Render a canonical `agents/*.agent.md` into a Pi-valid `~/.agents/*.agent.md` by
- * rewriting the `tools:` frontmatter to the Pi-mapped set (dropping `todo`). The
- * body is preserved verbatim — Pi consumes `<!-- pi-only -->` blocks (#817); only
- * the strict `tools:` allowlist needs remapping. A source with no frontmatter or
- * no `tools:` line is returned unchanged (defensive — all canonical agents have
- * both).
- */
-export function renderPiAgent(raw: string): string {
-  const match = raw.match(FRONTMATTER_RE);
-  if (!match) {
-    return raw;
-  }
-  const [, open, frontmatter, close, body] = match;
-  const toolsLineMatch = frontmatter.match(TOOLS_LINE_RE);
-  if (!toolsLineMatch) {
-    return raw;
-  }
-  const mapped = mapAgentToolsForPi(parseToolList(toolsLineMatch[1]));
-  let newFrontmatter: string;
-  if (mapped.length === 0) {
-    // All declared tools dropped (e.g. a source with only `todo`) — remove the
-    // `tools:` line entirely so no forbidden name leaks into the rendered
-    // allowlist (#1583). Returning raw would leave the unmapped names in place.
-    newFrontmatter = frontmatter.replace(/^[ \t]*tools:[^\n]*\n?/m, "");
-  } else {
-    newFrontmatter = frontmatter.replace(TOOLS_LINE_RE, `tools: ${mapped.join(", ")}`);
-  }
-  return `${open}${newFrontmatter}${close}${body}`;
-}
-
-/**
- * Write Pi-valid rendered copies of every packaged `agents/*.agent.md` into
- * `destDir` (created if missing). Shared by the global `~/.agents/` sync and the
- * project-local `.pi/agents/` sync (#1606) so both targets get identical Pi-valid
- * rewrites from the same neutral source.
- */
-function writeSyncedAgents(sourceRoot: string, destDir: string) {
-  fs.mkdirSync(destDir, { recursive: true });
-  for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".agent.md")) {
-      continue;
-    }
-    const raw = fs.readFileSync(path.join(sourceRoot, entry.name), "utf8");
-    fs.writeFileSync(path.join(destDir, entry.name), renderPiAgent(raw));
-  }
-}
-
-/**
- * Sync the project-local `.pi/agents/` directory with Pi-valid copies (#1606).
- *
- * When `.pi/agents` is a **symlink** (the dev-loops repo dev convention:
- * `.pi/agents -> ../agents`, dogfooding the package source), the Pi `subagent`
- * tool resolves project role agents from here with precedence over the global
- * `~/.agents/`, so the dispatch reads the raw neutral templates and Pi
- * strict-rejects `search`/`execute`. The sync replaces the symlink with a REAL
- * directory of Pi-valid rendered copies — it does NOT write through the symlink
- * (writing through would overwrite the neutral source and break Claude asset
- * generation; the source must keep `search`/`execute` per #1086).
- *
- * When `.pi/agents` is already a real directory, its packaged-agent files are
- * refreshed in place (same overwrite semantics as the global `~/.agents/` sync).
- *
- * When `.pi/agents` is **absent**, the sync is a no-op: consumer repos without a
- * project `.pi/agents` entry resolve from the global `~/.agents/` (already
- * Pi-valid after `syncPackagedAgents`) and stay unaffected.
- */
-export function syncProjectAgentsDir(projectRoot: string, sourceRoot: string) {
-  const projectAgentsDir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
-  let stat: fs.Stats | undefined;
+/** A dev-loops checkout: `package.json` names `dev-loops` and an `agents/` directory exists (same guard as `provision-worktree.mjs`). */
+export function isDevLoopsAgentsCheckout(dir: string): boolean {
   try {
-    stat = fs.lstatSync(projectAgentsDir);
+    return JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).name === "dev-loops" && fs.statSync(path.join(dir, "agents")).isDirectory();
   } catch {
-    // Absent — consumer repo relies on the global ~/.agents/ (no project shadow).
-    return;
-  }
-  if (stat.isSymbolicLink()) {
-    // Render all Pi-valid copies into a TEMP directory FIRST, so a read/render
-    // failure never leaves the project without `.pi/agents`. Only once the
-    // replacement content is known-good do we unlink the symlink and atomically
-    // rename the prepared directory into place (#1607 Copilot review: never
-    // remove the symlink before the replacement is prepared). rmSync on a
-    // symlink unlinks the link only; the neutral source target stays untouched.
-    const tmpDir = path.join(path.dirname(projectAgentsDir), `.pi-agents.tmp-${process.pid}`);
-    fs.rmSync(tmpDir, { force: true, recursive: true });
-    try {
-      writeSyncedAgents(sourceRoot, tmpDir);
-    } catch (err) {
-      fs.rmSync(tmpDir, { force: true, recursive: true });
-      throw err;
-    }
-    fs.rmSync(projectAgentsDir, { force: true });
-    fs.renameSync(tmpDir, projectAgentsDir);
-  } else {
-    // Real directory: refresh packaged-agent files in place (same overwrite
-    // semantics as the global ~/.agents/ sync).
-    writeSyncedAgents(sourceRoot, projectAgentsDir);
+    return false;
   }
 }
+
 
 /**
  * Sync the canonical packaged agents into `~/.agents/`, rewriting the `tools:`
  * frontmatter to Pi-valid builtin names (#1583). The source `agents/*.agent.md`
- * files stay harness-neutral (role agents keep `search`/`execute`; the dev-loop
+ * files stay harness-neutral (role agents retain mapped `search` and use `bash`
+ * for execution; the dev-loop
  * entrypoint drops `agent`/`todo` per #1604); only the rendered copies are
  * remapped. Best-effort: callers swallow errors so a sync failure never breaks
  * session start.
  *
  * #1606: when `projectRoot` is supplied (the session's project cwd), the sync
- * ALSO targets the project-local `.pi/agents/` directory with symlink-safety —
- * replacing a `.pi/agents -> ../agents` symlink with a real directory of Pi-valid
+ * ALSO targets the project-local `.pi/agents/` directory with symlink-safety:
+ * the legacy `.pi/agents -> ../agents` symlink is replaced with a real directory of Pi-valid
  * copies so project-local agent resolution no longer reads the raw source. This
  * fixes the dev-loops repo's own dispatch (the project symlink bypassed the global
  * sync). Consumer repos without a `.pi/agents` entry are unaffected (no-op).
@@ -205,4 +59,85 @@ export function syncPackagedAgents({
       // from the session_start best-effort path.
     }
   }
+}
+
+/** Neutral source tokens that are not Pi tool names. */
+const NON_PI_TOOLS = ["search", "execute"];
+
+/**
+ * The project root Pi resolves for a cwd: the nearest ancestor (cwd included) holding a `.pi` or
+ * `.agents` directory, else the cwd itself. `.git` does not stop the walk. The walk stops at the
+ * home directory (`~/.pi` and `~/.agents` are user configuration, never an implicit project).
+ */
+export function findProjectRoot(cwd: string, home: string | null = process.env.HOME || os.homedir()): string {
+  const isDir = (p: string) => {
+    try {
+      return fs.statSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
+    } catch {
+      return false;
+    }
+  };
+  const real = (p: string) => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return p;
+    }
+  };
+  const homeReal = home ? real(home) : null;
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    if (homeReal && real(dir) === homeReal) return path.resolve(cwd);
+    if (isDir(path.join(dir, ".pi")) || isDir(path.join(dir, ".agents"))) return dir;
+    if (path.dirname(dir) === dir) return path.resolve(cwd);
+  }
+}
+
+/**
+ * Preflight: runs only in a dev-loops checkout (any other project returns null and nothing is
+ * read). Refuses a launch when a file the dev-loops render writes into `.pi/agents` still
+ * declares a raw `search`/`execute` tool. Only the `*.agent.md` names found in the packaged agents
+ * source directory are inspected; any other project agent file is never read. Returns the typed
+ * `agent_set_not_rendered` reason, else null (an absent rendered file or a rendered set passes; an unreadable source directory or rendered file refuses).
+ */
+export function checkAgentSetRendered(
+  cwd: string,
+  sourceRoot: string = fileURLToPath(PACKAGED_AGENTS_ROOT),
+): string | null {
+  const projectRoot = findProjectRoot(cwd);
+  if (!isDevLoopsAgentsCheckout(projectRoot)) return null;
+  const dir = path.join(projectRoot, PROJECT_AGENTS_SUBPATH);
+  let names: string[];
+  try {
+    names = fs.readdirSync(sourceRoot).filter((n) => n.endsWith(".agent.md")).sort();
+  } catch {
+    return `agent_set_not_rendered: the packaged agents source ${sourceRoot} cannot be read, so the rendered set cannot be verified. ${PROJECT_TRUST_CEILING}`;
+  }
+  const offenders: string[] = [];
+  for (const name of names) {
+    const file = path.join(dir, name);
+    let raw: string;
+    try {
+      raw = fs.readFileSync(file, "utf8");
+    } catch (error) {
+      // ENOTDIR: a parent path component is a file, so the rendered file is absent.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") continue;
+      offenders.push(`${file} (unreadable)`);
+      continue;
+    }
+    const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1].match(TOOLS_LINE_RE);
+    const bad = parseToolList(match?.[1] ?? "").filter((tool) => NON_PI_TOOLS.includes(tool));
+    if (bad.length > 0) offenders.push(`${file} (${bad.join(", ")})`);
+  }
+  if (offenders.length === 0) return null;
+  let isSymlink = false;
+  try {
+    isSymlink = fs.lstatSync(dir).isSymbolicLink();
+  } catch {
+    // absent or unreadable: keep the default remedy
+  }
+  const remedy = isSymlink
+    ? `\`${dir}\` is a symlink to the raw agent sources and provisioning skips it. Rebase or merge the branch onto main first (this untracks \`.pi/agents\`), then run \`dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>\`. Never restore a \`.pi/agents\` symlink to the raw agent sources.`
+    : `Render the project set: in a worktree run \`dev-loops-run scripts/loop/provision-worktree.mjs --worktree-path <worktree> --repo-root <main-checkout>\`; in the main checkout restart the Pi session (the session-start sync re-renders \`${dir}\`). Never restore a \`.pi/agents\` symlink to the raw agent sources.`;
+  return `agent_set_not_rendered: the rendered agent set carries non-Pi tool names or unreadable files: ${offenders.join("; ")}. ${remedy} ${PROJECT_TRUST_CEILING}`;
 }

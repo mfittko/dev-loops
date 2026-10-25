@@ -32,6 +32,7 @@ import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveCla
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName, orderAnglesByCatalog, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { anchorBaseRef } from "../lib/anchor-base-ref.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -39,6 +40,7 @@ import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
 import { resolveRuntimeHarness } from "@dev-loops/core/loop/run-context";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
@@ -51,7 +53,7 @@ import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, norm
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { buildGateArtifactPath, buildGateContextPath, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
+import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 
@@ -104,7 +106,9 @@ export function mapGateToConfigKey(gate) {
   throw new Error(`Unknown gate: ${JSON.stringify(gate)} (expected draft_gate or pre_approval_gate)`);
 }
 
-const SPEC_OF_RECORD_DEPENDENT_ANGLES = ["acceptance-criteria", "pr-checklist", "pr-description", "gate-evidence"];
+const SPEC_OF_RECORD_DEPENDENT_ANGLES = ["acceptance-criteria", "pr-checklist", "pr-description"];
+// The standalone review has no lifecycle gates, so it never resolves this angle.
+const LIFECYCLE_ONLY_ANGLES = ["gate-evidence"];
 
 /**
  * `review` angle resolution — a standalone gate with no config key of
@@ -115,7 +119,7 @@ const SPEC_OF_RECORD_DEPENDENT_ANGLES = ["acceptance-criteria", "pr-checklist", 
  * never drift) — the STATIC pool; dynamic/tiered subtractive resolution is
  * deliberately not applied to review, never resolveGateAnglesDynamic.
  *
- * `acceptance-criteria`, `pr-checklist`, `pr-description`, and `gate-evidence`
+ * `acceptance-criteria`, `pr-checklist` and `pr-description`
  * — the angles that depend on a spec of record — are dropped from that union
  * only when both facts are DEFINITIVELY known false — the PR closes no issue
  * AND its own body carries no AC checklist; they are kept when either is
@@ -125,20 +129,33 @@ const SPEC_OF_RECORD_DEPENDENT_ANGLES = ["acceptance-criteria", "pr-checklist", 
  * `--prefix-file` mode) — an unknown fact must never be coerced to "false",
  * so this fails CLOSED and keeps every angle.
  *
+ * `gate-evidence` is always dropped: the standalone review has no lifecycle gates.
+ *
+ * `pr-checklist` is also dropped when both `hasFormalIssueSpec` (the single
+ * closing issue's body passes `requireSpecFromBody`) and `hasFormalPrSpec`
+ * (the PR description passes it) are definitively false. An unknown
+ * (`undefined`) fact keeps it.
+ *
  * @param {import("@dev-loops/core/config").DevLoopConfig} config
- * @param {{ hasClosingIssue: boolean|undefined, hasAcChecklist: boolean|undefined }} facts
+ * @param {{ hasClosingIssue: boolean|undefined, hasAcChecklist: boolean|undefined, hasFormalIssueSpec?: boolean, hasFormalPrSpec?: boolean }} facts
  * @returns {{ recommendedAngles: string[], skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: false, dynamicAnglesActive: false, addedAngles: string[], addedReasons: Record<string,string> }}
  */
-export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklist }) {
+export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklist, hasFormalIssueSpec, hasFormalPrSpec }) {
   const union = resolveOperationAnglePool(config, "review");
   const provablyNoSpecOfRecord = hasClosingIssue === false && hasAcChecklist === false;
-  const anglesToDrop = provablyNoSpecOfRecord
+  const provablyNoFormalSpec = hasFormalIssueSpec === false && hasFormalPrSpec === false;
+  const specDrops = provablyNoSpecOfRecord
     ? SPEC_OF_RECORD_DEPENDENT_ANGLES.filter((a) => union.includes(a))
-    : [];
+    : provablyNoFormalSpec && union.includes("pr-checklist") ? ["pr-checklist"] : [];
+  const lifecycleDrops = LIFECYCLE_ONLY_ANGLES.filter((a) => union.includes(a));
+  const anglesToDrop = [...specDrops, ...lifecycleDrops];
   return {
     recommendedAngles: union.filter((a) => !anglesToDrop.includes(a)),
     skippedAngles: anglesToDrop,
-    reasons: Object.fromEntries(anglesToDrop.map((a) => [a, "no spec-of-record"])),
+    reasons: {
+      ...Object.fromEntries(specDrops.map((a) => [a, provablyNoSpecOfRecord ? "no spec-of-record" : "no formal spec on the closing issue or PR description"])),
+      ...Object.fromEntries(lifecycleDrops.map((a) => [a, "the standalone review has no lifecycle gates"])),
+    },
     fallbackToAll: false,
     dynamicAnglesActive: false,
     addedAngles: [],
@@ -224,7 +241,7 @@ Optional:
   --rationale <json>             JSON array of {angle, action, reason} entries
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
-  --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see skills/docs/gate-review-sub-loop-contract.md.
+  --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); a bare branch uses origin/<branch> when that commit resolves. Explicit remote refs and revision expressions stay unchanged. Populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see skills/docs/gate-review-sub-loop-contract.md.
   --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing evidence file. OPTIONAL: when omitted, every of the PR's closing issue references is resolved, comma-joined and cross-repo-qualified (e.g. #1496, #1511 or owner/other#12) — an umbrella PR resolves all of them. The linked issues' bodies are fetched only when --issue-body is also omitted (see below). An unreadable PR or linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering absence. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
   --validation-posture <text>    Short description of the validation posture. Refused (fails closed, never truncated) past 500 chars; keep details in --validation-results.
   --pr-body <text>               PR description text, inlined into the rendered briefing evidence file. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content).
@@ -584,9 +601,7 @@ export { buildGateContextPath };
 // writes to (one `<angle>.json` per angle). Mirrors the path
 // `consolidate-fanin.mjs` reads from. Exported for reuse by the same-head
 // skip-completed resume scan.
-export function buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
-  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, dir: "gate-reviews" });
-}
+export { buildGateReviewsDir };
 
 /**
  * AC3 — same-head skip-completed resume. Scan the per-angle findings
@@ -680,9 +695,11 @@ export function buildGateBriefingScopePath({ repo, pr, gate, headSha, scope, tmp
 // across gates. Mirrors buildGateContextPath (same path-segment params); the
 // body is the emitter's own result object, so the artifact is self-describing
 // and key-stamped.
-export function buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
-  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".emit-plan.json" });
-}
+export { buildGateEmitPlanPath };
+
+// Keyed sibling of the emit plan: consolidate-fanin.mjs's ledger object
+// (verdict, findings, derived fan-out provenance) at the same round key.
+export { buildGateFaninLedgerPath };
 
 // Deterministic path for the keyed carry-forward plan artifact
 // (GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED, `resolve-angle-carry-forward.mjs`):
@@ -2298,7 +2315,9 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
 }
 
 /**
- * Capture a diff against `base` for the CLI `--base <ref>` flag: `git diff
+ * Capture a diff against the effective `base` for the CLI `--base <ref>` flag
+ * (bare branches use a resolvable origin counterpart; explicit remote refs and
+ * revision expressions stay unchanged): `git diff
  * --name-status <base>...HEAD` and `git diff <base>...HEAD`, shaped as the
  * `{ nameStatusOutput, diffOutput }` input `resolveDiffScope`/`buildGateContext`
  * expect. Uses execFileSync with an argv array (no shell), so `base` cannot
@@ -3041,6 +3060,15 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
 // no Non-goals still keeps the acceptance-criteria angle. Reads `acItems`
 // directly since the PR body carries only list-form AC/DoD checklists, never
 // a matrix; the matrix floor is an issue-side concern.
+function passesRequireSpecFromBody(body) {
+  try {
+    requireSpecFromBody(body);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function detectRefinementHasAcChecklist(prBody) {
   const artifact = detectIssueRefinementArtifact({ body: prBody });
   return artifact.acItems.length > 0;
@@ -3073,6 +3101,8 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
         // passes" — so an issue-less PR with a real checklist but no
         // Non-goals still keeps every spec-of-record-dependent angle.
         hasAcChecklist: detectRefinementHasAcChecklist(input.prBody ?? ""),
+        hasFormalIssueSpec: input.hasFormalIssueSpec,
+        hasFormalPrSpec: input.hasFormalPrSpec,
       })
     : await resolveGateAnglesDynamic(input.config, configKey, {
         diff: input.diff,
@@ -3299,6 +3329,8 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
   // description) and renders as PR_BODY_ABSENT_SENTINEL. That is distinct from
   // the throw above, which is the unresolvable case.
   if (needsBody) options.prBody = typeof pr.body === "string" ? pr.body : "";
+  const isReview = options.gate === "review";
+  if (isReview) options.hasFormalPrSpec = passesRequireSpecFromBody(options.prBody);
 
   // Recorded whenever `pr` was actually fetched (regardless of the acProvided
   // short-circuit below), for the `review` gate's own angle resolution
@@ -3313,6 +3345,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
   }
 
   if (closingNumbers.length === 0) {
+    if (isReview) options.hasFormalIssueSpec = false;
     // Genuinely no closing reference (and no body-keyword fallback match) —
     // recorded as such, so a consumer can tell "this PR closes no issue" from
     // "nobody fetched the issue".
@@ -3343,6 +3376,8 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
     targets.push({ repo, number: entry.number, label: sameRepo ? `#${entry.number}` : `${repo}#${entry.number}` });
   }
   options.acceptanceCriteria = targets.map((t) => t.label).join(", ");
+  // Several closing issues never merge into one spec, so only a single closing issue can be formal.
+  if (isReview && targets.length !== 1) options.hasFormalIssueSpec = false;
 
   if (options.issueBody == null) {
     const bodies = [];
@@ -3360,6 +3395,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
         );
       }
       const body = typeof issue.body === "string" ? issue.body : "";
+      if (isReview && targets.length === 1) options.hasFormalIssueSpec = passesRequireSpecFromBody(body);
       // "gives a reviewer real criteria to read" — true when the linked issue
       // is refined (`hasACs`: a valid AC→DoD matrix + Non-goals, or a
       // resolvable linked refinement doc + Non-goals) OR simply carries AC
@@ -3386,6 +3422,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
     }
     options.acceptanceCriteriaSource = anyRefined ? "linked-issue" : "linked-issue-unrefined";
   } else {
+    if (isReview && targets.length === 1) options.hasFormalIssueSpec = passesRequireSpecFromBody(options.issueBody);
     // Caller supplied the issue body text directly (without also supplying
     // --acceptance-criteria) — classify it as given rather than making a
     // network call whose result would be discarded. Uses `hasACs ||
@@ -3512,6 +3549,7 @@ export async function main(
       // Otherwise a stale CWD silently yields the wrong diff (caught only after
       // fan-out today). Throws → caught below → exit 1, no artifact written.
       assertWorktreeAtHead(options.headSha, { repoRoot });
+      options.base = anchorBaseRef(options.base, { repoRoot });
       diff = captureDiffFromBase(options.base, { repoRoot });
       const scope = await resolveDiffScope(
         { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" },
@@ -3589,6 +3627,8 @@ export async function main(
         resolverResult = resolveReviewGateAngles(config, {
           hasClosingIssue: options.hasClosingIssue,
           hasAcChecklist: detectRefinementHasAcChecklist(options.prBody ?? ""),
+          hasFormalIssueSpec: options.hasFormalIssueSpec,
+          hasFormalPrSpec: options.hasFormalPrSpec,
         });
       } else {
         if (options.fullLabel !== true && !options.prefixFile) {

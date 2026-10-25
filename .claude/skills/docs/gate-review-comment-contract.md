@@ -34,8 +34,8 @@ No separate verdict issue comment and no separate findings review is posted. Two
 the opt-in findings comment (`gates.postFindingsComments`, `GATE-COMMENT-IDENTITY-DISJOINT`) and
 the batched deferral comment (`<!-- dev-loops:deferred-summary -->`) that `judge-pass.mjs` and
 `close-gate-findings.mjs` post for a round's deferred findings, at most one per tool run, on the
-linked spec issue (ADR 0092, `GATE-EXEC-DEFERRAL-RECORD`). When the target is the PR itself no
-deferral comment is posted: a folded entry is recorded by its marker in the group it renders under in `Details`, a stamped thread by its thread marker plus resolving reply, and a no-stamp thread (an immediately deferred, non-fileable low) by its resolving reply plus the ledger entry. An in-window medium has only its ledger entry and its open thread, which still blocks, until its fix window passes.
+linked spec issue (ADR 0092, `GATE-EXEC-DEFERRAL-RECORD`) on lifecycle gates; the standalone `review` gate posts no deferral comment on any target (`REVIEW-GATE-JUDGE-PHASE`). When the target is the PR itself no
+deferral comment is posted: a folded entry is recorded by its marker in the group it renders under in `Details`, a stamped thread by its thread marker plus resolving reply.
 
 `GATE-COMMENT-SUPERSEDE-OUTDATED`: When a new `draft_gate` (resp. `pre_approval_gate`) verdict
 is created, `upsert-checkpoint-verdict.mjs` folds the SAME gate's prior verdict reviews recorded
@@ -70,10 +70,10 @@ floor, because its resolvable thread blocks gate-close until answered
 (`GATE-EXEC-THREAD-DISPOSITION`). A locatable finding at or above the inline floor, or visible by the rule above, keeps its inline thread whatever its judge disposition (inline thread creation keeps its rules on a create; an update cannot add inline comments). Every other finding FOLDS into the
 verdict body's one `Details` block, grouped by disposition: `Deferred (N)`, `Rejected (N)` and
 `Not judged (N)`. Each folded entry renders as a `file:line`-prefixed (when known)
-severity/angle/summary bullet plus its own INVISIBLE fingerprint marker (`disposition=deferred` on every folded entry that is not `high` and not `act`, Rejected and Not judged included; a folded `high`, possible only when `blockCleanOnFindingSeverities` excludes `high`, carries no `disposition` field, like a body-filed `high` marker) at
+severity/angle/summary bullet plus its own INVISIBLE fingerprint marker (`disposition=deferred` only on a folded entry the judge disposed `defer`; Rejected and Not judged markers carry no `disposition` field, and neither does a folded `high`, possible only when `blockCleanOnFindingSeverities` excludes `high`, like a body-filed `high` marker) at
 line start, the same shape a body-filed marker carries, so cross-round fingerprint suppression
 still applies and a folded finding renders exactly once. A deferred finding keeps its deferral
-comment or `issue=<n>` link, so folding hides no record (a folded Deferred marker carries `issue=<n>` for its deferral target: the recorded follow-up issue (`followUpIssueNumber`), else the PR). An `act` finding never folds and its
+comment or `issue=<n>` link, so folding hides no record (a folded Deferred marker carries `issue=<n>` for its deferral target: the recorded follow-up issue (`followUpIssueNumber`), else the PR; a `nit` member of a deferred cluster carries neither the `disposition=deferred` stamp nor `issue=<n>`, per the Nit bullet in the sub-loop contract). An `act` finding never folds and its
 marker never carries `disposition=deferred`, on any track: below the floor it takes the normal
 track (an inline thread when locatable, a visible body entry otherwise). A folded finding creates
 NO gate-authored review thread and never enters `unresolvedGateThreadCount`
@@ -250,6 +250,24 @@ gates: the `review`-header guard reads only the comment body, never the review's
 `event`/`state`, so `detect-checkpoint-evidence.mjs`/`detect-pr-gate-coordination-state.mjs`
 report no draft/pre-approval evidence from it.
 
+<!-- rule: REVIEW-GATE-JUDGE-PHASE -->
+### `review` gate judge phase
+
+`REVIEW-GATE-JUDGE-PHASE`: the standalone `review` gate runs the judge between the Phase 3 fan-in ledger and the verdict post (Phase 3.5, ADR 0179). A ledger with zero findings skips the judge. The judge takes its spec per the precedence in [Review-gate spec source and the `pr_scope` kind](./spec-authority-contract.md#review-gate-spec-source-and-the-pr_scope-kind-adr-0179); with no spec source (`none`) the judge does not run. `judge-pass.mjs --gate review` posts no deferral comment and takes no `--out`, so the round keeps one visible surface and never feeds a fixer. On a fully judged round the review verdict follows the judge act list alone. The review gate always derives the next action from the act list, and an unjudged round renders "read the findings, none was judged" (`GATE-COMMENT-REQUIRED-FIELDS`, ADR 0183, which amends ADR 0179); the judge-spec line is a new body element. Because the review ledger now carries `judgeDisposition`, the existing disposition-gated rules apply to review findings: `GATE-COMMENT-INLINE-SEVERITY-FLOOR` folds `reject` and `defer` findings below the blocking severities into the Details block, and the verdict follows the judged `act` items. An unjudged post (`none`, `unavailable`) keeps every finding in its normal track.
+
+`upsert-checkpoint-verdict.mjs --gate review` takes `--judge-spec-source <issue|pr_body|pr_scope|none|unavailable>` and `--judge-unavailable-reason <spec_cannot_decide|judge_failed>`. Both flags are refused on `draft_gate` and `pre_approval_gate`. The reason is required with `unavailable` and refused with every other source. When the `--findings-ledger` holds at least one finding, `--judge-spec-source` is required, and `issue`, `pr_body` and `pr_scope` need every finding to carry a `judgeDisposition`, while `none` and `unavailable` need no finding to carry one. A mismatch fails closed. A judge failure (`judge-pass.mjs` exits 1) posts the review unjudged with `unavailable`; the post is never aborted. The body renders one line:
+
+| Source | Line |
+|---|---|
+| `issue` | `**Judge spec:** linked issue` |
+| `pr_body` | `**Judge spec:** PR description` |
+| `pr_scope` | `**Judge spec:** PR description scope (no formal acceptance criteria or definition of done; informational)` |
+| `none` | `**Judge spec:** none, no usable PR scope, judge not run, every finding shown` |
+| `unavailable` with `spec_cannot_decide` | `**Judge:** unavailable, the judge could not decide against the PR scope, every finding shown` |
+| `unavailable` with `judge_failed` | `**Judge:** unavailable, judge failed, every finding shown` |
+
+The line is interim. The review body stays non-evidence: `parseGateReviewCommentFields` returns `null` for it.
+
 ## Separate chains per gate
 
 Each gate runs its own independent review chain (`GATE-EXEC-SEPARATE-CHAINS`, owned by
@@ -288,7 +306,7 @@ A clean `pre_approval_gate` comment does **not** retroactively replace the requi
 | **Verdict** | `clean`, `findings_present`, or `blocked` |
 | **Blocking severities** | (non-clean verdicts only) Which severity levels must be clean per gate config. Renders inside an HTML comment (`GATE-COMMENT-INLINE-SEVERITY-FLOOR`). |
 | **Findings summary** | Short truthful audit summary. Use `no issues found` only when the reviewed head needed no corrective change for that gate pass. |
-| **Next action** | One of: `stay draft and fix`, `rerun gate`, `mark ready for review`, `await final human approval` |
+| **Next action** | One of: `stay draft and fix`, `rerun gate`, `mark ready for review`, `await final human approval`. The standalone `review` gate ignores the caller's `--next-action` and derives it from the judge act list: `fix the N item(s) this review lists`, `no change requested`, `the review could not complete; rerun it` (a `blocked` verdict) or `read the findings, none was judged`, each followed by `; this review does not approve or block the PR`. N counts distinct act items (one per cluster). |
 
 ## Optional size-budget fields
 
@@ -318,6 +336,18 @@ consulted live by `buildPreMergeGateCheck` (`scripts/github/detect-checkpoint-ev
 the authoritative pre-merge path in addition to `evaluateMergePreconditions`/the lifecycle state
 machine, reads absent size evidence as "human approval required", never as a silent pass.
 
+## Optional converged field
+
+A `draft_gate` comment updated by `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) renders one more line
+beyond `GATE-COMMENT-REQUIRED-FIELDS`: `**Converged:** fixer <sha> delta sha256:<digest>`. The
+`<sha>` is the full fixer commit and the digest is the sha256 of the clean pre-push delta result.
+The line appears only on a `clean` `draft_gate` comment, and it is the only case where `clean`
+stands over open judge act items (all low or nit). A body without the line reads back as absent
+(unchanged). A present line that does not match the format reads back as malformed, and
+`buildPreMergeGateCheck` fails closed on it. Gate coordination treats a valid line as the
+`draft_gate` marker of the fixer commit's head. The line is not merge evidence: merge still needs a
+clean current-head `pre_approval_gate`.
+
 ## Verdict definitions
 
 <!-- rule: GATE-COMMENT-VERDICT-VALUES -->
@@ -326,26 +356,28 @@ with the fixed meaning below:
 
 | Verdict | Meaning |
 |---|---|
-| `clean` | No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain, and the judge act list is empty |
-| `findings_present` | The gate found issues at blocking severities, or the judge act list is not empty; fixes are required before the gate boundary can be crossed |
+| `clean` | A fully judged round (every finding carries a judge disposition) has an empty judge act list, whatever the severities; a round with an unjudged finding keeps the fan-in verdict, so no finding at a `blockCleanOnFindingSeverities` severity may remain. `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168) is the one exception |
+| `findings_present` | A fully judged round has a non-empty judge act list; a round with an unjudged finding has an issue at a blocking severity or a non-empty act list; fixes are required before the gate boundary can be crossed |
 | `blocked` | The gate could not complete or a hard blocker prevented a verdict |
 
 Enforcement at write time and post time:
 
 - The consolidator (`consolidate-fanin.mjs`) computes the severity `overallVerdict`. It threads
-  through `--ledger-out`'s `{ overallVerdict, findings, verifiedItems? }` wrapper into the durable ledger
+  through `--ledger-out`'s `{ overallVerdict, findings, verifiedItems?, provenance? }` wrapper (`provenance?` is present only with `--emit-plan`) into the durable ledger
   (`write-gate-findings-log.mjs`).
-- `write-gate-findings-log.mjs` refuses a `--verdict` that contradicts the
-  `--findings`/`--findings-file` wrapper's `overallVerdict` before any ledger is written. The
+- `write-gate-findings-log.mjs` refuses a `--verdict` that contradicts the `overallVerdict` it
+  resolves before any ledger is written. With the keyed fan-in ledger present, that is the ledger's
+  `overallVerdict` (the wrapper's value is ignored and `--verdict` is optional); otherwise it is the
+  `--findings`/`--findings-file` wrapper's `overallVerdict`. The
   check is the same whether or not `--judge-verdict` was supplied: the judge only adds
   `act`/`defer`/`reject` dispositions
   ([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525))
   and never revises `overallVerdict`.
 - `upsert-checkpoint-verdict.mjs` composes the ledger's `overallVerdict` with its open judge act
   items (ADR 0089) for the same head and gate (#1616), so a non-empty act list yields
-  `findings_present`. It derives the verdict by default (passing no `--verdict` is valid),
+  `findings_present` (except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168), for both ledger cases). A fully judged round takes its verdict from the act list alone, and a round with an unjudged finding keeps the fan-in severity verdict. It derives the verdict by default (passing no `--verdict` is valid),
   accepts a matching explicit value, and refuses a contradiction citing this rule. A ledger
-  without `overallVerdict` still refuses an explicit `clean` while its act list is not empty.
+  without `overallVerdict` still refuses an explicit `clean` while its act list is not empty, except `GATE-EXEC-LOW-NIT-CONVERGENCE` (ADR 0168).
 - The act list for a verdict post comes from judge-enriched data: the ledger written with
   `--judge-verdict`, or a judge-enriched `--findings-json` (its open act items also yield
   `findings_present` over a ledger). A durable log written before the judge pass carries no
@@ -395,7 +427,7 @@ satisfies the gate.
 
 <!-- rule: GATE-COMMENT-DRAFT-REQUIREMENTS -->
 `GATE-COMMENT-DRAFT-REQUIREMENTS`: The PR MUST NOT leave draft unless a visible, current-head
-`clean` `draft_gate` checkpoint verdict comment exists, per the rules below.
+`clean` `draft_gate` checkpoint verdict comment exists, per the rules below. Exception: `GATE-EXEC-LOW-NIT-CONVERGENCE` lets the converged `draft_gate` comment at head A that names the fixer commit stand as the comment for the fixer head.
 
 **One-time transition boundary.** `draft_gate` records exactly one decision point: the
 draft → ready-for-review transition. Once a clean `draft_gate` comment exists on the PR and the
@@ -405,7 +437,7 @@ follow-up relies on normal review/fix loops and the recurring per-head `pre_appr
 - **Skip rule:** skip the draft gate entirely only when a clean `draft_gate` comment exists on
   the PR (any head) AND the PR has already left draft. Do not re-post it on later heads.
 - While the PR is still draft, a checkpoint verdict comment for an older head SHA does not
-  satisfy the current head. A new head requires a new current-head `draft_gate` comment.
+  satisfy the current head. A new head requires a new current-head `draft_gate` comment, except that the converged comment of `GATE-EXEC-LOW-NIT-CONVERGENCE` at head A satisfies the fixer commit head it names.
 - When the `draft_gate` runs (while the PR is still draft and no clean evidence exists
   for the current head), the PR MUST receive a visible checkpoint verdict comment.
 - If the `draft_gate` verdict is `findings_present` or `blocked`, the comment MUST

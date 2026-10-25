@@ -20,6 +20,45 @@ template.
 | Gate state (detectors) | `gateState.{currentHeadSha, ciStatus, unresolvedThreadCount, copilotRoundCount}` (the volatile tail — see below) |
 | Envelope builder (timestamp) | `gateState.derivedAt` (build time, not detector-derived) |
 | Canonical sanctioned-command map (`scripts/loop/sanctioned-commands.mjs`) | `sanctionedCommands` |
+| Route already carried by the envelope (target kind/identity + selected strategy) | `unitBoundaries` (issue 2532) |
+
+Tracker-backed local routing may synthesize a `local_phase` target with phase
+`issue-<number>`. When its strategy is `local_implementation` and authoritative
+linkage is `resolved_no_open_pr`, derive `cwd` with the sanctioned issue worktree
+identity (`resolveWorktreePath`), preserving the resolver target and action.
+Explicit phases (including the same label with `not_applicable` linkage) and local
+branches retain their own slug paths. Missing or conflicting startup authority
+still requires reconciliation; a path label alone never establishes issue authority.
+
+A startup run from **inside** the target's own worktree reports that worktree as its repo
+root. `cwd` is that root itself: the derivation never appends the worktree namespace a second
+time, so an issue worktree is never named as a nested child of itself (issue 2532).
+
+For an active PR outside the `ui_review` strategy, the CLI builder binds `cwd`
+to exactly one existing registered linked checkout using the live PR's
+repository and head branch. It verifies the
+checkout's actual root, branch, common Git directory and isolation before passing
+the canonical root as `worktreeCwd`. An issue-named directory can therefore serve
+its PR without changing PR identity, routing or spec authority. Missing, foreign,
+ambiguous or unverifiable associations produce typed `pr_worktree_*` refusals;
+the builder does not acquire a checkout or fall back to an invented PR path.
+Local committed delivery may be ahead of the pushed PR; existing action checks
+retain authority over head-sensitive operations. Terminal reconciliation remains
+exempt from checkout association. The `ui_review` strategy retains the canonical
+PR provisioning path: its provisioner creates or reuses the isolated checkout,
+checks isolation and pins the PR head with a detached HEAD. Envelope construction
+does not require a branch checkout before that provisioning or on detached resume.
+
+When startup carries no canonical spec source, the CLI builder evaluates that
+same live PR body/head payload through the gate detector's refinement-artifact
+owner. Only a present PR-body result with no finding supplies the envelope's
+`pr_body` source. Existing authority retains precedence; linked issues, promoted
+plans, invalid bodies and unknown results never become PR-body authority here.
+The existing spec-context seam still owns live criteria extraction for the gate.
+
+In dev mode, correct a shared derivation mismatch at this owning seam and prove
+the unchanged startup-to-coordinator boundary in isolation. Do not repair an
+emitted envelope by hand or treat an isolated test as native continuation proof.
 
 ## Sanctioned commands (MANDATORY DEFAULT — issue #1081)
 
@@ -36,6 +75,84 @@ duplicate the map into prose — reference the module.
 
 A contract test (`test/contracts/sanctioned-commands-exist.test.mjs`) asserts
 every mapped wrapper exists on disk and fails closed if one is renamed/removed.
+
+## Unit coordinator boundaries (issue 2532)
+
+One coordinator runs one phase. `unitBoundaries` tells it where its unit ends, so no orchestrator
+brief has to restate the boundary:
+
+- `handBackAfter` lists the deterministic hand-back points for this route, in order, from the closed
+  set `draft_pr_opened` (a unit that owns no PR yet, so opening the draft PR ends its phase) and
+  `gate_verdict_posted` (a unit that posts a gate verdict of its own hands back after it).
+  **The list is ordered and first-match**: a unit that carries both stops at the draft PR it opens,
+  and the remaining verdict boundary belongs to its successor, which resumes already owning that PR.
+  The validator refuses a list that reverses that order, so the first match is always the draft PR.
+  It also refuses a set that contradicts the envelope's own target (`deriveTarget`), in both
+  directions: a target that owns no PR must carry `draft_pr_opened` first, because opening that
+  draft PR is the only boundary its phase can end at, and a target that already owns its PR must
+  **not** carry `draft_pr_opened` at all, because such a unit never opens a draft PR — as the
+  first match it would stop the unit at a boundary it cannot reach, before its gate round, leaving
+  `gate_verdict_posted` as its only reachable boundary. Two listed paths carry
+  `gate_verdict_posted` as a recorded naming approximation
+  (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`), never as a second boundary that
+  unit can reach: a route that posts no verdict of its own while its unit still runs a gate round
+  (`final_approval`), and an `issue_intake` unit that stops at the draft PR it opens.
+- `resume` names the authoritative re-resolution a successor runs (`kind: loop_startup` plus
+  whichever of the target's `issue`, `pr`, `branch` and `phase` values are set). It is **not** an
+  exclusive selector, and no XOR or precedence rule applies to it: `deriveUnitBoundaries` copies
+  each of those values the target sets, so a unit with more than one identity carries all of them,
+  and the dominant issue-plus-linked-PR route in particular resumes with both `issue` and `pr` —
+  the router re-targets that target to the PR route (`toRoutableCanonicalState` in
+  `packages/core/src/loop/public-dev-loop-routing.mjs`) and the envelope keeps the issue as that
+  unit's cross-link (`packages/core/src/loop/handoff-envelope.mjs`), while the validator requires
+  a non-empty, well-typed identity set whose every named identity is one that target itself
+  carries. A phase-only unit is the no-number case: its resume names `phase` and none of `issue`,
+  `pr` or `branch`. `resume.phase` is that artifact identity,
+  never a mode selector. `loop startup` has no `--phase` input: it selects its mode from exactly
+  one of `--issue`, `--pr`, `--input`, `--plan-file` or `--spike`, and `--lightweight` is an
+  optional modifier that composes with `--issue` (or the issue-less PR-first trigger when used
+  alone). The plan-file and spike builders in `scripts/loop/resolve-dev-loop-startup.mjs` emit the
+  SAME `local_phase` shape
+  (`{kind: "local_phase", issue: null, pr: null, linkedPr: null, branch: null, phase}`) for a
+  validated plan file and a validated spike file, so the label cannot choose between them. The
+  shipped re-resolution therefore never reads a mode from this field: no code consumes `resume`
+  (the validator only checks that it is present, well-typed and consistent with the envelope's own
+  target) and the successor's own `loop
+  startup` invocation is the re-resolution, its mode coming from that successor's route input —
+  the startup-output artifact the predecessor's hand-back names and
+  `emit-coordinator-work-order.mjs --input <startup-output>` turns into the successor's order,
+  which selects the relaxed `spike` sub-gate from `spikeIntakeState` on a local-implementation
+  route and never reads `planFileIntakeState`. So the phase is the identity a successor
+  re-resolves, not the mode that resolves it; a consumer holding only the resume could not tell a
+  plan-file from a spike, and the envelope deliberately carries no mode field to close that
+  (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`). `resume` is derived from the
+  envelope's own target, so **no successor field derives from the predecessor's
+  conversation** and the predecessor never writes or summarizes the next brief.
+- `resume` has a recorded consumer and acceptance linkage even though no code reads it. Its
+  consumers are specified rather than coded: the
+  [Main Agent Contract](main-agent-contract.md#unit-coordinator-boundaries-issue-2532) and
+  `agents/dev-loop.agent.md` both name `unitBoundaries.resume` as the identity a successor
+  re-resolves, and `docs/decisions/0181-unit-coordinator-handback-boundaries.md` records why the
+  field exists. Its acceptance linkage is issue 2532's Scope row ("Startup and the existing
+  handoff envelope provide the next brief through the existing tooling producer; the previous
+  coordinator never writes or summarizes it") read with its AC/DoD row "The successor resumes
+  from authoritative state" / "no field derives from predecessor conversation": a successor has
+  to take its unit identity from tooling, never from a predecessor's prose, and this field is
+  that emission. The same AC/DoD row's `nextAction`, `requiredReads` and `stopRules` evidence
+  names the brief's other fields; it is not an exclusive field list, so the row requires an
+  emitted resume identity rather than excluding one. Which entry point a pull-dispatched
+  successor then takes stays unsettled and deliberately open here: re-running its own
+  `loop startup` (this document and the Main Agent Contract) and treating the pulled order as its
+  envelope with no new envelope built (`agents/dev-loop.agent.md`) are both stated, and this
+  field's emission and validation depend on neither. No re-resolution step is added for it.
+
+The field is absent where the route has no unit to hand back: a terminal reconciliation envelope
+(`stopRules` are already terminal), a read-only `review` or `ui_review` round (one round, no
+lifecycle gate evidence) and `wait_watch` (no unit runs). Those are exactly the routes the public
+contract classes as pure read/observe, and the envelope builder names them in one explicit
+`STATELESS_UNIT_STRATEGIES` list that must stay in step with that classification: classifying a new
+read-only route means adding it there too. That keeps the field from contradicting a route's own
+stop rules. Because it derives only from target and strategy, it stays inside the byte-stable prefix.
 
 ## Acceptance templates
 
@@ -114,6 +231,14 @@ interface HandoffEnvelope {
 
   cwd: string | null;
   worktreeRequired: boolean;
+
+  // issue 2532: the deterministic points at which THIS unit coordinator stops and
+  // the orchestrator dispatches a fresh successor. Target+strategy derived, so it is
+  // byte-stable; absent on a terminal reconciliation envelope (its stopRules are terminal).
+  unitBoundaries?: {
+    handBackAfter: Array<"draft_pr_opened" | "gate_verdict_posted">;
+    resume: { kind: "loop_startup"; issue: number | null; pr: number | null; branch: string | null; phase: string | null };
+  };
 
   acceptance: {
     criteria: Array<{ id: string; must: string; severity: "required" | "recommended" }>;

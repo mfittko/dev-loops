@@ -5,7 +5,7 @@
  * pull-work-order.mjs selects by the ref's `fixer:` prefix. Serializer, envelope,
  * reader and receipt stay in _work-order-protocol.mjs.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile, rename } from "node:fs/promises";
@@ -135,15 +135,32 @@ export function buildSiteCoverageSkeleton(actList) {
   });
 }
 
+const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+const EDIT_RULE = "Edit rule: write file content only with the Edit and Write tools. Never write file content through Bash (heredoc, redirect, `sed -i`, or cp/mv onto a tracked file). Scripts the order names, such as the asset generator and `--construct`, may write files. Never write `fixer-disposition*.json` (the verifier's --construct writes it; a hand-written report is refused). Only after the verifier refuses this execution's report as hand-written, rm that report and its corresponding stale `.constructed` marker; no other delete is allowed. Preserve accepted construction evidence and unrelated files.";
+
+// The numbered full-phase steps (issue 2787 C1): push, confirm the remote head, wait for CI, --construct, verify, --check.
+function fullPhaseSteps(workOrder, verifier, { push }) {
+  const root = path.dirname(path.dirname(workOrder.executionRules.contract));
+  const { repo, pr } = workOrder.target;
+  const { branch } = workOrder.mutationAuthority;
+  if (spawnSync("git", ["check-ref-format", "--branch", branch]).status !== 0) throw new Error(`refusing to render a branch name git rejects: ${JSON.stringify(branch)}`);
+  const wait = `node ${shellQuote(path.join(root, "scripts/github/wait-pr-checks.mjs"))} --repo ${shellQuote(repo)} --pr ${pr} --timeout 900`;
+  return `Do these steps in this order; none may be skipped or reordered:
+1. ${push}
+2. Confirm the remote head equals the candidate: run \`git ls-remote origin\` with the ref ${JSON.stringify(`refs/heads/${branch}`)}; it must print the pushed candidate SHA. If it does not, stop and report.${verifier.includes("<pushed-head-sha>") ? " Replace `<pushed-head-sha>` in steps 4 to 6 with the confirmed SHA." : ""}
+3. Run \`${wait}\` once. If it exits 2 (not settled), run it exactly once more. If CI is red (\`failure\`), resolve no thread, run no verifier step, and hand back \`ci_failed\` with the failing check names. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, resolve no thread, run no verifier step, and hand back \`ci_pending\` (\`ci_unknown\` when the checks cannot be read).
+4. Run \`${verifier} --construct\`. If it fails because the output exists, go to step 5. If step 5 refuses the report as hand-written, rm only this execution's refused outputRef and its corresponding stale \`<outputRef>.constructed\` marker, then re-run step 4. Preserve accepted construction evidence and unrelated files.
+5. Run \`${verifier}\`.
+6. Run \`${verifier} --check\`.
+${EDIT_RULE}`;
+}
+
 export function renderWorkOrder(workOrder) {
   const [dispositionPath] = workOrder.outputRefs;
   if (workOrder.operation === "complete") {
-    const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
     const root = path.dirname(path.dirname(workOrder.executionRules.contract));
-    const verifier = `node ${quote(path.join(root, "scripts/github/verify-fixer-disposition.mjs"))} --repo ${quote(workOrder.target.repo)} --pr ${workOrder.target.pr} --head-sha ${workOrder.headSha} --fixer-plan ${quote(path.join(path.dirname(path.dirname(dispositionPath)), PLAN_FILE))}`;
-    const task = workOrder.source === "act-list"
-      ? `If the outputRef does not exist, run \`${verifier} --construct\`, then \`${verifier}\` and \`${verifier} --check\`. If the outputRef already exists, run the normal command and --check; never delete, overwrite or reconstruct it. Construction alone is not delivery. Preserve authenticated fixing commits and exact raw coverage.`
-      : `Write your own after-pull report \`{ headSha, dispositions: [...] }\` at the outputRef for exactly the thread IDs in the pinned threads read, with their evidenced fixing commits and dispositions. Run \`${verifier}\`, then \`${verifier} --check\`. Preserve an existing genuine report and use normal/check on reentry. Do not read ACT/history or take on unrelated live threads.`;
+    const verifier = `node ${shellQuote(path.join(root, "scripts/github/verify-fixer-disposition.mjs"))} --repo ${shellQuote(workOrder.target.repo)} --pr ${workOrder.target.pr} --head-sha ${workOrder.headSha} --fixer-plan ${shellQuote(path.join(path.dirname(path.dirname(dispositionPath)), PLAN_FILE))}`;
+    const task = `${fullPhaseSteps(workOrder, verifier, { push: "Do not push: the candidate is already pushed." })}\nConstruction alone is not delivery.${workOrder.source === "act-list" ? " Preserve authenticated fixing commits and exact raw coverage." : " Do not read ACT/history or take on unrelated live threads."}`;
     return `# Fixer delivery-only work order (ADR 0106)
 
 Operation: complete. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.
@@ -169,12 +186,11 @@ ${JSON.stringify(workOrder, null, 2)}
   // headRefName is PR-supplied: JSON-quote it (and paths) so a backtick cannot close a span and inject prose.
   const { branch, allowedPaths } = workOrder.mutationAuthority;
   const completion = workOrder.phase === "full" && workOrder.requiredReads.some((read) => read.kind === "completion-input");
-  const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-  const verifier = completion ? `node ${shellQuote(path.join(path.dirname(path.dirname(workOrder.executionRules.contract)), "scripts/github/verify-fixer-disposition.mjs"))} --repo ${shellQuote(workOrder.target.repo)} --pr ${workOrder.target.pr} --head-sha ${workOrder.headSha} --fixer-plan ${shellQuote(path.join(path.dirname(path.dirname(dispositionPath)), PLAN_FILE))}` : null;
+  const verifier = workOrder.phase === "full" ? `node ${shellQuote(path.join(path.dirname(path.dirname(workOrder.executionRules.contract)), "scripts/github/verify-fixer-disposition.mjs"))} --repo ${shellQuote(workOrder.target.repo)} --pr ${workOrder.target.pr} --head-sha ${completion ? workOrder.headSha : "<pushed-head-sha>"} --fixer-plan ${shellQuote(path.join(path.dirname(path.dirname(dispositionPath)), PLAN_FILE))}` : null;
   const task = workOrder.phase === "commit_only"
     ? `Apply the fixes the source read names, per agents/fixer.agent.md, and commit them. Hand back the commit SHA unpushed: no push, no thread replies. Write no disposition handoff. Write the site coverage record \`{ headSha, siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }] }\` (headSha = your commit) to \`${dispositionPath}\`, one entry per act item that has a siteQuery.${workOrder.siteCoverage ? " Start from the \`siteCoverage\` skeleton in the work order JSON below:" : ""} Set each site's \`status\` to \`fixed\` or \`skipped\`, add a \`reason\` to every skip and a \`test\` to every fixed \`input_form\` site. Run each siteQuery and set \`returnedSites\` to exactly the sites it returns (empty when it returns none), add each returned site missing from \`sites\`, then delete the \`FILL:\` \`noSitesReason\` when the query returned sites, else replace it with the query outcome. Keep fingerprints and \`input_form\` texts unchanged.${workOrder.handbackCheck ? " Before you hand back, run the work order's \`handbackCheck\` command from your worktree and correct the record until it exits 0 (skip it when you made no commit)." : ""}`
-    : completion ? `Push only the reviewed committed candidate \`${workOrder.headSha}\`; do not re-fix source or reclassify coverage. Keep every command's cwd at the mutation authority worktree. If the outputRef does not exist, run \`${verifier} --construct\`, then run \`${verifier}\` to reply, resolve and verify. If the outputRef already exists, run that normal command (or append \`--check\` for read-only verification); never delete, overwrite or reconstruct it. The authenticated completion-input preserves the original fixing commit and raw site coverage. Construction alone does not complete delivery.`
-    :`Apply and commit any fixes not yet committed, then push, reply to and resolve the addressed threads per agents/fixer.agent.md (pass \`--disposition fixed\` and the full 40-character SHA of the fixing commit in each fixed reply), then write the disposition handoff \`{ headSha, dispositions: [...] }\` (headSha = the pushed PR head) to \`${dispositionPath}\`. Also write \`siteCoverage: [{ fingerprint, returnedSites, sites, ruleCitations?, noSitesReason? }]\` in that handoff, ${workOrder.siteCoverage ? "starting from the \`siteCoverage\` skeleton in the work order JSON below (fill it as the commit_only phase describes), " : ""}one entry per act item that has a siteQuery (threadless items included): verify-fixer-disposition refuses a handoff without it. A threadless act item gets no disposition handoff entry; every entry's \`threadId\` is a review-thread node id.`;
+    : completion ? `Do not re-fix source or reclassify coverage. Keep every command's cwd at the mutation authority worktree. The authenticated completion-input preserves the original fixing commit and raw site coverage. Construction alone does not complete delivery.\n${fullPhaseSteps(workOrder, verifier, { push: `Push only the reviewed committed candidate \`${workOrder.headSha}\` to branch ${JSON.stringify(workOrder.mutationAuthority.branch)}.` })}`
+    : `Make no further commit: the clearing delta record's candidateHead is the delta-reviewed candidate, and --construct requires the pushed head to equal it. The verifier's --construct writes the report from the threads source and the clearing delta record; never write the disposition handoff yourself. Replace \`<pushed-head-sha>\` below with the full 40-character SHA of the pushed head.\n${fullPhaseSteps(workOrder, verifier, { push: `Push exactly the delta-reviewed candidate (the clearing delta record's candidateHead) to branch ${JSON.stringify(workOrder.mutationAuthority.branch)}.` })}`;
   return `# Fixer work order (ADR 0106)
 
 Source: the \`${workOrder.source}\` read${workOrder.gate ? ` (${workOrder.gate} act list)` : ""}. Phase: \`${workOrder.phase}\`. PR ${workOrder.target.repo}#${workOrder.target.pr} at head \`${workOrder.headSha}\`.

@@ -29,6 +29,50 @@
     "models": {
       "type": "object",
       "properties": {
+        "harnesses": {
+          "type": "object",
+          "properties": {
+            "codex": {
+              "type": "object",
+              "properties": {
+                "conductor": {
+                  "type": "object",
+                  "properties": {
+                    "model": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "\\S"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reasoningEffort": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "\\S"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false,
+                  "minProperties": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "codex"
+          ],
+          "additionalProperties": false
+        },
         "conductor": {
           "type": "string",
           "minLength": 1,
@@ -325,7 +369,7 @@
               "default": [
                 "high"
               ],
-              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
+              "description": "Defect finding severities that block a clean gate verdict only when the round is not fully judged; a fully judged round is decided by the judge's act dispositions instead (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {
@@ -342,7 +386,7 @@
               }
             },
             "mediumFixWindow": {
-              "description": "Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. high is exempt (never defers). Default 3.",
+              "description": "Per-gate medium fix window: the number of rounds the judge weighs an open medium finding for an in-gate fix. The window is an input to the judge's act, defer or reject decision, never applied by code, and never defers a finding by itself. high is exempt (never defers). Default 3.",
               "type": "integer",
               "minimum": 0
             },
@@ -560,7 +604,7 @@
               "default": [
                 "high"
               ],
-              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
+              "description": "Defect finding severities that block a clean gate verdict only when the round is not fully judged; a fully judged round is decided by the judge's act dispositions instead (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {
@@ -577,7 +621,7 @@
               }
             },
             "mediumFixWindow": {
-              "description": "Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. high is exempt (never defers). Default 3.",
+              "description": "Per-gate medium fix window: the number of rounds the judge weighs an open medium finding for an in-gate fix. The window is an input to the judge's act, defer or reject decision, never applied by code, and never defers a finding by itself. high is exempt (never defers). Default 3.",
               "type": "integer",
               "minimum": 0
             },
@@ -795,7 +839,7 @@
               "default": [
                 "high"
               ],
-              "description": "Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
+              "description": "Defect finding severities that block a clean gate verdict only when the round is not fully judged; a fully judged round is decided by the judge's act dispositions instead (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them.",
               "minItems": 1,
               "type": "array",
               "items": {
@@ -812,7 +856,7 @@
               }
             },
             "mediumFixWindow": {
-              "description": "Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. high is exempt (never defers). Default 3.",
+              "description": "Per-gate medium fix window: the number of rounds the judge weighs an open medium finding for an in-gate fix. The window is an input to the judge's act, defer or reject decision, never applied by code, and never defers a finding by itself. high is exempt (never defers). Default 3.",
               "type": "integer",
               "minimum": 0
             },
@@ -1890,7 +1934,7 @@
               "surface": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Surface name. A change set that spans surfaces, or an unmapped path, needs full validation."
+                "description": "Surface name. Fully mapped change sets combine checks across surfaces."
               },
               "commands": {
                 "type": "array",
@@ -1918,7 +1962,7 @@
             ],
             "additionalProperties": false
           },
-          "description": "Ordered, first-match-wins path-to-command map for targeted worker checks (`resolveTargetedValidation`)."
+          "description": "Ordered, first-match-wins path-to-command map for targeted worker checks (`resolveTargetedValidation`). When every path maps to non-empty commands, use the sorted, deduplicated union of commands and gateSuites across surfaces. An unmapped, empty-command or unsafe templated path needs full validation."
         }
       },
       "additionalProperties": false,

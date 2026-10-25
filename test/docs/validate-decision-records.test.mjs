@@ -508,10 +508,14 @@ test("run(): a clean non-degraded result exits 0 even in CI", async () => {
   const { root } = await fixture({
     "docs/decisions/0047-something.md": ACCEPTED_4047,
   }, makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }));
-  const silent = { write() {} };
+  let output = "";
+  const silent = { write(text) { output += text; } };
   try {
-    const code = await run({ root, git: makeGit({ "docs/decisions/0047-something.md": ACCEPTED_4047 }), env: { CI: "1" }, out: silent });
+    const git = makeGit({});
+    git.mergeBase = async () => "0123456789abcdef0123456789abcdef01234567";
+    const code = await run({ root, git, env: { CI: "1" }, out: silent });
     assert.equal(code, 0);
+    assert.match(output, /base 0123456789ab\)/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

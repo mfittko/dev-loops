@@ -1,7 +1,7 @@
 ---
 name: "developer"
 description: "Use for direct product implementation in this repository: focused code changes, refactors, tests, bug fixes, and feature work within an already-scoped task. Keywords: implement feature, write code, refactor module, add tests, fix bug, update source."
-tools: read, search, execute, bash, edit, write
+tools: read, search, bash, edit, write
 argument-hint: "Focused implementation task, relevant files, success criteria, and required verification."
 systemPromptMode: append
 inheritProjectContext: true
@@ -18,6 +18,7 @@ Under Codex, read and apply [Codex runtime setup](../skills/docs/copilot-loop-op
 - Report verification results and blockers precisely.
 
 ## Expectations
+- Read the implementation brief before your first edit. Fetch the spec body with `scripts/github/view-issue.mjs` for an issue spec or `scripts/github/view-pr.mjs` for a PR-body spec, write the spec body to `<spec-body-file>` (`--json body --jq .issue.body` for an issue spec, `--json body --jq .pr.body` for a PR-body spec), then run `node <dev-loops-package-root>/cli/index.mjs loop implementation-brief --body-file <spec-body-file> --paths <planned-paths>`<!-- pi-only --> (resolve `<dev-loops-package-root>` per the CLI invocation section of [dev-loop SKILL](../skills/dev-loop/SKILL.md))<!-- /pi-only -->. The brief is the canonical, deterministic projection of the spec: the AC/DoD matrix and non-goals, the touched paths, the registered rule IDs with their owning docs, the cited and path-matching ADRs with any amending or superseding record, `adrNeed`, and `adrTripwirePaths` — the path-based ADR-tripwire candidates: touched contract docs, the shared gate config and the devloops config sources. The tripwire's content-based triggers (the trigger classes in `scripts/loop/check-adr-tripwire.mjs`) are not projected, so check that file when your change could be ADR-shaped. Write any ADR that `adrNeed` or a planned `adrTripwirePaths` entry calls for in the first commit. A brief failure is reported in your hand-back; it does not stop the task.
 - Do not re-plan the broader milestone unless a blocker forces it.
 - Stay within the requested scope and files unless a small adjacent fix is required to complete the task safely.
 - Preserve existing project conventions and package/runtime behavior.
@@ -31,6 +32,7 @@ Under Codex, read and apply [Codex runtime setup](../skills/docs/copilot-loop-op
 - Prefer KISS: choose the simplest implementation that fully satisfies the task.
 - Apply SRP: keep functions, modules, and edits narrowly focused on one reason to change.
 - Apply YAGNI: do not add speculative abstractions, extension points, or configuration that the current task does not require.
+- Follow `DESIGN-SIMPLEST-FIRST` in [Structural quality](../skills/docs/structural-quality.md): remove any input, flag, branch or abstraction with no AC row before the first push.
 - Apply DRY carefully: remove duplication when it meaningfully improves maintainability, but do not force premature abstractions across unrelated code paths.
 - Favor explicit code over clever code. Optimize for readability and debuggability first.
 - Preserve existing behavior unless the task explicitly changes it. For refactors, keep surface-area changes small and well-tested.

@@ -78,9 +78,9 @@ test("the Phase 3.5 judge contract states no severity auto-defer and adjudicates
 const lowDeferGrants = (text) => sentences(text).filter((s) => /from round 1/i.test(s) && /\blow\b/i.test(s) && /defer/i.test(s));
 const unexemptedGrants = (text) => lowDeferGrants(text).filter((s) => !(s.includes("`act`") && s.includes("reproduction")));
 
-test("EVERY round-1 low-defer allowance in the sub-loop contract exempts a judge-acted low (no downstream re-defer)", async () => {
+test("the sub-loop contract carries no round-1 low-defer grant (any reintroduced grant must exempt a judge-acted low)", async () => {
   const text = await read("skills/docs/gate-review-sub-loop-contract.md");
-  assert.ok(lowDeferGrants(text).length >= 1, "expected at least one round-1 low-defer allowance");
+  assert.deepEqual(lowDeferGrants(text), []);
   assert.deepEqual(unexemptedGrants(text), []);
   // Reworded positive: the exception travels with the allowance in any phrasing.
   assert.deepEqual(unexemptedGrants("A low may be deferred from round 1, unless the judge marked it `act`; the fixer then declines only on reproduction grounds."), []);
@@ -95,8 +95,8 @@ test("the operational fixer instructions exempt a judge-acted low from the round
   // copilot-pr-followup SKILL's own fixer instructions, which must carry the
   // same judge-acted-low exception or the downstream re-defer leak reopens there.
   const text = await read("skills/copilot-pr-followup/SKILL.md");
-  const matches = text.match(/low the judge disposed `act`[\s\S]{0,140}reproduction grounds/g) ?? [];
-  assert.ok(matches.length >= 2, `both fixer-instruction sites (classify-findings + Phase 5 triage) must exempt a judge-acted low as a reproduction-only-declinable fix target (found ${matches.length})`);
+  const matches = text.match(/judge (?:disposed )?`act`[\s\S]{0,140}reproduction grounds/g) ?? [];
+  assert.ok(matches.length >= 2, `both fixer-instruction sites (classify-findings + Phase 5 triage) must treat a judge-acted finding as a reproduction-only-declinable fix target (found ${matches.length})`);
 });
 
 // --- Calibration half (AC3): a real correctness/fail-open is not labeled low ---
@@ -112,6 +112,19 @@ test("agents/review.agent.md applies the severity calibration so reviewers do no
     ["consequence", "correctness break", "at least `medium`", "never `low`"],
     ["`low`", "no operator-visible consequence"],
   ], "reviewer agent severity calibration");
+});
+
+// Fixture cases for the judge's calibration on code whose behavior is correct (DESIGN-SIMPLEST-FIRST issue, judge row).
+test("agents/judge.agent.md caps doc lag and coverage gaps on correct code at low unless named, and keeps a fail-open coverage gap at medium", async () => {
+  const block = (await read("agents/judge.agent.md"))
+    .split("\n").find((line) => line.includes("calibrate severity on code whose behavior is correct"));
+  assert.ok(block, "expected the calibration instruction");
+  const cases = [
+    { name: "doc lag on correct code is low", claim: ["documentation-lag finding", "test-coverage gap", "at most `low`"] },
+    { name: "a gap that an AC or DoD row names keeps its severity", claim: ["unless an AC or DoD row names that document or that test"] },
+    { name: "a coverage gap that hides a fail-open path stays medium", claim: ["coverage gap that hides a fail-open path", "stays `medium`"] },
+  ];
+  for (const { name, claim } of cases) assertClaims(block, [claim], name);
 });
 
 // --- ADR provenance: the amendment is recorded, 0051's body is untouched ---

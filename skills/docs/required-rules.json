@@ -157,6 +157,10 @@
       "id": "COPILOT-STATE-WATCH-PERSISTENCE"
     },
     {
+      "id": "DESIGN-SIMPLEST-FIRST",
+      "enforcement": "doc"
+    },
+    {
       "id": "DEV-LOOP-PROBE-TIMEOUT-CEILING",
       "enforcement": "doc"
     },
@@ -391,6 +395,11 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-EXEC-LOW-NIT-CONVERGENCE",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by composeConvergedDraftGate (packages/core/src/loop/pre-push-delta-review.mjs) and upsert-checkpoint-verdict.mjs --converged-json; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+    },
+    {
       "id": "GATE-EXEC-NO-CWD-DEPENDENCE"
     },
     {
@@ -422,6 +431,10 @@
     },
     {
       "id": "GATE-EXEC-REGATE-MANDATORY"
+    },
+    {
+      "id": "GATE-EXEC-RERUN-ANGLE",
+      "enforcement": "doc"
     },
     {
       "id": "GATE-EXEC-REMEDIATION-SITE-QUERY",
@@ -692,6 +705,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "PRE-PUSH-DELTA-PATCH-ARTIFACT",
+      "enforcement": "doc"
+    },
+    {
       "id": "PRE-PUSH-DELTA-NOT-GATE-EVIDENCE",
       "enforcement": "doc"
     },
@@ -793,6 +810,10 @@
     },
     {
       "id": "RETRO-SIZE-WAIVER-COUNT",
+      "enforcement": "doc"
+    },
+    {
+      "id": "REVIEW-GATE-JUDGE-PHASE",
       "enforcement": "doc"
     },
     {
@@ -995,6 +1016,9 @@
     },
     {
       "id": "VALIDATE-COVERAGE-THRESHOLD"
+    },
+    {
+      "id": "VALIDATE-LOCAL-RECORD-PRODUCER"
     },
     {
       "id": "VALIDATE-TARGETED-FIRST"

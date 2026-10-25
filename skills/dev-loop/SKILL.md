@@ -38,6 +38,12 @@ After async dispatch, follow [Async dispatch posture](../docs/main-agent-contrac
 
 ### Resolve authoritative state
 
+For an initial Codex conductor spawn, MAIN first consumes the config-only
+`gate resolve-role --conductor --harness codex` result and applies its native
+overrides per [Codex coordinator dispatch](../docs/main-agent-contract.md#codex-coordinator-dispatch).
+Startup remains the child's first workflow action; configuration/native refusal
+stops dispatch without an inherited replacement.
+
 > Under the Claude Code harness the dev-loop runs as a single agent: run these steps directly — no separate async-subagent dispatch. The coordinator has an opt-in read-only boundary for tracked repo files and code-verification/build commands (`DEVLOOPS_COORDINATOR_READONLY=1`, enforced by the guard hooks). See [Main Agent Contract](../docs/main-agent-contract.md).
 
 <!-- pi-only -->
@@ -255,7 +261,7 @@ After the fixer commits the act-list fix and before it pushes, the dev-loop coor
 delta-mode pre-push review (`PRE-PUSH-DELTA-TRIGGER` in the
 [Pre-push review contract](../docs/pre-pr-review-contract.md#delta-mode)), which owns the
 baseline, input, result, three-review bound and freshness rules. `node <dev-loops-package-root>/cli/index.mjs loop pre-push-delta`
-builds the reviewer input and checks each result against the current worktree head. Pass `--pr-head <the full PR head SHA just read from GitHub>`, and brief the delta reviewer that it MUST NOT push (`PRE-PUSH-DELTA-PUSH-AUTHORITY`). On the act-list route, pass the required `--findings-log <the reviewed round's findings log>` to the input run only (never pass `--handback`; only the fixer's emitted `handbackCheck` does); the thread route and the `--result` run take none.
+builds the reviewer input and checks each result against the current worktree head. Pass `--pr-head <the full PR head SHA just read from GitHub>`, and brief the delta reviewer that it MUST NOT push (`PRE-PUSH-DELTA-PUSH-AUTHORITY`) and name `input.patchPath` and `input.evidenceRule` in the brief. On the act-list route, pass the required `--findings-log <the reviewed round's findings log>` to the input run only (never pass `--handback`; only the fixer's emitted `handbackCheck` does); the thread route and the `--result` run take none.
 
 Before gate dispatch, read `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md) and Phase 3 of [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) for the full refusal conditions.
 

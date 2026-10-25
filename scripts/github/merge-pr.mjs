@@ -85,9 +85,12 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
   human_approver, mergeable, ci_green, title_markers, gate_evidence,
   copilot_convergence, size_budget_human_approval, merge_approval, adr_tripwire,
   retrospective_checkpoint (only when workflow.requireRetrospective is true),
-  adr_number_collision (a PR-added docs/decisions record shares its number with
-  the base branch tip).
-  adr_tripwire fetches the PR head and evaluates the ADR tripwire at
+  base_not_integrated (one base + PR-head fetch with an explicit refspec runs at
+  the top; after the ADR step, origin/<base> must be an ancestor of the PR head,
+  checked once with no refetch; a fetch or git failure refuses),
+  adr_number_collision (a PR-added docs/decisions
+  record shares its number with the base branch tip).
+  adr_tripwire reuses that fetch and evaluates the ADR tripwire at
   origin/<base>...<head> against the current PR body, on every merge class. It
   refuses when the tripwire blocks or cannot be evaluated. When the only cause
   is a stale standing-authorization waiver line (older head, expired, or a
@@ -433,21 +436,16 @@ async function isInternalOnlyPr({ repo, pr, patterns }, { env, ghCommand, runChi
   }
 }
 
-const defaultFetchPrHead = ({ pr, baseRefName, repoRoot }) => {
-  defaultFetchOrigin(baseRefName, { repoRoot });
-  defaultFetchOrigin(`pull/${pr}/head`, { repoRoot });
+export const defaultFetchPrHead = ({ pr, baseRefName, repoRoot }, exec) => {
+  // An explicit destination refspec updates the checked ref even when remote.origin.fetch excludes the base.
+  defaultFetchOrigin(`+refs/heads/${baseRefName}:refs/remotes/origin/${baseRefName}`, { repoRoot }, exec);
+  defaultFetchOrigin(`pull/${pr}/head`, { repoRoot }, exec);
 };
 
 // Returns an adr_tripwire refusal reason, or null when the tripwire passes.
-// Any evaluator or fetch error is a refusal (fail closed).
-async function resolveAdrTripwireRefusal({ options, baseRefName, body, headSha, repoRoot, env, ghCommand, runChild, ghJson, fetchPrHead, evaluateAdrTripwire, waiveAdrTripwire, detectOriginSlug }) {
+// Uses the origin/<base> and PR head already fetched at the top of the merge; any evaluator error is a refusal (fail closed).
+async function resolveAdrTripwireRefusal({ options, baseRefName, body, headSha, repoRoot, env, ghCommand, runChild, ghJson, evaluateAdrTripwire, waiveAdrTripwire }) {
   try {
-    if (!baseRefName) throw new Error("the PR base branch is unreadable");
-    const originSlug = detectOriginSlug(repoRoot);
-    if (!originSlug || !repoSlugEquals(originSlug, options.repo)) {
-      throw new Error(`the checkout origin (${originSlug ?? "unresolved"}) is not ${options.repo}`);
-    }
-    fetchPrHead({ pr: options.pr, baseRefName, repoRoot });
     const evaluate = (prBody) => evaluateAdrTripwire({ base: `origin/${baseRefName}`, head: headSha, prBody, repoRoot, env });
     let result = await evaluate(body);
     if (result.outcome === "block" && result.waiver?.standing === true && result.waiver.stale === true) {
@@ -459,6 +457,45 @@ async function resolveAdrTripwireRefusal({ options, baseRefName, body, headSha, 
     return result.outcome === "pass" ? null : `the ADR tripwire blocks at head ${headSha}: ${(result.reasons ?? []).join(" ")}`;
   } catch (error) {
     return `the ADR tripwire could not be evaluated (unevaluable): ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+export function defaultIsAncestor({ base, head, repoRoot }) {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", base, head], { cwd: repoRoot, env: scrubGitEnv(process.env), stdio: "ignore" });
+    return true;
+  } catch (error) {
+    if (error?.status === 1) return false;
+    throw error;
+  }
+}
+
+const couldNotVerify = (baseRefName, error) => `could not verify that the head contains origin/${baseRefName || "<base>"}: ${error instanceof Error ? error.message : String(error)}`;
+
+// The single base + PR-head fetch of the merge. Returns a base_not_integrated refusal reason, or null.
+// Any unreadable ref, origin mismatch or fetch error is a refusal (fail closed).
+function resolveBaseFetchRefusal({ options, baseRefName, headSha, repoRoot, fetchPrHead, detectOriginSlug }) {
+  try {
+    if (!baseRefName) throw new Error("the PR base branch is unreadable");
+    if (!headSha) throw new Error("the PR head is unreadable");
+    const originSlug = detectOriginSlug(repoRoot);
+    if (!originSlug || !repoSlugEquals(originSlug, options.repo)) {
+      throw new Error(`the checkout origin (${originSlug ?? "unresolved"}) is not ${options.repo}`);
+    }
+    fetchPrHead({ pr: options.pr, baseRefName, repoRoot });
+    return null;
+  } catch (error) {
+    return couldNotVerify(baseRefName, error);
+  }
+}
+
+// Pure ancestry check against the already-fetched origin/<base> (no fetch). Returns a refusal reason, or null.
+function resolveBaseNotIntegratedRefusal({ baseRefName, headSha, repoRoot, isAncestor }) {
+  try {
+    if (isAncestor({ base: `origin/${baseRefName}`, head: headSha, repoRoot })) return null;
+    return `head ${headSha} does not contain origin/${baseRefName} (GATE-EXEC-BASE-REFRESH); merge origin/${baseRefName} into the branch, push, and re-run the gate round at the new head`;
+  } catch (error) {
+    return couldNotVerify(baseRefName, error);
   }
 }
 
@@ -589,6 +626,7 @@ export async function mergePr(options, runtime = {}) {
     detectOriginSlug = detectRepoSlug,
     evaluateAdrTripwire = defaultEvaluateAdrTripwire,
     waiveAdrTripwire = defaultWaiveAdrTripwire,
+    isAncestor = defaultIsAncestor,
   } = runtime;
 
   assertGithubWriteStubbedInTestMode(runChild, "pr merge", { env });
@@ -600,6 +638,16 @@ export async function mergePr(options, runtime = {}) {
   const currentHeadSha = typeof prView?.headRefOid === "string" && prView.headRefOid.trim().length > 0 ? prView.headRefOid.trim() : null;
   if (!currentHeadSha) throw new Error("Invalid gh pr view payload: missing headRefOid");
 
+  const baseRefName = typeof prView?.baseRefName === "string" ? prView.baseRefName.trim() : "";
+  const repoRoot = resolveRepoRoot(cwd);
+  const refuseBaseNotIntegrated = (reason, mergeClass) => {
+    const error = new Error(`Merge preconditions not satisfied: base_not_integrated (${reason})`);
+    error.mergePrFailure = {
+      ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
+      mergeClass, failures: [{ precondition: "base_not_integrated", reason }],
+    };
+    throw error;
+  };
   const rawReviews = flattenPaginatedSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`],
     { env, ghCommand, runChild },
@@ -630,6 +678,10 @@ export async function mergePr(options, runtime = {}) {
     error.mergePrFailure = { ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy, humanMergeOnly: true };
     throw error;
   }
+
+  // The only base + PR-head fetch of the merge; the ADR tripwire and the ancestry check reuse it.
+  const fetchReason = resolveBaseFetchRefusal({ options, baseRefName, headSha: currentHeadSha, repoRoot, fetchPrHead, detectOriginSlug });
+  if (fetchReason !== null) refuseBaseNotIntegrated(fetchReason, null);
 
   // A standing authorization is NOT established by config alone
   // (autonomy.humanMergeOnly:false authorizes nothing). The orchestrator asserts
@@ -746,11 +798,11 @@ export async function mergePr(options, runtime = {}) {
   // Runs after the other preconditions pass: a re-issue writes the PR body.
   const adrReason = await resolveAdrTripwireRefusal({
     options,
-    baseRefName: typeof prView?.baseRefName === "string" ? prView.baseRefName.trim() : "",
+    baseRefName,
     body: typeof prView?.body === "string" ? prView.body : "",
     headSha: currentHeadSha,
-    repoRoot: resolveRepoRoot(cwd),
-    env, ghCommand, runChild, ghJson, fetchPrHead, evaluateAdrTripwire, waiveAdrTripwire, detectOriginSlug,
+    repoRoot,
+    env, ghCommand, runChild, ghJson, evaluateAdrTripwire, waiveAdrTripwire,
   });
   if (adrReason !== null) {
     const error = new Error(`Merge preconditions not satisfied: adr_tripwire (${adrReason})`);
@@ -760,6 +812,10 @@ export async function mergePr(options, runtime = {}) {
     };
     throw error;
   }
+
+  // The one ancestry check runs after the ADR step (the waiver writer refreshes the base too), with no refetch.
+  const ancestryReason = resolveBaseNotIntegratedRefusal({ baseRefName, headSha: currentHeadSha, repoRoot, isAncestor });
+  if (ancestryReason !== null) refuseBaseNotIntegrated(ancestryReason, verdict.mergeClass);
 
   // All preconditions satisfied — perform the merge. NEVER a tag or publish.
   // runChild resolves for ANY exit code (it only rejects on a spawn error), so a

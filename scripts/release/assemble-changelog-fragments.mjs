@@ -209,12 +209,15 @@ function locateUnreleased(lines) {
  * Group `## Unreleased` body lines by section. A `### Added|Changed|Fixed` line
  * switches section; entries before any heading are `Changed`. Every other
  * non-blank, non-`- ` line is an error naming the unreleased-line rule.
+ * The release fold also groups prerelease section bodies, naming them via `where`.
  *
  * @param {string[]} bodyLines
- * @returns {{ bySection: Map<string, string[]>, errors: string[] }}
+ * @param {string} [where] - Names the section in error messages.
+ * @returns {{ bySection: Map<string, string[]>, ordered: [string, string][], errors: string[] }} ordered = (section, entry) pairs in document order
  */
-function groupUnreleasedLines(bodyLines) {
+export function groupUnreleasedLines(bodyLines, where = 'the existing "## Unreleased" section') {
   const bySection = new Map(FRAGMENT_SECTIONS.map((name) => [name, []]));
+  const ordered = [];
   const errors = [];
   let section = DEFAULT_SECTION;
   for (const raw of bodyLines) {
@@ -222,14 +225,17 @@ function groupUnreleasedLines(bodyLines) {
     if (line === "") continue;
     const match = SECTION_LINE_RE.exec(line);
     if (match) section = match[1];
-    else if (line.startsWith("- ")) bySection.get(section).push(line);
+    else if (line.startsWith("- ")) {
+      bySection.get(section).push(line);
+      ordered.push([section, line]);
+    }
     else {
       errors.push(
-        `unreleased-line rule: the existing "## Unreleased" section has a line that is neither a "- " entry nor a ### Added, ### Changed or ### Fixed heading: ${line.slice(0, 60)}`,
+        `unreleased-line rule: ${where} has a line that is neither a "- " entry nor a ### Added, ### Changed or ### Fixed heading: ${line.slice(0, 60)}`,
       );
     }
   }
-  return { bySection, errors };
+  return { bySection, ordered, errors };
 }
 
 /**
