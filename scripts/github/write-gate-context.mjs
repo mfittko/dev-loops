@@ -1842,7 +1842,8 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
  * recordedHead guard). FAIL CLOSED on verdict eligibility: only a `clean` or
  * `findings_present` verdict is a CLOSED round whose reject/defer
  * dispositions are settled memory; a `blocked`/other/missing verdict (a
- * truncated write, an aborted round, a hand-edited ledger) is dropped. A
+ * truncated write, an aborted round, a hand-edited ledger) is dropped and
+ * reported through `onUnreadable` when its identity matches. A
  * missing directory (first round) yields `[]`.
  *
  * @returns {Promise<object[]>}
@@ -1890,7 +1891,10 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
       || log.pr === undefined || log.pr === null || Number(log.pr) !== Number(options.pr);
     if (identityMismatch) continue;
     const verdict = typeof log.verdict === "string" ? log.verdict.trim() : "";
-    if (verdict !== "clean" && verdict !== "findings_present") continue;
+    if (verdict !== "clean" && verdict !== "findings_present") {
+      onUnreadable?.(name);
+      continue;
+    }
     rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", log });
   }
   rounds.sort((a, b) => (a.loggedAt < b.loggedAt ? -1 : a.loggedAt > b.loggedAt ? 1 : a.sha < b.sha ? -1 : 1));

@@ -125,8 +125,9 @@ test("the choke point refuses every draft_gate input shape except the judged led
     const rows = [
       ["flat --findings-json", ["--verdict", "findings_present", "--findings-json", flat], /refusing --findings-json/],
       ["--findings-json with resurfaces", ["--verdict", "findings_present", "--findings-json", resurfacing], /refusing --findings-json/],
-      ["verdict-only findings_present", ["--verdict", "findings_present"], /refusing a verdict-only post/],
-      ["verdict-only blocked", ["--verdict", "blocked"], /refusing a verdict-only post/],
+      ["verdict-only findings_present", ["--verdict", "findings_present"], /refusing a post without --findings-ledger/],
+      ["verdict-only blocked", ["--verdict", "blocked"], /refusing a post without --findings-ledger/],
+      ["--findings-file", ["--verdict", "findings_present", "--findings-file", flat], /refusing a post without --findings-ledger.*--findings-file/],
       ["ledger without overallVerdict", ["--verdict", "findings_present", "--findings-ledger", noVerdictLedger], /without overallVerdict/],
     ];
     for (const [name, args, pattern] of rows) {
@@ -138,9 +139,9 @@ test("the choke point refuses every draft_gate input shape except the judged led
       }
     }
     await seedPrior(repoRoot, priorHeads);
-    // The light-mode inline carve-out (inline verdict-only clean) holds no finding and stays accepted; a fan-out one does not.
+    // An inline verdict-only clean holds no finding and stays accepted; a fan-out one does not.
     assert.equal(verdictOf(await post(["--verdict", "clean"])), "clean");
-    assert.match((await post(["--verdict", "clean", "--execution-mode", "fanout_fanin"])).error, /refusing a verdict-only post/);
+    assert.match((await post(["--verdict", "clean", "--execution-mode", "fanout_fanin"])).error, /refusing a post without --findings-ledger/);
     const ok = await post(["--findings-ledger", judged]);
     assert.equal(ok.error, undefined);
     assert.equal(verdictOf(ok), "clean", "the valid judged ledger posts");

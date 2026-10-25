@@ -499,3 +499,20 @@ describe("assertCleanImpliesNoBlockingAct", () => {
     assert.throws(() => assertCleanImpliesNoBlockingAct("clean", null, ["high"]), TypeError);
   });
 });
+
+describe("projectClusterDisposition resurfaces", () => {
+  test("projects the representative's resurfaces onto members and clears it when the representative has none", () => {
+    const withResurfaces = [
+      disposedFinding(locatedFinding({ angle: "correctness" }), "act", { resurfaces: "abcd" }),
+      disposedFinding(locatedFinding({ angle: "security" }), "act"),
+    ];
+    let { clusters } = clusterFindings(withResurfaces, { headSha: HEAD });
+    assert.equal(projectClusterDisposition(withResurfaces, clusters)[1].resurfaces, "abcd");
+    const without = [
+      disposedFinding(locatedFinding({ angle: "correctness" }), "act"),
+      disposedFinding(locatedFinding({ angle: "security" }), "act", { resurfaces: "abcd" }),
+    ];
+    ({ clusters } = clusterFindings(without, { headSha: HEAD }));
+    assert.equal("resurfaces" in projectClusterDisposition(without, clusters)[1], false);
+  });
+});

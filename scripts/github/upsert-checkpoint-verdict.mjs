@@ -2781,13 +2781,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       promoteLedgerFanout(options, preloadedFindingsLedger);
     }
     // GATE-EXEC-ROUND-CAP: with the cap on, the judged ledger is the only draft_gate input. One choke point
-    // refuses every other shape before any cap logic runs. The one exception is the light-mode inline carve-out:
-    // an inline verdict-only clean holds no finding, so the cap has nothing to count or block.
+    // refuses every other shape before any cap logic runs. The one exception is an inline verdict-only clean:
+    // it holds no finding, so the cap has nothing to count or block.
     if (options.gate === "draft_gate" && draftGateConfig.maxReviewRounds > 0) {
-      const lightModeClean = !options.findingsJson && !options.findingsLedger && options.verdict === "clean"
+      const inlineVerdictOnlyClean =!options.findingsJson && !options.findingsLedger && options.verdict === "clean"
         && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent";
-      const refused = lightModeClean ? null : options.findingsJson ? "--findings-json"
-        : !options.findingsLedger ? "a verdict-only post"
+      const refused = inlineVerdictOnlyClean ? null : options.findingsJson ? "--findings-json"
+        : !options.findingsLedger ? "a post without --findings-ledger (a --findings-file or --findings-summary post is refused)"
           : !preloadedFindingsLedger.overallVerdict ? "a --findings-ledger without overallVerdict" : null;
       if (refused) {
         throw new Error(`Cannot post draft_gate @ ${canonicalHeadSha} (GATE-EXEC-ROUND-CAP): gates.draft.maxReviewRounds is ${draftGateConfig.maxReviewRounds}, so the judged findings ledger (--findings-ledger carrying overallVerdict) is the only accepted input; refusing ${refused}. Write the ledger with write-gate-findings-log after the judge pass, or set gates.draft.maxReviewRounds to 0.`);

@@ -28,8 +28,10 @@ describe("draft_gate round cap", () => {
     assert.deepEqual(reasons([act("medium"), act("low"), act("low")]), Array(3).fill("round_cap_reached/new_act"));
   });
 
-  test("a re-surfaced act item is not new", () => {
-    assert.deepEqual(reasons([act("medium", { resurfaces: "abcd" })]), []);
+  test("a re-surfaced high or medium act item blocks as resurfaced; re-surfaced low and nit follow the low/nit rule", () => {
+    assert.deepEqual(reasons([act("medium", { resurfaces: "abcd" })]), ["round_cap_reached/resurfaced"]);
+    assert.deepEqual(reasons([act("high", { resurfaces: "abcd" }), act("low", { resurfaces: "ef01" })]), ["round_cap_reached/resurfaced"]);
+    assert.deepEqual(reasons([act("low", { resurfaces: "abcd" }), act("nit", { resurfaces: "ef01" })]), []);
   });
 
   test("defer and reject of low or nit are cap-closed without a blocker; high or medium is a severity_disagreement", () => {

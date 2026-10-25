@@ -17,7 +17,7 @@ Across 49 pull requests with two or more draft rounds, 99 new act findings first
 - One input. When the cap is on, the cap evaluates only the judged ledger of the round. `upsert-checkpoint-verdict.mjs` refuses every other `draft_gate` input shape at one choke point before the cap logic runs.
 - Past the cap, a new act item composes `blocked` with a `round_cap_reached` blocker and no fixer runs. A round whose act items are all low or nit converges through the 0168 rule. A mixed round blocks.
 - `capClosed`. Past the cap, a judge `defer` or `reject` is closed with `capClosed: { judgeDisposition, severity, round, cap }` in the ledger. A reviewer `high` or `medium` that the judge defers or rejects, a missing disposition and an unknown severity join the blocker with reason `severity_disagreement`. A locatable `question` is never cap-closed.
-- `resurfaces`. The judge receives prior act items as `{fingerprint, file, line, title}`. The ledger writer keeps `resurfaces` only for a fingerprint in that list.
+- `resurfaces`. The judge receives prior act items as `{fingerprint, file, line, title}`. The ledger writer keeps `resurfaces` only for a fingerprint in that list when the finding's file equals that prior item's file. A re-surfaced `high` or `medium` act item past the cap blocks with reason `resurfaced`.
 - Post-convergence push (operator decision, 2026-10-25). After a `draft_gate` round converges under 0168, tooling refuses a code commit on that head with a typed reason. Review threads on a converged head resolve by reply only. Low and nit items close by reply or PR-body edit only. This overrides the one `commit_only` fixer pass of 0168. The enforcement of this rule ships in a later slice of issue 2462; this ADR records the decision.
 
 ## Consequences

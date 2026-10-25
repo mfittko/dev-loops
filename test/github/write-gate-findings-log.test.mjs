@@ -2565,6 +2565,24 @@ test("writeGateFindingsLog keeps resurfaces only for a closed prior round's act 
   }
 });
 
+test("writeGateFindingsLog drops resurfaces when the finding sits in a different file than the prior act item", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-resurfaces-file-"));
+  try {
+    const { fingerprintFinding } = await import("../../scripts/github/_gate-finding-surface.mjs");
+    const prior = { severity: "medium", angle: "correctness", summary: "guard missing", files: ["src/a.mjs"], line: 4, judgeDisposition: "act" };
+    await writeCapPrior(tmpDir, { head: capPriorHeads[0], findings: [prior] });
+    const raw = [
+      { severity: "medium", angle: "correctness", summary: "same file", files: ["src/a.mjs"], line: 9 },
+      { severity: "medium", angle: "correctness", summary: "other file", files: ["src/b.mjs"], line: 9 },
+    ];
+    const resurfaces = fingerprintFinding(prior);
+    const findings = await writeCapRound(tmpDir, raw, [{ disposition: "act", resurfaces }, { disposition: "act", resurfaces }]);
+    assert.deepEqual(findings.map((f) => f.resurfaces), [resurfaces, undefined]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("writeGateFindingsLog records capClosed on a past-cap defer or reject, never on act or a locatable question", async () => {
   const raw = [
     { severity: "low", angle: "docs", summary: "low deferred" },

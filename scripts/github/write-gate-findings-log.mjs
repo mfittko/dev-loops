@@ -9,7 +9,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, neverDeferredSeverity, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
+import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, neverDeferredSeverity, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveFindingFile, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
@@ -883,11 +883,13 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       findings = await applySiblingSpecAuthorityVerdict(findings, judgePath, specAuthorityIdentity);
     }
   }
-  // `resurfaces` stays only when it names a closed prior round's act item; every other act item is new.
+  // `resurfaces` stays only when it names a closed prior round's act item in the same file; every other act item is new.
   const priorOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot };
   if (findings.some((f) => f.resurfaces !== undefined)) {
-    const prior = new Set((await listPriorActItems(priorOptions, { repoRoot })).map((item) => item.fingerprint));
-    for (const f of findings) if (f.resurfaces !== undefined && !prior.has(f.resurfaces)) delete f.resurfaces;
+    const priorFiles = new Map((await listPriorActItems(priorOptions, { repoRoot })).map((item) => [item.fingerprint, item.file]));
+    for (const f of findings) {
+      if (f.resurfaces !== undefined && !(priorFiles.has(f.resurfaces) && priorFiles.get(f.resurfaces) === (resolveFindingFile(f) ?? null))) delete f.resurfaces;
+    }
   }
   // Past the round cap, a judge defer or reject is recorded as cap-closed (GATE-EXEC-ROUND-CAP).
   if (options.gate === "draft_gate" && findings.some((f) => f.judgeDisposition === "defer" || f.judgeDisposition === "reject")) {

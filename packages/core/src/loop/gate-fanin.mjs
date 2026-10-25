@@ -1331,17 +1331,24 @@ export function capClosedFor(finding, { round, cap }) {
 }
 
 /**
- * Blockers a past-cap draft_gate round composes into `blocked`. A new act item blocks, unless every act item is
- * low or nit (the low/nit convergence rule applies instead). A reviewer high or medium that the judge defers or
+ * Blockers a past-cap draft_gate round composes into `blocked`. A new act item and a re-surfaced high or medium
+ * act item block, unless every act item is low or nit (the low/nit convergence rule applies instead). A reviewer high or medium that the judge defers or
  * rejects, a missing disposition and an unknown severity block as `severity_disagreement`.
- * @returns {Array<{ kind: "round_cap_reached", reason: "new_act"|"severity_disagreement", item: string }>}
+ * @returns {Array<{ kind: "round_cap_reached", reason: "new_act"|"resurfaced"|"severity_disagreement", item: string }>}
  */
 export function pastCapBlockers(findings) {
   const list = Array.isArray(findings) ? findings : [];
   const label = (f, reason) => `[${normalizeSeverity(f?.severity)}] ${String(f?.summary ?? "").trim()} (${reason})`;
   const acts = list.filter(isOpenActItem);
   const lowNitOnly = acts.every((f) => ["low", "nit"].includes(normalizeSeverity(f.severity)));
-  const blockers = lowNitOnly ? [] : acts.filter((f) => !f.resurfaces).map((f) => ({ kind: "round_cap_reached", reason: "new_act", item: label(f, "new_act") }));
+  const blockers = [];
+  if (!lowNitOnly) {
+    for (const f of acts) {
+      const severity = normalizeSeverity(f.severity);
+      const reason = !f.resurfaces ? "new_act" : severity === "high" || severity === "medium" ? "resurfaced" : null;
+      if (reason) blockers.push({ kind: "round_cap_reached", reason, item: label(f, reason) });
+    }
+  }
   for (const f of list) {
     if (isOpenActItem(f)) continue;
     const severity = normalizeSeverity(f?.severity);
