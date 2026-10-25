@@ -167,6 +167,27 @@ test("a fully judged rejected high posts clean on the sanctioned ledger plus --f
   }, { prefix: "dev-loops-act-list-high-json-" });
 });
 
+test("a judged ledger with a sole rejected high posts clean when --findings-json is the unjudged fan-in --out shape", async () => {
+  await withTempDir(async (tempDir) => {
+    const high = finding("high", "reject");
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "findings_present", findings: [high] });
+    const jsonPath = path.join(tempDir, "findings.json");
+    const { judgeDisposition: _omit, ...unjudged } = high;
+    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [unjudged] }]), "utf8");
+    const args = [
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
+      "--findings-summary", "act list test", "--findings-ledger", ledgerPath, "--findings-json", jsonPath,
+      "--next-action", "follow the verdict", "--inline-reason", "act list test", "--verdict", "clean",
+      "--findings-severity-counts", JSON.stringify({ high: 1, medium: 0, low: 0, question: 0, nit: 0 }),
+    ];
+    const posted = [];
+    await upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild(posted),
+    });
+    assert.match(posted.join("\n"), /\*\*Verdict:\*\* clean/);
+  }, { prefix: "dev-loops-act-list-unjudged-dup-" });
+});
+
 test("an empty ledger with a judged rejected high in --findings-json posts clean without a severity-floor refusal", async () => {
   await withTempDir(async (tempDir) => {
     const ledgerPath = await writeLedger(tempDir, { overallVerdict: "findings_present", findings: [] });
