@@ -517,3 +517,20 @@ for (const form of duplicateForms) {
     }, { prefix: "dev-loops-act-list-dup-form-" });
   });
 }
+
+for (const { name, jsonFile, refused } of [
+  { name: "a judge-rejected --findings-json finding on another file does not cover an unjudged ledger finding", jsonFile: "src/a.mjs", refused: true },
+  { name: "a judge-rejected --findings-json finding on the same file covers the unjudged ledger finding", jsonFile: "src/b.mjs", refused: false },
+]) {
+  test(name, async () => {
+    await withTempDir(async (tempDir) => {
+      const ledgerFinding = { severity: "high", angle: "correctness", summary: "shared summary", files: ["src/b.mjs"] };
+      const ledgerPath = await writeLedger(tempDir, { overallVerdict: "findings_present", findings: [ledgerFinding], executionMode: "fanout_fanin" });
+      const jsonPath = path.join(tempDir, "rejected.json");
+      await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [{ severity: "high", angle: "correctness", summary: "shared summary", file: jsonFile, judgeDisposition: "reject", judgeRationale: "r" }] }, { angle: "pr-description", verdict: "clean", findings: [] }, { angle: "holistic", verdict: "clean", findings: [] }]), "utf8");
+      const out = await postWithJson(ledgerPath, jsonPath, ["--verdict", "clean"]);
+      if (refused) assert.match(out.error, unjudgedLedgerMsg);
+      else assert.equal(out.error, undefined);
+    }, { prefix: "dev-loops-act-list-fingerprint-" });
+  });
+}

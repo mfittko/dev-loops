@@ -2945,15 +2945,16 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }));
     const badDisposition = flatFindings.find((f) => f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition));
     if (badDisposition) throw new Error(`--findings-json "${options.findingsJson}" finding "[${badDisposition.severity}] ${badDisposition.summary}" carries judgeDisposition ${JSON.stringify(badDisposition.judgeDisposition)} outside ${JUDGE_DISPOSITIONS.join("/")} (fail closed; ADR 0089)`);
-    // An unjudged ledger finding stays unknown unless a judged --findings-json finding covers it (same summary).
-    const judgedSummaries = new Set(flatFindings.filter((f) => f.judgeDisposition).map((f) => f.summary));
-    const uncovered = unjudgedLedgerFindings.filter((f) => !judgedSummaries.has(typeof f.summary === "string" ? f.summary.trim() : f.summary));
+    // An unjudged ledger finding stays unknown unless a judged --findings-json finding covers it (same fingerprint: first file plus normalized summary).
+    const judgedFingerprints = new Set(flatFindings.filter((f) => f.judgeDisposition).map((f) => fingerprintFinding(f)));
+    const uncovered = unjudgedLedgerFindings.filter((f) => !judgedFingerprints.has(fingerprintFinding(f)));
     if (uncovered.length > 0) throw new Error(unjudgedLedgerMessage(options, canonicalHeadSha, uncovered.length));
-    // Copy the judged disposition onto each unjudged ledger finding (same trimmed summary), so body visibility reads it; an existing ledger disposition stays.
+    // Copy the judged disposition onto each unjudged ledger finding (same fingerprint), so body visibility reads it; an existing ledger disposition stays.
     for (const lf of preloadedFindingsLedger?.findings ?? []) {
       if (lf?.judgeDisposition) continue;
       // Prefer an act match so an ambiguous summary fails open to visible.
-      const same = (f) => f.judgeDisposition && f.summary === (typeof lf.summary === "string" ? lf.summary.trim() : lf.summary);
+      const lfFingerprint = fingerprintFinding(lf);
+      const same = (f) => f.judgeDisposition && fingerprintFinding(f) === lfFingerprint;
       const judged = flatFindings.find((f) => f.judgeDisposition === "act" && same(f)) ?? flatFindings.find(same);
       if (judged) {
         lf.judgeDisposition = judged.judgeDisposition;
