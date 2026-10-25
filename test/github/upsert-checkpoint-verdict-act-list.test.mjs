@@ -492,6 +492,7 @@ test("an extra unjudged high in --findings-json keeps the severity guards active
 const duplicateForms = [
   { name: "same first file and summary", ledger: { files: ["src/a.mjs"] }, json: { files: ["src/a.mjs"] }, refused: false },
   { name: "same summary, different file", ledger: { files: ["src/a.mjs"] }, json: { files: ["src/b.mjs"] }, refused: true },
+  { name: "no files and the same summary", ledger: {}, json: {}, refused: false },
   { name: "same clusterId only", ledger: { files: ["src/a.mjs"], clusterId: 1 }, json: { files: ["src/b.mjs"], clusterId: 1, summary: "other summary" }, refused: true },
 ];
 for (const form of duplicateForms) {
