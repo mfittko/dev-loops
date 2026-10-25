@@ -5564,6 +5564,33 @@ describe("resolveGateAnglesDynamic: SECURITY_SENSITIVE_SEAM threat-model overrid
     assert.deepEqual(result.addedAngles, ["threat-model"]);
     assert.equal(result.addedReasons["threat-model"], "SECURITY_SENSITIVE_SEAM");
     assert.ok(resolveGateAngleContract(config, "draft").pool.includes("threat-model"));
+    const { rationaleFromResolver } = await import("../../../scripts/github/write-gate-context.mjs");
+    assert.deepEqual(
+      rationaleFromResolver(result).rationale.find((r) => r.angle === "threat-model"),
+      { angle: "threat-model", action: "added", reason: "SECURITY_SENSITIVE_SEAM" },
+    );
+  });
+
+  test("the static path (dynamic subtractive off) keeps threat-model on a seam diff", async () => {
+    const staticConfig = { ...config, gates: { draft: { ...config.gates.draft, dynamic: { subtractive: false } } } };
+    const result = await resolveGateAnglesDynamic(staticConfig, "draft", { diff: seamDiff });
+    assert.ok(result.recommendedAngles.includes("threat-model"));
+    assert.deepEqual(result.addedAngles, ["threat-model"]);
+    const plain = await resolveGateAnglesDynamic(staticConfig, "draft", { diff: plainDiff });
+    assert.ok(!plain.recommendedAngles.includes("threat-model"));
+  });
+
+  test("with requireDraftFirst:false the preApproval override fires only where threat-model is in the contract pool", async () => {
+    const pre = (angles) => ({ version: 1, workflow: { requireDraftFirst: false }, gates: { preApproval: { angles } } });
+    const disabled = pre(["scope", { name: "threat-model", enabled: false }]);
+    const fired = await resolveGateAnglesDynamic(disabled, "preApproval", { diff: seamDiff });
+    assert.ok(fired.recommendedAngles.includes("threat-model"));
+    assert.ok(resolveGateAngleContract(disabled, "preApproval").pool.includes("threat-model"));
+    // Not a pool member and not excluded: the override must not mint a foreign angle.
+    const absent = pre(["scope"]);
+    const skipped = await resolveGateAnglesDynamic(absent, "preApproval", { diff: seamDiff });
+    assert.ok(!skipped.recommendedAngles.includes("threat-model"));
+    assert.ok(!resolveGateAngleContract(absent, "preApproval").pool.includes("threat-model"));
   });
 
   test("a seam diff outside the first gate round keeps the config drop", async () => {
