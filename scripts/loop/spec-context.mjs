@@ -22,6 +22,7 @@ import {
   computeContentDigest,
   computeSpecDigest,
   requireSpecFromBody,
+  resolvePrDescriptionSpec,
   specCriterionIds,
 } from "@dev-loops/core/loop/spec-authority";
 import { resolveTrackerAdapter } from "@dev-loops/core/tracker";
@@ -38,19 +39,28 @@ import { resolveTrackerLocalSpec } from "../github/resolve-tracker-local-spec.mj
 import { viewPr } from "../github/view-pr.mjs";
 
 const USAGE = `Usage:
-  spec-context.mjs --repo <owner/name> (--issue <number> | --pr <number>) --content-file <path> [--head-sha <sha>] [--spec-out <path>] [--identity-out <path>]
+  spec-context.mjs --repo <owner/name> (--issue <number> | --pr <number> | --body-file <path>) --content-file <path> [--head-sha <sha>] [--spec-out <path>] [--identity-out <path>]
   spec-context.mjs changed-paths --base <ref> --head <ref> [--repo-root <path>]
 
 Default (extract) mode: resolve the selected canonical issue or live PR body, extract the
-structured spec ({ acceptanceCriteria, definitionOfDone, nonGoals }), and
+structured spec ({ acceptanceCriteria, definitionOfDone, nonGoals }; a pr_scope spec
+also carries specKind "pr_scope" and a scope list), echo specSource ("issue" or
+"pr_body" for --issue/--pr; "pr_body", "pr_scope" or "none" for --body-file), and
 compute specDigest (from the spec) + contentDigest (from --content-file) +
 the complete criterionIds set — feeds judge-pass.mjs's --spec-file/
 --content-digest directly, so the skill never hand-derives them.
 Required (extract mode):
   --repo <owner/name>        Repository slug
-  --issue <number>           Canonical tracker issue number; exactly one of --issue/--pr
+  --issue <number>           Canonical tracker issue number; exactly one of --issue/--pr/--body-file
   --pr <number>              Live GitHub PR number when routed authority is pr_body;
                               reads its own body/head without fetching an issue
+  --body-file <path>         Standalone review gate: a PR description read from a file
+                              (fetch it with scripts/github/view-pr.mjs). Resolves a
+                              formal spec (specSource "pr_body"), else a scope-only
+                              spec (specSource "pr_scope", specKind "pr_scope", no
+                              fabricated criteria), else { specSource: "none",
+                              reason: "no_usable_scope" } with no spec or digests.
+                              Mutually exclusive with --issue/--pr.
   --content-file <path>      Path to the reviewed implementation/prose content;
                               its bytes are hashed into contentDigest
 Optional (extract mode):
@@ -107,6 +117,7 @@ function parseExtractCliArgs(argv) {
       repo: { type: "string" },
       issue: { type: "string" },
       pr: { type: "string" },
+      "body-file": { type: "string" },
       "content-file": { type: "string" },
       "head-sha": { type: "string" },
       "spec-out": { type: "string" },
@@ -123,6 +134,7 @@ function parseExtractCliArgs(argv) {
     repo: undefined,
     issue: undefined,
     pr: undefined,
+    bodyFile: undefined,
     contentFile: undefined,
     headSha: undefined,
     specOut: undefined,
@@ -151,6 +163,11 @@ function parseExtractCliArgs(argv) {
       options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError);
       continue;
     }
+    if (token.name === "body-file") {
+      options.bodyFile = requireTokenValue(token, parseError).trim();
+      if (options.bodyFile.length === 0) throw parseError("--body-file requires a non-empty path");
+      continue;
+    }
     if (token.name === "content-file") {
       options.contentFile = requireTokenValue(token, parseError).trim();
       continue;
@@ -175,8 +192,8 @@ function parseExtractCliArgs(argv) {
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   if (options.repo === undefined || options.contentFile === undefined ||
-      (options.issue === undefined) === (options.pr === undefined)) {
-    throw parseError("extract mode requires --repo <owner/name>, exactly one of --issue <number> or --pr <number>, and --content-file <path>");
+      [options.issue, options.pr, options.bodyFile].filter((value) => value !== undefined).length !== 1) {
+    throw parseError("extract mode requires --repo <owner/name>, exactly one of --issue <number>, --pr <number> or --body-file <path>, and --content-file <path>");
   }
   if (options.contentFile.length === 0) {
     throw parseError("--content-file requires a non-empty path");
@@ -204,15 +221,23 @@ export async function specContextExtract(
   options,
   { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), tracker, sleep = delay, now = Date.now, runChild } = {},
 ) {
-  if ((options.issue === undefined) === (options.pr === undefined)) {
-    throw new Error("extract mode requires exactly one of --issue or --pr");
+  if ([options.issue, options.pr, options.bodyFile].filter((value) => value !== undefined).length !== 1) {
+    throw new Error("extract mode requires exactly one of --issue, --pr or --body-file");
   }
   const { owner, name } = parseRepoSlug(options.repo);
   const repo = `${owner}/${name}`;
   let resolved;
   try {
     let readSource;
-    if (options.pr !== undefined) {
+    if (options.bodyFile !== undefined) {
+      readSource = async () => {
+        try {
+          return { repo, body: await readFile(path.resolve(repoRoot, options.bodyFile), "utf8") };
+        } catch (error) {
+          throw new Error(`Cannot read --body-file "${options.bodyFile}": ${error instanceof Error ? error.message : String(error)}`);
+        }
+      };
+    } else if (options.pr !== undefined) {
       readSource = async () => {
         const { pr } = await viewPr(
           { repo, pr: options.pr, fields: "number,body,headRefOid" },
@@ -244,7 +269,15 @@ export async function specContextExtract(
     if (error?.code !== "RATE_LIMITED") throw error;
     return rateLimitedResult(error);
   }
-  const spec = requireSpecFromBody(resolved.body);
+  let spec;
+  let specSource = options.issue !== undefined ? "issue" : "pr_body";
+  if (options.bodyFile !== undefined) {
+    const prSpec = resolvePrDescriptionSpec(resolved.body);
+    if (prSpec.specSource === "none") return { ok: true, repo: resolved.repo, ...prSpec };
+    ({ spec, specSource } = prSpec);
+  } else {
+    spec = requireSpecFromBody(resolved.body);
+  }
   let contentBytes;
   try {
     contentBytes = await readFile(path.resolve(repoRoot, options.contentFile), "utf8");
@@ -257,7 +290,8 @@ export async function specContextExtract(
   const result = {
     ok: true,
     repo: resolved.repo,
-    ...(options.pr !== undefined ? { pr: resolved.pr } : { issue: resolved.issue }),
+    ...(options.pr !== undefined ? { pr: resolved.pr } : options.issue !== undefined ? { issue: resolved.issue } : {}),
+    specSource,
     spec,
     specDigest,
     contentDigest,

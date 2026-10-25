@@ -73,7 +73,7 @@ test("each pre-PR rule states its invariant with RFC-2119 modality and the right
   // [rule, /modal/, [required keywords...]]
   const checks = [
     ["PRE-PR-BEFORE-FIRST-PUSH", /MUST/, ["before the first push", "committed"]],
-    ["PRE-PR-ONE-FRESH-REVIEWER", /MUST/, ["exactly ONE", "fresh-context", "general-purpose", "brief"]],
+    ["PRE-PR-ONE-FRESH-REVIEWER", /MUST/, ["exactly ONE", "fresh-context", "general-purpose", "brief", "artifact paths", "read-only evidence rule", "carries no `patchPath`", "file:line or test path:line read", "MUST NOT prescribe `sed`, a pipe to `head`, or test execution"]],
     ["PRE-PR-BOUNDED-TWO-ROUNDS", /MUST NOT/, ["one general-purpose reviewer per round", "two", "reviewer"]],
     ["PRE-PR-EPHEMERAL-NO-ARTIFACTS", /MUST NOT/, ["pull request", "comment", "review thread", "copilot"]],
     ["PRE-PR-MODEL-CONFIG-RESOLVED", /MUST/, ["resolveRoleModel", "pre-push-reviewer", "non-null"]],
@@ -270,7 +270,7 @@ test("the gate fix pass and the fixer cross-reference delta mode between the fix
 
 test("delta mode states the decision record, the full-phase refusal and the fixed-reply refusal", () => {
   const doc = readRepo(CONTRACT).replace(/\s+/g, " ");
-  for (const text of ["<tmp-root>/gate-delta/<reviewBaselineHead>.json", "The run without `--result` writes nothing", "refuses `--phase full`", "`--phase commit_only` first", "A fixed reply", "`not_resolved` or `cannot_verify`", "`threadId` or by the fingerprint"]) {
+  for (const text of ["<tmp-root>/gate-delta/<reviewBaselineHead>.json", "The run without `--result` writes only the cumulative patch", "refuses `--phase full`", "`--phase commit_only` first", "A fixed reply", "`not_resolved` or `cannot_verify`", "`threadId` or by the fingerprint"]) {
     assert.ok(doc.includes(text), `contract must state: ${text}`);
   }
   assert.doesNotMatch(readRepo("scripts/loop/check-pre-push-delta.mjs"), /Read-only:/, "the --result run is no longer read-only");

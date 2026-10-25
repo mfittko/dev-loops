@@ -1589,6 +1589,17 @@ test("decideAgentDispatch denies every judge dispatch from the dev-loop coordina
   }
 });
 
+test("decideAgentDispatch lets the dev-loop coordinator dispatch only an emitted standalone review-gate judge pointer", () => {
+  const reviewJudge = buildDispatchPointer({ workOrderRef: "judge:o/r#7:review:abc123:j1790000000000-abcdef12", workOrderDigest: "ab12cd", executionIdentity: IDENTITIES.judge });
+  for (const caller of ["dev-loop", "dev-loops:dev-loop"]) {
+    assert.equal(dispatch(caller, "judge", reviewJudge).decision, "allow", caller);
+    for (const prompt of [`cd /w && ${reviewJudge}`, `${reviewJudge} extra`, "Judge PR 7 review:", null]) {
+      assert.equal(dispatch(caller, "judge", prompt).decision, "deny", JSON.stringify(prompt));
+    }
+    assert.equal(dispatch(caller, "review", reviewJudge).decision, "deny", "the exemption is judge-only");
+  }
+});
+
 test("decideAgentDispatch denies a dev-loop review dispatch that carries a wrapped work-order pull", () => {
   const p = pointer("review");
   for (const caller of ["dev-loop", "dev-loops:dev-loop"]) {

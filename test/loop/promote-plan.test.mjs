@@ -96,6 +96,8 @@ async function setup(plan = READY_PLAN, ghEntries = [PR_CREATE_ENTRY], { withRem
     assert.equal(init.status, 0, init.stderr);
     const add = spawnSync("git", ["remote", "add", "origin", remoteDir], { cwd: repoDir, env: ghStub.env, encoding: "utf8" });
     assert.equal(add.status, 0, add.stderr);
+    const seed = spawnSync("git", ["push", "-q", "origin", "main", "integration/develop", "explicit-override"], { cwd: repoDir, env: ghStub.env, encoding: "utf8" });
+    assert.equal(seed.status, 0, seed.stderr);
   }
   const planPath = path.join(repoDir, "docs", "phases", "phase-x.md");
   await mkdir(path.dirname(planPath), { recursive: true });

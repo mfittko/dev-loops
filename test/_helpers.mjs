@@ -269,6 +269,10 @@ const GIT_FIXTURE_ENV = {
   // this fixture's init/add/commit calls into a different repo entirely.
   GIT_DIR: undefined,
   GIT_WORK_TREE: undefined,
+  // Ignore the machine global/system git config and global excludes so a
+  // fixture repo sees only its own .gitignore.
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_SYSTEM: "/dev/null",
 };
 
 export function runGitFixture(cwd, args) {

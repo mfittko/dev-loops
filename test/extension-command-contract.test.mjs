@@ -150,7 +150,7 @@ test("session_start syncs the project-local .pi/agents (symlink replaced with Pi
   const previousHome = process.env.HOME;
   const tempHome = await mkdtemp(path.join(os.tmpdir(), "dev-loops-session-project-"));
   process.env.HOME = tempHome;
-  // A project root with a .pi/agents -> ../agents symlink (the dev-loops repo convention).
+  // A project root with a .pi/agents -> ../agents symlink (the legacy layout).
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-session-project-cwd-"));
   const projectAgentsDir = path.join(projectRoot, ".pi", "agents");
   await mkdir(path.join(projectRoot, ".pi"), { recursive: true });

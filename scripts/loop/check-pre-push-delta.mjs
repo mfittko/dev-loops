@@ -15,16 +15,17 @@
  *   <tmp-root>/gate-delta/<baseline>.json (last write wins; local evidence only,
  *   PRE-PUSH-DELTA-NOT-GATE-EVIDENCE).
  *
- * The run without --result is write-free: it reads the act list (or the
+ * The run without --result (except --handback, which writes nothing and omits patchPath and evidenceRule) writes only the cumulative patch (PRE-PUSH-DELTA-PATCH-ARTIFACT) at
+ * <tmp-root>/gate-delta/<baseline>-<candidate>.patch: it reads the act list (or the
  * unresolved-threads file of the thread route), the result file, the
  * --findings-log file and `git rev-parse HEAD`, runs the stale-surface reads
- * (`git cat-file`, `git diff`, `git grep`), and authenticates ACT coverage without writes.
+ * (`git cat-file`, `git diff`, `git grep`), and authenticates ACT coverage without further writes.
  * Pure result checks live in @dev-loops/core/loop/pre-push-delta-review.
  */
-import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { execFile, spawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 
 import { clearSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import {
@@ -48,7 +49,8 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { writeGateDeltaRecord } from "./_gate-delta-record.mjs";
-import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
+import { createGitClient, main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
+import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
        check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --handback --site-coverage <path> [--worktree <dir>]   (fixer handbackCheck run)
@@ -75,7 +77,8 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
 
 Output (stdout, JSON):
-  without --result: { "ok": true, "input": { ..., "resultShape": { ... } } }
+  without --result (except --handback, which writes nothing and omits "patchPath" and "evidenceRule"): { "ok": true, "input": { ..., "patchPath", "evidenceRule", "resultShape": { ... } } }
+                    Also writes the cumulative baseline..candidate patch to input.patchPath (<tmp-root>/gate-delta/<baseline>-<candidate>.patch); the reviewer reads it with the read tool and needs no shell.
                     Fill input.resultShape; on ACT copy its binding below unchanged.
 
 Result JSON (--result, DeltaPrePushReviewResult):
@@ -173,6 +176,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
     fixerPlan: values["fixer-plan"] ?? null,
     findingsLog: values["findings-log"] ?? null,
     result: values.result ?? null,
+    handback: values.handback === true,
     invocation,
     worktree: values.worktree ?? process.cwd(),
     jq: values.jq,
@@ -189,6 +193,19 @@ function gitRevParse(worktree, rev) {
   return out.stdout.trim();
 }
 
+export const DELTA_EVIDENCE_RULE = "Read patchPath with the read tool. Evidence is a file:line, or a test's path:line, read from disk. Run no tests, builds, or other command that mutates or executes anything; for a site query use only the shell-inert read/search commands the reviewer read-only gate allows (git grep, grep, rg).";
+
+export const deltaPatchPath = (tmpRoot, baseline, candidate) => path.join(tmpRoot, "gate-delta", `${baseline}-${candidate}.patch`);
+
+// The cumulative baseline..head patch the reviewer reads; formats pinned against operator git config.
+function gitDiffPatch(worktree, baseline, head) {
+  const out = spawnSync("git", ["-C", worktree, "-c", "core.quotePath=false", "diff", "--unified=3", "--diff-algorithm=myers", "-O/dev/null", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-renames", "--no-relative", "--ignore-submodules=none", `${baseline}..${head}`], {
+    env: gitEnvNoDirOverrides(), maxBuffer: 1024 * 1024 * 1024,
+  });
+  if (out.status !== 0) throw new Error(`git diff ${baseline}..${head} failed in ${worktree}: ${out.error?.message ?? out.stderr.toString().trim()}`);
+  return out.stdout;
+}
+
 function gitIsAncestor(worktree, ancestor, descendant) {
   const out = spawnSync("git", ["-C", worktree, "merge-base", "--is-ancestor", ancestor, descendant], {
     encoding: "utf8", env: gitEnvNoDirOverrides(),
@@ -196,6 +213,14 @@ function gitIsAncestor(worktree, ancestor, descendant) {
   if (out.status === 0) return true;
   if (out.status === 1) return false;
   throw new Error(`git merge-base --is-ancestor failed in ${worktree}: ${out.stderr.trim()}`);
+}
+
+function gitChangedPaths(worktree, baseline, head) {
+  const out = spawnSync("git", ["diff", "--name-only", "-z", "--no-renames", "--no-relative", "--no-ext-diff", `${baseline}..${head}`], {
+    cwd: resolveRepoRoot(worktree), env: gitEnvNoDirOverrides(), encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+  });
+  if (out.status !== 0) throw new Error(`git diff changed paths failed: ${out.error?.message ?? out.stderr.trim()}`);
+  return out.stdout.split("\0").filter(Boolean);
 }
 
 // Tracked-file hits of the sentences and identifiers the delta range removed, grepped at the candidate head.
@@ -287,7 +312,7 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
 
 export async function runCli(
   argv = process.argv.slice(2),
-  { revParse = gitRevParse, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, stdout = process.stdout, tmpRoot } = {},
+  { revParse = gitRevParse, diffPatch = gitDiffPatch, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, stdout = process.stdout, tmpRoot } = {},
 ) {
   const options = parseCheckPrePushDeltaArgs(argv);
   if (options.help) {
@@ -354,6 +379,21 @@ export async function runCli(
       sequence, result, invocation: options.invocation, currentHead, siteCoverage, validationCoverage, coverageBinding,
       staleSurfaceHits: staleSurfaceTruncated ? [...staleSurfaceHits, staleSurfaceTruncatedHit()] : staleSurfaceHits,
     });
+    if (changedPaths(options.worktree, sequence.reviewBaselineHead, currentHead).some((file) => file.startsWith("changes/"))) {
+      const diagnostics = [];
+      const log = { log: (...args) => diagnostics.push(args.join(" ")), error: (...args) => diagnostics.push(args.join(" ")) };
+      let code;
+      try {
+        const root = resolveRepoRoot(options.worktree);
+        const exec = promisify(execFile);
+        const git = createGitClient(root, (command, args, options) => exec(command, args, { ...options, env: gitEnvNoDirOverrides() }));
+        code = await changelog({ root, git, log, requireHeadInputs: true });
+      } catch (error) {
+        diagnostics.push(error.message);
+        code = 1;
+      }
+      if (code !== 0) throw new Error(`LIFECYCLE-CHANGELOG-COMPLETENESS: ${diagnostics.join("; ")}`);
+    }
     // Local evidence for the emitter and the fixed-reply guard; never a gate verdict.
     writeGateDeltaRecord({
       tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree),
@@ -361,7 +401,12 @@ export async function runCli(
     });
     payload = { ok: true, ...decision };
   } else {
-    payload = { ok: true, input: buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) };
+    const patchPath = deltaPatchPath(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sequence.reviewBaselineHead, currentHead);
+    if (!options.handback) { // the fixer handbackCheck stays write-free
+      mkdirSync(path.dirname(patchPath), { recursive: true });
+      writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead));
+    }
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;

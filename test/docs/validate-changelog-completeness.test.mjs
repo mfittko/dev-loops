@@ -320,6 +320,17 @@ async function withTempChangelog(fn, changelog = BASE_CHANGELOG) {
 }
 
 describe("main()", () => {
+  it("uses the explicit merge base without default resolution, retaining the default path", async () => {
+    await withTempChangelog(async (root) => {
+      const git = makeFakeGit({ mergeBase: "1234567890abcdef" });
+      git.symbolicRef = async () => { throw new Error("must not resolve defaults"); };
+      assert.equal(await main({ root, base: "origin/release", git, env: {}, log: capturingLog() }), 0);
+      assert.deepEqual(git.mergeBaseCalls, [["origin/release", "HEAD"]]);
+      const defaults = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "1234567890abcdef" });
+      assert.equal(await main({ root, git: defaults, env: {}, log: capturingLog() }), 0);
+      assert.deepEqual(defaults.mergeBaseCalls, [["origin/main", "HEAD"]]);
+    });
+  });
   // base-ref candidate order (origin/HEAD -> GITHUB_BASE_REF -> main -> master)
   // is now owned by the shared resolveBaseRef test in
   // test/docs/_doc-git-client.test.mjs; these caller tests keep only the

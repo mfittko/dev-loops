@@ -950,9 +950,15 @@ const isDispatchPointer = (prompt, role) => {
   return Boolean(match) && (match[1] ? match[1][0] === IDENTITY_PREFIX[role] : match[2].startsWith(`${role}:`));
 };
 
+// The standalone `review` gate runs no gate-coordinator judge phase: the dev-loop agent itself dispatches that
+// gate's judge (skills/review/SKILL.md Phase 3.5). Only an exact emitted judge pointer whose ref names gate `review`
+// is exempt; lifecycle-gate judge dispatches stay denied.
+const isStandaloneReviewJudgePointer = (prompt) =>
+  isDispatchPointer(prompt, "judge") && /--ref judge:[^ ]+#\d+:review:/.test(prompt);
+
 /**
  * Decide whether a PreToolUse Agent/Task dispatch must be denied (GATE-EXEC-GATE-COORDINATOR,
- * ADRs 0112 and 0116). The dev-loop coordinator never dispatches a `judge` agent and never
+ * ADRs 0112 and 0116). The dev-loop coordinator dispatches no `judge` agent except the emitted standalone review-gate judge pointer, and never
  * dispatches a `review` agent whose prompt carries a `pull-work-order` invocation with a work-order ref or execution identity, in any flag order or wrapping; its prose-briefed pre-PR
  * and delta `review` dispatches are allowed. The `gate-coordinator` agent dispatches only
  * `review` and `judge`, each with the emitted `dispatchPrompt` byte for byte. Every other
@@ -982,7 +988,7 @@ export function decideAgentDispatch({ callerAgentType = null, targetAgentType = 
   const target = normalizeAgentType(targetAgentType);
   const gateChild = GATE_ROUND_CHILD_ROLES.has(target);
   if (caller === DEV_LOOP_AGENT_TYPE && gateChild &&
-    (target === "judge" || (typeof prompt === "string" && /pull-work-order/.test(prompt) && GATE_UNIT_TOKEN_RE.test(prompt)))) {
+    ((target === "judge" && !isStandaloneReviewJudgePointer(prompt)) || (typeof prompt === "string" && /pull-work-order/.test(prompt) && GATE_UNIT_TOKEN_RE.test(prompt) && target !== "judge"))) {
     return {
       decision: "deny",
       reason:

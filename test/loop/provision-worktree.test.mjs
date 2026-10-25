@@ -10,10 +10,14 @@ import {
   readlinkSync,
   existsSync,
   symlinkSync,
+  cpSync,
+  copyFileSync,
   realpathSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 
 import {
   provisionWorktree,
@@ -209,10 +213,8 @@ test("provision: config with errors yields zero config-driven actions (fail-clos
       { loadConfig },
     );
     assert.equal(res.ok, true);
-    // Only the unconditional self-link action remains (this fixture has no
-    // packages/core in the worktree, so it's a source-missing skip).
-    assert.equal(res.actions.length, 1);
-    assert.equal(res.actions[0].entry, "node_modules/@dev-loops/core");
+    // Only the unconditional self-link remains (no agents/ sources in the fixture).
+    assert.deepEqual(res.actions.map((a) => a.entry), ["node_modules/@dev-loops/core"]);
     assert.equal(res.summary.copied, 0);
     assert.equal(res.summary.linked, 0);
     assert.ok(res.summary.warnings >= 1, "one WARN about the invalid config");
@@ -451,5 +453,147 @@ test("provision: does not reject normal entries when the main checkout lives und
     assert.equal(readFileSync(path.join(worktreePath, "config/app.yml"), "utf8"), "key: value\n");
   } finally {
     rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// #2865: the .pi/agents render runs only when the worktree has its own agents/ sources.
+test("provisionWorktree: renders .pi/agents from the worktree's agents/ sources", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    writeFileSync(path.join(fx.worktreePath, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    mkdirSync(path.join(fx.worktreePath, "agents"));
+    writeFileSync(path.join(fx.worktreePath, "agents", "x.agent.md"), "---\nname: x\ndescription: x\ntools: read, search, execute, bash\n---\nbody\n");
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    assert.ok(res.actions.some((a) => a.entry === ".pi/agents" && a.mode === "render"));
+    const tools = readFileSync(path.join(fx.worktreePath, ".pi", "agents", "x.agent.md"), "utf8").match(/^tools: (.+)$/m)[1].split(",").map((t) => t.trim());
+    for (const t of ["grep", "find", "ls", "bash"]) assert.ok(tools.includes(t), t);
+    for (const t of ["search", "execute"]) assert.ok(!tools.includes(t), `no ${t}`);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provisionWorktree: a non-dev-loops package with agents/ gets no .pi/agents", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    writeFileSync(path.join(fx.worktreePath, "package.json"), JSON.stringify({ name: "some-consumer" }));
+    mkdirSync(path.join(fx.worktreePath, "agents"));
+    writeFileSync(path.join(fx.worktreePath, "agents", "x.agent.md"), "---\nname: x\ndescription: x\ntools: read\n---\nbody\n");
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    assert.ok(!res.actions.some((a) => a.entry === ".pi/agents"));
+    assert.ok(!existsSync(path.join(fx.worktreePath, ".pi", "agents")));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provisionWorktree: a regular file at .pi/agents fails soft with a warning and records a render-failed skip action", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    writeFileSync(path.join(fx.worktreePath, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    mkdirSync(path.join(fx.worktreePath, "agents"));
+    writeFileSync(path.join(fx.worktreePath, "agents", "x.agent.md"), "---\nname: x\ndescription: x\ntools: read\n---\nbody\n");
+    mkdirSync(path.join(fx.worktreePath, ".pi"));
+    writeFileSync(path.join(fx.worktreePath, ".pi", "agents"), "not a directory\n");
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    assert.equal(res.ok, true);
+    assert.ok(res.summary.warnings >= 1);
+    const act = res.actions.find((a) => a.entry === ".pi/agents");
+    assert.equal(act.mode, "skip");
+    assert.match(act.reason, /^render-failed: /);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provisionWorktree: a worktree without agents/ gets no .pi/agents", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    const res = await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    assert.ok(!res.actions.some((a) => a.entry === ".pi/agents"));
+    assert.ok(!existsSync(path.join(fx.worktreePath, ".pi", "agents")));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provisionWorktree: a tracked .pi/agents symlink is left untouched and recorded as a skip", async () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    const wt = fx.worktreePath;
+    writeFileSync(path.join(wt, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    mkdirSync(path.join(wt, "agents"));
+    writeFileSync(path.join(wt, "agents", "x.agent.md"), "---\nname: x\ndescription: x\ntools: read\n---\nbody\n");
+    mkdirSync(path.join(wt, ".pi"));
+    symlinkSync("../agents", path.join(wt, ".pi", "agents"));
+    initGitFixture(wt, { commit: null });
+    runGitFixture(wt, ["add", "-A"]);
+    runGitFixture(wt, ["commit", "-q", "-m", "init"]);
+    const res = await provisionWorktree({ worktreePath: wt, repoRoot: fx.repoRoot });
+    const act = res.actions.find((a) => a.entry === ".pi/agents");
+    assert.equal(act.mode, "skip");
+    assert.match(act.reason, /\.pi\/agents/);
+    assert.equal(readlinkSync(path.join(wt, ".pi", "agents")), "../agents");
+    assert.equal(runGitFixture(wt, ["status", "--porcelain"]).replace(/.*node_modules.*\n?/g, ""), "");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// A packaged install runs the CLI under Node from node_modules, where .ts cannot load.
+test("provision-worktree CLI under Node from a node_modules package layout renders Pi-valid .pi/agents", () => {
+  const fx = makeFixture("version: 1\n");
+  try {
+    const repoDir = path.resolve(import.meta.dirname, "..", "..");
+    const pkg = path.join(fx.base, "node_modules", "dev-loops");
+    mkdirSync(path.join(pkg, "extension"), { recursive: true });
+    cpSync(path.join(repoDir, "scripts"), path.join(pkg, "scripts"), { recursive: true });
+    cpSync(path.join(repoDir, "extension", "pi-agent-render.mjs"), path.join(pkg, "extension", "pi-agent-render.mjs"));
+    cpSync(path.join(repoDir, "packages", "core"), path.join(fx.base, "node_modules", "@dev-loops", "core"), { recursive: true });
+    mkdirSync(path.join(pkg, "agents"));
+    writeFileSync(path.join(pkg, "agents", "x.agent.md"), "---\nname: x\ndescription: x\ntools: read, search, execute\n---\nbody\n");
+    const wt = fx.worktreePath;
+    writeFileSync(path.join(wt, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    cpSync(path.join(pkg, "agents"), path.join(wt, "agents"), { recursive: true });
+    const out = execFileSync("node", [path.join(pkg, "scripts", "loop", "provision-worktree.mjs"), "--worktree-path", wt, "--repo-root", fx.repoRoot], { encoding: "utf8" });
+    assert.ok(JSON.parse(out).actions.some((a) => a.entry === ".pi/agents" && a.mode === "render"), out);
+    const tools = readFileSync(path.join(wt, ".pi", "agents", "x.agent.md"), "utf8").match(/^tools: (.+)$/m)[1];
+    assert.equal(tools, "read, grep, find, ls, bash");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// #2854 slice 3: provisioning threads the repo's config into the Pi render.
+test("provisionWorktree: the .pi/agents render pins the model the repo config resolves for the agent's role", async () => {
+  const fx = makeFixture("version: 1\nmodels:\n  tiers:\n    low:\n      claude: sonnet\n      pi: fixture/pinned-model\n  roleTiers:\n    developer: low\n");
+  try {
+    copyFileSync(path.join(fx.repoRoot, ".devloops"), path.join(fx.worktreePath, ".devloops"));
+    writeFileSync(path.join(fx.worktreePath, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    mkdirSync(path.join(fx.worktreePath, "agents"));
+    for (const name of ["developer", "judge"]) {
+      writeFileSync(path.join(fx.worktreePath, "agents", `${name}.agent.md`), `---\nname: ${name}\ndescription: x\ntools: read\n---\nbody\n`);
+    }
+    await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    const rendered = (name) => readFileSync(path.join(fx.worktreePath, ".pi", "agents", `${name}.agent.md`), "utf8");
+    assert.match(rendered("developer"), /^model: "fixture\/pinned-model"$/m);
+    assert.doesNotMatch(rendered("judge"), /^model:/m);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("provisionWorktree: pins .pi/agents models from the worktree's config, not the main checkout's", async () => {
+  const cfg = (m) => `version: 1\nmodels:\n  tiers:\n    low:\n      claude: sonnet\n      pi: ${m}\n  roleTiers:\n    x: low\n`;
+  const fx = makeFixture(cfg("main/model"));
+  try {
+    writeFileSync(path.join(fx.worktreePath, ".devloops"), cfg("worktree/model"));
+    writeFileSync(path.join(fx.worktreePath, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    mkdirSync(path.join(fx.worktreePath, "agents"));
+    writeFileSync(path.join(fx.worktreePath, "agents", "x.agent.md"), "---\nname: x\ndescription: x\ntools: read\n---\nbody\n");
+    await provisionWorktree({ worktreePath: fx.worktreePath, repoRoot: fx.repoRoot });
+    assert.match(readFileSync(path.join(fx.worktreePath, ".pi", "agents", "x.agent.md"), "utf8"), /^model: "worktree\/model"$/m);
+  } finally {
+    fx.cleanup();
   }
 });

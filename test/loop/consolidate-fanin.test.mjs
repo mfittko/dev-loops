@@ -8,13 +8,14 @@ import { test } from "bun:test";
 
 import {
   consolidateGateFanin,
+  deriveFaninProvenance,
   detectMisplacedFindingsDiagnostic,
   fitsRenderBudget,
   parseConsolidateFaninCliArgs,
 } from "../../scripts/loop/consolidate-fanin.mjs";
 import { execFileSync } from "node:child_process";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
-import { buildGateEmitPlanPath, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { buildGateEmitPlanPath, buildGateFaninLedgerPath, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { retireGateRound } from "../../scripts/github/retire-gate-round.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { normalizeStructuredFindings, renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
@@ -1032,9 +1033,17 @@ test("consolidateGateFanin proceeds unchanged without a cache-telemetry artifact
 
 const EMIT_HEAD = "e5".repeat(20);
 
+// An object plan written under the default filename lands at the canonical keyed
+// path under `dir` (the fan-in binds --emit-plan to buildGateEmitPlanPath); a
+// string plan, a custom filename or an uncomputable key falls back to dir/filename.
 async function writeEmitPlan(dir, plan, filename = "emit-plan.json") {
-  await mkdir(dir, { recursive: true });
-  const planPath = path.join(dir, filename);
+  let planPath = path.join(dir, filename);
+  if (typeof plan === "object" && filename === "emit-plan.json") {
+    try {
+      planPath = buildGateEmitPlanPath({ repo: plan.repo, pr: plan.pr, gate: String(plan.gate).trim().toLowerCase(), headSha: String(plan.headSha).toLowerCase(), tmpRoot: dir });
+    } catch { /* keep the fallback path */ }
+  }
+  await mkdir(path.dirname(planPath), { recursive: true });
   await writeFile(planPath, typeof plan === "string" ? plan : JSON.stringify(plan), "utf8");
   return planPath;
 }
@@ -1064,6 +1073,14 @@ async function writeEmitPlanReceipt(receiptTmpRoot, unit = matchingEmitPlan().un
   const receiptPath = pullReceiptPath(receiptTmpRoot, unit.workOrderRef);
   await writeJson(receiptPath, { role: "review", workOrderRef, workOrderDigest, executionIdentity, pulledAt: pulledAt.toISOString() });
   await utimes(receiptPath, pulledAt, pulledAt);
+}
+
+// The dispatch-prompt record the emitter leaves for a plan unit (records-floor, #2526).
+async function writeEmitPlanLayoutRecord(tmpRoot, unit = matchingEmitPlan().units[0], gate = "review", headSha = EMIT_HEAD) {
+  const bytes = "## Invariant prefix\nrepo: o/r\n";
+  await writeGateBriefingRecord(tmpRoot, gate, headSha, bytes);
+  const prefixPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646", `${gate}-${headSha}.briefing-prefix.txt`);
+  await writeDispatchPromptRecord(tmpRoot, unit.scope, headSha, { prefixPath, leading: `${bytes}## Angle: ${unit.angles[0]}\n`, gate });
 }
 
 test("parseConsolidateFaninCliArgs: no --emit-plan flag leaves emitPlan undefined", () => {
@@ -1107,11 +1124,13 @@ test("consolidateGateFanin accepts a matching emit-plan key and proceeds unchang
       try {
         const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
         await writeEmitPlanReceipt(planDir);
+        await writeEmitPlanLayoutRecord(planDir);
         const result = await consolidateGateFanin({
           findingsDir: dir,
           emitPlan: planPath,
           gate: "review",
           headSha: EMIT_HEAD,
+          tmpRoot: planDir,
           receiptTmpRoot: planDir,
         });
         assert.equal(result.ok, true);
@@ -1140,7 +1159,7 @@ test("consolidateGateFanin fails closed on a missing, wrong-execution, wrong-uni
       // Written at the plan unit's receipt path, carrying the wrong identity.
       if (receipt) await writeEmitPlanReceipt(planDir, unit, receipt);
       await assert.rejects(
-        () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, receiptTmpRoot: planDir }),
+        () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, tmpRoot: planDir, receiptTmpRoot: planDir }),
         (err) => reason.test(err.message) && /incomplete delivery evidence/.test(err.message),
       );
     }));
@@ -1158,7 +1177,7 @@ test("consolidateGateFanin classifies a matching receipt without a post-pull res
     await writeEmitPlanReceipt(planDir);
     await writeEmitPlanReceipt(planDir, docsUnit);
     await assert.rejects(
-      () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, receiptTmpRoot: planDir }),
+      () => consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD, tmpRoot: planDir, receiptTmpRoot: planDir }),
       /interrupted reviewer: unit review-docs .*no post-pull result for angle\(s\) docs/,
     );
   }));
@@ -1285,11 +1304,13 @@ test("consolidateGateFanin accepts an emit-plan headSha that differs only in cas
       try {
         const upper = { ...matchingEmitPlan(), headSha: EMIT_HEAD.toUpperCase() };
         await writeEmitPlanReceipt(planDir);
+        await writeEmitPlanLayoutRecord(planDir);
         const result = await consolidateGateFanin({
           findingsDir: dir,
           emitPlan: await writeEmitPlan(planDir, upper),
           gate: "review",
           headSha: EMIT_HEAD,
+          tmpRoot: planDir,
           receiptTmpRoot: planDir,
         });
         assert.equal(result.ok, true);
@@ -1373,6 +1394,7 @@ test("consolidateGateFanin normalizes a programmatic gate: 'REVIEW' and processe
         const unit = { ...matchingEmitPlan().units[0], scope: "review-scope", angles: ["scope"], workOrderRef: `review:o/r#7:review:${TELEMETRY_HEAD}:review-scope` };
         const planPath = await writeEmitPlan(planDir, { ...matchingEmitPlan(), headSha: TELEMETRY_HEAD, units: [unit] });
         await writeEmitPlanReceipt(planDir, unit);
+        await writeEmitPlanLayoutRecord(planDir, unit, "review", TELEMETRY_HEAD);
         // A cache-telemetry artifact stamped gate: "review" (this normalized
         // round's real gate). Under the old bug, gate: "REVIEW" reached the
         // cache-telemetry gate compare as the raw "REVIEW" string and was
@@ -1400,6 +1422,7 @@ test("consolidateGateFanin normalizes a programmatic gate: 'REVIEW' and processe
           cacheTelemetry: telemetryPath,
           gate: "REVIEW",
           headSha: TELEMETRY_HEAD,
+          tmpRoot: planDir,
           receiptTmpRoot: planDir,
         });
         // 1. The uppercase spelling passed the emit-plan key check (the guard
@@ -1426,12 +1449,14 @@ test("consolidateGateFanin normalizes guarded gates but preserves gate pass-thro
       try {
         const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
         await writeEmitPlanReceipt(planDir);
+        await writeEmitPlanLayoutRecord(planDir);
         // Padded spelling: key check passes, gate normalized to "review".
         const result = await consolidateGateFanin({
           findingsDir: dir,
           emitPlan: planPath,
           gate: "  review  ",
           headSha: EMIT_HEAD,
+          tmpRoot: planDir,
           receiptTmpRoot: planDir,
         });
         assert.equal(result.ok, true);
@@ -2173,7 +2198,7 @@ test("parseConsolidateFaninCliArgs rejects a malformed prevVerdict/findings on -
   );
 });
 
-test("consolidateGateFanin never overrides a REAL artifact with a --carried-angles upsert for the same angle", async () => {
+test("consolidateGateFanin never replaces a REAL artifact's findings with a --carried-angles upsert for the same angle", async () => {
   await withMinimalConfigRepoRoot(async (repoRoot) => {
     await withFindingsDir(
       {
@@ -2193,7 +2218,7 @@ test("consolidateGateFanin never overrides a REAL artifact with a --carried-angl
         });
         assert.equal(result.angles.length, 1);
         assert.equal(result.angles[0].findingCount, 1, "the real artifact's finding must survive, not be replaced by the synthetic clean upsert");
-        assert.equal(result.angles[0].carriedFromHead, undefined, "a REAL artifact's entry is never marked carried");
+        assert.equal(result.angles[0].carriedFromHead, "a".repeat(40), "a declared carried angle's artifact takes provenance from the validated carry proof");
       },
     );
   });
@@ -3482,6 +3507,29 @@ test("consolidateGateFanin exempts a declared carried-forward angle from the hea
   });
 });
 
+test("consolidateGateFanin stamps carriedFromHead on an existing carried artifact only when its headSha is not the current head", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      {
+        "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: HEAD_A },
+        "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_B },
+      },
+      async (dir) => {
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          headSha: HEAD_A,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["coverage", "scope"],
+          carryForwardPlan: JSON.parse(carryForwardPlanJson(["coverage", "scope"], { carriedFromHead: HEAD_B })).carried,
+        });
+        assert.equal(result.angles.find((x) => x.angle === "coverage").carriedFromHead, HEAD_B);
+        assert.equal(result.angles.find((x) => x.angle === "scope").carriedFromHead, undefined);
+      },
+    );
+  });
+});
+
 test("consolidateGateFanin without --head-sha keeps the pre-stamp behavior for unstamped artifacts", async () => {
   await withFindingsDir(
     { "scope.json": { angle: "scope", verdict: "clean", findings: [] } },
@@ -4588,4 +4636,335 @@ test("#2709 AC5: an archived malformed record still triggers the retired-head re
     await writeFile(path.join(dir, `checkpoint-dispatch-prompt-draft-gate-coverage-${HEAD_A}.json`), "{ malformed");
   });
   assert.match(error?.message ?? "", /retired with archived dispatch records.*fresh --emit-plan/);
+});
+
+// ---------------------------------------------------------------------------
+// #2526 slice 1: fan-out provenance derived from head-stamped artifacts, the
+// emit plan and the carry-forward plan; keyed fan-in ledger; records-floor.
+// ---------------------------------------------------------------------------
+
+const PROV_HEAD = "d4".repeat(20);
+const PRIOR_HEAD = "b".repeat(40);
+const fresh = (angle, headSha = PROV_HEAD) => ({ angle, verdict: "clean", findings: [], headSha });
+const unitOf = (angles, group, executionIdentity) => ({ angles, group, executionIdentity });
+
+test("deriveFaninProvenance: a whole singleton unit records its dispatchId and no group key", () => {
+  const p = deriveFaninProvenance([fresh("scope")], { units: [unitOf(["scope"], null, "e0")] }, PROV_HEAD, undefined);
+  assert.deepEqual(p, { distinctReviewers: 1, perAngle: [{ angle: "scope", dispatchId: "e0" }] });
+  assert.equal("group" in p.perAngle[0], false);
+});
+
+test("deriveFaninProvenance: a grouped unit records the trimmed group on every angle, one reviewer", () => {
+  const p = deriveFaninProvenance([fresh("scope"), fresh("coverage")], { units: [unitOf(["scope", "coverage"], " g ", "e0")] }, PROV_HEAD);
+  assert.deepEqual(p.perAngle, [{ angle: "scope", dispatchId: "e0", group: "g" }, { angle: "coverage", dispatchId: "e0", group: "g" }]);
+  assert.equal(p.distinctReviewers, 1);
+});
+
+test("deriveFaninProvenance: a cap-split unit with a one-angle tail keeps the group and counts two reviewers", () => {
+  const head = ["a1", "a2", "a3", "a4", "a5"];
+  const p = deriveFaninProvenance([...head, "a6"].map((a) => fresh(a)), { units: [unitOf(head, "g", "e0"), unitOf(["a6"], "g", "e1")] }, PROV_HEAD);
+  assert.equal(p.perAngle.length, 6);
+  assert.deepEqual(p.perAngle[5], { angle: "a6", dispatchId: "e1", group: "g" });
+  assert.equal(p.distinctReviewers, 2);
+});
+
+test("deriveFaninProvenance: a carried angle records the prior reviewer identity, carriedFromHead and carriedVerdict", () => {
+  const carried = { angle: "coverage", verdict: "findings_present", findings: [], carriedFromHead: PRIOR_HEAD };
+  const plan = [{ angle: " coverage ", carriedFromHead: PRIOR_HEAD, reviewer: "rev-x", model: "m1", dispatchId: "  " }];
+  const p = deriveFaninProvenance([fresh("scope"), carried], { units: [unitOf(["scope"], null, "e0")] }, PROV_HEAD, plan);
+  assert.deepEqual(p.perAngle[1], { angle: "coverage", reviewer: "rev-x", model: "m1", carriedFromHead: PRIOR_HEAD, carriedVerdict: "findings_present" });
+  assert.equal(p.distinctReviewers, 2);
+});
+
+test("deriveFaninProvenance: duplicate carried angles pair identity from the first plan entry, like the minted artifact", () => {
+  const carried = { angle: "coverage", verdict: "clean", findings: [], carriedFromHead: PRIOR_HEAD };
+  const plan = [{ angle: "coverage", carriedFromHead: PRIOR_HEAD, reviewer: "r1" }, { angle: "coverage", carriedFromHead: PROV_HEAD, reviewer: "r2" }];
+  const p = deriveFaninProvenance([carried], { units: [] }, PROV_HEAD, plan);
+  assert.deepEqual(p.perAngle, [{ angle: "coverage", reviewer: "r1", carriedFromHead: PRIOR_HEAD, carriedVerdict: "clean" }]);
+});
+
+test("deriveFaninProvenance: a planned angle without a head-stamped fresh artifact gets no fresh entry", () => {
+  const unit = unitOf(["scope", "coverage", "docs"], "g", "e0");
+  const artifacts = [fresh("scope"), fresh("coverage", PRIOR_HEAD), { angle: "docs", verdict: "clean", findings: [] }];
+  const p = deriveFaninProvenance(artifacts, { units: [unit] }, PROV_HEAD);
+  assert.deepEqual(p.perAngle.map((e) => e.angle), ["scope"]);
+  assert.deepEqual(deriveFaninProvenance([], { units: [unit] }, PROV_HEAD), { distinctReviewers: 0, perAngle: [] });
+});
+
+// Builds a complete fan-out round on disk (artifacts, plan, receipts, one dispatch record) and a
+// repo root whose .devloops fixes the angle contract so write-gate-findings-log.mjs can validate it.
+async function withProvenanceRound({ units, fanout }, fn) {
+  await withTempDir(async (root) => {
+    const gate = "draft_gate";
+    await writeFile(path.join(root, ".devloops"), `version: 1\ngates:\n  draft:\n    angles:\n      - scope\n      - coverage\n      - name: pr-description\n        mandatory: true\n      - name: holistic\n        enabled: false\n  fanout:\n${fanout}\n`, "utf8");
+    const dir = path.join(root, "findings");
+    await mkdir(dir, { recursive: true });
+    const planUnits = units.map((u, i) => ({
+      scope: `draft-gate-u${i}`, angles: u.angles, group: u.group, promptPath: "tmp/x",
+      workOrderRef: `review:owner/repo#42:${gate}:${PROV_HEAD}:draft-gate-u${i}`, workOrderDigest: "sha256:d", executionIdentity: u.executionIdentity,
+    }));
+    for (const unit of planUnits) {
+      await writeEmitPlanReceipt(root, unit);
+      for (const angle of unit.angles) await writeFile(path.join(dir, `${angle}.json`), JSON.stringify(fresh(angle)), "utf8");
+    }
+    await writeEmitPlanLayoutRecord(root, planUnits[0], gate, PROV_HEAD);
+    const planPath = await writeEmitPlan(root, { ok: true, gate, headSha: PROV_HEAD, repo: "owner/repo", pr: 42, count: planUnits.length, units: planUnits });
+    const base = { findingsDir: dir, emitPlan: planPath, gate, headSha: PROV_HEAD, tmpRoot: root, receiptTmpRoot: root, repoRoot: root };
+    await fn({ root, base, ledgerOut: path.join(root, "out", "ledger.json") });
+  });
+}
+
+// The derived provenance must pass write-gate-findings-log.mjs unchanged, through
+// the findings-file wrapper and the emit-plan guard.
+async function assertWriterAccepts({ root, base, ledgerOut }, expectedReviewers) {
+  const ledger = JSON.parse(await readFile(ledgerOut, "utf8"));
+  assert.equal(ledger.provenance.distinctReviewers, expectedReviewers);
+  assert.equal(JSON.stringify(ledger.provenance).includes('"group":null'), false);
+  const written = await writeGateFindingsLog({
+    repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, verdict: ledger.overallVerdict, executionMode: "fanout_fanin",
+    findingsFile: ledgerOut, emitPlan: base.emitPlan, tmpRoot: path.join(root, "ledgers"),
+  }, { repoRoot: root });
+  assert.equal(written.ok, true);
+  assert.deepEqual(written.log.provenance.perAngle, ledger.provenance.perAngle);
+}
+
+test("#2526: grouped default derives provenance the writer accepts, and the keyed ledger is byte-identical to --ledger-out", async () => {
+  const fanout = "    groups:\n      - name: sc\n        angles: [scope, coverage]\n      - name: pd\n        angles: [pr-description]";
+  const units = [unitOf(["scope", "coverage"], "sc", "r1-u0"), unitOf(["pr-description"], null, "r1-u1")];
+  await withProvenanceRound({ units, fanout }, async (round) => {
+    const result = await consolidateGateFanin({ ...round.base, ledgerOut: round.ledgerOut });
+    assert.equal(result.ok, true);
+    await assertWriterAccepts(round, 2);
+    const keyed = buildGateFaninLedgerPath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, tmpRoot: round.root });
+    assert.equal(await readFile(keyed, "utf8"), await readFile(round.ledgerOut, "utf8"));
+  });
+});
+
+test("#2526: mode per-angle derives one dispatch identity per angle that the writer accepts", async () => {
+  const units = [unitOf(["scope"], null, "r1-u0"), unitOf(["coverage"], null, "r1-u1"), unitOf(["pr-description"], null, "r1-u2")];
+  await withProvenanceRound({ units, fanout: "    mode: per-angle" }, async (round) => {
+    await consolidateGateFanin({ ...round.base, ledgerOut: round.ledgerOut });
+    await assertWriterAccepts(round, 3);
+  });
+});
+
+test("#2526: --emit-plan without --ledger-out still writes the keyed fan-in ledger; without --emit-plan the ledger has no provenance", async () => {
+  const units = [unitOf(["scope"], null, "r1-u0")];
+  await withProvenanceRound({ units, fanout: "    mode: per-angle" }, async ({ root, base, ledgerOut }) => {
+    await consolidateGateFanin(base);
+    const keyed = buildGateFaninLedgerPath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, tmpRoot: root });
+    assert.equal(JSON.parse(await readFile(keyed, "utf8")).provenance.perAngle[0].dispatchId, "r1-u0");
+    await consolidateGateFanin({ findingsDir: base.findingsDir, ledgerOut });
+    assert.equal("provenance" in JSON.parse(await readFile(ledgerOut, "utf8")), false);
+  });
+});
+
+test("#2526 records-floor: a fresh-unit plan with zero dispatch-prompt records fails closed before any write", async () => {
+  const units = [unitOf(["scope"], null, "r1-u0")];
+  await withProvenanceRound({ units, fanout: "    mode: per-angle" }, async ({ root, base, ledgerOut }) => {
+    await rm(dispatchPromptLayoutRecordPath(root, "draft-gate-u0", PROV_HEAD));
+    const out = path.join(root, "out", "findings.json");
+    await assert.rejects(
+      () => consolidateGateFanin({ ...base, out, ledgerOut }),
+      /GATE-EXEC-FANOUT-DISPATCH-EMIT: --emit-plan has 1 fresh unit\(s\) .* zero draft_gate dispatch-prompt records/,
+    );
+    assert.equal(existsSync(out), false);
+    assert.equal(existsSync(ledgerOut), false);
+    assert.equal(existsSync(buildGateFaninLedgerPath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, tmpRoot: root })), false);
+  });
+});
+
+test("#2526 records-floor: only the other gate's dispatch-prompt record at the head still fails closed, and a stale keyed ledger is removed", async () => {
+  const units = [unitOf(["scope"], null, "r1-u0")];
+  await withProvenanceRound({ units, fanout: "    mode: per-angle" }, async ({ root, base, ledgerOut }) => {
+    await rm(dispatchPromptLayoutRecordPath(root, "draft-gate-u0", PROV_HEAD));
+    // A record exists at the head, but for the other gate only.
+    await writeEmitPlanLayoutRecord(root, { scope: "pre-approval-gate-u0", angles: ["scope"] }, "pre_approval_gate", PROV_HEAD);
+    const keyed = buildGateFaninLedgerPath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, tmpRoot: root });
+    await mkdir(path.dirname(keyed), { recursive: true });
+    await writeFile(keyed, "stale", "utf8");
+    const out = path.join(root, "out", "findings.json");
+    await assert.rejects(
+      () => consolidateGateFanin({ ...base, out, ledgerOut }),
+      /GATE-EXEC-FANOUT-DISPATCH-EMIT: --emit-plan has 1 fresh unit\(s\) .* zero draft_gate dispatch-prompt records/,
+    );
+    assert.equal(existsSync(out), false);
+    assert.equal(existsSync(ledgerOut), false);
+    assert.equal(existsSync(keyed), false);
+  });
+});
+
+test("#2526 records-floor: a zero-unit carried-only plan still consolidates and carries provenance", async () => {
+  await withTempDir(async (root) => {
+    const gate = "draft_gate";
+    const dir = path.join(root, "findings");
+    await mkdir(dir, { recursive: true });
+    const entry = { angle: "coverage", carriedFromHead: PRIOR_HEAD, reviewer: "rev-x", prevVerdict: "clean", reason: "unchanged" };
+    const planPath = await writeEmitPlan(root, { ok: true, gate, headSha: PROV_HEAD, repo: "owner/repo", pr: 42, pending: true, count: 0, units: [], carried: [entry] });
+    const result = await consolidateGateFanin({
+      findingsDir: dir, emitPlan: planPath, gate, headSha: PROV_HEAD, tmpRoot: root, receiptTmpRoot: root, repoRoot: root,
+      repo: "owner/repo", pr: "42", carriedAngles: ["coverage"], carryForwardPlan: [entry], resolvedAngles: ["coverage"],
+    });
+    assert.equal(result.ok, true);
+    const keyed = JSON.parse(await readFile(buildGateFaninLedgerPath({ repo: "owner/repo", pr: 42, gate, headSha: PROV_HEAD, tmpRoot: root }), "utf8"));
+    assert.deepEqual(keyed.provenance.perAngle, [{ angle: "coverage", reviewer: "rev-x", carriedFromHead: PRIOR_HEAD, carriedVerdict: "clean" }]);
+  });
+});
+
+test("#2526: zero-unit carried-only derived provenance (full identity) is accepted by the writer", async () => {
+  await withTempDir(async (root) => {
+    await writeFile(path.join(root, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - coverage\n      - name: pr-description\n        enabled: false\n      - name: holistic\n        enabled: false\n", "utf8");
+    const gate = "draft_gate";
+    const dir = path.join(root, "findings");
+    await mkdir(dir, { recursive: true });
+    const entry = { angle: "coverage", carriedFromHead: PRIOR_HEAD, reviewer: "rev-x", prevVerdict: "clean", reason: "unchanged" };
+    const planEntries = ["coverage"].map((angle) => ({ ...entry, angle, model: "m1", dispatchId: "d1" }));
+    const planPath = await writeEmitPlan(root, { ok: true, gate, headSha: PROV_HEAD, repo: "owner/repo", pr: 42, pending: true, count: 0, units: [], carried: planEntries });
+    const ledgerOut = path.join(root, "out", "ledger.json");
+    const result = await consolidateGateFanin({
+      findingsDir: dir, emitPlan: planPath, gate, headSha: PROV_HEAD, tmpRoot: root, receiptTmpRoot: root, repoRoot: root,
+      repo: "owner/repo", pr: "42", carriedAngles: ["coverage"], carryForwardPlan: planEntries, resolvedAngles: ["coverage"], ledgerOut,
+    });
+    assert.equal(result.ok, true);
+    const ledger = JSON.parse(await readFile(ledgerOut, "utf8"));
+    assert.deepEqual(ledger.provenance.perAngle.map((e) => [e.angle, e.reviewer, e.model, e.dispatchId]), planEntries.map((e) => [e.angle, "rev-x", "m1", "d1"]));
+    const written = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate, headSha: PROV_HEAD, verdict: ledger.overallVerdict, executionMode: "fanout_fanin",
+      findingsFile: ledgerOut, emitPlan: planPath, tmpRoot: path.join(root, "ledgers"),
+    }, { repoRoot: root });
+    assert.equal(written.ok, true);
+  });
+});
+
+// #2526 review fixes: the keyed fan-in ledger is bound to the verified plan location,
+// and a keyed (durable) ledger target lifts the over-budget --ledger-out requirement.
+async function zeroUnitCarriedPlan(root) {
+  const gate = "draft_gate";
+  const entry = { angle: "coverage", carriedFromHead: PRIOR_HEAD, reviewer: "rev-x", prevVerdict: "clean", reason: "unchanged" };
+  const plan = { ok: true, gate, headSha: PROV_HEAD, repo: "owner/repo", pr: 42, pending: true, count: 0, units: [], carried: [entry] };
+  const planPath = buildGateEmitPlanPath({ repo: "owner/repo", pr: 42, gate, headSha: PROV_HEAD, tmpRoot: root });
+  await mkdir(path.dirname(planPath), { recursive: true });
+  await writeFile(planPath, JSON.stringify(plan), "utf8");
+  const dir = path.join(root, "findings");
+  await mkdir(dir, { recursive: true });
+  const options = {
+    findingsDir: dir, emitPlan: planPath, gate, headSha: PROV_HEAD, tmpRoot: root, receiptTmpRoot: root, repoRoot: root,
+    repo: "owner/repo", pr: "42", carriedAngles: ["coverage"], carryForwardPlan: [entry], resolvedAngles: ["coverage"],
+  };
+  return { options, planPath, keyed: (tmpRoot) => buildGateFaninLedgerPath({ repo: "owner/repo", pr: 42, gate, headSha: PROV_HEAD, tmpRoot }) };
+}
+
+test("#2526 keyed ledger binding: an --emit-plan path equal to the canonical path is accepted, absolute and relative", async () => {
+  await withTempDir(async (root) => {
+    const { options, planPath } = await zeroUnitCarriedPlan(root);
+    assert.equal((await consolidateGateFanin(options)).ok, true);
+    const relative = path.relative(process.cwd(), planPath);
+    assert.equal((await consolidateGateFanin({ ...options, emitPlan: relative })).ok, true);
+  });
+});
+
+test("#2526 keyed ledger binding: a zero-unit plan under another tmp root is refused with no keyed write", async () => {
+  await withTempDir(async (root) => {
+    const other = path.join(root, "other-checkout-tmp");
+    const { options, keyed } = await zeroUnitCarriedPlan(root);
+    await assert.rejects(
+      () => consolidateGateFanin({ ...options, tmpRoot: other, receiptTmpRoot: other }),
+      /not the canonical emit-plan path/,
+    );
+    assert.equal(existsSync(keyed(other)), false);
+    assert.equal(existsSync(keyed(root)), false);
+  });
+});
+
+test("#2526 keyed ledger binding: a fresh-unit plan under another tmp root is refused before any write", async () => {
+  const units = [unitOf(["scope"], null, "r1-u0")];
+  await withProvenanceRound({ units, fanout: "    mode: per-angle" }, async ({ root, base, ledgerOut }) => {
+    const other = path.join(root, "other-checkout-tmp");
+    await assert.rejects(
+      () => consolidateGateFanin({ ...base, tmpRoot: other, ledgerOut }),
+      /not the canonical emit-plan path/,
+    );
+    assert.equal(existsSync(ledgerOut), false);
+  });
+});
+
+test("#2526 keyed ledger binding: a plan whose repo/pr map to another pr directory than its location is refused", async () => {
+  const units = [unitOf(["scope"], null, "r1-u0")];
+  await withProvenanceRound({ units, fanout: "    mode: per-angle" }, async ({ base, ledgerOut }) => {
+    // Re-stamp the plan as pr 43 in place: the file stays in the pr-42 directory.
+    const plan = JSON.parse(await readFile(base.emitPlan, "utf8"));
+    await writeFile(base.emitPlan, JSON.stringify({ ...plan, pr: 43 }), "utf8");
+    await assert.rejects(() => consolidateGateFanin({ ...base, ledgerOut }), /not the canonical emit-plan path/);
+    assert.equal(existsSync(ledgerOut), false);
+  });
+});
+
+test("#2526: an over-budget --emit-plan round without --ledger-out succeeds with the durable keyed ledger", async () => {
+  await withTempDir(async (root) => {
+    const { options, keyed } = await zeroUnitCarriedPlan(root);
+    const files = wideAngleFiles({ angleCount: 25, findingsPerAngle: 30 });
+    for (const [name, body] of Object.entries(files)) await writeFile(path.join(options.findingsDir, name), JSON.stringify({ ...body, headSha: PROV_HEAD }), "utf8");
+    const result = await consolidateGateFanin(options);
+    assert.equal(result.ok, true);
+    assert.equal(result.commentBudgetExceeded, true);
+    assert.equal(JSON.parse(await readFile(keyed(root), "utf8")).findings.length, 25 * 30);
+  });
+});
+
+test("#2526: a declared carried angle with a prior-head artifact keeps its findings and derives carried provenance the writer accepts", async () => {
+  await withTempDir(async (root) => {
+    await writeFile(path.join(root, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - coverage\n      - name: pr-description\n        enabled: false\n      - name: holistic\n        enabled: false\n", "utf8");
+    const { options, planPath } = await zeroUnitCarriedPlan(root);
+    const finding = { severity: "medium", summary: "prior open finding", disposition: "deferred" };
+    await writeFile(path.join(options.findingsDir, "coverage.json"), JSON.stringify({ angle: "coverage", verdict: "findings_present", findings: [finding], headSha: PRIOR_HEAD }), "utf8");
+    const ledgerOut = path.join(root, "out", "ledger.json");
+    const carryForwardPlan = [{ ...options.carryForwardPlan[0], prevVerdict: "findings_present", findings: [finding] }];
+    await writeFile(planPath, JSON.stringify({ ...JSON.parse(await readFile(planPath, "utf8")), carried: carryForwardPlan }), "utf8");
+    const result = await consolidateGateFanin({ ...options, carryForwardPlan, ledgerOut });
+    assert.equal(result.angles[0].carriedFromHead, PRIOR_HEAD);
+    assert.equal(result.findings.length, 1);
+    const ledger = JSON.parse(await readFile(ledgerOut, "utf8"));
+    assert.deepEqual(ledger.provenance.perAngle, [{ angle: "coverage", reviewer: "rev-x", carriedFromHead: PRIOR_HEAD, carriedVerdict: "findings_present" }]);
+    const written = await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, verdict: ledger.overallVerdict, executionMode: "fanout_fanin",
+      findingsFile: ledgerOut, emitPlan: planPath, tmpRoot: path.join(root, "ledgers"),
+    }, { repoRoot: root });
+    assert.equal(written.ok, true);
+  });
+});
+
+test("#2526 records-floor: a directory named like a dispatch-prompt record does not satisfy the floor", async () => {
+  const units = [unitOf(["scope"], null, "r1-u0")];
+  await withProvenanceRound({ units, fanout: "    mode: per-angle" }, async ({ root, base }) => {
+    const record = dispatchPromptLayoutRecordPath(root, "draft-gate-u0", PROV_HEAD);
+    await rm(record);
+    await mkdir(record);
+    await assert.rejects(() => consolidateGateFanin(base), /zero draft_gate dispatch-prompt records/);
+  });
+});
+
+test("#2526: --out aliasing the keyed ledger is refused without overwriting it (symlink alias too)", async () => {
+  await withTempDir(async (root) => {
+    const { options, keyed } = await zeroUnitCarriedPlan(root);
+    const keyedPath = keyed(root);
+    for (const out of [keyedPath, path.join(root, "alias.json")]) {
+      if (out !== keyedPath) {
+        await mkdir(path.dirname(keyedPath), { recursive: true });
+        await writeFile(keyedPath, "x", "utf8");
+        await symlink(keyedPath, out);
+      }
+      await assert.rejects(() => consolidateGateFanin({ ...options, out }), /--out resolves to a ledger target/);
+      assert.equal(JSON.parse(await readFile(keyedPath, "utf8")).overallVerdict, "clean");
+    }
+  });
+});
+
+test("#2526: a withheld over-budget round with --out at the keyed ledger is refused and does not delete it", async () => {
+  await withTempDir(async (root) => {
+    const { options, keyed } = await zeroUnitCarriedPlan(root);
+    const files = wideAngleFiles({ angleCount: 25, findingsPerAngle: 30 });
+    for (const [name, body] of Object.entries(files)) await writeFile(path.join(options.findingsDir, name), JSON.stringify({ ...body, headSha: PROV_HEAD }), "utf8");
+    await assert.rejects(() => consolidateGateFanin({ ...options, out: keyed(root) }), /--out resolves to a ledger target/);
+    assert.equal(JSON.parse(await readFile(keyed(root), "utf8")).findings.length, 25 * 30);
+  });
 });
