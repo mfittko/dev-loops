@@ -32,7 +32,7 @@ import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveCla
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName, orderAnglesByCatalog, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
-import { anchorBaseRef, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
+import { anchorBaseRef } from "../lib/anchor-base-ref.mjs";
 import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";

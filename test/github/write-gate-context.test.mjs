@@ -8276,7 +8276,7 @@ test("issue 2885: a SHA, revision-expression or non-origin remote --base records
   }
 });
 
-test("issue 2885: a failed preflight fetch exits 1 with base_fetch_failed, the normalized base and no artifact", async () => {
+test("issue 2885: a failed preflight fetch exits 1 with base_fetch_failed, the raw base and no artifact", async () => {
   const { root, clone, headSha } = await makeOriginFixture();
   try {
     let received;
