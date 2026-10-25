@@ -8244,12 +8244,32 @@ test("issue 2885: write-gate-context records baseFreshness on a current base and
     const realWrite = process.stderr.write.bind(process.stderr);
     let errText = "";
     process.stderr.write = (chunk) => { errText += String(chunk); return true; };
-    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
-    process.stderr.write = realWrite;
-    assert.equal(process.exitCode, 1);
-    assert.match(errText, /base_stale_integrate_first[^]*newer base commit[^]*resolve-pr-conflicts/u);
-    process.exitCode = before;
+    try {
+      await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+      assert.equal(process.exitCode, 1);
+      assert.match(errText, /base_stale_integrate_first[^]*newer base commit[^]*resolve-pr-conflicts/u);
+    } finally {
+      process.stderr.write = realWrite;
+      process.exitCode = before;
+    }
     assert.equal(existsSync(path.join(clone, "tmp/gate-context")), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885: a SHA or revision-expression --base skips the freshness preflight and records unchecked", async () => {
+  const { root, clone, headSha } = await makeOriginFixture();
+  try {
+    const sha = git(clone, ["rev-parse", "HEAD~1"]).trim();
+    for (const base of [sha, "HEAD~1"]) {
+      await rm(path.join(clone, "tmp"), { recursive: true, force: true });
+      const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "review", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
+      const never = async () => { throw new Error("preflight must not run for a non-branch base"); };
+      await mainImpl(argv, { repoRoot: clone, run: stubGhRun, checkBaseFreshness: never });
+      const artifact = await readGateContext({ repo: "owner/repo", pr: 71, gate: "review", headSha }, { repoRoot: clone });
+      assert.deepEqual(artifact.baseFreshness, { status: "unchecked", base });
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

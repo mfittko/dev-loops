@@ -15,7 +15,11 @@ const lines = (s) => s.split(/\r?\n/u).map((l) => l.trim()).filter((l) => l.leng
  */
 export async function checkBaseFreshness({ base, cwd = process.cwd(), env = process.env, gitCommand = "git" }) {
   const git = async (args) => lines((await runCommand(gitCommand, args, { cwd, env })).stdout);
-  await runCommand(gitCommand, ["fetch", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`], { cwd, env });
+  try {
+    await runCommand(gitCommand, ["fetch", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`], { cwd, env });
+  } catch (error) {
+    return { ok: false, error: "base_fetch_failed", base, message: error?.message ?? String(error) };
+  }
   const newerCommits = await git(["log", `HEAD..origin/${base}`, "--oneline"]);
   if (newerCommits.length === 0) return { ok: true, status: "base_current", base };
   const touched = new Set(await git(["diff", "--name-only", `origin/${base}...HEAD`]));
@@ -29,7 +33,6 @@ export async function checkBaseFreshness({ base, cwd = process.cwd(), env = proc
     remedy: `Merge origin/${base} into the branch via scripts/loop/resolve-pr-conflicts.mjs. Never rebase a pushed branch. Never force-push. Push the merge, re-derive spec identity, and re-validate at the new head.`,
   };
 }
-
 
 export function parseRemoteFreshnessGuardCliArgs(argv) {
   const options = { help: false, branch: undefined, base: undefined };
@@ -58,7 +61,8 @@ export function parseRemoteFreshnessGuardCliArgs(argv) {
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  if (options.branch === undefined && options.base === undefined) throw parseError("--branch <name> is required");
+  if (options.branch !== undefined && options.base !== undefined) throw parseError("--branch and --base are mutually exclusive");
+  if (options.branch === undefined && options.base === undefined) throw parseError("--branch <name> or --base <name> is required");
   return options;
 }
 

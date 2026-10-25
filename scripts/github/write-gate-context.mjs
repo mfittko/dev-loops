@@ -32,7 +32,7 @@ import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveCla
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName, orderAnglesByCatalog, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
-import { anchorBaseRef } from "../lib/anchor-base-ref.mjs";
+import { anchorBaseRef, isBranchName } from "../lib/anchor-base-ref.mjs";
 import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";
@@ -3553,9 +3553,20 @@ export async function main(
       // Otherwise a stale CWD silently yields the wrong diff (caught only after
       // fan-out today). Throws → caught below → exit 1, no artifact written.
       assertWorktreeAtHead(options.headSha, { repoRoot });
-      const freshness = await checkBaseFreshness({ base: options.base.replace(/^origin\//u, ""), cwd: repoRoot, env });
-      if (!freshness.ok) throw new Error(`${freshness.error}: origin/${freshness.base} has ${freshness.newerCommits.length} commit(s) the PR head lacks (${freshness.newerCommits.join("; ")}); files differing only because of the stale base: ${freshness.foreignFiles.join(", ") || "none"}. ${freshness.remedy}`);
-      options.baseFreshness = { status: freshness.status, base: freshness.base };
+      // SHAs and revision expressions (HEAD~3, main^) have no origin branch to refresh.
+      const branch = options.base.replace(/^origin\//u, "");
+      if (isBranchName(branch, { allowSlash: true })) {
+        const freshness = await checkBaseFreshness({ base: branch, cwd: repoRoot, env });
+        if (!freshness.ok) {
+          if (freshness.error !== "base_stale_integrate_first") throw new Error(`${freshness.error}: ${freshness.message}`);
+          const shown = freshness.newerCommits.slice(0, 5).join("; ");
+          const more = freshness.newerCommits.length > 5 ? ` (+${freshness.newerCommits.length - 5} more)` : "";
+          throw new Error(`${freshness.error}: origin/${freshness.base} has ${freshness.newerCommits.length} commit(s) the PR head lacks (${shown}${more}); files differing only because of the stale base: ${freshness.foreignFiles.join(", ") || "none"}. ${freshness.remedy}`);
+        }
+        options.baseFreshness = { status: freshness.status, base: freshness.base };
+      } else {
+        options.baseFreshness = { status: "unchecked", base: options.base };
+      }
       options.base = anchorBaseRef(options.base, { repoRoot });
       diff = captureDiffFromBase(options.base, { repoRoot });
       const scope = await resolveDiffScope(

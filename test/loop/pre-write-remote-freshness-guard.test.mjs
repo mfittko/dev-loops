@@ -49,7 +49,7 @@ async function writeGitStub(tempDir, { commits = [], logFile } = {}) {
 }
 
 test("parseRemoteFreshnessGuardCliArgs rejects missing --branch", () => {
-  assert.throws(() => parseRemoteFreshnessGuardCliArgs([]), /--branch .* is required/i);
+  assert.throws(() => parseRemoteFreshnessGuardCliArgs([]), /--branch <name> or --base <name> is required/u);
 });
 
 test("parseRemoteFreshnessGuardCliArgs parses --branch", () => {
@@ -270,8 +270,26 @@ test("runCli --base exits nonzero when stale and rejects a call with neither --b
     assert.equal(result.error, "base_stale_integrate_first");
     assert.equal(process.exitCode, 1);
     process.exitCode = saved;
-    assert.throws(() => parseRemoteFreshnessGuardCliArgs([]), /--branch <name> is required/u);
+    assert.throws(() => parseRemoteFreshnessGuardCliArgs([]), /--branch <name> or --base <name> is required/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("checkBaseFreshness returns a typed base_fetch_failed error when the fetch fails", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "freshness-nofetch-"));
+  try {
+    execFileSync("git", ["init", "-q", root]);
+    const result = await checkBaseFreshness({ base: "main", cwd: root });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "base_fetch_failed");
+    assert.equal(result.base, "main");
+    assert.equal(typeof result.message, "string");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("parseRemoteFreshnessGuardCliArgs rejects --branch together with --base", () => {
+  assert.throws(() => parseRemoteFreshnessGuardCliArgs(["--branch", "a", "--base", "b"]), /mutually exclusive/u);
 });
