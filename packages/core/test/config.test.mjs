@@ -5542,6 +5542,49 @@ test("parseGitNumstat skips excluded paths, counts binaries as 0 lines, and fail
 // resolveGateAnglesDynamic tests
 // ============================================================================
 
+describe("resolveGateAnglesDynamic: SECURITY_SENSITIVE_SEAM threat-model override", () => {
+  const config = {
+    version: 1,
+    gates: {
+      draft: { angles: ["scope", "correctness", { name: "threat-model", enabled: false }, { name: "yagni", enabled: false }] },
+    },
+  };
+  const seamDiff = {
+    nameStatusOutput: "M\tscripts/x.mjs",
+    diffOutput: "diff --git a/scripts/x.mjs b/scripts/x.mjs\n--- a/scripts/x.mjs\n+++ b/scripts/x.mjs\n@@ -1 +1,2 @@\n a\n+spawn(cmd);\n",
+  };
+  const plainDiff = {
+    nameStatusOutput: "M\tscripts/x.mjs",
+    diffOutput: "diff --git a/scripts/x.mjs b/scripts/x.mjs\n--- a/scripts/x.mjs\n+++ b/scripts/x.mjs\n@@ -1 +1,2 @@\n a\n+const b = 1;\n",
+  };
+
+  test("a seam diff keeps threat-model despite enabled:false and records an added entry", async () => {
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: seamDiff });
+    assert.ok(result.recommendedAngles.includes("threat-model"));
+    assert.deepEqual(result.addedAngles, ["threat-model"]);
+    assert.equal(result.addedReasons["threat-model"], "SECURITY_SENSITIVE_SEAM");
+    assert.ok(resolveGateAngleContract(config, "draft").pool.includes("threat-model"));
+  });
+
+  test("a seam diff outside the first gate round keeps the config drop", async () => {
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: seamDiff, seamFirstRound: false });
+    assert.ok(!result.recommendedAngles.includes("threat-model"));
+  });
+
+  test("a diff without the seam keeps the config drop", async () => {
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: plainDiff });
+    assert.ok(!result.recommendedAngles.includes("threat-model"));
+  });
+
+  test("every config-disabled angle absent from the resolved set has a dropped reason", async () => {
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: plainDiff });
+    for (const angle of ["threat-model", "yagni"]) {
+      assert.ok(result.skippedAngles.includes(angle), `${angle} must be dropped`);
+      assert.equal(result.reasons[angle], "config_disabled");
+    }
+  });
+});
+
 describe("resolveGateAnglesDynamic", () => {
   test("returns full angle list when dynamicAngles is false", async () => {
     const config = {
@@ -5610,7 +5653,7 @@ describe("resolveGateAnglesDynamic", () => {
     });
     assert.equal(result.dynamicAnglesActive, true);
     assert.ok(!result.recommendedAngles.includes("kiss"));
-    assert.ok(!result.skippedAngles.includes("kiss")); // excluded before dynamic resolution
+    assert.equal(result.reasons.kiss, "config_disabled"); // excluded before dynamic resolution, recorded as dropped
   });
 
   test("returns reasons for skipped angles", async () => {
