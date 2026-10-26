@@ -28,7 +28,11 @@ import { isCommitContainedByHead } from "./_commit-containment.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
 
 // File the gate detector writes the body finding to and the judge emit pins.
-export const copilotBodyJudgePath = ({ tmpRoot, repo, pr, headSha }) => path.join(tmpRoot, "gate-judge", repoSlugFor(repo), `pr-${pr}`, `copilot-body-${headSha}.json`);
+export const copilotBodyJudgePath = ({ tmpRoot, repo, pr, headSha }) => {
+  if (!Number.isInteger(Number(pr)) || Number(pr) <= 0) throw new Error(`copilotBodyJudgePath: pr must be a positive integer, got ${pr}`);
+  if (typeof headSha !== "string" || !/^[0-9a-f]{40,64}$/.test(headSha)) throw new Error(`copilotBodyJudgePath: headSha must be 40-64 lowercase hex chars, got ${headSha}`);
+  return path.join(tmpRoot, "gate-judge", repoSlugFor(repo), `pr-${Number(pr)}`, `copilot-body-${headSha}.json`);
+};
 
 const MARKER_RE = /<!--\s*dev-loops:copilot-body-disposition\s+review=(\S+)\s+head=([0-9a-fA-F]{40})\s+(?:fix=([0-9a-fA-F]{40})|operator)\s*-->/;
 
@@ -142,10 +146,12 @@ export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewI
 // The exact operator marker line for a review, and the angle-result-shaped
 // finding the judge adjudicates for a body-only Copilot review.
 const markerLineFor = (reviewId, headSha) => `<!-- dev-loops:copilot-body-disposition review=${reviewId} head=${headSha} operator -->`;
-function buildJudgeFinding(review) {
+export function buildJudgeFinding(review) {
   const text = typeof review?.body === "string" ? review.body.trim() : "";
-  const summary = text.split("\n")[0].slice(0, 300) || "Copilot review body feedback";
-  return { angle: "copilot-body", findings: [{ severity: "medium", summary, recommendation: text.slice(0, 4000) }] };
+  const firstLine = text.split("\n").map((line) => line.trim()).find((line) => line && !line.startsWith("#"));
+  const severity = classifyCopilotReviewBodyDisposition(review?.state, review?.body) === COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK ? "low" : "medium";
+  const recommendation = text.length > 4000 ? `${text.slice(0, 4000)} [truncated]` : text;
+  return { angle: "copilot-body", findings: [{ severity, summary: (firstLine ?? "Copilot review body feedback").slice(0, 300), recommendation }] };
 }
 
 const BODY_ONLY_BLOCKING_DISPOSITIONS = new Set([

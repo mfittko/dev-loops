@@ -43,7 +43,7 @@ import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 // Gate-coordination terminal stop actions where the dev-loop run is completing
 // or stopping (success OR stop). The runner-coordination lock is auto-released
@@ -1014,21 +1014,19 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     currentHeadSha,
   });
   const reviewSummary = summarizeCopilotReviews(prData?.reviews, { headSha: currentHeadSha, draftGateResetAtMs });
-  // The gate-ENTRY body-feedback block must consume the same evaluateCopilotConvergence
+  // The gate-ENTRY body-feedback check consumes the same evaluateCopilotConvergence
   // eval the MERGE gate uses, not the raw current-head body finding.
   // `hasBodyFindingOnCurrentHead` is true for BOTH 🟡 CHANGES_RECOMMENDED
-  // and 🔵 NEEDS_CLOSER_LOOK, but evaluateCopilotConvergence treats a thread-clean
-  // 🔵 as converged (ok:true). Block on the body ONLY when convergence fails
-  // (🟡 / unrecognized / unknown head) — fail closed. Unresolved THREADS still
-  // block independently via unresolvedThreadCount, so a 🔵/🟡 with an open thread
-  // still blocks (no regression).
+  // and 🔵 NEEDS_CLOSER_LOOK. A body-only failure no longer blocks entry
+  // (the judge gets it); unresolved THREADS still block independently via
+  // unresolvedThreadCount.
   //
   // A trusted copilot-body-disposition record naming the review that raised
-  // the body finding clears both the loop's body-feedback signal and this
-  // gate-entry block. The resolver is shared with detect-copilot-loop-state.mjs
-  // and request-copilot-review.mjs so all three agree. An earlier-head
-  // body-only finding without a record also fails the convergence check, so
-  // the round-cap grant in the evaluator cannot pass it.
+  // the body finding clears it. The resolver is shared with
+  // detect-copilot-loop-state.mjs and request-copilot-review.mjs. Without a
+  // record, GATE-EXEC-COPILOT-BODY-TO-JUDGE routes a current-head or
+  // earlier-head body-only finding to the judge and gate entry stays open
+  // (see bodyRoutedToJudge below).
   const bodyFeedback = await resolveCurrentHeadBodyFeedback(
     { repo: options.repo, pr: options.pr, headSha: currentHeadSha, reviewSummary, reviewThreads: parsedThreads.threads },
     runtime,
@@ -1040,24 +1038,31 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // GATE-EXEC-COPILOT-BODY-TO-JUDGE: a body-only finding (current or earlier
   // head) with no operator marker goes to the judge and never blocks gate entry.
   const copilotBodyJudgeFinding = bodyFeedback.judgeFinding ?? null;
-  // The judge emit pins this file by default; a stale file for the head is removed.
-  const copilotBodyJudgePathForHead = copilotBodyJudgePath({
-    tmpRoot: resolveGateArtifactTmpRoot(runtime.repoRoot ?? resolveRepoRoot(process.cwd())),
-    repo: options.repo,
-    pr: options.pr,
-    headSha: currentHeadSha,
-  });
+  // The judge emit pins this file by default (keyed by head, shared by both
+  // gates); a stale file for the head is removed. The write is atomic (temp
+  // file + rename). A failure sets copilotBodyJudgeFileError and the result
+  // still carries the finding.
   let copilotBodyJudgeFile = null;
+  let copilotBodyJudgeFileError = null;
   try {
+    const judgeFilePath = copilotBodyJudgePath({
+      tmpRoot: resolveGateArtifactTmpRoot(runtime.repoRoot ?? resolveRepoRoot(process.cwd())),
+      repo: options.repo,
+      pr: options.pr,
+      headSha: currentHeadSha,
+    });
     if (copilotBodyJudgeFinding) {
-      await mkdir(path.dirname(copilotBodyJudgePathForHead), { recursive: true });
-      await writeFile(copilotBodyJudgePathForHead, `${JSON.stringify(copilotBodyJudgeFinding, null, 2)}\n`);
-      copilotBodyJudgeFile = copilotBodyJudgePathForHead;
+      await mkdir(path.dirname(judgeFilePath), { recursive: true });
+      const tempPath = `${judgeFilePath}.${process.pid}.tmp`;
+      await writeFile(tempPath, `${JSON.stringify(copilotBodyJudgeFinding, null, 2)}\n`);
+      await rename(tempPath, judgeFilePath);
+      copilotBodyJudgeFile = judgeFilePath;
     } else {
-      await rm(copilotBodyJudgePathForHead, { force: true });
+      await rm(judgeFilePath, { force: true });
     }
-  } catch {
-    // best effort: the result still carries the finding
+  } catch (error) {
+    // Removing a stale file is best effort; only an unwritten finding is an error.
+    if (copilotBodyJudgeFinding) copilotBodyJudgeFileError = error instanceof Error ? error.message : String(error);
   }
   const bodyRoutedToJudge = bodyFeedback.copilotBodyFeedbackUnresolved || bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved;
   const copilotBodyConvergence = bodyRoutedToJudge
@@ -1182,9 +1187,10 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     postConvergenceReviewSuppressed,
     carriedConvergence,
     copilotBodyDisposition: bodyFeedback.bodyDisposition,
-    copilotBodyDispositionRequired: null,
+    copilotBodyDispositionRequired: bodyFeedback.dispositionRequired ?? null,
     copilotBodyJudgeFinding,
     copilotBodyJudgeFile,
+    copilotBodyJudgeFileError,
     fixerDisposition,
   };
 }
@@ -1462,13 +1468,14 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   }
   // Recorded dispositions: the carried convergence (source review and head)
   // and the body-feedback disposition record, each null when none applies.
-  // copilotBodyDispositionRequired names the review a disposition record must
-  // name while a body-feedback flag blocks; null otherwise.
+  // copilotBodyDispositionRequired is a non-blocking advisory: the review and
+  // exact marker line an operator may post to override the judge routing.
   result.carriedConvergence = context.carriedConvergence ?? null;
   result.copilotBodyDisposition = context.copilotBodyDisposition ?? null;
   result.copilotBodyDispositionRequired = context.copilotBodyDispositionRequired ?? null;
   result.copilotBodyJudgeFinding = context.copilotBodyJudgeFinding ?? null;
   result.copilotBodyJudgeFile = context.copilotBodyJudgeFile ?? null;
+  result.copilotBodyJudgeFileError = context.copilotBodyJudgeFileError ?? null;
   // Auto-release the runner-coordination lock at gate-coordination terminal stop
   // boundaries — see TERMINAL_RUNNER_RELEASE_ACTIONS above for the rationale
   // (success-or-stop release vs 30-min TTL; env-aware, best-effort,

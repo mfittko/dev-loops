@@ -325,6 +325,7 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
       copilotBodyDispositionRequired: null,
       copilotBodyJudgeFinding: null,
       copilotBodyJudgeFile: null,
+      copilotBodyJudgeFileError: null,
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1054,7 +1055,7 @@ test("detect-pr-gate-coordination-state output equals a direct evaluatePrGateCoo
     assert.equal(parsed.carriedConvergence, null);
     assert.equal(parsed.copilotBodyDisposition, null);
     assert.equal(parsed.copilotBodyDispositionRequired, null);
-    const { carriedConvergence: _carried, copilotBodyDisposition: _bodyDisposition, copilotBodyDispositionRequired: _dispositionRequired, copilotBodyJudgeFinding: _judgeFinding, copilotBodyJudgeFile: _judgeFile, ...evaluatorOwned } = parsed;
+    const { carriedConvergence: _carried, copilotBodyDisposition: _bodyDisposition, copilotBodyDispositionRequired: _dispositionRequired, copilotBodyJudgeFinding: _judgeFinding, copilotBodyJudgeFile: _judgeFile, copilotBodyJudgeFileError: _judgeFileError, ...evaluatorOwned } = parsed;
     assert.deepEqual({ ...evaluatorOwned, copilotReviewRoundCount: directResult.copilotReviewRoundCount }, directResult);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1397,7 +1398,7 @@ test("detect-pr-gate-coordination-state allows pre_approval_gate (not an impossi
 // Copilot review, so no post-convergence compare fires (last-reviewed head
 // === current head).
 function pathAGhEntries({ reviewBody, threadNodes = [], atCap = true }) {
-  const currentHead = "def56789abcdef";
+  const currentHead = "def56789abcdef".padEnd(40, "0");
   // At the round cap (default) two submitted rounds are present (cap = 2 in the
   // fixture .devloops); below the cap only the single current-head review exists.
   const reviews = atCap
@@ -1462,7 +1463,7 @@ test("gate entry routes a current-head 🔵 body finding to the judge instead of
   assert.equal(context.snapshot.copilotBodyFeedbackUnresolved, false);
   assert.equal(context.copilotBodyConvergence.ok, true);
   assert.equal(context.copilotBodyJudgeFinding.angle, "copilot-body");
-  assert.equal(context.copilotBodyDispositionRequired, null);
+  assert.match(context.copilotBodyDispositionRequired.reason, /current-head Copilot review/);
 });
 
 test("detect-pr-gate-coordination-state ENTERS pre_approval for a thread-clean current-head 🔵 BELOW the round cap (round 1, non-terminal) (#2345)", async () => {
@@ -1495,9 +1496,10 @@ test("detect-pr-gate-coordination-state ALLOWS pre_approval for a below-cap curr
   const parsed = JSON.parse(result.stdout);
   assert.ok(parsed.allowedNextActions.includes("run_pre_approval_gate"));
   assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
-  assert.equal(parsed.copilotBodyDispositionRequired, null);
+  assert.match(parsed.copilotBodyDispositionRequired.reason, /current-head Copilot review/);
   assert.equal(parsed.copilotBodyJudgeFinding.angle, "copilot-body");
-  assert.equal(parsed.copilotBodyJudgeFinding.findings[0].summary, "### 🟡 Changes recommended");
+  assert.equal(parsed.copilotBodyJudgeFinding.findings[0].summary, "Actionable feedback in the body.");
+  assert.equal(parsed.copilotBodyJudgeFinding.findings[0].severity, "medium");
   assert.match(parsed.copilotBodyJudgeFinding.findings[0].recommendation, /Actionable feedback in the body\./);
 });
 

@@ -1,7 +1,7 @@
 // Node-id marker rule (#2937 AC16) and the judge finding for a body-only Copilot review.
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import { resolveCopilotBodyDisposition, resolveCurrentHeadBodyFeedback } from "../../scripts/github/_copilot-body-disposition.mjs";
+import { buildJudgeFinding, copilotBodyJudgePath, resolveCopilotBodyDisposition, resolveCurrentHeadBodyFeedback } from "../../scripts/github/_copilot-body-disposition.mjs";
 
 const HEAD = "a".repeat(40);
 const NODE_ID = "PRR_kwDOAbc123";
@@ -27,7 +27,7 @@ test("the required-disposition record carries the exact node-id marker line and 
   assert.equal(feedback.dispositionRequired.markerLine, marker(NODE_ID));
   assert.equal(feedback.judgeFinding.angle, "copilot-body");
   assert.equal(feedback.judgeFinding.findings[0].severity, "medium");
-  assert.equal(feedback.judgeFinding.findings[0].summary, "### 🟡 Changes recommended");
+  assert.equal(feedback.judgeFinding.findings[0].summary, "Fix the thing.");
   assert.match(feedback.judgeFinding.findings[0].recommendation, /Fix the thing\./);
 });
 
@@ -36,4 +36,24 @@ test("an operator marker with the node id still clears and leaves no judge findi
   assert.equal(feedback.copilotBodyFeedbackUnresolved, false);
   assert.equal(feedback.judgeFinding, null);
   assert.notEqual(feedback.bodyDisposition, null);
+});
+
+test("a numeric marker clears a numeric review id", async () => {
+  const result = await resolveCopilotBodyDisposition({ repo: "o/r", pr: 1, headSha: HEAD, reviewId: "5648696420", reviewCommitSha: HEAD }, runtimeWith("5648696420"));
+  assert.equal(result.cleared, true);
+});
+
+test("buildJudgeFinding maps severity, skips headings and marks truncation", () => {
+  const low = buildJudgeFinding({ state: "COMMENTED", body: "### 🔵 Needs a closer look\n\nLook again." });
+  assert.equal(low.findings[0].severity, "low");
+  assert.equal(low.findings[0].summary, "Look again.");
+  const long = buildJudgeFinding({ state: "COMMENTED", body: `### 🟡 Changes recommended\n\n${"x".repeat(5000)}` });
+  assert.equal(long.findings[0].severity, "medium");
+  assert.ok(long.findings[0].recommendation.endsWith(" [truncated]"));
+});
+
+test("copilotBodyJudgePath rejects a bad pr or head", () => {
+  assert.throws(() => copilotBodyJudgePath({ tmpRoot: "t", repo: "o/r", pr: 0, headSha: HEAD }));
+  assert.throws(() => copilotBodyJudgePath({ tmpRoot: "t", repo: "o/r", pr: 1, headSha: "../x" }));
+  assert.ok(copilotBodyJudgePath({ tmpRoot: "t", repo: "o/r", pr: 1, headSha: HEAD }).endsWith(`copilot-body-${HEAD}.json`));
 });

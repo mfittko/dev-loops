@@ -141,6 +141,11 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   const derivedBodyFile = copilotBodyJudgePath({ tmpRoot: resolveGateArtifactTmpRoot(checkoutRoot), repo, pr, headSha });
   const bodyFile = copilotBodyFile ? abs(copilotBodyFile) : (existsSync(derivedBodyFile) ? derivedBodyFile : null);
   const copilotBody = bodyFile ? await readSource("copilot-body-feedback", bodyFile) : null;
+  if (copilotBody) {
+    let parsedBody = null;
+    try { parsedBody = JSON.parse(copilotBody.bytes.toString("utf8")); } catch { /* refused below */ }
+    if (typeof parsedBody?.angle !== "string" || !Array.isArray(parsedBody?.findings)) throw new Refusal(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${bodyFile} is not JSON with an angle and a findings array`);
+  }
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
   const workOrder = {
     role: "judge",

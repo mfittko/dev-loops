@@ -461,3 +461,13 @@ test("J1: an unreadable --copilot-body-file refuses citing GATE-EXEC-COPILOT-BOD
     await assert.rejects(emitJudgeWorkOrder({ ...sources, copilotBodyFile: path.join(root, "absent.json") }), /^Error: GATE-EXEC-COPILOT-BODY-TO-JUDGE: required judge source copilot-body-feedback is missing/);
   });
 });
+
+test("J1: a derived copilot body file that is not an angle result refuses citing GATE-EXEC-COPILOT-BODY-TO-JUDGE", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const derived = copilotBodyJudgePath({ tmpRoot: path.join(root, "tmp"), repo: sources.repo, pr: sources.pr, headSha: sources.headSha });
+    await mkdir(path.dirname(derived), { recursive: true });
+    await writeFile(derived, "{ not json");
+    await assert.rejects(emitJudgeWorkOrder(sources), /GATE-EXEC-COPILOT-BODY-TO-JUDGE: .* is not JSON with an angle and a findings array/);
+  });
+});
