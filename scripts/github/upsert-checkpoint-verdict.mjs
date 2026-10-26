@@ -1102,6 +1102,12 @@ function normalizeStructuredFinding(f) {
   if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
     entry.judgeDisposition = f.judgeDisposition.trim();
   }
+  if (typeof f.judgeReason === "string" && f.judgeReason.trim().length > 0) {
+    entry.judgeReason = f.judgeReason.trim();
+  }
+  if (Number.isInteger(f.followUpIssueNumber) && f.followUpIssueNumber > 0) {
+    entry.followUpIssueNumber = f.followUpIssueNumber;
+  }
   return entry;
 }
 // Sort findings by severity (high first, unknown/missing last) for
@@ -1430,6 +1436,8 @@ function renderBodyOnlyFindingLine(finding, ctx) {
   // Judge relevance-based disposition.
   const judgeSuffix = finding.judgeDisposition
     ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_`
+      + (finding.judgeReason ? `: ${sanitizeStructuredInline(finding.judgeReason)}` : "")
+      + (finding.followUpIssueNumber ? ` (→ #${finding.followUpIssueNumber})` : "")
     : "";
   const angleSuffix = finding.angle ? ` _(${sanitizeStructuredInline(finding.angle)})_` : "";
   return `- ${markerPrefix}${summary}${location}${dispositionSuffix}${judgeSuffix}${angleSuffix}`;
