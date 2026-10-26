@@ -976,7 +976,9 @@ export async function judgePassCli(
   // blocking severities come from the same config the consolidator used to
   // compute overallVerdict, so the two cannot disagree on what "blocking" means.
   const { blockingSeverities, trackerProvider } = await resolveGateSettings(options, resolvedRoot);
-  assertCleanImpliesNoBlockingAct(overallVerdict, result.act, blockingSeverities);
+  // A failOpen promotion (ADR 0188) raised a low to medium after the consolidator computed overallVerdict, so check the ORIGINAL severities.
+  const actAtInputSeverity = result.enriched.flatMap((f, i) => (isOpenActItem(f) ? [{ ...f, severity: findings[i]?.severity ?? f.severity }] : []));
+  assertCleanImpliesNoBlockingAct(overallVerdict, actAtInputSeverity, blockingSeverities);
 
   // Persist the durable approval record AFTER the act list is finalized, so a
   // round with remaining act findings approves nothing (re-entry stays honest).

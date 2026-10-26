@@ -872,6 +872,9 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
     assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 1 } } }));
     await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap" && /GATE-EXEC-LOW-FIX-UNTIL-CAP.*only low or nit items/.test(e.message));
+    // A deduped [low, medium] cluster carries its full severities, so the representative's low does not trip the cap guard.
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low", clusterSeverities: ["low", "medium"] })]));
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
     // pre_approval_gate has no cap, so a low-only act list is never past it.
     assert.equal((await emit({ gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
     await rm(path.join(wt, ".devloops.json"));

@@ -2549,26 +2549,27 @@ async function writeCapRound(tmpDir, rawFindings, dispositions) {
   return JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", `draft_gate-${CAP_HEAD}.json`), "utf8")).findings;
 }
 
-test("writeGateFindingsLog reads the round-cap state from the canonical root even with a pinned custom --tmp-root (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
+test("writeGateFindingsLog counts rounds from the custom --tmp-root it persists to, without seeded ledgers (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-cap-root-"));
   try {
-    // Three closed canonical rounds make this round 4 (the cap), while the empty custom root alone would resolve round 1.
-    for (const head of capPriorHeads) await writeCapPrior(tmpDir, { head, findings: [] });
-    await rm(path.join(tmpDir, "gate-findings"), { recursive: true, force: true });
     const custom = path.join(tmpDir, "custom-root");
-    const judgeVerdict = path.join(tmpDir, "judge-verdict.json");
-    await writeFile(judgeVerdict, JSON.stringify({
-      headSha: CAP_HEAD,
-      scopeDrift: { verdict: "within_scope", rationale: "r", driftedAreas: [] },
-      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "why" }],
-    }), "utf8");
     await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 4\n", "utf8");
-    await writeGateFindingsLog({
-      repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: CAP_HEAD, verdict: "findings_present",
-      findings: JSON.stringify([{ severity: "nit", angle: "docs", summary: "tidy comment" }]), judgeVerdict, tmpRoot: custom,
-    }, { repoRoot: tmpDir });
-    const written = JSON.parse(await readFile(path.join(custom, "gate-findings", "owner-repo", "pr-42", `draft_gate-${CAP_HEAD}.json`), "utf8"));
-    assert.equal(written.findings[0].judgeDisposition, "reject");
+    // Successive writes to the custom root: a nit act holds in round 1 and rejects in round 2.
+    const results = [];
+    for (const headSha of [capPriorHeads[0], capPriorHeads[1]]) {
+      const judgeVerdict = path.join(tmpDir, `judge-${headSha[0]}.json`);
+      await writeFile(judgeVerdict, JSON.stringify({
+        headSha,
+        scopeDrift: { verdict: "within_scope", rationale: "r", driftedAreas: [] },
+        dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "why" }],
+      }), "utf8");
+      await writeGateFindingsLog({
+        repo: "owner/repo", pr: 42, gate: "draft_gate", headSha, verdict: "findings_present",
+        findings: JSON.stringify([{ severity: "nit", angle: "docs", summary: "tidy comment" }]), judgeVerdict, tmpRoot: custom,
+      }, { repoRoot: tmpDir });
+      results.push(JSON.parse(await readFile(path.join(custom, "gate-findings", "owner-repo", "pr-42", `draft_gate-${headSha}.json`), "utf8")).findings[0].judgeDisposition);
+    }
+    assert.deepEqual(results, ["act", "reject"]);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

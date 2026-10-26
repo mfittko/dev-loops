@@ -465,6 +465,31 @@ test("runJudgePass never defers an unstamped [low, medium] duplicate cluster thr
   assert.deepEqual(result.enriched.map((f) => f.judgeDisposition), ["act", "act"]);
 });
 
+for (const [label, severities, options] of [["[nit, low] in round 2", ["nit", "low"], { pastCap: false, round: 2 }], ["[low, medium] at the cap", ["low", "medium"], { pastCap: true, round: 4 }]]) test(`the deduped fixer act list keeps the full ${label} cluster severities (ADR 0188)`, () => {
+  const findings = ledger(...severities.map((severity, i) => locatedFinding({ severity, angle: i === 0 ? "correctness" : "security", summary: `null deref (${severity} report)` })));
+  const act = { disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" };
+  const result = runJudgePass(findings, verdict({ dispositions: [{ index: 0, ...act }, { index: 1, ...act }] }), HEAD, options);
+  const deduped = dedupeActListByCluster(result.act, result.clusters, result.enriched);
+  assert.equal(deduped.length, 1);
+  assert.deepEqual(deduped[0].clusterSeverities, severities);
+});
+
+test("judgePassCli accepts a clean low-only ledger whose failOpen act is promoted to medium (ADR 0188)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-failopen-clean-"));
+  await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4, blockCleanOnFindingSeverities: ["high", "medium"] } } }));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "clean", findings: [finding({ severity: "low", summary: "low one" })] }));
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", failOpen: true, title: "t", detail: "d", fix: "f", reason: "r", rationale: "fail open" }] })),
+  );
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "2243", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
+    { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+  );
+  assert.equal(payload.ok, true);
+  assert.equal(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8"))[0].severity, "medium");
+});
+
 test("runJudgePass keeps an unstamped [nit, low] duplicate act on both below the cap in round 2 (GATE-EXEC-LOW-FIX-UNTIL-CAP)", () => {
   const findings = ledger(
     locatedFinding({ severity: "nit", angle: "correctness", summary: "null deref (nit report)" }),
