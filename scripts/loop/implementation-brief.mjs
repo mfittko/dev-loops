@@ -103,7 +103,7 @@ target resolves outside --repo-root; 2 malformed skills/docs/required-rules.json
 an unreadable body file, or another runtime error.`;
 
 const SOURCE_FILE_RE = /\.(?:mjs|cjs|js|ts)$/u;
-const EXPORT_DECL_RE = /^export\s+(?:async\s+)?(?:function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gmu;
+const EXPORT_DECL_RE = /^export\s+(?:async\s+)?(?:function\*?|const|let|var|class|interface|type|enum|abstract\s+class)\s+([A-Za-z_$][\w$]*)/gmu;
 const EXPORT_LIST_RE = /^export\s*\{([^}]*)\}/gmu;
 const IMPORT_SPECIFIER_RE = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\(\s*)["'](\.[^"']*)["']/gu;
 const execFileAsync = promisify(execFile);

@@ -961,12 +961,14 @@ test("the helper inventory lists sorted exported names per module in touched dir
     "src/a.mjs": "export function zeta() {}\nexport const alpha = 1;\nconst x = 1;\nexport { x as mid };\n",
     "src/notes.md": "export const ignored = 1;\n",
     "scripts/lib/util.mjs": "export class Util {}\n",
+    "src/t.ts": "export interface Options {}\nexport type Id = string;\nexport enum Mode { A }\nexport abstract class Base {}\nexport { type Opts };\n// export interface Commented {}\nexport type { Hidden } from \"./h.mjs\";\nexportinterface Glued {}\n",
   });
   const { helperInventory } = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
   assert.deepEqual(helperInventory, {
     modules: [
       { path: "scripts/lib/util.mjs", exports: ["Util"] },
       { path: "src/a.mjs", exports: ["alpha", "mid", "zeta"] },
+      { path: "src/t.ts", exports: ["Base", "Id", "Mode", "Options", "Opts"] },
     ],
     overflowModules: [],
   });
@@ -974,11 +976,11 @@ test("the helper inventory lists sorted exported names per module in touched dir
 
 test("inline inventory names stop at 2,000 characters and the overflow lists module paths only", async () => {
   const names = (prefix) => Array.from({ length: 60 }, (_, i) => `export const ${prefix}${String(i).padStart(3, "0")}_${"x".repeat(12)} = 1;`).join("\n");
-  const root = await trackedRepo({ "src/a.mjs": names("a"), "src/b.mjs": names("b"), "src/c.mjs": names("c") });
+  const root = await trackedRepo({ "src/a.mjs": names("a"), "src/b.mjs": names("b"), "src/c.mjs": names("c"), "src/d.mjs": "export const z = 1;\n" });
   const { helperInventory } = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src"] });
   // Each module joins to 1,079 characters, so a second module would reach 2,159.
   assert.deepEqual(helperInventory.modules.map((m) => m.path), ["src/a.mjs"]);
-  assert.deepEqual(helperInventory.overflowModules, ["src/b.mjs", "src/c.mjs"]);
+  assert.deepEqual(helperInventory.overflowModules, ["src/b.mjs", "src/c.mjs", "src/d.mjs"]);
 });
 
 test("inline inventory names that join to exactly 2,000 characters stay inline", async () => {
@@ -1069,7 +1071,7 @@ test("the inventory and importers skip tracked directory symlinks and symlinks l
   assert.deepEqual(brief.importers, { "src/a.mjs": { files: [] } });
 });
 
-test("a tracked entry beneath a directory symlink leaving the root, a directory entry and a missing entry are skipped", async () => {
+test("a tracked entry beneath a directory symlink leaving the root, a non-source entry and a missing entry are skipped", async () => {
   const root = await trackedRepo({ "src/a.mjs": "export const a = 1;\n", "vendor/x.mjs": "export const v = 1;\n", "src/gone.mjs": "export const g = 1;\n", "src/d.mjs/inner.txt": "x\n" });
   const outside = await mkdtemp(path.join(os.tmpdir(), "implementation-brief-outside-"));
   tempDirs.push(outside);
