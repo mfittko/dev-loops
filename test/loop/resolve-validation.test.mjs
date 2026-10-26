@@ -757,6 +757,26 @@ test("a paths-only edit with a full-repository base selection resolves incomplet
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
+test("a paths-only edit with a changed path that no base rule maps resolves incomplete", async () => {
+  const { repoRoot } = await fixture();
+  try {
+    await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:docs").replace('"**"', '"docs/**"'));
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "base paths"], { cwd: repoRoot });
+    execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/main"], { cwd: repoRoot });
+    execFileSync("git", ["fetch", "-q", "origin"], { cwd: repoRoot });
+    await mkdir(path.join(repoRoot, "docs"), { recursive: true });
+    await writeFile(path.join(repoRoot, "docs", "a.md"), "a\n");
+    await writeFile(path.join(repoRoot, "other.txt"), "x\n");
+    await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:scripts"));
+    execFileSync("git", ["add", "docs/a.md", "other.txt"], { cwd: repoRoot });
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "pr edit"], { cwd: repoRoot });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:docs"]), { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.match(result.reason, /base branch validation paths/);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
 test("a hung CI read times out so the gate resolves incomplete", async () => {
   await assert.rejects(defaultReadCi({ repo: "o/r", pr: 1 }, { read: () => new Promise(() => {}), timeoutMs: 20 }), /timed out/);
 });
