@@ -704,7 +704,7 @@ async function runDeferRound({ findings, dispositions, deps, config, pr = "1658"
   const durablePath = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", `pr-${pr}`, `${gate}-${HEAD}.json`);
   if (durable) {
     await mkdir(path.dirname(durablePath), { recursive: true });
-    await writeFile(durablePath, JSON.stringify({ findings: durable }));
+    await writeFile(durablePath, JSON.stringify(Array.isArray(durable) ? { repo: "mfittko/dev-loops", pr: Number(pr), gate, headSha: HEAD, verdict: "findings_present", findings: durable } : durable));
   }
   if (config) await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify(config));
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
@@ -714,7 +714,7 @@ async function runDeferRound({ findings, dispositions, deps, config, pr = "1658"
     { repoRoot: tmpDir, ...deps },
   );
   const enriched = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8"));
-  return { payload, enriched, tmpDir, durableLog: durable ? JSON.parse(await readFile(durablePath, "utf8")) : undefined };
+  return { payload, enriched, tmpDir, durableLog: Array.isArray(durable) ? JSON.parse(await readFile(durablePath, "utf8")) : undefined };
 }
 
 test("judgePassCli: the defer target reaches the durable findings log the cap-round fixer check reads (AC4a)", async () => {
@@ -728,6 +728,20 @@ test("judgePassCli: the defer target reaches the durable findings log the cap-ro
   assert.equal(durableLog.findings[1].followUpIssueNumber, 2425);
   assert.equal(durableLog.findings[0].followUpIssueNumber, undefined, "an act item gets no target");
 });
+
+for (const [label, durable] of [
+  ["malformed (no ledger identity)", { findings: [finding({ summary: "defer this", severity: "medium", judgeDisposition: "defer" })] }],
+  ["without a findings array", { repo: "mfittko/dev-loops", pr: 1658, gate: "draft_gate", headSha: HEAD, verdict: "findings_present" }],
+]) {
+  test(`judgePassCli: a durable findings log ${label} fails the pass instead of skipping the stamp`, async () => {
+    const { deps } = stubDeferralDeps({ closing: [2425] });
+    await assert.rejects(runDeferRound({
+      findings: [finding({ summary: "defer this", severity: "medium" })],
+      dispositions: [{ index: 0, ...DEFER }],
+      deps, durable,
+    }), /Gate findings ledger/);
+  });
+}
 
 const DEFER = { disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } };
 

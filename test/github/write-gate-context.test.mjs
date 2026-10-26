@@ -8389,6 +8389,23 @@ test("resolveClosureRound returns the trimmed, lowercased ledger headSha as from
   }
 });
 
+test("CLI closure round is detected from the main-anchored ledger when the context bundle is relocated with --tmp-root", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  try {
+    await seedClosedRounds(repoRoot, 47, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    process.exitCode = undefined;
+    await main(["--repo", "owner/repo", "--pr", "47", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", headSha, "--tmp-root", "relocated"], { repoRoot, run: stubGhRun });
+    assert.notEqual(process.exitCode, 1);
+    const closure = await readGateContext({ repo: "owner/repo", pr: 47, gate: "draft_gate", headSha, tmpRoot: "relocated" }, { repoRoot });
+    assert.equal(closure.scope.closureRound.fromHead, baseSha);
+    assert.equal(closure.scope.closureRound.ignoredBase, headSha);
+  } finally {
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI closure round diffs from the cap round head, records scope.closureRound and overrides a different --base; an ordinary round records none", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   const priorExitCode = process.exitCode;

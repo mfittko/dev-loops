@@ -3641,7 +3641,8 @@ export async function main(
     const { config } = await loadDevLoopConfigStrict({ repoRoot });
     options.config = config;
     // GATE-EXEC-ROUND-CAP (ADR 0191): the one closure round diffs from the cap round's head.
-    const closureRound = await resolveClosureRound(options, { repoRoot, cap: resolveGateConfig(config, "draft").maxReviewRounds ?? 0 });
+    // The findings ledger is main-anchored: read it from its own root, not the (possibly relocated) context --tmp-root.
+    const closureRound = await resolveClosureRound({ ...options, tmpRoot: undefined }, { repoRoot, cap: resolveGateConfig(config, "draft").maxReviewRounds ?? 0 });
     if (closureRound) {
       // The closure round diffs from fromHead whatever --base the caller passes (coordinators pass origin/main) and records the ignored --base.
       options.closureRound = { ...closureRound, ignoredBase: options.base ?? null };
