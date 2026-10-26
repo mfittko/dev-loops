@@ -553,7 +553,7 @@ function validateFindingsArray(parsed, flagLabel) {
  * already the judge-pass's own fresh copy from `applyJudgeDispositions`). A
  * re-run does not append a fingerprint the target already lists.
  */
-async function applyDeferralComment(enriched, { repo, pr, trackerProvider }, deps) {
+async function applyDeferralComment(enriched, { repo, pr, gate, trackerProvider }, deps) {
   for (const f of enriched) {
     f.fingerprint = fingerprintFinding(f);
   }
@@ -567,7 +567,13 @@ async function applyDeferralComment(enriched, { repo, pr, trackerProvider }, dep
     summary: f.summary,
   }));
   const { issueNumber } = await commentDeferredFindings({ repo, pr, entries, trackerProvider }, deps);
-  for (const f of deferred) f.followUpIssueNumber = issueNumber;
+  for (const f of deferred) {
+    // #2724 slice 0: a pre_approval_gate low_fix_until_cap defer needs a target other than the PR itself; with none it is a reject.
+    if (gate === "pre_approval_gate" && issueNumber === pr && f.judgeReason?.startsWith("low_fix_until_cap ")) {
+      f.judgeDisposition = "reject";
+      delete f.followUpDraft;
+    } else f.followUpIssueNumber = issueNumber;
+  }
 }
 
 /**
@@ -1032,10 +1038,11 @@ export async function judgePassCli(
   } else {
     await applyDeferralComment(
       result.enriched,
-      { repo: options.repo, pr: Number(options.pr), trackerProvider },
+      { repo: options.repo, pr: Number(options.pr), gate: options.gate, trackerProvider },
       { env, ghCommand, run, commentIssue },
     );
     await stampDurableDeferTargets(result.enriched, options, resolvedRoot);
+    result.counts = countByDisposition(result.enriched);
   }
 
   // Recurrence escalation: an act item whose surface appears in act items of three counted

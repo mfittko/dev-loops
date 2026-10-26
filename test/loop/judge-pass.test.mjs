@@ -2021,13 +2021,29 @@ test("judgePassCli at pre_approval_gate defers a low-only act verdict with low_f
   await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting to fix" }] })));
   const payload = await judgePassCli(
     { repo: "mfittko/dev-loops", pr: "2724", gate: "pre_approval_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
-    { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+    { repoRoot: tmpDir, ...stubDeferralDeps({ closing: [99] }).deps },
   );
   assert.equal(payload.ok, true);
   assert.equal(payload.actCount, 0);
   const enriched = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings[0];
   assert.equal(enriched.judgeDisposition, "defer");
+  assert.equal(enriched.followUpIssueNumber, 99);
   assert.match(enriched.judgeReason, /^low_fix_until_cap /);
+});
+
+test("judgePassCli at pre_approval_gate rejects a coerced low defer when the only target is the PR itself", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-pre-approval-"));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "clean", findings: [finding({ severity: "low", summary: "low one" })] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting to fix" }] })));
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "2724", gate: "pre_approval_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
+    { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+  );
+  assert.equal(payload.actCount, 0);
+  assert.deepEqual(payload.counts, { act: 0, defer: 0, reject: 1 });
+  const enriched = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings[0];
+  assert.equal(enriched.judgeDisposition, "reject");
+  assert.equal(enriched.followUpIssueNumber, undefined);
 });
 
 test("pre_approval_gate: failOpen low stays a medium act, mixed medium and low keeps the medium act, a question stays open", () => {
