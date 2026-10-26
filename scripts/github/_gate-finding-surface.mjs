@@ -376,7 +376,7 @@ export async function commentDeferredFindings(
 // The defer target and judge reason that follow a rendered disposition: ` (follow-up N) - <reason>` (no `#`: the issue-id guard refuses a bare id in a posted body).
 // The reason loses every `judge:` token, so the last ` judge: <word>` on a line stays the genuine disposition
 // (parseRenderedJudgeDisposition reads the greedy last match).
-function renderJudgeDetail({ judgeReason, followUpIssueNumber }) {
+export function renderJudgeDetail({ judgeReason, followUpIssueNumber }) {
   const target = Number.isInteger(followUpIssueNumber) && followUpIssueNumber > 0 ? ` (follow-up ${followUpIssueNumber})` : "";
   const reason = typeof judgeReason === "string" && judgeReason.trim().length > 0
     ? ` - ${sanitizeInline(neutralizeBareIssuePrIds(judgeReason)).replace(/judge:/gi, "judge -")}`

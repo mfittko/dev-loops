@@ -3790,8 +3790,8 @@ test("renderStructuredFindings posts the judge reason and defer target for a clo
     },
   ]);
   const body = renderStructuredFindings(angles);
-  assert.match(body, /deferred one — judge: _`defer`_: tracked elsewhere \(follow-up 77\)/);
-  assert.match(body, /rejected one — judge: _`reject`_: not reproducible/);
+  assert.match(body, /deferred one — judge: _`defer`_ \(follow-up 77\) - tracked elsewhere/);
+  assert.match(body, /rejected one — judge: _`reject`_ - not reproducible/);
 });
 
 test("renderGateReviewCommentBody aggregate **Inline findings:** line breaks severities down in SEVERITY_ORDER and dedups touched angles (#1942)", () => {

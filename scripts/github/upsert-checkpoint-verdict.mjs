@@ -45,6 +45,7 @@ import {
   isLocatableFinding,
   listPrReviews,
   readGateFindingsLedger,
+  renderJudgeDetail,
   renderVerdictDetailsBlock,
   renderInlineCommentBody,
   resolveGateRound,
@@ -58,7 +59,7 @@ import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
-import { buildValidationResultsPath, countCompletedRounds } from "./write-gate-context.mjs";
+import { buildValidationResultsPath, countCompletedRounds, readClosedPriorRoundLogs } from "./write-gate-context.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -1435,10 +1436,7 @@ function renderBodyOnlyFindingLine(finding, ctx) {
     : "";
   // Judge relevance-based disposition.
   const judgeSuffix = finding.judgeDisposition
-    ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_`
-      + (finding.judgeReason ? `: ${sanitizeStructuredInline(neutralizeBareIssuePrIds(finding.judgeReason))}` : "")
-      // no `#`: the issue-id guard refuses a bare id in a posted body
-      + (finding.followUpIssueNumber ? ` (follow-up ${finding.followUpIssueNumber})` : "")
+    ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_${renderJudgeDetail(finding)}`
     : "";
   const angleSuffix = finding.angle ? ` _(${sanitizeStructuredInline(finding.angle)})_` : "";
   return `- ${markerPrefix}${summary}${location}${dispositionSuffix}${judgeSuffix}${angleSuffix}`;
@@ -1664,7 +1662,7 @@ export function assertJudgeSpecSourceMatchesLedger(options, ledgerFindings) {
 // `nonLocatableFindings` also drives an invisible fingerprint+disposition
 // marker per finding, load-bearing for GATE-EXEC-FINDING-THREADS's
 // cross-round suppression/deferral tracking.
-export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, converged, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, pr, judgeSpecSource, judgeUnavailableReason }) {
+export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, converged, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers, closureFromHead, pr, judgeSpecSource, judgeUnavailableReason }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1684,6 +1682,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     // ledger records the underlying review verdict and the proven blockers.
     // Neither label matches a parsed field, so the parse contract is unchanged.
     ...(reviewVerdict ? [`**Review verdict:** ${reviewVerdict}`] : []),
+    ...(gate === "draft_gate" && /^[0-9a-f]{40}$/.test(closureFromHead ?? "") ? [`closure round: diff from ${closureFromHead}`] : []),
     ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockerCounts(gateBlockers)}`] : []),
     ...(judgeSpecSource ? [judgeSpecSource === "unavailable" ? JUDGE_UNAVAILABLE_LINES[judgeUnavailableReason] : JUDGE_SPEC_LINES[judgeSpecSource]] : []),
     ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),
@@ -3032,6 +3031,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const roundFindings = [...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems, ...jsonUnactedFindings];
   const judgedRound = isFullyJudged(roundFindings);
   let checkpointComposition = null;
+  // GATE-EXEC-ROUND-CAP: the closure round (count cap+1) states where its diff starts.
+  let closureFromHead = null;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
     // Judged non-act findings stay in the list so a judged round with an empty act list composes clean; the converged guard replaces only the act items.
@@ -3047,6 +3048,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const completedRound = options.gate === "draft_gate" && !convergedInput && cap > 0
       ? await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot })
       : 0;
+    if (completedRound > 0 && completedRound === cap + 1) {
+      closureFromHead = (await readClosedPriorRoundLogs({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot })).at(-1)?.headSha?.trim().toLowerCase() ?? null;
+    }
     const gateBlockers = [
       ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),
       ...(isPastRoundCap(completedRound, cap) ? pastCapBlockers(roundFindings, { pr: Number(options.pr), round: completedRound, cap }) : []),
@@ -3514,6 +3518,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
     ...(checkpointComposition ? { reviewVerdict: checkpointComposition.reviewVerdict, gateBlockers: checkpointComposition.blockers } : {}),
+    closureFromHead,
     ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable, locatableFindings: findingSurface.locatable, foldedFindings: findingSurface.folded } : {}),
   });
   // ISSUE/PR-ID GUARD: the rendered gate verdict body must never emit a

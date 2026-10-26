@@ -8280,6 +8280,20 @@ test("resolveClosureRound returns the cap round head and the prior act items onl
   }
 });
 
+test("resolveClosureRound returns the trimmed, lowercased ledger headSha as fromHead", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await seedClosedRounds(repoRoot, 45, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    const file = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-45", `draft_gate-${baseSha}.json`);
+    const log = JSON.parse(await readFile(file, "utf8"));
+    await writeFile(file, JSON.stringify({ ...log, headSha: ` ${baseSha.toUpperCase()} ` }), "utf8");
+    const closure = await resolveClosureRound({ repo: "owner/repo", pr: 45, gate: "draft_gate", headSha }, { repoRoot, cap: 4 });
+    assert.equal(closure.fromHead, baseSha);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI closure round diffs from the cap round head, records scope.closureRound and overrides a different --base; an ordinary round records none", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   const priorExitCode = process.exitCode;
@@ -8291,12 +8305,14 @@ test("CLI closure round diffs from the cap round head, records scope.closureRoun
 
     await seedClosedRounds(repoRoot, 43, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
     process.exitCode = undefined;
-    await main(args(43, "HEAD~1"), { repoRoot, run: stubGhRun });
+    // headSha differs from fromHead (baseSha) and as a base would resolve an empty change set, so a diff from it would fail.
+    await main(args(43, headSha), { repoRoot, run: stubGhRun });
     assert.notEqual(process.exitCode, 1, "a --base that differs from the cap round head is overridden, not refused");
     const closure = await readGateContext({ repo: "owner/repo", pr: 43, gate: "draft_gate", headSha }, { repoRoot });
     assert.equal(closure.scope.diffSource, "base");
     assert.deepEqual(closure.scope.changedFiles, ["src/changed.mjs"]);
     assert.equal(closure.scope.closureRound.fromHead, baseSha);
+    assert.equal(closure.scope.closureRound.ignoredBase, headSha);
     assert.deepEqual(closure.scope.closureRound.priorActItems.map((i) => i.title), ["Guard is missing"]);
   } finally {
     process.exitCode = priorExitCode;

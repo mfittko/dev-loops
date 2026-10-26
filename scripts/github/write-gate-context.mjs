@@ -1954,8 +1954,9 @@ export async function resolveClosureRound(options, { repoRoot, cap }) {
   if (options.gate !== "draft_gate" || !(cap > 0)) return null;
   if (await countCompletedRounds(options, { repoRoot }) !== cap + 1) return null;
   const closed = await readClosedPriorRoundLogs(options, { repoRoot });
-  const fromHead = closed.at(-1)?.headSha;
-  if (typeof fromHead !== "string" || fromHead.length === 0) return null;
+  const last = closed.at(-1)?.headSha;
+  if (typeof last !== "string" || last.trim().length === 0) return null;
+  const fromHead = last.trim().toLowerCase();
   return { fromHead, priorActItems: await listPriorActItems(options, { repoRoot }) };
 }
 
@@ -3622,9 +3623,9 @@ export async function main(
     // GATE-EXEC-ROUND-CAP (ADR 0191): the one closure round diffs from the cap round's head.
     const closureRound = await resolveClosureRound(options, { repoRoot, cap: resolveGateConfig(config, "draft").maxReviewRounds ?? 0 });
     if (closureRound) {
-      // The closure round ignores any caller --base (coordinators pass origin/main): the diff always starts at fromHead.
+      // The closure round diffs from fromHead whatever --base the caller passes (coordinators pass origin/main) and records the ignored --base.
+      options.closureRound = { ...closureRound, ignoredBase: options.base ?? null };
       options.base = closureRound.fromHead;
-      options.closureRound = closureRound;
     }
     let diff = null;
     if (options.base) {

@@ -1375,13 +1375,16 @@ export function capClosedFor(finding, { round, cap }) {
  * act item block, unless every act item is low or nit (GATE-EXEC-LOW-FIX-UNTIL-CAP applies instead). A high, a `failOpen: true` finding that is not an act item with a `judgeFix` at the cap round, a missing
  * disposition, an unknown severity, a medium `defer` without `followUpIssueNumber` and a medium `reject` without `judgeReason` block as
  * `severity_disagreement`. A defer to the PR itself (`pr`) is not a target, and a medium defer is never final when `pr` is not an integer (fail closed). A medium rejected with a reason or deferred with a target issue is final (ADR 0191).
- * At the cap round (`round === cap`) an act item with a judge-specified remedy (`judgeFix`) does not block: the round composes
- * `findings_present` and the fixer fixes it; the next round is the one closure round, where every act item blocks (GATE-EXEC-ROUND-CAP).
+ * At the cap round (`round === cap`) an act item of a known severity with a string `judgeFix` does not block: the round composes
+ * `findings_present` and the fixer fixes it. In every round after the cap round any act item blocks and no fixer runs (GATE-EXEC-ROUND-CAP).
+ * A `judgeFix` or `judgeReason` counts only as a non-blank string.
  * @returns {Array<{ kind: "round_cap_reached", reason: "new_act"|"resurfaced"|"severity_disagreement", item: string }>}
  */
 export function pastCapBlockers(findings, { pr, round, cap } = {}) {
   const atCap = cap > 0 && round === cap;
-  const hasRemedy = (f) => String(f.judgeFix ?? "").trim().length > 0;
+  const nonBlank = (value) => typeof value === "string" && value.trim().length > 0;
+  // Only an act item of a known severity (high, medium, low, nit) with a string remedy is exempt at the cap round; an unknown, missing or question severity blocks.
+  const hasRemedy = (f) => nonBlank(f.judgeFix) && ["high", "medium", "low", "nit"].includes(normalizeSeverity(f.severity));
   const list = Array.isArray(findings) ? findings : [];
   const label = (f, reason) => `[${normalizeSeverity(f?.severity)}] ${String(f?.summary ?? "").trim()} (${reason})`;
   const acts = list.filter(isOpenActItem);
@@ -1400,7 +1403,7 @@ export function pastCapBlockers(findings, { pr, round, cap } = {}) {
     const severity = normalizeSeverity(f?.severity);
     const closed = f?.judgeDisposition === "defer" || f?.judgeDisposition === "reject";
     const isFinal = f?.judgeDisposition === "reject"
-      ? String(f.judgeReason ?? "").trim().length > 0
+      ? nonBlank(f.judgeReason)
       : Number.isInteger(pr) && Number.isInteger(f?.followUpIssueNumber) && f.followUpIssueNumber > 0 && f.followUpIssueNumber !== pr;
     const closedBlocks = closed && (severity === "high" || (severity === "medium" && !isFinal));
     if (!JUDGE_DISPOSITIONS.includes(f?.judgeDisposition) || !VALID_SEVERITIES.has(severity) || f?.failOpen === true || closedBlocks) {

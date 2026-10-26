@@ -179,7 +179,7 @@ test("the structured findings path posts a defer target and a reason holding an 
       "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 1, question: 0, nit: 0 }),
     ], { root: capOffRoot });
     assert.equal(out.error, undefined);
-    assert.match(out.body, /judge: _`defer`_: tracked in 123 already \(follow-up 77\)/);
+    assert.match(out.body, /judge: _`defer`_ \(follow-up 77\) - tracked in 123 already/);
     assert.doesNotMatch(out.body, /#(?:123|77)/);
   }, { prefix: "dev-loops-round-cap-structured-ids-" });
 });

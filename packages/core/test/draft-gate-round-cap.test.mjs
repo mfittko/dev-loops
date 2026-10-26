@@ -119,6 +119,18 @@ describe("draft_gate round cap", () => {
       assert.deepEqual(pastCapBlockers([closed("medium", "defer", { ...fix, followUpIssueNumber: 2950 })], at(5)), []);
     });
 
+    test("at the cap round an unknown, missing or question severity act item with judgeFix still blocks; high and medium do not", () => {
+      assert.deepEqual(pastCapBlockers([act("high", fix), act("medium", fix)], at(4)), []);
+      assert.deepEqual(blockerReasons([act("critical", fix)], at(4)), ["new_act"]);
+      assert.deepEqual(blockerReasons([{ summary: "no severity", judgeDisposition: "act", ...fix }], at(4)), ["new_act"]);
+      assert.deepEqual(blockerReasons([act("question", fix)], at(4)), ["new_act"]);
+    });
+
+    test("a non-string or blank judgeFix does not count as a remedy and a non-string or blank judgeReason is not final", () => {
+      for (const judgeFix of [true, 1, {}, "   "]) assert.deepEqual(blockerReasons([act("medium", { judgeFix })], at(4)), ["new_act"], String(judgeFix));
+      for (const judgeReason of [1, {}, "   "]) assert.deepEqual(blockerReasons([closed("medium", "reject", { judgeReason })], at(5)), ["severity_disagreement"], String(judgeReason));
+    });
+
     test("a failOpen act item with judgeFix at the cap round has no blocker", () => {
       assert.deepEqual(pastCapBlockers([act("medium", { ...fix, failOpen: true })], at(4)), []);
       assert.deepEqual(blockerReasons([act("medium", { failOpen: true })], at(4)), ["new_act"]);
