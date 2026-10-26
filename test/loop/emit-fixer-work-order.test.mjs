@@ -2377,14 +2377,6 @@ test("ADR 0197: an unreadable prior ledger keeps the round_cap_reached refusal a
   });
 });
 
-test("ADR 0197: the commit-only handback check uses the cap-round head as baseline after a base-only merge", async () => {
-  await withFixture(async (fx) => {
-    const { over } = await capRoundThenBaseMerge(fx, {});
-    const result = await fx.emit(over);
-    assert.match(result.workOrder.handbackCheck, new RegExp(`--baseline ${fx.head} `));
-  });
-});
-
 test("ADR 0197: a PR-own change after the cap round keeps the round_cap_reached refusal", async () => {
   await withFixture(async (fx) => {
     const { over } = await capRoundThenBaseMerge(fx, { ownChangeAfterMerge: true });

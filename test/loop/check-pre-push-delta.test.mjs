@@ -631,3 +631,17 @@ test("--findings-log is refused on the thread route and validated on the act-lis
   assert.throws(() => parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s", "--findings-log", good]), /refused with --threads-file/);
   assert.equal(parseCheckPrePushDeltaArgs([...threadArgs(threadsFile), "--spec-identity", "s"]).findingsLog, null);
 });
+
+test("input mode accepts the cap-round findings log at an earlier head after a base-only merge", async () => {
+  const { actList } = fixture();
+  const seam = { ...headAt("c".repeat(40)), baseOnlyMerge: async ({ fromHead, head }) => fromHead === A && head === B };
+  const out = await runCli(["--act-list", actList, "--baseline", B, "--spec-identity", "s", "--findings-log", logFor(A)], seam);
+  assert.deepEqual(out.input.surfaceHints, ["correctness"]);
+});
+
+test("input mode still rejects an earlier-head findings log after a PR-own change or a seam error", async () => {
+  const { actList } = fixture();
+  for (const baseOnlyMerge of [async () => false, async () => { throw new Error("git failed"); }]) {
+    await assert.rejects(runCli(["--act-list", actList, "--baseline", B, "--spec-identity", "s", "--findings-log", logFor(A)], { ...headAt("c".repeat(40)), baseOnlyMerge }), /not the baseline/);
+  }
+});
