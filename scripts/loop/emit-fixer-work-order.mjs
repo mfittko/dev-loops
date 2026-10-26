@@ -314,7 +314,9 @@ export async function emitFixerWorkOrder({
       }
     }
     if (lowNitOnly && (lowFixCapped || (actSeverities.every((s) => s === "nit") && round !== 1))) {
-      throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${actListFile} holds only low or nit items ${lowFixCapped ? (gate === "pre_approval_gate" ? "at pre_approval_gate" : "at or past the draft_gate round cap") : "outside draft_gate round 1"}; low and nit findings no longer reach the fixer`);
+      const cappedAt = gate === "pre_approval_gate" ? "at pre_approval_gate" : "at or past the draft_gate round cap";
+      const where = lowFixCapped ? cappedAt : "outside draft_gate round 1";
+      throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${actListFile} holds only low or nit items ${where}; low and nit findings no longer reach the fixer`);
     }
   }
   // The verify-time act-thread guard matches open gate threads by fingerprint, so a missing or wrong one would let a matching thread pass as threadless.
