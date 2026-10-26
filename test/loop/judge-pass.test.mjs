@@ -2046,6 +2046,18 @@ test("judgePassCli at pre_approval_gate rejects a coerced low defer when the onl
   assert.equal(enriched.followUpIssueNumber, undefined);
 });
 
+test("judgePassCli at pre_approval_gate rewrites the durable log entry to reject when the only target is the PR itself", async () => {
+  const { durableLog } = await runDeferRound({
+    findings: [finding({ severity: "low", summary: "low one" })],
+    dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting to fix" }],
+    deps: stubDeferralDeps().deps, pr: "2724", gate: "pre_approval_gate",
+    durable: [finding({ severity: "low", summary: "low one", judgeDisposition: "defer", followUpDraft: { title: "t", body: "d" } })],
+  });
+  assert.equal(durableLog.findings[0].judgeDisposition, "reject");
+  assert.equal(durableLog.findings[0].followUpDraft, undefined);
+  assert.equal(durableLog.findings[0].followUpIssueNumber, undefined);
+});
+
 test("pre_approval_gate: failOpen low stays a medium act, mixed medium and low keeps the medium act, a question stays open", () => {
   const failOpen = runJudgePass([PR2945_ROUND5_LOW], pre2945Verdict({ failOpen: true }), HEAD, { pastCap: true });
   assert.deepEqual(failOpen.act.map((f) => f.severity), ["medium"]);

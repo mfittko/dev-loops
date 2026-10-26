@@ -12,7 +12,7 @@ On PR 2945, the `pre_approval_gate` ran 5 rounds. Round 5 at `77a28e841627f4a72e
 
 ## Decision
 
-- Coercion. At `pre_approval_gate`, `applyJudgeDispositions` applies the past-cap coercion of `GATE-EXEC-LOW-FIX-UNTIL-CAP` in every round. A cluster holding a `low` becomes `defer` with a synthesized `followUpDraft`, and an all-`nit` cluster becomes `reject`, both with the reason `low_fix_until_cap`. The operator-visibility test stays the judge's rule for its own `defer` or `reject` choice. The round composes `clean`.
+- Coercion. At `pre_approval_gate`, `applyJudgeDispositions` applies the past-cap coercion of `GATE-EXEC-LOW-FIX-UNTIL-CAP` in every round. A cluster holding a `low` becomes `defer` with a synthesized `followUpDraft`, and an all-`nit` cluster becomes `reject`, both with the reason `low_fix_until_cap`. The operator-visibility test stays the judge's rule for its own `defer` or `reject` choice. When the only deferral target is the PR itself, `judge-pass.mjs` records the coerced `defer` as `reject` in `--ledger-out` and in the durable findings log. The round composes `clean`.
 - Unchanged. A `failOpen` disposition on a cluster holding a `low` still promotes the members to `medium` and blocks. `high`, `medium` and `question` keep their behavior.
 - Fixer. `emit-fixer-work-order.mjs` refuses a low-only act list at `pre_approval_gate` with `low_fix_until_cap`.
 - Reuse. `resolveDraftRoundCap` returns one added field, `lowFixCapped`. It adds no cap module and no counter.

@@ -582,7 +582,9 @@ async function applyDeferralComment(enriched, { repo, pr, gate, trackerProvider 
  */
 async function stampDurableDeferTargets(enriched, options, resolvedRoot) {
   const targets = new Map(enriched.filter((f) => f.judgeDisposition === "defer" && Number.isInteger(f.followUpIssueNumber)).map((f) => [f.fingerprint, f.followUpIssueNumber]));
-  if (targets.size === 0) return;
+  // A defer that applyDeferralComment converted to reject (the PR is the only target, #2724 slice 0) is rewritten to reject on the durable log too.
+  const rejects = new Set(enriched.filter((f) => f.judgeDisposition === "reject" && f.judgeReason?.startsWith("low_fix_until_cap ")).map((f) => f.fingerprint));
+  if (targets.size === 0 && rejects.size === 0) return;
   const logPath = path.resolve(resolvedRoot, buildLogPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }));
   if (!(await access(logPath).then(() => true, (err) => (err?.code === "ENOENT" ? false : Promise.reject(err))))) return;
   // One validity rule for the ledger: the canonical reader rejects a malformed log. It normalizes in memory, so the raw log is re-read to stamp it.
@@ -590,8 +592,11 @@ async function stampDurableDeferTargets(enriched, options, resolvedRoot) {
   const log = JSON.parse(await readFile(logPath, "utf8"));
   let changed = false;
   for (const f of log.findings) {
-    const target = f?.judgeDisposition === "defer" && f.followUpIssueNumber == null ? targets.get(fingerprintFinding(f)) : undefined;
+    if (f?.judgeDisposition !== "defer" || f.followUpIssueNumber != null) continue;
+    const fp = fingerprintFinding(f);
+    const target = targets.get(fp);
     if (target !== undefined) { f.followUpIssueNumber = target; changed = true; }
+    else if (rejects.has(fp)) { f.judgeDisposition = "reject"; delete f.followUpDraft; changed = true; }
   }
   if (changed) await writeFile(logPath, JSON.stringify(log, null, 2) + "\n");
 }
