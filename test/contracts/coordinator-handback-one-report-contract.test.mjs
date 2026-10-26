@@ -54,7 +54,7 @@ test("GATE-EXEC-HARNESS-JOIN names children in flight and cites the read rule", 
   assert.match(text, /report sent while a child is in flight.*`COORDINATOR-HANDBACK-ONE-REPORT`/s);
   assert.match(text, /names every such child: agent id, expected artifact path or hand-back, and the next step/);
   assert.match(text, /gate coordinator child the expected hand-back is its round result/);
-  assert.match(text, /terminal hand-back, not a pause: the parent handles it as a final report.*keeps the child list\. The wait command cancels no child, so the parent treats each listed child as still running and reads its output file.*`MAIN-AGENT-COORDINATOR-REPORT-READ`/s);
+  assert.match(text, /treats the reporter as still running and reads its output file on the reporter's next notification \(`MAIN-AGENT-COORDINATOR-REPORT-READ`.*terminal hand-back, not a pause.*keeps the child list\. The wait command cancels no child, so the parent treats each listed child as still running\./s);
   assert.ok(!/last assistant message/.test(text), "the read rule is cited, not restated");
 });
 
