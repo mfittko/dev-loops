@@ -181,7 +181,9 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   Entries merge BY NAME across config layers: add/override/disable only the named
   entry, without copying the array. Duplicate names appear once and retain their
   mandatory/prunable status. `enabled: false` excludes an entry, including a
-  mandatory one, and is a hard ceiling against later additions.
+  mandatory one, and is a hard ceiling against later additions, except the
+  security-sensitive-seam override for `threat-model` below. A disabled entry that
+  the resolved set omits is recorded as `dropped` with reason `config_disabled`.
   - `dynamic.subtractive` defaults ON: retain relevant angles and record each
     dropped angle's rationale. Enabled `mandatory: true` entries always survive.
     When explicitly off, use the static pool unchanged. Without a diff, an
@@ -201,9 +203,9 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   execution, untrusted network fetch, or destructive filesystem / local-file-upload ops — the
   resolver selects the `threat-model` angle (recommended when configured; added from the pool in
   additive mode). It is never dropped for such a diff, regardless of change size: the resolver
-  runs it once per head, in the first gate round, past `enabled: false`, and records it as an
-  added angle. A later gate round at the same head and an explicit `--angles` override skip this
-  seam override. Its prompt returns an exhaustive trust-boundary checklist, not a spot-check. `input-validation` is likewise part of the core `LOGIC_CHANGE` subset, not pool-only.
+  runs it past `enabled: false` in a `draft_gate` round, or in `pre_approval_gate` when
+  draft-first is off, and records it as an added angle. An explicit `--angles` set receives the
+  same override. A head reviewed only by `pre_approval_gate` under draft-first does not run it. Its prompt returns an exhaustive trust-boundary checklist, not a spot-check. `input-validation` is likewise part of the core `LOGIC_CHANGE` subset, not pool-only.
 - the preamble produces one or more review handoff artifacts (branch, head SHA, PR/issue
   scope, acceptance criteria, touched files, validation posture). The resolved angle set
   and its rationale are written as a deterministic handoff artifact under

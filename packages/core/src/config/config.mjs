@@ -2892,7 +2892,10 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
     return { tier: null, angles: null, reason: "no_tier_match" };
   }
   const { mandatoryAngles, pool } = resolveGateAngleContract(config, gate);
-  if (pool !== null && matched.angles.some((a) => !pool.includes(a))) {
+  const excludedAngles = resolveGateConfig(config, gate).excludeAngles;
+  // A config-disabled angle stays outside the pool even though the seam
+  // override widens it, so a tier cannot run it on a non-seam diff.
+  if (pool !== null && matched.angles.some((a) => !pool.includes(a) || excludedAngles.includes(a))) {
     return { tier: null, angles: null, reason: "angle_outside_pool" };
   }
   return { tier: matched.name, angles: [...new Set([...mandatoryAngles, ...matched.angles])], reason: "tier_match" };
@@ -3094,8 +3097,8 @@ export function resolveReviewProportionality(config, gate, {
  * @param {boolean} [options.hasFullLabel] — `gate:full` label present on the PR (bypasses tier resolution)
  * @param {boolean} [options.checkFloors] — opt into the GATE-EXEC-PROPORTIONALITY floor check above
  * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [options.sizeOutcome] — only consulted when `checkFloors` is true
- * @param {boolean} [options.seamFirstRound] — true when this is the first gate round at the head (default: draft, or preApproval when draft-first is off); only then does a SECURITY_SENSITIVE_SEAM diff force threat-model past `enabled: false`
- * @param {string[]} [options.explicitAngles] — caller-supplied verbatim override (e.g. CLI `--angles`); wins over tier/dynamic resolution but NEVER over a fired floor above (a fired floor refuses the override and continues to tier/dynamic best-effort selection)
+ * @param {boolean} [options.seamFirstRound] — true in a draft_gate round, or in pre_approval_gate when draft-first is off (the default); only then does a SECURITY_SENSITIVE_SEAM diff force threat-model past `enabled: false`, so a head reviewed only by pre_approval_gate under draft-first does not run it
+ * @param {string[]} [options.explicitAngles] — caller-supplied verbatim override (e.g. CLI `--angles`); wins over tier/dynamic resolution but NEVER over a fired floor above (a fired floor refuses the override and continues to tier/dynamic best-effort selection); the security-seam override still adds threat-model to it
  * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: boolean, dynamicAnglesActive: boolean, addedAngles: string[], addedReasons: Record<string,string> }}
  */
 export async function resolveGateAnglesDynamic(config, gate, options = {}) {
@@ -3110,6 +3113,33 @@ export async function resolveGateAnglesDynamic(config, gate, options = {}) {
     ...result,
     skippedAngles: [...result.skippedAngles, ...missing],
     reasons: { ...result.reasons, ...Object.fromEntries(missing.map((a) => [a, "config_disabled"])) },
+  };
+}
+
+// Security-seam override shared by the explicit, tier and static paths: on a
+// seam diff, threat-model is added past `enabled: false` and recorded as an
+// added angle so the override is never silent.
+async function applySeamOverride(config, gate, diff, result, seamFirstRound) {
+  const { recommendedAngles, skippedAngles, reasons } = result;
+  if (!diff || !seamFirstRound || recommendedAngles.includes(SECURITY_SEAM_ANGLE)) return result;
+  const eligible = resolveGateConfig(config, gate).excludeAngles.includes(SECURITY_SEAM_ANGLE)
+    || (resolveGateAngles(config, gate) ?? []).includes(SECURITY_SEAM_ANGLE);
+  if (!eligible) return result;
+  const { analyzeDiff } = await import("../analysis/diff-analyzer.mjs");
+  const seamCategories = analyzeDiff({
+    nameStatusOutput: diff.nameStatusOutput,
+    diffOutput: diff.diffOutput,
+    rules: resolveClassifyRules(config),
+  }).t1?.changeCategories ?? [];
+  if (!seamCategories.includes("SECURITY_SENSITIVE_SEAM")) return result;
+  const { [SECURITY_SEAM_ANGLE]: _dropped, ...otherReasons } = reasons;
+  return {
+    ...result,
+    recommendedAngles: [...recommendedAngles, SECURITY_SEAM_ANGLE],
+    skippedAngles: skippedAngles.filter((a) => a !== SECURITY_SEAM_ANGLE),
+    reasons: otherReasons,
+    addedAngles: [SECURITY_SEAM_ANGLE],
+    addedReasons: { [SECURITY_SEAM_ANGLE]: "SECURITY_SENSITIVE_SEAM" },
   };
 }
 
@@ -3146,17 +3176,17 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
   );
   // A fired floor refuses an explicit --angles override. Selection falls
   // through to the same tier/dynamic best-effort path as every other diff.
-  // An explicit --angles override intentionally skips the seam override.
+  // An explicit --angles set still gets the security-seam override.
   if (Array.isArray(explicitAngles) && !floorFired) {
-    return {
-      recommendedAngles: explicitAngles,
+    return applySeamOverride(config, gate, diff, {
+      recommendedAngles: [...explicitAngles],
       skippedAngles: [],
       reasons: {},
       fallbackToAll: false,
       dynamicAnglesActive: false,
       addedAngles: [],
       addedReasons: {},
-    };
+    }, seamFirstRound);
   }
   const tierResult = resolveGateTier(config, gate, { changedFiles, filesChanged, linesChanged, hasFullLabel });
   if (tierResult.tier) {
@@ -3168,36 +3198,17 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
     if (recommendedAngles.includes("deslop") && prosePresent === false) {
       recommendedAngles = recommendedAngles.filter((a) => a !== "deslop");
     }
-    let skippedAngles = configuredAngles.filter((a) => !recommendedAngles.includes(a));
+    const skippedAngles = configuredAngles.filter((a) => !recommendedAngles.includes(a));
     const reasons = Object.fromEntries(skippedAngles.map((a) => [a, `tier:${tierResult.tier}`]));
-    let addedAngles = [];
-    let addedReasons = {};
-    // Security-seam override: a tier never drops threat-model on a seam diff.
-    if (diff && seamFirstRound && !recommendedAngles.includes(SECURITY_SEAM_ANGLE)
-      && (resolveGateConfig(config, gate).excludeAngles.includes(SECURITY_SEAM_ANGLE) || configuredAngles.includes(SECURITY_SEAM_ANGLE))) {
-      const { analyzeDiff } = await import("../analysis/diff-analyzer.mjs");
-      const seamCategories = analyzeDiff({
-        nameStatusOutput: diff.nameStatusOutput,
-        diffOutput: diff.diffOutput,
-        rules: resolveClassifyRules(config),
-      }).t1?.changeCategories ?? [];
-      if (seamCategories.includes("SECURITY_SENSITIVE_SEAM")) {
-        recommendedAngles = [...recommendedAngles, SECURITY_SEAM_ANGLE];
-        skippedAngles = skippedAngles.filter((a) => a !== SECURITY_SEAM_ANGLE);
-        delete reasons[SECURITY_SEAM_ANGLE];
-        addedAngles = [SECURITY_SEAM_ANGLE];
-        addedReasons = { [SECURITY_SEAM_ANGLE]: "SECURITY_SENSITIVE_SEAM" };
-      }
-    }
-    return {
+    return applySeamOverride(config, gate, diff, {
       recommendedAngles,
       skippedAngles,
       reasons,
       fallbackToAll: false,
       dynamicAnglesActive: true,
-      addedAngles,
-      addedReasons,
-    };
+      addedAngles: [],
+      addedReasons: {},
+    }, seamFirstRound);
   }
 
   const gateConfig = resolveGateConfig(config, gate);
@@ -3206,7 +3217,7 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
     return { recommendedAngles: null, skippedAngles: [], reasons: {}, fallbackToAll: false, dynamicAnglesActive: false, addedAngles: [], addedReasons: {} };
   }
 
-  // The seam override applies only where threat-model is in the gate's contract pool.
+  // The dynamic-path seam override applies only where threat-model is in the gate's contract pool.
   const seamEligible = gateConfig.excludeAngles.includes(SECURITY_SEAM_ANGLE) || staticAngles.includes(SECURITY_SEAM_ANGLE);
   if (!gateConfig.dynamicAngles || !diff) {
     // No diff to select on (a thin briefing) or dynamic resolution explicitly
@@ -3219,7 +3230,7 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
     const recommendedAngles = bestEffortWithoutDiff ? (plan.angles ?? staticAngles) : staticAngles;
     const recommended = new Set(recommendedAngles);
     const skippedAngles = staticAngles.filter((a) => !recommended.has(a));
-    const result = {
+    return applySeamOverride(config, gate, diff, {
       recommendedAngles,
       skippedAngles,
       reasons: Object.fromEntries(
@@ -3229,24 +3240,7 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
       dynamicAnglesActive: bestEffortWithoutDiff,
       addedAngles: [],
       addedReasons: {},
-    };
-    // Static path with a diff: the seam override still applies.
-    if (diff && seamFirstRound && seamEligible && !recommended.has(SECURITY_SEAM_ANGLE)) {
-      const { analyzeDiff } = await import("../analysis/diff-analyzer.mjs");
-      const seamCategories = analyzeDiff({
-        nameStatusOutput: diff.nameStatusOutput,
-        diffOutput: diff.diffOutput,
-        rules: resolveClassifyRules(config),
-      }).t1?.changeCategories ?? [];
-      if (seamCategories.includes("SECURITY_SENSITIVE_SEAM")) {
-        result.recommendedAngles = [...recommendedAngles, SECURITY_SEAM_ANGLE];
-        result.skippedAngles = skippedAngles.filter((a) => a !== SECURITY_SEAM_ANGLE);
-        delete result.reasons[SECURITY_SEAM_ANGLE];
-        result.addedAngles = [SECURITY_SEAM_ANGLE];
-        result.addedReasons = { [SECURITY_SEAM_ANGLE]: "SECURITY_SENSITIVE_SEAM" };
-      }
-    }
-    return result;
+    }, seamFirstRound);
   }
 
   // Split into mandatory (always run) and candidate pool (dynamic selection)
@@ -3297,9 +3291,9 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
     Object.entries(dynamicResult.addedReasons ?? {}).filter(([a]) => !mandatory.has(a))
   );
 
-  // Security-seam override: threat-model runs once per head (the first gate
-  // round) on a seam diff regardless of `enabled: false`, and is recorded as
-  // an added angle so the override is never silent.
+  // Security-seam override: threat-model runs on a seam diff regardless of
+  // `enabled: false` in a draft round (or pre_approval when draft-first is
+  // off), and is recorded as an added angle so the override is never silent.
   const seamOverride = seamFirstRound && seamEligible && categories.includes("SECURITY_SENSITIVE_SEAM")
     && !filteredMandatory.includes(SECURITY_SEAM_ANGLE)
     && !dynamicResult.recommendedAngles.includes(SECURITY_SEAM_ANGLE)
@@ -3318,7 +3312,8 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
   // angles — fall back to the static pool (already excludeAngles-filtered),
   // mirroring selectFloorPlusJustifiedAngles and the composer, so the resolver
   // and the composer agree for the identical input. The whole pool is selected,
-  // so nothing is skipped and no angle carries a skip reason.
+  // so nothing is skipped here; resolveGateAnglesDynamic still records
+  // each config-disabled angle as dropped with reason config_disabled.
   const degenerateFallback = mergedAngles.length === 0;
   const recommendedAngles = degenerateFallback ? [...staticAngles] : mergedAngles;
   if (seamOverride && !recommendedAngles.includes(SECURITY_SEAM_ANGLE)) recommendedAngles.push(SECURITY_SEAM_ANGLE);

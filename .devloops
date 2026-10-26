@@ -76,7 +76,9 @@ gates:
       # D3 — so dropping a shipped angle requires an explicit enabled:false
       # entry here; omitting it entirely would let it merge back in).
       # threat-model is overridden on a SECURITY_SENSITIVE_SEAM diff: the
-      # resolver adds it back once per head in the first gate round.
+      # resolver adds it back in a draft_gate round (or in pre_approval_gate when
+      # draft-first is off); a head reviewed only by pre_approval_gate under
+      # draft-first does not run it.
       - name: threat-model
         enabled: false
       - name: renderer-security

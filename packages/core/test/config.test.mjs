@@ -5630,6 +5630,35 @@ describe("resolveGateAnglesDynamic: SECURITY_SENSITIVE_SEAM threat-model overrid
     assert.ok(!result.recommendedAngles.includes("threat-model"));
   });
 
+  test("an explicit angle set on a seam diff gets threat-model as an added angle", async () => {
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: seamDiff, explicitAngles: ["scope"] });
+    assert.deepEqual(result.recommendedAngles, ["scope", "threat-model"]);
+    assert.deepEqual(result.addedAngles, ["threat-model"]);
+    assert.equal(result.addedReasons["threat-model"], "SECURITY_SENSITIVE_SEAM");
+    assert.equal(result.reasons.yagni, "config_disabled");
+    const plain = await resolveGateAnglesDynamic(config, "draft", { diff: plainDiff, explicitAngles: ["scope"] });
+    assert.deepEqual(plain.recommendedAngles, ["scope"]);
+    assert.equal(plain.reasons["threat-model"], "config_disabled");
+  });
+
+  test("an enabled threat-model on a seam diff appears once and is not relabeled as added", async () => {
+    const enabled = { version: 1, gates: { draft: { angles: ["scope", "correctness", "threat-model"] } } };
+    const result = await resolveGateAnglesDynamic(enabled, "draft", { diff: seamDiff });
+    assert.equal(result.recommendedAngles.filter((a) => a === "threat-model").length, 1);
+    assert.equal(result.addedReasons["threat-model"], undefined);
+  });
+
+  test("a tier listing a config-disabled threat-model falls back on a non-seam diff", async () => {
+    const tierConfig = {
+      ...config,
+      gates: { draft: { ...config.gates.draft, tiers: [{ name: "small-code", match: { kinds: ["code"], maxLines: 50 }, angles: ["correctness", "threat-model"] }] } },
+    };
+    const plain = await resolveGateAnglesDynamic(tierConfig, "draft", { diff: plainDiff });
+    assert.ok(!plain.recommendedAngles.includes("threat-model"));
+    const seam = await resolveGateAnglesDynamic(tierConfig, "draft", { diff: seamDiff });
+    assert.equal(seam.addedReasons["threat-model"], "SECURITY_SENSITIVE_SEAM");
+  });
+
   test("a diff without the seam keeps the config drop", async () => {
     const result = await resolveGateAnglesDynamic(config, "draft", { diff: plainDiff });
     assert.ok(!result.recommendedAngles.includes("threat-model"));
