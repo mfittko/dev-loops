@@ -1628,6 +1628,17 @@ describe("applyJudgeDispositions (#1525)", () => {
       assert.deepEqual(out.map((f) => f.judgeDisposition), ["act", "act"]);
     });
 
+    test("failOpen never downgrades a high or question in a mixed cluster, stamped or unstamped", () => {
+      for (const top of ["high", "question"]) {
+        const stamped = applyJudgeDispositions(cluster(top, "low"), judgeVerdict([{ index: 0, ...act, failOpen: true }]), { pastCap: true, round: 4 });
+        assert.deepEqual(stamped.findings.map((f) => [f.severity, f.judgeDisposition]), [[top, "act"], ["low", "act"]]);
+        const findings = [0, 1].map((i) => ({ severity: [top, "low"][i], angle: `a${i}`, summary: "dup", file: "src/x.mjs", line: 10, recommendation: "same fix" }));
+        const { findings: out } = applyJudgeDispositions(findings, judgeVerdict([{ index: 0, ...act }, { index: 1, ...act, failOpen: true }]), { pastCap: true, round: 4 });
+        assert.equal(out[0].severity, top);
+        assert.equal(out[0].judgeDisposition, "act");
+      }
+    });
+
     test("a cluster with a medium member stays act", () => {
       const { findings } = applyJudgeDispositions(cluster("medium", "low"), judgeVerdict([{ index: 0, ...act }]));
       assert.deepEqual(findings.map((f) => [f.severity, f.judgeDisposition]), [["medium", "act"], ["low", "act"]]);

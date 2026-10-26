@@ -1291,7 +1291,7 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
     const lowOrNitOnly = severities.every((s) => s === "low" || s === "nit");
     const allNit = severities.every((s) => s === "nit");
     if (disposition === "act") {
-      if (failOpen && severities.includes("low")) {
+      if (failOpen && lowOrNitOnly && severities.includes("low")) {
         promote = true;
       } else if (lowOrNitOnly && (allNit ? !(round === 1 && !pastCap) : pastCap)) {
         disposition = allNit ? "reject" : "defer";
