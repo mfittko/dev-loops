@@ -1167,7 +1167,7 @@ export function commandContainsInlineInterpreter(command) {
     if (interpreterRegex("node").test(s)) {
       const code = s.replace(interpreterRegex("node"), "").trim();
       const tokens = code.split(/\s+/).filter(Boolean);
-      // ponytail: closed list of value flags. An unlisted `--long value` flag fails closed: when the scan breaks on a non-flag token that follows a `--flag` without `=`, a stdin-script token right after it is refused.
+      // ponytail: closed list of value flags. An unlisted `--long value` flag fails closed: a non-flag token that follows a `--flag` without `=` is skipped as its value and the scan continues (a boolean long flag before a script then over-refuses a later `-`/heredoc; accepted).
       // Node value-taking flags (short + long) each consume the following token. Consuming them lets
       // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
       // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value.
@@ -1181,7 +1181,7 @@ export function commandContainsInlineInterpreter(command) {
         if (t === "-e" || t.startsWith("-e") || t === "--eval" || t.startsWith("--eval=") || t === "-p" || t.startsWith("-p")) return true;
         if (!t.startsWith("-")) {
           const prev = tokens[i - 1];
-          if (prev?.startsWith("--") && !prev.includes("=") && isStdinScriptToken(tokens[i + 1] ?? "")) return true;
+          if (prev?.startsWith("--") && !prev.includes("=")) continue; // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
           break; // script path reached — a later `-e` is a script argument
         }
         if (NODE_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
