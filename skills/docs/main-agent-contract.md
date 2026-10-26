@@ -247,13 +247,13 @@ because "the user said yes," not because it is running from a worktree.
 - On Claude Code a gate coordinator's completion notification is the join signal for its round and is never dismissed as a repeat (`GATE-EXEC-HARNESS-JOIN` in [Gate Review Sub-Loop Contract](gate-review-sub-loop-contract.md)).
 
 <!-- rule: COORDINATOR-HANDBACK-ONE-REPORT -->
-`COORDINATOR-HANDBACK-ONE-REPORT`: Claude Code only. A pause is a turn end while the coordinator's run is not finished, for example while a child it dispatched runs.
+`COORDINATOR-HANDBACK-ONE-REPORT`: Claude Code only. A pause is a turn end while the dev-loop coordinator's run is not finished, for example while a child it dispatched runs.
 
 - A pause ends the turn with plain text and never calls `SubagentHandback`. The harness "report has not been delivered" prompt after a pause is answered in plain text too.
-- An answer to a question typed into the coordinator's thread, and a duplicate child wake, are pauses when the run state did not change (no dispatch, push, gate result or new stop).
+- An answer to a question typed into the dev-loop coordinator's thread, and a duplicate child wake, are pauses when the run state did not change (no dispatch, push, gate result or new stop).
 - The one `SubagentHandback` call of a run carries its final report: `final_approval_ready`, or a stop that needs a caller decision.
-- A turn end with no child in flight is never a pause. The coordinator never ends silently while its next step is runnable.
-- After a refused `SubagentHandback`, the coordinator makes no further call in that run and ends the turn with the full report as plain text.
+- A turn end with no child in flight is never a pause. The dev-loop coordinator never ends silently while its next step is runnable.
+- After a refused `SubagentHandback`, the dev-loop coordinator makes no further call in that run and ends the turn with the full report as plain text.
 - Every hand-back names the last relayed message it consumed, by first line and arrival time, or states that it consumed none.
 
 <!-- rule: MAIN-AGENT-COORDINATOR-REPORT-READ -->
@@ -261,7 +261,7 @@ because "the user said yes," not because it is running from a worktree.
 
 - The orchestrator sends all decisions for one block in one message.
 - The orchestrator reads the latest hand-back before it re-instructs.
-- A reporter whose report names children in flight is still running. The orchestrator reads its output file by this path on the reporter's next notification.
+- On the next notification of a reporter that named children in flight, read its output file by this path before acting.
 
 ## Model tier at dispatch (Pi)
 

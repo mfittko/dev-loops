@@ -14,17 +14,17 @@ async function rule(id, file = MAIN) {
   const content = await readRepo(file);
   assert.equal(content.split(`<!-- rule: ${id} -->`).length - 1, 1, `${id} defined once`);
   const start = content.indexOf(`<!-- rule: ${id} -->`);
-  const next = content.indexOf("\n<!-- rule:", start + 1);
-  return content.slice(start, next === -1 ? undefined : next);
+  const ends = ["\n<!-- rule:", "\n## "].map((m) => content.indexOf(m, start + 1)).filter((i) => i !== -1);
+  return content.slice(start, ends.length ? Math.min(...ends) : undefined);
 }
 
 test("COORDINATOR-HANDBACK-ONE-REPORT defines pauses as plain text", async () => {
   const text = await rule(ONE);
   assert.match(text, /Claude Code only/);
-  assert.match(text, /pause is a turn end while the coordinator's run is not finished/);
-  assert.match(text, /ends the turn with plain text and never calls `SubagentHandback`/);
+  assert.match(text, /pause is a turn end while the dev-loop coordinator's run is not finished/);
+  assert.match(text, /plain text and never calls `SubagentHandback`/);
   assert.match(text, /"report has not been delivered" prompt.*plain text/);
-  assert.match(text, /typed into the coordinator's thread.*duplicate child wake.*run state did not change.*dispatch, push, gate result or new stop/s);
+  assert.match(text, /dev-loop coordinator's thread.*duplicate child wake.*run state did not change/s);
 });
 
 test("COORDINATOR-HANDBACK-ONE-REPORT carries one final report and the refusal path", async () => {
@@ -40,7 +40,7 @@ test("MAIN-AGENT-COORDINATOR-REPORT-READ defines the orchestrator read path", as
   assert.match(text, /"not repeated here".*idle without a delivered report.*last assistant message of the coordinator's output file before it resumes or re-asks/s);
   assert.match(text, /all decisions for one block in one message/);
   assert.match(text, /latest hand-back before it re-instructs/);
-  assert.match(text, /names children in flight is still running.*next notification/s);
+  assert.match(text, /next notification of a reporter that named children in flight, read its output file/);
 });
 
 test("GATE-EXEC-HARNESS-JOIN names children in flight and cites the read rule", async () => {

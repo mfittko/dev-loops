@@ -4,7 +4,7 @@
 
 Accepted — 2026-10-26 ([issue 2611](https://github.com/mfittko/dev-loops/issues/2611), slice 1).
 
-Amends [0056](0056-bounded-parallel-gate-dispatch.md). The body of 0056 is unchanged. Its "No mid-chain turn-ending" and "Blocking join for a nested single-child step" bullets hold for Pi only. Related: [0069](0069-claude-harness-fanout-concurrency-clamp.md), [0095](0095-single-wave-gate-fanout.md), [0112](0112-gate-coordinator-agent-joins-the-agent-taxonomy.md).
+Amends [0056](0056-bounded-parallel-gate-dispatch.md). The body of 0056 is unchanged. Its "No mid-chain turn-ending" and "Blocking join for a nested single-child step" bullets will hold for Pi only once the remaining slice of [issue 2611](https://github.com/mfittko/dev-loops/issues/2611) lands. Related: [0069](0069-claude-harness-fanout-concurrency-clamp.md), [0095](0095-single-wave-gate-fanout.md), [0112](0112-gate-coordinator-agent-joins-the-agent-taxonomy.md).
 
 ## Context
 
@@ -21,6 +21,8 @@ On Claude Code the report path has three parts.
 3. The orchestrator reads the last assistant message of the coordinator's output file before it resumes or re-asks the coordinator. It sends all decisions for one block in one message.
 
 Every hand-back names the last relayed message it consumed, by first line and arrival time, or states that it consumed none. A report sent while a child is in flight names each child, and its parent treats the reporter as still running.
+
+Relaying interim reports through `SendMessage` was rejected because its availability varies by session (PR 2602).
 
 The rules are `COORDINATOR-HANDBACK-ONE-REPORT` and `MAIN-AGENT-COORDINATOR-REPORT-READ` in `skills/docs/main-agent-contract.md`. The join stays harness-scoped as issue 2579 landed it (`GATE-EXEC-HARNESS-JOIN`).
 
