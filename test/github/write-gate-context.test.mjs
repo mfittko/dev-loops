@@ -8215,6 +8215,30 @@ test("seamFirstRoundFor: pre_approval is a seam-first round only when no draft_g
   }
 });
 
+// Wiring pin: deleting the seamFirstRound line in buildGateContext restores the
+// resolver default (false for preApproval) and must fail this test.
+test("buildGateContext passes seamFirstRoundFor to the resolver: a pre_approval seam round adds threat-model only when no draft artifact at the head lists it", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-seam-wiring-"));
+  try {
+    const config = { version: 1, gates: { preApproval: { angles: ["scope", { name: "threat-model", enabled: false }] } } };
+    const seamDiff = {
+      nameStatusOutput: "M\tscripts/x.mjs",
+      diffOutput: "diff --git a/scripts/x.mjs b/scripts/x.mjs\n--- a/scripts/x.mjs\n+++ b/scripts/x.mjs\n@@ -1 +1,2 @@\n a\n+spawn(cmd);\n",
+    };
+    const id = { repo: "owner/repo", pr: 12, headSha: "a".repeat(40) };
+    const build = () => buildGateContext({ config, gate: "pre_approval_gate", diff: seamDiff, ...id, branch: "issue-1" }, { repoRoot });
+    const noDraft = await build();
+    assert.ok(noDraft.artifact.resolvedAngles.includes("threat-model"), "no draft artifact at the head");
+    const draftPath = path.join(repoRoot, buildGateContextPath({ ...id, gate: "draft_gate" }));
+    await mkdir(path.dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, JSON.stringify({ resolvedAngles: ["scope", "threat-model"] }));
+    const afterDraft = await build();
+    assert.ok(!afterDraft.artifact.resolvedAngles.includes("threat-model"), "draft artifact lists threat-model");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("countCompletedRounds counts an in-range identity-matching ledger with a missing or unknown verdict, never a foreign one", async () => {
   const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-round-count-"));
   try {

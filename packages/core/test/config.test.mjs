@@ -31,6 +31,7 @@ import {
   resolveRejectForeignAngles,
   resolveGateAnglesDynamic,
   resolveGateTier,
+  resolveReviewerRole,
   resolveAnglePool,
   resolveWorkflowConfig,
   resolveLightMode,
@@ -3730,20 +3731,13 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
       assert.ok(role.prompt && role.prompt.startsWith(promptStart), `${angle} prompt should start with ${JSON.stringify(promptStart)}, got ${JSON.stringify(role.prompt?.slice(0, 60))}`);
     }
 
-    // "threat-model" is genuinely disabled (dropped) from every one of this
-    // repo's shipped gates, same as pre-#1404 (it was likewise absent from
-    // every resolved angle pool there — its old top-level personas[angle]
-    // entry was reachable ONLY because that registry was global and
-    // independent of any gate's angle list, a property D3's per-gate angle
-    // entries deliberately don't reproduce for a name disabled everywhere:
-    // findAngleEntry has no live caller that queries a name outside some
-    // gate's enabled, resolved angle list). It still resolves via
-    // BUILTIN_PERSONAS (persona "review", no prompt there either) rather
-    // than the generic default-reviewer fallback, since it IS a known builtin
-    // persona name — just with no reachable prompt override anymore.
+    // "threat-model" is disabled in every one of this repo's shipped gates, but
+    // the SECURITY_SENSITIVE_SEAM override can still add it to a round, so
+    // findAngleEntry falls back to the disabled entry and the role carries the
+    // shipped trust-boundary checklist prompt.
     const threatModel = resolveReviewerRole(config, "threat-model");
     assert.equal(threatModel.persona, "review");
-    assert.equal(threatModel.prompt, null);
+    assert.match(threatModel.prompt, /trust-boundary CHECKLIST/);
     assert.equal(threatModel.fallback, false);
   });
 
@@ -5680,6 +5674,22 @@ describe("resolveGateAnglesDynamic: SECURITY_SENSITIVE_SEAM threat-model overrid
     assert.ok(resolveGateAngleContract(absent, "preApproval").pool.includes("threat-model"));
     const plain = await resolveGateAnglesDynamic(absent, "preApproval", { diff: plainDiff, seamFirstRound: true });
     assert.ok(!plain.recommendedAngles.includes("threat-model"));
+  });
+
+  test("resolveReviewerRole finds a seam-added angle's prompt: enabled entry wins, a disabled-only entry is the fallback, no entry stays null", () => {
+    const withPrompt = (extra) => ({ name: "threat-model", persona: "review", prompt: "Check trust boundaries.", ...extra });
+    const disabledOnly = { version: 1, gates: { draft: { angles: ["scope", withPrompt({ enabled: false })] } } };
+    assert.equal(resolveReviewerRole(disabledOnly, "threat-model").prompt, "Check trust boundaries.");
+    const enabledElsewhere = {
+      version: 1,
+      gates: {
+        draft: { angles: [{ name: "threat-model", enabled: false }] },
+        preApproval: { angles: [{ name: "threat-model", persona: "review", prompt: "Enabled prompt." }] },
+      },
+    };
+    assert.equal(resolveReviewerRole(enabledElsewhere, "threat-model").prompt, "Enabled prompt.");
+    const none = { version: 1, gates: { draft: { angles: ["scope"] } } };
+    assert.equal(resolveReviewerRole(none, "threat-model").prompt, null);
   });
 
   test("a tier listing threat-model still falls back on a gate that does not configure it", () => {

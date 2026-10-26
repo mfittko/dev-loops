@@ -1203,22 +1203,27 @@ function normalizeAngleEntries(raw) {
 /**
  * Find a named angle's configured entry, searching this config's own gates in
  * a fixed priority order (draft, preApproval, spike) and returning the first
- * match. A DISABLED entry (`enabled: false`) is SKIPPED, never returned:
- * returning a bare `enabled:false` placeholder would shadow another gate's real
- * override of the same angle name. Both callers only ever look up a name
- * already present in some gate's enabled resolved list, so a name disabled
- * everywhere is never queried.
+ * match. An ENABLED entry in any gate wins: returning a bare `enabled:false`
+ * placeholder first would shadow another gate's real override of the same
+ * angle name. When no gate enables the name, the first DISABLED entry is the
+ * fallback, so an angle the SECURITY_SENSITIVE_SEAM override adds past
+ * `enabled: false` (threat-model) still resolves its persona and prompt. No
+ * entry in any gate returns null.
  * @param {DevLoopConfig} config
  * @param {string} name
  * @returns {{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string}|null}
  */
 function findAngleEntry(config, name) {
+  let disabled = null;
   for (const gate of ["draft", "preApproval", "spike"]) {
     const entries = normalizeAngleEntries(config?.gates?.[gate]?.angles);
-    const found = entries.find((e) => e.name === name && e.enabled !== false);
-    if (found) return found;
+    for (const e of entries) {
+      if (e.name !== name) continue;
+      if (e.enabled !== false) return e;
+      disabled ??= e;
+    }
   }
-  return null;
+  return disabled;
 }
 
 /**
