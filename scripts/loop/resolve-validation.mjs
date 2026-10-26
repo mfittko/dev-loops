@@ -111,7 +111,7 @@ export function readCheckoutValidation(repoRoot) {
 
 // ADR 0192 (ADR0192-PATHS-ONLY-ADMIT): `paths` is never executed by the gate, so a difference in `paths`
 // alone is admitted. Any other difference refuses. Execution reads only the base block, and a targeted
-// request's suites are checked against the base paths in `resolveValidation`.
+// request's suites are replaced by the suites the base paths select in `resolveValidation`.
 export function validationDifferenceRefusal(checkout, base) {
   const { paths: _checkoutPaths, ...checkoutRest } = checkout;
   const { paths: _basePaths, ...baseRest } = base;
