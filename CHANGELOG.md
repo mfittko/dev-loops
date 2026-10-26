@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.8-pre.3
+
+### Added
+
+- `gates.draft.maxReviewRounds` (default 4, `0` disables) caps `draft_gate` rounds and limits the verdict post to the judged ledger (#2462)
+- Map changeset fragments to docs checks and run literal referencing tests for skill contracts (#2508)
+- Handoff envelopes carry `unitBoundaries`, the target- and strategy-derived points where a unit coordinator hands back and a fresh successor resumes (ADR 0181) (#2532)
+- `dev-loops loop implementation-brief` prints a spec body's review expectations offline (#2588)
+- `loop implementation-brief` lists a helper inventory and importers of each touched source module; when `git ls-files` fails, `importers` is `null` with an `importers_unavailable` finding (#2588)
+- Claude Code coordinators make one `SubagentHandback` per run and pause in plain text; the orchestrator reads the coordinator output file (#2611)
+- On Claude Code the dev-loop coordinator never calls `SubagentHandback` while a child is in flight; it pauses in plain text and names each child (#2611)
+- Add opt-in Codex conductor model and reasoning settings to initial and resumed native coordinator dispatch (#2913)
+- Capture authenticated supplemental residual assessments as unqualified snapshots; delivery, CI, full-gate acceptance and thread closure remain dependent work (#2918)
+
+### Changed
+
+- The draft round cap counts only rounds whose ledger was written after the cap landed, so in-flight pull requests get a fresh budget (#2462)
+- Past the draft round cap, a medium the judge rejects with a reason or defers to an issue is final and raises no blocker (#2462)
+- The findings-log writer derives a fan-out round's mode, provenance, `verifiedItems` and verdict from the keyed emit plan and fan-in ledger (#2526)
+- At `pre_approval_gate`, a round of only low and nit findings composes clean in every round, and the fixer refuses a low-only act list with `low_fix_until_cap` (#2724)
+- Fold prerelease CHANGELOG sections into one section on a stable version bump and use annotated tags in the release runbook (#2804)
+- A validation block that differs from the base only in `paths` no longer blocks the gate; mode and fullCommand differences still refuse (#2852)
+- A stale PR base now fails fast with `base_stale_integrate_first`; every gate-context run checks the PR base, with or without `--base` (#2885)
+- The judge owns every finding disposition, the review verdict and the next action; fan-in leaves findings `unjudged` (#2903)
+- The standalone `review` gate never resolves the `gate-evidence` angle, and the judge rejects template-only findings (#2903)
+- `@dev-loops/core/loop/gate-fanin` no longer exports `deriveDisposition` or `isDefaultDeferrableSeverity`; fan-in leaves findings unjudged (#2903)
+- The fixer fixes lows until the draft-gate round cap; a nit is fixed in draft round 1 and rejected from round 2 on, and at or past the cap lows defer and a low/nit-only round composes clean (#2937)
+- The autonomy principles are contract rules with one owner each, and the low/nit refusal at the cap carries the typed code `low_fix_until_cap` (#2937)
+- At the draft round cap, judge-acted findings with a specified remedy are fixed and one closure round verifies the fix delta; a later act item blocks (#2937)
+
+### Fixed
+
+- Unit coordinators hand back only on routes that own a phase, and a phase-only target resumes by phase (#2532)
+- A handoff envelope keeps a Windows drive or network-share worktree root, and one root has one `cwd` spelling (#2532)
+- A resume identity rejects a non-string branch or phase instead of accepting malformed authoritative state (#2532)
+- Run threat-model on a SECURITY_SENSITIVE_SEAM diff in a draft_gate round, or in a pre_approval_gate round at a head where no draft round ran it, even when config disables it (#2899)
+
 ## 1.0.8-pre.2
 
 ### Added

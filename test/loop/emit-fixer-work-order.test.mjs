@@ -955,7 +955,7 @@ test("ADR 0188: the round count comes from the --tmp-root the ledger writer uses
     await writeCurrentLog(custom, head);
     await writeCurrentLog(path.join(root, "tmp"), head);
     await assert.rejects(emit({ tmpRoot: custom }), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
-    await assert.rejects(emit(),(e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
+    await assert.rejects(emit(),(e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message) && !/pre_approval_gate/.test(e.message));
     // A subdirectory cwd reads the repo cap, not the default 4.
     const sub = path.join(wt, "scripts");
     await mkdir(sub, { recursive: true });
@@ -1001,13 +1001,15 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
     // A deduped [low, medium] cluster carries its full severities, so the representative's low does not trip the cap guard.
     await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low", clusterSeverities: ["low", "medium"] })]));
     assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
-    // pre_approval_gate has no cap, so a low-only act list is never past it.
     assert.equal((await emit({ gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low" })]));
+    // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate applies the past-cap rule in every round, so a low-only act list is refused (PR 2945 replay).
+    await assert.rejects(emit({ gate: "pre_approval_gate" }), (e) => e.refusal === "low_fix_until_cap" && /at pre_approval_gate/.test(e.message));
     await rm(path.join(wt, ".devloops.json"));
     // A nit-only list is fixable in draft round 1 below the cap; refused at the cap and on a gate with no round count.
     await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "nit" })]));
     assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
-    await assert.rejects(emit({ gate: "pre_approval_gate" }), (e) => e.refusal === "low_fix_until_cap" && /outside draft_gate round 1/.test(e.message));
+    await assert.rejects(emit({ gate: "pre_approval_gate" }), (e) => e.refusal === "low_fix_until_cap" && /at pre_approval_gate/.test(e.message));
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 1 } } }));
     await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
     await rm(path.join(wt, ".devloops.json"));
@@ -2332,5 +2334,52 @@ for (const form of ["foreign-route", "two-matching"]) test(`complete THREAD --co
     await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: candidate, fixerPlan: unit.planPath, construct: true }, { repoRoot: wt, env: gitFreeEnv(), runChild: mock.runChild }),
       form === "two-matching" ? /several clearing delta records/ : /needs a clearing delta record/);
     assert.equal(existsSync(unit.workOrder.outputRefs[0]), false);
+  });
+});
+
+// ADR 0197 (#2937 S4b): the cap round (cap 2) ran at `head`; origin/main then moved and the branch merged it.
+async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfterMerge = false } = {}) {
+  await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+  const medium = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
+  await writeFile(files.actList, JSON.stringify([medium]));
+  const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
+  await mkdir(dir, { recursive: true });
+  for (const [sha, loggedAt] of [["d".repeat(40), "2026-11-01T00:00:00.000Z"], [head, "2026-11-02T00:00:00.000Z"]]) {
+    await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt, findings: sha === head ? [medium] : [] }));
+  }
+  await writeFile(path.join(root, "main-only.md"), "main content\n");
+  git(root, "add", "main-only.md");
+  git(root, "commit", "-q", "-m", "main moves");
+  git(root, "update-ref", "refs/remotes/origin/main", "main");
+  git(wt, "merge", "-q", "--no-ff", "-m", "merge origin/main", "origin/main");
+  if (ownChangeAfterMerge) {
+    await writeFile(path.join(wt, "own.md"), "own change\n");
+    git(wt, "add", "own.md");
+    git(wt, "commit", "-q", "-m", "own change");
+  }
+  const merged = git(wt, "rev-parse", "HEAD");
+  return { merged, over: { headSha: merged, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: merged, baseRefName: "main" }), fetchVerdictMarkers: verdictPostedAt(head), phase: "commit_only", deltaResult: undefined } };
+}
+
+test("ADR 0197: a base-only merge after the cap round does not consume the closure round; the cap-round act list reaches the fixer at the merged head", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, {});
+    const result = await fx.emit(over);
+    assert.equal(result.workOrder.source, "act-list");
+  });
+});
+
+test("ADR 0197: an unreadable prior ledger keeps the round_cap_reached refusal after a base-only merge", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, {});
+    await writeFile(path.join(fx.root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${"d".repeat(40)}.json`), "{not json");
+    await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
+  });
+});
+
+test("ADR 0197: a PR-own change after the cap round keeps the round_cap_reached refusal", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, { ownChangeAfterMerge: true });
+    await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
   });
 });

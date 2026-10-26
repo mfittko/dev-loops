@@ -128,6 +128,7 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/github/ready-for-review.mjs` | Fail closed: `config_load_failed` on its own load, plus the size budget block |
 | `scripts/loop/judge-pass.mjs` | Fail closed: throws |
 | `scripts/loop/spec-lint.mjs` | Fail closed: throws, so a broken `.devloops` cannot relax the size forecast bound |
+| `scripts/loop/check-pre-push-delta.mjs` | Fail closed: the earlier-head findings log is refused |
 | `scripts/loop/consolidate-fanin.mjs` | Fail closed: throws with `--gate` |
 | `scripts/github/upsert-checkpoint-verdict.mjs` | Fail closed: throws |
 | `scripts/github/merge-pr.mjs` | Fail closed: refuses with `configError` |
