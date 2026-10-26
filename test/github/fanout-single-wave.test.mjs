@@ -114,7 +114,7 @@ describe("single-wave fan-out under the shipped group table and maxConcurrent 5"
     }
   }
 
-  for (const [label, config, expectedPool] of [["shipped 22-angle draft catalog", SHIPPED_CONFIG, 22], ["this repo's 20-angle draft pool", REPO_CONFIG, 20]]) {
+  for (const [label, config, expectedPool] of [["shipped 22-angle draft catalog", SHIPPED_CONFIG, 22], ["this repo's 20-angle draft pool plus the seam-only threat-model", REPO_CONFIG, 21]]) {
     for (const [harness, env] of HARNESS_ENVS) {
       test(`full round, ${label} (${harness}): packed into one grouped wave of at most 5 units`, () => {
         const { pool } = resolveGateAngleContract(config, "draft");

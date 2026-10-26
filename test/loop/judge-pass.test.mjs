@@ -426,6 +426,80 @@ test("judgePassCli accepts a clean verdict whose acts are all non-blocking, prod
   );
 });
 
+for (const [label, maxReviewRounds, expectedActs] of [["at the round cap", 1, 0], ["in draft round 1 below the round cap", 4, 4]]) test(`judgePassCli: an act verdict on 3 low + 1 nit findings ${label} leaves ${expectedActs} act items (ADR 0188)`, async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-low-nit-"));
+  await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds } } }));
+  await writeFile(
+    path.join(tmpDir, "ledger.json"),
+    JSON.stringify({
+      overallVerdict: "clean",
+      findings: [
+        finding({ severity: "low", summary: "low one" }),
+        finding({ severity: "low", summary: "low two" }),
+        finding({ severity: "low", summary: "low three" }),
+        finding({ severity: "nit", summary: "a nit" }),
+      ],
+    }),
+  );
+  const act = { disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting to fix" };
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(verdict({ dispositions: [0, 1, 2, 3].map((index) => ({ index, ...act })) })),
+  );
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "2243", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
+    { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+  );
+  assert.equal(payload.ok, true);
+  assert.equal(payload.actCount, expectedActs);
+  assert.equal(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")).length, expectedActs);
+});
+
+test("runJudgePass never defers an unstamped [low, medium] duplicate cluster through the low-nit coercion (ADR 0188)", () => {
+  const findings = ledger(
+    locatedFinding({ severity: "low", angle: "correctness", summary: "null deref (low report)" }),
+    locatedFinding({ severity: "medium", angle: "security", summary: "null deref (medium report)" }),
+  );
+  const act = { disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" };
+  const result = runJudgePass(findings, verdict({ dispositions: [{ index: 0, ...act }, { index: 1, ...act }] }), HEAD, { pastCap: true, round: 4 });
+  assert.deepEqual(result.enriched.map((f) => f.judgeDisposition), ["act", "act"]);
+});
+
+for (const [label, severities, options] of [["[nit, low] in round 2", ["nit", "low"], { pastCap: false, round: 2 }], ["[low, medium] at the cap", ["low", "medium"], { pastCap: true, round: 4 }]]) test(`the deduped fixer act list keeps the full ${label} cluster severities (ADR 0188)`, () => {
+  const findings = ledger(...severities.map((severity, i) => locatedFinding({ severity, angle: i === 0 ? "correctness" : "security", summary: `null deref (${severity} report)` })));
+  const act = { disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" };
+  const result = runJudgePass(findings, verdict({ dispositions: [{ index: 0, ...act }, { index: 1, ...act }] }), HEAD, options);
+  const deduped = dedupeActListByCluster(result.act, result.clusters, result.enriched);
+  assert.equal(deduped.length, 1);
+  assert.deepEqual(deduped[0].clusterSeverities, severities);
+});
+
+test("judgePassCli accepts a clean low-only ledger whose failOpen act is promoted to medium (ADR 0188)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-failopen-clean-"));
+  await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4, blockCleanOnFindingSeverities: ["high", "medium"] } } }));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "clean", findings: [finding({ severity: "low", summary: "low one" })] }));
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", failOpen: true, title: "t", detail: "d", fix: "f", reason: "r", rationale: "fail open" }] })),
+  );
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "2243", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
+    { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+  );
+  assert.equal(payload.ok, true);
+  assert.equal(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8"))[0].severity, "medium");
+});
+
+test("runJudgePass keeps an unstamped [nit, low] duplicate act on both below the cap in round 2 (GATE-EXEC-LOW-FIX-UNTIL-CAP)", () => {
+  const findings = ledger(
+    locatedFinding({ severity: "nit", angle: "correctness", summary: "null deref (nit report)" }),
+    locatedFinding({ severity: "low", angle: "security", summary: "null deref (low report)" }),
+  );
+  const act = { disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" };
+  const result = runJudgePass(findings, verdict({ dispositions: [{ index: 0, ...act }, { index: 1, ...act }] }), HEAD, { pastCap: false, round: 2 });
+  assert.deepEqual(result.enriched.map((f) => f.judgeDisposition), ["act", "act"]);
+});
+
 // #2246: the fail-closed half of the same rule — a clean verdict with an act on
 // a BLOCKING severity (high, in this repo's block set) is genuinely invalid: an
 // acted high is unresolved blocking work, so the round cannot be clean.
@@ -537,7 +611,7 @@ test("judgePassCli fails closed when the gate config cannot be loaded (#2246)", 
       { judgePlan: plan.planPath, ...options, judgeVerdict: plan.workOrder.outputRefs[0] },
       { repoRoot: tmpDir, receiptTmpRoot },
     ),
-    /could not be fully loaded\/validated/,
+    /invalid dev-loops config/, // the round-cap resolver reads the config first and fails closed (ADR 0188)
   );
 });
 
@@ -624,17 +698,49 @@ function stubDeferralDeps({ closing = [], listed = [] } = {}) {
   return { deps: { run, commentIssue }, runCalls, commentCalls };
 }
 
-async function runDeferRound({ findings, dispositions, deps, config, pr = "1658", gate = "draft_gate" }) {
+async function runDeferRound({ findings, dispositions, deps, config, pr = "1658", gate = "draft_gate", durable }) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-defer-"));
+  // A durable findings log written before the pass (write-gate-findings-log --judge-verdict never records a defer target).
+  const durablePath = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", `pr-${pr}`, `${gate}-${HEAD}.json`);
+  if (durable) {
+    await mkdir(path.dirname(durablePath), { recursive: true });
+    await writeFile(durablePath, JSON.stringify(Array.isArray(durable) ? { repo: "mfittko/dev-loops", pr: Number(pr), gate, headSha: HEAD, verdict: "findings_present", findings: durable } : durable));
+  }
   if (config) await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify(config));
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
   await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions })));
   const payload = await judgePassCli(
-    { repo: "mfittko/dev-loops", pr, gate, headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", ...(gate === "review" ? {} : { out: "./act.json" }), ledgerOut: "./enriched.json" },
+    { repo: "mfittko/dev-loops", pr, gate, headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", ...(gate === "review" ? {} : { out: "./act.json" }), ledgerOut: "./enriched.json", ...(durable ? { tmpRoot: "./tmp" } : {}) },
     { repoRoot: tmpDir, ...deps },
   );
   const enriched = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8"));
-  return { payload, enriched, tmpDir };
+  return { payload, enriched, tmpDir, durableLog: Array.isArray(durable) ? JSON.parse(await readFile(durablePath, "utf8")) : undefined };
+}
+
+test("judgePassCli: the defer target reaches the durable findings log the cap-round fixer check reads (AC4a)", async () => {
+  const { deps } = stubDeferralDeps({ closing: [2425] });
+  const durable = [finding({ summary: "fix this", judgeDisposition: "act" }), finding({ summary: "defer this", severity: "medium", judgeDisposition: "defer" })];
+  const { durableLog } = await runDeferRound({
+    findings: [finding({ summary: "fix this" }), finding({ summary: "defer this", severity: "medium" })],
+    dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" }, { index: 1, ...DEFER }],
+    deps, durable,
+  });
+  assert.equal(durableLog.findings[1].followUpIssueNumber, 2425);
+  assert.equal(durableLog.findings[0].followUpIssueNumber, undefined, "an act item gets no target");
+});
+
+for (const [label, durable] of [
+  ["malformed (no ledger identity)", { findings: [finding({ summary: "defer this", severity: "medium", judgeDisposition: "defer" })] }],
+  ["without a findings array", { repo: "mfittko/dev-loops", pr: 1658, gate: "draft_gate", headSha: HEAD, verdict: "findings_present" }],
+]) {
+  test(`judgePassCli: a durable findings log ${label} fails the pass instead of skipping the stamp`, async () => {
+    const { deps } = stubDeferralDeps({ closing: [2425] });
+    await assert.rejects(runDeferRound({
+      findings: [finding({ summary: "defer this", severity: "medium" })],
+      dispositions: [{ index: 0, ...DEFER }],
+      deps, durable,
+    }), /Gate findings ledger/);
+  });
 }
 
 const DEFER = { disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } };
@@ -1868,3 +1974,26 @@ for (const gate of ["draft_gate", "pre_approval_gate"]) {
     await assert.rejects(run(), /specKind "pr_scope".*only the review gate/);
   });
 }
+
+test("judgePassCli counts the round from --tmp-root, like the ledger writer and the fixer emitter (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-tmp-root-"));
+  await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ severity: "nit", summary: "tidy comment" })] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting" }] })));
+  // One closed prior round, written only to the custom root: this head is draft round 2 there and round 1 in the canonical root.
+  const custom = path.join(tmpDir, "custom-root");
+  const priorDir = path.join(custom, "gate-findings", "mfittko-dev-loops", "pr-2243");
+  await mkdir(priorDir, { recursive: true });
+  await writeFile(path.join(priorDir, `draft_gate-${"d".repeat(40)}.json`), JSON.stringify({ repo: "mfittko/dev-loops", pr: 2243, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+  const run = async (extra) => {
+    const out = `./act-${extra.tmpRoot ? "custom" : "default"}.json`;
+    const payload = await judgePassCli(
+      { repo: "mfittko/dev-loops", pr: "2243", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out, ...extra },
+      { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+    );
+    assert.equal(payload.ok, true);
+    return payload.actCount;
+  };
+  assert.equal(await run({ tmpRoot: custom }), 0);
+  assert.equal(await run({}), 1);
+});

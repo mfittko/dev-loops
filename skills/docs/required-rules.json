@@ -9,6 +9,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "ADR-OVER-WAIVER",
+      "enforcement": "doc"
+    },
+    {
       "id": "ADR-PATH-NUMBERING",
       "enforcement": "doc"
     },
@@ -378,6 +382,10 @@
       "enforcementNote": "the gate coordinator releases the first emitted wave with no primer or lead-reviewer step; emit-fanout-dispatch.mjs emits no primer unit and its dispatch-sequence tests pin one-wave release under the Claude and Pi bounds"
     },
     {
+      "id": "GATE-EXEC-FIXER-CYCLE-BOUND",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-EXEC-FIXER-DISPOSITION-BOUNDARY",
       "enforcement": "runtime",
       "enforcementNote": "resolveFixerDispositionInput in scripts/loop/detect-pr-gate-coordination-state.mjs is the advisory seam (ADR 0155): an incomplete claimed-tackled thread yields a warning (fixerDispositionWarning) with nextAction null and no forbiddenActions; evaluateFixerDisposition (packages/core/src/loop/fixer-disposition.mjs) and the optional scripts/github/verify-fixer-disposition.mjs keep their own nextAction output"
@@ -393,6 +401,10 @@
       "id": "GATE-EXEC-JUDGE-NOT-FRESH"
     },
     {
+      "id": "GATE-EXEC-JUDGE-PRIME-AUTHORITY",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-EXEC-JUDGE-PHASE"
     },
     {
@@ -403,6 +415,19 @@
       "id": "GATE-EXEC-LOW-NIT-CONVERGENCE",
       "enforcement": "runtime",
       "enforcementNote": "Enforced by composeConvergedDraftGate (packages/core/src/loop/pre-push-delta-review.mjs) and upsert-checkpoint-verdict.mjs --converged-json; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+    },
+    {
+      "id": "GATE-EXEC-LOW-FIX-UNTIL-CAP",
+      "enforcement": "runtime",
+      "enforcementNote": "applyJudgeDispositions coerces the disposition (pastCap and round from resolveDraftRoundCap) and emit-fixer-work-order.mjs refuses a low/nit-only act list at or past the cap, or a nit-only list outside draft round 1, with code low_fix_until_cap"
+    },
+    {
+      "id": "GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE",
+      "enforcement": "doc"
+    },
+    {
+      "id": "GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH",
+      "enforcement": "doc"
     },
     {
       "id": "GATE-EXEC-NO-CWD-DEPENDENCE"
@@ -457,7 +482,7 @@
     {
       "id": "GATE-EXEC-ROUND-CAP",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by upsert-checkpoint-verdict.mjs (choke point, count, past-cap composition via pastCapBlockers in packages/core/src/loop/gate-fanin.mjs) and countCompletedRounds in write-gate-context.mjs, and capClosedFor at write-gate-findings-log.mjs; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+      "enforcementNote": "Enforced by upsert-checkpoint-verdict.mjs (choke point, count, past-cap composition via pastCapBlockers in packages/core/src/loop/gate-fanin.mjs) and countCompletedRounds and resolveClosureRound in write-gate-context.mjs, and capClosedFor at write-gate-findings-log.mjs, and emit-fixer-work-order.mjs (refuses round_cap_reached after the cap round and at a blocked cap round); the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-ROUND-RETIREMENT",
@@ -1083,6 +1108,10 @@
     },
     {
       "id": "WORKTREE-SCRIPT-LAUNCHER-CWD",
+      "enforcement": "doc"
+    },
+    {
+      "id": "WORKTREE-STALE-BASE-REMEDY",
       "enforcement": "doc"
     },
     {

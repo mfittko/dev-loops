@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { test } from "bun:test";
-import { anchorBaseRef } from "../../scripts/lib/anchor-base-ref.mjs";
+import { anchorBaseRef, isBranchName, normalizeBaseBranch } from "../../scripts/lib/anchor-base-ref.mjs";
 
 test("anchors only bare branches with an origin commit, isolated to repoRoot", () => {
   const repoRoot = mkdtempSync(path.join(tmpdir(), "anchor-base-"));
@@ -21,4 +21,14 @@ test("anchors only bare branches with an origin commit, isolated to repoRoot", (
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
+});
+
+test("normalizeBaseBranch strips one origin prefix; isBranchName keeps short hex names as branches", () => {
+  for (const ref of ["main", "origin/main", "refs/heads/main", "refs/remotes/origin/main"]) assert.equal(normalizeBaseBranch(ref), "main");
+  assert.equal(normalizeBaseBranch("upstream/main"), "upstream/main");
+  assert.equal(isBranchName("beef"), true);
+  assert.equal(isBranchName("abc12"), true);
+  assert.equal(isBranchName("HEAD~1"), false);
+  for (const ok of ["team@v2", "release@2"]) assert.equal(isBranchName(ok), true, ok);
+  for (const bad of ["a@{1}", "@"]) assert.equal(isBranchName(bad), false, bad);
 });

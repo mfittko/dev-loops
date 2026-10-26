@@ -404,7 +404,7 @@ test("detect-checkpoint-evidence: a fanout_fanin ledger naming a FOREIGN angle b
       config: ANGLE_CONFIG, cwd: repoB,
     });
     const pa = enforcement.gates.find((g) => g.name === "pre_approval_gate");
-    assert.deepEqual(pa.anglePool, ["pr-checklist", "dry"], "enforcement must carry the resolved pool as anglePool");
+    assert.deepEqual(pa.anglePool, ["pr-checklist", "dry", "threat-model"], "enforcement must carry the resolved pool as anglePool");
     const check = buildPreMergeGateCheck(cleanEvidenceFor(HEAD), 0, null, enforcement);
     assert.equal(check.ok, false);
     assert.ok(

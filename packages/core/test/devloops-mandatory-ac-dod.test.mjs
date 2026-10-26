@@ -100,6 +100,16 @@ describe(".devloops draft-gate angle drops (draft gate)", () => {
     const draftAngles = resolveGateAngles(config, "draft");
     assert.ok(!draftAngles.includes("threat-model"));
     assert.ok(!draftAngles.includes("renderer-security"));
+
+    // The SECURITY_SENSITIVE_SEAM override brings threat-model back despite the drop.
+    const seam = await resolveGateAnglesDynamic(config, "draft", {
+      diff: {
+        nameStatusOutput: "M\tscripts/x.mjs",
+        diffOutput: "diff --git a/scripts/x.mjs b/scripts/x.mjs\n--- a/scripts/x.mjs\n+++ b/scripts/x.mjs\n@@ -1 +1,2 @@\n a\n+spawn(cmd);\n",
+      },
+    });
+    assert.ok(seam.recommendedAngles.includes("threat-model"));
+    assert.ok(!seam.recommendedAngles.includes("renderer-security"));
     // A handful of the shipped draft-pool angles this repo's .devloops no
     // longer restates must still resolve (inherited from extension-defaults).
     for (const angle of ["scope", "coverage", "ci-guard", "pr-description"]) {
