@@ -292,7 +292,7 @@ export async function emitFixerWorkOrder({
   // A nit-only list is fixable in draft round 1 only; any other round, and any gate without a round count, refuses it (the judge pass would have rejected it).
   if (actListFile && source.parsed.every((f) => f.severity === "low" || f.severity === "nit")) {
     // The round state comes from the canonical ledger root, as in judge-pass, whatever --tmp-root says.
-    const { pastCap, round } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot: resolveGateArtifactTmpRoot(cwd) }, { repoRoot: cwd });
+    const { pastCap, round } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot: resolveGateArtifactTmpRoot(cwd) }, { repoRoot: resolveRepoRoot(cwd) });
     if (pastCap || (source.parsed.every((f) => f.severity === "nit") && round !== 1)) {
       throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${actListFile} holds only low or nit items ${pastCap ? "at or past the draft_gate round cap" : "outside draft_gate round 1"}; low and nit findings no longer reach the fixer`);
     }

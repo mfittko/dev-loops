@@ -15,6 +15,14 @@ const OWNERS = {
   "ADR-OVER-WAIVER": "skills/docs/decision-record-contract.md",
   "GATE-EXEC-FIXER-CYCLE-BOUND": "skills/docs/gate-review-sub-loop-contract.md",
 };
+const RULE_OUTCOME = {
+  "GATE-EXEC-JUDGE-PRIME-AUTHORITY": /the judge decides it/,
+  "GATE-EXEC-LOW-FIX-UNTIL-CAP": /At or past the cap it becomes `defer`/,
+  "GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE": /`merge-pr.mjs` refuses until it exists/,
+  "GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH": /no agent pushes a stable tag or publishes/,
+  "ADR-OVER-WAIVER": /the orchestrator adds the ADR to the PR/,
+  "GATE-EXEC-FIXER-CYCLE-BOUND": /the orchestrator dispatches another fixer cycle/,
+};
 const ruleText = (id) => read(OWNERS[id]).split("\n").find((l) => l.startsWith(`\`${id}\``) || l.includes(`rule: ${id} --> \`${id}\``));
 
 test("no S1 rule has a second definition or an embedded body outside its owner", async () => {
@@ -40,7 +48,10 @@ test("each rule has an owner-line with no loose modal wording that names a trigg
     assert.match(text, /\b(When|If)\b/, `${id} trigger`);
     assert.match(text, /\b(judge|orchestrator|operator|refiner|`applyJudgeDispositions`)\b/, `${id} actor`);
     assert.match(text, /ADR 0188 records this rule|#2756/, id);
+    assert.match(text, RULE_OUTCOME[id], `${id} outcome`);
   }
+  // Negative fixture: a rule line without its outcome clause fails the outcome check.
+  assert.doesNotMatch(ruleText("ADR-OVER-WAIVER").replace("the orchestrator adds the ADR to the PR", ""), RULE_OUTCOME["ADR-OVER-WAIVER"]);
 });
 
 test("remaining operator lines state why the judge cannot decide them", () => {

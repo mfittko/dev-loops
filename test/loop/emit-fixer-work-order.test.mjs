@@ -831,6 +831,10 @@ test("ADR 0188: the round count comes from the canonical ledger root, even with 
     const custom = path.join(path.dirname(root), "custom-tmp");
     await assert.rejects(emit({ tmpRoot: custom }), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
     await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
+    // A subdirectory cwd reads the repo cap, not the default 4.
+    const sub = path.join(wt, "scripts");
+    await mkdir(sub, { recursive: true });
+    await assert.rejects(emit({ cwd: sub }), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
   });
 });
 

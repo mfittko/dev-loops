@@ -1599,6 +1599,12 @@ describe("applyJudgeDispositions (#1525)", () => {
       assert.deepEqual(out.map((f) => [f.severity, f.judgeDisposition]), [["medium", "reject"], ["medium", "act"]]);
     });
 
+    test("on a stamped ledger another cluster's failOpen does not promote this cluster's lows", () => {
+      const findings = [1, 0].map((clusterId, i) => ({ severity: "low", angle: `a${i}`, summary: `l${i}`, clusterId }));
+      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict([{ index: 0, ...act }, { index: 1, ...act, failOpen: true }]), { pastCap: true, round: 4 });
+      assert.deepEqual(out.map((f) => [f.severity, f.judgeDisposition]), [["medium", "act"], ["low", "defer"]]);
+    });
+
     test("an unstamped ledger coerces the same whatever the order of the dispositions", () => {
       const findings = [{ severity: "low", angle: "a", summary: "l0" }, { severity: "low", angle: "b", summary: "l1" }];
       const dispositions = [{ index: 0, ...act, failOpen: true }, { index: 1, ...act }];

@@ -1286,7 +1286,8 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
     let followUpDraft = d.followUpDraft;
     let promote = false;
     // The projection copies one member's disposition onto the rest, so any act failOpen inside the projected cluster counts.
-    const failOpen = d.failOpen === true || validated.dispositions.some((o) => o.disposition === "act" && o.failOpen === true && memberIndices.includes(o.index));
+    // Unstamped only: on a stamped ledger `index` is a clusterId, not a finding position.
+    const failOpen = d.failOpen === true || (!stamped && validated.dispositions.some((o) => o.disposition === "act" && o.failOpen === true && memberIndices.includes(o.index)));
     const severities = memberIndices.map((i) => originalSeverities[i]);
     const lowOrNitOnly = severities.every((s) => s === "low" || s === "nit");
     const allNit = severities.every((s) => s === "nit");
