@@ -39,6 +39,8 @@ test("convert-to-draft -> fan-out draft_gate post -> restore-ready composes with
   try {
     const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
     const findingsPath = path.join(tempDir, "findings.json");
+    // The per-angle --findings-json shape predates the round cap, so this fixture turns the cap off.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 0\n", "utf8");
     await writeFile(
       findingsPath,
       JSON.stringify([
