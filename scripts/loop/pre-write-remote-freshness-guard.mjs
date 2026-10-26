@@ -1,19 +1,86 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue, runCommand } from "../_cli-primitives.mjs";
-import { parseArgs } from "node:util";
+import { execFile } from "node:child_process";
+import { parseArgs, promisify } from "node:util";
+import { isBranchName, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: pre-write-remote-freshness-guard.mjs --branch <name>\nRefresh remote branch state before starting local file writes.\n\n${JQ_OUTPUT_USAGE}`;
+const USAGE = `Usage: pre-write-remote-freshness-guard.mjs (--branch <name> | --base <name>)\nRefresh remote branch state before starting local file writes (--branch), or check that HEAD contains the current origin/<base> (--base; exits nonzero with base_stale_integrate_first when stale, base_fetch_failed when the fetch fails or times out, or base_not_origin_branch for a SHA, revision expression or non-origin remote ref).\n\n${JQ_OUTPUT_USAGE}`;
+const execFileAsync = promisify(execFile);
 const parseError = buildParseError(USAGE);
+const lines = (s) => s.split(/\r?\n/u).map((l) => l.trim()).filter((l) => l.length > 0);
+
+/**
+ * Stale-base preflight (issue 2885): fetch origin/<base> with an explicit refspec and report
+ * commits on it that HEAD lacks. `foreignFiles` are files whose content differs from origin/<base>
+ * (two-dot) but that the branch never touched (three-dot), the stale-base signature.
+ */
+export async function checkBaseFreshness({ base: rawBase, head: rawHead = "HEAD", cwd = process.cwd(), env = process.env, gitCommand = "git", fetchTimeoutMs = 60_000, trusted = false }) {
+  // Scrub the git-dir overrides so every spawn targets cwd, never an inherited repository.
+  const gitEnv = { ...env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C", LANGUAGE: "C" };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"]) delete gitEnv[key];
+  const git = async (args) => lines((await runCommand(gitCommand, args, { cwd, env: gitEnv })).stdout);
+  // `trusted`: the caller passes GitHub's baseRefName, which is always an origin branch, so skip the user-input remote-name probe.
+  const base = trusted ? rawBase : normalizeBaseBranch(rawBase);
+  const notBranch = (message) => ({ ok: false, error: "base_not_origin_branch", base: rawBase, message });
+  if (!isBranchName(base, { allowSlash: true })) return notBranch(`${rawBase} is not an origin branch name`);
+  // A trusted baseRefName is already a branch (even `origin/release` or 40 hex characters): only untrusted input needs the ambiguity checks.
+  if (!trusted && (base.startsWith("refs/") || base.startsWith("origin/"))) return notBranch(`${rawBase} is not an origin branch name`);
+  // A full-length SHA is never an untrusted origin branch: classify it before any network call.
+  if (!trusted && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(base)) return notBranch(`${rawBase} is a SHA, not an origin branch`);
+  if (!trusted && base.includes("/")) {
+    const remote = base.split("/")[0];
+    if (remote !== "origin" && (await git(["remote"]).catch(() => [])).includes(remote)) return notBranch(`${rawBase} names the remote ${remote}, not an origin branch`);
+  }
+  try {
+    // Sibling worktrees share one ref store: retry a bounded number of times on a ref-lock collision.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await execFileAsync(gitCommand, ["fetch", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`], { cwd, env: gitEnv, timeout: fetchTimeoutMs });
+        break;
+      } catch (error) {
+        if (attempt >= 3 || !/cannot lock ref|Unable to create '.*\.lock'/u.test(error?.stderr ?? "")) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+      }
+    }
+  } catch (error) {
+    // A hex-only value with no such origin branch is an abbreviated SHA, not a stale-base failure.
+    if (/^[0-9a-f]+$/iu.test(base) && /couldn't find remote ref/u.test(error?.stderr ?? "")) return notBranch(`${rawBase} is not an origin branch (looks like a SHA)`);
+    return { ok: false, error: "base_fetch_failed", base, message: error?.killed ? `git fetch timed out after ${fetchTimeoutMs}ms` : (error?.stderr?.trim() || error?.message || String(error)) };
+  }
+  // The verdict describes the reviewed head, not the checkout: fail closed when it does not resolve locally.
+  let head = "HEAD";
+  if (rawHead !== "HEAD") {
+    const unresolved = { ok: false, error: "base_head_unresolved", base, message: `head ${rawHead} does not resolve to a local commit` };
+    if (!/^(?:[0-9a-f]{7,40}|[0-9a-f]{64})$/iu.test(rawHead)) return unresolved;
+    head = (await git(["rev-parse", "--verify", "--quiet", `${rawHead}^{commit}`]).catch(() => []))[0];
+    if (!head) return unresolved;
+  }
+  // Fully qualified: a bare `origin/<base>` can resolve to a same-named tag or branch before the fetched remote-tracking ref.
+  const remoteRef = `refs/remotes/origin/${base}`;
+  const newerCommits = await git(["log", `${head}..${remoteRef}`, "--no-decorate", "--no-show-signature", "--format=%h %s"]);
+  if (newerCommits.length === 0) return { ok: true, status: "base_current", base };
+  const touched = new Set(await git(["diff", "--name-only", `${remoteRef}...${head}`]));
+  const foreignFiles = (await git(["diff", "--name-only", `${remoteRef}..${head}`])).filter((f) => !touched.has(f));
+  return {
+    ok: false,
+    error: "base_stale_integrate_first",
+    base,
+    newerCommits,
+    foreignFiles,
+    remedy: `Merge origin/${base} into the branch via scripts/loop/resolve-pr-conflicts.mjs. Never rebase a pushed branch. Never force-push. Push the merge, re-derive spec identity, and re-validate at the new head.`,
+  };
+}
 
 export function parseRemoteFreshnessGuardCliArgs(argv) {
-  const options = { help: false, branch: undefined };
+  const options = { help: false, branch: undefined, base: undefined };
   const { tokens } = parseArgs({
     args: [...argv],
     options: {
       help: { type: "boolean", short: "h" },
       branch: { type: "string" },
+      base: { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -29,16 +96,24 @@ export function parseRemoteFreshnessGuardCliArgs(argv) {
     }
     if (token.name === "help") { options.help = true; return options; }
     if (token.name === "branch") { options.branch = requireTokenValue(token, parseError, { flagPattern: /^-/u }); continue; }
+    if (token.name === "base") { options.base = requireTokenValue(token, parseError, { flagPattern: /^-/u }); continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  if (options.branch === undefined) throw parseError("--branch <name> is required");
+  if (options.branch !== undefined && options.base !== undefined) throw parseError("--branch and --base are mutually exclusive");
+  if (options.branch === undefined && options.base === undefined) throw parseError("--branch <name> or --base <name> is required");
   return options;
 }
 
 export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, cwd = process.cwd(), env = process.env, gitCommand = "git" } = {}) {
   const options = parseRemoteFreshnessGuardCliArgs(argv);
   if (options.help) { stdout.write(`${USAGE}\n`); return { ok: true, help: true }; }
+  if (options.base !== undefined) {
+    const p = await checkBaseFreshness({ base: options.base, cwd, env, gitCommand });
+    process.exitCode = emitResult(p, { jq: options.jq, silent: options.silent, stdout: p.ok ? stdout : stderr, stderr });
+    if (!p.ok) process.exitCode = process.exitCode || 1;
+    return p;
+  }
   await runCommand(gitCommand, ["fetch", "origin", options.branch], { cwd, env });
   const { stdout: logOutput } = await runCommand(gitCommand, ["log", `HEAD..origin/${options.branch}`, "--oneline"], { cwd, env });
   const newCommits = logOutput.split(/\r?\n/u).map(l => l.trim()).filter(l => l.length > 0);

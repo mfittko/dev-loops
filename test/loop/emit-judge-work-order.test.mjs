@@ -471,3 +471,21 @@ test("J1: a derived copilot body file that is not an angle result refuses citing
     await assert.rejects(emitJudgeWorkOrder(sources), /GATE-EXEC-COPILOT-BODY-TO-JUDGE: .* is not JSON with an angle and a findings array/);
   });
 });
+
+test("a closure round's gate context (scope.closureRound) adds closureRound: true; an ordinary round adds none (GATE-EXEC-ROUND-CAP)", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root, { gate: "draft_gate" });
+    const ordinary = await emitJudgeWorkOrder(sources);
+    assert.equal("closureRound" in ordinary.workOrder, false);
+    const contextPath = path.join(root, buildGateContextPath({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: HEAD }));
+    const context = JSON.parse(await readFile(contextPath, "utf8"));
+    await writeFile(contextPath, JSON.stringify({ ...context, scope: { closureRound: { fromHead: "c".repeat(40), priorActItems: [] } } }));
+    const closure = await emitJudgeWorkOrder(sources);
+    assert.equal(closure.workOrder.closureRound, true);
+    assert.ok(Array.isArray(closure.workOrder.priorActItems));
+    // The closure context's own list is copied, not rebuilt from this checkout's history.
+    const items = [{ fingerprint: "abcd", file: "a.mjs", line: 3, title: "t" }];
+    await writeFile(contextPath, JSON.stringify({ ...context, scope: { closureRound: { fromHead: "c".repeat(40), priorActItems: items } } }));
+    assert.deepEqual((await emitJudgeWorkOrder(sources)).workOrder.priorActItems, items);
+  });
+});

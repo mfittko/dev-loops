@@ -13,7 +13,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
-import { VALID_SEVERITIES } from "@dev-loops/core/loop/gate-fanin";
+import { VALID_SEVERITIES, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { deltaCoverageBinding, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -22,10 +22,10 @@ import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
-import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
+import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
-import { fingerprintFinding } from "../github/_gate-finding-surface.mjs";
-import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
+import { renderRequiredReadLine, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../github/_fixer-emission-evidence.mjs";
@@ -287,6 +287,37 @@ export async function emitFixerWorkOrder({
   const isActItem = (f) => f?.judgeDisposition === "act" && VALID_SEVERITIES.has(f.severity) && typeof f.summary === "string" && f.summary.trim() !== "";
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
+  }
+  // ADR 0188: at or past the draft_gate round cap, low and nit findings never reach the fixer (backstop for hand-built or legacy ledgers). Below the cap a low act is fixed.
+  // A nit-only list is fixable in draft round 1 only; any other round, and any gate without a round count, refuses it (the judge pass would have rejected it).
+  // A deduped cluster carries every member severity in `clusterSeverities`; the guard reads those, not the representative's.
+  const badCluster = actListFile ? source.parsed.find((f) => f.clusterSeverities !== undefined && !(Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 && f.clusterSeverities.every((s) => VALID_SEVERITIES.has(s)))) : undefined;
+  if (badCluster) throw new WorkOrderRefusal("invalid_cluster_severities", `invalid_cluster_severities: act item ${JSON.stringify(badCluster.summary)} has clusterSeverities that is not a non-empty array of known severities; re-run judge-pass to regenerate the act list`);
+  const actSeverities = actListFile ? source.parsed.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity])) : [];
+  const lowNitOnly = actSeverities.every((s) => s === "low" || s === "nit");
+  if (actListFile && (gate === "draft_gate" || lowNitOnly)) {
+    // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
+    const { lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot },{ repoRoot: resolveRepoRoot(cwd) });
+    // GATE-EXEC-ROUND-CAP: a round after the cap round composes blocked on any act item (a blocked ledger does not count, so a further round is again cap+1); no fixer order follows it.
+    if (cap > 0 && round > cap) {
+      throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): act list ${actListFile} belongs to draft_gate round ${round}, after the cap round (cap ${cap}); the verdict is blocked and no fixer order follows it`);
+    }
+    // At the cap round the current-head round can still compose blocked (a failOpen finding the judge rejected, a question-severity act item): no fixer order follows a blocked verdict. An unreadable ledger fails closed.
+    if (cap > 0 && round === cap) {
+      const repoRoot = resolveRepoRoot(cwd);
+      const ledgerFile = path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }));
+      if (!existsSync(ledgerFile)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist; failing closed at the cap round`);
+      const { findings: ledgerFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
+      const blockers = pastCapBlockers([...ledgerFindings, ...source.parsed], { pr: Number(pr), round, cap }); // Number(pr): the CLI pr is a string; a non-integer yields NaN and fails closed in pastCapBlockers.
+      if (blockers.length > 0) {
+        throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the cap round (cap ${cap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
+      }
+    }
+    if (lowNitOnly && (lowFixCapped || (actSeverities.every((s) => s === "nit") && round !== 1))) {
+      const cappedAt = gate === "pre_approval_gate" ? "at pre_approval_gate" : "at or past the draft_gate round cap";
+      const where = lowFixCapped ? cappedAt : "outside draft_gate round 1";
+      throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${actListFile} holds only low or nit items ${where}; low and nit findings no longer reach the fixer`);
+    }
   }
   // The verify-time act-thread guard matches open gate threads by fingerprint, so a missing or wrong one would let a matching thread pass as threadless.
   const badFingerprint = actListFile ? source.parsed.find((f) => f.fingerprint !== fingerprintFinding(f)) : undefined;

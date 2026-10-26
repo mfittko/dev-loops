@@ -40,7 +40,9 @@ const OPERATION_GATE_KEY = Object.freeze({ ...GATE_CONFIG_KEY, spike: "spike" })
  * fully merged config:
  *   - draft_gate / pre_approval_gate / spike: the effective `gates.<key>`
  *     pool (`resolveGateAngleContract(config, key).pool` — mandatory/static/
- *     additive rules applied, disabled/excluded angles removed).
+ *     additive rules applied, disabled/excluded angles removed, except the
+ *     SECURITY_SENSITIVE_SEAM `threat-model` exception, which stays in the
+ *     draft_gate and pre_approval_gate pools only).
  *   - review: the de-duplicated, order-stable union of the static draft and
  *     pre-approval angle sets (`resolveGateAngles`, NOT the additive/tier
  *     pool) — standalone review's existing dedicated semantics; it gains no

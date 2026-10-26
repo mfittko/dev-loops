@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
-import { parseUpsertCheckpointVerdictCliArgs, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
+import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
+import { parseUpsertCheckpointVerdictCliArgs, renderGateReviewCommentBody, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
 // GATE-EXEC-ROUND-CAP: the cap reads only the judged ledger, counts completed rounds, and past the cap a new
 // act item blocks with round_cap_reached while an all-low/nit act list converges by the low/nit rule.
@@ -54,7 +55,7 @@ async function seedPrior(root, heads, { extraNames = [], unreadable = [] } = {})
   await mkdir(dir, { recursive: true });
   for (const head of heads) {
     await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
-      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-10-0${head[0]}T00:00:00.000Z`, findings: [],
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${head[0]}T00:00:00.000Z`, findings: [],
     }), "utf8");
   }
   for (const head of unreadable) await writeFile(path.join(dir, `draft_gate-${head}.json`), "{not json", "utf8");
@@ -165,6 +166,24 @@ test("with maxReviewRounds 0 the legacy shapes post as before", async () => {
   }, { prefix: "dev-loops-round-cap-off-" });
 });
 
+test("the structured findings path posts a defer target and a reason holding an issue id past the issue-id guard", async () => {
+  await withTempDir(async (tempDir) => {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "correctness", verdict: "findings_present", findings: [
+        { severity: "low", summary: "deferred low", judgeDisposition: "defer", judgeReason: "tracked in #123 already", followUpIssueNumber: 77 },
+      ] },
+    ]), "utf8");
+    const out = await post([
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 1, question: 0, nit: 0 }),
+    ], { root: capOffRoot });
+    assert.equal(out.error, undefined);
+    assert.match(out.body, /judge: _`defer`_ \(follow-up 77\) - tracked in 123 already/);
+    assert.doesNotMatch(out.body, /#(?:123|77)/);
+  }, { prefix: "dev-loops-round-cap-structured-ids-" });
+});
+
 for (const severity of ["high", "medium"]) {
   test(`past the cap a new ${severity} act item composes blocked with round_cap_reached`, async () => {
     await withTempDir(async (tempDir) => {
@@ -229,6 +248,28 @@ for (const [name, findings] of [
   });
 }
 
+test("past the cap a reasoned medium reject and a medium defer to another issue post clean with the judge reason shown", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await pastCap(tempDir, [
+      finding("medium", "reject", { judgeReason: "reject-reason-text", summary: "rejected medium" }),
+      finding("medium", "defer", { followUpIssueNumber: 99, judgeReason: "defer-reason-text", summary: "deferred medium" }),
+    ], { overallVerdict: "clean" });
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "clean");
+    assert.doesNotMatch(out.body, /severity_disagreement/);
+    assert.match(out.body, /judge: reject - reject-reason-text/);
+    assert.match(out.body, /judge: defer \(follow-up 99\) - defer-reason-text/);
+  }, { prefix: "dev-loops-round-cap-final-medium-" });
+});
+
+test("past the cap a medium defer to the PR itself blocks as severity_disagreement", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await pastCap(tempDir, [finding("medium", "defer", { followUpIssueNumber: 17 })], { overallVerdict: "clean" });
+    assert.equal(verdictOf(out), "blocked");
+    assert.match(out.body, /severity_disagreement/);
+  }, { prefix: "dev-loops-round-cap-self-defer-" });
+});
+
 test("the count reads the ledger's own gate-findings root, so a relocated --tmp-root still reaches the cap", async () => {
   await withTempDir(async (tempDir) => {
     const root = path.join(tempDir, "relocated");
@@ -259,4 +300,141 @@ test("the count includes an unreadable in-range ledger and ignores sidecars", as
     await seedPrior(repoRoot, priorHeads.slice(0, 2), { unreadable: [priorHeads[2]] });
     assert.equal(verdictOf(await post(["--findings-ledger", ledger])), "blocked", "an unreadable in-range ledger is the third prior round");
   }, { prefix: "dev-loops-round-cap-count-" });
+});
+
+// ADR 0189: replay of the PR 2922 round-5 ledger set. All four prior rounds were logged before the cap landed.
+test("a round-5 ledger after four pre-cap rounds does not compose round_cap_reached", async () => {
+  await withTempDir(async (tempDir) => {
+    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    const rounds = [
+      ["1", "clean", "2026-10-24T10:10:17.964Z"], ["2", "clean", "2026-10-25T21:31:53.080Z"],
+      ["3", "findings_present", "2026-10-25T22:04:19.514Z"], ["4", "clean", "2026-10-25T22:32:10.233Z"],
+    ];
+    for (const [c, verdict, loggedAt] of rounds) {
+      await writeFile(path.join(dir, `draft_gate-${c.repeat(40)}.json`), JSON.stringify({
+        repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: c.repeat(40), verdict, loggedAt, findings: [],
+      }), "utf8");
+    }
+    const out = await post(["--findings-ledger", await writeLedger(tempDir, { findings: [finding("high", "act")] })]);
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "findings_present");
+    assert.doesNotMatch(out.body, /round_cap_reached/);
+  }, { prefix: "dev-loops-round-cap-replay-" });
+});
+
+// ADR 0191 (#2937 S4a): the cap round fixes judge-specified remedies, the next round is the one closure round, a later round is refused.
+const withFix = { judgeFix: "the remedy and the test to add" };
+const pr2944Shape = () => [
+  finding("medium", "act", { ...withFix, resurfaces: "64c4d8f93e0f7ffd" }),
+  finding("medium", "act", withFix),
+  { ...finding("low", "act", withFix), summary: "low act" },
+  { ...finding("nit", "act", withFix), summary: "nit act" },
+  { ...finding("medium", "defer", { ...withFix, followUpIssueNumber: 2940 }), summary: "deferred medium" },
+];
+const extraPriors = ["4", "5"].map((c) => c.repeat(40));
+
+test("at the cap round judge-acted findings with a remedy compose findings_present, with no round_cap_reached", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await pastCap(tempDir, pr2944Shape());
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "findings_present");
+    assert.doesNotMatch(out.body, /round_cap_reached/);
+  }, { prefix: "dev-loops-round-cap-closure-cap-" });
+});
+
+test("the closure round with an act item blocks, and a round counted cap+2 blocks too", async () => {
+  await withTempDir(async (tempDir) => {
+    for (const heads of [[...priorHeads, extraPriors[0]], [...priorHeads, ...extraPriors]]) {
+      await seedPrior(repoRoot, heads);
+      const out = await post(["--findings-ledger", await writeLedger(tempDir, { findings: pr2944Shape() })]);
+      assert.equal(verdictOf(out), "blocked");
+      assert.match(out.body, /round_cap_reached/);
+    }
+  }, { prefix: "dev-loops-round-cap-closure-next-" });
+});
+
+test("in the closure round a finding judged defer with a target is final and the round composes clean", async () => {
+  await withTempDir(async (tempDir) => {
+    await seedPrior(repoRoot, [...priorHeads, extraPriors[0]]);
+    const findings = [{ ...finding("medium", "defer", { ...withFix, followUpIssueNumber: 2950 }), summary: "outside the delta" }];
+    const out = await post(["--findings-ledger", await writeLedger(tempDir, { findings })]);
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "clean");
+  }, { prefix: "dev-loops-round-cap-closure-defer-" });
+});
+
+test("at the cap round an act item without judgeFix still blocks", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await pastCap(tempDir, [finding("medium", "act")]);
+    assert.equal(verdictOf(out), "blocked");
+  }, { prefix: "dev-loops-round-cap-closure-nofix-" });
+});
+
+// ADR 0188 + ADR 0191: the judge-marked failOpen enters through --judge-verdict, is stamped on the ledger finding and read by pastCapBlockers.
+async function judgedLedgerPath(raw, disposition) {
+  const judgeVerdict = path.join(repoRoot, "judge-verdict.json");
+  await writeFile(judgeVerdict, JSON.stringify({
+    headSha: HEAD, scopeDrift: { verdict: "within_scope", rationale: "r", driftedAreas: [] },
+    dispositions: [{ index: 0, title: "t", detail: "d", fix: "the remedy and the test to add", reason: "r", rationale: "why", failOpen: true, ...disposition }],
+  }), "utf8");
+  await writeGateFindingsLog({
+    repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, verdict: "findings_present", findings: JSON.stringify([raw]), judgeVerdict, tmpRoot: path.join(repoRoot, "tmp"),
+  }, { repoRoot });
+  return path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-17", `draft_gate-${HEAD}.json`);
+}
+const rawMedium = { severity: "medium", angle: "correctness", summary: "fail-open medium", disposition: "accepted-for-fix" };
+
+test("a judge-marked failOpen medium rejected with a judgeReason past the cap blocks as severity_disagreement", async () => {
+  await seedPrior(repoRoot, priorHeads);
+  const out = await post(["--findings-ledger", await judgedLedgerPath(rawMedium, { disposition: "reject" })]);
+  assert.equal(out.error, undefined);
+  assert.equal(verdictOf(out), "blocked");
+  assert.match(out.body, /severity_disagreement/);
+});
+
+test("a judge-marked failOpen act item with a judgeFix at the cap round goes to the closure fixer without a blocker", async () => {
+  await seedPrior(repoRoot, priorHeads);
+  const out = await post(["--findings-ledger", await judgedLedgerPath(rawMedium, { disposition: "act" })]);
+  assert.equal(out.error, undefined);
+  assert.equal(verdictOf(out), "findings_present");
+  assert.doesNotMatch(out.body, /round_cap_reached/);
+});
+
+test("in the closure round a low or nit act item blocks, though the cap round keeps it for the fixer", async () => {
+  await withTempDir(async (tempDir) => {
+    for (const severity of ["low", "nit"]) {
+      await seedPrior(repoRoot, [...priorHeads, extraPriors[0]]);
+      const out = await post(["--findings-ledger", await writeLedger(tempDir, { findings: [finding(severity, "act")] })]);
+      assert.equal(verdictOf(out), "blocked", severity);
+      assert.match(out.body, /round_cap_reached/);
+    }
+  }, { prefix: "dev-loops-round-cap-closure-lownit-" });
+});
+
+test("the closure round (count cap+1) posts the closure round line with the last closed ledger head", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledger = await writeLedger(tempDir, { overallVerdict: "clean", findings: [] });
+    await seedPrior(repoRoot, [...priorHeads, extraPriors[0]]);
+    assert.match((await post(["--findings-ledger", ledger])).body, new RegExp(`closure round: diff from ${extraPriors[0]}`));
+    await seedPrior(repoRoot, priorHeads);
+    assert.doesNotMatch((await post(["--findings-ledger", ledger])).body, /closure round: diff from/, "the cap round has no closure line");
+  }, { prefix: "dev-loops-round-cap-closure-line-" });
+});
+
+test("closureFromHeadOf, shared by the poster and resolveClosureRound, refuses a blank or non-string last head with one message", async () => {
+  const { closureFromHeadOf } = await import("../../scripts/github/write-gate-context.mjs");
+  const message = /closure round reached but the latest closed prior round's head cannot be recovered/;
+  for (const headSha of ["", "  ", 7, undefined]) assert.throws(() => closureFromHeadOf([{ headSha }]), message);
+  assert.throws(() => closureFromHeadOf([]), message);
+  assert.equal(closureFromHeadOf([{ headSha: ` ${"A".repeat(40)} ` }]), "a".repeat(40));
+});
+
+test("the closure round line renders a normalized full SHA and refuses a short, blank or missing head", () => {
+  const line = (closureFromHead) => renderGateReviewCommentBody({ gate: "draft_gate", headSha: HEAD, repo: "o/r", verdict: "clean", closureFromHead });
+  for (const [input, rendered] of [["a".repeat(40), "a".repeat(40)], ["b".repeat(64), "b".repeat(64)], [` ${"A".repeat(40)} `, "a".repeat(40)]]) {
+    assert.match(line(input), new RegExp(`closure round: diff from ${rendered}\\b`));
+  }
+  for (const input of ["abc1234", "", "  ", null, undefined]) assert.doesNotMatch(line(input), /closure round: diff from/, String(input));
 });

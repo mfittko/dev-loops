@@ -816,6 +816,153 @@ test("delta gate: a three-thread Copilot fix cannot reach --phase full without a
   });
 });
 
+// The cap round reads the current-head findings log and refuses when it is absent.
+async function writeCurrentLog(tmpRoot, head, findings = []) {
+  const file = path.join(tmpRoot, "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${head}.json`);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "findings_present", findings }));
+}
+
+// The judge-pass --out shape of a deduped cluster: the representative's severity plus every member severity.
+const clusterAct = (severity, clusterSeverities) => withFp({ ...ACT[0], severity, clusterSeverities });
+for (const [label, severities, setup, refuses] of [
+  ["[nit, low] in draft round 2", ["nit", "low"], "round2", false],
+  ["[low, medium] at the cap", ["low", "medium"], "cap", false],
+  ["[nit, nit] in draft round 2", ["nit", "nit"], "round2", true],
+]) test(`a judge-pass deduped ${label} cluster ${refuses ? "is refused" : "reaches the fixer"} (GATE-EXEC-LOW-FIX-UNTIL-CAP)`, async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const prior = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${"d".repeat(40)}.json`);
+    await mkdir(path.dirname(prior), { recursive: true });
+    await writeFile(prior, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+    if (setup === "cap") await writeCurrentLog(path.join(root, "tmp"), head);
+    if (setup === "cap") await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    // The representative is the lowest-severity member; the other members only appear in clusterSeverities.
+    await writeFile(files.actList, JSON.stringify([clusterAct(severities[0], severities)]));
+    if (refuses) await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap");
+    else assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+  });
+});
+
+test("GATE-EXEC-ROUND-CAP: a medium act list reaches the fixer below and at the cap round, and is refused after it (round_cap_reached)", async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
+    const prior = async (sha, verdict) => {
+      const file = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${sha.repeat(40)}.json`);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha.repeat(40), verdict, findings: [] }));
+    };
+    // Round 1: below the cap.
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    // Cap round (count equal to the cap, findings_present): emits.
+    await prior("d", "findings_present");
+    // The cap round needs its own current-head findings log: an absent one is refused (fail closed).
+    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached" && /does not exist/.test(e.message));
+    const currentLog = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${head}.json`);
+    await writeFile(currentLog, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "findings_present", findings: [] }));
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    await rm(currentLog);
+    // Closure round (count cap+1) and a further round after a blocked closure ledger (blocked never counts): refused.
+    await prior("e", "findings_present");
+    await assert.rejects(emit(), (e) => e.refusal === "round_cap_reached");
+    await prior("f", "blocked");
+    await assert.rejects(emit(), (e) => e.refusal === "round_cap_reached" && /no fixer order follows/.test(e.message));
+  });
+});
+
+test("GATE-EXEC-ROUND-CAP: the cap round is refused when the current-head round composes a blocker (round_cap_reached)", async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `draft_gate-${"d".repeat(40)}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+    const medium = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
+    const current = (findings) => writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "findings_present", findings }));
+    await writeFile(files.actList, JSON.stringify([medium]));
+    // A medium act item with a judgeFix alone emits at the cap round.
+    await current([medium]);
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    // A failOpen finding the judge rejected in the same round blocks it.
+    await current([medium, { severity: "low", angle: "x", summary: "fail open", judgeDisposition: "reject", judgeReason: "n/a", failOpen: true }]);
+    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached" && /no fixer order follows/.test(e.message));
+    // A question-severity act item blocks.
+    await current([]);
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "question", judgeFix: "ask" })]));
+    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached");
+    // An unreadable current-head log fails closed.
+    await writeFile(path.join(dir, `draft_gate-${head}.json`), "{not json");
+    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached");
+    // A malformed finding in the current-head log is refused by the shared ledger reader.
+    await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "findings_present", findings: [{ summary: "no severity" }] }));
+    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached" && /malformed/.test(e.message));
+  });
+});
+
+test("GATE-EXEC-ROUND-CAP: the cap round with a string pr (the CLI form) and a targeted medium defer emits; a defer to the PR itself refuses", async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `draft_gate-${"d".repeat(40)}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+    const medium = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
+    const current = (followUpIssueNumber) => writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "findings_present",
+      findings: [medium, { severity: "medium", angle: "x", summary: "later", judgeDisposition: "defer", followUpIssueNumber }] }));
+    await writeFile(files.actList, JSON.stringify([medium]));
+    await current(99);
+    assert.equal((await emit({ pr: String(PR), phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    await current(PR);
+    await assert.rejects(emit({ pr: String(PR), phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached");
+    // A medium defer with no target and a high defer refuse; a medium reject with a judgeReason emits.
+    const closed = (extra) => writeCurrentLog(path.join(root, "tmp"), head, [medium, { severity: "medium", angle: "x", summary: "later", ...extra }]);
+    const run = () => emit({ pr: String(PR), phase: "commit_only", deltaResult: undefined });
+    await closed({ judgeDisposition: "defer" });
+    await assert.rejects(run(), (e) => e.refusal === "round_cap_reached");
+    await closed({ severity: "high", judgeDisposition: "defer", followUpIssueNumber: 99 });
+    await assert.rejects(run(), (e) => e.refusal === "round_cap_reached");
+    await closed({ severity: "high", judgeDisposition: "reject", judgeReason: "n/a" });
+    await assert.rejects(run(), (e) => e.refusal === "round_cap_reached");
+    await closed({ judgeDisposition: "reject", judgeReason: "out of scope" });
+    assert.equal((await run()).workOrder.source, "act-list");
+  });
+});
+
+test("an act item whose clusterSeverities is empty, not an array or holds an unknown severity is refused (invalid_cluster_severities)", async () => {
+  await withFixture(async ({ files, emit }) => {
+    for (const bad of [[], "low", ["low", "critical"], [1]]) {
+      await writeFile(files.actList, JSON.stringify([clusterAct("low", bad)]));
+      await assert.rejects(emit(), (e) => e.refusal === "invalid_cluster_severities", JSON.stringify(bad));
+    }
+  });
+});
+
+test("ADR 0188: the round count comes from the --tmp-root the ledger writer uses, default the canonical root", async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const closedPrior =path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${"d".repeat(40)}.json`);
+    await mkdir(path.dirname(closedPrior), { recursive: true });
+    await writeFile(closedPrior, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+    // Draft round 2 below the default cap: a nit-only list refuses, a low-only list still emits.
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "nit" })]));
+    await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap" && /outside draft_gate round 1/.test(e.message));
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low" })]));
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    // Cap 2: round 2 is at the cap. A custom --tmp-root counts its own ledgers (as the writer does): none there is round 1, below the cap.
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    const custom = path.join(path.dirname(root), "custom-tmp");
+    assert.equal((await emit({ tmpRoot: custom, phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    const customPrior = path.join(custom, "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${"d".repeat(40)}.json`);
+    await mkdir(path.dirname(customPrior), { recursive: true });
+    await writeFile(customPrior, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+    await writeCurrentLog(custom, head);
+    await writeCurrentLog(path.join(root, "tmp"), head);
+    await assert.rejects(emit({ tmpRoot: custom }), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
+    await assert.rejects(emit(),(e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message) && !/pre_approval_gate/.test(e.message));
+    // A subdirectory cwd reads the repo cap, not the default 4.
+    const sub = path.join(wt, "scripts");
+    await mkdir(sub, { recursive: true });
+    await assert.rejects(emit({ cwd: sub }), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
+  });
+});
+
 test("F1: free-form brief, payload override and summary-file substitution exit 2", () => {
   for (const flag of ["--brief", "--payload", "--summary-file"]) {
     const result = spawnSync("node", [EMITTER, "--repo", REPO, "--pr", "7", "--head-sha", "a".repeat(40), "--phase", "full", "--threads-file", "t.json", flag, "x"], { encoding: "utf8", env: runIdFreeEnv() });
@@ -835,7 +982,7 @@ test("an act-list item with a missing or non-canonical fingerprint refuses", asy
 });
 
 test("F1: missing or conflicting source and authority refuse before dispatch", async () => {
-  await withFixture(async ({ wt, head, files, emit }) => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
     await assert.rejects(emit({ actListFile: path.join(wt, "missing.json") }), /required fixer source act-list is missing/);
     await assert.rejects(emit({ actListFile: undefined }), /exactly one of --act-list-file and --threads-file/);
     await assert.rejects(emit({ threadsFile: files.threads }), /exactly one of/);
@@ -845,9 +992,30 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
       await writeFile(files.actList, JSON.stringify(bad));
       await assert.rejects(emit(), /not a non-empty judge-pass --out array/, JSON.stringify(bad));
     }
+    // ADR 0188: below the draft round cap a low-only act list reaches the fixer; at the cap it is refused.
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low" }), withFp({ ...ACT[0], severity: "nit", summary: "rename" })]));
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 1 } } }));
+    await writeCurrentLog(path.join(root, "tmp"), head);
+    await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap" && /GATE-EXEC-LOW-FIX-UNTIL-CAP.*only low or nit items/.test(e.message));
+    // A deduped [low, medium] cluster carries its full severities, so the representative's low does not trip the cap guard.
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low", clusterSeverities: ["low", "medium"] })]));
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    assert.equal((await emit({ gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low" })]));
+    // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate applies the past-cap rule in every round, so a low-only act list is refused (PR 2945 replay).
+    await assert.rejects(emit({ gate: "pre_approval_gate" }), (e) => e.refusal === "low_fix_until_cap" && /at pre_approval_gate/.test(e.message));
+    await rm(path.join(wt, ".devloops.json"));
+    // A nit-only list is fixable in draft round 1 below the cap; refused at the cap and on a gate with no round count.
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "nit" })]));
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    await assert.rejects(emit({ gate: "pre_approval_gate" }), (e) => e.refusal === "low_fix_until_cap" && /at pre_approval_gate/.test(e.message));
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 1 } } }));
+    await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
+    await rm(path.join(wt, ".devloops.json"));
     await writeFile(files.actList, JSON.stringify(ACT));
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ autonomy: { humanMergeOnly: "nope" } }));
-    await assert.rejects(emit(), /dev-loops config is invalid/);
+    await assert.rejects(emit(), /dev-loops config is invalid|Schema validation failed/);
     await rm(path.join(wt, ".devloops.json"));
     await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, repo: "o/other" }), /not successful list-review-threads --unresolved-only output/);
     // A failed list or one that includes resolved threads is not the unresolved-only source.

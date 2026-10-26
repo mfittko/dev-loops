@@ -15,9 +15,9 @@ import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, apply
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
-import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveRejectForeignAngles } from "@dev-loops/core/config";
-import { capClosedFor, isPastRoundCap } from "@dev-loops/core/loop/gate-fanin";
-import { countCompletedRounds, listPriorActItems } from "./write-gate-context.mjs";
+import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { capClosedFor } from "@dev-loops/core/loop/gate-fanin";
+import { listPriorActItems, resolveDraftRoundCap } from "./write-gate-context.mjs";
 import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } from "@dev-loops/core/loop/finding-cluster";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
@@ -231,6 +231,7 @@ function validateFindingsArray(parsed, flagLabel) {
       entry.judgeDisposition = jd;
     }
     if (f.remedyKind === "evidence_only") entry.remedyKind = "evidence_only";
+    if (f.failOpen === true) entry.failOpen = true;
     // Kept in the ledger only when it names a closed prior round's act fingerprint (writeGateFindingsLog checks).
     if (typeof f.resurfaces === "string" && /^[0-9a-f]{16}$/.test(f.resurfaces.trim())) entry.resurfaces = f.resurfaces.trim();
     if (typeof f.judgeRationale === "string" && f.judgeRationale.trim().length > 0) {
@@ -861,6 +862,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     options.specAuthority !== undefined ? path.resolve(repoRoot, options.specAuthority) : undefined,
     parseError,
   );
+  // `priorOptions` and the round-cap state are shared by the judge coercion and the cap-closed record below.
+  const priorOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot };
+  let roundCap;
+  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot }));
   if (options.judgeVerdict) {
     const judgePath = path.resolve(repoRoot, options.judgeVerdict);
     let judgeVerdict;
@@ -869,7 +874,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     } catch (error) {
       throw parseError(`--judge-verdict could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const enriched = applyJudgeDispositions(rawFindings, judgeVerdict);
+    const { lowFixCapped, round } = await roundCapState();
+    const enriched = applyJudgeDispositions(rawFindings, judgeVerdict, { pastCap: lowFixCapped, round });
     // Same cluster projection judge-pass applies: one judge decision per root cause, so the durable ledger
     // matches judge-pass's --ledger-out instead of dropping the cluster-normalized dispositions.
     const stamped = enriched.findings.every((f) => Number.isInteger(f?.clusterId));
@@ -884,7 +890,6 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     }
   }
   // `resurfaces` stays only when it names a closed prior round's act item in the same file; every other act item is new.
-  const priorOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot };
   if (findings.some((f) => f.resurfaces !== undefined)) {
     const priorFiles = new Map((await listPriorActItems(priorOptions, { repoRoot })).map((item) => [item.fingerprint, item.file]));
     for (const f of findings) {
@@ -893,10 +898,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   }
   // Past the round cap, a judge defer or reject is recorded as cap-closed (GATE-EXEC-ROUND-CAP).
   if (options.gate === "draft_gate" && findings.some((f) => f.judgeDisposition === "defer" || f.judgeDisposition === "reject")) {
-    const { config } = await loadDevLoopConfigStrict({ repoRoot });
-    const cap = resolveGateConfig(config, "draft").maxReviewRounds;
-    const round = await countCompletedRounds(priorOptions, { repoRoot });
-    if (isPastRoundCap(round, cap)) {
+    const { pastCap, round, cap } = await roundCapState();
+    if (pastCap) {
       for (const f of findings) {
         const capClosed = capClosedFor(f, { round, cap });
         if (capClosed) f.capClosed = capClosed;
