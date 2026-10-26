@@ -9,7 +9,7 @@ import { test } from "bun:test";
 
 import { GATE_ANGLE_SCOPES, loadDevLoopConfig, resolveGateAngles, resolveGateAnglesDynamic, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildAngleRequestGroups, composeReviewerPromptText, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/review-dispatch-plan";
-import { initGitFixture, makeGhMock } from "../_helpers.mjs";
+import { initGitFixture, makeGhMock, runGitFixture } from "../_helpers.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
 import {
@@ -31,7 +31,7 @@ import {
   collapsePureSubstitutionRuns,
   prematureGateOrderingRefusal,
   ISSUE_BODY_ABSENT_SENTINEL,
-  main,
+  main as mainImpl,
   mapGateToConfigKey,
   parseChangedFiles,
   parseWriteGateContextCliArgs,
@@ -77,7 +77,7 @@ function git(cwd, args) {
 // that has a body and closes no issue — the shape most of these tests assume.
 async function stubGhRun(_command, args) {
   if (args[0] === "pr" && args[1] === "view") {
-    return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [] }), stderr: "" };
+    return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [], baseRefName: "main" }), stderr: "" };
   }
   if (args[0] === "issue" && args[1] === "view") {
     return { code: 0, stdout: JSON.stringify({ body: "stub issue body" }), stderr: "" };
@@ -270,7 +270,7 @@ function stubGhRunWithLabels(labelsAnswer) {
         }
         return { code: 0, stdout: JSON.stringify({ labels: labelsAnswer }), stderr: "" };
       }
-      return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [] }), stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [], baseRefName: "main" }), stderr: "" };
     }
     if (args[0] === "issue" && args[1] === "view") {
       return { code: 0, stdout: JSON.stringify({ body: "stub issue body" }), stderr: "" };
@@ -4375,14 +4375,18 @@ test("dogfood: an orchestrator-supplied --prefix-file record verifies clean via 
   }
 });
 
-test("main: --prefix-file never touches GitHub for spec resolution, even with no --pr-body/--issue-body/--acceptance-criteria flags", async () => {
+test("main: --prefix-file reads only the PR base branch from GitHub, never spec resolution, even with no --pr-body/--issue-body/--acceptance-criteria flags", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
     await mkdir(path.join(repoRoot, "tmp"), { recursive: true });
     const prefixPath = path.join(repoRoot, "tmp", "orchestrator-prefix.txt");
     await writeFile(prefixPath, "# Orchestrator briefing\n\nbytes.\n", "utf8");
 
-    const run = async () => { throw new Error("must not call gh under --prefix-file"); };
+    // Only the base-branch read (AC6 freshness) may reach GitHub; spec fields never.
+    const run = async (_c, args) => {
+      assert.equal(args[args.indexOf("--json") + 1], "baseRefName", "must not read spec fields under --prefix-file");
+      return { code: 0, stdout: JSON.stringify({ baseRefName: "main" }), stderr: "" };
+    };
     await main([
       "--repo", "owner/repo", "--pr", "91", "--gate", "draft_gate",
       "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
@@ -4420,7 +4424,7 @@ function specStubRun({
   return async (_command, args) => {
     if (args[0] === "pr" && args[1] === "view") {
       if (prFails) return { code: 1, stdout: "", stderr: "gh: could not resolve PR" };
-      return { code: 0, stdout: JSON.stringify({ body: prBody, closingIssuesReferences: closing }), stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ body: prBody, closingIssuesReferences: closing, baseRefName: "main" }), stderr: "" };
     }
     if (args[0] === "issue" && args[1] === "view") {
       if (issueFails) return { code: 1, stdout: "", stderr: "gh: could not resolve issue" };
@@ -8193,6 +8197,78 @@ test("resolvePrSpecContext (review): caller-supplied spec flags leave the formal
   assert.equal(options.hasFormalPrSpec, undefined);
 });
 
+// Issue 2885: fixtures without an origin remote cannot fetch; default to a stub that reports the PR base as current.
+// The stale-base tests below call mainImpl with a real or stale checker instead.
+const currentBase = async ({ base }) => ({ ok: true, status: "base_current", base });
+function main(argv, runtime = {}) {
+  return mainImpl(argv, { checkBaseFreshness: currentBase, ...runtime });
+}
+
+// Real throwaway repos: bare origin, a clone at the PR head, then origin/main advances.
+async function makeOriginFixture() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "gate-context-stale-base-"));
+  const origin = path.join(root, "origin.git");
+  const clone = path.join(root, "clone");
+  const other = path.join(root, "other");
+  runGitFixture(root, ["init", "-q", "--bare", "-b", "main", origin]);
+  runGitFixture(root, ["clone", "-q", origin, other]);
+  runGitFixture(other, ["config", "user.email", "t@example.com"]);
+  runGitFixture(other, ["config", "user.name", "t"]);
+  await writeFile(path.join(other, "a.txt"), "a\n");
+  runGitFixture(other, ["add", "a.txt"]);
+  runGitFixture(other, ["commit", "-qm", "init"]);
+  runGitFixture(other, ["push", "-q", "origin", "main"]);
+  runGitFixture(root, ["clone", "-q", origin, clone]);
+  runGitFixture(clone, ["config", "user.email", "t@example.com"]);
+  runGitFixture(clone, ["config", "user.name", "t"]);
+  runGitFixture(clone, ["checkout", "-q", "-b", "feature"]);
+  await writeFile(path.join(clone, "b.txt"), "b\n");
+  runGitFixture(clone, ["add", "b.txt"]);
+  runGitFixture(clone, ["commit", "-qm", "feature"]);
+  const headSha = runGitFixture(clone, ["rev-parse", "HEAD"]).trim();
+  const advanceOrigin = async () => {
+    await writeFile(path.join(other, "c.txt"), "c\n");
+    runGitFixture(other, ["add", "c.txt"]);
+    runGitFixture(other, ["commit", "-qm", "newer base commit"]);
+    runGitFixture(other, ["push", "-q", "origin", "main"]);
+  };
+  return { root, clone, headSha, advanceOrigin };
+}
+
+test("issue 2885: write-gate-context records baseFreshness on a current base and refuses once origin advanced", async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    const argv = ["--repo", "owner/repo", "--pr", "70", "--gate", "draft_gate", "--head-sha", headSha, "--base", "main", "--angles", '["correctness"]'];
+    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha }, { repoRoot: clone });
+    assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
+    await advanceOrigin();
+    // The caller never fetches: the preflight itself must see the advanced origin.
+    // The earlier base_current context and an emit plan stay on disk: the refused retry must remove both.
+    const key = { repo: "owner/repo", pr: 70, gate: "draft_gate", headSha, tmpRoot: "tmp" };
+    const contextFile = path.join(clone, buildGateContextPath(key));
+    const planFile = path.join(clone, buildGateEmitPlanPath(key));
+    await writeFile(planFile, "{}\n", "utf8");
+    assert.equal(existsSync(contextFile), true);
+    const before = process.exitCode;
+    const realWrite = process.stderr.write.bind(process.stderr);
+    let errText = "";
+    process.stderr.write = (chunk) => { errText += String(chunk); return true; };
+    try {
+      await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+      assert.equal(process.exitCode, 1);
+      assert.match(errText, /base_stale_integrate_first[^]*newer base commit[^]*resolve-pr-conflicts/u);
+    } finally {
+      process.stderr.write = realWrite;
+      process.exitCode = before;
+    }
+    assert.equal(existsSync(contextFile), false);
+    assert.equal(existsSync(planFile), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("seamFirstRoundFor: pre_approval is a seam-first round only when no draft_gate round ran threat-model at the head", async () => {
   const { seamFirstRoundFor } = await import("../../scripts/github/write-gate-context.mjs");
   const root = await mkdtemp(path.join(os.tmpdir(), "seam-first-"));
@@ -8211,6 +8287,154 @@ test("seamFirstRoundFor: pre_approval is a seam-first round only when no draft_g
     assert.equal(await seamFirstRoundFor({ ...id, gate: "pre_approval_gate" }, root), false);
     assert.equal(await seamFirstRoundFor({ ...id, tmpRoot: "", gate: "pre_approval_gate" }, root), false, "empty tmpRoot shares the writer's normalization");
     assert.equal(await seamFirstRoundFor({ ...id, gate: "draft_gate" }, root), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function expectRefusal(argv, runtime, pattern, clone) {
+  const before = process.exitCode;
+  const realWrite = process.stderr.write.bind(process.stderr);
+  let errText = "";
+  process.stderr.write = (chunk) => { errText += String(chunk); return true; };
+  try {
+    await mainImpl(argv, runtime);
+    assert.equal(process.exitCode, 1);
+    assert.match(errText, pattern);
+  } finally {
+    process.stderr.write = realWrite;
+    process.exitCode = before;
+  }
+  assert.equal(existsSync(path.join(clone, "tmp/gate-context")), false);
+}
+
+for (const gate of ["draft_gate", "pre_approval_gate"]) test(`issue 2885 AC6: a run without --base checks the PR base branch, records baseFreshness and refuses once origin advanced (${gate})`, async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    const argv = ["--repo", "owner/repo", "--pr", "74", "--gate", gate, "--head-sha", headSha, "--angles", '["correctness"]'];
+    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 74, gate, headSha }, { repoRoot: clone });
+    assert.equal(artifact.scope.diffSource, "none");
+    assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
+    await advanceOrigin();
+    await rm(path.join(clone, "tmp"), { recursive: true, force: true });
+    await expectRefusal(argv, { repoRoot: clone, run: stubGhRun }, /base_stale_integrate_first[^]*newer base commit/u, clone);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885 AC6: the freshness verdict describes --head-sha, not the checkout HEAD", async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    await advanceOrigin();
+    runGitFixture(clone, ["fetch", "-q", "origin"]);
+    runGitFixture(clone, ["merge", "-q", "--no-edit", "origin/main"]);
+    // The checkout HEAD contains origin/main, but the reviewed head (pre-merge) lacks it.
+    const argv = ["--repo", "owner/repo", "--pr", "75", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["correctness"]'];
+    await expectRefusal(argv, { repoRoot: clone, run: stubGhRun }, /base_stale_integrate_first/u, clone);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885 AC6: a SHA, revision-expression or non-origin remote --base is checked against the PR base branch", async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    const sha = runGitFixture(clone, ["rev-parse", "HEAD~1"]).trim();
+    runGitFixture(clone, ["remote", "add", "upstream", runGitFixture(clone, ["remote", "get-url", "origin"]).trim()]);
+    runGitFixture(clone, ["fetch", "-q", "upstream"]);
+    const bases = [sha, "HEAD~1", "upstream/main"];
+    for (const base of bases) {
+      await rm(path.join(clone, "tmp"), { recursive: true, force: true });
+      const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "draft_gate", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
+      await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+      const artifact = await readGateContext({ repo: "owner/repo", pr: 71, gate: "draft_gate", headSha }, { repoRoot: clone });
+      assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
+      assert.equal(artifact.scope.diffSource, "base");
+    }
+    await advanceOrigin();
+    for (const base of bases) {
+      await rm(path.join(clone, "tmp"), { recursive: true, force: true });
+      const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "draft_gate", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
+      await expectRefusal(argv, { repoRoot: clone, run: stubGhRun }, /base_stale_integrate_first/u, clone);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885 AC6: an unreadable PR base refuses with base_unresolved and writes no artifact", async () => {
+  const { root, clone, headSha } = await makeOriginFixture();
+  try {
+    const noBase = async (command, args) => {
+      const res = await stubGhRun(command, args);
+      return args[0] === "pr" ? { ...res, stdout: JSON.stringify({ body: "b", closingIssuesReferences: [] }) } : res;
+    };
+    const argv = ["--repo", "owner/repo", "--pr", "75", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["correctness"]'];
+    await expectRefusal(argv, { repoRoot: clone, run: noBase }, /base_unresolved/u, clone);
+    // A failed `gh pr view` for baseRefName refuses the same way.
+    const failingRead = async (command, args) => (args[0] === "pr" && args[args.indexOf("--json") + 1] === "baseRefName"
+      ? { code: 1, stdout: "", stderr: "boom" }
+      : stubGhRun(command, args));
+    await expectRefusal(argv, { repoRoot: clone, run: failingRead }, /base_unresolved/u, clone);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885: the review gate records a stale base in baseFreshness and still writes the artifact", async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    await advanceOrigin();
+    const argv = ["--repo", "owner/repo", "--pr", "76", "--gate", "review", "--head-sha", headSha, "--angles", '["correctness"]'];
+    const before = process.exitCode;
+    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+    assert.equal(process.exitCode, before);
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 76, gate: "review", headSha }, { repoRoot: clone });
+    assert.deepEqual(artifact.baseFreshness, { status: "base_stale_integrate_first", base: "main" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885: a failed preflight fetch exits 1 with base_fetch_failed, the PR base and no artifact", async () => {
+  const { root, clone, headSha } = await makeOriginFixture();
+  try {
+    let received;
+    const failing = async ({ base }) => { received = base; return { ok: false, error: "base_fetch_failed", base, message: "x" }; };
+    const argv = ["--repo", "owner/repo", "--pr", "72", "--gate", "draft_gate", "--head-sha", headSha, "--base", "origin/main", "--angles", '["correctness"]'];
+    const before = process.exitCode;
+    const realWrite = process.stderr.write.bind(process.stderr);
+    let errText = "";
+    process.stderr.write = (chunk) => { errText += String(chunk); return true; };
+    try {
+      await mainImpl(argv, { repoRoot: clone, run: stubGhRun, checkBaseFreshness: failing });
+      assert.equal(process.exitCode, 1);
+      assert.match(errText, /base_fetch_failed/u);
+    } finally {
+      process.stderr.write = realWrite;
+      process.exitCode = before;
+    }
+    assert.equal(received, "main");
+    assert.equal(existsSync(path.join(clone, "tmp/gate-context")), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885: a stale local refs/heads/main base diffs against origin/main, not the local ref", async () => {
+  const { root, clone, advanceOrigin } = await makeOriginFixture();
+  try {
+    await advanceOrigin();
+    runGitFixture(clone, ["fetch", "-q", "origin"]);
+    runGitFixture(clone, ["merge", "-q", "--no-edit", "origin/main"]);
+    const headSha = runGitFixture(clone, ["rev-parse", "HEAD"]).trim();
+    const argv = ["--repo", "owner/repo", "--pr", "73", "--gate", "review", "--head-sha", headSha, "--base", "refs/heads/main", "--angles", '["correctness"]'];
+    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 73, gate: "review", headSha }, { repoRoot: clone });
+    assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
+    assert.deepEqual(artifact.scope.changedFiles, ["b.txt"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

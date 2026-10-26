@@ -1,9 +1,21 @@
 import { spawnSync } from "node:child_process";
 
+/** Strip one leading `refs/remotes/origin/`, `refs/heads/` or `origin/`; any other value is returned unchanged. */
+export function normalizeBaseBranch(base) {
+  return typeof base === "string" ? base.replace(/^(?:refs\/remotes\/origin\/|refs\/heads\/|origin\/)/u, "") : base;
+}
+
+/** True for a plain branch name; false for HEAD and revision expressions. A hex-only value is a valid name; callers probe the remote to tell a SHA from a branch. `/` is allowed only on request. */
+export function isBranchName(base, { allowSlash = false } = {}) {
+  return typeof base === "string" && base !== "" && base !== "HEAD"
+    && base !== "@"
+    &&!(allowSlash ? /[\s\\~^:?*\[\]{}]/u : /[\s/\\~^:?*\[\]{}]/u).test(base)
+    && !base.startsWith("-") && !base.includes("..");
+}
+
 /** Prefer the remote counterpart only for a bare branch, never a revision expression. */
 export function anchorBaseRef(base, { repoRoot = process.cwd(), env = process.env } = {}) {
-  if (typeof base !== "string" || !base || base === "HEAD" || /^[0-9a-f]+$/iu.test(base)
-    || /[\s/\\~^:@?*\[\]{}]/u.test(base) || base.startsWith("-") || base.includes("..")) return base;
+  if (!isBranchName(base)) return base;
   const gitEnv = { ...env };
   delete gitEnv.GIT_DIR;
   delete gitEnv.GIT_WORK_TREE;
