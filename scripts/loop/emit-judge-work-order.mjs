@@ -145,6 +145,8 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     mediumFixWindow: resolveGateConfig(config, GATE_CONFIG_KEY[gate] ?? "preApproval").mediumFixWindow,
     // Act items of the closed prior rounds. A cluster that repeats one sets `resurfaces` to its fingerprint; every other act item is new.
     priorActItems: await listPriorActItems({ repo, pr, gate, headSha, tmpRoot: resolveGateArtifactTmpRoot(checkoutRoot) }, { repoRoot: checkoutRoot }),
+    // GATE-EXEC-ROUND-CAP: the one past-cap closure round (the gate context records scope.closureRound).
+    ...(context?.scope?.closureRound ? { closureRound: true } : {}),
     configSha256: sha256(JSON.stringify(config ?? {})),
     authority: {
       specDigest,

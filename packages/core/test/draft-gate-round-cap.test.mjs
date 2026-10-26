@@ -77,6 +77,50 @@ describe("draft_gate round cap", () => {
     assert.deepEqual(pastCapBlockers(ledger), []);
   });
 
+  describe("closure round (ADR 0191, #2937 S4a)", () => {
+    const fix = { judgeFix: "the remedy and the test to add" };
+    const at = (round) => ({ pr: 2944, round, cap: 4 });
+    // Shape of the PR 2944 draft_gate round 4 ledger at e869fb2f8: act mediums with remedies (some resurfaced), low/nit acts, a medium defer.
+    const replay = () => [
+      act("medium", { ...fix, resurfaces: "64c4d8f93e0f7ffd" }),
+      act("medium", { ...fix, resurfaces: "a14963ebd69de8ca" }),
+      act("medium", fix),
+      act("low", fix), act("low", { ...fix, resurfaces: "64c4d8f93e0f7ffd" }), act("nit", fix),
+      closed("medium", "defer", { ...fix, followUpIssueNumber: 2940 }),
+    ];
+    const blockerReasons = (findings, ctx) => pastCapBlockers(findings, ctx).map((b) => b.reason);
+
+    test("the PR 2944 round 4 shape raises no blocker at the cap round and blocks at cap+1 and cap+2", () => {
+      assert.deepEqual(pastCapBlockers(replay(), at(4)), []);
+      assert.equal(blockerReasons(replay(), at(5)).filter((r) => r === "resurfaced").length, 2);
+      assert.ok(blockerReasons(replay(), at(5)).length >= 3);
+      assert.ok(blockerReasons(replay(), at(6)).length >= 3, "a second closure round is refused");
+    });
+
+    test("without round and cap, and for an act item with no judgeFix, the cap round blocks as before", () => {
+      assert.deepEqual(blockerReasons([act("medium", fix)], {}), ["new_act"]);
+      assert.deepEqual(blockerReasons([act("medium")], at(4)), ["new_act"]);
+      assert.deepEqual(blockerReasons([act("medium", { judgeFix: "  " })], at(4)), ["new_act"]);
+      assert.deepEqual(blockerReasons([act("medium", fix)], { pr: 1, round: 4, cap: 0 }), ["new_act"]);
+    });
+
+    test("a closure round with a remaining act item blocks; a new out-of-delta act blocks; the same finding judged defer with a target is final", () => {
+      assert.deepEqual(blockerReasons([act("medium", { ...fix, resurfaces: "abcd" })], at(5)), ["resurfaced"]);
+      assert.deepEqual(blockerReasons([act("medium", fix)], at(5)), ["new_act"]);
+      assert.deepEqual(pastCapBlockers([closed("medium", "defer", { ...fix, followUpIssueNumber: 2950 })], at(5)), []);
+    });
+
+    test("failOpen, a high defer or reject and an unreasoned medium still block at the cap round; judged medium reject or defer stays final", () => {
+      const sd = ["severity_disagreement"];
+      assert.deepEqual(blockerReasons([act("medium", { ...fix, failOpen: true })], at(4)), ["new_act"]);
+      assert.deepEqual(blockerReasons([closed("medium", "reject", { judgeReason: "r", failOpen: true })], at(4)), sd);
+      assert.deepEqual(blockerReasons([closed("high", "defer", { followUpIssueNumber: 7 })], at(4)), sd);
+      assert.deepEqual(blockerReasons([closed("high", "reject", { judgeReason: "why" })], at(4)), sd);
+      assert.deepEqual(blockerReasons([closed("medium", "reject")], at(4)), sd);
+      assert.deepEqual(pastCapBlockers([closed("medium", "reject", { judgeReason: "why" }), closed("medium", "defer", { followUpIssueNumber: 7 })], at(4)), []);
+    });
+  });
+
   test("a missing disposition or an unknown severity is a severity_disagreement", () => {
     assert.deepEqual(reasons([{ severity: "low", summary: "x" }]), ["round_cap_reached/severity_disagreement"]);
     assert.deepEqual(reasons([closed("critical", "reject")]), ["round_cap_reached/severity_disagreement"]);

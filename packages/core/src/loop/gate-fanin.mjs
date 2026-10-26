@@ -1335,9 +1335,13 @@ export function capClosedFor(finding, { round, cap }) {
  * act item block, unless every act item is low or nit (the low/nit convergence rule applies instead). A high, a `failOpen: true` finding, a missing
  * disposition, an unknown severity, a medium `defer` without `followUpIssueNumber` and a medium `reject` without `judgeReason` block as
  * `severity_disagreement`. A defer to the PR itself (`pr`) is not a target. A medium rejected with a reason or deferred with a target issue is final (ADR 0191).
+ * At the cap round (`round === cap`) an act item with a judge-specified remedy (`judgeFix`) does not block: the round composes
+ * `findings_present` and the fixer fixes it; the next round is the one closure round, where every act item blocks (ADR 0191, #2937 S4a).
  * @returns {Array<{ kind: "round_cap_reached", reason: "new_act"|"resurfaced"|"severity_disagreement", item: string }>}
  */
-export function pastCapBlockers(findings, { pr } = {}) {
+export function pastCapBlockers(findings, { pr, round, cap } = {}) {
+  const atCap = cap > 0 && round === cap;
+  const hasRemedy = (f) => f.failOpen !== true && String(f.judgeFix ?? "").trim().length > 0;
   const list = Array.isArray(findings) ? findings : [];
   const label = (f, reason) => `[${normalizeSeverity(f?.severity)}] ${String(f?.summary ?? "").trim()} (${reason})`;
   const acts = list.filter(isOpenActItem);
@@ -1345,6 +1349,7 @@ export function pastCapBlockers(findings, { pr } = {}) {
   const blockers = [];
   if (!lowNitOnly) {
     for (const f of acts) {
+      if (atCap && hasRemedy(f)) continue;
       const severity = normalizeSeverity(f.severity);
       const reason = !f.resurfaces ? "new_act" : severity === "high" || severity === "medium" ? "resurfaced" : null;
       if (reason) blockers.push({ kind: "round_cap_reached", reason, item: label(f, reason) });

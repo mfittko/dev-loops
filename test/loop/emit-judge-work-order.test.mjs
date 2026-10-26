@@ -423,3 +423,17 @@ test("J1: the --round CLI accepts only /^[1-9][0-9]*$/ and carries it to the wor
     }
   });
 });
+
+test("a closure round's gate context (scope.closureRound) adds closureRound: true; an ordinary round adds none (GATE-EXEC-ROUND-CAP)", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root, { gate: "draft_gate" });
+    const ordinary = await emitJudgeWorkOrder(sources);
+    assert.equal("closureRound" in ordinary.workOrder, false);
+    const contextPath = path.join(root, buildGateContextPath({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: HEAD }));
+    const context = JSON.parse(await readFile(contextPath, "utf8"));
+    await writeFile(contextPath, JSON.stringify({ ...context, scope: { closureRound: { fromHead: "c".repeat(40), priorActItems: [] } } }));
+    const closure = await emitJudgeWorkOrder(sources);
+    assert.equal(closure.workOrder.closureRound, true);
+    assert.ok(Array.isArray(closure.workOrder.priorActItems));
+  });
+});

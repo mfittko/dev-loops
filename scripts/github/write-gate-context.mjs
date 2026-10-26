@@ -28,7 +28,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveGateConfig, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
@@ -1934,6 +1934,19 @@ export async function listPriorActItems(options, { repoRoot }) {
 }
 
 /**
+ * The one past-cap closure round (GATE-EXEC-ROUND-CAP, ADR 0191, #2937 S4a): a draft_gate round whose completed-round count is cap+1.
+ * Returns null for any other round; otherwise the head of the latest closed prior round (the fix delta starts there) and the prior act items to verify.
+ */
+export async function resolveClosureRound(options, { repoRoot, cap }) {
+  if (options.gate !== "draft_gate" || !(cap > 0)) return null;
+  if (await countCompletedRounds(options, { repoRoot }) !== cap + 1) return null;
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot });
+  const fromHead = closed.at(-1)?.headSha;
+  if (typeof fromHead !== "string" || fromHead.length === 0) return null;
+  return { fromHead, priorActItems: await listPriorActItems(options, { repoRoot }) };
+}
+
+/**
  * Known-findings block (GATE-EXEC-FINDING-THREADS): every open or resolved
  * review thread, any author, with full comment bodies, rendered from the
  * default `capture-review-threads.mjs --repo --pr` output. Delivered as a
@@ -2271,6 +2284,9 @@ export function buildGateContextArtifact(options) {
   // backward compatible with the artifact shape they already assert on.
   if (typeof options.diffSource === "string" && options.diffSource.length > 0) {
     artifact.scope.diffSource = options.diffSource;
+  }
+  if (options.closureRound && typeof options.closureRound === "object") {
+    artifact.scope.closureRound = options.closureRound;
   }
   // The deterministic, neutral adjacent-code bundle. Only present
   // when the context-builder computed it — keeps the artifact shape backward
@@ -3582,6 +3598,23 @@ export async function main(
     // full bundle. A run WITH --base that then fails to resolve (bad ref, not a
     // git repo, etc.) DOES fail closed: the caller opted into the full bundle,
     // so a silent thin degrade there would be a worse surprise than an error.
+    // Load the dev-loop config once, before the diff (the closure round needs the cap): used for the closure round, for dynamic angle resolution
+    // (when --angles is omitted) and, regardless of --angles, to resolve each
+    // angle's concrete review model for the dispatch-plan artifact
+    // (resolveRoleModel(kind:"angle"), inside writeGateContext). A config load
+    // error throws config_load_failed: the angle set, mandatory list and tiers
+    // never fall back to defaults.
+    const { config } = await loadDevLoopConfigStrict({ repoRoot });
+    options.config = config;
+    // GATE-EXEC-ROUND-CAP (ADR 0191): the one closure round diffs from the cap round's head.
+    const closureRound = await resolveClosureRound(options, { repoRoot, cap: resolveGateConfig(config, "draft").maxReviewRounds ?? 0 });
+    if (closureRound) {
+      if (options.base && options.base !== closureRound.fromHead) {
+        throw new Error(`GATE-EXEC-ROUND-CAP: this is the closure round, so --base must be the cap round head ${closureRound.fromHead}; got ${JSON.stringify(options.base)}.`);
+      }
+      options.base = closureRound.fromHead;
+      options.closureRound = closureRound;
+    }
     let diff = null;
     if (options.base) {
       // Fail-closed precondition: the diff is resolved FROM the CWD worktree, so
@@ -3629,14 +3662,6 @@ export async function main(
         sizeOutcome = null; // fails CLOSED — checkFloors treats null as ambiguous
       }
     }
-    // Load the dev-loop config once: used both for dynamic angle resolution
-    // (when --angles is omitted) and, regardless of --angles, to resolve each
-    // angle's concrete review model for the dispatch-plan artifact
-    // (resolveRoleModel(kind:"angle"), inside writeGateContext). A config load
-    // error throws config_load_failed: the angle set, mandatory list and tiers
-    // never fall back to defaults.
-    const { config } = await loadDevLoopConfigStrict({ repoRoot });
-    options.config = config;
 
     // Angle resolution: when --angles is omitted, resolve dynamically from the
     // loaded config (.devloops) + the captured --base diff — the SAME path the

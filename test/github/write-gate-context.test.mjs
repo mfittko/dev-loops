@@ -42,6 +42,7 @@ import {
   resolvePrSpecContext,
   resolvePriorDispositions,
   countCompletedRounds,
+  resolveClosureRound,
   readGateContext,
   renderBriefingEvidence,
   renderBriefingPrefix,
@@ -8237,5 +8238,63 @@ test("countCompletedRounds skips closed ledgers logged before DRAFT_ROUND_CAP_EF
     assert.equal(await count(), 6, "an impossible date, month 13, hour 24/25 or four fraction digits is noncanonical and counts");
   } finally {
     await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+// ADR 0191 (#2937 S4a): the one closure round diffs from the cap round's head.
+async function seedClosedRounds(repoRoot, pr, heads) {
+  const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", `pr-${pr}`);
+  await mkdir(dir, { recursive: true });
+  for (const [i, head] of heads.entries()) {
+    const findings = i === heads.length - 1 ? [{ severity: "medium", summary: "guard missing", files: ["src/changed.mjs"], line: 2, judgeDisposition: "act", judgeTitle: "Guard is missing", judgeFix: "add the guard" }] : [];
+    await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
+      repo: "owner/repo", pr, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings,
+    }), "utf8");
+  }
+}
+
+test("resolveClosureRound returns the cap round head and the prior act items only at count cap+1 of a draft_gate", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 41, gate: "draft_gate", headSha };
+    await seedClosedRounds(repoRoot, 41, ["1".repeat(40), "2".repeat(40), "3".repeat(40)]);
+    assert.equal(await resolveClosureRound(opts, { repoRoot, cap: 4 }), null, "the cap round is not a closure round");
+    await seedClosedRounds(repoRoot, 41, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    assert.equal(await resolveClosureRound(opts, { repoRoot, cap: 0 }), null, "cap 0 disables");
+    assert.equal(await resolveClosureRound({ ...opts, gate: "pre_approval_gate" }, { repoRoot, cap: 4 }), null);
+    const closure = await resolveClosureRound(opts, { repoRoot, cap: 4 });
+    assert.equal(closure.fromHead, baseSha);
+    assert.deepEqual(closure.priorActItems.map((i) => i.title), ["Guard is missing"]);
+    await seedClosedRounds(repoRoot, 41, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha, "5".repeat(40)]);
+    assert.equal(await resolveClosureRound(opts, { repoRoot, cap: 4 }), null, "a second closure round does not exist");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI closure round diffs from the cap round head, records scope.closureRound and refuses a different --base; an ordinary round records none", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  try {
+    const args = (pr, base) => ["--repo", "owner/repo", "--pr", String(pr), "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', ...(base ? ["--base", base] : [])];
+    await main(args(42, baseSha), { repoRoot, run: stubGhRun });
+    const ordinary = await readGateContext({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal("closureRound" in ordinary.scope, false);
+
+    await seedClosedRounds(repoRoot, 43, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    process.exitCode = undefined;
+    await main(args(43, "HEAD~1"), { repoRoot, run: stubGhRun });
+    assert.equal(process.exitCode, 1, "a --base that differs from the cap round head is refused");
+    assert.equal(await readGateContext({ repo: "owner/repo", pr: 43, gate: "draft_gate", headSha }, { repoRoot }), null);
+    process.exitCode = priorExitCode;
+    await main(args(43), { repoRoot, run: stubGhRun });
+    const closure = await readGateContext({ repo: "owner/repo", pr: 43, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal(closure.scope.diffSource, "base");
+    assert.deepEqual(closure.scope.changedFiles, ["src/changed.mjs"]);
+    assert.equal(closure.scope.closureRound.fromHead, baseSha);
+    assert.deepEqual(closure.scope.closureRound.priorActItems.map((i) => i.title), ["Guard is missing"]);
+  } finally {
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
   }
 });

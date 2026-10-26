@@ -304,3 +304,51 @@ test("a round-5 ledger after four pre-cap rounds does not compose round_cap_reac
     assert.doesNotMatch(out.body, /round_cap_reached/);
   }, { prefix: "dev-loops-round-cap-replay-" });
 });
+
+// ADR 0191 (#2937 S4a): the cap round fixes judge-specified remedies, the next round is the one closure round, a later round is refused.
+const withFix = { judgeFix: "the remedy and the test to add" };
+const pr2944Shape = () => [
+  finding("medium", "act", { ...withFix, resurfaces: "64c4d8f93e0f7ffd" }),
+  finding("medium", "act", withFix),
+  { ...finding("low", "act", withFix), summary: "low act" },
+  { ...finding("nit", "act", withFix), summary: "nit act" },
+  { ...finding("medium", "defer", { ...withFix, followUpIssueNumber: 2940 }), summary: "deferred medium" },
+];
+const extraPriors = ["4", "5"].map((c) => c.repeat(40));
+
+test("at the cap round judge-acted findings with a remedy compose findings_present, with no round_cap_reached", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await pastCap(tempDir, pr2944Shape());
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "findings_present");
+    assert.doesNotMatch(out.body, /round_cap_reached/);
+  }, { prefix: "dev-loops-round-cap-closure-cap-" });
+});
+
+test("the closure round with an act item blocks, and a second closure round is refused", async () => {
+  await withTempDir(async (tempDir) => {
+    for (const heads of [[...priorHeads, extraPriors[0]], [...priorHeads, ...extraPriors]]) {
+      await seedPrior(repoRoot, heads);
+      const out = await post(["--findings-ledger", await writeLedger(tempDir, { findings: pr2944Shape() })]);
+      assert.equal(verdictOf(out), "blocked");
+      assert.match(out.body, /round_cap_reached/);
+    }
+  }, { prefix: "dev-loops-round-cap-closure-next-" });
+});
+
+test("in the closure round a finding judged defer with a target is final and the round composes clean", async () => {
+  await withTempDir(async (tempDir) => {
+    await seedPrior(repoRoot, [...priorHeads, extraPriors[0]]);
+    const findings = [{ ...finding("medium", "defer", { ...withFix, followUpIssueNumber: 2950 }), summary: "outside the delta" }];
+    const out = await post(["--findings-ledger", await writeLedger(tempDir, { findings })]);
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "clean");
+  }, { prefix: "dev-loops-round-cap-closure-defer-" });
+});
+
+test("at the cap round an act item without judgeFix still blocks", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await pastCap(tempDir, [finding("medium", "act")]);
+    assert.equal(verdictOf(out), "blocked");
+  }, { prefix: "dev-loops-round-cap-closure-nofix-" });
+});
