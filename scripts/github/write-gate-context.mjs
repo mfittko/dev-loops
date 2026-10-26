@@ -1903,14 +1903,22 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
   return rounds.map((round) => round.log);
 }
 
+/** Merge time of the round cap (PR 2932); a closed prior ledger never counts only when its `loggedAt` is a toISOString-form UTC timestamp earlier than it; every other closed ledger counts (ADR 0189). */
+export const DRAFT_ROUND_CAP_EFFECTIVE_AT = "2026-10-26T08:51:13Z";
+
 /**
- * Completed-round count for the round cap: the closed prior rounds, plus an unreadable ledger at an
- * in-range head, plus the round being posted. Foreign, mismatched and unclosed ledgers never count.
+ * Completed-round count for the round cap: the closed prior rounds logged at or after
+ * DRAFT_ROUND_CAP_EFFECTIVE_AT (a closed ledger is skipped only when its `loggedAt` is a UTC timestamp in toISOString form earlier than the cutoff; every other value counts), plus an unreadable ledger at an
+ * in-range head (counted regardless of date, since it has no readable `loggedAt`), plus the round being posted. Foreign, mismatched and unclosed ledgers never count.
  */
 export async function countCompletedRounds(options, { repoRoot }) {
   let unreadable = 0;
   const closed = await readClosedPriorRoundLogs(options, { repoRoot, onUnreadable: () => { unreadable += 1; } });
-  return closed.length + unreadable + 1;
+  const cutoff = Date.parse(DRAFT_ROUND_CAP_EFFECTIVE_AT);
+  // Only a strict toISOString-form UTC timestamp earlier than the cutoff is skipped; any other value counts (fails toward the cap).
+  // The calendar round trip rejects values Date.parse normalizes (2026-02-30, T24:00:00); at most 3 fraction digits.
+  const preCap = (loggedAt) => typeof loggedAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(loggedAt) && Number.isFinite(Date.parse(loggedAt)) && new Date(loggedAt).toISOString().slice(0, 19) === loggedAt.slice(0, 19) && Date.parse(loggedAt) < cutoff;
+  return closed.filter((log) => !preCap(log.loggedAt)).length + unreadable + 1;
 }
 
 /** Act items of the closed prior rounds as `{ fingerprint, file, line, title }`, one per fingerprint. */

@@ -54,7 +54,7 @@ async function seedPrior(root, heads, { extraNames = [], unreadable = [] } = {})
   await mkdir(dir, { recursive: true });
   for (const head of heads) {
     await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
-      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-10-0${head[0]}T00:00:00.000Z`, findings: [],
+      repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${head[0]}T00:00:00.000Z`, findings: [],
     }), "utf8");
   }
   for (const head of unreadable) await writeFile(path.join(dir, `draft_gate-${head}.json`), "{not json", "utf8");
@@ -259,4 +259,26 @@ test("the count includes an unreadable in-range ledger and ignores sidecars", as
     await seedPrior(repoRoot, priorHeads.slice(0, 2), { unreadable: [priorHeads[2]] });
     assert.equal(verdictOf(await post(["--findings-ledger", ledger])), "blocked", "an unreadable in-range ledger is the third prior round");
   }, { prefix: "dev-loops-round-cap-count-" });
+});
+
+// ADR 0189: replay of the PR 2922 round-5 ledger set. All four prior rounds were logged before the cap landed.
+test("a round-5 ledger after four pre-cap rounds does not compose round_cap_reached", async () => {
+  await withTempDir(async (tempDir) => {
+    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    const rounds = [
+      ["1", "clean", "2026-10-24T10:10:17.964Z"], ["2", "clean", "2026-10-25T21:31:53.080Z"],
+      ["3", "findings_present", "2026-10-25T22:04:19.514Z"], ["4", "clean", "2026-10-25T22:32:10.233Z"],
+    ];
+    for (const [c, verdict, loggedAt] of rounds) {
+      await writeFile(path.join(dir, `draft_gate-${c.repeat(40)}.json`), JSON.stringify({
+        repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: c.repeat(40), verdict, loggedAt, findings: [],
+      }), "utf8");
+    }
+    const out = await post(["--findings-ledger", await writeLedger(tempDir, { findings: [finding("high", "act")] })]);
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "findings_present");
+    assert.doesNotMatch(out.body, /round_cap_reached/);
+  }, { prefix: "dev-loops-round-cap-replay-" });
 });

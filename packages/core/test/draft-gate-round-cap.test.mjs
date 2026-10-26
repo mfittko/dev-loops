@@ -55,7 +55,7 @@ describe("draft_gate round cap", () => {
       const dir = path.join(tmpRoot, "gate-findings", "owner-repo", "pr-5");
       await mkdir(dir, { recursive: true });
       const head = (c) => c.repeat(40);
-      const ledger = (h, extra) => JSON.stringify({ repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: h, loggedAt: "2026-10-01T00:00:00.000Z", ...extra });
+      const ledger = (h, extra) => JSON.stringify({ repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: h, loggedAt: "2026-10-27T00:00:00.000Z", ...extra });
       await writeFile(path.join(dir, `draft_gate-${head("1")}.json`), ledger(head("1"), { verdict: "findings_present" }), "utf8");
       await writeFile(path.join(dir, `draft_gate-${head("2")}.json`), "{not json", "utf8");
       await writeFile(path.join(dir, `draft_gate-${head("3")}.json`), ledger(head("3"), { verdict: "findings_present", repo: "other/repo" }), "utf8");
