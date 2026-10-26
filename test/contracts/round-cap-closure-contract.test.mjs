@@ -8,7 +8,7 @@ const read = (rel) => readFile(new URL(`../../${rel}`, import.meta.url), "utf8")
 test("GATE-EXEC-ROUND-CAP states the cap-round fix, the one closure round and the escalation", async () => {
   const contract = await read("skills/docs/gate-review-sub-loop-contract.md");
   const rule = contract.split("<!-- rule: GATE-EXEC-ROUND-CAP -->")[1].split("\n")[1];
-  for (const text of ["`judgeFix`", "composes `findings_present`", "the one closure round", "`scope.closureRound`", "`closureRound: true`", "judge `defer` with a target issue", "no second closure round exists", "ADR 0191"]) {
+  for (const text of ["`judgeFix`", "composes `findings_present`", "a closure round (count cap+1)","`scope.closureRound`", "`closureRound: true`", "judge `defer` with a target issue", "Every round whose count equals cap+1 is a closure round", "the closure round ignores `--base`","ADR 0191"]) {
     assert.ok(rule.includes(text), text);
   }
   assert.ok(!rule.includes("unchanged in this slice"));

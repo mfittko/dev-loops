@@ -9,7 +9,7 @@ import { countCompletedRounds } from "../../../scripts/github/write-gate-context
 const act = (severity, extra = {}) => ({ severity, summary: `${severity} act`, judgeDisposition: "act", ...extra });
 const closed = (severity, judgeDisposition, extra = {}) => ({ severity, summary: `${severity} ${judgeDisposition}`, judgeDisposition, ...extra });
 const ctx = { round: 4, cap: 4 };
-const reasons = (findings) => pastCapBlockers(findings).map((b) => `${b.kind}/${b.reason}`);
+const reasons = (findings) => pastCapBlockers(findings, { pr: 9999 }).map((b) => `${b.kind}/${b.reason}`);
 
 describe("draft_gate round cap", () => {
   test("isPastRoundCap: count at or above the cap, never with cap 0", () => {
@@ -69,12 +69,21 @@ describe("draft_gate round cap", () => {
     const ledger = [
       closed("medium", "reject", r), closed("medium", "reject", r), closed("medium", "reject", r),
       closed("medium", "reject", { ...r, resurfaces: "0123456789abcdef" }),
-      closed("medium", "defer", { followUpIssueNumber: 2940 }),
+      closed("medium", "defer", { followUpIssueNumber: 2937 }),
       ...Array.from({ length: 4 }, () => closed("low", "reject", r)),
       ...Array.from({ length: 4 }, () => closed("nit", "reject", r)),
     ];
     assert.equal(ledger.length, 13);
-    assert.deepEqual(pastCapBlockers(ledger), []);
+    assert.deepEqual(pastCapBlockers(ledger, { pr: 2940, round: 4, cap: 4 }), []);
+    // the original ledger deferred to the PR itself, which is not a target
+    const selfDefer = [closed("medium", "defer", { followUpIssueNumber: 2940 })];
+    assert.deepEqual(pastCapBlockers(selfDefer, { pr: 2940, round: 4, cap: 4 }).map((b) => b.reason), ["severity_disagreement"]);
+  });
+
+  test("a medium defer is not final when pr is not an integer (fail closed)", () => {
+    const deferred = [closed("medium", "defer", { followUpIssueNumber: 17 })];
+    assert.deepEqual(pastCapBlockers(deferred).map((b) => b.reason), ["severity_disagreement"]);
+    assert.deepEqual(pastCapBlockers(deferred, { pr: Number.NaN }).map((b) => b.reason), ["severity_disagreement"]);
   });
 
   describe("closure round (ADR 0191, #2937 S4a)", () => {

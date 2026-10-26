@@ -166,6 +166,24 @@ test("with maxReviewRounds 0 the legacy shapes post as before", async () => {
   }, { prefix: "dev-loops-round-cap-off-" });
 });
 
+test("the structured findings path posts a defer target and a reason holding an issue id past the issue-id guard", async () => {
+  await withTempDir(async (tempDir) => {
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "correctness", verdict: "findings_present", findings: [
+        { severity: "low", summary: "deferred low", judgeDisposition: "defer", judgeReason: "tracked in #123 already", followUpIssueNumber: 77 },
+      ] },
+    ]), "utf8");
+    const out = await post([
+      "--verdict", "findings_present", "--findings-json", findingsPath,
+      "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 1, question: 0, nit: 0 }),
+    ], { root: capOffRoot });
+    assert.equal(out.error, undefined);
+    assert.match(out.body, /judge: _`defer`_: tracked in 123 already \(follow-up 77\)/);
+    assert.doesNotMatch(out.body, /#(?:123|77)/);
+  }, { prefix: "dev-loops-round-cap-structured-ids-" });
+});
+
 for (const severity of ["high", "medium"]) {
   test(`past the cap a new ${severity} act item composes blocked with round_cap_reached`, async () => {
     await withTempDir(async (tempDir) => {
@@ -326,7 +344,7 @@ test("at the cap round judge-acted findings with a remedy compose findings_prese
   }, { prefix: "dev-loops-round-cap-closure-cap-" });
 });
 
-test("the closure round with an act item blocks, and a second closure round is refused", async () => {
+test("the closure round with an act item blocks, and a round counted cap+2 blocks too", async () => {
   await withTempDir(async (tempDir) => {
     for (const heads of [[...priorHeads, extraPriors[0]], [...priorHeads, ...extraPriors]]) {
       await seedPrior(repoRoot, heads);

@@ -1436,8 +1436,9 @@ function renderBodyOnlyFindingLine(finding, ctx) {
   // Judge relevance-based disposition.
   const judgeSuffix = finding.judgeDisposition
     ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_`
-      + (finding.judgeReason ? `: ${sanitizeStructuredInline(finding.judgeReason)}` : "")
-      + (finding.followUpIssueNumber ? ` (follow-up #${finding.followUpIssueNumber})` : "")
+      + (finding.judgeReason ? `: ${sanitizeStructuredInline(neutralizeBareIssuePrIds(finding.judgeReason))}` : "")
+      // no `#`: the issue-id guard refuses a bare id in a posted body
+      + (finding.followUpIssueNumber ? ` (follow-up ${finding.followUpIssueNumber})` : "")
     : "";
   const angleSuffix = finding.angle ? ` _(${sanitizeStructuredInline(finding.angle)})_` : "";
   return `- ${markerPrefix}${summary}${location}${dispositionSuffix}${judgeSuffix}${angleSuffix}`;

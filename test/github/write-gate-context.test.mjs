@@ -8266,13 +8266,21 @@ test("resolveClosureRound returns the cap round head and the prior act items onl
     assert.equal(closure.fromHead, baseSha);
     assert.deepEqual(closure.priorActItems.map((i) => i.title), ["Guard is missing"]);
     await seedClosedRounds(repoRoot, 41, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha, "5".repeat(40)]);
-    assert.equal(await resolveClosureRound(opts, { repoRoot, cap: 4 }), null, "a second closure round does not exist");
+    assert.equal(await resolveClosureRound(opts, { repoRoot, cap: 4 }), null, "a round counted cap+2 is not a closure round");
+    // A blocked closure ledger does not count, so the next head is again counted cap+1 and resolves from the last closed head.
+    await seedClosedRounds(repoRoot, 44, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    const blockedHead = "6".repeat(40);
+    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-44", `draft_gate-${blockedHead}.json`), JSON.stringify({
+      repo: "owner/repo", pr: 44, gate: "draft_gate", headSha: blockedHead, verdict: "blocked", loggedAt: "2026-11-09T00:00:00.000Z", findings: [],
+    }), "utf8");
+    const again = await resolveClosureRound({ ...opts, pr: 44 }, { repoRoot, cap: 4 });
+    assert.equal(again?.fromHead, baseSha, "a blocked closure ledger leaves the next round a closure round from the last closed head");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
 
-test("CLI closure round diffs from the cap round head, records scope.closureRound and refuses a different --base; an ordinary round records none", async () => {
+test("CLI closure round diffs from the cap round head, records scope.closureRound and overrides a different --base; an ordinary round records none", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   const priorExitCode = process.exitCode;
   try {
@@ -8284,10 +8292,7 @@ test("CLI closure round diffs from the cap round head, records scope.closureRoun
     await seedClosedRounds(repoRoot, 43, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
     process.exitCode = undefined;
     await main(args(43, "HEAD~1"), { repoRoot, run: stubGhRun });
-    assert.equal(process.exitCode, 1, "a --base that differs from the cap round head is refused");
-    assert.equal(await readGateContext({ repo: "owner/repo", pr: 43, gate: "draft_gate", headSha }, { repoRoot }), null);
-    process.exitCode = priorExitCode;
-    await main(args(43), { repoRoot, run: stubGhRun });
+    assert.notEqual(process.exitCode, 1, "a --base that differs from the cap round head is overridden, not refused");
     const closure = await readGateContext({ repo: "owner/repo", pr: 43, gate: "draft_gate", headSha }, { repoRoot });
     assert.equal(closure.scope.diffSource, "base");
     assert.deepEqual(closure.scope.changedFiles, ["src/changed.mjs"]);

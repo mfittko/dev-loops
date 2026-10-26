@@ -3622,9 +3622,7 @@ export async function main(
     // GATE-EXEC-ROUND-CAP (ADR 0191): the one closure round diffs from the cap round's head.
     const closureRound = await resolveClosureRound(options, { repoRoot, cap: resolveGateConfig(config, "draft").maxReviewRounds ?? 0 });
     if (closureRound) {
-      if (options.base && options.base !== closureRound.fromHead) {
-        throw new Error(`GATE-EXEC-ROUND-CAP: this is the closure round, so --base must be the cap round head ${closureRound.fromHead}; got ${JSON.stringify(options.base)}.`);
-      }
+      // The closure round ignores any caller --base (coordinators pass origin/main): the diff always starts at fromHead.
       options.base = closureRound.fromHead;
       options.closureRound = closureRound;
     }
