@@ -259,8 +259,8 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
       // A null bodyFindingReviewId means tied current-head reviews: forward the signaling bodies tied at the latest submittedAt.
       const signaling = effective.filter((r) => r?.state !== "PENDING" && (r?.commit?.oid ?? r?.commit_id) === headSha
         && (isBodyOnlyBlockingReview(r) || classifyCopilotReviewBodyDisposition(r?.state, r?.body) === COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK));
-      const latest = signaling.reduce((max, r) => (String(r?.submittedAt ?? "") > max ? String(r?.submittedAt ?? "") : max), "");
-      currentReviews = signaling.filter((r) => String(r?.submittedAt ?? "") === latest);
+      const latest = signaling.reduce((max, r) => ((reviewSubmittedAt(r) ?? "") > max ? reviewSubmittedAt(r) : max), "");
+      currentReviews = signaling.filter((r) => (reviewSubmittedAt(r) ?? "") === latest);
     }
     if (currentReviews.length === 0) currentReviews = [resolveLatestCopilotReview({ reviews: effective }).review];
     return record.cleared
