@@ -8295,6 +8295,20 @@ test("issue 2885 AC6: a run without --base checks the PR base branch, records ba
   }
 });
 
+test("issue 2885 AC6: the freshness verdict describes --head-sha, not the checkout HEAD", async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    await advanceOrigin();
+    git(clone, ["fetch", "-q", "origin"]);
+    git(clone, ["merge", "-q", "--no-edit", "origin/main"]);
+    // The checkout HEAD contains origin/main, but the reviewed head (pre-merge) lacks it.
+    const argv = ["--repo", "owner/repo", "--pr", "75", "--gate", "review", "--head-sha", headSha, "--angles", '["correctness"]'];
+    await expectRefusal(argv, { repoRoot: clone, run: stubGhRun }, /base_stale_integrate_first/u, clone);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("issue 2885 AC6: a SHA, revision-expression or non-origin remote --base is checked against the PR base branch", async () => {
   const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
   try {

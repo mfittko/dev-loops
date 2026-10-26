@@ -275,6 +275,26 @@ test("runCli --base exits nonzero when the base is stale", async () => {
   }
 });
 
+test("checkBaseFreshness judges the head option, not the checkout HEAD, and fails closed on an unresolvable head", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: true });
+  try {
+    const g = (args) => execFileSync("git", args, { cwd: clone, encoding: "utf8" }).trim();
+    const staleHead = g(["rev-parse", "HEAD"]);
+    g(["fetch", "-q", "origin"]);
+    g(["-c", "user.email=t@example.com", "-c", "user.name=t", "merge", "-q", "--no-edit", "origin/main"]);
+    // The checkout HEAD now contains origin/main; only the named head is stale.
+    assert.equal((await checkBaseFreshness({ base: "main", cwd: clone })).ok, true);
+    const stale = await checkBaseFreshness({ base: "main", head: staleHead, cwd: clone });
+    assert.equal(stale.error, "base_stale_integrate_first");
+    assert.equal((await checkBaseFreshness({ base: "main", head: g(["rev-parse", "HEAD"]), cwd: clone })).ok, true);
+    for (const head of ["0123456789abcdef0123456789abcdef01234567", "--output=x", "not-a-sha"]) {
+      assert.equal((await checkBaseFreshness({ base: "main", head, cwd: clone })).error, "base_head_unresolved", head);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("checkBaseFreshness normalizes every origin spelling of the base and rejects non-branch values with a typed error", async () => {
   const { root, clone } = await makeStaleBaseFixture({ advance: false });
   try {

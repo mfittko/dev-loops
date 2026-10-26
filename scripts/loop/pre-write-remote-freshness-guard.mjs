@@ -16,7 +16,7 @@ const lines = (s) => s.split(/\r?\n/u).map((l) => l.trim()).filter((l) => l.leng
  * commits on it that HEAD lacks. `foreignFiles` are files whose content differs from origin/<base>
  * (two-dot) but that the branch never touched (three-dot), the stale-base signature.
  */
-export async function checkBaseFreshness({ base: rawBase, cwd = process.cwd(), env = process.env, gitCommand = "git", fetchTimeoutMs = 60_000 }) {
+export async function checkBaseFreshness({ base: rawBase, head: rawHead = "HEAD", cwd = process.cwd(), env = process.env, gitCommand = "git", fetchTimeoutMs = 60_000 }) {
   // Scrub the git-dir overrides so every spawn targets cwd, never an inherited repository.
   const gitEnv = { ...env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C", LANGUAGE: "C" };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"]) delete gitEnv[key];
@@ -46,10 +46,18 @@ export async function checkBaseFreshness({ base: rawBase, cwd = process.cwd(), e
     if (/^[0-9a-f]+$/iu.test(base) && /couldn't find remote ref/u.test(error?.stderr ?? "")) return notBranch(`${rawBase} is not an origin branch (looks like a SHA)`);
     return { ok: false, error: "base_fetch_failed", base, message: error?.killed ? `git fetch timed out after ${fetchTimeoutMs}ms` : (error?.stderr?.trim() || error?.message || String(error)) };
   }
-  const newerCommits = await git(["log", `HEAD..origin/${base}`, "--no-decorate", "--no-show-signature", "--format=%h %s"]);
+  // The verdict describes the reviewed head, not the checkout: fail closed when it does not resolve locally.
+  let head = "HEAD";
+  if (rawHead !== "HEAD") {
+    const unresolved = { ok: false, error: "base_head_unresolved", base, message: `head ${rawHead} does not resolve to a local commit` };
+    if (!/^(?:[0-9a-f]{7,40}|[0-9a-f]{64})$/iu.test(rawHead)) return unresolved;
+    head = (await git(["rev-parse", "--verify", "--quiet", `${rawHead}^{commit}`]).catch(() => []))[0];
+    if (!head) return unresolved;
+  }
+  const newerCommits = await git(["log", `${head}..origin/${base}`, "--no-decorate", "--no-show-signature", "--format=%h %s"]);
   if (newerCommits.length === 0) return { ok: true, status: "base_current", base };
-  const touched = new Set(await git(["diff", "--name-only", `origin/${base}...HEAD`]));
-  const foreignFiles = (await git(["diff", "--name-only", `origin/${base}..HEAD`])).filter((f) => !touched.has(f));
+  const touched = new Set(await git(["diff", "--name-only", `origin/${base}...${head}`]));
+  const foreignFiles = (await git(["diff", "--name-only", `origin/${base}..${head}`])).filter((f) => !touched.has(f));
   return {
     ok: false,
     error: "base_stale_integrate_first",
