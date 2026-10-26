@@ -52,7 +52,7 @@ Output (stdout, JSON):
       "supersededBy": { "number", "title", "path" } | null }],
     "adrNeed": "<section text>" | "unstated", "adrTripwirePaths": ["..."],
     "helperInventory": { "modules": [{ "path", "exports": ["<name>"] }], "overflowModules": ["<path>"] },
-    "importers": { "<touched source module>": { "files": ["<path>"], "importersTruncated"?: true } },
+    "importers": null | { "<touched source module>": { "files": ["<path>"], "importersTruncated"?: true } },
     "requiredReads": ["skills/docs/structural-quality.md", "changes/README.md"],
     "findings": [{ "kind", "reason" }] }
 
@@ -87,7 +87,8 @@ and the remaining modules are listed by path only in "overflowModules".
 "importers" has one entry per touched source module (.mjs/.cjs/.js/.ts): the sorted
 tracked files (git ls-files, offline) that import it by relative specifier, capped
 at ${IMPORTERS_LIMIT} with "importersTruncated": true beyond; an empty "files" list means no
-importer. A non-source touched path has no entry. Check each listed importer
+importer. A non-source touched path has no entry. When git ls-files fails, "importers" is
+null and "findings" carries importers_unavailable with the reason. Check each listed importer
 before hand-back.
 
 ${JQ_OUTPUT_USAGE}
@@ -105,7 +106,7 @@ const EXPORT_LIST_RE = /^export\s*\{([^}]*)\}/gmu;
 const IMPORT_SPECIFIER_RE = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\(\s*)["'](\.[^"']*)["']/gu;
 const execFileAsync = promisify(execFile);
 
-const REQUIRED_READS =Object.freeze(["skills/docs/structural-quality.md", "changes/README.md"]);
+const REQUIRED_READS = Object.freeze(["skills/docs/structural-quality.md", "changes/README.md"]);
 const ADR_NEED_UNSTATED = "unstated";
 // Repo-relative path citation, including an ./-prefixed extensionless entry
 // (./LICENSE). A token never ends on a dot, so sentence punctuation stays out. Leading
@@ -296,9 +297,10 @@ function exportedNames(source) {
   const names = new Set();
   for (const [, name] of source.matchAll(EXPORT_DECL_RE)) names.add(name);
   for (const [, list] of source.matchAll(EXPORT_LIST_RE)) {
-    for (const item of list.split(",")) {
-      const name = item.trim().split(/\s+as\s+/u).pop();
-      if (name && name !== "default") names.add(name);
+    const cleaned = list.replace(/\/\*[\s\S]*?\*\//gu, " ").replace(/\/\/[^\n]*/gu, " ");
+    for (const item of cleaned.split(",")) {
+      const name = item.trim().replace(/^type\s+/u, "").split(/\s+as\s+/u).pop();
+      if (name && name !== "default" && /^[A-Za-z_$][\w$]*$/u.test(name)) names.add(name);
     }
   }
   return [...names].sort();
@@ -312,23 +314,38 @@ async function helperInventory(root, touchedPaths, resolved) {
     dirs.add(dir === "." ? "" : dir);
   }
   const modules = [];
+  const rootReal = await realpath(root);
   for (const dir of [...dirs].sort()) {
-    const names = await readdir(path.join(root, ...dir.split("/"))).catch((error) => {
+    const dirPath = path.join(root, ...dir.split("/"));
+    const entries = await readdir(dirPath, { withFileTypes: true }).catch((error) => {
       if (isMissing(error)) return [];
       throw error;
     });
-    for (const name of names.filter((n) => SOURCE_FILE_RE.test(n))) modules.push(dir === "" ? name : `${dir}/${name}`);
+    for (const entry of entries) {
+      if (!SOURCE_FILE_RE.test(entry.name)) continue;
+      // Real files only; a symlink counts when it resolves to a file inside the root.
+      if (!entry.isFile()) {
+        if (!entry.isSymbolicLink()) continue;
+        const target = path.join(dirPath, entry.name);
+        const real = await realpath(target).catch(() => null);
+        if (real === null || !real.startsWith(rootReal + path.sep) || !(await stat(real)).isFile()) continue;
+      }
+      modules.push(dir === "" ? entry.name : `${dir}/${entry.name}`);
+    }
   }
   const inline = [];
   const overflowModules = [];
-  let used = 0;
+  // Budget = all inline names joined with commas, separators between modules included.
+  const inlineNames = [];
   for (const modulePath of sortedUnique(modules)) {
     const source = await readTextOrNull(path.join(root, ...modulePath.split("/")));
     if (source == null) continue;
     const exports = exportedNames(source);
-    used += exports.join(",").length;
-    if (used > INVENTORY_CHAR_LIMIT || overflowModules.length > 0) overflowModules.push(modulePath);
-    else inline.push({ path: modulePath, exports });
+    if ([...inlineNames, ...exports].join(",").length > INVENTORY_CHAR_LIMIT || overflowModules.length > 0) overflowModules.push(modulePath);
+    else {
+      inlineNames.push(...exports);
+      inline.push({ path: modulePath, exports });
+    }
   }
   return { modules: inline, overflowModules };
 }
@@ -336,10 +353,15 @@ async function helperInventory(root, touchedPaths, resolved) {
 /** Tracked files that import each touched source module by relative specifier. */
 async function importersByModule(root, touchedPaths, resolved) {
   const targets = touchedPaths.filter((relPath) => resolved.get(relPath) === "file" && SOURCE_FILE_RE.test(relPath));
-  if (targets.length === 0) return {};
-  const tracked = await execFileAsync("git", ["-C", root, "ls-files", "-z"], { env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 })
-    .then(({ stdout }) => stdout.split("\0").filter((file) => SOURCE_FILE_RE.test(file)).sort())
-    .catch(() => []);
+  if (targets.length === 0) return { importers: {} };
+  let tracked;
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "-z"], { env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
+    tracked = stdout.split("\0").filter((file) => SOURCE_FILE_RE.test(file)).sort();
+  } catch {
+    // Fixed text keeps the brief byte-identical across checkout roots.
+    return { importers: null, error: "git ls-files failed under --repo-root (not a git work tree, or git is unavailable)" };
+  }
   const found = new Map(targets.map((target) => [target, []]));
   for (const file of tracked) {
     const source = await readTextOrNull(path.join(root, ...file.split("/")));
@@ -350,10 +372,12 @@ async function importersByModule(root, touchedPaths, resolved) {
       if (hit && file !== resolvedSpecifier && !hit.includes(file)) hit.push(file);
     }
   }
-  return Object.fromEntries(targets.map((target) => {
-    const files = found.get(target);
-    return [target, files.length > IMPORTERS_LIMIT ? { files: files.slice(0, IMPORTERS_LIMIT), importersTruncated: true } : { files }];
-  }));
+  return {
+    importers: Object.fromEntries(targets.map((target) => {
+      const files = found.get(target);
+      return [target, files.length > IMPORTERS_LIMIT ? { files: files.slice(0, IMPORTERS_LIMIT), importersTruncated: true } : { files }];
+    })),
+  };
 }
 
 /**
@@ -495,6 +519,9 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
 
   const adrNeed = extractSection(stripFencedCode(body), "ADR need") ?? "";
 
+  const { importers, error: importersError } = await importersByModule(root, touchedPaths, resolved);
+  if (importersError) findings.push({ kind: "importers_unavailable", reason: importersError });
+
   return {
     ok: true,
     matrix,
@@ -506,7 +533,7 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
     adrNeed: adrNeed === "" ? ADR_NEED_UNSTATED : adrNeed,
     adrTripwirePaths: touchedPaths.filter(matchesAdrTripwire),
     helperInventory: await helperInventory(root, touchedPaths, resolved),
-    importers: await importersByModule(root, touchedPaths, resolved),
+    importers,
     requiredReads: [...REQUIRED_READS],
     findings,
   };

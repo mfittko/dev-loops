@@ -996,6 +996,31 @@ test("importers lists the sorted tracked files that import a touched module, and
   });
 });
 
+test("a git ls-files failure yields null importers and an importers_unavailable finding", async () => {
+  const root = await fixtureRepo({ files: { "src/a.mjs": "export const a = 1;\n" } });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
+  assert.equal(brief.importers, null);
+  assert.ok(brief.findings.some((f) => f.kind === "importers_unavailable" && f.reason));
+});
+
+test("the inventory skips directories named like modules and symlinks leaving the root", async () => {
+  const root = await fixtureRepo({ files: { "src/a.mjs": "export const a = 1;\n" } });
+  const outside = await mkdtemp(path.join(os.tmpdir(), "implementation-brief-outside-"));
+  await writeFile(path.join(outside, "x.mjs"), "export const leaked = 1;\n");
+  await mkdir(path.join(root, "src", "dir.mjs"));
+  await symlink(path.join(outside, "x.mjs"), path.join(root, "src", "link.mjs"));
+  const { helperInventory } = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
+  assert.deepEqual(helperInventory.modules.map((m) => m.path), ["src/a.mjs"]);
+});
+
+test("export lists drop comments, a type prefix and non-identifier items", async () => {
+  const root = await fixtureRepo({
+    files: { "src/a.mjs": "export {\n  one, // note, fake\n  /* block, hidden */ two,\n  type Three,\n  four as Four,\n};\n" },
+  });
+  const { helperInventory } = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
+  assert.deepEqual(helperInventory.modules.find((m) => m.path === "src/a.mjs").exports, ["Four", "Three", "one", "two"]);
+});
+
 test("a non-source touched path has no importers entry", async () => {
   const root = await trackedRepo({ "docs/readme.md": "Text.\n" });
   const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["docs/readme.md"] });
