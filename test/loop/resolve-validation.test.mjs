@@ -760,8 +760,8 @@ test("a paths-only edit with a full-repository base selection resolves incomplet
 test("a paths-only edit with a changed path whose base rule selects no gate suite resolves incomplete", async () => {
   const { repoRoot } = await fixture();
   try {
-    // Every changed path matches a base rule and the combined selection is targeted; only the tools/ rule has commands but no gateSuites.
-    await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:docs").replace('"**"', '"docs/**"') + '    - match: "tools/**"\n      surface: all\n      commands: [node tools/check.mjs]\n');
+    // The docs rule also matches .devloops, so every changed path matches a gateSuites rule except tools/b.txt (commands, no gateSuites); the combined selection is targeted and only the per-path clause refuses.
+    await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:docs").replace('"**"', '["docs/**", ".devloops"]') + '    - match: "tools/**"\n      surface: all\n      commands: [node tools/check.mjs]\n');
     execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "base paths"], { cwd: repoRoot });
     execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/main"], { cwd: repoRoot });
     execFileSync("git", ["fetch", "-q", "origin"], { cwd: repoRoot });
@@ -775,7 +775,7 @@ test("a paths-only edit with a changed path whose base rule selects no gate suit
     const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
     const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:docs"]), { repoRoot });
     assert.equal(result.status, "incomplete");
-    assert.match(result.reason, /base branch validation paths/);
+    assert.match(result.reason, /a changed path selects no base gate suite/);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
