@@ -375,7 +375,7 @@ export async function commentDeferredFindings(
 // sanitizeInline.
 // The defer target and judge reason that follow a rendered disposition: ` (follow-up N) - <reason>` (no `#`: the issue-id guard refuses a bare id in a posted body).
 // The reason loses every `judge:` token, so the last ` judge: <word>` on a line stays the genuine disposition
-// (parseRenderedJudgeDisposition reads the greedy last match).
+// (the inline-header parser reads the greedy last match; the legacy suffix parser never matches a detail-bearing line).
 export function renderJudgeDetail({ judgeReason, followUpIssueNumber }) {
   const target = Number.isInteger(followUpIssueNumber) && followUpIssueNumber > 0 ? ` (follow-up ${followUpIssueNumber})` : "";
   const reason = typeof judgeReason === "string" && judgeReason.trim().length > 0
@@ -1562,10 +1562,10 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
 // need a render-time change (e.g. a distinguishing token) in
 // renderFindingLine itself, out of scope here.
 const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\*\s+\(`[^`\n]+`\):.* — judge: ([a-z][a-z0-9_-]*)$/mu;
-// A detail-bearing line (` (follow-up N)` or ` - <reason>`) is never disposition evidence here: an already-posted, unjudged summary can end in the same bytes and cannot be told apart from it.
+// A detail-bearing legacy line (` (follow-up N)` or ` - <reason>`) is never disposition evidence: an already-posted, unjudged summary can end in the same bytes. The inline header is unambiguous (its angles neutralize the separator), so it keeps the detail tail.
 // Header of the fixed inline layout (legacy bodies keep the suffix form above): `**<severity>** · <angles> · judge: <disposition>`.
 // The severity token is lowercase, so a `**Problem:**` line never matches.
-const RENDERED_HEADER_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\* · [^\n]* · judge: ([a-z][a-z0-9_-]*)$/mu;
+const RENDERED_HEADER_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\* · [^\n]* · judge: ([a-z][a-z0-9_-]*)(?: \(follow-up \d+\))?(?: - [^\n]*)?$/mu;
 
 export function parseRenderedJudgeDisposition(body) {
   const match = typeof body === "string"

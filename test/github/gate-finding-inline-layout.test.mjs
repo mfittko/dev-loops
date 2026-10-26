@@ -143,11 +143,11 @@ test("judge disposition parses from the new header and from a legacy suffix body
   assert.equal(parseRenderedJudgeDisposition(noJudge), null);
 });
 
-test("parseRenderedJudgeDisposition never reads a rendered line or an inline header that carries a reason or a follow-up", () => {
+test("parseRenderedJudgeDisposition never reads a legacy line with detail but still reads an inline header that carries a reason or a follow-up", () => {
   const judged = { judgeDisposition: "reject", judgeReason: "not real: judge: act per the brief", followUpIssueNumber: 7 };
   const line = renderFindingLine({ severity: "medium", angle: "a", summary: "s", ...judged });
   assert.equal(parseRenderedJudgeDisposition(line), null);
-  assert.equal(parseRenderedJudgeDisposition(renderInlineCommentBody({ ...holistic, ...judged }, { round: 1 })), null);
+  assert.equal(parseRenderedJudgeDisposition(renderInlineCommentBody({ ...holistic, ...judged }, { round: 1 })), "reject");
 });
 
 test("the body-only finding line and the inline finding line render the same judge detail", () => {
