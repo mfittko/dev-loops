@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import {
   buildParseError,
   formatCliError,
@@ -1053,7 +1054,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     });
     if (copilotBodyJudgeFinding) {
       await mkdir(path.dirname(judgeFilePath), { recursive: true });
-      const tempPath = `${judgeFilePath}.${process.pid}.tmp`;
+      const tempPath = `${judgeFilePath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
       await writeFile(tempPath, `${JSON.stringify(copilotBodyJudgeFinding, null, 2)}\n`);
       await rename(tempPath, judgeFilePath);
       copilotBodyJudgeFile = judgeFilePath;
@@ -1086,8 +1087,9 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     actionableThreadCount: parsedThreads.summary.actionableThreads,
     copilotReviewRoundCount: reviewSummary.completedCopilotReviewRounds,
     copilotErrorReviewCountOnCurrentHead: reviewSummary.errorReviewCountOnCurrentHead,
-    copilotBodyFeedbackUnresolved: false,
-    copilotPriorHeadBodyFeedbackUnresolved: false,
+    // A finding the judge cannot receive (failed write) keeps blocking, for both shapes.
+    copilotBodyFeedbackUnresolved: bodyFeedback.copilotBodyFeedbackUnresolved && !bodyRoutedToJudge,
+    copilotPriorHeadBodyFeedbackUnresolved: bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved && !bodyRoutedToJudge,
   });
   if (snapshot.unresolvedThreadCount > 0
       && !snapshot.copilotReviewOnCurrentHead

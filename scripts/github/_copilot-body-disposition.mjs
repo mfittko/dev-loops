@@ -285,7 +285,7 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
       judgeFinding: { angle: "copilot-body", findings: blockingReviews.flatMap((r) => buildJudgeFinding(r).findings) },
     };
   }
-  const reviewId =review.id !== null && review.id !== undefined ? String(review.id) : null;
+  const reviewId = review.id !== null && review.id !== undefined ? String(review.id) : null;
   if (reviewHasOwnThread(reviewThreads, reviewId)) {
     return settled;
   }
