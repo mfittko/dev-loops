@@ -24,7 +24,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -237,7 +237,7 @@ Required:
   --head-sha <sha>
 Optional:
   --harness <pi|claude|codex> Active reviewer harness (default: active CLI harness).
-  --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is a verbatim explicit override only when no proportionality floor fires, and a SECURITY_SENSITIVE_SEAM diff adds threat-model to the explicit set (draft round, or pre_approval round with no draft round at that head); a fired floor refuses it and continues with tier-or-best-effort selection. An empty list (\`[]\`) is refused (exit 1, no artifact written) at every entry point — the CLI dynamic path, this flag, and the exported buildGateContext/writeGateContext API — because a gate-context bundle must carry at least one review angle; the non-empty verbatim/floor behavior is unchanged.
+  --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is a verbatim explicit override only when no proportionality floor fires, and a SECURITY_SENSITIVE_SEAM diff adds threat-model to the explicit set (draft round, or pre_approval round at a head where no draft round ran threat-model); a fired floor refuses it and continues with tier-or-best-effort selection. An empty list (\`[]\`) is refused (exit 1, no artifact written) at every entry point — the CLI dynamic path, this flag, and the exported buildGateContext/writeGateContext API — because a gate-context bundle must carry at least one review angle; the non-empty verbatim/floor behavior is unchanged.
   --rationale <json>             JSON array of {angle, action, reason} entries
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
@@ -3128,12 +3128,15 @@ function detectRefinementHasAcChecklist(prBody) {
 }
 
 // SECURITY_SENSITIVE_SEAM override scope: a draft round, or a pre_approval round
-// at a head where no draft_gate round wrote a gate-context artifact.
+// at a head where no draft_gate round ran threat-model (its gate-context
+// artifact is missing, unreadable, or does not list threat-model).
 export async function seamFirstRoundFor({ gate, repo, pr, headSha, tmpRoot }, repoRoot) {
-  if (gate !== "pre_approval_gate") return true;
+  if (gate === "draft_gate") return true;
+  if (gate !== "pre_approval_gate") return false;
   try {
-    await access(path.resolve(repoRoot, buildGateContextPath({ repo, pr, gate: "draft_gate", headSha, tmpRoot })));
-    return false;
+    const draftPath = buildGateContextPath({ repo, pr, gate: "draft_gate", headSha, tmpRoot: tmpRoot || "tmp" });
+    const { resolvedAngles } = JSON.parse(await readFile(path.resolve(repoRoot, draftPath), "utf8"));
+    return !(Array.isArray(resolvedAngles) && resolvedAngles.includes("threat-model"));
   } catch {
     return true;
   }

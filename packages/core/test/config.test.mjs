@@ -5650,14 +5650,14 @@ describe("resolveGateAnglesDynamic: SECURITY_SENSITIVE_SEAM threat-model overrid
     assert.ok(result.recommendedAngles.includes("threat-model"));
   });
 
-  test("preApproval with requireDraftFirst:true does not add threat-model on a seam diff", async () => {
-    const pre = { version: 1, workflow: { requireDraftFirst: true }, gates: { preApproval: { angles: ["scope", { name: "threat-model", enabled: false }] } } };
+  test("preApproval without seamFirstRound does not add threat-model on a seam diff", async () => {
+    const pre = { version: 1, gates: { preApproval: { angles: ["scope", { name: "threat-model", enabled: false }] } } };
     const result = await resolveGateAnglesDynamic(pre, "preApproval", { diff: seamDiff });
     assert.ok(!result.recommendedAngles.includes("threat-model"));
   });
 
   test("preApproval with no draft round at the head adds threat-model on a seam diff; after a draft round it does not", async () => {
-    const pre = { version: 1, workflow: { requireDraftFirst: true }, gates: { preApproval: { angles: ["scope", { name: "threat-model", enabled: false }] } } };
+    const pre = { version: 1, gates: { preApproval: { angles: ["scope", { name: "threat-model", enabled: false }] } } };
     const noDraft = await resolveGateAnglesDynamic(pre, "preApproval", { diff: seamDiff, seamFirstRound: true });
     assert.ok(noDraft.recommendedAngles.includes("threat-model"));
     assert.equal(noDraft.addedReasons["threat-model"], "SECURITY_SENSITIVE_SEAM");
@@ -5665,17 +5665,35 @@ describe("resolveGateAnglesDynamic: SECURITY_SENSITIVE_SEAM threat-model overrid
     assert.ok(!afterDraft.recommendedAngles.includes("threat-model"));
   });
 
-  test("with no draft round at the head the preApproval override fires only where threat-model is in the contract pool", async () => {
-    const pre = (angles) => ({ version: 1, workflow: { requireDraftFirst: false }, gates: { preApproval: { angles } } });
+  test("with no draft round at the head the preApproval override fires on a pool that does not list threat-model", async () => {
+    const pre = (angles) => ({ version: 1, gates: { preApproval: { angles } } });
     const disabled = pre(["scope", { name: "threat-model", enabled: false }]);
     const fired = await resolveGateAnglesDynamic(disabled, "preApproval", { diff: seamDiff, seamFirstRound: true });
     assert.ok(fired.recommendedAngles.includes("threat-model"));
     assert.ok(resolveGateAngleContract(disabled, "preApproval").pool.includes("threat-model"));
-    // Not a pool member and not excluded: the override must not mint a foreign angle.
+    // Shipped-style pool [scope]: threat-model is added as an added angle and is in the contract pool.
     const absent = pre(["scope"]);
-    const skipped = await resolveGateAnglesDynamic(absent, "preApproval", { diff: seamDiff, seamFirstRound: true });
-    assert.ok(!skipped.recommendedAngles.includes("threat-model"));
-    assert.ok(!resolveGateAngleContract(absent, "preApproval").pool.includes("threat-model"));
+    const added = await resolveGateAnglesDynamic(absent, "preApproval", { diff: seamDiff, seamFirstRound: true });
+    assert.ok(added.recommendedAngles.includes("threat-model"));
+    assert.deepEqual(added.addedAngles, ["threat-model"]);
+    assert.equal(added.addedReasons["threat-model"], "SECURITY_SENSITIVE_SEAM");
+    assert.ok(resolveGateAngleContract(absent, "preApproval").pool.includes("threat-model"));
+    const plain = await resolveGateAnglesDynamic(absent, "preApproval", { diff: plainDiff, seamFirstRound: true });
+    assert.ok(!plain.recommendedAngles.includes("threat-model"));
+  });
+
+  test("a tier listing threat-model still falls back on a gate that does not configure it", () => {
+    const cfg = {
+      version: 1,
+      gates: { preApproval: { angles: ["scope"], tiers: [{ name: "small-code", match: { kinds: ["code"], maxLines: 50 }, angles: ["threat-model"] }] } },
+    };
+    const tier = resolveGateTier(cfg, "preApproval", { changedFiles: ["scripts/x.mjs"], filesChanged: 1, linesChanged: 2 });
+    assert.equal(tier.reason, "angle_outside_pool");
+  });
+
+  test("the spike gate gets no seam widening", () => {
+    const cfg = { version: 1, gates: { spike: { angles: ["scope"] } } };
+    assert.ok(!resolveGateAngleContract(cfg, "spike").pool.includes("threat-model"));
   });
 
   test("a seam diff outside the first gate round keeps the config drop", async () => {
@@ -7038,7 +7056,7 @@ describe("resolveGateAngleContract (#1196 — shared angle enforcement contract)
     };
     const { mandatoryAngles, pool } = resolveGateAngleContract(config, "preApproval");
     assert.deepEqual(mandatoryAngles, ["pr-checklist"]);
-    assert.deepEqual(pool, ["pr-checklist", "dry", "kiss"]);
+    assert.deepEqual(pool, ["pr-checklist", "dry", "kiss", "threat-model"]);
   });
 
   test("an excluded mandatory angle is dropped from BOTH sides (no missing-mandatory/foreign deadlock)", () => {

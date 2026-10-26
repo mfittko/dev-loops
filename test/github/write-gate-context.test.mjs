@@ -8192,17 +8192,23 @@ test("resolvePrSpecContext (review): caller-supplied spec flags leave the formal
   assert.equal(options.hasFormalPrSpec, undefined);
 });
 
-test("seamFirstRoundFor: pre_approval is a seam-first round only when no draft_gate artifact exists at the head", async () => {
+test("seamFirstRoundFor: pre_approval is a seam-first round only when no draft_gate round ran threat-model at the head", async () => {
   const { seamFirstRoundFor } = await import("../../scripts/github/write-gate-context.mjs");
   const root = await mkdtemp(path.join(os.tmpdir(), "seam-first-"));
   try {
     const id = { repo: "o/r", pr: 7, headSha: "a".repeat(40), tmpRoot: "tmp" };
     assert.equal(await seamFirstRoundFor({ ...id, gate: "draft_gate" }, root), true);
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "review" }, root), false);
     assert.equal(await seamFirstRoundFor({ ...id, gate: "pre_approval_gate" }, root), true);
     const draftPath = path.join(root, buildGateContextPath({ ...id, gate: "draft_gate" }));
     await mkdir(path.dirname(draftPath), { recursive: true });
-    await writeFile(draftPath, "{}");
+    await writeFile(draftPath, JSON.stringify({ resolvedAngles: ["scope"] }));
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "pre_approval_gate" }, root), true, "draft artifact without threat-model");
+    await writeFile(draftPath, "{not json");
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "pre_approval_gate" }, root), true, "malformed draft artifact");
+    await writeFile(draftPath, JSON.stringify({ resolvedAngles: ["scope", "threat-model"] }));
     assert.equal(await seamFirstRoundFor({ ...id, gate: "pre_approval_gate" }, root), false);
+    assert.equal(await seamFirstRoundFor({ ...id, tmpRoot: "", gate: "pre_approval_gate" }, root), false, "empty tmpRoot shares the writer's normalization");
     assert.equal(await seamFirstRoundFor({ ...id, gate: "draft_gate" }, root), true);
   } finally {
     await rm(root, { recursive: true, force: true });

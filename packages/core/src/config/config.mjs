@@ -2826,7 +2826,8 @@ export function resolveAnglePool(config) {
  * omitted, foreign if recorded). `pool` is resolveGateAngles, widened to the
  * global catalog (resolveAnglePool) when `additiveAngles` is on, with
  * excludeAngles still a hard ceiling (except the SECURITY_SENSITIVE_SEAM
- * `threat-model` exception, which is always added to `pool` when excluded);
+ * `threat-model` exception, which is always added to the `pool` of the draft
+ * and preApproval gates, whether or not they list or exclude it);
  * a null pool skips the foreign check.
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
@@ -2834,21 +2835,27 @@ export function resolveAnglePool(config) {
  */
 export function resolveGateAngleContract(config, gate) {
   const gateConfig = resolveGateConfig(config, gate);
-  const excluded = new Set(gateConfig.excludeAngles);
-  const mandatoryAngles = gateConfig.mandatoryAngles.filter((a) => !excluded.has(a));
-  let pool = resolveGateAngles(config, gate);
-  if (gateConfig.additiveAngles && pool !== null) {
-    pool = [...new Set([...pool, ...resolveAnglePool(config)])].filter((a) => !excluded.has(a));
-  }
-  // The security-seam override may record threat-model even when config
-  // disables it, so it is never a foreign angle.
-  // The override only fires for a gate that excludes or already pools threat-model.
-  if (pool !== null && excluded.has(SECURITY_SEAM_ANGLE)) pool = [...pool, SECURITY_SEAM_ANGLE];
+  const mandatoryAngles = gateConfig.mandatoryAngles.filter((a) => !gateConfig.excludeAngles.includes(a));
+  let pool = resolveGateContractBasePool(config, gate);
+  // The security-seam override may record threat-model even when the gate does
+  // not pool it, so it is never a foreign angle. It runs only through the override.
+  if (pool !== null && SEAM_GATES.has(gate) && !pool.includes(SECURITY_SEAM_ANGLE)) pool = [...pool, SECURITY_SEAM_ANGLE];
   return { mandatoryAngles, pool };
+}
+
+// The contract pool before the seam widening: the static angle set, widened to
+// the global catalog under additiveAngles, with excludeAngles a hard ceiling.
+function resolveGateContractBasePool(config, gate) {
+  const gateConfig = resolveGateConfig(config, gate);
+  const pool = resolveGateAngles(config, gate);
+  if (!gateConfig.additiveAngles || pool === null) return pool;
+  return [...new Set([...pool, ...resolveAnglePool(config)])].filter((a) => !gateConfig.excludeAngles.includes(a));
 }
 
 /** Angle the gate-review contract never drops on a SECURITY_SENSITIVE_SEAM diff. */
 const SECURITY_SEAM_ANGLE = "threat-model";
+/** Gate keys whose rounds the seam override applies to. */
+const SEAM_GATES = new Set(["draft", "preApproval"]);
 
 /**
  * Resolve the diff-class angle tier for a gate from its ordered
@@ -2904,11 +2911,11 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
   if (!matched) {
     return { tier: null, angles: null, reason: "no_tier_match" };
   }
-  const { mandatoryAngles, pool } = resolveGateAngleContract(config, gate);
-  const excludedAngles = resolveGateConfig(config, gate).excludeAngles;
-  // A config-disabled angle stays outside the pool even though the seam
-  // override widens it, so a tier cannot run it on a non-seam diff.
-  if (pool !== null && matched.angles.some((a) => !pool.includes(a) || excludedAngles.includes(a))) {
+  const { mandatoryAngles } = resolveGateAngleContract(config, gate);
+  // Checked against the pool before the seam widening, so a tier cannot run
+  // threat-model on a gate that does not configure it.
+  const pool = resolveGateContractBasePool(config, gate);
+  if (pool !== null && matched.angles.some((a) => !pool.includes(a))) {
     return { tier: null, angles: null, reason: "angle_outside_pool" };
   }
   return { tier: matched.name, angles: [...new Set([...mandatoryAngles, ...matched.angles])], reason: "tier_match" };
@@ -3110,7 +3117,7 @@ export function resolveReviewProportionality(config, gate, {
  * @param {boolean} [options.hasFullLabel] — `gate:full` label present on the PR (bypasses tier resolution)
  * @param {boolean} [options.checkFloors] — opt into the GATE-EXEC-PROPORTIONALITY floor check above
  * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [options.sizeOutcome] — only consulted when `checkFloors` is true
- * @param {boolean} [options.seamFirstRound] — true in a draft_gate round, or in a pre_approval_gate round at a head where no draft_gate round ran (caller-derived; defaults to true only for `draft`); only then does a SECURITY_SENSITIVE_SEAM diff force threat-model past `enabled: false`, so a pre_approval_gate round after a draft round at the same head does not re-run it
+ * @param {boolean} [options.seamFirstRound] — true in a draft_gate round, or in a pre_approval_gate round at a head where no draft_gate round ran threat-model (caller-derived; defaults to true only for `draft`); only then does a SECURITY_SENSITIVE_SEAM diff force threat-model past `enabled: false`, so a pre_approval_gate round after a draft round at the same head does not re-run it
  * @param {string[]} [options.explicitAngles] — caller-supplied verbatim override (e.g. CLI `--angles`); wins over tier/dynamic resolution but NEVER over a fired floor above (a fired floor refuses the override and continues to tier/dynamic best-effort selection); a SECURITY_SENSITIVE_SEAM diff still adds threat-model to the explicit set (when seamFirstRound)
  * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: boolean, dynamicAnglesActive: boolean, addedAngles: string[], addedReasons: Record<string,string> }}
  */
@@ -3134,10 +3141,7 @@ export async function resolveGateAnglesDynamic(config, gate, options = {}) {
 // added angle so the override is never silent.
 async function applySeamOverride(config, gate, diff, result, seamFirstRound) {
   const { recommendedAngles, skippedAngles, reasons } = result;
-  if (!diff || !seamFirstRound || recommendedAngles.includes(SECURITY_SEAM_ANGLE)) return result;
-  const eligible = resolveGateConfig(config, gate).excludeAngles.includes(SECURITY_SEAM_ANGLE)
-    || (resolveGateAngles(config, gate) ?? []).includes(SECURITY_SEAM_ANGLE);
-  if (!eligible) return result;
+  if (!diff || !seamFirstRound || !SEAM_GATES.has(gate) || recommendedAngles.includes(SECURITY_SEAM_ANGLE)) return result;
   const { analyzeDiff } = await import("../analysis/diff-analyzer.mjs");
   const seamCategories = analyzeDiff({
     nameStatusOutput: diff.nameStatusOutput,
@@ -3230,8 +3234,6 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
     return { recommendedAngles: null, skippedAngles: [], reasons: {}, fallbackToAll: false, dynamicAnglesActive: false, addedAngles: [], addedReasons: {} };
   }
 
-  // The dynamic-path seam override applies only where threat-model is in the gate's contract pool.
-  const seamEligible = gateConfig.excludeAngles.includes(SECURITY_SEAM_ANGLE) || staticAngles.includes(SECURITY_SEAM_ANGLE);
   if (!gateConfig.dynamicAngles || !diff) {
     // No diff to select on (a thin briefing) or dynamic resolution explicitly
     // disabled by config. An explicitly disabled resolver keeps its static pool
@@ -3307,7 +3309,7 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
   // Security-seam override: threat-model runs on a seam diff regardless of
   // `enabled: false` in a draft round (or a pre_approval round with no draft
   // round at the head), and is recorded as an added angle so the override is never silent.
-  const seamOverride = seamFirstRound && seamEligible && categories.includes("SECURITY_SENSITIVE_SEAM")
+  const seamOverride = seamFirstRound && SEAM_GATES.has(gate) && categories.includes("SECURITY_SENSITIVE_SEAM")
     && !filteredMandatory.includes(SECURITY_SEAM_ANGLE)
     && !dynamicResult.recommendedAngles.includes(SECURITY_SEAM_ANGLE)
     && !addedAngles.includes(SECURITY_SEAM_ANGLE);

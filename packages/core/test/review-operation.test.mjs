@@ -14,12 +14,12 @@ import {
 describe("resolveOperationAnglePool", () => {
   test("draft_gate resolves the static gates.draft pool", () => {
     const config = { gates: { draft: { angles: ["correctness", "docs"] } } };
-    assert.deepEqual(resolveOperationAnglePool(config, "draft_gate"), ["correctness", "docs"]);
+    assert.deepEqual(resolveOperationAnglePool(config, "draft_gate"), ["correctness", "docs", "threat-model"]);
   });
 
   test("pre_approval_gate resolves the static gates.preApproval pool", () => {
     const config = { gates: { preApproval: { angles: ["security"] } } };
-    assert.deepEqual(resolveOperationAnglePool(config, "pre_approval_gate"), ["security"]);
+    assert.deepEqual(resolveOperationAnglePool(config, "pre_approval_gate"), ["security", "threat-model"]);
   });
 
   test("spike resolves the static gates.spike pool", () => {
@@ -29,7 +29,7 @@ describe("resolveOperationAnglePool", () => {
 
   test("mandatory angle is included even when absent from the plain angles list", () => {
     const config = { gates: { draft: { angles: [{ name: "acceptance-criteria", mandatory: true }] } } };
-    assert.deepEqual(resolveOperationAnglePool(config, "draft_gate"), ["acceptance-criteria"]);
+    assert.deepEqual(resolveOperationAnglePool(config, "draft_gate"), ["acceptance-criteria", "threat-model"]);
   });
 
   test("disabled/excluded angle is removed from the pool", () => {
@@ -44,12 +44,12 @@ describe("resolveOperationAnglePool", () => {
         },
       },
     };
-    assert.deepEqual(resolveOperationAnglePool(config, "draft_gate"), ["correctness"]);
+    assert.deepEqual(resolveOperationAnglePool(config, "draft_gate"), ["correctness", "threat-model"]);
   });
 
   test("a mandatory angle that is also disabled stays excluded (excludeAngles is a hard ceiling)", () => {
     const config = { gates: { draft: { angles: [{ name: "docs", mandatory: true, enabled: false }] } } };
-    assert.deepEqual(resolveOperationAnglePool(config, "draft_gate"), []);
+    assert.deepEqual(resolveOperationAnglePool(config, "draft_gate"), ["threat-model"]);
   });
 
   test("additive pool widens draft_gate (dynamic.additive) but never widens review", () => {
