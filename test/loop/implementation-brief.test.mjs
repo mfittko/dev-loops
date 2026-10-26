@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +8,7 @@ import { afterEach, test } from "bun:test";
 
 import { detectAcDodMatrix } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { runCli } from "../../cli/index.mjs";
+import { runGitFixture } from "../_helpers.mjs";
 import { buildImplementationBrief, main } from "../../scripts/loop/implementation-brief.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -58,7 +58,7 @@ async function fixtureRepo({ rules, decisions = {}, files = {}, withDecisions = 
     await writeFile(target, text);
   }
   // A work tree by default: the inventory and importers read `git ls-files`.
-  if (git) execFileSync("git", ["-C", root, "init", "-q"], { stdio: "ignore" });
+  if (git) runGitFixture(root, ["init", "-q"]);
   return root;
 }
 
@@ -952,7 +952,7 @@ test("a checkbox non-goal yields the same item as the canonical spec reader", as
 
 async function trackedRepo(files, options = {}) {
   const root = await fixtureRepo({ ...options, files });
-  execFileSync("git", ["-C", root, "add", "-A"], { stdio: "ignore" });
+  runGitFixture(root, ["add", "-A"]);
   return root;
 }
 
@@ -1025,16 +1025,18 @@ test("a non-git --repo-root nested inside a work tree is not read through the en
   assert.ok(brief.findings.some((f) => f.kind === "importers_unavailable"));
 });
 
-test("the inventory skips directories named like modules and symlinks leaving the root", async () => {
-  const root = await fixtureRepo({ files: { "src/a.mjs": "export const a = 1;\n" } });
+test("the inventory and importers skip tracked directory symlinks and symlinks leaving the root", async () => {
+  const root = await fixtureRepo({ files: { "src/a.mjs": "export const a = 1;\n", "src/real/keep.mjs": "export const k = 1;\n" } });
   const outside = await mkdtemp(path.join(os.tmpdir(), "implementation-brief-outside-"));
   tempDirs.push(outside);
-  await writeFile(path.join(outside, "x.mjs"), "export const leaked = 1;\n");
-  await mkdir(path.join(root, "src", "dir.mjs"));
+  await writeFile(path.join(outside, "x.mjs"), 'export const leaked = 1;\nimport "../src/a.mjs";\n');
+  await symlink(path.join(root, "src", "real"), path.join(root, "src", "dir.mjs"));
+  await symlink(path.join(root, "src", "real"), path.join(root, "src", "dirlink.js"));
   await symlink(path.join(outside, "x.mjs"), path.join(root, "src", "link.mjs"));
-  execFileSync("git", ["-C", root, "add", "-A"], { stdio: "ignore" });
-  const { helperInventory } = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
-  assert.deepEqual(helperInventory.modules.map((m) => m.path), ["src/a.mjs"]);
+  runGitFixture(root, ["add", "-A"]);
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
+  assert.deepEqual(brief.helperInventory.modules.map((m) => m.path), ["src/a.mjs"]);
+  assert.deepEqual(brief.importers, { "src/a.mjs": { files: [] } });
 });
 
 test("the inventory omits untracked and ignored source files", async () => {
@@ -1058,7 +1060,7 @@ test("a directory symlink leaving the root adds no inventory module for an unres
   tempDirs.push(outside);
   await writeFile(path.join(outside, "x.mjs"), "export const leaked = 1;\n");
   await symlink(outside, path.join(root, "ext"));
-  execFileSync("git", ["-C", root, "add", "-A"], { stdio: "ignore" });
+  runGitFixture(root, ["add", "-A"]);
   const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["ext/new.mjs"] });
   assert.deepEqual(brief.unresolvedPaths, ["ext/new.mjs"]);
   assert.deepEqual(brief.helperInventory, { modules: [], overflowModules: [] });

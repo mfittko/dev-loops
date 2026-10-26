@@ -319,7 +319,24 @@ async function trackedSourceFiles(root, rootReal) {
   try {
     const env = { ...gitEnvNoDirOverrides(), GIT_CEILING_DIRECTORIES: path.dirname(rootReal) };
     const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "-z"], { env, maxBuffer: 64 * 1024 * 1024 });
-    return { files: stdout.split("\0").filter((file) => SOURCE_FILE_RE.test(file)).sort() };
+    const files = [];
+    for (const file of stdout.split("\0").filter((entry) => SOURCE_FILE_RE.test(entry)).sort()) {
+      // A tracked symlink counts only when it resolves to a file inside the root;
+      // a gitlink or directory entry named like a module is skipped.
+      const target = path.join(root, ...file.split("/"));
+      const info = await lstat(target).catch((error) => {
+        if (isMissing(error)) return null;
+        throw error;
+      });
+      if (!info) continue;
+      if (!info.isFile()) {
+        if (!info.isSymbolicLink()) continue;
+        const real = await realpath(target).catch(() => null);
+        if (real === null || !real.startsWith(rootReal + path.sep) || !(await stat(real)).isFile()) continue;
+      }
+      files.push(file);
+    }
+    return { files };
   } catch {
     // Fixed text keeps the brief byte-identical across checkout roots.
     return { files: null, error: "git ls-files failed under --repo-root (not a git work tree, or git is unavailable)" };
@@ -327,7 +344,7 @@ async function trackedSourceFiles(root, rootReal) {
 }
 
 /** Exported names of the tracked source modules beside each touched path and in scripts/lib/. */
-async function helperInventory(root, rootReal, touchedPaths, resolved, tracked) {
+async function helperInventory(root, touchedPaths, resolved, tracked) {
   if (tracked === null) return { modules: [], overflowModules: [] };
   const dirs = new Set(["scripts/lib"]);
   for (const relPath of touchedPaths) {
@@ -338,18 +355,6 @@ async function helperInventory(root, rootReal, touchedPaths, resolved, tracked) 
   for (const file of tracked) {
     const dir = path.posix.dirname(file);
     if (!dirs.has(dir === "." ? "" : dir)) continue;
-    // A tracked symlink counts only when it resolves to a file inside the root.
-    const target = path.join(root, ...file.split("/"));
-    const info = await lstat(target).catch((error) => {
-      if (isMissing(error)) return null;
-      throw error;
-    });
-    if (!info) continue;
-    if (!info.isFile()) {
-      if (!info.isSymbolicLink()) continue;
-      const real = await realpath(target).catch(() => null);
-      if (real === null || !real.startsWith(rootReal + path.sep) || !(await stat(real)).isFile()) continue;
-    }
     modules.push(file);
   }
   const inline = [];
@@ -542,7 +547,7 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
     adrs,
     adrNeed: adrNeed === "" ? ADR_NEED_UNSTATED : adrNeed,
     adrTripwirePaths: touchedPaths.filter(matchesAdrTripwire),
-    helperInventory: await helperInventory(root, rootReal, touchedPaths, resolved, trackedSources.files),
+    helperInventory: await helperInventory(root, touchedPaths, resolved, trackedSources.files),
     importers: await importersByModule(root, touchedPaths, resolved, trackedSources.files),
     requiredReads: [...REQUIRED_READS],
     findings,
