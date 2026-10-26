@@ -219,17 +219,19 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
       const installed = execFileSync("bun", ["--version"], { cwd: repoRoot, encoding: "utf8", env }).trim();
       if (`bun@${installed}` !== pinned) return incomplete(`installed bun@${installed} differs from ${pinned}`);
       const scripts = await readPackageScripts(repoRoot);
-      const classification = classifyPackageSuites(options.suites, scripts);
+      // ADR 0192: an admitted paths-only difference must not let checkout `paths` choose the suites.
+      // The base paths select the suites for the PR's changed paths; the requested checkout-derived suites are replaced.
+      let runOptions = options;
+      if (options.profile === "targeted" && JSON.stringify(checkout.validation.paths ?? []) !== JSON.stringify(base.validation.paths ?? [])) {
+        const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `origin/HEAD...${options.headSha}`], { cwd: repoRoot, encoding: "utf8", env: gitEnv, stdio: ["ignore", "pipe", "ignore"] }).split("\0").filter(Boolean).sort();
+        const selected = resolveTargetedValidation(changed, base.validation.paths ?? []);
+        if (selected.profile !== "targeted" || selected.gateSuites.length === 0) return incomplete("the base branch validation paths select full-repository validation for the changed paths");
+        runOptions = { ...options, suites: selected.gateSuites };
+      }
+      const classification = classifyPackageSuites(runOptions.suites, scripts);
       if (options.profile === "targeted" && classification === "full-repository") return incomplete("targeted profile cannot run full-repository validation");
       if (options.profile === "targeted" && classification !== "targeted") return incomplete("targeted profile requires a validation suite");
       if (options.profile === "full-repository" && classification !== "full-repository") return incomplete("verify script is not classified as full-repository validation");
-      // ADR 0192: an admitted paths-only difference must not let checkout `paths` choose the suites.
-      // The requested suites must equal those the base paths select for the PR's changed paths.
-      if (options.profile === "targeted" && JSON.stringify(checkout.validation.paths ?? []) !== JSON.stringify(base.validation.paths ?? [])) {
-        const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `origin/HEAD...${options.headSha}`], { cwd: repoRoot, encoding: "utf8", env: gitEnv, stdio: ["ignore", "pipe", "ignore"] }).split("\0").filter(Boolean).sort();
-        const expected = resolveTargetedValidation(changed, base.validation.paths ?? []).gateSuites;
-        if (JSON.stringify([...new Set(options.suites)].sort()) !== JSON.stringify(expected)) return incomplete("requested suites differ from the suites the base branch validation paths select for the changed paths");
-      }
       // Reuse another lifecycle gate's passing artifact for the same head, profile, toolchain and suites.
       // The suites consume the PR title (DEVLOOPS_PR_TITLE), so the title is part of the match key; an unreadable title never reuses.
       // ponytail: reused suites keep the source gate's outputPath log; a rerun of that gate at the same head may overwrite it.
@@ -240,14 +242,14 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
           if (prior.ok === true && prior.allPassed === true
             && prior.repo === options.repo && prior.pr === options.pr && String(prior.headSha).toLowerCase() === options.headSha
             && prior.profile === options.profile && prior.toolchain === pinned && prior.prTitle === currentTitle
-            && JSON.stringify(prior.suites.map((s) => s.name)) === JSON.stringify(options.suites)
+            && JSON.stringify(prior.suites.map((s) => s.name)) === JSON.stringify(runOptions.suites)
             && prior.suites.every((s) => s.exitCode === 0)) {
             artifact = { ...prior, gate: options.gate, generatedAt: new Date().toISOString(), reusedFrom: prior.reusedFrom ?? gate };
             break;
           }
         } catch { /* An unreadable or malformed prior artifact is never reused. */ }
       }
-      artifact ??= { ...await buildValidationArtifact(options, { repoRoot, readPrTitle }), profile: options.profile, toolchain: pinned };
+      artifact ??= { ...await buildValidationArtifact(runOptions, { repoRoot, readPrTitle }), profile: options.profile, toolchain: pinned };
     }
     const afterProblem = currentTreeProblem();
     if (afterProblem) return incomplete(`validation changed the worktree: ${afterProblem.reason}`, afterProblem);

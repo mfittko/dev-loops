@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
-import { defaultReadCi, parseResolveValidationArgs, resolveValidation } from "../../scripts/loop/resolve-validation.mjs";
+import { defaultReadCi, parseResolveValidationArgs, readBaseValidation, readCheckoutValidation, resolveValidation, validationDifferenceRefusal } from "../../scripts/loop/resolve-validation.mjs";
 import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
 import { runNode } from "../_helpers.mjs";
 
@@ -661,6 +661,21 @@ test("a paths-only validation block difference is admitted in local and ci-only 
   }
 });
 
+// DoD replay: PR 2851's real base and head validation blocks (verbatim from da955b464^ and da955b464).
+test("PR 2851's real base and head validation blocks are admitted and resolve complete in ci-only mode", async () => {
+  const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "validation-2851");
+  const { repoRoot } = await bareFixture(`version: 1\n${await readFile(path.join(fixtures, "base.yml"), "utf8")}`);
+  try {
+    await writeFile(path.join(repoRoot, ".devloops"), `version: 1\n${await readFile(path.join(fixtures, "head.yml"), "utf8")}`);
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "pr edit"], { cwd: repoRoot });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    assert.equal(validationDifferenceRefusal(readCheckoutValidation(repoRoot).validation, readBaseValidation(repoRoot).validation), null);
+    const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
+    assert.equal(result.status, "complete", result.reason);
+    assert.equal(result.artifact.authority, "ci-authoritative");
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
 test("the declared command runs without GitHub tokens in its environment", async () => {
   const { repoRoot, headSha } = await bareFixture("version: 1\nvalidation:\n  mode: local\n  fullCommand: env\n");
   try {
@@ -721,15 +736,14 @@ test("with a paths-only edit, resolveValidation runs the requested suites that m
     const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:docs"]), { repoRoot });
     assert.equal(result.status, "complete");
     assert.deepEqual(result.artifact.suites.map((s) => s.command), ["bun run test:docs"]);
-    // The checkout-selected suite is not the base-selected one, so it resolves incomplete.
+    // The checkout-selected suite is replaced by the base-selected one: the run resolves as if there were no difference (ADR 0192).
     const checkoutSuite = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot });
-    assert.equal(checkoutSuite.status, "incomplete");
-    assert.match(checkoutSuite.reason, /base branch validation paths/);
-    assert.equal(checkoutSuite.artifact, undefined);
+    assert.equal(checkoutSuite.status, "complete");
+    assert.deepEqual(checkoutSuite.artifact.suites.map((s) => s.command), ["bun run test:docs"]);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
-test("a checkout-only validation.paths edit that selects suites the base paths do not select resolves incomplete", async () => {
+test("a paths-only edit with a full-repository base selection resolves incomplete with no suites", async () => {
   const { repoRoot } = await fixture();
   try {
     await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:scripts"));
