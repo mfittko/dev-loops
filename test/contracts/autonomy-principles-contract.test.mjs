@@ -70,7 +70,7 @@ test("the low/nit refusal and coercion code is pinned to the rule text", async (
 
 // A paraphrased restatement of a rule outcome is a second definition even when no verbatim body is pasted (AC10).
 const OUTCOME_PHRASES = {
-  "GATE-EXEC-LOW-FIX-UNTIL-CAP": [/at or past the cap\b.{0,80}\bdefer\b/i, /\bdefer\b.{0,80}at or past the cap\b/i, /\bfrom round 2\b.{0,80}\bnit\b/i, /\bnit\b.{0,80}\bfrom round 2\b/i, /\bis `act` below the round cap/i],
+  "GATE-EXEC-LOW-FIX-UNTIL-CAP": [/at or past the cap\b.{0,80}\bdefer\b/i, /\bdefer\b.{0,80}at or past the cap\b/i, /\bfrom round 2\b.{0,80}\bnit\b/i, /\bnit\b.{0,80}\bfrom round 2\b/i, /\bis `act` below the round cap/i, /promoted to `medium`/i],
 };
 
 test("S1 rule outcome phrases appear under agents/ and skills/ only in the owning rule line", () => {
