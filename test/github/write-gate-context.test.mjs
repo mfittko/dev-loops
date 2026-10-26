@@ -8719,3 +8719,28 @@ test("closure round refuses with closure_delta_no_pr_own_change when the PR-own 
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("closure round refuses with closure_delta_no_pr_own_change (unproven) when origin/<base> does not resolve (ADR 0197)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  const stderrWrite = process.stderr.write.bind(process.stderr);
+  const stdoutWrite = process.stdout.write.bind(process.stdout);
+  let out = "";
+  try {
+    await seedClosedRounds(repoRoot, 50, ["1".repeat(40), "2".repeat(40), "3".repeat(40), headSha]);
+    const mergedHead = await mergeBaseIntoPr(repoRoot, baseSha);
+    git(repoRoot, ["update-ref", "-d", "refs/remotes/origin/main"]);
+    process.stdout.write = (chunk) => { out += String(chunk); return true; };
+    process.stderr.write = (chunk) => { out += String(chunk); return true; };
+    await runClosureCli(repoRoot, 50, mergedHead);
+    assert.equal(process.exitCode, 1);
+    assert.match(out, /closure_delta_no_pr_own_change/);
+    assert.match(out, /unproven/);
+    assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-50", `draft_gate-${mergedHead}.json`)), false, "no artifact");
+  } finally {
+    process.stdout.write = stdoutWrite;
+    process.stderr.write = stderrWrite;
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
