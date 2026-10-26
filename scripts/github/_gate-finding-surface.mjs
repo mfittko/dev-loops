@@ -25,7 +25,7 @@ import {
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { escapeProse, flattenPaginatedSlurp, listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { PROBLEM_CAP, RECOMMENDATION_CAP, cutAtSentence, normalizeFindingSummary } from "./_gate-finding-text.mjs";
-import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { buildLogPath } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
@@ -1386,6 +1386,12 @@ async function listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, rep
   return { dir, filenames: entries.filter((name) => name.startsWith(prefix) && name.endsWith(".json")).sort() };
 }
 
+// A findings log is exactly `<gate>-<full sha>.json`. Sidecars (`.act-list.json`, `.judged-ledger.json`, ...)
+// share the prefix and suffix and never count as a round.
+export function isFindingsLogName(gate, name) {
+  return name.startsWith(`${gate}-`) && /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.json$/i.test(name.slice(gate.length + 1));
+}
+
 async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot }) {
   // The round-number fallback count must never throw: unlike the
   // judge-disposition lookup below, an unreadable directory here just means
@@ -1393,7 +1399,7 @@ async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, re
   // fail-closed obligation to preserve.
   try {
     const { filenames } = await listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });
-    return filenames.length;
+    return filenames.filter((name) => isFindingsLogName(gate, name)).length;
   } catch {
     return 0;
   }

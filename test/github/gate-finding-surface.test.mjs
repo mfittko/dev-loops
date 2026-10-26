@@ -1117,6 +1117,25 @@ test("#2381: resolveGateRound does not throw on a non-ENOENT ledger-directory re
   });
 });
 
+test("resolveGateRound counts only <gate>-<sha>.json logs: round 2 for a second head with round 1 sidecars present", async () => {
+  const head1 = "1".repeat(40);
+  const head2 = "2".repeat(40);
+  const prior = [`### Gate review: \`${JDF_GATE}\``, "", `**Reviewed head SHA:** \`${head1}\``, "**Verdict:** findings_present"].join("\n");
+  const ledger = jdfLedger({ loggedAt: "2026-09-01T00:00:00.000Z", disposition: "act", rationale: "r" });
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-${head1}.json`]: ledger,
+      [`${JDF_GATE}-${head1}.act-list.json`]: [],
+      [`${JDF_GATE}-${head1}.judged-ledger.json`]: ledger,
+      [`${JDF_GATE}-${head1}.fanin-ledger.json`]: ledger,
+    },
+    async (tmpRoot) => {
+      const round = await resolveGateRound({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: head2, reviews: [], issueComments: [{ body: prior }], tmpRoot, repoRoot: tmpRoot });
+      assert.equal(round, 2);
+    },
+  );
+});
+
 // ---------------------------------------------------------------------------
 // ADR 0088: parseRenderedJudgeDisposition tier 3 — only the exact
 // renderFindingLine suffix shape counts
