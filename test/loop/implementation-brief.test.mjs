@@ -32,7 +32,7 @@ function record({ title, status = "Accepted — 2026-01-01", body = "Text." }) {
   return `# ${title}\n\n## Status\n\n${status}\n\n## Context\n\n${body}\n`;
 }
 
-async function fixtureRepo({ rules, decisions = {}, files = {}, withDecisions = true } = {}) {
+async function fixtureRepo({ rules, decisions = {}, files = {}, withDecisions = true, git = true } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "implementation-brief-"));
   tempDirs.push(root);
   await mkdir(path.join(root, "skills", "docs"), { recursive: true });
@@ -57,6 +57,8 @@ async function fixtureRepo({ rules, decisions = {}, files = {}, withDecisions = 
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, text);
   }
+  // A work tree by default: the inventory and importers read `git ls-files`.
+  if (git) execFileSync("git", ["-C", root, "init", "-q"], { stdio: "ignore" });
   return root;
 }
 
@@ -731,15 +733,19 @@ test("the same inputs produce byte-identical output across two checkout roots", 
     decisions: { "0010-base.md": record({ title: "0010. Base record" }) },
     files: { "src/touched.mjs": "export const value = 1;\n", ".devloops": "version: 1\n" },
   };
-  const first = await fixtureRepo(tree);
-  const second = await fixtureRepo(tree);
+  tree.files["src/user.mjs"] = 'import { value } from "./touched.mjs";\n';
+  const first = await trackedRepo(tree.files, { decisions: tree.decisions });
+  const second = await trackedRepo(tree.files, { decisions: tree.decisions });
   const body = `${MATRIX}\nFollows ADR 0010.\n`;
   const argvFor = (root, bodyFile) => ["--body-file", bodyFile, "--repo-root", root, "--paths", "src/touched.mjs"];
   const left = io();
   const right = io();
   assert.equal((await run(left, argvFor(first, await writeBody(first, body)))).code, 0);
   assert.equal((await run(right, argvFor(second, await writeBody(second, body)))).code, 0);
-  assert.equal(left.stdout.read(), right.stdout.read());
+  const output = left.stdout.read();
+  assert.equal(output, right.stdout.read());
+  // The populated importers and inventory branches are the ones compared.
+  assert.deepEqual(JSON.parse(output).importers, { "src/touched.mjs": { files: ["src/user.mjs"] } });
 });
 
 // The network modules the brief must never reach.
@@ -944,21 +950,17 @@ test("a checkbox non-goal yields the same item as the canonical spec reader", as
   assert.deepEqual(brief.nonGoals, ["No gate credit."]);
 });
 
-async function trackedRepo(files) {
-  const root = await fixtureRepo({ files });
-  const git = (...args) => execFileSync("git", ["-C", root, ...args], { stdio: "ignore" });
-  git("init", "-q");
-  git("add", "-A");
+async function trackedRepo(files, options = {}) {
+  const root = await fixtureRepo({ ...options, files });
+  execFileSync("git", ["-C", root, "add", "-A"], { stdio: "ignore" });
   return root;
 }
 
 test("the helper inventory lists sorted exported names per module in touched dirs and scripts/lib", async () => {
-  const root = await fixtureRepo({
-    files: {
-      "src/a.mjs": "export function zeta() {}\nexport const alpha = 1;\nconst x = 1;\nexport { x as mid };\n",
-      "src/notes.md": "export const ignored = 1;\n",
-      "scripts/lib/util.mjs": "export class Util {}\n",
-    },
+  const root = await trackedRepo({
+    "src/a.mjs": "export function zeta() {}\nexport const alpha = 1;\nconst x = 1;\nexport { x as mid };\n",
+    "src/notes.md": "export const ignored = 1;\n",
+    "scripts/lib/util.mjs": "export class Util {}\n",
   });
   const { helperInventory } = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
   assert.deepEqual(helperInventory, {
@@ -972,13 +974,22 @@ test("the helper inventory lists sorted exported names per module in touched dir
 
 test("inline inventory names stop at 2,000 characters and the overflow lists module paths only", async () => {
   const names = (prefix) => Array.from({ length: 60 }, (_, i) => `export const ${prefix}${String(i).padStart(3, "0")}_${"x".repeat(12)} = 1;`).join("\n");
-  const root = await fixtureRepo({ files: { "src/a.mjs": names("a"), "src/b.mjs": names("b"), "src/c.mjs": names("c") } });
+  const root = await trackedRepo({ "src/a.mjs": names("a"), "src/b.mjs": names("b"), "src/c.mjs": names("c") });
   const { helperInventory } = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src"] });
-  const inline = helperInventory.modules.flatMap((m) => m.exports).join(",").length;
-  assert.ok(inline > 0 && inline <= 2000);
-  assert.deepEqual(helperInventory.modules.map((m) => m.path), ["src/a.mjs", "src/b.mjs"].slice(0, helperInventory.modules.length));
-  assert.deepEqual(helperInventory.overflowModules, ["src/a.mjs", "src/b.mjs", "src/c.mjs"].slice(helperInventory.modules.length));
-  assert.ok(helperInventory.overflowModules.length >= 1);
+  // Each module joins to 1,079 characters, so a second module would reach 2,159.
+  assert.deepEqual(helperInventory.modules.map((m) => m.path), ["src/a.mjs"]);
+  assert.deepEqual(helperInventory.overflowModules, ["src/b.mjs", "src/c.mjs"]);
+});
+
+test("inline inventory names that join to exactly 2,000 characters stay inline", async () => {
+  // 69 names of 28 characters joined by 68 commas: 69 * 28 + 68 = 2,000.
+  const exact = Array.from({ length: 69 }, (_, i) => `export const n${String(i).padStart(2, "0")}${"x".repeat(25)} = 1;`).join("\n");
+  const root = await trackedRepo({ "src/a.mjs": exact, "src/b.mjs": "export const z = 1;\n" });
+  const { helperInventory } = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src"] });
+  assert.equal(helperInventory.modules.flatMap((m) => m.exports).join(",").length, 2000);
+  assert.deepEqual(helperInventory.modules.map((m) => m.path), ["src/a.mjs"]);
+  // One more name would make 2,002 characters, so it moves to the overflow.
+  assert.deepEqual(helperInventory.overflowModules, ["src/b.mjs"]);
 });
 
 test("importers lists the sorted tracked files that import a touched module, and an empty list when none", async () => {
@@ -997,25 +1008,73 @@ test("importers lists the sorted tracked files that import a touched module, and
 });
 
 test("a git ls-files failure yields null importers and an importers_unavailable finding", async () => {
-  const root = await fixtureRepo({ files: { "src/a.mjs": "export const a = 1;\n" } });
+  const root = await fixtureRepo({ files: { "src/a.mjs": "export const a = 1;\n" }, git: false });
   const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
   assert.equal(brief.importers, null);
+  assert.deepEqual(brief.helperInventory, { modules: [], overflowModules: [] });
   assert.ok(brief.findings.some((f) => f.kind === "importers_unavailable" && f.reason));
+});
+
+test("a non-git --repo-root nested inside a work tree is not read through the enclosing repository", async () => {
+  const parent = await trackedRepo({ "README.md": "Parent.\n" });
+  const nested = path.join(parent, "nested");
+  await mkdir(path.join(nested, "src"), { recursive: true });
+  await writeFile(path.join(nested, "src", "a.mjs"), "export const a = 1;\n");
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: nested, paths: ["src/a.mjs"] });
+  assert.equal(brief.importers, null);
+  assert.ok(brief.findings.some((f) => f.kind === "importers_unavailable"));
 });
 
 test("the inventory skips directories named like modules and symlinks leaving the root", async () => {
   const root = await fixtureRepo({ files: { "src/a.mjs": "export const a = 1;\n" } });
   const outside = await mkdtemp(path.join(os.tmpdir(), "implementation-brief-outside-"));
+  tempDirs.push(outside);
   await writeFile(path.join(outside, "x.mjs"), "export const leaked = 1;\n");
   await mkdir(path.join(root, "src", "dir.mjs"));
   await symlink(path.join(outside, "x.mjs"), path.join(root, "src", "link.mjs"));
+  execFileSync("git", ["-C", root, "add", "-A"], { stdio: "ignore" });
   const { helperInventory } = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
   assert.deepEqual(helperInventory.modules.map((m) => m.path), ["src/a.mjs"]);
 });
 
+test("the inventory omits untracked and ignored source files", async () => {
+  const root = await trackedRepo({ "src/a.mjs": "export const a = 1;\n", ".gitignore": "src/ignored.mjs\n" });
+  await writeFile(path.join(root, "src", "scratch.mjs"), "export const scratch = 1;\n");
+  await writeFile(path.join(root, "src", "ignored.mjs"), "export const ignored = 1;\n");
+  const { helperInventory } = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
+  assert.deepEqual(helperInventory.modules.map((m) => m.path), ["src/a.mjs"]);
+});
+
+test("a wrong-case parent of an unresolved declared path adds no inventory module", async () => {
+  const root = await trackedRepo({ "src/a.mjs": "export const a = 1;\n" });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["SRC/new.mjs"] });
+  assert.deepEqual(brief.unresolvedPaths, ["SRC/new.mjs"]);
+  assert.deepEqual(brief.helperInventory, { modules: [], overflowModules: [] });
+});
+
+test("a directory symlink leaving the root adds no inventory module for an unresolved path beneath it", async () => {
+  const root = await trackedRepo({ "src/a.mjs": "export const a = 1;\n" });
+  const outside = await mkdtemp(path.join(os.tmpdir(), "implementation-brief-outside-"));
+  tempDirs.push(outside);
+  await writeFile(path.join(outside, "x.mjs"), "export const leaked = 1;\n");
+  await symlink(outside, path.join(root, "ext"));
+  execFileSync("git", ["-C", root, "add", "-A"], { stdio: "ignore" });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["ext/new.mjs"] });
+  assert.deepEqual(brief.unresolvedPaths, ["ext/new.mjs"]);
+  assert.deepEqual(brief.helperInventory, { modules: [], overflowModules: [] });
+});
+
+test("an unresolved declared source path has no importers entry", async () => {
+  const root = await trackedRepo({ "src/a.mjs": "export const a = 1;\n" });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs", "src/new-helper.mjs"] });
+  assert.deepEqual(brief.touchedPaths, ["src/a.mjs", "src/new-helper.mjs"]);
+  assert.deepEqual(brief.unresolvedPaths, ["src/new-helper.mjs"]);
+  assert.deepEqual(Object.keys(brief.importers), ["src/a.mjs"]);
+});
+
 test("export lists drop comments, a type prefix and non-identifier items", async () => {
-  const root = await fixtureRepo({
-    files: { "src/a.mjs": "export {\n  one, // note, fake\n  /* block, hidden */ two,\n  type Three,\n  four as Four,\n};\n" },
+  const root = await trackedRepo({
+    "src/a.mjs": "export {\n  one, // note, fake\n  /* block, hidden */ two,\n  type Three,\n  four as Four,\n};\n",
   });
   const { helperInventory } = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
   assert.deepEqual(helperInventory.modules.find((m) => m.path === "src/a.mjs").exports, ["Four", "Three", "one", "two"]);

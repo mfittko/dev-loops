@@ -16,7 +16,7 @@
  * authority drift.
  */
 import { execFile } from "node:child_process";
-import { readFile, readdir, realpath, stat } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
@@ -81,15 +81,17 @@ those against the diff.
 list markers. "findings" carries missing_decision_records when the checkout has
 no docs/decisions directory and missing_adr_record for a cited ADR with no record.
 
-"helperInventory" lists the sorted exported names of every module in each touched
-path's directory and in scripts/lib/; inline names stop at ${INVENTORY_CHAR_LIMIT} characters
-and the remaining modules are listed by path only in "overflowModules".
-"importers" has one entry per touched source module (.mjs/.cjs/.js/.ts): the sorted
-tracked files (git ls-files, offline) that import it by relative specifier, capped
-at ${IMPORTERS_LIMIT} with "importersTruncated": true beyond; an empty "files" list means no
-importer. A non-source touched path has no entry. When git ls-files fails, "importers" is
-null and "findings" carries importers_unavailable with the reason. Check each listed importer
-before hand-back.
+"helperInventory" lists the sorted exported names of every tracked module (git ls-files,
+offline) in each touched path's directory and in scripts/lib/; inline names stop at
+${INVENTORY_CHAR_LIMIT} characters and the remaining modules are listed by path only in
+"overflowModules".
+"importers" has one entry per existing touched source file (.mjs/.cjs/.js/.ts): the sorted
+tracked files that import it by relative specifier, capped at ${IMPORTERS_LIMIT} with
+"importersTruncated": true beyond; an empty "files" list means no importer. A non-source
+touched path and an unresolved touched path (a planned file that does not exist yet) have
+no entry. When git ls-files fails (including a non-git --repo-root nested in another work
+tree), "helperInventory" is empty, "importers" is null and "findings" carries
+importers_unavailable with the reason. Check each listed importer before hand-back.
 
 ${JQ_OUTPUT_USAGE}
 
@@ -306,32 +308,49 @@ function exportedNames(source) {
   return [...names].sort();
 }
 
-/** Exported names of the source modules beside each touched path and in scripts/lib/. */
-async function helperInventory(root, touchedPaths, resolved) {
+/**
+ * Tracked source files, from one offline `git ls-files`. The inventory and the
+ * importers both read this list: it matches names case-exactly, holds no
+ * untracked or ignored file and lists nothing beneath a directory symlink, so
+ * two checkouts of one commit agree. GIT_CEILING_DIRECTORIES stops git from
+ * discovering an enclosing repository when --repo-root is a nested non-git directory.
+ */
+async function trackedSourceFiles(root, rootReal) {
+  try {
+    const env = { ...gitEnvNoDirOverrides(), GIT_CEILING_DIRECTORIES: path.dirname(rootReal) };
+    const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "-z"], { env, maxBuffer: 64 * 1024 * 1024 });
+    return { files: stdout.split("\0").filter((file) => SOURCE_FILE_RE.test(file)).sort() };
+  } catch {
+    // Fixed text keeps the brief byte-identical across checkout roots.
+    return { files: null, error: "git ls-files failed under --repo-root (not a git work tree, or git is unavailable)" };
+  }
+}
+
+/** Exported names of the tracked source modules beside each touched path and in scripts/lib/. */
+async function helperInventory(root, rootReal, touchedPaths, resolved, tracked) {
+  if (tracked === null) return { modules: [], overflowModules: [] };
   const dirs = new Set(["scripts/lib"]);
   for (const relPath of touchedPaths) {
     const dir = resolved.get(relPath) === "directory" ? relPath : path.posix.dirname(relPath);
     dirs.add(dir === "." ? "" : dir);
   }
   const modules = [];
-  const rootReal = await realpath(root);
-  for (const dir of [...dirs].sort()) {
-    const dirPath = path.join(root, ...dir.split("/"));
-    const entries = await readdir(dirPath, { withFileTypes: true }).catch((error) => {
-      if (isMissing(error)) return [];
+  for (const file of tracked) {
+    const dir = path.posix.dirname(file);
+    if (!dirs.has(dir === "." ? "" : dir)) continue;
+    // A tracked symlink counts only when it resolves to a file inside the root.
+    const target = path.join(root, ...file.split("/"));
+    const info = await lstat(target).catch((error) => {
+      if (isMissing(error)) return null;
       throw error;
     });
-    for (const entry of entries) {
-      if (!SOURCE_FILE_RE.test(entry.name)) continue;
-      // Real files only; a symlink counts when it resolves to a file inside the root.
-      if (!entry.isFile()) {
-        if (!entry.isSymbolicLink()) continue;
-        const target = path.join(dirPath, entry.name);
-        const real = await realpath(target).catch(() => null);
-        if (real === null || !real.startsWith(rootReal + path.sep) || !(await stat(real)).isFile()) continue;
-      }
-      modules.push(dir === "" ? entry.name : `${dir}/${entry.name}`);
+    if (!info) continue;
+    if (!info.isFile()) {
+      if (!info.isSymbolicLink()) continue;
+      const real = await realpath(target).catch(() => null);
+      if (real === null || !real.startsWith(rootReal + path.sep) || !(await stat(real)).isFile()) continue;
     }
+    modules.push(file);
   }
   const inline = [];
   const overflowModules = [];
@@ -350,18 +369,11 @@ async function helperInventory(root, touchedPaths, resolved) {
   return { modules: inline, overflowModules };
 }
 
-/** Tracked files that import each touched source module by relative specifier. */
-async function importersByModule(root, touchedPaths, resolved) {
+/** Tracked files that import each existing touched source module by relative specifier. */
+async function importersByModule(root, touchedPaths, resolved, tracked) {
+  if (tracked === null) return null;
   const targets = touchedPaths.filter((relPath) => resolved.get(relPath) === "file" && SOURCE_FILE_RE.test(relPath));
-  if (targets.length === 0) return { importers: {} };
-  let tracked;
-  try {
-    const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "-z"], { env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
-    tracked = stdout.split("\0").filter((file) => SOURCE_FILE_RE.test(file)).sort();
-  } catch {
-    // Fixed text keeps the brief byte-identical across checkout roots.
-    return { importers: null, error: "git ls-files failed under --repo-root (not a git work tree, or git is unavailable)" };
-  }
+  if (targets.length === 0) return {};
   const found = new Map(targets.map((target) => [target, []]));
   for (const file of tracked) {
     const source = await readTextOrNull(path.join(root, ...file.split("/")));
@@ -372,12 +384,10 @@ async function importersByModule(root, touchedPaths, resolved) {
       if (hit && file !== resolvedSpecifier && !hit.includes(file)) hit.push(file);
     }
   }
-  return {
-    importers: Object.fromEntries(targets.map((target) => {
-      const files = found.get(target);
-      return [target, files.length > IMPORTERS_LIMIT ? { files: files.slice(0, IMPORTERS_LIMIT), importersTruncated: true } : { files }];
-    })),
-  };
+  return Object.fromEntries(targets.map((target) => {
+    const files = found.get(target);
+    return [target, files.length > IMPORTERS_LIMIT ? { files: files.slice(0, IMPORTERS_LIMIT), importersTruncated: true } : { files }];
+  }));
 }
 
 /**
@@ -519,8 +529,8 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
 
   const adrNeed = extractSection(stripFencedCode(body), "ADR need") ?? "";
 
-  const { importers, error: importersError } = await importersByModule(root, touchedPaths, resolved);
-  if (importersError) findings.push({ kind: "importers_unavailable", reason: importersError });
+  const trackedSources = await trackedSourceFiles(root, rootReal);
+  if (trackedSources.error) findings.push({ kind: "importers_unavailable", reason: trackedSources.error });
 
   return {
     ok: true,
@@ -532,8 +542,8 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
     adrs,
     adrNeed: adrNeed === "" ? ADR_NEED_UNSTATED : adrNeed,
     adrTripwirePaths: touchedPaths.filter(matchesAdrTripwire),
-    helperInventory: await helperInventory(root, touchedPaths, resolved),
-    importers,
+    helperInventory: await helperInventory(root, rootReal, touchedPaths, resolved, trackedSources.files),
+    importers: await importersByModule(root, touchedPaths, resolved, trackedSources.files),
     requiredReads: [...REQUIRED_READS],
     findings,
   };
