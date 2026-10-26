@@ -838,7 +838,7 @@ for (const [label, severities, setup, refuses] of [
 test("GATE-EXEC-ROUND-CAP: a medium act list reaches the fixer below and at the cap round, and is refused after it (round_cap_reached)", async () => {
   await withFixture(async ({ root, wt, files, emit }) => {
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
-    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium" })]));
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" })]));
     const prior = async (sha, verdict) => {
       const file = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${sha.repeat(40)}.json`);
       await mkdir(path.dirname(file), { recursive: true });
@@ -854,6 +854,31 @@ test("GATE-EXEC-ROUND-CAP: a medium act list reaches the fixer below and at the 
     await assert.rejects(emit(), (e) => e.refusal === "round_cap_reached");
     await prior("f", "blocked");
     await assert.rejects(emit(), (e) => e.refusal === "round_cap_reached" && /no fixer order follows/.test(e.message));
+  });
+});
+
+test("GATE-EXEC-ROUND-CAP: the cap round is refused when the current-head round composes a blocker (round_cap_reached)", async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `draft_gate-${"d".repeat(40)}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+    const medium = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
+    const current = (findings) => writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "findings_present", findings }));
+    await writeFile(files.actList, JSON.stringify([medium]));
+    // A medium act item with a judgeFix alone emits at the cap round.
+    await current([medium]);
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    // A failOpen finding the judge rejected in the same round blocks it.
+    await current([medium, { severity: "low", angle: "x", summary: "fail open", judgeDisposition: "reject", judgeReason: "n/a", failOpen: true }]);
+    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached" && /no fixer order follows/.test(e.message));
+    // A question-severity act item blocks.
+    await current([]);
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "question", judgeFix: "ask" })]));
+    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached");
+    // An unreadable current-head log fails closed.
+    await writeFile(path.join(dir, `draft_gate-${head}.json`), "{not json");
+    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached");
   });
 });
 
