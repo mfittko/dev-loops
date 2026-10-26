@@ -1266,9 +1266,12 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
     if (!clusterIds.has(d.index)) {
       throw new Error(`judge disposition index ${d.index} is out of range (findings has ${enriched.length} entries) or is not a clusterId`);
     }
+    const memberIndices = stamped
+      ? enriched.flatMap((_f, i) => (clusterOf(i) === d.index ? [i] : []))
+      : projectedClusters.find((c) => c.memberIndices.includes(d.index)).memberIndices;
     if (d.disposition === "defer") {
       // GATE-EXEC-THREAD-DISPOSITION: a high, a question and an all-nit cluster are never deferred.
-      const blocked = neverDeferredSeverity(enriched.filter((_f, i) => clusterOf(i) === d.index));
+      const blocked = neverDeferredSeverity(memberIndices.map((i) => enriched[i]));
       if (blocked) {
         throw new Error(`judge disposition for cluster ${d.index} defers a cluster whose severity is ${blocked}; a high, a question or an all-nit cluster is never deferred (GATE-EXEC-THREAD-DISPOSITION) — fail closed`);
       }
@@ -1282,14 +1285,13 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
     let reason = d.reason;
     let followUpDraft = d.followUpDraft;
     let promote = false;
-    const memberIndices = stamped
-      ? enriched.flatMap((_f, i) => (clusterOf(i) === d.index ? [i] : []))
-      : projectedClusters.find((c) => c.memberIndices.includes(d.index)).memberIndices;
+    // The projection copies one member's disposition onto the rest, so any act failOpen inside the projected cluster counts.
+    const failOpen = d.failOpen === true || validated.dispositions.some((o) => o.disposition === "act" && o.failOpen === true && memberIndices.includes(o.index));
     const severities = memberIndices.map((i) => originalSeverities[i]);
     const lowOrNitOnly = severities.every((s) => s === "low" || s === "nit");
     const allNit = severities.every((s) => s === "nit");
     if (disposition === "act") {
-      if (d.failOpen === true && severities.includes("low")) {
+      if (failOpen && severities.includes("low")) {
         promote = true;
       } else if (lowOrNitOnly && (allNit ? !(round === 1 && !pastCap) : pastCap)) {
         disposition = allNit ? "reject" : "defer";

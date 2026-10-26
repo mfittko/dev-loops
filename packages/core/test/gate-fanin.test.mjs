@@ -1607,6 +1607,21 @@ describe("applyJudgeDispositions (#1525)", () => {
       assert.deepEqual(run(dispositions), [["medium", "act"], ["low", "defer"]]);
     });
 
+    test("an unstamped low duplicate pair promotes both members when either disposition carries failOpen", () => {
+      const findings = [0, 1].map((i) => ({ severity: "low", angle: `a${i}`, summary: "dup", file: "src/x.mjs", line: 10, recommendation: "same fix" }));
+      const dispositions = [{ index: 0, ...act }, { index: 1, ...act, failOpen: true }];
+      const run = (list) => applyJudgeDispositions(findings, judgeVerdict(list), { pastCap: true, round: 4 }).findings.map((f) => [f.severity, f.judgeDisposition]);
+      assert.deepEqual(run(dispositions), [["medium", "act"], ["medium", "act"]]);
+      assert.deepEqual(run([...dispositions].reverse()), [["medium", "act"], ["medium", "act"]]);
+    });
+
+    test("an unstamped judge defer on the nit of a [nit, low] duplicate is accepted like the stamped cluster", () => {
+      const findings = [0, 1].map((i) => ({ severity: ["nit", "low"][i], angle: `a${i}`, summary: "dup", file: "src/x.mjs", line: 10, recommendation: "same fix" }));
+      const defer = { disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "r", followUpDraft: { title: "t", body: "b" } };
+      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict([{ index: 0, ...defer }, { index: 1, ...defer }]), { pastCap: false, round: 2 });
+      assert.deepEqual(out.map((f) => f.judgeDisposition), ["defer", "defer"]);
+    });
+
     test("an unstamped [nit, low] duplicate keeps both members act in round 2 below the cap", () => {
       const findings = [0, 1].map((i) => ({ severity: ["nit", "low"][i], angle: `a${i}`, summary: "dup", file: "src/x.mjs", line: 10, recommendation: "same fix" }));
       const { findings: out } = applyJudgeDispositions(findings, judgeVerdict([{ index: 0, ...act }, { index: 1, ...act }]), { pastCap: false, round: 2 });
