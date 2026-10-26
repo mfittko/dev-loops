@@ -1947,7 +1947,7 @@ export async function listPriorActItems(options, { repoRoot }) {
 }
 
 /**
- * The one past-cap closure round (GATE-EXEC-ROUND-CAP, ADR 0191, #2937 S4a): a draft_gate round whose completed-round count is cap+1.
+ * The one past-cap closure round (GATE-EXEC-ROUND-CAP): a draft_gate round whose completed-round count is cap+1.
  * Returns null for any other round; otherwise the head of the latest closed prior round (the fix delta starts there) and the prior act items to verify.
  */
 export async function resolveClosureRound(options, { repoRoot, cap }) {

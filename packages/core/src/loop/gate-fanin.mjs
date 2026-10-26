@@ -1376,7 +1376,7 @@ export function capClosedFor(finding, { round, cap }) {
  * disposition, an unknown severity, a medium `defer` without `followUpIssueNumber` and a medium `reject` without `judgeReason` block as
  * `severity_disagreement`. A defer to the PR itself (`pr`) is not a target, and a medium defer is never final when `pr` is not an integer (fail closed). A medium rejected with a reason or deferred with a target issue is final (ADR 0191).
  * At the cap round (`round === cap`) an act item with a judge-specified remedy (`judgeFix`) does not block: the round composes
- * `findings_present` and the fixer fixes it; the next round is the one closure round, where every act item blocks (ADR 0191, #2937 S4a).
+ * `findings_present` and the fixer fixes it; the next round is the one closure round, where every act item blocks (GATE-EXEC-ROUND-CAP).
  * @returns {Array<{ kind: "round_cap_reached", reason: "new_act"|"resurfaced"|"severity_disagreement", item: string }>}
  */
 export function pastCapBlockers(findings, { pr, round, cap } = {}) {
