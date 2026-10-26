@@ -230,7 +230,7 @@ test("CLI re-runs all angles when reviewed config is reverted to base", async ()
     await writeFile(logPath, JSON.stringify({ ...cleanLog, headSha: prevHead }));
     const result = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha, "--tmp-root", "tmp"], { repoRoot });
     assert.equal(result.ok, true);
-    assert.deepEqual(result.deltaChangedFiles, []);
+    assert.deepEqual(result.deltaChangedFiles, [".devloops.yaml"]);
     assert.deepEqual(result.carried, []);
     assert.deepEqual(result.mustRerun.map((entry) => entry.angle), ["correctness", "coverage", "docs"]);
   } finally {

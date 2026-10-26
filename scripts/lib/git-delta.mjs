@@ -76,7 +76,10 @@ export async function captureChangedFilesBetween({ base, head = "HEAD", repoRoot
  * kept only when it was BOTH changed since the prior head AND its head blob
  * differs from `mainRef` (genuinely PR-own). `mainRef..head` (two-dot) is exactly
  * "files whose head blob differs from mainRef", so intersecting drops every file
- * that a base-move only integrated from main.
+ * that a base-move only integrated from main. Exception: an incremental file
+ * that the merged base (`merge-base(base, mainRef)..mainRef`) did not touch stays
+ * PR-own even when its head content equals mainRef (a PR-side revert or delete
+ * toward main).
  *
  * This deliberately keeps the delta INCREMENTAL, not the absolute
  * `merge-base(mainRef,head)...head` PR diff: an angle untouched since the prior
@@ -137,6 +140,23 @@ export async function captureMainRelativeChangedFilesSince({ base, mainRef = "or
   if (mainResult.code !== 0) throw new Error(`git diff ${mainRange} failed: ${mainResult.stderr.trim() || `exit ${mainResult.code}`}`);
   const prOwn = new Set(parseChangedFiles(mainResult.stdout));
 
+  // Paths the merged base touched (mergeBase..mainRef, rename endpoints included).
+  // A PR-side revert/delete toward main equals main at head, so it is absent from
+  // prOwn yet is not a base-side change; it stays PR-own. Unresolved merge-base:
+  // baseSide stays null and behavior is unchanged.
+  let baseSide = null;
+  const mb = await runGit(["merge-base", normalizedBase, normalizedMain], { repoRoot });
+  if (mb.code === 0 && mb.stdout.trim()) {
+    const baseRange = `${mb.stdout.trim()}..${normalizedMain}`;
+    const baseResult = await runGit([...GIT_ISOLATION, "diff", "--no-ext-diff", "--name-status", baseRange], { repoRoot });
+    if (baseResult.code === 0) {
+      baseSide = new Set();
+      for (const line of baseResult.stdout.split("\n")) {
+        for (const c of line.replace(/\r$/, "").split("\t").slice(1)) if (c.trim()) baseSide.add(c.trim());
+      }
+    }
+  }
+
   // Keep only incremental entries whose destination path is genuinely PR-own.
   // Parse the name-status per line here (rather than via parseChangedFiles) so a
   // surviving rename entry's R-status is tracked for hasRename.
@@ -173,9 +193,40 @@ export async function captureMainRelativeChangedFilesSince({ base, mainRef = "or
     // Adding source membership can only RETAIN renames, never over-exclude: a
     // rename replayed from main has neither endpoint in prOwn and stays dropped.
     const prOwnEntry = prOwn.has(file) || (isRenameOrCopy && src.length > 0 && prOwn.has(src));
-    if (!prOwnEntry) continue; // already on main at head — exclude
+    const prSideOnly = baseSide !== null && !baseSide.has(file) && !(src.length > 0 && baseSide.has(src));
+    if (!prOwnEntry && !prSideOnly) continue; // already on main at head — exclude
     changedFiles.push(file);
     if (isRenameOrCopy) hasRename = true;
   }
   return { changedFiles, incrementalFiles, hasRename, reduced: true };
+}
+
+/**
+ * Base-only merge (ADR 0197): `fromHead` is an ancestor of `head`, every commit in `fromHead..head` that is not already on `mainRef` is a merge,
+ * and the main-relative PR-own delta since `fromHead` is empty, so the PR-own patch is unchanged. Reuses
+ * {@link captureMainRelativeChangedFilesSince}. The comparison base is the merged base point `merge-base(head, mainRef)`, never the moving
+ * `mainRef` tip, so a later base advance cannot misclassify the merge; an unresolved `mainRef` is never base-only. A PR-own file at
+ * `fromHead` (`merge-base(fromHead, mergedBase)..fromHead`) that equals the merged base at `head` was discarded by the merge, so it is never base-only.
+ */
+export async function isBaseOnlyMergeSince({ fromHead, head, mainRef, repoRoot, runGit = runGitCommand }) {
+  const ancestor = await runGit(["merge-base", "--is-ancestor", fromHead, head], { repoRoot });
+  if (ancestor.code !== 0) return false;
+  const mb = await runGit(["merge-base", head, mainRef], { repoRoot });
+  const mergedBase = mb.code === 0 ? mb.stdout.trim() : "";
+  if (!mergedBase) return false;
+  const nonMerges = await runGit(["rev-list", "--no-merges", "--count", `${fromHead}..${head}`, `^${mergedBase}`], { repoRoot });
+  if (nonMerges.code !== 0 || nonMerges.stdout.trim() !== "0") return false;
+  const delta = await captureMainRelativeChangedFilesSince({ base: fromHead, mainRef: mergedBase, head, repoRoot, runGit });
+  if (!delta.reduced || delta.changedFiles.length !== 0) return false;
+  const ownBase = await runGit(["merge-base", fromHead, mergedBase], { repoRoot });
+  if (ownBase.code !== 0 || !ownBase.stdout.trim()) return false;
+  const names = async (a, b) => {
+    const r = await runGit([...GIT_ISOLATION, "diff", "--no-ext-diff", "--no-renames", "--name-only", `${a}..${b}`], { repoRoot });
+    return r.code === 0 ? new Set(r.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) : null;
+  };
+  const prOwnAtFromHead = await names(ownBase.stdout.trim(), fromHead);
+  const prOwnAtHead = await names(mergedBase, head);
+  if (!prOwnAtFromHead || !prOwnAtHead) return false;
+  for (const file of prOwnAtFromHead) if (!prOwnAtHead.has(file)) return false;
+  return true;
 }
