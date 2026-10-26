@@ -75,7 +75,7 @@ function git(cwd, args) {
 // that has a body and closes no issue — the shape most of these tests assume.
 async function stubGhRun(_command, args) {
   if (args[0] === "pr" && args[1] === "view") {
-    return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [] }), stderr: "" };
+    return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [], baseRefName: "main" }), stderr: "" };
   }
   if (args[0] === "issue" && args[1] === "view") {
     return { code: 0, stdout: JSON.stringify({ body: "stub issue body" }), stderr: "" };
@@ -268,7 +268,7 @@ function stubGhRunWithLabels(labelsAnswer) {
         }
         return { code: 0, stdout: JSON.stringify({ labels: labelsAnswer }), stderr: "" };
       }
-      return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [] }), stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [], baseRefName: "main" }), stderr: "" };
     }
     if (args[0] === "issue" && args[1] === "view") {
       return { code: 0, stdout: JSON.stringify({ body: "stub issue body" }), stderr: "" };
@@ -4374,14 +4374,18 @@ test("dogfood: an orchestrator-supplied --prefix-file record verifies clean via 
   }
 });
 
-test("main: --prefix-file never touches GitHub for spec resolution, even with no --pr-body/--issue-body/--acceptance-criteria flags", async () => {
+test("main: --prefix-file reads only the PR base branch from GitHub, never spec resolution, even with no --pr-body/--issue-body/--acceptance-criteria flags", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
     await mkdir(path.join(repoRoot, "tmp"), { recursive: true });
     const prefixPath = path.join(repoRoot, "tmp", "orchestrator-prefix.txt");
     await writeFile(prefixPath, "# Orchestrator briefing\n\nbytes.\n", "utf8");
 
-    const run = async () => { throw new Error("must not call gh under --prefix-file"); };
+    // Only the base-branch read (AC6 freshness) may reach GitHub; spec fields never.
+    const run = async (_c, args) => {
+      assert.equal(args[args.indexOf("--json") + 1], "baseRefName", "must not read spec fields under --prefix-file");
+      return { code: 0, stdout: JSON.stringify({ baseRefName: "main" }), stderr: "" };
+    };
     await main([
       "--repo", "owner/repo", "--pr", "91", "--gate", "draft_gate",
       "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
@@ -4419,7 +4423,7 @@ function specStubRun({
   return async (_command, args) => {
     if (args[0] === "pr" && args[1] === "view") {
       if (prFails) return { code: 1, stdout: "", stderr: "gh: could not resolve PR" };
-      return { code: 0, stdout: JSON.stringify({ body: prBody, closingIssuesReferences: closing }), stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ body: prBody, closingIssuesReferences: closing, baseRefName: "main" }), stderr: "" };
     }
     if (args[0] === "issue" && args[1] === "view") {
       if (issueFails) return { code: 1, stdout: "", stderr: "gh: could not resolve issue" };
@@ -8192,9 +8196,9 @@ test("resolvePrSpecContext (review): caller-supplied spec flags leave the formal
   assert.equal(options.hasFormalPrSpec, undefined);
 });
 
-// Issue 2885: fixtures without an origin remote cannot fetch; default to an unchecked-base stub.
+// Issue 2885: fixtures without an origin remote cannot fetch; default to a stub that reports the PR base as current.
 // The stale-base tests below call mainImpl with a real or stale checker instead.
-const currentBase = async ({ base }) => ({ ok: false, error: "base_not_origin_branch", base });
+const currentBase = async ({ base }) => ({ ok: true, status: "base_current", base });
 function main(argv, runtime = {}) {
   return mainImpl(argv, { checkBaseFreshness: currentBase, ...runtime });
 }
@@ -8258,25 +8262,79 @@ test("issue 2885: write-gate-context records baseFreshness on a current base and
   }
 });
 
-test("issue 2885: a SHA, revision-expression or non-origin remote --base records unchecked", async () => {
-  const { root, clone, headSha } = await makeOriginFixture();
+async function expectRefusal(argv, runtime, pattern, clone) {
+  const before = process.exitCode;
+  const realWrite = process.stderr.write.bind(process.stderr);
+  let errText = "";
+  process.stderr.write = (chunk) => { errText += String(chunk); return true; };
+  try {
+    await mainImpl(argv, runtime);
+    assert.equal(process.exitCode, 1);
+    assert.match(errText, pattern);
+  } finally {
+    process.stderr.write = realWrite;
+    process.exitCode = before;
+  }
+  assert.equal(existsSync(path.join(clone, "tmp/gate-context")), false);
+}
+
+test("issue 2885 AC6: a run without --base checks the PR base branch, records baseFreshness and refuses once origin advanced", async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    const argv = ["--repo", "owner/repo", "--pr", "74", "--gate", "review", "--head-sha", headSha, "--angles", '["correctness"]'];
+    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 74, gate: "review", headSha }, { repoRoot: clone });
+    assert.equal(artifact.scope.diffSource, "none");
+    assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
+    await advanceOrigin();
+    await rm(path.join(clone, "tmp"), { recursive: true, force: true });
+    await expectRefusal(argv, { repoRoot: clone, run: stubGhRun }, /base_stale_integrate_first[^]*newer base commit/u, clone);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885 AC6: a SHA, revision-expression or non-origin remote --base is checked against the PR base branch", async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
   try {
     const sha = git(clone, ["rev-parse", "HEAD~1"]).trim();
     git(clone, ["remote", "add", "upstream", git(clone, ["remote", "get-url", "origin"]).trim()]);
     git(clone, ["fetch", "-q", "upstream"]);
-    for (const base of [sha, "HEAD~1", "upstream/main"]) {
+    const bases = [sha, "HEAD~1", "upstream/main"];
+    for (const base of bases) {
       await rm(path.join(clone, "tmp"), { recursive: true, force: true });
       const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "review", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
       await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
       const artifact = await readGateContext({ repo: "owner/repo", pr: 71, gate: "review", headSha }, { repoRoot: clone });
-      assert.deepEqual(artifact.baseFreshness, { status: "unchecked", base });
+      assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
+      assert.equal(artifact.scope.diffSource, "base");
+    }
+    await advanceOrigin();
+    for (const base of bases) {
+      await rm(path.join(clone, "tmp"), { recursive: true, force: true });
+      const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "review", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
+      await expectRefusal(argv, { repoRoot: clone, run: stubGhRun }, /base_stale_integrate_first/u, clone);
     }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("issue 2885: a failed preflight fetch exits 1 with base_fetch_failed, the raw base and no artifact", async () => {
+test("issue 2885 AC6: an unreadable PR base refuses with base_unresolved and writes no artifact", async () => {
+  const { root, clone, headSha } = await makeOriginFixture();
+  try {
+    const noBase = async (command, args) => {
+      const res = await stubGhRun(command, args);
+      return args[0] === "pr" ? { ...res, stdout: JSON.stringify({ body: "b", closingIssuesReferences: [] }) } : res;
+    };
+    const argv = ["--repo", "owner/repo", "--pr", "75", "--gate", "review", "--head-sha", headSha, "--angles", '["correctness"]'];
+    await expectRefusal(argv, { repoRoot: clone, run: noBase }, /base_unresolved/u, clone);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885: a failed preflight fetch exits 1 with base_fetch_failed, the PR base and no artifact", async () => {
   const { root, clone, headSha } = await makeOriginFixture();
   try {
     let received;
@@ -8294,7 +8352,7 @@ test("issue 2885: a failed preflight fetch exits 1 with base_fetch_failed, the r
       process.stderr.write = realWrite;
       process.exitCode = before;
     }
-    assert.equal(received, "origin/main");
+    assert.equal(received, "main");
     assert.equal(existsSync(path.join(clone, "tmp/gate-context")), false);
   } finally {
     await rm(root, { recursive: true, force: true });

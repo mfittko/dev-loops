@@ -32,7 +32,7 @@ import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveCla
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName, orderAnglesByCatalog, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
-import { anchorBaseRef } from "../lib/anchor-base-ref.mjs";
+import { anchorBaseRef, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
 import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";
@@ -242,12 +242,13 @@ Optional:
   --rationale <json>             JSON array of {angle, action, reason} entries
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
-  --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); a bare branch uses origin/<branch> when that commit resolves. Explicit remote refs and revision expressions stay unchanged for the diff. A branch base (main, origin/main, refs/heads/main, refs/remotes/origin/main) first runs git fetch origin (bounded, no prompt) and refuses with base_stale_integrate_first (the PR head lacks origin/<branch> commits) or base_fetch_failed, writing no artifact; the artifact records baseFreshness {status: base_current|unchecked, base}, where unchecked covers SHAs, revision expressions and non-origin remote refs. Populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see skills/docs/gate-review-sub-loop-contract.md.
+  --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); a bare branch uses origin/<branch> when that commit resolves. Explicit remote refs and revision expressions stay unchanged for the diff.  Populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see skills/docs/gate-review-sub-loop-contract.md.
+  Base freshness (every run, with or without --base): the PR's base branch (baseRefName) is fetched from origin (bounded, no prompt) and the PR head must contain it. A stale head refuses with base_stale_integrate_first, a failed fetch with base_fetch_failed, an unreadable PR base with base_unresolved; each writes no artifact. The artifact records baseFreshness {status: "base_current", base} on every path.
   --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing evidence file. OPTIONAL: when omitted, every of the PR's closing issue references is resolved, comma-joined and cross-repo-qualified (e.g. #1496, #1511 or owner/other#12) — an umbrella PR resolves all of them. The linked issues' bodies are fetched only when --issue-body is also omitted (see below). An unreadable PR or linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering absence. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
   --validation-posture <text>    Short description of the validation posture. Refused (fails closed, never truncated) past 500 chars; keep details in --validation-results.
   --pr-body <text>               PR description text, inlined into the rendered briefing evidence file. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content).
   --issue-body <text>            Linked-issue body text, inlined into the briefing evidence file under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the evidence file should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the evidence file entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
-  --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base still runs local git reads plus the base freshness git fetch origin, base_stale_integrate_first, base_fetch_failed and the baseFreshness artifact field; see --base). Omit for the default self-rendered prefix (prefixMode inline|pointer).
+  --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (the CLI still reads the PR base branch, runs the base freshness git fetch origin and records baseFreshness; see Base freshness). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-RESOLUTION) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing evidence file, bound by sha256 as an optional read (read field by field with jq; the sentinel still verifies its hash) (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
@@ -3546,6 +3547,25 @@ export async function main(
     // full bundle. A run WITH --base that then fails to resolve (bad ref, not a
     // git repo, etc.) DOES fail closed: the caller opted into the full bundle,
     // so a silent thin degrade there would be a worse surprise than an error.
+    // AC6 (issue 2885): every dispatch runs the freshness check against the PR's own base branch (baseRefName),
+    // whatever --base is (absent, SHA, revision, remote ref). Anything but base_current writes no artifact.
+    let prBase;
+    try {
+      ({ pr: { baseRefName: prBase } } = await viewPr({ repo: options.repo, pr: options.pr, fields: "baseRefName" }, { env, run }));
+    } catch (error) {
+      throw new Error(`base_unresolved: could not read the base branch of PR #${options.pr} in ${options.repo} (${error?.message ?? error}); refusing to dispatch without a base freshness check.`);
+    }
+    if (typeof prBase !== "string" || !prBase) throw new Error(`base_unresolved: PR #${options.pr} in ${options.repo} reports no baseRefName; refusing to dispatch without a base freshness check.`);
+    const freshness = await checkBaseFreshness({ base: prBase, cwd: repoRoot, env });
+    if (freshness.ok) {
+      options.baseFreshness = { status: freshness.status, base: freshness.base };
+    } else if (freshness.error !== "base_stale_integrate_first") {
+      throw new Error(`${freshness.error}: ${freshness.message}`);
+    } else {
+      const shown = freshness.newerCommits.slice(0, 5).join("; ");
+      const more = freshness.newerCommits.length > 5 ? ` (+${freshness.newerCommits.length - 5} more)` : "";
+      throw new Error(`${freshness.error}: origin/${freshness.base} has ${freshness.newerCommits.length} commit(s) the PR head lacks (${shown}${more}); files differing only because of the stale base: ${freshness.foreignFiles.join(", ") || "none"}. ${freshness.remedy}`);
+    }
     let diff = null;
     if (options.base) {
       // Fail-closed precondition: the diff is resolved FROM the CWD worktree, so
@@ -3553,21 +3573,8 @@ export async function main(
       // Otherwise a stale CWD silently yields the wrong diff (caught only after
       // fan-out today). Throws → caught below → exit 1, no artifact written.
       assertWorktreeAtHead(options.headSha, { repoRoot });
-      // SHAs, revision expressions and non-origin remote refs (upstream/main) have no origin branch to refresh.
-      const freshness = await checkBaseFreshness({ base: options.base, cwd: repoRoot, env });
-      if (freshness.ok) {
-        options.baseFreshness = { status: freshness.status, base: freshness.base };
-      } else if (freshness.error === "base_not_origin_branch") {
-        options.baseFreshness = { status: "unchecked", base: freshness.base };
-      } else if (freshness.error !== "base_stale_integrate_first") {
-        throw new Error(`${freshness.error}: ${freshness.message}`);
-      } else {
-        const shown = freshness.newerCommits.slice(0, 5).join("; ");
-        const more = freshness.newerCommits.length > 5 ? ` (+${freshness.newerCommits.length - 5} more)` : "";
-        throw new Error(`${freshness.error}: origin/${freshness.base} has ${freshness.newerCommits.length} commit(s) the PR head lacks (${shown}${more}); files differing only because of the stale base: ${freshness.foreignFiles.join(", ") || "none"}. ${freshness.remedy}`);
-      }
-      // A base_current preflight verified origin/<base>, so diff against that ref, never a possibly stale local one.
-      options.base = options.baseFreshness.status === "base_current" ? `origin/${options.baseFreshness.base}` : anchorBaseRef(options.base, { repoRoot });
+      // A base_current preflight verified origin/<prBase>, so a --base naming that branch diffs against that ref, never a possibly stale local one.
+      options.base = normalizeBaseBranch(options.base) === options.baseFreshness.base ? `origin/${options.baseFreshness.base}` : anchorBaseRef(options.base, { repoRoot });
       diff = captureDiffFromBase(options.base, { repoRoot });
       const scope = await resolveDiffScope(
         { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" },
