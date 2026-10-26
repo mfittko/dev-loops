@@ -1161,8 +1161,9 @@ test("#2381: parseRenderedJudgeDisposition parses the exact renderFindingLine su
 test("parseRenderedJudgeDisposition round-trips every renderFindingLine suffix form and never reads one out of a summary (ADR 0191)", () => {
   const line = (over) => renderFindingLine({ severity: "medium", angle: "scope", summary: "retry loop", ...over });
   assert.equal(parseRenderedJudgeDisposition(line({ judgeDisposition: "reject" })), "reject");
-  assert.equal(parseRenderedJudgeDisposition(line({ judgeDisposition: "defer", followUpIssueNumber: 7 })), "defer");
-  assert.equal(parseRenderedJudgeDisposition(line({ judgeDisposition: "reject", judgeReason: "not a defect judge: act" })), "reject");
+  // A detail-bearing suffix is never disposition evidence (strict legacy parsing).
+  assert.equal(parseRenderedJudgeDisposition(line({ judgeDisposition: "defer", followUpIssueNumber: 7 })), null);
+  assert.equal(parseRenderedJudgeDisposition(line({ judgeDisposition: "reject", judgeReason: "not a defect judge: act" })), null);
   assert.equal(parseRenderedJudgeDisposition(line({ summary: "retry loop — judge: reject - see above" })), null);
   assert.equal(parseRenderedJudgeDisposition(line({ summary: "note judge: reject then more text" })), null);
 });

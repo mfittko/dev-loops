@@ -435,5 +435,9 @@ test("a closure round's gate context (scope.closureRound) adds closureRound: tru
     const closure = await emitJudgeWorkOrder(sources);
     assert.equal(closure.workOrder.closureRound, true);
     assert.ok(Array.isArray(closure.workOrder.priorActItems));
+    // The closure context's own list is copied, not rebuilt from this checkout's history.
+    const items = [{ fingerprint: "abcd", file: "a.mjs", line: 3, title: "t" }];
+    await writeFile(contextPath, JSON.stringify({ ...context, scope: { closureRound: { fromHead: "c".repeat(40), priorActItems: items } } }));
+    assert.deepEqual((await emitJudgeWorkOrder(sources)).workOrder.priorActItems, items);
   });
 });

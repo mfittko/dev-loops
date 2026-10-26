@@ -1955,7 +1955,7 @@ export async function resolveClosureRound(options, { repoRoot, cap }) {
   if (await countCompletedRounds(options, { repoRoot }) !== cap + 1) return null;
   const closed = await readClosedPriorRoundLogs(options, { repoRoot });
   const last = closed.at(-1)?.headSha;
-  if (typeof last !== "string" || last.trim().length === 0) return null;
+  if (typeof last !== "string" || last.trim().length === 0) throw new Error("closure round reached but the latest closed prior round's head cannot be recovered (its ledgers are unreadable); refusing to build the context");
   const fromHead = last.trim().toLowerCase();
   return { fromHead, priorActItems: await listPriorActItems(options, { repoRoot }) };
 }

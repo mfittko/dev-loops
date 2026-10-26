@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, link, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8275,6 +8275,18 @@ test("resolveClosureRound returns the cap round head and the prior act items onl
     }), "utf8");
     const again = await resolveClosureRound({ ...opts, pr: 44 }, { repoRoot, cap: 4 });
     assert.equal(again?.fromHead, baseSha, "a blocked closure ledger leaves the next round a closure round from the last closed head");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveClosureRound refuses when the closure count is reached but no closed prior ledger is readable", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    await seedClosedRounds(repoRoot, 46, ["1".repeat(40), "2".repeat(40), "3".repeat(40), "4".repeat(40)]);
+    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-46");
+    for (const name of await readdir(dir)) await writeFile(path.join(dir, name), "{not json", "utf8");
+    await assert.rejects(resolveClosureRound({ repo: "owner/repo", pr: 46, gate: "draft_gate", headSha }, { repoRoot, cap: 4 }), /cannot be recovered/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

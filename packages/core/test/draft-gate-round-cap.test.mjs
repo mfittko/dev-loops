@@ -34,7 +34,7 @@ describe("draft_gate round cap", () => {
 
   test("a re-surfaced high or medium act item blocks as resurfaced; re-surfaced low and nit follow the low/nit rule", () => {
     assert.deepEqual(reasons([act("medium", { resurfaces: "abcd" })]), ["round_cap_reached/resurfaced"]);
-    assert.deepEqual(reasons([act("high", { resurfaces: "abcd" }), act("low", { resurfaces: "ef01" })]), ["round_cap_reached/resurfaced"]);
+    assert.deepEqual(reasons([act("high", { resurfaces: "abcd" }), act("low", { resurfaces: "ef01" })]), Array(2).fill("round_cap_reached/resurfaced"));
     assert.deepEqual(reasons([act("low", { resurfaces: "abcd" }), act("nit", { resurfaces: "ef01" })]), []);
   });
 
@@ -124,6 +124,14 @@ describe("draft_gate round cap", () => {
       assert.deepEqual(blockerReasons([act("critical", fix)], at(4)), ["new_act"]);
       assert.deepEqual(blockerReasons([{ summary: "no severity", judgeDisposition: "act", ...fix }], at(4)), ["new_act"]);
       assert.deepEqual(blockerReasons([act("question", fix)], at(4)), ["new_act"]);
+    });
+
+    test("at the cap round a resurfaced act item without a remedy blocks whatever its severity, even beside a medium with a remedy", () => {
+      const medium = act("medium", fix);
+      for (const extra of [{ severity: "question" }, { severity: "critical" }, { severity: undefined }]) {
+        const item = { ...act("low", { resurfaces: "abcd" }), ...extra };
+        assert.deepEqual(blockerReasons([item, medium], at(4)), ["resurfaced"], String(extra.severity));
+      }
     });
 
     test("a non-string or blank judgeFix does not count as a remedy and a non-string or blank judgeReason is not final", () => {

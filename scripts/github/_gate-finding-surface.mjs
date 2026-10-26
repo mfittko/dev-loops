@@ -1550,9 +1550,8 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
 //
 // The suffix shape is matched EXACTLY as renderFindingLine emits it — a
 // single space, then a literal EM DASH, then a single space, "judge:", a
-// single space, the disposition token, then an optional ` (follow-up N)` and an
-// optional ` - <reason>` (renderJudgeDetail, which neutralizes `judge:` in the
-// reason), then end-of-line. renderFindingLine also neutralizes `judge:` in the
+// single space, the disposition token, then end-of-line (a suffix with
+// renderJudgeDetail's ` (follow-up N)` or ` - <reason>` never matches). renderFindingLine also neutralizes `judge:` in the
 // reviewer summary, so the last ` — judge: <word>` on a line is always the
 // genuine suffix. A looser `\s*` on either side would also
 // match an unrelated (e.g. LLM-authored) summary that merely CONTAINS the
@@ -1562,10 +1561,11 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
 // the genuine suffix by string shape alone; closing that gap fully would
 // need a render-time change (e.g. a distinguishing token) in
 // renderFindingLine itself, out of scope here.
-const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\*\s+\(`[^`\n]+`\):.* — judge: ([a-z][a-z0-9_-]*)(?: \(follow-up \d+\))?(?: - [^\n]*)?$/mu;
+const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\*\s+\(`[^`\n]+`\):.* — judge: ([a-z][a-z0-9_-]*)$/mu;
+// A detail-bearing line (` (follow-up N)` or ` - <reason>`) is never disposition evidence here: an already-posted, unjudged summary can end in the same bytes and cannot be told apart from it.
 // Header of the fixed inline layout (legacy bodies keep the suffix form above): `**<severity>** · <angles> · judge: <disposition>`.
 // The severity token is lowercase, so a `**Problem:**` line never matches.
-const RENDERED_HEADER_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\* · [^\n]* · judge: ([a-z][a-z0-9_-]*)(?: \(follow-up \d+\))?(?: - [^\n]*)?$/mu;
+const RENDERED_HEADER_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\* · [^\n]* · judge: ([a-z][a-z0-9_-]*)$/mu;
 
 export function parseRenderedJudgeDisposition(body) {
   const match = typeof body === "string"

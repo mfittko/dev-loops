@@ -1395,9 +1395,9 @@ export function pastCapBlockers(findings, { pr, round, cap } = {}) {
   if (!lowNitOnly) {
     for (const f of acts) {
       if (atCap && hasRemedy(f)) continue;
-      const severity = normalizeSeverity(f.severity);
-      const reason = !f.resurfaces ? "new_act" : afterCap || severity === "high" || severity === "medium" ? "resurfaced" : null;
-      if (reason) blockers.push({ kind: "round_cap_reached", reason, item: label(f, reason) });
+      // A resurfaced act item that is not exempt above blocks whatever its severity (question, unknown or missing included).
+      const reason = f.resurfaces ? "resurfaced" : "new_act";
+      blockers.push({ kind: "round_cap_reached", reason, item: label(f, reason) });
     }
   }
   for (const f of list) {
