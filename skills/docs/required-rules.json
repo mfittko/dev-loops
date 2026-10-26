@@ -1111,6 +1111,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "WORKTREE-STALE-BASE-REMEDY",
+      "enforcement": "doc"
+    },
+    {
       "id": "WORKTREE-WRONG-CHECKOUT-GUARD",
       "enforcement": "runtime"
     },
