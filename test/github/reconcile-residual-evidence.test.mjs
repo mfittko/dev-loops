@@ -386,7 +386,15 @@ for (const [name, alter] of Object.entries(acceptanceNegatives)) test(`acceptanc
   if (name.startsWith("verifierWindow")) assert.equal(f.state.deliveryVerified, true);
 }, "pi", negativeFindings));
 
-const judged = (ledger, disposition) => {
+test("acceptance refuses capClosed on a locatable question finding", async () => acceptanceFixture(async (f) => {
+  const ledger = JSON.parse(await readFile(f.ledgerPath));
+  acceptingBaseline(f, ledger);
+  ledger.findings.find((x) => x.severity === "question").capClosed = capClosedOf({ judgeDisposition: "reject", severity: "question" });
+  await put(f.ledgerPath, ledger);
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), /invalid capClosed record/);
+}, "pi", [{ severity: "question", summary: "locatable question", file: "a.mjs", line: 1 }, { severity: "low", summary: "all members retained" }]));
+
+const judged =(ledger, disposition) => {
   for (const finding of ledger.findings) Object.assign(finding, { judgeDisposition: disposition, judgeRationale: "AC 1", ...JUDGE_PROSE,
     ...(disposition === "defer" ? { followUpDraft: { title: "Follow up", body: "Evidence retained" } } : {}),
     ...(disposition === "act" ? { remedyKind: "evidence_only" } : {}) });

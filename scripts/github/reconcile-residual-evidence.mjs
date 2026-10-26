@@ -8,7 +8,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, loadDevLoopConfigStrict, resolveGateConfig, resolveGateAngleContract, resolveFanoutGroups } from "@dev-loops/core/config";
 import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
 import { startDeltaSequence, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
-import { consolidateFanin, checkResolvedAngleEvidence, fanoutReviewerPairingError, toFindingsLogShape, composeReviewVerdict, listOpenActItems, validateJudgeVerdict, neverDeferredSeverity } from "@dev-loops/core/loop/gate-fanin";
+import { consolidateFanin, checkResolvedAngleEvidence, fanoutReviewerPairingError, toFindingsLogShape, composeReviewVerdict, listOpenActItems, validateJudgeVerdict, neverDeferredSeverity, capClosedFor, isPastRoundCap } from "@dev-loops/core/loop/gate-fanin";
 import { clusterFindings } from "@dev-loops/core/loop/finding-cluster";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { normalizeHeadScopedCiContract } from "@dev-loops/core/loop/copilot-ci-status";
@@ -415,13 +415,11 @@ export async function verifyResidualEvidenceAcceptance(options, deps = {}) {
     requireProof(finding.operatorVisible === undefined || typeof finding.operatorVisible === "boolean" && finding.severity === "low", "invalid operator visibility");
     requireProof(finding.resolvedIn === undefined || /^[a-f0-9]{7,64}$/i.test(finding.resolvedIn), "invalid resolution metadata");
     requireProof(finding.resurfaces === undefined || typeof finding.resurfaces === "string" && /^[a-f0-9]{16}$/.test(finding.resurfaces), "invalid resurfaces fingerprint");
-    // The capClosedFor shape (@dev-loops/core/loop/gate-fanin): only a defer or reject finding carries it, with its own disposition and severity.
+    // capClosedFor (@dev-loops/core/loop/gate-fanin) decides who carries capClosed, so a locatable question never does.
     const cc = finding.capClosed;
     requireProof(cc === undefined || cc !== null && typeof cc === "object" && !Array.isArray(cc)
-      && isDeepStrictEqual(Object.keys(cc).sort(), ["cap", "judgeDisposition", "round", "severity"])
-      && (finding.judgeDisposition === "defer" || finding.judgeDisposition === "reject")
-      && cc.judgeDisposition === finding.judgeDisposition && cc.severity === finding.severity
-      && Number.isSafeInteger(cc.round) && Number.isSafeInteger(cc.cap) && cc.cap > 0 && cc.round >= cc.cap, "invalid capClosed record");
+      && Number.isSafeInteger(cc.round) && Number.isSafeInteger(cc.cap)
+      && isPastRoundCap(cc.round, cc.cap) && isDeepStrictEqual(cc, capClosedFor(finding, cc)), "invalid capClosed record");
   }
   for (const members of clusters.values()) { // GATE-EXEC-THREAD-DISPOSITION, as write-gate-findings-log enforces
     requireProof(!members.some((f) => f.judgeDisposition === "defer") || neverDeferredSeverity(members) === null, "judge defer reaches a never-deferred cluster");
