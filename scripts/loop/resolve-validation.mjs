@@ -196,8 +196,17 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     const refusal = validationDifferenceRefusal(checkout.validation, base.validation);
     if (refusal) return incomplete(refusal);
     const { mode, fullCommand } = base.validation;
+    // ADR 0192: an admitted paths-only difference must not let checkout `paths` choose the suites.
+    // The base paths select the suites for the PR's changed paths. When they select full-repository validation or no gate suite,
+    // the full-repository profile runs, as it does with no difference; a PR cannot narrow it.
+    let runOptions = options;
+    if (mode === "local" && options.profile === "targeted" && existsSync(path.join(repoRoot, "package.json")) && JSON.stringify(checkout.validation.paths) !== JSON.stringify(base.validation.paths)) {
+      const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `origin/HEAD...${options.headSha}`], { cwd: repoRoot, encoding: "utf8", env: gitEnv, stdio: ["ignore", "pipe", "ignore"] }).split("\0").filter(Boolean).sort();
+      const selected = resolveTargetedValidation(changed, base.validation.paths);
+      runOptions = selected.profile === "targeted" && selected.gateSuites.length > 0 ? { ...options, suites: selected.gateSuites } : { ...options, profile: "full-repository", suites: ["verify"] };
+    }
     // A declared command also serves a targeted request in a repo without package.json.
-    const declared = mode === "local" && fullCommand && (options.profile === "full-repository" || !existsSync(path.join(repoRoot, "package.json"))) && fullCommand;
+    const declared = mode === "local" && fullCommand && (runOptions.profile === "full-repository" || !existsSync(path.join(repoRoot, "package.json"))) && fullCommand;
     let pinned = null;
     let artifact;
     if (mode === "ci-only") {
@@ -211,7 +220,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
       if (ciStatus === "success" && !ranSuite) return incomplete("current-head CI ran no checks");
       artifact = { ok: ciStatus === "success", status: ciStatus === "success" ? "complete" : "failed", allPassed: ciStatus === "success", ...(ciStatus === "success" ? { authority: "ci-authoritative" } : { reason: "current-head CI is failure" }), repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, profile: options.profile, generatedAt: new Date().toISOString(), suites: [] };
     } else if (declared) {
-      artifact = { ...await runDeclaredFullCommand(declared, options, { repoRoot, env }), profile: options.profile };
+      artifact = { ...await runDeclaredFullCommand(declared, runOptions, { repoRoot, env }), profile: runOptions.profile };
     } else {
       const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
       pinned = packageJson.packageManager;
@@ -219,19 +228,10 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
       const installed = execFileSync("bun", ["--version"], { cwd: repoRoot, encoding: "utf8", env }).trim();
       if (`bun@${installed}` !== pinned) return incomplete(`installed bun@${installed} differs from ${pinned}`);
       const scripts = await readPackageScripts(repoRoot);
-      // ADR 0192: an admitted paths-only difference must not let checkout `paths` choose the suites.
-      // The base paths select the suites for the PR's changed paths; the requested checkout-derived suites are replaced.
-      let runOptions = options;
-      if (options.profile === "targeted" && JSON.stringify(checkout.validation.paths ?? []) !== JSON.stringify(base.validation.paths ?? [])) {
-        const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `origin/HEAD...${options.headSha}`], { cwd: repoRoot, encoding: "utf8", env: gitEnv, stdio: ["ignore", "pipe", "ignore"] }).split("\0").filter(Boolean).sort();
-        const selected = resolveTargetedValidation(changed, base.validation.paths ?? []);
-        if (selected.profile !== "targeted" || selected.gateSuites.length === 0) return incomplete(selected.profile !== "targeted" ? "the base branch validation paths select full-repository validation for the changed paths" : "the base branch validation paths select no gate suite for the changed paths");
-        runOptions = { ...options, suites: selected.gateSuites };
-      }
       const classification = classifyPackageSuites(runOptions.suites, scripts);
-      if (options.profile === "targeted" && classification === "full-repository") return incomplete("targeted profile cannot run full-repository validation");
-      if (options.profile === "targeted" && classification !== "targeted") return incomplete("targeted profile requires a validation suite");
-      if (options.profile === "full-repository" && classification !== "full-repository") return incomplete("verify script is not classified as full-repository validation");
+      if (runOptions.profile === "targeted" && classification === "full-repository") return incomplete("targeted profile cannot run full-repository validation");
+      if (runOptions.profile === "targeted" && classification !== "targeted") return incomplete("targeted profile requires a validation suite");
+      if (runOptions.profile === "full-repository" && classification !== "full-repository") return incomplete("verify script is not classified as full-repository validation");
       // Reuse another lifecycle gate's passing artifact for the same head, profile, toolchain and suites.
       // The suites consume the PR title (DEVLOOPS_PR_TITLE), so the title is part of the match key; an unreadable title never reuses.
       // ponytail: reused suites keep the source gate's outputPath log; a rerun of that gate at the same head may overwrite it.
@@ -241,7 +241,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
           const prior = JSON.parse(await readFile(path.resolve(repoRoot, buildValidationResultsPath({ ...options, gate })), "utf8"));
           if (prior.ok === true && prior.allPassed === true
             && prior.repo === options.repo && prior.pr === options.pr && String(prior.headSha).toLowerCase() === options.headSha
-            && prior.profile === options.profile && prior.toolchain === pinned && prior.prTitle === currentTitle
+            && prior.profile === runOptions.profile && prior.toolchain === pinned && prior.prTitle === currentTitle
             && JSON.stringify(prior.suites.map((s) => s.name)) === JSON.stringify(runOptions.suites)
             && prior.suites.every((s) => s.exitCode === 0)) {
             artifact = { ...prior, gate: options.gate, generatedAt: new Date().toISOString(), reusedFrom: prior.reusedFrom ?? gate };
@@ -249,7 +249,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
           }
         } catch { /* An unreadable or malformed prior artifact is never reused. */ }
       }
-      artifact ??= { ...await buildValidationArtifact(runOptions, { repoRoot, readPrTitle }), profile: options.profile, toolchain: pinned };
+      artifact ??= { ...await buildValidationArtifact(runOptions, { repoRoot, readPrTitle }), profile: runOptions.profile, toolchain: pinned };
     }
     const afterProblem = currentTreeProblem();
     if (afterProblem) return incomplete(`validation changed the worktree: ${afterProblem.reason}`, afterProblem);
@@ -258,7 +258,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     // HEAD can move between the check above and the write: re-check after it.
     const writtenProblem = currentTreeProblem();
     if (writtenProblem) return incomplete(`worktree moved during the artifact write: ${writtenProblem.reason}`, writtenProblem);
-    return { ok: artifact.allPassed, status: artifact.allPassed ? "complete" : "failed", allPassed: artifact.allPassed, profile: options.profile, headSha: options.headSha, toolchain: pinned, artifactPath: buildValidationResultsPath(options), artifact };
+    return { ok: artifact.allPassed, status: artifact.allPassed ? "complete" : "failed", allPassed: artifact.allPassed, profile: runOptions.profile, headSha: options.headSha, toolchain: pinned, artifactPath: buildValidationResultsPath(options), artifact };
   } catch (error) {
     let stillConfirmed = false;
     try { stillConfirmed = headConfirmed && readHead() === options.headSha; } catch { /* An unconfirmable head writes no artifact. */ }

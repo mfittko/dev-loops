@@ -743,19 +743,24 @@ test("with a paths-only edit, resolveValidation runs the requested suites that m
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
-test("a paths-only edit with a full-repository base selection resolves incomplete with no suites", async () => {
-  const { repoRoot } = await fixture();
-  try {
-    await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:scripts"));
-    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "pr edit"], { cwd: repoRoot });
-    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
-    const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot });
-    assert.equal(result.status, "incomplete");
-    assert.equal(result.ok, false);
-    assert.match(result.reason, /base branch validation paths/);
-    assert.equal(result.artifact, undefined);
-  } finally { await rm(repoRoot, { recursive: true, force: true }); }
-});
+// ADR 0192: base paths that select full-repository validation run it, exactly as the equal-paths case does.
+for (const [name, editPaths] of [["a paths-only edit", true], ["equal paths", false]]) {
+  test(`${name} with a full-repository base selection resolves the full-repository profile with the verify suite`, async () => {
+    const { repoRoot } = await fixture();
+    try {
+      if (editPaths) {
+        await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:scripts"));
+        execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "pr edit"], { cwd: repoRoot });
+      }
+      const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+      const result = await resolveValidation(parseResolveValidationArgs(editPaths ? [...args(headSha, "targeted"), "--suite", "test:scripts"] : args(headSha)), { repoRoot });
+      assert.equal(result.status, "complete");
+      assert.equal(result.profile, "full-repository");
+      assert.equal(result.artifact.profile, "full-repository");
+      assert.deepEqual(result.artifact.suites.map((x) => x.name), ["verify"]);
+    } finally { await rm(repoRoot, { recursive: true, force: true }); }
+  });
+}
 
 const commandsOnlyRules = () => pathsRule("test:docs").replace('"**"', '["docs/**", ".devloops"]') + '    - match: "tools/**"\n      surface: all\n      commands: [node tools/check.mjs]\n';
 
