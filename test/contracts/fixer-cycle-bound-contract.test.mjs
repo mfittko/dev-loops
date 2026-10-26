@@ -41,6 +41,11 @@ test("no agent, skill or brief imposes a fixed fixer-cycle cap", async () => {
   }
 });
 
+test("the gate contract carries no retry-cycle maximum", async () => {
+  const text = await readFile(path.join(repoRoot, "skills/docs/gate-review-sub-loop-contract.md"), "utf8");
+  assert.doesNotMatch(text, /Maximum retry cycles/i);
+});
+
 test("the gate contract states the fixer-cycle bound", async () => {
   const text = (await readFile(path.join(repoRoot, "skills/docs/gate-review-sub-loop-contract.md"), "utf8")).replace(/\s+/g, " ");
   assert.match(text, /<!-- rule: GATE-EXEC-FIXER-CYCLE-BOUND -->/);
