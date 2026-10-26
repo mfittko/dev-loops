@@ -5722,6 +5722,12 @@ describe("resolveGateAnglesDynamic: SECURITY_SENSITIVE_SEAM threat-model overrid
     assert.equal(plain.reasons["threat-model"], "config_disabled");
   });
 
+  test("an explicit empty angle set on a seam diff stays empty", async () => {
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: seamDiff, explicitAngles: [] });
+    assert.deepEqual(result.recommendedAngles, []);
+    assert.deepEqual(result.addedAngles, []);
+  });
+
   test("an enabled threat-model on a seam diff appears once and is not relabeled as added", async () => {
     const enabled = { version: 1, gates: { draft: { angles: ["scope", "correctness", "threat-model"] } } };
     const result = await resolveGateAnglesDynamic(enabled, "draft", { diff: seamDiff });

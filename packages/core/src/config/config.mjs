@@ -3199,6 +3199,19 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
   // A fired floor refuses an explicit --angles override. Selection falls
   // through to the same tier/dynamic best-effort path as every other diff.
   // An explicit --angles set still gets the security-seam override.
+  // An explicit empty set is returned unchanged so the writer's empty-selection
+  // refusal still fires; the seam override must not turn it into a non-empty set.
+  if (Array.isArray(explicitAngles) && !floorFired && explicitAngles.length === 0) {
+    return {
+      recommendedAngles: [],
+      skippedAngles: [],
+      reasons: {},
+      fallbackToAll: false,
+      dynamicAnglesActive: false,
+      addedAngles: [],
+      addedReasons: {},
+    };
+  }
   if (Array.isArray(explicitAngles) && !floorFired) {
     return applySeamOverride(config, gate, diff, {
       recommendedAngles: [...explicitAngles],
