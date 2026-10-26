@@ -46,7 +46,7 @@ function assertClaims(block, claims, label) {
 test("agents/judge.agent.md states severity is an INPUT and a real defect (incl. a low) is act regardless of its label", async () => {
   const text = await read("agents/judge.agent.md");
   assert.match(text, /Severity is an INPUT[\s\S]{0,60}never an auto-gate/, "judge contract must state severity is an INPUT, never an auto-gate");
-  assert.match(text, /low and nit findings never block \(ADR 0188\)[\s\S]{0,400}`failOpen: true`[\s\S]{0,80}promoted to `medium`[\s\S]{0,40}stays `act`/, "judge contract must state low/nit never block and failOpen promotes a low to medium");
+  assert.match(text, /`GATE-EXEC-LOW-NIT-NEVER-BLOCKS`[\s\S]{0,200}`failOpen: true`/, "judge contract must cite the low/nit rule and failOpen");
   assert.doesNotMatch(text, OLD_AUTODEFER_RE, "judge contract must NOT re-introduce the severity-based auto-defer sentence for lows");
 });
 
@@ -67,7 +67,7 @@ test("the Phase 3.5 judge contract states no severity auto-defer and adjudicates
   assertClaims(body, [
     ["Severity is an INPUT", "never an auto-gate"],
     ["EVERY finding", "`low`", "merits"],
-    ["`failOpen: true`", "`medium`", "keeps `act`"],
+    ["`GATE-EXEC-LOW-NIT-NEVER-BLOCKS`"],
     ["cosmetic `low`", "defaults to", "`reject`"],
   ], "Phase 3.5 merit disposition");
   assert.doesNotMatch(body, OLD_AUTODEFER_RE, "Phase 3.5 must NOT re-introduce the severity-based auto-defer sentence for lows");

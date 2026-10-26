@@ -890,10 +890,7 @@ by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
   of done (a correctness bug, a fail-open/fail-closed gap, a security regression, or an AC-breaking
   defect), plus the non-defect `act` cases named below (a `nit` riding an already-planned fix pass;
   an admitted coverage-expansion request); the fixer addresses it. Severity is an INPUT to the judgment, never an auto-gate:
-  the judge adjudicates EVERY finding, including a `low`, on its merits, but a cluster of only `low` and `nit` members is
-  never `act` (ADR 0188): `applyJudgeDispositions` coerces an `act` on it to `defer` (a low) or
-  `reject` (all nit), unless the disposition sets `failOpen: true`, which promotes the members to
-  `medium` and keeps `act`. `emit-fixer-work-order.mjs` refuses an act list of only low/nit items.
+  the judge adjudicates EVERY finding on its merits, and `GATE-EXEC-LOW-NIT-NEVER-BLOCKS` bounds a cluster of only `low` and `nit` members.
 - `defer` — real but belongs in a follow-up; MUST carry a `followUpDraft` (soft-cap contract):
   the draft is the durable ledger record, and `judge-pass`'s batched deferral comment on a linked spec issue target (a PR target posts no comment; the verdict body's Details marker in the Deferred group records a folded finding, and the thread marker plus resolving reply a stamped thread)
   records the deferral (`GATE-EXEC-DEFERRAL-RECORD`). The defer bar is high (net-reduction policy): a `nit` MUST NOT get
@@ -1026,6 +1023,18 @@ but stops being the actor that decides relevance. The judge does NOT soften `mus
 correctness grounds: a real defect stays a real defect; the judge decides *where* it is
 fixed, not *whether* it is real. When no judge verdict is present (a gate that has not yet
 wired the judge phase), the findings stay `unjudged`, and the fixer never derives a disposition from severity.
+
+<!-- rule: GATE-EXEC-JUDGE-PRIME-AUTHORITY -->
+`GATE-EXEC-JUDGE-PRIME-AUTHORITY`: When a gate round yields a finding, a disposition, a verdict or a next action, the judge decides it, and the orchestrator and the operator add no line to it. The operator decides a point only when neither the judge nor the orchestrator can decide it or the repo requires a human to approve it, and the only such points are `GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE` and `GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH`. ADR 0188 records this rule.
+
+<!-- rule: GATE-EXEC-LOW-NIT-NEVER-BLOCKS -->
+`GATE-EXEC-LOW-NIT-NEVER-BLOCKS`: When the judge disposes a cluster of only `low` and `nit` members as `act`, `applyJudgeDispositions` coerces the disposition: an all-`nit` cluster becomes `reject`, a cluster holding a `low` becomes `defer`, and a disposition with `failOpen: true` promotes the members to `medium` and stays `act`. A round whose findings are all `low` or `nit` composes `clean`. `emit-fixer-work-order.mjs` refuses an act list of only `low` or `nit` items with the typed code `low_nit_never_blocks`, and the coercion records the same code as the judge reason. ADR 0188 records this rule.
+
+<!-- rule: GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE -->
+`GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE`: When `merge-pr.mjs` reports `size_budget_human_approval` for a PR of escalated size, the operator writes the `approve merge <sha>` line and `merge-pr.mjs` refuses until it exists. The judge cannot decide this line because it accepts the review and rollback cost of an oversized change, a repo-required human approval that no code-relevance finding supplies. ADR 0188 records this rule.
+
+<!-- rule: GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH -->
+`GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH`: When a stable release tag or an npm publish is due, the operator approves and performs it, and no agent pushes a stable tag or publishes. The judge cannot decide this because a release is an irreversible external act that the release runbook assigns to a human, and the judge reviews a PR head, not a registry state. ADR 0188 records this rule.
 
 <!-- rule: GATE-EXEC-JUDGE-NOT-FRESH -->
 `GATE-EXEC-JUDGE-NOT-FRESH`: The judge is the one actor that must NOT be fresh-context per

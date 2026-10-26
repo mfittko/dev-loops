@@ -847,7 +847,7 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
     }
     // ADR 0188: an act list of only low/nit items never reaches the fixer.
     await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low" }), withFp({ ...ACT[0], severity: "nit", summary: "rename" })]));
-    await assert.rejects(emit(), /only low or nit items/);
+    await assert.rejects(emit(), /low_nit_never_blocks \(GATE-EXEC-LOW-NIT-NEVER-BLOCKS\).*only low or nit items/);
     await writeFile(files.actList, JSON.stringify(ACT));
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ autonomy: { humanMergeOnly: "nope" } }));
     await assert.rejects(emit(), /dev-loops config is invalid/);

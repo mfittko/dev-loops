@@ -1280,7 +1280,7 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
         promote = true;
       } else {
         disposition = clusterMembers.every((f) => normalizeSeverity(f.severity) === "nit") ? "reject" : "defer";
-        if (typeof reason !== "string" || reason.trim().length === 0) reason = "low and nit findings never block (ADR 0188)";
+        if (typeof reason !== "string" || reason.trim().length === 0) reason = "low_nit_never_blocks (GATE-EXEC-LOW-NIT-NEVER-BLOCKS)";
         if (disposition === "defer" && !followUpDraft) followUpDraft = { title: d.title.trim(), body: d.detail.trim() };
       }
     }

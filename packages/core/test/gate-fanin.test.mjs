@@ -1544,7 +1544,7 @@ describe("applyJudgeDispositions (#1525)", () => {
     test("an act on an all-nit cluster becomes reject with a default reason", () => {
       const { findings } = applyJudgeDispositions(cluster("nit", "nit"), judgeVerdict([{ index: 0, ...act }]));
       assert.deepEqual(findings.map((f) => f.judgeDisposition), ["reject", "reject"]);
-      assert.match(findings[0].judgeReason, /ADR 0188/);
+      assert.match(findings[0].judgeReason, /^low_nit_never_blocks \(GATE-EXEC-LOW-NIT-NEVER-BLOCKS\)$/);
     });
 
     test("an act on a cluster holding a low becomes defer with a synthesized follow-up draft", () => {
