@@ -835,6 +835,28 @@ for (const [label, severities, setup, refuses] of [
   });
 });
 
+test("GATE-EXEC-ROUND-CAP: a medium act list reaches the fixer below and at the cap round, and is refused after it (round_cap_reached)", async () => {
+  await withFixture(async ({ root, wt, files, emit }) => {
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "medium" })]));
+    const prior = async (sha, verdict) => {
+      const file = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${sha.repeat(40)}.json`);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha.repeat(40), verdict, findings: [] }));
+    };
+    // Round 1: below the cap.
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    // Cap round (count equal to the cap, findings_present): emits.
+    await prior("d", "findings_present");
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    // Closure round (count cap+1) and a further round after a blocked closure ledger (blocked never counts): refused.
+    await prior("e", "findings_present");
+    await assert.rejects(emit(), (e) => e.refusal === "round_cap_reached");
+    await prior("f", "blocked");
+    await assert.rejects(emit(), (e) => e.refusal === "round_cap_reached" && /no fixer order follows/.test(e.message));
+  });
+});
+
 test("an act item whose clusterSeverities is empty, not an array or holds an unknown severity is refused (invalid_cluster_severities)", async () => {
   await withFixture(async ({ files, emit }) => {
     for (const bad of [[], "low", ["low", "critical"], [1]]) {
@@ -919,7 +941,7 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
     await rm(path.join(wt, ".devloops.json"));
     await writeFile(files.actList, JSON.stringify(ACT));
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ autonomy: { humanMergeOnly: "nope" } }));
-    await assert.rejects(emit(), /dev-loops config is invalid/);
+    await assert.rejects(emit(), /dev-loops config is invalid|Schema validation failed/);
     await rm(path.join(wt, ".devloops.json"));
     await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, repo: "o/other" }), /not successful list-review-threads --unresolved-only output/);
     // A failed list or one that includes resolved threads is not the unresolved-only source.

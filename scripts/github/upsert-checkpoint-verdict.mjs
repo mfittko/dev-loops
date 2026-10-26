@@ -1682,7 +1682,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     // ledger records the underlying review verdict and the proven blockers.
     // Neither label matches a parsed field, so the parse contract is unchanged.
     ...(reviewVerdict ? [`**Review verdict:** ${reviewVerdict}`] : []),
-    ...(gate === "draft_gate" && /^[0-9a-f]{40}$/.test(closureFromHead ?? "") ? [`closure round: diff from ${closureFromHead}`] : []),
+    ...(gate === "draft_gate" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(closureFromHead ?? "") ? [`closure round: diff from ${closureFromHead}`] : []),
     ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockerCounts(gateBlockers)}`] : []),
     ...(judgeSpecSource ? [judgeSpecSource === "unavailable" ? JUDGE_UNAVAILABLE_LINES[judgeUnavailableReason] : JUDGE_SPEC_LINES[judgeSpecSource]] : []),
     ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),

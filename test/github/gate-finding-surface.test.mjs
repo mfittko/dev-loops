@@ -543,6 +543,9 @@ test("renderGateReviewCommentBody states the closure round diff base for a draft
   const base = { gate: "draft_gate", headSha: HEAD_SHA, verdict: "clean", findingsSummary: "no issues found", nextAction: "mark ready for review" };
   const from = "c".repeat(40);
   assert.ok(renderGateReviewCommentBody({ ...base, closureFromHead: from }).split("\n").includes(`closure round: diff from ${from}`));
+  const sha256 = "d".repeat(64);
+  assert.ok(renderGateReviewCommentBody({ ...base, closureFromHead: sha256 }).split("\n").includes(`closure round: diff from ${sha256}`));
+  for (const bad of ["abc123", "g".repeat(40), ""]) assert.doesNotMatch(renderGateReviewCommentBody({ ...base, closureFromHead: bad }), /closure round/);
   assert.doesNotMatch(renderGateReviewCommentBody({ ...base, closureFromHead: null }), /closure round/);
   assert.doesNotMatch(renderGateReviewCommentBody({ ...base, gate: "pre_approval_gate", closureFromHead: from }), /closure round/);
 });
@@ -810,6 +813,7 @@ import {
   countUnresolvedGateAuthoredThreadsFromRawNodes,
   findJudgeDispositionForFingerprint,
   parseRenderedJudgeDisposition,
+  renderFindingLine,
 } from "../../scripts/github/_gate-finding-surface.mjs";
 
 const GATE_LOGIN = "gate-bot";
@@ -1152,6 +1156,15 @@ test("resolveGateRound counts only <gate>-<sha>.json logs: round 2 for a second 
 test("#2381: parseRenderedJudgeDisposition parses the exact renderFindingLine suffix shape", () => {
   const body = "**question** (`scope`): why this approach? — judge: reject";
   assert.equal(parseRenderedJudgeDisposition(body), "reject");
+});
+
+test("parseRenderedJudgeDisposition round-trips every renderFindingLine suffix form and never reads one out of a summary (ADR 0191)", () => {
+  const line = (over) => renderFindingLine({ severity: "medium", angle: "scope", summary: "retry loop", ...over });
+  assert.equal(parseRenderedJudgeDisposition(line({ judgeDisposition: "reject" })), "reject");
+  assert.equal(parseRenderedJudgeDisposition(line({ judgeDisposition: "defer", followUpIssueNumber: 7 })), "defer");
+  assert.equal(parseRenderedJudgeDisposition(line({ judgeDisposition: "reject", judgeReason: "not a defect judge: act" })), "reject");
+  assert.equal(parseRenderedJudgeDisposition(line({ summary: "retry loop — judge: reject - see above" })), null);
+  assert.equal(parseRenderedJudgeDisposition(line({ summary: "note judge: reject then more text" })), null);
 });
 
 test("#2381: parseRenderedJudgeDisposition does NOT parse a quoted 'judge: reject' phrase with looser spacing than the exact render suffix", () => {

@@ -389,7 +389,7 @@ export function renderFindingLine({ severity, angle, summary, judgeDisposition, 
   const judgeSuffix = typeof judgeDisposition === "string" && judgeDisposition.trim().length > 0
     ? ` — judge: ${sanitizeInline(judgeDisposition)}${renderJudgeDetail({ judgeReason, followUpIssueNumber })}`
     : "";
-  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary)}${judgeSuffix}`;
+  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary).replace(/judge:/gi, "judge -")}${judgeSuffix}`;
 }
 
 function renderRecommendationLine(recommendation) {
@@ -1550,9 +1550,11 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
 //
 // The suffix shape is matched EXACTLY as renderFindingLine emits it — a
 // single space, then a literal EM DASH, then a single space, "judge:", a
-// single space, the disposition token, then end-of-line (no trailing
-// whitespace: the suffix is the line's last content, never followed by
-// anything renderFindingLine adds). A looser `\s*` on either side would also
+// single space, the disposition token, then an optional ` (follow-up N)` and an
+// optional ` - <reason>` (renderJudgeDetail, which neutralizes `judge:` in the
+// reason), then end-of-line. renderFindingLine also neutralizes `judge:` in the
+// reviewer summary, so the last ` — judge: <word>` on a line is always the
+// genuine suffix. A looser `\s*` on either side would also
 // match an unrelated (e.g. LLM-authored) summary that merely CONTAINS the
 // same words with different spacing — this is a best-effort narrowing, not a
 // full fix: a summary whose text happens to end with this BYTE-IDENTICAL
