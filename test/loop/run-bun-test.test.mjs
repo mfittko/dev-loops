@@ -811,6 +811,80 @@ test("launcher expands the complete inventory without consuming Bun flags", asyn
   for (const file of ["test/loop/test-inventory.test.mjs", "packages/core/test/config.test.mjs", "skills/dev-loop/scripts/render-template.test.mjs"]) assert.ok(args.includes(file));
 });
 
+test("referencing expands exactly the literal matches in the canonical inventory", async () => {
+  const root = path.resolve(import.meta.dir, "../..");
+  const reference = "skills/loop-grill/SKILL.md";
+  const expected = [];
+  for (const file of await discoverRepositoryTests()) {
+    if ((await readFile(path.join(root, file), "utf8")).includes(reference)) expected.push(file);
+  }
+  const args = await resolveBunTestFiles(["--dots", "--referencing", reference]);
+  assert.deepEqual(args, ["--dots", ...expected]);
+  assert.ok(args.includes("test/loop/loop-grill-writeback-contract.test.mjs"));
+  assert.ok(!args.includes("packages/core/test/config.test.mjs"));
+});
+
+test("referencing reads are rooted at the inventory and file errors fail loudly", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "bun-referencing-"));
+  try {
+    await writeFile(path.join(root, "literal.test.mjs"), "skills/docs/a.b.md");
+    const options = { repoRoot: root, discover: async () => ["literal.test.mjs"] };
+    assert.deepEqual(await resolveBunTestFiles(["--referencing", "skills/docs/a.b.md"], options), ["literal.test.mjs"]);
+    assert.deepEqual(await resolveBunTestFiles(["--referencing", "skills/docs/aXb.md"], options), []);
+    await assert.rejects(resolveBunTestFiles(["--referencing", "anything"], {
+      repoRoot: root, discover: async () => ["missing.test.mjs"],
+    }), /ENOENT/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("zero referencing matches exit before progress, capture or spawning", async () => {
+  let output = "";
+  const reference = ["__no_matching", "contract_2508__"].join("_");
+  assert.equal(await runBunTest(["--dots", "--referencing", reference], {
+    stdout: { write: (chunk) => { output += chunk; } },
+    progressFactory: () => assert.fail("must not start progress"),
+    captureFactory: () => assert.fail("must not capture"),
+    spawnImpl: () => assert.fail("must not spawn tests"),
+  }), 0);
+  assert.equal(output.trim().split("\n").length, 1);
+  assert.ok(output.includes(reference));
+});
+
+test("referencing CLI exits safely for no matches and malformed selectors", async () => {
+  const missing = ["__missing", "reference_2508__"].join("_");
+  for (const [args, code, message] of [
+    [["--referencing", missing], 0, new RegExp(missing)],
+    [["--referencing"], 1, /--referencing.*value/],
+    [["--referencing=skills/loop-grill/SKILL.md"], 1, /--referencing.*value/],
+    [["--referencing="], 1, /--referencing.*value/],
+    [["--referencing", "--dots"], 1, /--referencing.*value/],
+    [["--all", "--referencing", "skills/docs/x.md"], 1, /--referencing.*--all/],
+    [["--referencing", "x", "--referencing", "y"], 1, /--referencing.*once/],
+    [["test/loop/a.test.mjs", "--referencing", "no/such/path"], 1, /--referencing.*positional/],
+    [["test/loop/a.test.mjs", "--referencing", "skills/loop-grill/SKILL.md"], 1, /--referencing.*positional/],
+    [["--referencing", "skills/loop-grill/SKILL.md", "--all"], 1, /--referencing.*--all/],
+    [["--referencing", "no/such/path", "test/loop"], 1, /--referencing.*positional/],
+    [["--referencing", "no/such/path", "packages/core/test"], 1, /--referencing.*positional/],
+    [["--referencing", missing, "--timeout", "test/loop"], 1, /--referencing.*positional/],
+    [["--referencing", missing, "--reporter", "test/loop"], 1, /--referencing.*positional/],
+    [["--referencing", missing, "--path-ignore-patterns", "test/loop"], 1, /--referencing.*positional/],
+    [["--referencing", missing, "--timeout", "5000"], 0, new RegExp(missing)],
+    [["--referencing", missing, "--reporter", "dots"], 0, new RegExp(missing)],
+    [["--referencing", missing, "--dots"], 0, new RegExp(missing)],
+  ]) {
+    const child = Bun.spawn([process.execPath, "scripts/run-bun-test.mjs", ...args], {
+      cwd: path.resolve(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, BUN_BIN: "/__must_not_spawn_bun_tests_2508__" },
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    assert.equal(exitCode, code, stderr);
+    assert.match(stdout + stderr, message);
+    assert.doesNotMatch(stdout + stderr, /ENOENT|Retained Bun diagnostics/);
+  }
+});
+
 test("shared child result settles when a spawn error has no close event", async () => {
   const child = new EventEmitter();
   const error = new Error("spawn failed");
