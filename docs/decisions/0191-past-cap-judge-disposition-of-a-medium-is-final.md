@@ -12,9 +12,9 @@ On PR 2940, the `draft_gate` round 4 at `c6af3f2223d78dfc7a1d8d75b4b0777cc41f85e
 
 ## Decision
 
-- Final medium. Past the cap, a medium that the judge disposes `reject` with a `judgeReason`, or `defer` with a `followUpIssueNumber` (an integer greater than 0), is final. It raises no blocker. The round composes clean when nothing else blocks.
-- Verdict. The posted verdict lists each such medium with its disposition and reason.
-- Still blocking. Every `high`, every finding with `failOpen: true` (set by the judge or a reviewer), a `defer` without a target issue, a `reject` without a reason and every `act` item still block. No fixer runs past the cap.
+- Final medium. Past the cap, a medium that the judge disposes `reject` with a `judgeReason`, or `defer` with a `followUpIssueNumber` (an integer greater than 0 that differs from the PR number), is final. A defer to the PR itself is not a target (AC15 of [issue 2937](https://github.com/mfittko/dev-loops/issues/2937)). A final medium raises no blocker. The round composes clean when nothing else blocks.
+- Verdict. The posted verdict lists each such medium with its disposition, defer target and reason.
+- Still blocking. A `high` the judge defers or rejects, a `medium` `defer` without a `followUpIssueNumber` other than the PR, a `medium` `reject` without `judgeReason`, a `failOpen: true` finding (set by the judge or a reviewer), a missing disposition and an unknown severity join the blocker with reason `severity_disagreement`. Every `act` item blocks, except an all-low/nit act list, which converges by `GATE-EXEC-LOW-NIT-CONVERGENCE`. No fixer runs past the cap.
 - Reuse. The rule uses the existing cap module and disposition fields. It adds no counter and no parser.
 
 ## Consequences

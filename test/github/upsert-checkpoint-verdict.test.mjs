@@ -3790,7 +3790,7 @@ test("renderStructuredFindings posts the judge reason and defer target for a clo
     },
   ]);
   const body = renderStructuredFindings(angles);
-  assert.match(body, /deferred one — judge: _`defer`_: tracked elsewhere \(→ #77\)/);
+  assert.match(body, /deferred one — judge: _`defer`_: tracked elsewhere \(follow-up #77\)/);
   assert.match(body, /rejected one — judge: _`reject`_: not reproducible/);
 });
 

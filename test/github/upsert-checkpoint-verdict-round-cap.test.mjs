@@ -229,6 +229,28 @@ for (const [name, findings] of [
   });
 }
 
+test("past the cap a reasoned medium reject and a medium defer to another issue post clean with the judge reason shown", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await pastCap(tempDir, [
+      finding("medium", "reject", { judgeReason: "reject-reason-text", summary: "rejected medium" }),
+      finding("medium", "defer", { followUpIssueNumber: 99, judgeReason: "defer-reason-text", summary: "deferred medium" }),
+    ], { overallVerdict: "clean" });
+    assert.equal(out.error, undefined);
+    assert.equal(verdictOf(out), "clean");
+    assert.doesNotMatch(out.body, /severity_disagreement/);
+    assert.match(out.body, /judge: reject - reject-reason-text/);
+    assert.match(out.body, /judge: defer \(follow-up 99\) - defer-reason-text/);
+  }, { prefix: "dev-loops-round-cap-final-medium-" });
+});
+
+test("past the cap a medium defer to the PR itself blocks as severity_disagreement", async () => {
+  await withTempDir(async (tempDir) => {
+    const out = await pastCap(tempDir, [finding("medium", "defer", { followUpIssueNumber: 17 })], { overallVerdict: "clean" });
+    assert.equal(verdictOf(out), "blocked");
+    assert.match(out.body, /severity_disagreement/);
+  }, { prefix: "dev-loops-round-cap-self-defer-" });
+});
+
 test("the count reads the ledger's own gate-findings root, so a relocated --tmp-root still reaches the cap", async () => {
   await withTempDir(async (tempDir) => {
     const root = path.join(tempDir, "relocated");

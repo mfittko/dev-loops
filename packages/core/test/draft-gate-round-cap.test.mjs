@@ -48,6 +48,12 @@ describe("draft_gate round cap", () => {
     assert.deepEqual(reasons([closed("medium", "reject", { judgeReason: "out of scope" }), closed("medium", "defer", { followUpIssueNumber: 2940 })]), []);
   });
 
+  test("a medium defer to the PR itself is not a target; another issue is final", () => {
+    const deferred = [closed("medium", "defer", { followUpIssueNumber: 17 })];
+    assert.deepEqual(pastCapBlockers(deferred, { pr: 17 }).map((b) => b.reason), ["severity_disagreement"]);
+    assert.deepEqual(pastCapBlockers(deferred, { pr: 18 }), []);
+  });
+
   test("a medium reject without a reason, a medium defer without a target and a failOpen finding still block", () => {
     const blocked = ["round_cap_reached/severity_disagreement"];
     assert.deepEqual(reasons([closed("medium", "reject")]), blocked);

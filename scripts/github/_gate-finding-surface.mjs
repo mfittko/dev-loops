@@ -373,10 +373,21 @@ export async function commentDeferredFindings(
 // sanitizeInline. normalizeSeverity alone does not neutralize hostile
 // characters, so it is applied in addition to, never instead of,
 // sanitizeInline.
-export function renderFindingLine({ severity, angle, summary, judgeDisposition }) {
+// The defer target and judge reason that follow a rendered disposition: ` (follow-up N) - <reason>` (no `#`: the issue-id guard refuses a bare id in a posted body).
+// The reason loses every `judge:` token, so the last ` judge: <word>` on a line stays the genuine disposition
+// (parseRenderedJudgeDisposition reads the greedy last match).
+function renderJudgeDetail({ judgeReason, followUpIssueNumber }) {
+  const target = Number.isInteger(followUpIssueNumber) && followUpIssueNumber > 0 ? ` (follow-up ${followUpIssueNumber})` : "";
+  const reason = typeof judgeReason === "string" && judgeReason.trim().length > 0
+    ? ` - ${sanitizeInline(neutralizeBareIssuePrIds(judgeReason)).replace(/judge:/gi, "judge -")}`
+    : "";
+  return `${target}${reason}`;
+}
+
+export function renderFindingLine({ severity, angle, summary, judgeDisposition, judgeReason, followUpIssueNumber }) {
   const safeSeverity = sanitizeInline(normalizeSeverity(severity));
   const judgeSuffix = typeof judgeDisposition === "string" && judgeDisposition.trim().length > 0
-    ? ` — judge: ${sanitizeInline(judgeDisposition)}`
+    ? ` — judge: ${sanitizeInline(judgeDisposition)}${renderJudgeDetail({ judgeReason, followUpIssueNumber })}`
     : "";
   return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary)}${judgeSuffix}`;
 }
@@ -496,7 +507,7 @@ export function renderInlineCommentBody(finding, { round }) {
   }
   const angles = [...new Set(members.map((member) => neutralizeHeaderSeparator(escapeProse(member.angle))))].join(", ");
   const judge = typeof finding.judgeDisposition === "string" && finding.judgeDisposition.trim().length > 0
-    ? ` · judge: ${sanitizeInline(finding.judgeDisposition)}`
+    ? ` · judge: ${sanitizeInline(finding.judgeDisposition)}${renderJudgeDetail(finding)}`
     : "";
   const lines = [...markers, `**${sanitizeInline(severity)}** · ${angles}${judge}`];
   // File and line references render as inline code right under the header.
@@ -1549,10 +1560,10 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
 // the genuine suffix by string shape alone; closing that gap fully would
 // need a render-time change (e.g. a distinguishing token) in
 // renderFindingLine itself, out of scope here.
-const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\*\s+\(`[^`\n]+`\):.* — judge: ([a-z][a-z0-9_-]*)$/mu;
+const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\*\s+\(`[^`\n]+`\):.* — judge: ([a-z][a-z0-9_-]*)(?: \(follow-up \d+\))?(?: - [^\n]*)?$/mu;
 // Header of the fixed inline layout (legacy bodies keep the suffix form above): `**<severity>** · <angles> · judge: <disposition>`.
 // The severity token is lowercase, so a `**Problem:**` line never matches.
-const RENDERED_HEADER_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\* · [^\n]* · judge: ([a-z][a-z0-9_-]*)$/mu;
+const RENDERED_HEADER_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\* · [^\n]* · judge: ([a-z][a-z0-9_-]*)(?: \(follow-up \d+\))?(?: - [^\n]*)?$/mu;
 
 export function parseRenderedJudgeDisposition(body) {
   const match = typeof body === "string"

@@ -1437,7 +1437,7 @@ function renderBodyOnlyFindingLine(finding, ctx) {
   const judgeSuffix = finding.judgeDisposition
     ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_`
       + (finding.judgeReason ? `: ${sanitizeStructuredInline(finding.judgeReason)}` : "")
-      + (finding.followUpIssueNumber ? ` (→ #${finding.followUpIssueNumber})` : "")
+      + (finding.followUpIssueNumber ? ` (follow-up #${finding.followUpIssueNumber})` : "")
     : "";
   const angleSuffix = finding.angle ? ` _(${sanitizeStructuredInline(finding.angle)})_` : "";
   return `- ${markerPrefix}${summary}${location}${dispositionSuffix}${judgeSuffix}${angleSuffix}`;
@@ -3048,7 +3048,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       : 0;
     const gateBlockers = [
       ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),
-      ...(isPastRoundCap(completedRound, cap) ? pastCapBlockers(roundFindings) : []),
+      ...(isPastRoundCap(completedRound, cap) ? pastCapBlockers(roundFindings, { pr: Number(options.pr) }) : []),
     ];
     const composedVerdict = composeCheckpointVerdict({ reviewVerdict: ledgerVerdict, blockers: gateBlockers });
     if (options.verdict === undefined) {
