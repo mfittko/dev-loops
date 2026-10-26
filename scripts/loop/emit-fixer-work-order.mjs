@@ -291,10 +291,12 @@ export async function emitFixerWorkOrder({
   // ADR 0188: at or past the draft_gate round cap, low and nit findings never reach the fixer (backstop for hand-built or legacy ledgers). Below the cap a low act is fixed.
   // A nit-only list is fixable in draft round 1 only; any other round, and any gate without a round count, refuses it (the judge pass would have rejected it).
   // A deduped cluster carries every member severity in `clusterSeverities`; the guard reads those, not the representative's.
+  const badCluster = actListFile ? source.parsed.find((f) => f.clusterSeverities !== undefined && !(Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 && f.clusterSeverities.every((s) => VALID_SEVERITIES.has(s)))) : undefined;
+  if (badCluster) throw new WorkOrderRefusal("invalid_cluster_severities", `invalid_cluster_severities: act item ${JSON.stringify(badCluster.summary)} has clusterSeverities that is not a non-empty array of known severities; re-run judge-pass to regenerate the act list`);
   const actSeverities = actListFile ? source.parsed.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity])) : [];
   if (actListFile && actSeverities.every((s) => s === "low" || s === "nit")) {
-    // The round state comes from the canonical ledger root, as in judge-pass, whatever --tmp-root says.
-    const { pastCap, round } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot: resolveGateArtifactTmpRoot(cwd) }, { repoRoot: resolveRepoRoot(cwd) });
+    // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
+    const { pastCap, round } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot },{ repoRoot: resolveRepoRoot(cwd) });
     if (pastCap || (actSeverities.every((s) => s === "nit") && round !== 1)) {
       throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${actListFile} holds only low or nit items ${pastCap ? "at or past the draft_gate round cap" : "outside draft_gate round 1"}; low and nit findings no longer reach the fixer`);
     }

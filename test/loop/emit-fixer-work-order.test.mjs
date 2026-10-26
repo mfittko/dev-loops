@@ -816,7 +816,35 @@ test("delta gate: a three-thread Copilot fix cannot reach --phase full without a
   });
 });
 
-test("ADR 0188: the round count comes from the canonical ledger root, even with a custom --tmp-root", async () => {
+// The judge-pass --out shape of a deduped cluster: the representative's severity plus every member severity.
+const clusterAct = (severity, clusterSeverities) => withFp({ ...ACT[0], severity, clusterSeverities });
+for (const [label, severities, setup, refuses] of [
+  ["[nit, low] in draft round 2", ["nit", "low"], "round2", false],
+  ["[low, medium] at the cap", ["low", "medium"], "cap", false],
+  ["[nit, nit] in draft round 2", ["nit", "nit"], "round2", true],
+]) test(`a judge-pass deduped ${label} cluster ${refuses ? "is refused" : "reaches the fixer"} (GATE-EXEC-LOW-FIX-UNTIL-CAP)`, async () => {
+  await withFixture(async ({ root, wt, files, emit }) => {
+    const prior = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${"d".repeat(40)}.json`);
+    await mkdir(path.dirname(prior), { recursive: true });
+    await writeFile(prior, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+    if (setup === "cap") await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    // The representative is the lowest-severity member; the other members only appear in clusterSeverities.
+    await writeFile(files.actList, JSON.stringify([clusterAct(severities[0], severities)]));
+    if (refuses) await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap");
+    else assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+  });
+});
+
+test("an act item whose clusterSeverities is empty, not an array or holds an unknown severity is refused (invalid_cluster_severities)", async () => {
+  await withFixture(async ({ files, emit }) => {
+    for (const bad of [[], "low", ["low", "critical"], [1]]) {
+      await writeFile(files.actList, JSON.stringify([clusterAct("low", bad)]));
+      await assert.rejects(emit(), (e) => e.refusal === "invalid_cluster_severities", JSON.stringify(bad));
+    }
+  });
+});
+
+test("ADR 0188: the round count comes from the --tmp-root the ledger writer uses, default the canonical root", async () => {
   await withFixture(async ({ root, wt, files, emit }) => {
     const closedPrior = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${"d".repeat(40)}.json`);
     await mkdir(path.dirname(closedPrior), { recursive: true });
@@ -826,11 +854,15 @@ test("ADR 0188: the round count comes from the canonical ledger root, even with 
     await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap" && /outside draft_gate round 1/.test(e.message));
     await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low" })]));
     assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
-    // Cap 2: round 2 is at the cap. A custom --tmp-root with no ledgers must not read round 1.
+    // Cap 2: round 2 is at the cap. A custom --tmp-root counts its own ledgers (as the writer does): none there is round 1, below the cap.
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
     const custom = path.join(path.dirname(root), "custom-tmp");
+    assert.equal((await emit({ tmpRoot: custom, phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    const customPrior = path.join(custom, "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${"d".repeat(40)}.json`);
+    await mkdir(path.dirname(customPrior), { recursive: true });
+    await writeFile(customPrior, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
     await assert.rejects(emit({ tmpRoot: custom }), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
-    await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
+    await assert.rejects(emit(),(e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
     // A subdirectory cwd reads the repo cap, not the default 4.
     const sub = path.join(wt, "scripts");
     await mkdir(sub, { recursive: true });

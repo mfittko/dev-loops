@@ -48,7 +48,7 @@ import {
   matchJqOutputToken,
 } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>]
+const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>] [--tmp-root <path>]
 
 Bridge the judge pass between gate fan-in (Phase 3) and the fixer pass (Phase 4).
 Reads the judge agent's verdict artifact, enforces current-head freshness, applies
@@ -115,6 +115,8 @@ Inputs:
                                stamped thread by its thread marker plus resolving reply). This tool never
                                creates an issue. A re-run does not append a fingerprint
                                the target already lists.
+  --tmp-root <path>            Ledger root for the round count and prior-round reads; pass the
+                               ledger writer's --tmp-root. Default: the main checkout's tmp/.
   --repo-root <path>           Root used to resolve relative --findings-file /
                                --judge-verdict / --out / --ledger-out paths
                                (default: process.cwd()).
@@ -220,6 +222,7 @@ export function parseJudgePassCliArgs(argv) {
       out: { type: "string" },
       "ledger-out": { type: "string" },
       "repo-root": { type: "string" },
+      "tmp-root": { type: "string" },
       "spec-file": { type: "string" },
       "content-digest": { type: "string" },
       "spec-authority-verdict": { type: "string" },
@@ -281,6 +284,10 @@ export function parseJudgePassCliArgs(argv) {
     }
     if (token.name === "ledger-out") {
       options.ledgerOut = token.value;
+      continue;
+    }
+    if (token.name === "tmp-root") {
+      options.tmpRoot = token.value;
       continue;
     }
     if (token.name === "repo-root") {
@@ -883,7 +890,7 @@ async function resolveEscalations(result, options, resolvedRoot, specDigest, { r
     return { escalations: [], skipped: `GATE-EXEC-RECURRENCE-ESCALATION cannot read the head's sources: round head ${result.headSha} is not available in this repository, so escalation was not evaluated` };
   }
   const priorLogs = await readPriorLogs(
-    { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: resolveGateArtifactTmpRoot(resolvedRoot) },
+    { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) },
     { repoRoot: resolvedRoot },
   );
   const sources = new Map();
@@ -909,6 +916,9 @@ export function gitShowSource(cwd, sha, file) {
   return out.status === 0 ? out.stdout : null;
 }
 
+// The ledger root of the round history: the writer's --tmp-root, else the canonical root.
+const historyRoot = (options, resolvedRoot) => (options.tmpRoot ? path.resolve(resolvedRoot, options.tmpRoot) : resolveGateArtifactTmpRoot(resolvedRoot));
+
 export async function judgePassCli(
   options,
   { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot, readPriorLogs = readClosedPriorRoundLogs, hasCommit = hasCommitInRepo, readSource = gitShowSource } = {},
@@ -921,7 +931,7 @@ export async function judgePassCli(
     "--judge-verdict",
     parseError,
   );
-  const { pastCap, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: resolveGateArtifactTmpRoot(resolvedRoot) }, { repoRoot: resolvedRoot });
+  const { pastCap, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
   const result = runJudgePass(findings, judgeVerdict, options.headSha, { pastCap, round });
 
   // Immutable spec-authority gate (opt-in via --spec-file). A spec_cannot_decide

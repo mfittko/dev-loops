@@ -1942,3 +1942,26 @@ for (const gate of ["draft_gate", "pre_approval_gate"]) {
     await assert.rejects(run(), /specKind "pr_scope".*only the review gate/);
   });
 }
+
+test("judgePassCli counts the round from --tmp-root, like the ledger writer and the fixer emitter (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-tmp-root-"));
+  await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 4 } } }));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ severity: "nit", summary: "tidy comment" })] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting" }] })));
+  // One closed prior round, written only to the custom root: this head is draft round 2 there and round 1 in the canonical root.
+  const custom = path.join(tmpDir, "custom-root");
+  const priorDir = path.join(custom, "gate-findings", "mfittko-dev-loops", "pr-2243");
+  await mkdir(priorDir, { recursive: true });
+  await writeFile(path.join(priorDir, `draft_gate-${"d".repeat(40)}.json`), JSON.stringify({ repo: "mfittko/dev-loops", pr: 2243, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+  const run = async (extra) => {
+    const out = `./act-${extra.tmpRoot ? "custom" : "default"}.json`;
+    const payload = await judgePassCli(
+      { repo: "mfittko/dev-loops", pr: "2243", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out, ...extra },
+      { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+    );
+    assert.equal(payload.ok, true);
+    return payload.actCount;
+  };
+  assert.equal(await run({ tmpRoot: custom }), 0);
+  assert.equal(await run({}), 1);
+});
