@@ -9,7 +9,7 @@ import { test } from "bun:test";
 
 import { GATE_ANGLE_SCOPES, loadDevLoopConfig, resolveGateAngles, resolveGateAnglesDynamic, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildAngleRequestGroups, composeReviewerPromptText, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/review-dispatch-plan";
-import { initGitFixture, makeGhMock } from "../_helpers.mjs";
+import { initGitFixture, makeGhMock, runGitFixture } from "../_helpers.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
 import {
@@ -8210,27 +8210,27 @@ async function makeOriginFixture() {
   const origin = path.join(root, "origin.git");
   const clone = path.join(root, "clone");
   const other = path.join(root, "other");
-  git(root, ["init", "-q", "--bare", "-b", "main", origin]);
-  git(root, ["clone", "-q", origin, other]);
-  git(other, ["config", "user.email", "t@example.com"]);
-  git(other, ["config", "user.name", "t"]);
+  runGitFixture(root, ["init", "-q", "--bare", "-b", "main", origin]);
+  runGitFixture(root, ["clone", "-q", origin, other]);
+  runGitFixture(other, ["config", "user.email", "t@example.com"]);
+  runGitFixture(other, ["config", "user.name", "t"]);
   await writeFile(path.join(other, "a.txt"), "a\n");
-  git(other, ["add", "a.txt"]);
-  git(other, ["commit", "-qm", "init"]);
-  git(other, ["push", "-q", "origin", "main"]);
-  git(root, ["clone", "-q", origin, clone]);
-  git(clone, ["config", "user.email", "t@example.com"]);
-  git(clone, ["config", "user.name", "t"]);
-  git(clone, ["checkout", "-q", "-b", "feature"]);
+  runGitFixture(other, ["add", "a.txt"]);
+  runGitFixture(other, ["commit", "-qm", "init"]);
+  runGitFixture(other, ["push", "-q", "origin", "main"]);
+  runGitFixture(root, ["clone", "-q", origin, clone]);
+  runGitFixture(clone, ["config", "user.email", "t@example.com"]);
+  runGitFixture(clone, ["config", "user.name", "t"]);
+  runGitFixture(clone, ["checkout", "-q", "-b", "feature"]);
   await writeFile(path.join(clone, "b.txt"), "b\n");
-  git(clone, ["add", "b.txt"]);
-  git(clone, ["commit", "-qm", "feature"]);
-  const headSha = git(clone, ["rev-parse", "HEAD"]).trim();
+  runGitFixture(clone, ["add", "b.txt"]);
+  runGitFixture(clone, ["commit", "-qm", "feature"]);
+  const headSha = runGitFixture(clone, ["rev-parse", "HEAD"]).trim();
   const advanceOrigin = async () => {
     await writeFile(path.join(other, "c.txt"), "c\n");
-    git(other, ["add", "c.txt"]);
-    git(other, ["commit", "-qm", "newer base commit"]);
-    git(other, ["push", "-q", "origin", "main"]);
+    runGitFixture(other, ["add", "c.txt"]);
+    runGitFixture(other, ["commit", "-qm", "newer base commit"]);
+    runGitFixture(other, ["push", "-q", "origin", "main"]);
   };
   return { root, clone, headSha, advanceOrigin };
 }
@@ -8279,12 +8279,12 @@ async function expectRefusal(argv, runtime, pattern, clone) {
   assert.equal(existsSync(path.join(clone, "tmp/gate-context")), false);
 }
 
-test("issue 2885 AC6: a run without --base checks the PR base branch, records baseFreshness and refuses once origin advanced", async () => {
+for (const gate of ["draft_gate", "pre_approval_gate"]) test(`issue 2885 AC6: a run without --base checks the PR base branch, records baseFreshness and refuses once origin advanced (${gate})`, async () => {
   const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
   try {
-    const argv = ["--repo", "owner/repo", "--pr", "74", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["correctness"]'];
+    const argv = ["--repo", "owner/repo", "--pr", "74", "--gate", gate, "--head-sha", headSha, "--angles", '["correctness"]'];
     await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
-    const artifact = await readGateContext({ repo: "owner/repo", pr: 74, gate: "draft_gate", headSha }, { repoRoot: clone });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 74, gate, headSha }, { repoRoot: clone });
     assert.equal(artifact.scope.diffSource, "none");
     assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
     await advanceOrigin();
@@ -8299,8 +8299,8 @@ test("issue 2885 AC6: the freshness verdict describes --head-sha, not the checko
   const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
   try {
     await advanceOrigin();
-    git(clone, ["fetch", "-q", "origin"]);
-    git(clone, ["merge", "-q", "--no-edit", "origin/main"]);
+    runGitFixture(clone, ["fetch", "-q", "origin"]);
+    runGitFixture(clone, ["merge", "-q", "--no-edit", "origin/main"]);
     // The checkout HEAD contains origin/main, but the reviewed head (pre-merge) lacks it.
     const argv = ["--repo", "owner/repo", "--pr", "75", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["correctness"]'];
     await expectRefusal(argv, { repoRoot: clone, run: stubGhRun }, /base_stale_integrate_first/u, clone);
@@ -8312,9 +8312,9 @@ test("issue 2885 AC6: the freshness verdict describes --head-sha, not the checko
 test("issue 2885 AC6: a SHA, revision-expression or non-origin remote --base is checked against the PR base branch", async () => {
   const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
   try {
-    const sha = git(clone, ["rev-parse", "HEAD~1"]).trim();
-    git(clone, ["remote", "add", "upstream", git(clone, ["remote", "get-url", "origin"]).trim()]);
-    git(clone, ["fetch", "-q", "upstream"]);
+    const sha = runGitFixture(clone, ["rev-parse", "HEAD~1"]).trim();
+    runGitFixture(clone, ["remote", "add", "upstream", runGitFixture(clone, ["remote", "get-url", "origin"]).trim()]);
+    runGitFixture(clone, ["fetch", "-q", "upstream"]);
     const bases = [sha, "HEAD~1", "upstream/main"];
     for (const base of bases) {
       await rm(path.join(clone, "tmp"), { recursive: true, force: true });
@@ -8398,9 +8398,9 @@ test("issue 2885: a stale local refs/heads/main base diffs against origin/main, 
   const { root, clone, advanceOrigin } = await makeOriginFixture();
   try {
     await advanceOrigin();
-    git(clone, ["fetch", "-q", "origin"]);
-    git(clone, ["merge", "-q", "--no-edit", "origin/main"]);
-    const headSha = git(clone, ["rev-parse", "HEAD"]).trim();
+    runGitFixture(clone, ["fetch", "-q", "origin"]);
+    runGitFixture(clone, ["merge", "-q", "--no-edit", "origin/main"]);
+    const headSha = runGitFixture(clone, ["rev-parse", "HEAD"]).trim();
     const argv = ["--repo", "owner/repo", "--pr", "73", "--gate", "review", "--head-sha", headSha, "--base", "refs/heads/main", "--angles", '["correctness"]'];
     await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
     const artifact = await readGateContext({ repo: "owner/repo", pr: 73, gate: "review", headSha }, { repoRoot: clone });

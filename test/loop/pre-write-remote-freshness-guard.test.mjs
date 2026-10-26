@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { test } from "bun:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { runGitFixture, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import { checkBaseFreshness, parseRemoteFreshnessGuardCliArgs, runCli } from "../../scripts/loop/pre-write-remote-freshness-guard.mjs";
 
@@ -208,7 +208,7 @@ test("parseRemoteFreshnessGuardCliArgs rejects single-dash flag-like value for -
 // Issue 2885: real throwaway repos with a bare origin; origin/main advances after the branch forked.
 async function makeStaleBaseFixture({ advance }) {
   const root = await mkdtemp(path.join(os.tmpdir(), "freshness-base-"));
-  const g = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8" });
+  const g = runGitFixture;
   const origin = path.join(root, "origin.git");
   const other = path.join(root, "other");
   const clone = path.join(root, "clone");
@@ -278,7 +278,7 @@ test("runCli --base exits nonzero when the base is stale", async () => {
 test("checkBaseFreshness judges the head option, not the checkout HEAD, and fails closed on an unresolvable head", async () => {
   const { root, clone } = await makeStaleBaseFixture({ advance: true });
   try {
-    const g = (args) => execFileSync("git", args, { cwd: clone, encoding: "utf8" }).trim();
+    const g = (args) => runGitFixture(clone, args);
     const staleHead = g(["rev-parse", "HEAD"]);
     g(["fetch", "-q", "origin"]);
     g(["-c", "user.email=t@example.com", "-c", "user.name=t", "merge", "-q", "--no-edit", "origin/main"]);
@@ -298,11 +298,11 @@ test("checkBaseFreshness judges the head option, not the checkout HEAD, and fail
 test("checkBaseFreshness normalizes every origin spelling of the base and rejects non-branch values with a typed error", async () => {
   const { root, clone } = await makeStaleBaseFixture({ advance: false });
   try {
-    execFileSync("git", ["remote", "add", "upstream", "/nonexistent"], { cwd: clone });
+    runGitFixture(clone, ["remote", "add", "upstream", "/nonexistent"]);
     for (const base of ["main", "origin/main", "refs/heads/main", "refs/remotes/origin/main"]) {
       assert.deepEqual(await checkBaseFreshness({ base, cwd: clone }), { ok: true, status: "base_current", base: "main" }, base);
     }
-    execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/release/1.0"], { cwd: clone });
+    runGitFixture(clone, ["push", "-q", "origin", "HEAD:refs/heads/release/1.0"]);
     assert.equal((await checkBaseFreshness({ base: "release/1.0", cwd: clone })).ok, true);
     for (const base of ["HEAD~1", "refs/heads/refs/heads/main", "origin/origin/main", "upstream/main", "a".repeat(40)]) {
       const result = await checkBaseFreshness({ base, cwd: clone });
@@ -319,7 +319,7 @@ test("checkBaseFreshness treats a hex-only branch name as a branch and fetches i
     // No such origin branch: an abbreviated SHA (4-6 or 7+ hex) is unchecked, not a fetch failure.
     for (const base of ["abc12", "beef", "deadbeef"]) assert.equal((await checkBaseFreshness({ base, cwd: clone })).error, "base_not_origin_branch", base);
     for (const base of ["beef", "deadbeef"]) {
-      execFileSync("git", ["push", "-q", "origin", `HEAD:refs/heads/${base}`], { cwd: clone });
+      runGitFixture(clone, ["push", "-q", "origin", `HEAD:refs/heads/${base}`]);
       assert.equal((await checkBaseFreshness({ base, cwd: clone })).ok, true, base);
     }
   } finally {
@@ -373,7 +373,7 @@ test("checkBaseFreshness maps a hung fetch to base_fetch_failed within the timeo
 test("checkBaseFreshness returns a typed base_fetch_failed error when the fetch fails", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "freshness-nofetch-"));
   try {
-    execFileSync("git", ["init", "-q", root]);
+    runGitFixture(root, ["init", "-q"]);
     const result = await checkBaseFreshness({ base: "main", cwd: root });
     assert.equal(result.ok, false);
     assert.equal(result.error, "base_fetch_failed");
@@ -404,13 +404,13 @@ test("checkBaseFreshness retries a ref-lock fetch failure and then reports base_
 test("checkBaseFreshness accepts @ inside a branch name, rejects @{ and a bare @, and trusts a baseRefName with a remote-named segment", async () => {
   const { root, clone } = await makeStaleBaseFixture({ advance: false });
   try {
-    execFileSync("git", ["remote", "add", "upstream", "/nonexistent"], { cwd: clone });
+    runGitFixture(clone, ["remote", "add", "upstream", "/nonexistent"]);
     for (const base of ["team@v2", "release@2"]) {
-      execFileSync("git", ["push", "-q", "origin", `HEAD:refs/heads/${base}`], { cwd: clone });
+      runGitFixture(clone, ["push", "-q", "origin", `HEAD:refs/heads/${base}`]);
       assert.deepEqual(await checkBaseFreshness({ base, cwd: clone }), { ok: true, status: "base_current", base }, base);
     }
     for (const base of ["a@{1}", "@"]) assert.equal((await checkBaseFreshness({ base, cwd: clone })).error, "base_not_origin_branch", base);
-    execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/upstream/x"], { cwd: clone });
+    runGitFixture(clone, ["push", "-q", "origin", "HEAD:refs/heads/upstream/x"]);
     assert.equal((await checkBaseFreshness({ base: "upstream/x", cwd: clone })).error, "base_not_origin_branch");
     assert.deepEqual(await checkBaseFreshness({ base: "upstream/x", trusted: true, cwd: clone }), { ok: true, status: "base_current", base: "upstream/x" });
   } finally {
