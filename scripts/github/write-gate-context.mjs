@@ -1903,7 +1903,7 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
   return rounds.map((round) => round.log);
 }
 
-/** Merge time of the round cap (PR 2932); a closed prior ledger logged before it never counts (ADR 0189). */
+/** Merge time of the round cap (PR 2932); a closed prior ledger never counts only when its `loggedAt` is a toISOString-form UTC timestamp earlier than it; every other closed ledger counts (ADR 0189). */
 export const DRAFT_ROUND_CAP_EFFECTIVE_AT = "2026-10-26T08:51:13Z";
 
 /**

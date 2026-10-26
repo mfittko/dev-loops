@@ -18,4 +18,4 @@ On PR 2922, the `draft_gate` round 5 composed `blocked` with a `round_cap_reache
 
 ## Consequences
 
-Pull requests in flight at the landing get a fresh round budget. Rounds logged before the landing never count. Every other part of the cap, including past-cap composition and `capClosed`, is unchanged.
+Pull requests in flight at the landing get a fresh round budget. A closed ledger whose `loggedAt` is a `toISOString`-form UTC timestamp earlier than the landing never counts, and every other closed ledger counts. Every other part of the cap, including past-cap composition and `capClosed`, is unchanged.
