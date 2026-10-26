@@ -69,6 +69,7 @@ test("both agent files cite the hand-back rule and embed no rule body", async ()
 
 test("the packet list cites the hand-back rule and no hand-back goes out with a child in flight", async () => {
   assert.match(await readRepo(MAIN), /compact relay packet.*also carries the consumed relayed message under `COORDINATOR-HANDBACK-ONE-REPORT`/s);
+  assert.match(await readRepo(MAIN), /compact relay packet.*child list under `GATE-EXEC-HARNESS-JOIN`/s);
   assert.match(await rule(ONE), /never calls `SubagentHandback` while a child is in flight/);
   assert.match(await readRepo(GATE), /on Pi a hand-back, on Claude Code a plain-text pause under `COORDINATOR-HANDBACK-ONE-REPORT`/);
 });

@@ -179,7 +179,7 @@ through authoritative state, not through the relay: the successor recovers round
 evidence and open findings by re-running the detectors at resume.
 
 A child hand-back is a **compact relay packet** only: unit identity, status, `nextAction`, evidence
-links (including the startup-output path that unit ran), and an open question if one is needed. On Claude Code the packet also carries the consumed relayed message under `COORDINATOR-HANDBACK-ONE-REPORT`. No
+links (including the startup-output path that unit ran), and an open question if one is needed. On Claude Code the packet also carries the consumed relayed message under `COORDINATOR-HANDBACK-ONE-REPORT`. On Pi a hand-back sent with a child in flight also carries the child list under `GATE-EXEC-HARNESS-JOIN` in [Gate review sub-loop contract](./gate-review-sub-loop-contract.md). No
 transcript, tool output or review text. A relay is the dispatch trigger, never the successor's
 context.
 
