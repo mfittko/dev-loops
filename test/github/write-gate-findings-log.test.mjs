@@ -2523,11 +2523,14 @@ test("writeGateFindingsLog enriches findings from --judge-verdict and records sc
 const CAP_HEAD = "c".repeat(40);
 const capPriorHeads = ["1", "2", "3"].map((c) => c.repeat(40));
 async function writeCapPrior(tmpDir, { pr = 42, head, findings, gate = "draft_gate" }) {
-  const dir = path.join(tmpDir, "gate-findings", "owner-repo", `pr-${pr}`);
-  await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, `${gate}-${head}.json`), JSON.stringify({
-    repo: "owner/repo", pr, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-10-0${head[0]}T00:00:00.000Z`, findings,
-  }), "utf8");
+  // The pinned --tmp-root (prior act items) and the canonical <repoRoot>/tmp (round-cap state) both hold the prior round.
+  for (const root of [tmpDir, path.join(tmpDir, "tmp")]) {
+    const dir = path.join(root, "gate-findings", "owner-repo", `pr-${pr}`);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `${gate}-${head}.json`), JSON.stringify({
+      repo: "owner/repo", pr, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-10-0${head[0]}T00:00:00.000Z`, findings,
+    }), "utf8");
+  }
 }
 async function writeCapRound(tmpDir, rawFindings, dispositions) {
   const judgeVerdict = path.join(tmpDir, "judge-verdict.json");
@@ -2544,6 +2547,31 @@ async function writeCapRound(tmpDir, rawFindings, dispositions) {
   }, { repoRoot: tmpDir });
   return JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", `draft_gate-${CAP_HEAD}.json`), "utf8")).findings;
 }
+
+test("writeGateFindingsLog reads the round-cap state from the canonical root even with a pinned custom --tmp-root (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-cap-root-"));
+  try {
+    // Three closed canonical rounds make this round 4 (the cap), while the empty custom root alone would resolve round 1.
+    for (const head of capPriorHeads) await writeCapPrior(tmpDir, { head, findings: [] });
+    await rm(path.join(tmpDir, "gate-findings"), { recursive: true, force: true });
+    const custom = path.join(tmpDir, "custom-root");
+    const judgeVerdict = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdict, JSON.stringify({
+      headSha: CAP_HEAD,
+      scopeDrift: { verdict: "within_scope", rationale: "r", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "why" }],
+    }), "utf8");
+    await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 4\n", "utf8");
+    await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: CAP_HEAD, verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "nit", angle: "docs", summary: "tidy comment" }]), judgeVerdict, tmpRoot: custom,
+    }, { repoRoot: tmpDir });
+    const written = JSON.parse(await readFile(path.join(custom, "gate-findings", "owner-repo", "pr-42", `draft_gate-${CAP_HEAD}.json`), "utf8"));
+    assert.equal(written.findings[0].judgeDisposition, "reject");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
 
 test("writeGateFindingsLog keeps resurfaces only for a closed prior round's act fingerprint", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-resurfaces-"));

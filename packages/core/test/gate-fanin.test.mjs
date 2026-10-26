@@ -1590,6 +1590,29 @@ describe("applyJudgeDispositions (#1525)", () => {
       }
     });
 
+    test("failOpen promotes a low on an unstamped ledger that also holds a medium reject at the cap", () => {
+      const findings = [{ severity: "medium", angle: "a", summary: "m" }, { severity: "low", angle: "b", summary: "l" }];
+      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict([
+        { index: 0, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "r" },
+        { index: 1, ...act, failOpen: true },
+      ]), { pastCap: true, round: 4 });
+      assert.deepEqual(out.map((f) => [f.severity, f.judgeDisposition]), [["medium", "reject"], ["medium", "act"]]);
+    });
+
+    test("an unstamped ledger coerces the same whatever the order of the dispositions", () => {
+      const findings = [{ severity: "low", angle: "a", summary: "l0" }, { severity: "low", angle: "b", summary: "l1" }];
+      const dispositions = [{ index: 0, ...act, failOpen: true }, { index: 1, ...act }];
+      const run = (list) => applyJudgeDispositions(findings, judgeVerdict(list), { pastCap: true, round: 4 }).findings.map((f) => [f.severity, f.judgeDisposition]);
+      assert.deepEqual(run(dispositions), run([...dispositions].reverse()));
+      assert.deepEqual(run(dispositions), [["medium", "act"], ["low", "defer"]]);
+    });
+
+    test("an unstamped [nit, low] duplicate keeps both members act in round 2 below the cap", () => {
+      const findings = [0, 1].map((i) => ({ severity: ["nit", "low"][i], angle: `a${i}`, summary: "dup", file: "src/x.mjs", line: 10, recommendation: "same fix" }));
+      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict([{ index: 0, ...act }, { index: 1, ...act }]), { pastCap: false, round: 2 });
+      assert.deepEqual(out.map((f) => f.judgeDisposition), ["act", "act"]);
+    });
+
     test("a cluster with a medium member stays act", () => {
       const { findings } = applyJudgeDispositions(cluster("medium", "low"), judgeVerdict([{ index: 0, ...act }]));
       assert.deepEqual(findings.map((f) => [f.severity, f.judgeDisposition]), [["medium", "act"], ["low", "act"]]);

@@ -461,7 +461,17 @@ test("runJudgePass never defers an unstamped [low, medium] duplicate cluster thr
     locatedFinding({ severity: "medium", angle: "security", summary: "null deref (medium report)" }),
   );
   const act = { disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" };
-  const result = runJudgePass(findings, verdict({ dispositions: [{ index: 0, ...act }, { index: 1, ...act }] }), HEAD);
+  const result = runJudgePass(findings, verdict({ dispositions: [{ index: 0, ...act }, { index: 1, ...act }] }), HEAD, { pastCap: true, round: 4 });
+  assert.deepEqual(result.enriched.map((f) => f.judgeDisposition), ["act", "act"]);
+});
+
+test("runJudgePass keeps an unstamped [nit, low] duplicate act on both below the cap in round 2 (GATE-EXEC-LOW-FIX-UNTIL-CAP)", () => {
+  const findings = ledger(
+    locatedFinding({ severity: "nit", angle: "correctness", summary: "null deref (nit report)" }),
+    locatedFinding({ severity: "low", angle: "security", summary: "null deref (low report)" }),
+  );
+  const act = { disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" };
+  const result = runJudgePass(findings, verdict({ dispositions: [{ index: 0, ...act }, { index: 1, ...act }] }), HEAD, { pastCap: false, round: 2 });
   assert.deepEqual(result.enriched.map((f) => f.judgeDisposition), ["act", "act"]);
 });
 
