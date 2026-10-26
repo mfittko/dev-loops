@@ -27,6 +27,7 @@ import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
+import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
 import { clearSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import {
   DELTA_MAX_INVOCATIONS,
@@ -262,9 +263,12 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
   const perAngle = log?.provenance?.perAngle;
   const logHead = typeof log?.headSha === "string" ? log.headSha.trim().toLowerCase() : "";
   const sameHead = HEAD_SHA_RE.test(logHead) && (logHead.startsWith(baseline) || baseline.startsWith(logHead));
-  // ponytail: origin/main assumed as the PR base; a different base fails closed into the rejection below.
   const earlierHead = !sameHead && HEAD_SHA_RE.test(logHead)
-    && await Promise.resolve(baseOnlyMerge({ fromHead: logHead, head: baseline, mainRef: "origin/main", repoRoot: worktree })).catch(() => false);
+    && await Promise.resolve().then(async () => {
+      let config = null;
+      try { ({ config } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(worktree) })); } catch { config = null; }
+      return baseOnlyMerge({ fromHead: logHead, head: baseline, mainRef: `origin/${resolveBaseBranch(config, { cwd: worktree })}`, repoRoot: worktree });
+    }).catch(() => false);
   if (!sameHead && !earlierHead) {
     throw new Error(`--findings-log ${findingsLogPath} records head ${log?.headSha ?? "(none)"}, not the baseline ${baseline}: pass the findings log of the reviewed round`);
   }

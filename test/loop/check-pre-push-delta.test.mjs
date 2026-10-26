@@ -10,7 +10,7 @@ import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 
 import { DELTA_EVIDENCE_RULE, deltaPatchPath, parseCheckPrePushDeltaArgs, runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
-import { A, B, boundArgs } from "./_delta-coverage-fixture.mjs";
+import { A, B, boundArgs, coverageRepo } from "./_delta-coverage-fixture.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { decidePiToolCall } from "../../extension/readonly-role-gate.ts";
@@ -637,6 +637,19 @@ test("input mode accepts the cap-round findings log at an earlier head after a b
   const seam = { ...headAt("c".repeat(40)), baseOnlyMerge: async ({ fromHead, head }) => fromHead === A && head === B };
   const out = await runCli(["--act-list", actList, "--baseline", B, "--spec-identity", "s", "--findings-log", logFor(A)], seam);
   assert.deepEqual(out.input.surfaceHints, ["correctness"]);
+});
+
+test("the base-only merge is checked against the configured base, not a hardcoded origin/main", async () => {
+  const { actList } = fixture();
+  const cfg = path.join(coverageRepo, ".devloops");
+  fs.writeFileSync(cfg, "version: 1\nworkflow:\n  baseBranch: develop\n");
+  try {
+    const seen = [];
+    const seam = { ...headAt("c".repeat(40)), baseOnlyMerge: async ({ fromHead, head, mainRef }) => { seen.push(mainRef); return mainRef === "origin/develop" && fromHead === A && head === B; } };
+    const out = await runCli(["--act-list", actList, "--baseline", B, "--spec-identity", "s", "--findings-log", logFor(A)], seam);
+    assert.deepEqual(out.input.surfaceHints, ["correctness"]);
+    assert.deepEqual(seen, ["origin/develop"]);
+  } finally { fs.rmSync(cfg, { force: true }); }
 });
 
 test("input mode still rejects an earlier-head findings log after a PR-own change or a seam error", async () => {
