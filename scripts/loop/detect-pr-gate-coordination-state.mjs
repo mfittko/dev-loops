@@ -1037,8 +1037,12 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     currentHeadSha,
     reviews: reviewSummary.effectiveCopilotReviews,
   });
-  const copilotBodyConvergence = bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved
-    ? { ...evaluatedBodyConvergence, ok: false, reason: "the latest Copilot review, on an earlier head, carries body-only feedback with no trusted copilot-body-disposition record" }
+  // GATE-EXEC-COPILOT-BODY-TO-JUDGE: a body-only finding (current or earlier
+  // head) with no operator marker goes to the judge and never blocks gate entry.
+  const copilotBodyJudgeFinding = bodyFeedback.judgeFinding ?? null;
+  const bodyRoutedToJudge = bodyFeedback.copilotBodyFeedbackUnresolved || bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved;
+  const copilotBodyConvergence = bodyRoutedToJudge
+    ? { ...evaluatedBodyConvergence, ok: true, reason: "Copilot body feedback is routed to the judge (GATE-EXEC-COPILOT-BODY-TO-JUDGE)" }
     : (bodyFeedback.bodyDisposition && !evaluatedBodyConvergence.ok
       ? { ...evaluatedBodyConvergence, ok: true, reason: "body finding cleared by a recorded copilot-body-disposition", bodyDisposition: bodyFeedback.bodyDisposition }
       : evaluatedBodyConvergence);
@@ -1056,8 +1060,8 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     actionableThreadCount: parsedThreads.summary.actionableThreads,
     copilotReviewRoundCount: reviewSummary.completedCopilotReviewRounds,
     copilotErrorReviewCountOnCurrentHead: reviewSummary.errorReviewCountOnCurrentHead,
-    copilotBodyFeedbackUnresolved: bodyFeedback.copilotBodyFeedbackUnresolved,
-    copilotPriorHeadBodyFeedbackUnresolved: bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved,
+    copilotBodyFeedbackUnresolved: false,
+    copilotPriorHeadBodyFeedbackUnresolved: false,
   });
   if (snapshot.unresolvedThreadCount > 0
       && !snapshot.copilotReviewOnCurrentHead
@@ -1159,7 +1163,8 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     postConvergenceReviewSuppressed,
     carriedConvergence,
     copilotBodyDisposition: bodyFeedback.bodyDisposition,
-    copilotBodyDispositionRequired: bodyFeedback.dispositionRequired,
+    copilotBodyDispositionRequired: null,
+    copilotBodyJudgeFinding,
     fixerDisposition,
   };
 }
@@ -1442,6 +1447,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   result.carriedConvergence = context.carriedConvergence ?? null;
   result.copilotBodyDisposition = context.copilotBodyDisposition ?? null;
   result.copilotBodyDispositionRequired = context.copilotBodyDispositionRequired ?? null;
+  result.copilotBodyJudgeFinding = context.copilotBodyJudgeFinding ?? null;
   // Auto-release the runner-coordination lock at gate-coordination terminal stop
   // boundaries — see TERMINAL_RUNNER_RELEASE_ACTIONS above for the rationale
   // (success-or-stop release vs 30-min TTL; env-aware, best-effort,

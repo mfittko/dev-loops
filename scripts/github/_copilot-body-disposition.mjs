@@ -112,7 +112,11 @@ export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewI
   } catch (error) {
     return notCleared(`disposition records unreadable: ${error instanceof Error ? error.message : String(error)}`);
   }
+  let numericIdMarker = null;
   for (const marker of markers) {
+    if (marker.headSha === normalizedHead && /^\d+$/.test(marker.reviewId) && String(reviewId).startsWith("PRR_")) {
+      numericIdMarker ??= marker;
+    }
     if (marker.headSha !== normalizedHead || marker.reviewId !== String(reviewId)) continue;
     if (marker.operator) {
       return { cleared: true, disposition: marker, reason: `operator disposition recorded for review ${marker.reviewId} at head ${normalizedHead}` };
@@ -121,7 +125,22 @@ export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewI
       return { cleared: true, disposition: marker, reason: `fix commit ${marker.fixSha} disposes review ${marker.reviewId} at head ${normalizedHead}` };
     }
   }
+  if (numericIdMarker) {
+    return {
+      ...notCleared(`the marker names numeric review id ${numericIdMarker.reviewId} but the review id is the node id ${reviewId}; re-post the marker with review=${reviewId}`),
+      reasonCode: "review_id_mismatch",
+    };
+  }
   return notCleared("no trusted disposition record names this review for the current head; the body finding stays blocked (COPILOT-STATE-BODY-DISPOSITION-RECORD)");
+}
+
+// The exact operator marker line for a review, and the angle-result-shaped
+// finding the judge adjudicates for a body-only Copilot review.
+const markerLineFor = (reviewId, headSha) => `<!-- dev-loops:copilot-body-disposition review=${reviewId} head=${headSha} operator -->`;
+function buildJudgeFinding(review) {
+  const text = typeof review?.body === "string" ? review.body.trim() : "";
+  const summary = text.split("\n")[0].slice(0, 300) || "Copilot review body feedback";
+  return { angle: "copilot-body", findings: [{ severity: "medium", summary, recommendation: text.slice(0, 4000) }] };
 }
 
 const BODY_ONLY_BLOCKING_DISPOSITIONS = new Set([
@@ -211,22 +230,28 @@ export function reviewHasOwnThread(reviewThreads, reviewId) {
  * @returns {Promise<{ copilotBodyFeedbackUnresolved: boolean, copilotPriorHeadBodyFeedbackUnresolved: boolean, bodyDisposition: object|null, dispositionRequired: { reviewId: string|null, reviewCommitSha: string|null, reason: string }|null }>}
  */
 export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, reviewSummary, reviewThreads }, runtime = {}) {
-  const settled = { copilotBodyFeedbackUnresolved: false, copilotPriorHeadBodyFeedbackUnresolved: false, bodyDisposition: null, dispositionRequired: null };
+  const settled = { copilotBodyFeedbackUnresolved: false, copilotPriorHeadBodyFeedbackUnresolved: false, bodyDisposition: null, dispositionRequired: null, judgeFinding: null };
   if (reviewSummary?.hasBodyFindingOnCurrentHead === true) {
+    const currentReviewId = reviewSummary.bodyFindingReviewId;
     const record = await resolveCopilotBodyDisposition(
-      { repo, pr, headSha, reviewId: reviewSummary.bodyFindingReviewId, reviewCommitSha: headSha },
+      { repo, pr, headSha, reviewId: currentReviewId, reviewCommitSha: headSha },
       runtime,
     );
+    const currentReview = (reviewSummary.effectiveCopilotReviews ?? []).find((r) => currentReviewId != null && String(r?.id) === String(currentReviewId))
+      ?? resolveLatestCopilotReview({ reviews: reviewSummary.effectiveCopilotReviews }).review;
     return record.cleared
       ? { ...settled, bodyDisposition: record.disposition }
       : {
         ...settled,
         copilotBodyFeedbackUnresolved: true,
         dispositionRequired: {
-          reviewId: reviewSummary.bodyFindingReviewId ?? null,
+          reviewId: currentReviewId ?? null,
           reviewCommitSha: headSha,
           reason: "the current-head Copilot review carries body feedback with no trusted operator copilot-body-disposition record",
+          ...(record.reasonCode ? { reasonCode: record.reasonCode, reason: record.reason } : {}),
+          markerLine: currentReviewId ? markerLineFor(currentReviewId, headSha) : null,
         },
+        judgeFinding: buildJudgeFinding(currentReview),
       };
   }
   const { review, ambiguousBlockingTie } = resolveLatestCopilotReview({ reviews: reviewSummary?.effectiveCopilotReviews });
@@ -242,7 +267,9 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
         reviewId: null,
         reviewCommitSha,
         reason: "two or more tied latest Copilot reviews carry body-only feedback, so no single copilot-body-disposition record can clear it",
+        markerLine: null,
       },
+      judgeFinding: buildJudgeFinding(review),
     };
   }
   const reviewId = review.id !== null && review.id !== undefined ? String(review.id) : null;
@@ -259,6 +286,9 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
         reviewId,
         reviewCommitSha,
         reason: "the latest Copilot review, on an earlier head, carries body-only feedback with no trusted copilot-body-disposition record",
+        ...(record.reasonCode ? { reasonCode: record.reasonCode, reason: record.reason } : {}),
+        markerLine: reviewId ? markerLineFor(reviewId, headSha) : null,
       },
+      judgeFinding: buildJudgeFinding(review),
     };
 }

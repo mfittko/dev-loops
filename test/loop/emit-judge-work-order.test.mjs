@@ -423,3 +423,20 @@ test("J1: the --round CLI accepts only /^[1-9][0-9]*$/ and carries it to the wor
     }
   });
 });
+
+test("GATE-EXEC-COPILOT-BODY-TO-JUDGE: --copilot-body-file pins a required read and the Judgment paragraph; without it the emission is unchanged", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const plain = await emitJudgeWorkOrder(sources);
+    const plainText = await readFile(plain.promptPath, "utf8");
+    assert.ok(!plain.workOrder.requiredReads.some((read) => read.kind === "copilot-body-feedback"));
+    assert.ok(!plainText.includes("copilot-body-feedback"));
+    const bodyPath = path.join(root, "judge-fixture", "copilot-body.json");
+    await writeFile(bodyPath, JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "s", recommendation: "r" }] }));
+    const withBody = await emitJudgeWorkOrder({ ...sources, copilotBodyFile: bodyPath });
+    assert.equal(withBody.workOrder.requiredReads.find((read) => read.kind === "copilot-body-feedback")?.path, bodyPath);
+    assert.match(await readFile(withBody.promptPath, "utf8"), /A `copilot-body-feedback` read holds a Copilot review body/);
+    assert.notEqual(withBody.workOrderDigest, plain.workOrderDigest);
+    await assert.rejects(emitJudgeWorkOrder({ ...sources, copilotBodyFile: path.join(root, "missing.json") }), /copilot-body-feedback is missing/);
+  });
+});

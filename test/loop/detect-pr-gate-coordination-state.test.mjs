@@ -322,6 +322,7 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
       carriedConvergence: null,
       copilotBodyDisposition: null,
       copilotBodyDispositionRequired: null,
+      copilotBodyJudgeFinding: null,
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1051,7 +1052,7 @@ test("detect-pr-gate-coordination-state output equals a direct evaluatePrGateCoo
     assert.equal(parsed.carriedConvergence, null);
     assert.equal(parsed.copilotBodyDisposition, null);
     assert.equal(parsed.copilotBodyDispositionRequired, null);
-    const { carriedConvergence: _carried, copilotBodyDisposition: _bodyDisposition, copilotBodyDispositionRequired: _dispositionRequired, ...evaluatorOwned } = parsed;
+    const { carriedConvergence: _carried, copilotBodyDisposition: _bodyDisposition, copilotBodyDispositionRequired: _dispositionRequired, copilotBodyJudgeFinding: _judgeFinding, ...evaluatorOwned } = parsed;
     assert.deepEqual({ ...evaluatorOwned, copilotReviewRoundCount: directResult.copilotReviewRoundCount }, directResult);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1450,15 +1451,16 @@ test("detect-pr-gate-coordination-state ENTERS pre_approval for a thread-clean c
   assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
 });
 
-test("gate entry preserves the shared loop body-feedback signal for a current-head 🔵 (#2345)", async () => {
+test("gate entry routes a current-head 🔵 body finding to the judge instead of the loop body-feedback signal (#2345, #2937)", async () => {
   const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🔵 Needs a closer look\n\nA soft, conductor-overridable non-approval.", atCap: false }));
   const context = await loadPrGateCoordinationContext(
     { repo: "owner/repo", pr: 266 },
     buildMockRuntime(env, { repoRoot: capFixtureRepoRoot }),
   );
-  assert.equal(context.snapshot.copilotBodyFeedbackUnresolved, true);
-  assert.equal(context.interpretation.state, "unresolved_feedback_present");
+  assert.equal(context.snapshot.copilotBodyFeedbackUnresolved, false);
   assert.equal(context.copilotBodyConvergence.ok, true);
+  assert.equal(context.copilotBodyJudgeFinding.angle, "copilot-body");
+  assert.equal(context.copilotBodyDispositionRequired, null);
 });
 
 test("detect-pr-gate-coordination-state ENTERS pre_approval for a thread-clean current-head 🔵 BELOW the round cap (round 1, non-terminal) (#2345)", async () => {
@@ -1482,26 +1484,29 @@ test("detect-pr-gate-coordination-state ENTERS pre_approval for a thread-clean c
   assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
 });
 
-test("detect-pr-gate-coordination-state still BLOCKS pre_approval for a below-cap current-head 🟡 (#2345 no regression)", async () => {
-  // Below the cap a 🟡 "Changes recommended" body finding is unresolved feedback,
-  // so gate entry is refused — the fix must not open this path (only the 🔵 does).
+test("detect-pr-gate-coordination-state ALLOWS pre_approval for a below-cap current-head 🟡 and routes it to the judge (#2937)", async () => {
+  // GATE-EXEC-COPILOT-BODY-TO-JUDGE: no operator marker is required.
   const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body.", atCap: false }));
   const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
   assert.equal(result.code, 0);
   assert.equal(result.stderr, "");
   const parsed = JSON.parse(result.stdout);
-  assert.notEqual(parsed.lifecycleState, "round_cap_clean_fallback");
-  assert.ok(parsed.forbiddenActions.includes("run_pre_approval_gate"));
-  assert.ok(!parsed.allowedNextActions.includes("run_pre_approval_gate"));
+  assert.ok(parsed.allowedNextActions.includes("run_pre_approval_gate"));
+  assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
+  assert.equal(parsed.copilotBodyDispositionRequired, null);
+  assert.equal(parsed.copilotBodyJudgeFinding.angle, "copilot-body");
+  assert.equal(parsed.copilotBodyJudgeFinding.findings[0].summary, "### 🟡 Changes recommended");
+  assert.match(parsed.copilotBodyJudgeFinding.findings[0].recommendation, /Actionable feedback in the body\./);
 });
 
-test("detect-pr-gate-coordination-state still BLOCKS pre_approval for an at-cap current-head 🟡 (#2345 no regression)", async () => {
+test("detect-pr-gate-coordination-state ALLOWS pre_approval for an at-cap current-head 🟡 and routes it to the judge (#2937)", async () => {
   const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body." }));
   const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
   assert.equal(result.code, 0);
   const parsed = JSON.parse(result.stdout);
-  assert.ok(parsed.forbiddenActions.includes("run_pre_approval_gate"));
-  assert.ok(!parsed.allowedNextActions.includes("run_pre_approval_gate"));
+  assert.ok(parsed.allowedNextActions.includes("run_pre_approval_gate"));
+  assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
+  assert.notEqual(parsed.copilotBodyJudgeFinding, null);
 });
 
 test("detect-pr-gate-coordination-state still BLOCKS pre_approval for a 🔵 with an unresolved thread (#2345 no regression)", async () => {
@@ -1529,15 +1534,16 @@ test("detect-pr-gate-coordination-state still BLOCKS pre_approval for a 🔵 wit
 
 test("the production gate-entry and merge call sites agree on 🔵 and 🟡 dispositions (#2345 AC3)", async () => {
   const currentHeadSha = "def56789abcdef";
-  for (const { body, disposition, allowed } of [
-    { body: "### 🔵 Needs a closer look", disposition: "needs_closer_look", allowed: true },
-    { body: "### 🟡 Changes recommended", disposition: "changes_recommended", allowed: false },
+  for (const { body, disposition, allowed, gateAllowed } of [
+    { body: "### 🔵 Needs a closer look", disposition: "needs_closer_look", allowed: true, gateAllowed: true },
+    // Gate entry routes a 🟡 body to the judge (#2937); the merge path keeps the marker prerequisite.
+    { body: "### 🟡 Changes recommended", disposition: "changes_recommended", allowed: false, gateAllowed: true },
   ]) {
     const env = writeGhStub(null, pathAGhEntries({ reviewBody: body, atCap: false }));
     const gateResult = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
     assert.equal(gateResult.code, 0);
     const gate = JSON.parse(gateResult.stdout);
-    assert.equal(gate.allowedNextActions.includes("run_pre_approval_gate"), allowed);
+    assert.equal(gate.allowedNextActions.includes("run_pre_approval_gate"), gateAllowed);
 
     const reviews = [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: currentHeadSha }, body, submittedAt: "2026-05-31T20:10:00Z" }];
     const merge = evaluateMergePreconditions({

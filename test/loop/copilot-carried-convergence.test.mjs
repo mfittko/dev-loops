@@ -349,16 +349,15 @@ describe("round cap: body-only Copilot feedback clears only through a recorded d
         assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
         assert.equal(detected.copilotBodyDisposition.reviewId, "PRR_round2");
         assert.equal(detected.copilotBodyDisposition.headSha, HEAD);
+        assert.equal(detected.copilotBodyJudgeFinding, null);
       } else {
-        assert.notEqual(detected.lifecycleState, "round_cap_clean_fallback");
-        assert.ok(detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+        // GATE-EXEC-COPILOT-BODY-TO-JUDGE: no marker, so the judge gets the finding and gate entry is open.
+        assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+        assert.ok(!detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
         assert.equal(detected.copilotBodyDisposition, null);
+        assert.equal(detected.copilotBodyJudgeFinding.angle, "copilot-body");
       }
-      assert.deepEqual(detected.copilotBodyDispositionRequired, cleared ? null : {
-        reviewId: "PRR_round2",
-        reviewCommitSha: HEAD,
-        reason: "the current-head Copilot review carries body feedback with no trusted operator copilot-body-disposition record",
-      });
+      assert.equal(detected.copilotBodyDispositionRequired, null);
     });
 
     it(`copilot loop detector: ${name}`, async () => {
@@ -523,7 +522,9 @@ describe("current-head body finding: request tool and detector agree through the
     const detected = await runDetector(fixture([]), { root: wideRoot });
     assert.notEqual(request.status, "suppressed_same_head_clean");
     assert.equal(detected.copilotBodyDisposition, null);
-    assert.ok(detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+    // The request tool keeps the marker; gate entry routes the finding to the judge (#2937).
+    assert.ok(!detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+    assert.notEqual(detected.copilotBodyJudgeFinding, null);
   });
 });
 
@@ -559,9 +560,10 @@ describe("round cap: an earlier-head body-only finding clears only through a rec
     it(`gate coordination detector: ${name}`, async () => {
       const detected = await runDetector(fixture(), { files });
       if (reopened) {
-        assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
-        assert.ok(detected.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
-        assert.ok(detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+        // #2937: the body finding no longer holds the round-cap fallback at gate entry, so the
+        // judge gets it and gate entry opens instead of a Copilot re-request.
+        assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+        assert.notEqual(detected.copilotBodyJudgeFinding, null);
         assert.equal(detected.carriedConvergence, null);
       } else if (cleared) {
         assert.equal(detected.lifecycleState, "round_cap_clean_fallback");
@@ -570,15 +572,11 @@ describe("round cap: an earlier-head body-only finding clears only through a rec
         assert.equal(detected.copilotBodyDisposition.reviewId, "PRR_round2");
         assert.equal(detected.copilotBodyDisposition.headSha, HEAD);
       } else {
-        assert.equal(detected.lifecycleState, "round_cap_reached");
-        assert.ok(detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
-        assert.equal(detected.carriedConvergence, null);
-        // The output names the sanctioned exit: a record for this review.
-        assert.deepEqual(detected.copilotBodyDispositionRequired, {
-          reviewId: "PRR_round2",
-          reviewCommitSha: PRIOR,
-          reason: "the latest Copilot review, on an earlier head, carries body-only feedback with no trusted copilot-body-disposition record",
-        });
+        // GATE-EXEC-COPILOT-BODY-TO-JUDGE: the earlier-head finding goes to the judge and gate entry is open.
+        assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+        assert.ok(!detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+        assert.equal(detected.copilotBodyDispositionRequired, null);
+        assert.equal(detected.copilotBodyJudgeFinding.angle, "copilot-body");
       }
     });
 
@@ -1032,12 +1030,12 @@ describe("converged-once: a later Copilot review wins over an earlier convergenc
     const shape = (dispositions) => ({ reviews: [currentHeadClean, laterYellow], delta: CODE_DELTA, dispositions });
 
     const blocked = await runDetector(scenario(shape([])), { root: convergedOnceWideRoot });
-    assert.ok(blocked.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+    // Gate entry routes the finding to the judge (#2937); the merge below keeps the marker.
+    assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+    assert.notEqual(blocked.copilotBodyJudgeFinding, null);
     for (const action of [PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW]) {
       assert.ok(!blocked.allowedNextActions.includes(action), action);
     }
-    assert.equal(blocked.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
-    assert.equal(blocked.copilotBodyDispositionRequired.reviewId, "PRR_prior");
     const refused = await runMerge(scenario(shape([])), shape([]), { strict: false });
     assert.equal(refused.merged, false);
     assert.ok(refused.failures.some((failure) => failure.precondition === "copilot_convergence"));
