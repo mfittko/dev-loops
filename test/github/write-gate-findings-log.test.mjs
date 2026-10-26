@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
+import { execFileSync } from "node:child_process";
 
 import {
   buildLogPath,
@@ -2394,7 +2395,7 @@ test("writeGateFindingsLog canonicalizes a non-canonical caller --verdict on a b
     const result = await writeGateFindingsLog({
       repo: "o/n",
       pr: 7,
-      gate: "draft_gate",
+      gate: "pre_approval_gate",
       headSha: "a1".repeat(20),
       verdict: " Clean ",
       findings: "[]",
@@ -2463,7 +2464,7 @@ test("#1616: writeGateFindingsLog omits overallVerdict for a bare-array input (l
     const result = await writeGateFindingsLog({
       repo: "o/n",
       pr: 7,
-      gate: "draft_gate",
+      gate: "pre_approval_gate",
       headSha: "a1".repeat(20),
       verdict: "clean",
       findings: JSON.stringify([]),
@@ -2514,6 +2515,161 @@ test("writeGateFindingsLog enriches findings from --judge-verdict and records sc
     assert.equal(parsed.findings[1].judgeDisposition, "reject");
     assert.equal(parsed.scopeDrift.verdict, "drift_detected");
     assert.deepEqual(parsed.scopeDrift.driftedAreas, ["cli surface"]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Round cap: `resurfaces` stays only for a closed prior round's act fingerprint; a past-cap defer/reject is cap-closed.
+const CAP_HEAD = "c".repeat(40);
+const capPriorHeads = ["1", "2", "3"].map((c) => c.repeat(40));
+async function writeCapPrior(tmpDir, { pr = 42, head, findings, gate = "draft_gate" }) {
+  // The pinned --tmp-root (prior act items) and the canonical <repoRoot>/tmp (round-cap state) both hold the prior round.
+  for (const root of [tmpDir, path.join(tmpDir, "tmp")]) {
+    const dir = path.join(root, "gate-findings", "owner-repo", `pr-${pr}`);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `${gate}-${head}.json`), JSON.stringify({
+      repo: "owner/repo", pr, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${head[0]}T00:00:00.000Z`, findings,
+    }), "utf8");
+  }
+}
+async function writeCapRound(tmpDir, rawFindings, dispositions) {
+  const judgeVerdict = path.join(tmpDir, "judge-verdict.json");
+  await writeFile(judgeVerdict, JSON.stringify({
+    headSha: CAP_HEAD,
+    scopeDrift: { verdict: "within_scope", rationale: "r", driftedAreas: [] },
+    dispositions: dispositions.map((d, index) => ({ index, title: "t", detail: "d", fix: "f", reason: "r", rationale: "why", ...d })),
+  }), "utf8");
+  // Pin the cap so the checked-in .devloops cannot change the round numbers asserted below.
+  await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 4\n", "utf8");
+  await writeGateFindingsLog({
+    repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: CAP_HEAD, verdict: "findings_present",
+    findings: JSON.stringify(rawFindings), judgeVerdict, tmpRoot: tmpDir,
+  }, { repoRoot: tmpDir });
+  return JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", `draft_gate-${CAP_HEAD}.json`), "utf8")).findings;
+}
+
+test("writeGateFindingsLog counts rounds from the custom --tmp-root it persists to, without seeded ledgers (GATE-EXEC-LOW-FIX-UNTIL-CAP)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-cap-root-"));
+  try {
+    const custom = path.join(tmpDir, "custom-root");
+    await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 4\n", "utf8");
+    // Successive writes to the custom root: a nit act holds in round 1 and rejects in round 2.
+    const results = [];
+    for (const headSha of [capPriorHeads[0], capPriorHeads[1]]) {
+      const judgeVerdict = path.join(tmpDir, `judge-${headSha[0]}.json`);
+      await writeFile(judgeVerdict, JSON.stringify({
+        headSha,
+        scopeDrift: { verdict: "within_scope", rationale: "r", driftedAreas: [] },
+        dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "why" }],
+      }), "utf8");
+      await writeGateFindingsLog({
+        repo: "owner/repo", pr: 42, gate: "draft_gate", headSha, verdict: "findings_present",
+        findings: JSON.stringify([{ severity: "nit", angle: "docs", summary: "tidy comment" }]), judgeVerdict, tmpRoot: custom,
+      }, { repoRoot: tmpDir });
+      results.push(JSON.parse(await readFile(path.join(custom, "gate-findings", "owner-repo", "pr-42", `draft_gate-${headSha}.json`), "utf8")).findings[0].judgeDisposition);
+    }
+    assert.deepEqual(results, ["act", "reject"]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog keeps resurfaces only for a closed prior round's act fingerprint", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-resurfaces-"));
+  try {
+    const { fingerprintFinding } = await import("../../scripts/github/_gate-finding-surface.mjs");
+    const prior = { severity: "medium", angle: "correctness", summary: "guard missing", files: ["src/a.mjs"], line: 4, judgeDisposition: "act" };
+    const foreign = { severity: "medium", angle: "correctness", summary: "foreign guard", files: ["src/f.mjs"], line: 4, judgeDisposition: "act" };
+    await writeCapPrior(tmpDir, { head: capPriorHeads[0], findings: [prior] });
+    await writeCapPrior(tmpDir, { pr: 43, head: capPriorHeads[1], findings: [foreign] });
+    const valid = fingerprintFinding(prior);
+    const raw = ["one", "two", "three", "four"].map((summary) => ({ severity: "medium", angle: "correctness", summary, files: ["src/a.mjs"], line: 9 }));
+    const findings = await writeCapRound(tmpDir, raw, [
+      { disposition: "act", resurfaces: valid },
+      { disposition: "act", resurfaces: "ffffffffffffffff" },
+      { disposition: "act", resurfaces: fingerprintFinding(foreign) },
+      { disposition: "act" },
+    ]);
+    assert.deepEqual(findings.map((f) => f.resurfaces), [valid, undefined, undefined, undefined]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog drops resurfaces when the finding sits in a different file than the prior act item", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-resurfaces-file-"));
+  try {
+    const { fingerprintFinding } = await import("../../scripts/github/_gate-finding-surface.mjs");
+    const prior = { severity: "medium", angle: "correctness", summary: "guard missing", files: ["src/a.mjs"], line: 4, judgeDisposition: "act" };
+    await writeCapPrior(tmpDir, { head: capPriorHeads[0], findings: [prior] });
+    const raw = [
+      { severity: "medium", angle: "correctness", summary: "same file", files: ["src/a.mjs"], line: 9 },
+      { severity: "medium", angle: "correctness", summary: "other file", files: ["src/b.mjs"], line: 9 },
+    ];
+    const resurfaces = fingerprintFinding(prior);
+    const findings = await writeCapRound(tmpDir, raw, [{ disposition: "act", resurfaces }, { disposition: "act", resurfaces }]);
+    assert.deepEqual(findings.map((f) => f.resurfaces), [resurfaces, undefined]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog records capClosed on a past-cap defer or reject, never on act or a locatable question", async () => {
+  const raw = [
+    { severity: "low", angle: "docs", summary: "low deferred" },
+    { severity: "nit", angle: "docs", summary: "nit rejected" },
+    { severity: "question", angle: "scope", summary: "locatable question", files: ["src/q.mjs"], line: 2 },
+    { severity: "question", angle: "scope", summary: "body question" },
+    { severity: "medium", angle: "correctness", summary: "still act" },
+  ];
+  const dispositions = [
+    { disposition: "defer", followUpDraft: { title: "t", body: "b" } },
+    { disposition: "reject" }, { disposition: "reject" }, { disposition: "reject" }, { disposition: "act" },
+  ];
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-capclosed-"));
+  try {
+    for (const head of capPriorHeads.slice(0, 2)) await writeCapPrior(tmpDir, { head, findings: [] });
+    const below = await writeCapRound(tmpDir, raw, dispositions);
+    assert.deepEqual(below.map((f) => f.capClosed), Array(5).fill(undefined), "round 3 is below the cap of 4");
+    await writeCapPrior(tmpDir, { head: capPriorHeads[2], findings: [] });
+    const past = await writeCapRound(tmpDir, raw, dispositions);
+    assert.deepEqual(past.map((f) => f.capClosed), [
+      { judgeDisposition: "defer", severity: "low", round: 4, cap: 4 },
+      { judgeDisposition: "reject", severity: "nit", round: 4, cap: 4 },
+      undefined,
+      { judgeDisposition: "reject", severity: "question", round: 4, cap: 4 },
+      undefined,
+    ]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog records capClosed on a past-cap medium reject and refuses a high defer or a missing disposition", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-capclosed-sev-"));
+  try {
+    for (const head of capPriorHeads) await writeCapPrior(tmpDir, { head, findings: [] });
+    const medium = { severity: "medium", angle: "correctness", summary: "medium rejected" };
+    const past = await writeCapRound(tmpDir, [medium], [{ disposition: "reject" }]);
+    assert.deepEqual(past.map((f) => f.capClosed), [{ judgeDisposition: "reject", severity: "medium", round: 4, cap: 4 }]);
+    const high = { severity: "high", angle: "correctness", summary: "high deferred" };
+    await assert.rejects(writeCapRound(tmpDir, [high], [{ disposition: "defer", followUpDraft: { title: "t", body: "b" } }]), /high|defer/i);
+    await assert.rejects(writeCapRound(tmpDir, [medium], []), /disposition|judge/i);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog persists the caller verdict as overallVerdict on a draft_gate inline write from a bare array", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-inline-overall-"));
+  try {
+    const head = "abc1234567890abcdef000000000000000000000";
+    const write = (gate, executionMode) => writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate, headSha: head, verdict: "clean", findings: "[]", executionMode, tmpRoot: tmpDir,
+    }, { repoRoot: tmpDir }).then(() => readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", `${gate}-${head}.json`), "utf8")).then(JSON.parse);
+    assert.equal((await write("draft_gate", "inline_single_agent")).overallVerdict, "clean");
+    assert.equal((await write("pre_approval_gate", "inline_single_agent")).overallVerdict, undefined);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -2943,6 +3099,62 @@ test("writeGateFindingsLog refuses a clusterId outside the array or naming an en
     assert.equal((await write([at(0, "a")])).ok, true);
     await assert.rejects(() => write([at(0, "a"), at(2, "b")]), /clusterId 2 must be less than 2/);
     await assert.rejects(() => write([at(1, "a"), at(0, "b")]), /clusterId 1 .*own clusterId is 1/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ADR 0188: the ledger writer coerces a low act only at or past the draft round cap; a nit act stays act only in draft round 1 below the cap.
+for (const [cap, lowDisposition, nitDisposition] of [[4, "act", "act"], [1, "defer", "reject"]]) {
+  test(`writeGateFindingsLog with maxReviewRounds ${cap} records a judged low act as ${lowDisposition} and a nit act as ${nitDisposition} (ADR 0188)`, async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-low-cap-"));
+    try {
+      const headSha = "e5".repeat(20);
+      const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+      await writeFile(judgeVerdictPath, JSON.stringify({
+        headSha,
+        scopeDrift: { verdict: "within_scope", rationale: "within AC", driftedAreas: [] },
+        dispositions: [0, 1].map((index) => ({ index, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting" })),
+      }), "utf8");
+      await writeFile(path.join(tmpDir, ".devloops"), `version: 1\ngates:\n  draft:\n    maxReviewRounds: ${cap}\n`, "utf8");
+      await writeGateFindingsLog({
+        repo: "owner/repo", pr: 2243, gate: "draft_gate", headSha, verdict: "findings_present",
+        findings: JSON.stringify([
+          { severity: "low", angle: "docs", summary: "rename variable" },
+          { severity: "nit", angle: "docs", summary: "tidy comment" },
+        ]),
+        judgeVerdict: judgeVerdictPath, tmpRoot: tmpDir,
+      }, { repoRoot: tmpDir });
+      const parsed = JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-2243", `draft_gate-${headSha}.json`), "utf8"));
+      assert.deepEqual(parsed.findings.map((f) => f.judgeDisposition), [lowDisposition, nitDisposition]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+}
+
+// GATE-EXEC-ROUND-CAP: a subdirectory cwd must read the repo's cap, not the default 4.
+test("writeGateFindingsLog run from a repo subdirectory reads the repo round cap (ADR 0188)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-subdir-cap-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: tmpDir });
+    const sub = path.join(tmpDir, "nested", "dir");
+    await mkdir(sub, { recursive: true });
+    const headSha = "e6".repeat(20);
+    const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdictPath, JSON.stringify({
+      headSha,
+      scopeDrift: { verdict: "within_scope", rationale: "within AC", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting" }],
+    }), "utf8");
+    await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 1\n", "utf8");
+    await writeGateFindingsLog({
+      repo: "owner/repo", pr: 2243, gate: "draft_gate", headSha, verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "low", angle: "docs", summary: "rename variable" }]),
+      judgeVerdict: judgeVerdictPath, tmpRoot: tmpDir,
+    }, { repoRoot: sub });
+    const parsed = JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-2243", `draft_gate-${headSha}.json`), "utf8"));
+    assert.deepEqual(parsed.findings.map((f) => f.judgeDisposition), ["defer"]);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

@@ -395,6 +395,12 @@ const GateConfig = z.strictObject({
   tiers: z.array(GateTier).min(1).describe("Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class.").optional(),
 });
 
+// Only the draft gate reads maxReviewRounds, so only gates.draft accepts it.
+// No schema-level `.default()` (same layer-shadowing hazard); resolveGateConfig applies 4.
+const DraftGateConfig = GateConfig.extend({
+  maxReviewRounds: z.number().int().nonnegative().optional().describe("Round cap for the draft gate: a round whose count of completed judged rounds reaches this number is past the cap, and a new act item then blocks with round_cap_reached instead of running another fixer round. 0 disables the cap. Default 4."),
+});
+
 // One named group of angles dispatched together onto a single reviewer under
 // grouped fan-out. `name` is recorded as the shared reviewer's
 // provenance `group` (see resolveFanoutGroups / fanoutReviewerPairingError).
@@ -512,7 +518,7 @@ const SizeConfig = z.strictObject({
 });
 
 const GatesConfig = z.strictObject({
-  draft: GateConfig.optional(),
+  draft: DraftGateConfig.optional(),
   // Fail-closed PR size/tier budget (active by default); computation lives in
   // scripts/loop/check-size-budget.mjs.
   size: SizeConfig.optional(),
@@ -961,7 +967,7 @@ const FileGatesConfig = z.strictObject({
   // Each gate gets its own GateConfig.partial() instance rather than three
   // .describe() clones of one shared partial, so no underlying def is shared
   // and per-gate metadata renders unambiguously.
-  draft: GateConfig.partial().describe("Draft gate config (runs before a PR leaves draft).").optional(),
+  draft: DraftGateConfig.partial().describe("Draft gate config (runs before a PR leaves draft).").optional(),
   preApproval: GateConfig.partial().describe("Pre-approval gate config (final re-review before the merge handoff).").optional(),
   spike: GateConfig.partial().describe("Relaxed spike gate profile; applies only to spike-mode work.").optional(),
   size: SizeConfig.partial().describe("Fail-closed PR size/tier budget: testDiscount, absoluteHardLoc, and per-tier soft/waiver/slice thresholds + patterns.").optional(),
@@ -2168,7 +2174,7 @@ function resolveBlockingSeverities(config, gate) {
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
- * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, inlineSeverityFloor: string, tiers: Array<{name: string, match: object, angles: string[]}>, angleCategoryBindings: Record<string, {categories: string[], kinds: string[]}> }}
+ * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, maxReviewRounds: number, inlineSeverityFloor: string, tiers: Array<{name: string, match: object, angles: string[]}>, angleCategoryBindings: Record<string, {categories: string[], kinds: string[]}> }}
  * @throws {Error} when ANY gate's (not only the requested one's) PRESENT
  *   `blockCleanOnFindingSeverities` is schema-invalid (non-array, empty, or an
  *   out-of-vocabulary entry). Validated EAGERLY across all three gates on every
@@ -2186,6 +2192,10 @@ export function resolveGateConfig(config, gate) {
   for (const g of GATE_KEYS_WITH_BLOCKING_SEVERITIES) {
     const resolved = resolveBlockingSeverities(config, g);
     if (g === gate) blockCleanOnFindingSeverities = resolved;
+  }
+  const maxReviewRounds = gateConfig?.maxReviewRounds ?? 4;
+  if (!Number.isInteger(maxReviewRounds) || maxReviewRounds < 0) {
+    throw new Error(`gates.${gate}.maxReviewRounds must be a non-negative integer (0 disables the cap); got ${JSON.stringify(gateConfig.maxReviewRounds)}`);
   }
   const entries = normalizeAngleEntries(gateConfig?.angles);
   // An explicitly-empty array is a real configured "no angles" — distinct from
@@ -2205,6 +2215,7 @@ export function resolveGateConfig(config, gate) {
     // mediumFixWindow wins; worthFixingNowFixWindow is the deprecated alias,
     // still honored so an unmigrated config keeps its window.
     mediumFixWindow: gateConfig?.mediumFixWindow ?? gateConfig?.worthFixingNowFixWindow ?? 3,
+    maxReviewRounds,
     inlineSeverityFloor: gateConfig?.inlineSeverityFloor ?? "medium",
     tiers: gateConfig?.tiers ?? [],
     // Per-angle category/file-kind bindings for enabled entries that declare

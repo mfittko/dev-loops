@@ -28,10 +28,10 @@ import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promise
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { baseAngleName, orderAnglesByCatalog, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { baseAngleName, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef } from "../lib/anchor-base-ref.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";
@@ -54,7 +54,7 @@ import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_c
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
-import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 
 /**
@@ -1835,19 +1835,20 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
  * by SHA) for {@link resolvePriorDispositions}'s latest-wins fold.
  *
  * Filename SHAs match case-insensitively. FAIL OPEN on a path-resolution
- * error (no prior rounds). Per ledger: FAIL OPEN on an unreadable or
- * malformed file (it contributes nothing). FAIL CLOSED on identity: a ledger whose recorded headSha differs
+ * error (no prior rounds). Per ledger: an unparseable or non-object file is
+ * dropped and reported through `onUnreadable`. FAIL CLOSED on identity: a ledger whose recorded headSha differs
  * from its filename SHA, or whose recorded repo/pr/gate is absent or differs
  * from this invocation, is dropped (mirrors resolve-angle-carry-forward.mjs's own
  * recordedHead guard). FAIL CLOSED on verdict eligibility: only a `clean` or
  * `findings_present` verdict is a CLOSED round whose reject/defer
- * dispositions are settled memory; a `blocked`/other/missing verdict (a
- * truncated write, an aborted round, a hand-edited ledger) is dropped. A
+ * dispositions are settled memory; a `blocked` verdict is skipped silently,
+ * and a missing or unknown verdict (a truncated write, a hand-edited ledger)
+ * is dropped and reported through `onUnreadable` when its identity matches. A
  * missing directory (first round) yields `[]`.
  *
  * @returns {Promise<object[]>}
  */
-export async function readClosedPriorRoundLogs(options, { repoRoot }) {
+export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable }) {
   let ledgerDir;
   try {
     const sampleLogPath = buildLogPath({
@@ -1872,9 +1873,13 @@ export async function readClosedPriorRoundLogs(options, { repoRoot }) {
     try {
       log = JSON.parse(await readFile(path.join(ledgerDir, name), "utf8"));
     } catch {
+      onUnreadable?.(name);
       continue;
     }
-    if (!log || typeof log !== "object") continue;
+    if (!log || typeof log !== "object") {
+      onUnreadable?.(name);
+      continue;
+    }
     const recordedHead = typeof log.headSha === "string" ? log.headSha.trim().toLowerCase() : null;
     const recordedRepo = typeof log.repo === "string" ? log.repo.trim().toLowerCase() : null;
     const recordedGate = typeof log.gate === "string" ? log.gate.trim().toLowerCase() : null;
@@ -1886,11 +1891,59 @@ export async function readClosedPriorRoundLogs(options, { repoRoot }) {
       || log.pr === undefined || log.pr === null || Number(log.pr) !== Number(options.pr);
     if (identityMismatch) continue;
     const verdict = typeof log.verdict === "string" ? log.verdict.trim() : "";
-    if (verdict !== "clean" && verdict !== "findings_present") continue;
+    // A readable `blocked` ledger is a well-formed unclosed round: neither completed nor unreadable.
+    if (verdict === "blocked") continue;
+    if (verdict !== "clean" && verdict !== "findings_present") {
+      onUnreadable?.(name);
+      continue;
+    }
     rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", log });
   }
   rounds.sort((a, b) => (a.loggedAt < b.loggedAt ? -1 : a.loggedAt > b.loggedAt ? 1 : a.sha < b.sha ? -1 : 1));
   return rounds.map((round) => round.log);
+}
+
+/** Merge time of the round cap (PR 2932); a closed prior ledger never counts only when its `loggedAt` is a toISOString-form UTC timestamp earlier than it; every other closed ledger counts (ADR 0189). */
+export const DRAFT_ROUND_CAP_EFFECTIVE_AT = "2026-10-26T08:51:13Z";
+
+/**
+ * Completed-round count for the round cap: the closed prior rounds logged at or after
+ * DRAFT_ROUND_CAP_EFFECTIVE_AT (a closed ledger is skipped only when its `loggedAt` is a UTC timestamp in toISOString form earlier than the cutoff; every other value counts), plus an unreadable ledger at an
+ * in-range head (counted regardless of date, since it has no readable `loggedAt`), plus the round being posted. Foreign, mismatched and unclosed ledgers never count.
+ */
+export async function countCompletedRounds(options, { repoRoot }) {
+  let unreadable = 0;
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot, onUnreadable: () => { unreadable += 1; } });
+  const cutoff = Date.parse(DRAFT_ROUND_CAP_EFFECTIVE_AT);
+  // Only a strict toISOString-form UTC timestamp earlier than the cutoff is skipped; any other value counts (fails toward the cap).
+  // The calendar round trip rejects values Date.parse normalizes (2026-02-30, T24:00:00); at most 3 fraction digits.
+  const preCap = (loggedAt) => typeof loggedAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(loggedAt) && Number.isFinite(Date.parse(loggedAt)) && new Date(loggedAt).toISOString().slice(0, 19) === loggedAt.slice(0, 19) && Date.parse(loggedAt) < cutoff;
+  return closed.filter((log) => !preCap(log.loggedAt)).length + unreadable + 1;
+}
+
+/**
+ * Round-cap state of the round being posted (GATE-EXEC-ROUND-CAP). The cap exists only for draft_gate, so any
+ * other gate is never past it. One resolver for the judge pass, the ledger writer and the fixer emitter.
+ * @returns {Promise<{ pastCap: boolean, round: number, cap: number }>}
+ */
+export async function resolveDraftRoundCap(options, { repoRoot }) {
+  if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0 };
+  const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
+  const cap = resolveGateConfig(config, "draft").maxReviewRounds;
+  const round = await countCompletedRounds(options, { repoRoot });
+  return { pastCap: isPastRoundCap(round, cap), round, cap };
+}
+
+/** Act items of the closed prior rounds as `{ fingerprint, file, line, title }`, one per fingerprint. */
+export async function listPriorActItems(options, { repoRoot }) {
+  const items = new Map();
+  for (const log of await readClosedPriorRoundLogs(options, { repoRoot })) {
+    for (const f of listOpenActItems(log.findings)) {
+      const fingerprint = fingerprintFinding(f);
+      if (!items.has(fingerprint)) items.set(fingerprint, { fingerprint, file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary });
+    }
+  }
+  return [...items.values()];
 }
 
 /**

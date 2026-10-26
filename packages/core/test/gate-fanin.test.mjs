@@ -1536,6 +1536,140 @@ describe("applyJudgeDispositions (#1525)", () => {
     assert.equal(applyJudgeDispositions(findings, verdict).findings[1].judgeDisposition, "defer");
   });
 
+  // ADR 0188: lows are fixed until the round cap; a nit is fixed in draft round 1 and rejected from round 2 on.
+  describe("low and nit act coercion (ADR 0188)", () => {
+    const act = { disposition: "act", title: "t", detail: "d", fix: "f", rationale: "r" };
+    const cluster = (...severities) => severities.map((s, i) => ({ severity: s, angle: `a${i}`, summary: `finding ${i}`, clusterId: 0 }));
+
+    test("an act on an all-nit cluster becomes reject with a default reason outside draft round 1", () => {
+      // round 2 below the cap, round 1 at the cap (cap of 1), the past-cap rounds, and no round count (pre_approval_gate, round 0).
+      for (const options of [{ pastCap: false, round: 2 }, { pastCap: true, round: 1 }, { pastCap: true, round: 3 }, { pastCap: false, round: 0 }, undefined]) {
+        const { findings } = applyJudgeDispositions(cluster("nit", "nit"), judgeVerdict([{ index: 0, ...act }]), options);
+        assert.deepEqual(findings.map((f) => f.judgeDisposition), ["reject", "reject"], JSON.stringify(options));
+        assert.match(findings[0].judgeReason, /^low_fix_until_cap \(GATE-EXEC-LOW-FIX-UNTIL-CAP\)$/);
+      }
+    });
+
+    test("in draft round 1 below the cap an act on an all-nit cluster stays act", () => {
+      const { findings } = applyJudgeDispositions(cluster("nit", "nit"), judgeVerdict([{ index: 0, ...act }]), { pastCap: false, round: 1 });
+      assert.deepEqual(findings.map((f) => f.judgeDisposition), ["act", "act"]);
+      assert.equal(findings[0].judgeReason, undefined);
+    });
+
+    test("a cluster holding a low and a nit is one disposition: act in round 2 below the cap, defer at the cap", () => {
+      const verdict = judgeVerdict([{ index: 0, ...act }]);
+      assert.deepEqual(applyJudgeDispositions(cluster("low", "nit"), verdict, { pastCap: false, round: 2 }).findings.map((f) => f.judgeDisposition), ["act", "act"]);
+      assert.deepEqual(applyJudgeDispositions(cluster("low", "nit"), verdict, { pastCap: true, round: 3 }).findings.map((f) => f.judgeDisposition), ["defer", "defer"]);
+    });
+
+    test("below the cap an act on a cluster holding a low stays act", () => {
+      for (const options of [undefined, { pastCap: false }]) {
+        const { findings } = applyJudgeDispositions(cluster("low", "nit"), judgeVerdict([{ index: 0, ...act }]), options);
+        assert.deepEqual(findings.map((f) => f.judgeDisposition), ["act", "act"]);
+      }
+    });
+
+    test("at or past the cap an act on a cluster holding a low becomes defer with a synthesized follow-up draft", () => {
+      const { findings } = applyJudgeDispositions(cluster("low", "nit"), judgeVerdict([{ index: 0, ...act, reason: "kept reason" }]), { pastCap: true });
+      assert.equal(findings[0].judgeDisposition, "defer");
+      assert.equal(findings[0].judgeReason, "low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): kept reason");
+      assert.deepEqual(findings[1].followUpDraft, { title: "t", body: "d" });
+    });
+
+    test("failOpen promotes the low members to medium and keeps act in every round", () => {
+      for (const pastCap of [false, true]) {
+        const { findings } = applyJudgeDispositions(cluster("low", "nit"), judgeVerdict([{ index: 0, ...act, failOpen: true }]), { pastCap });
+        assert.deepEqual(findings.map((f) => [f.severity, f.judgeDisposition]), [["medium", "act"], ["medium", "act"]]);
+      }
+    });
+
+    test("failOpen on an all-nit cluster is ignored: it becomes reject with nit severity outside draft round 1", () => {
+      for (const options of [{ pastCap: false, round: 2 }, { pastCap: false, round: 0 }]) {
+        const { findings } = applyJudgeDispositions(cluster("nit", "nit"), judgeVerdict([{ index: 0, ...act, failOpen: true }]), options);
+        assert.deepEqual(findings.map((f) => [f.severity, f.judgeDisposition]), [["nit", "reject"], ["nit", "reject"]], JSON.stringify(options));
+      }
+    });
+
+    test("failOpen promotes a low on an unstamped ledger that also holds a medium reject at the cap", () => {
+      const findings = [{ severity: "medium", angle: "a", summary: "m" }, { severity: "low", angle: "b", summary: "l" }];
+      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict([
+        { index: 0, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "r" },
+        { index: 1, ...act, failOpen: true },
+      ]), { pastCap: true, round: 4 });
+      assert.deepEqual(out.map((f) => [f.severity, f.judgeDisposition]), [["medium", "reject"], ["medium", "act"]]);
+    });
+
+    test("on a stamped ledger another cluster's failOpen does not promote this cluster's lows", () => {
+      const findings = [1, 0].map((clusterId, i) => ({ severity: "low", angle: `a${i}`, summary: `l${i}`, clusterId }));
+      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict([{ index: 0, ...act }, { index: 1, ...act, failOpen: true }]), { pastCap: true, round: 4 });
+      assert.deepEqual(out.map((f) => [f.severity, f.judgeDisposition]), [["medium", "act"], ["low", "defer"]]);
+    });
+
+    test("an unstamped ledger coerces the same whatever the order of the dispositions", () => {
+      const findings = [{ severity: "low", angle: "a", summary: "l0" }, { severity: "low", angle: "b", summary: "l1" }];
+      const dispositions = [{ index: 0, ...act, failOpen: true }, { index: 1, ...act }];
+      const run = (list) => applyJudgeDispositions(findings, judgeVerdict(list), { pastCap: true, round: 4 }).findings.map((f) => [f.severity, f.judgeDisposition]);
+      assert.deepEqual(run(dispositions), run([...dispositions].reverse()));
+      assert.deepEqual(run(dispositions), [["medium", "act"], ["low", "defer"]]);
+    });
+
+    test("an unstamped low duplicate pair promotes both members when either disposition carries failOpen", () => {
+      const findings = [0, 1].map((i) => ({ severity: "low", angle: `a${i}`, summary: "dup", file: "src/x.mjs", line: 10, recommendation: "same fix" }));
+      const dispositions = [{ index: 0, ...act }, { index: 1, ...act, failOpen: true }];
+      const run = (list) => applyJudgeDispositions(findings, judgeVerdict(list), { pastCap: true, round: 4 }).findings.map((f) => [f.severity, f.judgeDisposition]);
+      assert.deepEqual(run(dispositions), [["medium", "act"], ["medium", "act"]]);
+      assert.deepEqual(run([...dispositions].reverse()), [["medium", "act"], ["medium", "act"]]);
+    });
+
+    test("an unstamped judge defer on the nit of a [nit, low] duplicate is accepted like the stamped cluster", () => {
+      const findings = [0, 1].map((i) => ({ severity: ["nit", "low"][i], angle: `a${i}`, summary: "dup", file: "src/x.mjs", line: 10, recommendation: "same fix" }));
+      const defer = { disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "r", followUpDraft: { title: "t", body: "b" } };
+      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict([{ index: 0, ...defer }, { index: 1, ...defer }]), { pastCap: false, round: 2 });
+      assert.deepEqual(out.map((f) => f.judgeDisposition), ["defer", "defer"]);
+    });
+
+    test("an unstamped [nit, low] duplicate keeps both members act in round 2 below the cap", () => {
+      const findings = [0, 1].map((i) => ({ severity: ["nit", "low"][i], angle: `a${i}`, summary: "dup", file: "src/x.mjs", line: 10, recommendation: "same fix" }));
+      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict([{ index: 0, ...act }, { index: 1, ...act }]), { pastCap: false, round: 2 });
+      assert.deepEqual(out.map((f) => f.judgeDisposition), ["act", "act"]);
+    });
+
+    test("failOpen never downgrades a high or question in a mixed cluster, stamped or unstamped", () => {
+      for (const top of ["high", "question"]) {
+        const stamped = applyJudgeDispositions(cluster(top, "low"), judgeVerdict([{ index: 0, ...act, failOpen: true }]), { pastCap: true, round: 4 });
+        assert.deepEqual(stamped.findings.map((f) => [f.severity, f.judgeDisposition]), [[top, "act"], ["low", "act"]]);
+        const findings = [0, 1].map((i) => ({ severity: [top, "low"][i], angle: `a${i}`, summary: "dup", file: "src/x.mjs", line: 10, recommendation: "same fix" }));
+        const { findings: out } = applyJudgeDispositions(findings, judgeVerdict([{ index: 0, ...act }, { index: 1, ...act, failOpen: true }]), { pastCap: true, round: 4 });
+        assert.equal(out[0].severity, top);
+        assert.equal(out[0].judgeDisposition, "act");
+      }
+    });
+
+    test("a cluster with a medium member stays act", () => {
+      const { findings } = applyJudgeDispositions(cluster("medium", "low"), judgeVerdict([{ index: 0, ...act }]));
+      assert.deepEqual(findings.map((f) => [f.severity, f.judgeDisposition]), [["medium", "act"], ["low", "act"]]);
+    });
+
+    test("a non-boolean failOpen fails closed", () => {
+      assert.throws(() => applyJudgeDispositions(cluster("low"), judgeVerdict([{ index: 0, ...act, failOpen: "yes" }])), /failOpen must be a boolean/);
+    });
+
+    test("at the cap a ledger of 3 low and 1 nit judged act composes clean with no open act items", () => {
+      const findings = ["low", "low", "low", "nit"].map((s, i) => ({ severity: s, angle: `a${i}`, summary: `finding ${i}`, clusterId: i }));
+      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict(findings.map((_f, i) => ({ index: i, ...act }))), { pastCap: true });
+      assert.equal(listOpenActItems(out).length, 0);
+      assert.equal(composeReviewVerdict("findings_present", out), "clean");
+    });
+
+    test("below the cap the same ledger keeps the 3 lows as act items and rejects the nit", () => {
+      const findings = ["low", "low", "low", "nit"].map((s, i) => ({ severity: s, angle: `a${i}`, summary: `finding ${i}`, clusterId: i }));
+      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict(findings.map((_f, i) => ({ index: i, ...act }))), { pastCap: false, round: 2 });
+      assert.equal(listOpenActItems(out).length, 3);
+      assert.equal(out[3].judgeDisposition, "reject");
+      assert.equal(composeReviewVerdict("findings_present", out), "findings_present");
+    });
+  });
+
   test("a finding rejected as out-of-scope against a named non-goal gets judgeDisposition reject", () => {
     const verdict = judgeVerdict([
       { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in-scope defect", criterion: "AC-1" },
