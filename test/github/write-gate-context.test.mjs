@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, link, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -42,6 +42,7 @@ import {
   resolvePrSpecContext,
   resolvePriorDispositions,
   countCompletedRounds,
+  resolveClosureRound,
   readGateContext,
   renderBriefingEvidence,
   renderBriefingPrefix,
@@ -886,11 +887,10 @@ test("rationaleFromResolver marks addedAngles entries as 'added' with their adde
   });
 });
 
-test("rationaleFromResolver treats addedAngles entries as 'kept' when dynamicAnglesActive is not true (defensive guard)", () => {
-  // resolveGateAnglesDynamic never produces a non-empty addedAngles with
-  // dynamicAnglesActive false, but a hand-constructed/malformed resolverResult
-  // could. The "added" classification must stay gated on dynamicActive so
-  // rationale semantics remain internally consistent.
+test("rationaleFromResolver records addedAngles entries as 'added' even when dynamicAnglesActive is false (static-path seam override)", () => {
+  // The static path (dynamic subtractive off) can add threat-model for a
+  // SECURITY_SENSITIVE_SEAM diff with dynamicAnglesActive false; the override
+  // must be recorded as added, never silent.
   const { rationale } = rationaleFromResolver({
     recommendedAngles: ["some-angle"],
     skippedAngles: [],
@@ -900,7 +900,7 @@ test("rationaleFromResolver treats addedAngles entries as 'kept' when dynamicAng
     dynamicAnglesActive: false,
   });
   assert.deepEqual(rationale, [
-    { angle: "some-angle", action: "kept", reason: "static pool (dynamic angle resolution inactive)" },
+    { angle: "some-angle", action: "added", reason: "Added: triggered by change category CI_ONLY" },
   ]);
 });
 
@@ -8263,6 +8263,29 @@ test("issue 2885: write-gate-context records baseFreshness on a current base and
   }
 });
 
+test("seamFirstRoundFor: pre_approval is a seam-first round only when no draft_gate round ran threat-model at the head", async () => {
+  const { seamFirstRoundFor } = await import("../../scripts/github/write-gate-context.mjs");
+  const root = await mkdtemp(path.join(os.tmpdir(), "seam-first-"));
+  try {
+    const id = { repo: "o/r", pr: 7, headSha: "a".repeat(40), tmpRoot: "tmp" };
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "draft_gate" }, root), true);
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "review" }, root), false);
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "pre_approval_gate" }, root), true);
+    const draftPath = path.join(root, buildGateContextPath({ ...id, gate: "draft_gate" }));
+    await mkdir(path.dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, JSON.stringify({ resolvedAngles: ["scope"] }));
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "pre_approval_gate" }, root), true, "draft artifact without threat-model");
+    await writeFile(draftPath, "{not json");
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "pre_approval_gate" }, root), true, "malformed draft artifact");
+    await writeFile(draftPath, JSON.stringify({ resolvedAngles: ["scope", "threat-model"] }));
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "pre_approval_gate" }, root), false);
+    assert.equal(await seamFirstRoundFor({ ...id, tmpRoot: "", gate: "pre_approval_gate" }, root), false, "empty tmpRoot shares the writer's normalization");
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "draft_gate" }, root), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 async function expectRefusal(argv, runtime, pattern, clone) {
   const before = process.exitCode;
   const realWrite = process.stderr.write.bind(process.stderr);
@@ -8411,6 +8434,67 @@ test("issue 2885: a stale local refs/heads/main base diffs against origin/main, 
   }
 });
 
+// Wiring pin: deleting the seamFirstRound line in buildGateContext restores the
+// resolver default (false for preApproval) and must fail this test.
+test("buildGateContext passes seamFirstRoundFor to the resolver: a pre_approval seam round adds threat-model only when no draft artifact at the head lists it", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-seam-wiring-"));
+  try {
+    const config = { version: 1, gates: { preApproval: { angles: ["scope", { name: "threat-model", enabled: false }] } } };
+    const seamDiff = {
+      nameStatusOutput: "M\tscripts/x.mjs",
+      diffOutput: "diff --git a/scripts/x.mjs b/scripts/x.mjs\n--- a/scripts/x.mjs\n+++ b/scripts/x.mjs\n@@ -1 +1,2 @@\n a\n+spawn(cmd);\n",
+    };
+    const id = { repo: "owner/repo", pr: 12, headSha: "a".repeat(40) };
+    const build = () => buildGateContext({ config, gate: "pre_approval_gate", diff: seamDiff, ...id, branch: "issue-1" }, { repoRoot });
+    const noDraft = await build();
+    assert.ok(noDraft.artifact.resolvedAngles.includes("threat-model"), "no draft artifact at the head");
+    const draftPath = path.join(repoRoot, buildGateContextPath({ ...id, gate: "draft_gate" }));
+    await mkdir(path.dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, JSON.stringify({ resolvedAngles: ["scope", "threat-model"] }));
+    const afterDraft = await build();
+    assert.ok(!afterDraft.artifact.resolvedAngles.includes("threat-model"), "draft artifact lists threat-model");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Wiring pin: deleting `seamFirstRound: await seamFirstRoundFor(options, repoRoot)`
+// in main() restores the resolver default (false for preApproval) and must fail this test.
+test("main() passes seamFirstRoundFor to the resolver: a pre_approval seam round adds threat-model only when no draft artifact at the head lists it", async () => {
+  const { repoRoot, baseSha } = await makeBaseDiffRepo();
+  try {
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      ["version: 1", "gates:", "  preApproval:", "    angles:", "      - scope", "      - name: threat-model", "        enabled: false"].join("\n") + "\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "src/changed.mjs"),
+      'import { helper } from "./dep.mjs";\nexport function changed() { spawn(cmd); return helper() + 1; }\n',
+      "utf8",
+    );
+    git(repoRoot, ["add", "src/changed.mjs"]);
+    git(repoRoot, ["commit", "-q", "-m", "seam"]);
+    const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    const id = { repo: "owner/repo", pr: 92, headSha };
+    const run = async () => {
+      await main(["--repo", id.repo, "--pr", String(id.pr), "--gate", "pre_approval_gate", "--head-sha", headSha, "--base", baseSha], {
+        repoRoot,
+        run: stubGhRun,
+        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true } }),
+      });
+      return (await readGateContext({ ...id, gate: "pre_approval_gate" }, { repoRoot })).resolvedAngles;
+    };
+    assert.ok((await run()).includes("threat-model"), "no draft artifact at the head");
+    const draftPath = path.join(repoRoot, buildGateContextPath({ ...id, gate: "draft_gate" }));
+    await mkdir(path.dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, JSON.stringify({ resolvedAngles: ["scope", "threat-model"] }));
+    assert.ok(!(await run()).includes("threat-model"), "draft artifact lists threat-model");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("countCompletedRounds counts an in-range identity-matching ledger with a missing or unknown verdict, never a foreign one", async () => {
   const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-round-count-"));
   try {
@@ -8455,5 +8539,113 @@ test("countCompletedRounds skips closed ledgers logged before DRAFT_ROUND_CAP_EF
     assert.equal(await count(), 6, "an impossible date, month 13, hour 24/25 or four fraction digits is noncanonical and counts");
   } finally {
     await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+// ADR 0191 (#2937 S4a): the one closure round diffs from the cap round's head.
+async function seedClosedRounds(repoRoot, pr, heads) {
+  const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", `pr-${pr}`);
+  await mkdir(dir, { recursive: true });
+  for (const [i, head] of heads.entries()) {
+    const findings = i === heads.length - 1 ? [{ severity: "medium", summary: "guard missing", files: ["src/changed.mjs"], line: 2, judgeDisposition: "act", judgeTitle: "Guard is missing", judgeFix: "add the guard" }] : [];
+    await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
+      repo: "owner/repo", pr, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings,
+    }), "utf8");
+  }
+}
+
+test("resolveClosureRound returns the cap round head and the prior act items only at count cap+1 of a draft_gate", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 41, gate: "draft_gate", headSha };
+    await seedClosedRounds(repoRoot, 41, ["1".repeat(40), "2".repeat(40), "3".repeat(40)]);
+    assert.equal(await resolveClosureRound(opts, { repoRoot, cap: 4 }), null, "the cap round is not a closure round");
+    await seedClosedRounds(repoRoot, 41, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    assert.equal(await resolveClosureRound(opts, { repoRoot, cap: 0 }), null, "cap 0 disables");
+    assert.equal(await resolveClosureRound({ ...opts, gate: "pre_approval_gate" }, { repoRoot, cap: 4 }), null);
+    const closure = await resolveClosureRound(opts, { repoRoot, cap: 4 });
+    assert.equal(closure.fromHead, baseSha);
+    assert.deepEqual(closure.priorActItems.map((i) => i.title), ["Guard is missing"]);
+    await seedClosedRounds(repoRoot, 41, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha, "5".repeat(40)]);
+    assert.equal(await resolveClosureRound(opts, { repoRoot, cap: 4 }), null, "a round counted cap+2 is not a closure round");
+    // A blocked closure ledger does not count, so the next head is again counted cap+1 and resolves from the last closed head.
+    await seedClosedRounds(repoRoot, 44, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    const blockedHead = "6".repeat(40);
+    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-44", `draft_gate-${blockedHead}.json`), JSON.stringify({
+      repo: "owner/repo", pr: 44, gate: "draft_gate", headSha: blockedHead, verdict: "blocked", loggedAt: "2026-11-09T00:00:00.000Z", findings: [],
+    }), "utf8");
+    const again = await resolveClosureRound({ ...opts, pr: 44 }, { repoRoot, cap: 4 });
+    assert.equal(again?.fromHead, baseSha, "a blocked closure ledger leaves the next round a closure round from the last closed head");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveClosureRound refuses when the closure count is reached but no closed prior ledger is readable", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    await seedClosedRounds(repoRoot, 46, ["1".repeat(40), "2".repeat(40), "3".repeat(40), "4".repeat(40)]);
+    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-46");
+    for (const name of await readdir(dir)) await writeFile(path.join(dir, name), "{not json", "utf8");
+    await assert.rejects(resolveClosureRound({ repo: "owner/repo", pr: 46, gate: "draft_gate", headSha }, { repoRoot, cap: 4 }), /cannot be recovered/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveClosureRound returns the trimmed, lowercased ledger headSha as fromHead", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await seedClosedRounds(repoRoot, 45, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    const file = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-45", `draft_gate-${baseSha}.json`);
+    const log = JSON.parse(await readFile(file, "utf8"));
+    await writeFile(file, JSON.stringify({ ...log, headSha: ` ${baseSha.toUpperCase()} ` }), "utf8");
+    const closure = await resolveClosureRound({ repo: "owner/repo", pr: 45, gate: "draft_gate", headSha }, { repoRoot, cap: 4 });
+    assert.equal(closure.fromHead, baseSha);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI closure round is detected from the main-anchored ledger when the context bundle is relocated with --tmp-root", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  try {
+    await seedClosedRounds(repoRoot, 47, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    process.exitCode = undefined;
+    await main(["--repo", "owner/repo", "--pr", "47", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", headSha, "--tmp-root", "relocated"], { repoRoot, run: stubGhRun });
+    assert.notEqual(process.exitCode, 1);
+    const closure = await readGateContext({ repo: "owner/repo", pr: 47, gate: "draft_gate", headSha, tmpRoot: "relocated" }, { repoRoot });
+    assert.equal(closure.scope.closureRound.fromHead, baseSha);
+    assert.equal(closure.scope.closureRound.ignoredBase, headSha);
+  } finally {
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI closure round diffs from the cap round head, records scope.closureRound and overrides a different --base; an ordinary round records none", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  try {
+    const args = (pr, base) => ["--repo", "owner/repo", "--pr", String(pr), "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', ...(base ? ["--base", base] : [])];
+    await main(args(42, baseSha), { repoRoot, run: stubGhRun });
+    const ordinary = await readGateContext({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal("closureRound" in ordinary.scope, false);
+
+    await seedClosedRounds(repoRoot, 43, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    process.exitCode = undefined;
+    // headSha differs from fromHead (baseSha) and as a base would resolve an empty change set, so a diff from it would fail.
+    await main(args(43, headSha), { repoRoot, run: stubGhRun });
+    assert.notEqual(process.exitCode, 1, "a --base that differs from the cap round head is overridden, not refused");
+    const closure = await readGateContext({ repo: "owner/repo", pr: 43, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal(closure.scope.diffSource, "base");
+    assert.deepEqual(closure.scope.changedFiles, ["src/changed.mjs"]);
+    assert.equal(closure.scope.closureRound.fromHead, baseSha);
+    assert.equal(closure.scope.closureRound.ignoredBase, headSha);
+    assert.deepEqual(closure.scope.closureRound.priorActItems.map((i) => i.title), ["Guard is missing"]);
+  } finally {
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
   }
 });

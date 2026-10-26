@@ -75,6 +75,9 @@ gates:
       # #1404: gates.<gate>.angles now merges BY NAME across config layers —
       # D3 — so dropping a shipped angle requires an explicit enabled:false
       # entry here; omitting it entirely would let it merge back in).
+      # threat-model is overridden on a SECURITY_SENSITIVE_SEAM diff: the
+      # resolver adds it back past enabled: false in a draft_gate round, or in a
+      # pre_approval_gate round at a head where no draft_gate round ran threat-model.
       - name: threat-model
         enabled: false
       - name: renderer-security

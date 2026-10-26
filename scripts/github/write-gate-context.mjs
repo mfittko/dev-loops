@@ -205,7 +205,7 @@ export function rationaleFromResolver(resolverResult) {
 
   const rationale = [];
   for (const angle of recommended) {
-    if (added.has(angle) && dynamicActive) {
+    if (added.has(angle)) {
       rationale.push({
         angle,
         action: "added",
@@ -238,7 +238,7 @@ Required:
   --head-sha <sha>
 Optional:
   --harness <pi|claude|codex> Active reviewer harness (default: active CLI harness).
-  --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is a verbatim explicit override only when no proportionality floor fires; a fired floor refuses it and continues with tier-or-best-effort selection. An empty list (\`[]\`) is refused (exit 1, no artifact written) at every entry point — the CLI dynamic path, this flag, and the exported buildGateContext/writeGateContext API — because a gate-context bundle must carry at least one review angle; the non-empty verbatim/floor behavior is unchanged.
+  --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is a verbatim explicit override only when no proportionality floor fires, and a SECURITY_SENSITIVE_SEAM diff adds threat-model to the explicit set (draft round, or pre_approval round at a head where no draft round ran threat-model); a fired floor refuses it and continues with tier-or-best-effort selection. An empty list (\`[]\`) is refused (exit 1, no artifact written) at every entry point — the CLI dynamic path, this flag, and the exported buildGateContext/writeGateContext API — because a gate-context bundle must carry at least one review angle; the non-empty verbatim/floor behavior is unchanged.
   --rationale <json>             JSON array of {angle, action, reason} entries
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
@@ -1948,6 +1948,24 @@ export async function listPriorActItems(options, { repoRoot }) {
   return [...items.values()];
 }
 
+/** The one closure-round fromHead derivation: the head of the latest closed ledger; throws when it is not a non-blank string. */
+export function closureFromHeadOf(closed) {
+  const last = closed.at(-1)?.headSha;
+  if (typeof last !== "string" || last.trim().length === 0) throw new Error("closure round reached but the latest closed prior round's head cannot be recovered (its ledgers are unreadable)");
+  return last.trim().toLowerCase();
+}
+
+/**
+ * The one past-cap closure round (GATE-EXEC-ROUND-CAP): a draft_gate round whose completed-round count is cap+1.
+ * Returns null for any other round; otherwise the head of the latest closed prior round (the fix delta starts there) and the prior act items to verify.
+ */
+export async function resolveClosureRound(options, { repoRoot, cap }) {
+  if (options.gate !== "draft_gate" || !(cap > 0)) return null;
+  if (await countCompletedRounds(options, { repoRoot }) !== cap + 1) return null;
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot });
+  return { fromHead: closureFromHeadOf(closed), priorActItems: await listPriorActItems(options, { repoRoot }) };
+}
+
 /**
  * Known-findings block (GATE-EXEC-FINDING-THREADS): every open or resolved
  * review thread, any author, with full comment bodies, rendered from the
@@ -2286,6 +2304,9 @@ export function buildGateContextArtifact(options) {
   // backward compatible with the artifact shape they already assert on.
   if (typeof options.diffSource === "string" && options.diffSource.length > 0) {
     artifact.scope.diffSource = options.diffSource;
+  }
+  if (options.closureRound && typeof options.closureRound === "object") {
+    artifact.scope.closureRound = options.closureRound;
   }
   // The deterministic, neutral adjacent-code bundle. Only present
   // when the context-builder computed it — keeps the artifact shape backward
@@ -3131,6 +3152,21 @@ function detectRefinementHasAcChecklist(prBody) {
   return artifact.acItems.length > 0;
 }
 
+// SECURITY_SENSITIVE_SEAM override scope: a draft round, or a pre_approval round
+// at a head where no draft_gate round ran threat-model (its gate-context
+// artifact is missing, unreadable, or does not list threat-model).
+export async function seamFirstRoundFor({ gate, repo, pr, headSha, tmpRoot }, repoRoot) {
+  if (gate === "draft_gate") return true;
+  if (gate !== "pre_approval_gate") return false;
+  try {
+    const draftPath = buildGateContextPath({ repo, pr, gate: "draft_gate", headSha, tmpRoot: tmpRoot || "tmp" });
+    const { resolvedAngles } = JSON.parse(await readFile(path.resolve(repoRoot, draftPath), "utf8"));
+    return !(Array.isArray(resolvedAngles) && resolvedAngles.includes("threat-model"));
+  } catch {
+    return true;
+  }
+}
+
 export async function buildGateContext(input, { repoRoot = process.cwd() } = {}) {
   const isReviewGate = input.gate === "review";
   // review has no config key of its own (resolveGateAnglesDynamic only
@@ -3172,6 +3208,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
         // before.
         checkFloors: input.checkFloors === true,
         sizeOutcome: input.sizeOutcome,
+        seamFirstRound: await seamFirstRoundFor(input, repoRoot),
       });
   const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
 
@@ -3600,6 +3637,22 @@ export async function main(
     // full bundle. A run WITH --base that then fails to resolve (bad ref, not a
     // git repo, etc.) DOES fail closed: the caller opted into the full bundle,
     // so a silent thin degrade there would be a worse surprise than an error.
+    // Load the dev-loop config once, before the diff (the closure round needs the cap): used for the closure round, for dynamic angle resolution
+    // (when --angles is omitted) and, regardless of --angles, to resolve each
+    // angle's concrete review model for the dispatch-plan artifact
+    // (resolveRoleModel(kind:"angle"), inside writeGateContext). A config load
+    // error throws config_load_failed: the angle set, mandatory list and tiers
+    // never fall back to defaults.
+    const { config } = await loadDevLoopConfigStrict({ repoRoot });
+    options.config = config;
+    // GATE-EXEC-ROUND-CAP (ADR 0191): the one closure round diffs from the cap round's head.
+    // The findings ledger is main-anchored: read it from its own root, not the (possibly relocated) context --tmp-root.
+    const closureRound = await resolveClosureRound({ ...options, tmpRoot: undefined }, { repoRoot, cap: resolveGateConfig(config, "draft").maxReviewRounds ?? 0 });
+    if (closureRound) {
+      // The closure round diffs from fromHead whatever --base the caller passes (coordinators pass origin/main) and records the ignored --base.
+      options.closureRound = { ...closureRound, ignoredBase: options.base ?? null };
+      options.base = closureRound.fromHead;
+    }
     // AC6 (issue 2885): every dispatch runs the freshness check against the PR's own base branch (baseRefName),
     // whatever --base is (absent, SHA, revision, remote ref). draft_gate and pre_approval_gate refuse (no artifact) on anything but base_current; the review gate records the status and continues; base_unresolved refuses on every gate.
     let prBase;
@@ -3672,19 +3725,12 @@ export async function main(
         sizeOutcome = null; // fails CLOSED — checkFloors treats null as ambiguous
       }
     }
-    // Load the dev-loop config once: used both for dynamic angle resolution
-    // (when --angles is omitted) and, regardless of --angles, to resolve each
-    // angle's concrete review model for the dispatch-plan artifact
-    // (resolveRoleModel(kind:"angle"), inside writeGateContext). A config load
-    // error throws config_load_failed: the angle set, mandatory list and tiers
-    // never fall back to defaults.
-    const { config } = await loadDevLoopConfigStrict({ repoRoot });
-    options.config = config;
 
     // Angle resolution: when --angles is omitted, resolve dynamically from the
     // loaded config (.devloops) + the captured --base diff — the SAME path the
     // programmatic buildGateContext API uses (resolveGateAnglesDynamic). When
-    // --angles IS supplied, it is used as an explicit selector, BUT the
+    // --angles IS supplied, it is used as an explicit selector (a
+    // SECURITY_SENSITIVE_SEAM diff adds threat-model to it), BUT the
     // GATE-EXEC-PROPORTIONALITY floors are non-overridable: draft/preApproval
     // always run explicit angles through resolveGateAnglesDynamic's handling
     // below. With no floor the override is verbatim; a fired floor refuses it
@@ -3741,6 +3787,7 @@ export async function main(
           checkFloors: Boolean(options.base),
           sizeOutcome,
           explicitAngles: Array.isArray(options.angles) ? options.angles : undefined,
+          seamFirstRound: await seamFirstRoundFor(options, repoRoot),
         });
       }
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);

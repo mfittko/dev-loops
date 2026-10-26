@@ -203,6 +203,8 @@ export function projectClusterDisposition(enrichedFindings, clusters) {
       }
       if (representative.resurfaces !== undefined) target.resurfaces = representative.resurfaces;
       else delete target.resurfaces;
+      if (representative.failOpen === true) target.failOpen = true;
+      else delete target.failOpen;
     }
   }
   return result;

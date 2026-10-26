@@ -1310,6 +1310,9 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
       delete target.followUpDraft;
       delete target.judgeReason;
       if (promote) target.severity = "medium";
+      // The judge-marked failOpen reaches the ledger (pastCapBlockers reads it); an all-nit cluster ignores it (ADR 0188).
+      delete target.failOpen;
+      if (failOpen && !allNit) target.failOpen = true;
       delete target.resurfaces;
       if (typeof d.resurfaces === "string" && d.resurfaces.trim().length > 0) target.resurfaces = d.resurfaces.trim();
       target.judgeDisposition = disposition;
@@ -1368,29 +1371,44 @@ export function capClosedFor(finding, { round, cap }) {
 }
 
 /**
- * Blockers a past-cap draft_gate round composes into `blocked`. A new act item and a re-surfaced high or medium
- * act item block, unless every act item is low or nit (the low/nit convergence rule applies instead). A reviewer high or medium that the judge defers or
- * rejects, a missing disposition and an unknown severity block as `severity_disagreement`.
+ * Blockers a past-cap draft_gate round composes into `blocked`. A new act item and, after the cap round, a re-surfaced act item of any severity
+ * block (at the cap round a re-surfaced high or medium blocks only without a `judgeFix`), unless every act item is low or nit in the cap round (GATE-EXEC-LOW-FIX-UNTIL-CAP applies instead); a mixed cap-round list follows the remedy rule below. A high, a `failOpen: true` finding that is not an act item with a `judgeFix` at the cap round, a missing
+ * disposition, an unknown severity, a medium `defer` without `followUpIssueNumber` and a medium `reject` without `judgeReason` block as
+ * `severity_disagreement`. A defer to the PR itself (`pr`) is not a target, and a medium defer is never final when `pr` is not an integer (fail closed). A medium rejected with a reason or deferred with a target issue is final (ADR 0191).
+ * At the cap round (`round === cap`) an act item of a known severity with a string `judgeFix` does not block: the round composes
+ * `findings_present` and the fixer fixes it. In every round after the cap round any act item blocks, a low or nit and a re-surfaced one included, and no fixer runs (GATE-EXEC-ROUND-CAP).
+ * A `judgeFix` or `judgeReason` counts only as a non-blank string.
  * @returns {Array<{ kind: "round_cap_reached", reason: "new_act"|"resurfaced"|"severity_disagreement", item: string }>}
  */
-export function pastCapBlockers(findings) {
+export function pastCapBlockers(findings, { pr, round, cap } = {}) {
+  const atCap = cap > 0 && round === cap;
+  const nonBlank = (value) => typeof value === "string" && value.trim().length > 0;
+  // Only an act item of a known severity (high, medium, low, nit) with a string remedy is exempt at the cap round; an unknown, missing or question severity blocks.
+  const hasRemedy = (f) => nonBlank(f.judgeFix) && ["high", "medium", "low", "nit"].includes(normalizeSeverity(f.severity));
   const list = Array.isArray(findings) ? findings : [];
   const label = (f, reason) => `[${normalizeSeverity(f?.severity)}] ${String(f?.summary ?? "").trim()} (${reason})`;
   const acts = list.filter(isOpenActItem);
-  const lowNitOnly = acts.every((f) => ["low", "nit"].includes(normalizeSeverity(f.severity)));
+  const afterCap = cap > 0 && round > cap;
+  // An all-low/nit list follows GATE-EXEC-LOW-FIX-UNTIL-CAP in the cap round; in a round after the cap round any act item blocks.
+  const lowNitOnly = !afterCap && acts.every((f) => ["low", "nit"].includes(normalizeSeverity(f.severity)));
   const blockers = [];
   if (!lowNitOnly) {
     for (const f of acts) {
-      const severity = normalizeSeverity(f.severity);
-      const reason = !f.resurfaces ? "new_act" : severity === "high" || severity === "medium" ? "resurfaced" : null;
-      if (reason) blockers.push({ kind: "round_cap_reached", reason, item: label(f, reason) });
+      if (atCap && hasRemedy(f)) continue;
+      // A resurfaced act item that is not exempt above blocks whatever its severity (question, unknown or missing included).
+      const reason = f.resurfaces ? "resurfaced" : "new_act";
+      blockers.push({ kind: "round_cap_reached", reason, item: label(f, reason) });
     }
   }
   for (const f of list) {
     if (isOpenActItem(f)) continue;
     const severity = normalizeSeverity(f?.severity);
     const closed = f?.judgeDisposition === "defer" || f?.judgeDisposition === "reject";
-    if (!JUDGE_DISPOSITIONS.includes(f?.judgeDisposition) || !VALID_SEVERITIES.has(severity) || (closed && (severity === "high" || severity === "medium"))) {
+    const isFinal = f?.judgeDisposition === "reject"
+      ? nonBlank(f.judgeReason)
+      : Number.isInteger(pr) && Number.isInteger(f?.followUpIssueNumber) && f.followUpIssueNumber > 0 && f.followUpIssueNumber !== pr;
+    const closedBlocks = closed && (severity === "high" || (severity === "medium" && !isFinal));
+    if (!JUDGE_DISPOSITIONS.includes(f?.judgeDisposition) || !VALID_SEVERITIES.has(severity) || (closed && f?.failOpen === true) || closedBlocks) {
       blockers.push({ kind: "round_cap_reached", reason: "severity_disagreement", item: label(f, "severity_disagreement") });
     }
   }
@@ -1473,6 +1491,7 @@ export function toFindingsLogShape(findings) {
     for (const field of ["judgeTitle", "judgeDetail", "judgeFix", "judgeReason"]) {
       if (typeof f[field] === "string" && f[field].trim().length > 0) entry[field] = f[field].trim();
     }
+    if (f.failOpen === true) entry.failOpen = true;
     return entry;
   });
 }
