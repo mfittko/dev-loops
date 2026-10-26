@@ -2611,7 +2611,7 @@ test("writeGateFindingsLog accepts a clean wrapper with non-blocking judge-act f
         overallVerdict: "clean",
         findings: [
           { severity: "medium", angle: "correctness", summary: "worth fixing now", disposition: "accepted-for-fix" },
-          { severity: "low", angle: "docs", summary: "rename variable", disposition: "accepted-for-fix" },
+          { severity: "medium", angle: "docs", summary: "rename variable", disposition: "accepted-for-fix" },
         ],
       }),
       judgeVerdict: judgeVerdictPath,

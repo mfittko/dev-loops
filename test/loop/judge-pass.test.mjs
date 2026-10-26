@@ -393,7 +393,7 @@ test("judgePassCli accepts a clean verdict whose acts are all non-blocking, prod
       overallVerdict: "clean",
       findings: [
         finding({ severity: "medium", summary: "medium worth fixing now" }),
-        finding({ severity: "low", summary: "cheap polish" }),
+        finding({ severity: "medium", summary: "cheap polish" }),
       ],
     }),
   );

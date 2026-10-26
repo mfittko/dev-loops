@@ -373,6 +373,10 @@
       "enforcementNote": "the gate coordinator releases the first emitted wave with no primer or lead-reviewer step; emit-fanout-dispatch.mjs emits no primer unit and its dispatch-sequence tests pin one-wave release under the Claude and Pi bounds"
     },
     {
+      "id": "GATE-EXEC-FIXER-CYCLE-BOUND",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-EXEC-FIXER-DISPOSITION-BOUNDARY",
       "enforcement": "runtime",
       "enforcementNote": "resolveFixerDispositionInput in scripts/loop/detect-pr-gate-coordination-state.mjs is the advisory seam (ADR 0155): an incomplete claimed-tackled thread yields a warning (fixerDispositionWarning) with nextAction null and no forbiddenActions; evaluateFixerDisposition (packages/core/src/loop/fixer-disposition.mjs) and the optional scripts/github/verify-fixer-disposition.mjs keep their own nextAction output"

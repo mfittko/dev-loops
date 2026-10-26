@@ -608,7 +608,7 @@ const THREE = { ...THREADS, threads: ["T1", "T2", "T3"].map((threadId, i) => ({ 
 
 test("F1: a judge-act finding below the inline floor still reaches the work order through the act list", async () => {
   await withFixture(async ({ files, emit }) => {
-    const lowAct = [{ severity: "nit", angle: "naming", summary: "rename the local", judgeDisposition: "act" }].map(withFp);
+    const lowAct = [{ severity: "medium", angle: "naming", summary: "rename the local", judgeDisposition: "act" }].map(withFp);
     await writeFile(files.actList, JSON.stringify(lowAct));
     const { workOrder } = await emit({ deltaResult: undefined, phase: "commit_only" });
     assert.equal(workOrder.source, "act-list");
@@ -845,6 +845,9 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
       await writeFile(files.actList, JSON.stringify(bad));
       await assert.rejects(emit(), /not a non-empty judge-pass --out array/, JSON.stringify(bad));
     }
+    // ADR 0188: an act list of only low/nit items never reaches the fixer.
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low" }), withFp({ ...ACT[0], severity: "nit", summary: "rename" })]));
+    await assert.rejects(emit(), /only low or nit items/);
     await writeFile(files.actList, JSON.stringify(ACT));
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ autonomy: { humanMergeOnly: "nope" } }));
     await assert.rejects(emit(), /dev-loops config is invalid/);
@@ -2049,8 +2052,8 @@ test("handbackCheck is machine-local: two commit_only emissions with different e
 test("the skeleton merges a shared fingerprint and dedupes repeated site texts", async () => {
   await withFixture(async ({ files, emit }) => {
     await writeFile(files.actList, JSON.stringify([
-      { severity: "low", angle: "correctness", summary: "one", judgeDisposition: "act", siteQuery: "q1", statedSurfaces: ["a.md", "a.md", "--x"], acceptedForms: ["--x"] },
-      { severity: "low", angle: "holistic", summary: "one", judgeDisposition: "act", siteQuery: "q2", statedSurfaces: ["b.md", "a.md"] },
+      { severity: "medium", angle: "correctness", summary: "one", judgeDisposition: "act", siteQuery: "q1", statedSurfaces: ["a.md", "a.md", "--x"], acceptedForms: ["--x"] },
+      { severity: "medium", angle: "holistic", summary: "one", judgeDisposition: "act", siteQuery: "q2", statedSurfaces: ["b.md", "a.md"] },
     ].map(withFp)));
     const { workOrder } = await emit({ phase: "commit_only", deltaResult: undefined });
     assert.equal(workOrder.siteCoverage.length, 1);

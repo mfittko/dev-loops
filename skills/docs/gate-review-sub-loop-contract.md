@@ -169,6 +169,9 @@ trusting the recorded facts. ADR 0156 records this rule.
 <!-- rule: GATE-EXEC-LOW-NIT-CONVERGENCE -->
 `GATE-EXEC-LOW-NIT-CONVERGENCE`: A `draft_gate` round at head A whose open judge act items are ALL `low` or `nit` (a non-empty list) converges after one `commit_only` fixer pass and a fresh, valid `locally_clear` pre-push delta review of the fixer commit (`PRE-PUSH-DELTA-NOT-GATE-EVIDENCE`). No further full `draft_gate` round runs. The poster updates the `draft_gate` comment at A to `clean` with `upsert-checkpoint-verdict.mjs --converged-json` and records `**Converged:** fixer <sha> delta sha256:<digest>` (the fixer commit and the digest of the clean delta result). The round converges once: one pre-push delta sequence from A, bound by the delta result baseline A and `candidateHead` = the fixer commit. `composeConvergedDraftGate` (`packages/core/src/loop/pre-push-delta-review.mjs`) refuses a non-`draft_gate` gate, an empty act list, a `medium`, `high`, `question` or unknown severity, a mixed list, an act list that differs from the round's (compared by severity and summary as a multiset with counts), a delta result that is invalid, not `locally_clear`, stale or carries a new finding. The membership-only delta check is sufficient: the act-set id and baseline A bind the result to this round, and `pre_approval_gate` reviews the final head in full. `upsert-checkpoint-verdict.mjs` requires `--findings-ledger` and takes the round's act items from the union of the ledger at A and the `--findings-json` act items (it refuses without the ledger, and a missing or unreadable ledger refuses naming the path and error), refuses a PR head other than the fixer commit, and refuses a comment at A that is already `clean` or already converged. Any refusal keeps the full round. `detect-checkpoint-evidence.mjs` re-derives the light-mode scope, risk-path and size floors for an inline marker against the marker's own head (the fixer commit). The rule takes no round count and no cap. Gate coordination reads the marker as the `draft_gate` marker of the fixer commit (`summarizeGateReviewCommentMarkers`) and returns `mark_ready_for_review`, then the mandatory `pre_approval_gate`. The `pre_approval_gate` stays a full review of the final head, and `merge-pr.mjs` is unchanged: the marker is not merge evidence. ADR 0168 records this rule.
 
+<!-- rule: GATE-EXEC-FIXER-CYCLE-BOUND -->
+`GATE-EXEC-FIXER-CYCLE-BOUND`: No contract, agent brief or orchestrator brief sets a fixed fixer-cycle cap. Fixer cycles are bounded only by a new `high` finding, by size-band growth past the forecast (#2756), or by the closure-only round cap. ADR 0188 records this rule.
+
 ### Phase 1 — Preamble: context-builder
 
 Before fanning out reviewers, run a preamble pass that produces review handoff context
@@ -887,18 +890,18 @@ by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
   of done (a correctness bug, a fail-open/fail-closed gap, a security regression, or an AC-breaking
   defect), plus the non-defect `act` cases named below (a `nit` riding an already-planned fix pass;
   an admitted coverage-expansion request); the fixer addresses it. Severity is an INPUT to the judgment, never an auto-gate:
-  the judge adjudicates EVERY finding — INCLUDING a `low` — on its merits, and a real defect
-  is `act` regardless of its severity label. Round 1 is the cheapest fix point, so a real
-  AC-relevant `low` is acted up front, never auto-deferred on its label.
+  the judge adjudicates EVERY finding, including a `low`, on its merits, but a cluster of only `low` and `nit` members is
+  never `act` (ADR 0188): `applyJudgeDispositions` coerces an `act` on it to `defer` (a low) or
+  `reject` (all nit), unless the disposition sets `failOpen: true`, which promotes the members to
+  `medium` and keeps `act`. `emit-fixer-work-order.mjs` refuses an act list of only low/nit items.
 - `defer` — real but belongs in a follow-up; MUST carry a `followUpDraft` (soft-cap contract):
   the draft is the durable ledger record, and `judge-pass`'s batched deferral comment on a linked spec issue target (a PR target posts no comment; the verdict body's Details marker in the Deferred group records a folded finding, and the thread marker plus resolving reply a stamped thread)
   records the deferral (`GATE-EXEC-DEFERRAL-RECORD`). The defer bar is high (net-reduction policy): a `nit` MUST NOT get
-  a verdict `disposition` of `defer` (merged into the ledger as `judgeDisposition`; `act` —
-  only when it rides an already-planned fix pass — or `reject`, and the resolved thread note
+  a verdict `disposition` of `defer` (merged into the ledger as `judgeDisposition`; an all-nit
+  cluster is `reject`, and the resolved thread note
   is its record; the ledger disposition of a nit stays unjudged), and a
-  `low` adjudicated as a genuine AC-relevant defect is `act` (above), never deferred or
-  rejected on its severity label; a `low` that is real but out of this PR's scope MUST be
-  deferred only when leaving it unfixed would change an operator-visible outcome (wrong
+  real `low` is `defer` (`act` only with `failOpen: true`, above) when
+  leaving it unfixed would change an operator-visible outcome (wrong
   guidance a conductor executes, a fail-closed gap reachable on a sanctioned path, or a
   demonstrable bug), and a genuinely non-blocking/cosmetic `low` that clears none of those
   defaults to `reject`. When the judge's pulled inputs (the covering issue references in

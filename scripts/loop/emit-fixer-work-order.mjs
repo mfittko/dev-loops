@@ -288,6 +288,10 @@ export async function emitFixerWorkOrder({
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   }
+  // ADR 0188: low and nit findings never reach the fixer (backstop for hand-built or legacy ledgers).
+  if (actListFile && source.parsed.every((f) => f.severity === "low" || f.severity === "nit")) {
+    throw new Refusal(`act list ${actListFile} holds only low or nit items; low and nit findings never reach the fixer (ADR 0188)`);
+  }
   // The verify-time act-thread guard matches open gate threads by fingerprint, so a missing or wrong one would let a matching thread pass as threadless.
   const badFingerprint = actListFile ? source.parsed.find((f) => f.fingerprint !== fingerprintFinding(f)) : undefined;
   if (badFingerprint) {

@@ -1179,6 +1179,9 @@ export function validateJudgeVerdict(verdict) {
         throw new Error(`judge verdict.dispositions[${i}].${field} must be a non-empty string (the judge authors each cluster's prose)`);
       }
     }
+    if (entry.failOpen !== undefined && typeof entry.failOpen !== "boolean") {
+      throw new Error(`judge verdict.dispositions[${i}].failOpen must be a boolean when present`);
+    }
     if (entry.disposition !== "act" && (typeof entry.reason !== "string" || entry.reason.trim().length === 0)) {
       throw new Error(`judge verdict.dispositions[${i}].reason must be a non-empty one-sentence string on a ${entry.disposition} disposition`);
     }
@@ -1265,6 +1268,22 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
         throw new Error(`judge disposition for cluster ${d.index} defers a cluster whose severity is ${blocked}; a high, a question or an all-nit cluster is never deferred (GATE-EXEC-THREAD-DISPOSITION) — fail closed`);
       }
     }
+    // ADR 0188: low and nit findings never block. An `act` on an all-low/nit cluster is coerced
+    // (failOpen promotes to medium and keeps act; else all-nit rejects, a low defers).
+    let disposition = d.disposition;
+    let reason = d.reason;
+    let followUpDraft = d.followUpDraft;
+    let promote = false;
+    const clusterMembers = enriched.filter((_f, i) => clusterOf(i) === d.index);
+    if (disposition === "act" && clusterMembers.every((f) => ["low", "nit"].includes(normalizeSeverity(f.severity)))) {
+      if (d.failOpen === true) {
+        promote = true;
+      } else {
+        disposition = clusterMembers.every((f) => normalizeSeverity(f.severity) === "nit") ? "reject" : "defer";
+        if (typeof reason !== "string" || reason.trim().length === 0) reason = "low and nit findings never block (ADR 0188)";
+        if (disposition === "defer" && !followUpDraft) followUpDraft = { title: d.title.trim(), body: d.detail.trim() };
+      }
+    }
     for (const [i, target] of enriched.entries()) {
       if (clusterOf(i) !== d.index) continue;
       // Reset judge-owned fields before the re-merge so a re-disposed finding
@@ -1273,17 +1292,18 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
       delete target.judgeCriterion;
       delete target.followUpDraft;
       delete target.judgeReason;
-      target.judgeDisposition = d.disposition;
+      if (promote) target.severity = "medium";
+      target.judgeDisposition = disposition;
       target.judgeRationale = d.rationale;
       target.judgeTitle = d.title.trim();
       target.judgeDetail = d.detail.trim();
       target.judgeFix = d.fix.trim();
-      if (typeof d.reason === "string" && d.reason.trim().length > 0) target.judgeReason = d.reason.trim();
+      if (typeof reason === "string" && reason.trim().length > 0) target.judgeReason = reason.trim();
       if (typeof d.criterion === "string" && d.criterion.trim().length > 0) {
         target.judgeCriterion = d.criterion.trim();
       }
-      if (d.disposition === "defer" && d.followUpDraft) {
-        target.followUpDraft = d.followUpDraft;
+      if (disposition === "defer" && followUpDraft) {
+        target.followUpDraft = followUpDraft;
       }
     }
   }
