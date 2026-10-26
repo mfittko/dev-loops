@@ -620,7 +620,7 @@ test("a PR head that changes the validation block runs nothing and resolves inco
   const edits = {
     fullCommand: base.replace("echo base-ran", "touch MARKER"),
     mode: base.replace("mode: local", "mode: ci-only"),
-    paths: base.replace("echo one", "echo two"),
+    mixed: base.replace("mode: local", "mode: ci-only").replace("echo one", "echo two"),
   };
   for (const [name, devloops] of Object.entries(edits)) {
     const { repoRoot, headSha: baseSha } = await bareFixture(base);
@@ -635,7 +635,28 @@ test("a PR head that changes the validation block runs nothing and resolves inco
       assert.match(result.reason, /differs from the base branch.*config-source change/, name);
       const artifact = JSON.parse(await readFile(path.join(repoRoot, result.artifactPath), "utf8"));
       assert.equal(artifact.allPassed, false, name);
+      assert.deepEqual(artifact.suites, [], name);
       await assert.rejects(readFile(marker), /ENOENT/, name);
+    } finally { await rm(repoRoot, { recursive: true, force: true }); }
+  }
+});
+
+// ADR 0192: a paths-only difference resolves as if there were no difference and runs the BASE command.
+test("a paths-only validation block difference is admitted in local and ci-only modes", async () => {
+  const rules = (n) => Array.from({ length: n }, (_, i) => `    - match: dir${i}/**\n      surface: s${i}\n      commands: [echo c${i}]\n`).join("");
+  for (const mode of ["local", "ci-only"]) {
+    const base = `version: 1\nvalidation:\n  mode: ${mode}\n${mode === "local" ? "  fullCommand: echo base-ran\n" : ""}  paths:\n${rules(22)}`;
+    const { repoRoot } = await bareFixture(base);
+    try {
+      await writeFile(path.join(repoRoot, ".devloops"), base + rules(24).slice(rules(22).length));
+      execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "pr edit"], { cwd: repoRoot });
+      const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+      const result = await resolveValidation(parseResolveValidationArgs(args(headSha)), { repoRoot, readCi: ciReader(headSha, "SUCCESS") });
+      assert.equal(result.status, "complete", `${mode}: ${result.reason}`);
+      if (mode === "local") {
+        const log = await readFile(path.join(repoRoot, result.artifact.suites[0].outputPath), "utf8");
+        assert.match(log, /base-ran/);
+      } else assert.equal(result.artifact.authority, "ci-authoritative");
     } finally { await rm(repoRoot, { recursive: true, force: true }); }
   }
 });
@@ -683,16 +704,16 @@ test("an unreadable or malformed base validation block resolves incomplete and r
   }
 });
 
-test("a checkout-only validation.paths edit never reaches a gate-consumed suite", async () => {
+test("a checkout-only validation.paths edit never supplies a gate suite", async () => {
   const { repoRoot } = await fixture();
   try {
     await writeFile(path.join(repoRoot, ".devloops"), "version: 1\nvalidation:\n  mode: local\n  paths:\n    - match: src/**\n      surface: src\n      commands: [bun run passing]\n      gateSuites: [passing]\n");
     execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "pr edit"], { cwd: repoRoot });
     const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
-    const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "passing"]), { repoRoot });
-    assert.equal(result.status, "incomplete");
-    assert.match(result.reason, /differs from the base branch/);
-    assert.equal(result.artifact, undefined);
+    // Only the caller's --suite values run; the checkout gateSuites (passing) supply nothing.
+    const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:docs"]), { repoRoot });
+    assert.equal(result.status, "complete");
+    assert.deepEqual(result.artifact.suites.map((s) => s.command), ["bun run test:docs"]);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 

@@ -108,6 +108,15 @@ export function readCheckoutValidation(repoRoot) {
   return { validation: resolveValidationConfig({ validation: parsed.data }) };
 }
 
+// ADR 0192 (ADR0192-PATHS-ONLY-ADMIT): `paths` is never executed by the gate, so a difference in `paths`
+// alone is admitted. Any other difference refuses. Execution reads only the base block.
+export function validationDifferenceRefusal(checkout, base) {
+  const { paths: _checkoutPaths, ...checkoutRest } = checkout;
+  const { paths: _basePaths, ...baseRest } = base;
+  if (JSON.stringify(checkoutRest) === JSON.stringify(baseRest)) return null;
+  return "validation config differs from the base branch: a config-source change needs review before validation runs";
+}
+
 // Secrets stay out of the declared command's environment.
 const SECRET_ENV = /token|secret|password|passwd|credential|api_?key|^gh_|^github_|^npm_/i;
 // Inherited Git repository pointers would aim a Git command at another repository.
@@ -182,9 +191,8 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
     const base = readBaseValidation(repoRoot);
     if (base.reason) return incomplete(base.reason);
     // A PR that edits its own validation block never runs what it declared.
-    if (JSON.stringify(checkout.validation) !== JSON.stringify(base.validation)) {
-      return incomplete("validation config differs from the base branch: a config-source change needs review before validation runs");
-    }
+    const refusal = validationDifferenceRefusal(checkout.validation, base.validation);
+    if (refusal) return incomplete(refusal);
     const { mode, fullCommand } = base.validation;
     // A declared command also serves a targeted request in a repo without package.json.
     const declared = mode === "local" && fullCommand && (options.profile === "full-repository" || !existsSync(path.join(repoRoot, "package.json"))) && fullCommand;

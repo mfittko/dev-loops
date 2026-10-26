@@ -15,7 +15,7 @@ import { parseValidationRecord, validationRecordPath } from "@dev-loops/core/loo
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { buildParseError,formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
-import { readBaseValidation, readCheckoutValidation } from "./resolve-validation.mjs";
+import { readBaseValidation, readCheckoutValidation, validationDifferenceRefusal } from "./resolve-validation.mjs";
 import { buildValidationArtifact, classifyPackageSuites, readPackageScripts } from "./run-gate-validation.mjs";
 
 const DEFAULT_TIMEOUT_S = 540;
@@ -92,9 +92,8 @@ export async function produceValidationRecord(options, { repoRoot = resolveRepoR
     if (checkout.reason) return incomplete(checkout.reason);
     const base = readBaseValidation(repoRoot);
     if (base.reason) return incomplete(base.reason);
-    if (JSON.stringify(checkout.validation) !== JSON.stringify(base.validation)) {
-      return incomplete("validation config differs from the base branch: a config-source change needs review before validation runs");
-    }
+    const refusal = validationDifferenceRefusal(checkout.validation, base.validation);
+    if (refusal) return incomplete(refusal);
     if (base.validation.mode !== "local") {
       return incomplete(`base validation mode resolves to ${JSON.stringify(base.validation.mode)}; ci-only selects the ci producer (ADR 0170), so the local producer runs nothing`);
     }

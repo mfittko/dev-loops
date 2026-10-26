@@ -141,9 +141,28 @@ test("a head mismatch is incomplete",() => withFixture({}, async (repoRoot) => {
   await assertIncomplete(repoRoot, "b".repeat(40), /differs from requested head/);
 }));
 
-test("a checkout validation block that differs from the base is incomplete", () => withFixture({}, async (repoRoot) => {
-  const headSha = await commit(repoRoot, { ".devloops": DEVLOOPS.replace("bun run test:docs", "echo changed") });
-  await assertIncomplete(repoRoot, headSha, /differs from the base branch/);
+test("a checkout validation block that differs from the base in mode or fullCommand is incomplete", async () => {
+  const edits = [
+    DEVLOOPS.replace("mode: local\n", "mode: local\n  fullCommand: \"echo changed\"\n"),
+    DEVLOOPS.replace("mode: local\n", "mode: local\n  fullCommand: \"echo changed\"\n").replace("bun run test:docs", "echo changed"),
+  ];
+  for (const devloops of edits) {
+    await withFixture({}, async (repoRoot) => {
+      const headSha = await commit(repoRoot, { ".devloops": devloops });
+      await assertIncomplete(repoRoot, headSha, /differs from the base branch/);
+    });
+  }
+});
+
+// ADR 0192: a paths-only difference is admitted and the BASE paths select the suites.
+test("a checkout validation block that differs from the base only in paths is admitted", () => withFixture({}, async (repoRoot) => {
+  const headSha = await commit(repoRoot, { ".devloops": DEVLOOPS.replace("bun run test:docs", "echo changed"), "docs/a.md": "# a\n" });
+  const out = await run(repoRoot, headSha);
+  assert.equal(out.code, 0, out.stdout + out.stderr);
+  const record = JSON.parse(out.stdout);
+  // The edited .devloops is itself an unmapped changed path under the BASE paths, so the full suite runs.
+  assert.equal(record.profile, "full-repository");
+  assert.equal(record.allPassed, true);
 }));
 
 test("a base validation block in ci-only mode, absent or with no config file is incomplete and writes no record", async () => {
