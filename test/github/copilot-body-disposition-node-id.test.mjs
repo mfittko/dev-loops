@@ -50,6 +50,13 @@ test("a current-head tie (null bodyFindingReviewId) forwards every signaling bod
   assert.deepEqual(feedback.judgeFinding.findings.map((f) => [f.severity, f.summary]), [["medium", "First."], ["low", "Second."]]);
 });
 
+test("a current-head tie forwards only the reviews tied at the latest submittedAt, not an older superseded one", async () => {
+  const mk = (id, submittedAt, text) => ({ ...review, id, submittedAt, body: `### 🟡 Changes recommended\n\n${text}` });
+  const summary = { hasBodyFindingOnCurrentHead: true, bodyFindingReviewId: null, effectiveCopilotReviews: [mk("PRR_old", "2026-05-31T19:00:00Z", "Old."), mk("PRR_a", "2026-05-31T20:10:00Z", "First."), mk("PRR_b", "2026-05-31T20:10:00Z", "Second.")] };
+  const feedback = await resolveCurrentHeadBodyFeedback({ repo: "o/r", pr: 1, headSha: HEAD, reviewSummary: summary, reviewThreads: [] }, runtimeWith("PRR_zzz"));
+  assert.deepEqual(feedback.judgeFinding.findings.map((f) => f.summary), ["First.", "Second."]);
+});
+
 test("buildJudgeFinding maps severity, skips headings and keeps the full body", () => {
   const low = buildJudgeFinding({ state: "COMMENTED", body: "### 🔵 Needs a closer look\n\nLook again." });
   assert.equal(low.findings[0].severity, "low");

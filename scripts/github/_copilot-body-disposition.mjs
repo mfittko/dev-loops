@@ -256,9 +256,11 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
     const effective = reviewSummary.effectiveCopilotReviews ?? [];
     let currentReviews = effective.filter((r) => currentReviewId != null && String(r?.id) === String(currentReviewId));
     if (currentReviews.length === 0) {
-      // A null bodyFindingReviewId means tied current-head reviews: forward every signaling body.
-      currentReviews = effective.filter((r) => r?.state !== "PENDING" && (r?.commit?.oid ?? r?.commit_id) === headSha
+      // A null bodyFindingReviewId means tied current-head reviews: forward the signaling bodies tied at the latest submittedAt.
+      const signaling = effective.filter((r) => r?.state !== "PENDING" && (r?.commit?.oid ?? r?.commit_id) === headSha
         && (isBodyOnlyBlockingReview(r) || classifyCopilotReviewBodyDisposition(r?.state, r?.body) === COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK));
+      const latest = signaling.reduce((max, r) => (String(r?.submittedAt ?? "") > max ? String(r?.submittedAt ?? "") : max), "");
+      currentReviews = signaling.filter((r) => String(r?.submittedAt ?? "") === latest);
     }
     if (currentReviews.length === 0) currentReviews = [resolveLatestCopilotReview({ reviews: effective }).review];
     return record.cleared
