@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
+import { execFileSync } from "node:child_process";
 
 import {
   buildLogPath,
@@ -3130,3 +3131,30 @@ for (const [cap, lowDisposition, nitDisposition] of [[4, "act", "act"], [1, "def
     }
   });
 }
+
+// GATE-EXEC-ROUND-CAP: a subdirectory cwd must read the repo's cap, not the default 4.
+test("writeGateFindingsLog run from a repo subdirectory reads the repo round cap (ADR 0188)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-subdir-cap-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: tmpDir });
+    const sub = path.join(tmpDir, "nested", "dir");
+    await mkdir(sub, { recursive: true });
+    const headSha = "e6".repeat(20);
+    const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdictPath, JSON.stringify({
+      headSha,
+      scopeDrift: { verdict: "within_scope", rationale: "within AC", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting" }],
+    }), "utf8");
+    await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  draft:\n    maxReviewRounds: 1\n", "utf8");
+    await writeGateFindingsLog({
+      repo: "owner/repo", pr: 2243, gate: "draft_gate", headSha, verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "low", angle: "docs", summary: "rename variable" }]),
+      judgeVerdict: judgeVerdictPath, tmpRoot: tmpDir,
+    }, { repoRoot: sub });
+    const parsed = JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-2243", `draft_gate-${headSha}.json`), "utf8"));
+    assert.deepEqual(parsed.findings.map((f) => f.judgeDisposition), ["defer"]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});

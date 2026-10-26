@@ -54,7 +54,7 @@ import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_c
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
-import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 
 /**
@@ -1928,7 +1928,7 @@ export async function countCompletedRounds(options, { repoRoot }) {
  */
 export async function resolveDraftRoundCap(options, { repoRoot }) {
   if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0 };
-  const { config } = await loadDevLoopConfigStrict({ repoRoot });
+  const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
   const cap = resolveGateConfig(config, "draft").maxReviewRounds;
   const round = await countCompletedRounds(options, { repoRoot });
   return { pastCap: isPastRoundCap(round, cap), round, cap };
