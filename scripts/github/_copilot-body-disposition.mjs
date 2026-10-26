@@ -150,8 +150,8 @@ export function buildJudgeFinding(review) {
   const text = typeof review?.body === "string" ? review.body.trim() : "";
   const firstLine = text.split("\n").map((line) => line.trim()).find((line) => line && !line.startsWith("#"));
   const severity = classifyCopilotReviewBodyDisposition(review?.state, review?.body) === COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK ? "low" : "medium";
-  const recommendation = text.length > 4000 ? `${text.slice(0, 4000)} [truncated]` : text;
-  return { angle: "copilot-body", findings: [{ severity, summary: (firstLine ?? "Copilot review body feedback").slice(0, 300), recommendation }] };
+  // The full body is preserved; only the summary is bounded.
+  return { angle: "copilot-body", findings: [{ severity, summary: (firstLine ?? "Copilot review body feedback").slice(0, 300), recommendation: text }] };
 }
 
 const BODY_ONLY_BLOCKING_DISPOSITIONS = new Set([
@@ -253,8 +253,14 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
       { repo, pr, headSha, reviewId: currentReviewId, reviewCommitSha: headSha },
       runtime,
     );
-    const currentReview = (reviewSummary.effectiveCopilotReviews ?? []).find((r) => currentReviewId != null && String(r?.id) === String(currentReviewId))
-      ?? resolveLatestCopilotReview({ reviews: reviewSummary.effectiveCopilotReviews }).review;
+    const effective = reviewSummary.effectiveCopilotReviews ?? [];
+    let currentReviews = effective.filter((r) => currentReviewId != null && String(r?.id) === String(currentReviewId));
+    if (currentReviews.length === 0) {
+      // A null bodyFindingReviewId means tied current-head reviews: forward every signaling body.
+      currentReviews = effective.filter((r) => r?.state !== "PENDING" && (r?.commit?.oid ?? r?.commit_id) === headSha
+        && (isBodyOnlyBlockingReview(r) || classifyCopilotReviewBodyDisposition(r?.state, r?.body) === COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK));
+    }
+    if (currentReviews.length === 0) currentReviews = [resolveLatestCopilotReview({ reviews: effective }).review];
     return record.cleared
       ? { ...settled, bodyDisposition: record.disposition }
       : {
@@ -267,7 +273,7 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
           ...(record.reasonCode ? { reasonCode: record.reasonCode, reason: record.reason } : {}),
           markerLine: currentReviewId ? markerLineFor(currentReviewId, headSha) : null,
         },
-        judgeFinding: buildJudgeFinding(currentReview),
+        judgeFinding: { angle: "copilot-body", findings: currentReviews.flatMap((r) => buildJudgeFinding(r).findings) },
       };
   }
   const { review, ambiguousBlockingTie, blockingReviews } = resolveLatestCopilotReview({ reviews: reviewSummary?.effectiveCopilotReviews });

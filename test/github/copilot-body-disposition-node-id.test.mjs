@@ -43,13 +43,20 @@ test("a numeric marker clears a numeric review id", async () => {
   assert.equal(result.cleared, true);
 });
 
-test("buildJudgeFinding maps severity, skips headings and marks truncation", () => {
+test("a current-head tie (null bodyFindingReviewId) forwards every signaling body, mixed severities included", async () => {
+  const mk = (id, heading, text) => ({ ...review, id, body: `### ${heading}\n\n${text}` });
+  const summary = { hasBodyFindingOnCurrentHead: true, bodyFindingReviewId: null, effectiveCopilotReviews: [mk("PRR_a", "🟡 Changes recommended", "First."), mk("PRR_b", "🔵 Needs a closer look", "Second.")] };
+  const feedback = await resolveCurrentHeadBodyFeedback({ repo: "o/r", pr: 1, headSha: HEAD, reviewSummary: summary, reviewThreads: [] }, runtimeWith("PRR_zzz"));
+  assert.deepEqual(feedback.judgeFinding.findings.map((f) => [f.severity, f.summary]), [["medium", "First."], ["low", "Second."]]);
+});
+
+test("buildJudgeFinding maps severity, skips headings and keeps the full body", () => {
   const low = buildJudgeFinding({ state: "COMMENTED", body: "### 🔵 Needs a closer look\n\nLook again." });
   assert.equal(low.findings[0].severity, "low");
   assert.equal(low.findings[0].summary, "Look again.");
-  const long = buildJudgeFinding({ state: "COMMENTED", body: `### 🟡 Changes recommended\n\n${"x".repeat(5000)}` });
+  const long = buildJudgeFinding({ state: "COMMENTED", body: `### 🟡 Changes recommended\n\n${"x".repeat(5000)}TAIL` });
   assert.equal(long.findings[0].severity, "medium");
-  assert.ok(long.findings[0].recommendation.endsWith(" [truncated]"));
+  assert.ok(long.findings[0].recommendation.endsWith("TAIL"));
 });
 
 test("copilotBodyJudgePath rejects a bad pr or head", () => {
