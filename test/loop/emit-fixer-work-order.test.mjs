@@ -2334,3 +2334,42 @@ for (const form of ["foreign-route", "two-matching"]) test(`complete THREAD --co
     assert.equal(existsSync(unit.workOrder.outputRefs[0]), false);
   });
 });
+
+// ADR 0197 (#2937 S4b): the cap round (cap 2) ran at `head`; origin/main then moved and the branch merged it.
+async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfterMerge = false } = {}) {
+  await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+  const medium = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
+  await writeFile(files.actList, JSON.stringify([medium]));
+  const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
+  await mkdir(dir, { recursive: true });
+  for (const [sha, loggedAt] of [["d".repeat(40), "2026-11-01T00:00:00.000Z"], [head, "2026-11-02T00:00:00.000Z"]]) {
+    await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt, findings: sha === head ? [medium] : [] }));
+  }
+  await writeFile(path.join(root, "main-only.md"), "main content\n");
+  git(root, "add", "main-only.md");
+  git(root, "commit", "-q", "-m", "main moves");
+  git(root, "update-ref", "refs/remotes/origin/main", "main");
+  git(wt, "merge", "-q", "--no-ff", "-m", "merge origin/main", "origin/main");
+  if (ownChangeAfterMerge) {
+    await writeFile(path.join(wt, "own.md"), "own change\n");
+    git(wt, "add", "own.md");
+    git(wt, "commit", "-q", "-m", "own change");
+  }
+  const merged = git(wt, "rev-parse", "HEAD");
+  return { merged, over: { headSha: merged, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: merged, baseRefName: "main" }), fetchVerdictMarkers: verdictPostedAt(head), phase: "commit_only", deltaResult: undefined } };
+}
+
+test("ADR 0197: a base-only merge after the cap round does not consume the closure round; the cap-round act list reaches the fixer at the merged head", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, {});
+    const result = await fx.emit(over);
+    assert.equal(result.workOrder.source, "act-list");
+  });
+});
+
+test("ADR 0197: a PR-own change after the cap round keeps the round_cap_reached refusal", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, { ownChangeAfterMerge: true });
+    await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
+  });
+});

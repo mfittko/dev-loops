@@ -13,7 +13,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
-import { VALID_SEVERITIES, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
+import { VALID_SEVERITIES, isPastRoundCap, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { deltaCoverageBinding, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -25,7 +25,8 @@ import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWo
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
-import { renderRequiredReadLine, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
+import { closureFromHeadOf, readClosedPriorRoundLogs, renderRequiredReadLine, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
+import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../github/_fixer-emission-evidence.mjs";
@@ -98,7 +99,7 @@ function normalizeAllowedPath(raw) {
 }
 
 async function defaultFetchPr({ repo, pr }) {
-  const out = execFileSync("gh", ["pr", "view", String(pr), "--repo", repo, "--json", "headRefName,headRefOid"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const out = execFileSync("gh", ["pr", "view", String(pr), "--repo", repo, "--json", "headRefName,headRefOid,baseRefName"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   return JSON.parse(out);
 }
 
@@ -295,9 +296,23 @@ export async function emitFixerWorkOrder({
   if (badCluster) throw new WorkOrderRefusal("invalid_cluster_severities", `invalid_cluster_severities: act item ${JSON.stringify(badCluster.summary)} has clusterSeverities that is not a non-empty array of known severities; re-run judge-pass to regenerate the act list`);
   const actSeverities = actListFile ? source.parsed.flatMap((f) => (Array.isArray(f.clusterSeverities) && f.clusterSeverities.length > 0 ? f.clusterSeverities : [f.severity])) : [];
   const lowNitOnly = actSeverities.every((s) => s === "low" || s === "nit");
+  let capRoundHead = headSha; // the head whose ledger and posted verdict the act list belongs to (ADR 0197)
   if (actListFile && (gate === "draft_gate" || lowNitOnly)) {
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
-    const { pastCap, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot },{ repoRoot: resolveRepoRoot(cwd) });
+    let { pastCap, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot },{ repoRoot: resolveRepoRoot(cwd) });
+    // ADR 0197: a base-only merge after the cap round neither counts as a round nor consumes the closure round. The head with no ledger of its own,
+    // whose changes since the cap-round head are merges of the PR base with an unchanged PR-own patch, is still the cap round: the cap-round ledger and posted verdict are read at the cap-round head.
+    if (cap > 0 && round === cap + 1 && !existsSync(path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate, headSha, tmpRoot })))) {
+      try {
+        const fromHead = closureFromHeadOf(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd) }));
+        const baseRefName = (await fetchPr({ repo, pr }))?.baseRefName;
+        if (typeof baseRefName === "string" && baseRefName && await isBaseOnlyMergeSince({ fromHead, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd })) {
+          round = cap;
+          pastCap = isPastRoundCap(round, cap);
+          capRoundHead = fromHead;
+        }
+      } catch { /* an unreadable cap-round head or base fails closed: the round_cap_reached refusal below stands */ }
+    }
     // GATE-EXEC-ROUND-CAP: a round after the cap round composes blocked on any act item (a blocked ledger does not count, so a further round is again cap+1); no fixer order follows it.
     if (cap > 0 && round > cap) {
       throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): act list ${actListFile} belongs to draft_gate round ${round}, after the cap round (cap ${cap}); the verdict is blocked and no fixer order follows it`);
@@ -305,7 +320,7 @@ export async function emitFixerWorkOrder({
     // At the cap round the current-head round can still compose blocked (a failOpen finding the judge rejected, a question-severity act item): no fixer order follows a blocked verdict. An unreadable ledger fails closed.
     if (cap > 0 && round === cap) {
       const repoRoot = resolveRepoRoot(cwd);
-      const ledgerFile = path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }));
+      const ledgerFile = path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha: capRoundHead, tmpRoot: tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }));
       if (!existsSync(ledgerFile)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist; failing closed at the cap round`);
       const { findings: ledgerFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
       const blockers = pastCapBlockers([...ledgerFindings, ...source.parsed], { pr: Number(pr), round, cap }); // Number(pr): the CLI pr is a string; a non-integer yields NaN and fails closed in pastCapBlockers.
@@ -344,12 +359,12 @@ export async function emitFixerWorkOrder({
   if (String(prState.headRefOid ?? "").toLowerCase() !== headSha) throw new Refusal(`PR ${repo}#${pr} head is ${prState.headRefOid}, not --head-sha ${headSha}; conflicting authority, refresh and re-emit`);
   // GATE-EXEC-POST-BEFORE-FIX: an act list is fixed only after its round's verdict review is on the PR at this head.
   if (actListFile) {
-    const upsert = `dev-loops gate upsert-verdict --repo ${repo} --pr ${pr} --head-sha ${headSha} --gate ${gate} --findings-ledger <this round's findings ledger>`;
+    const upsert = `dev-loops gate upsert-verdict --repo ${repo} --pr ${pr} --head-sha ${capRoundHead} --gate ${gate} --findings-ledger <this round's findings ledger>`;
     let markers;
-    try { markers = await fetchVerdictMarkers({ repo, pr, headSha, gate, runtime: { env, ghCommand, runChild } }); } catch (error) {
-      throw new Refusal(`verdict_not_posted: could not read the PR's posted verdicts (${error?.message ?? error}); post the ${gate} verdict review at ${headSha} before fixing: ${upsert}`);
+    try { markers = await fetchVerdictMarkers({ repo, pr, headSha: capRoundHead, gate, runtime: { env, ghCommand, runChild } }); } catch (error) {
+      throw new Refusal(`verdict_not_posted: could not read the PR's posted verdicts (${error?.message ?? error}); post the ${gate} verdict review at ${capRoundHead} before fixing: ${upsert}`);
     }
-    if (!(markers?.[gate]?.visible && markers[gate].contractComplete === true)) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${headSha}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`);
+    if (!(markers?.[gate]?.visible && markers[gate].contractComplete === true)) throw new Refusal(`verdict_not_posted: no ${gate} verdict review is posted on ${repo}#${pr} at ${capRoundHead}; post it before fixing (GATE-EXEC-POST-BEFORE-FIX): ${upsert}`);
   }
 
   let completion, completionRead, candidateHead = headSha, recheckCandidate = () => {}, rejectOriginalRetirement = () => {};

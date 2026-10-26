@@ -179,3 +179,17 @@ export async function captureMainRelativeChangedFilesSince({ base, mainRef = "or
   }
   return { changedFiles, incrementalFiles, hasRename, reduced: true };
 }
+
+/**
+ * Base-only merge (ADR 0197): `fromHead` is an ancestor of `head`, every commit in `fromHead..head` that is not already on `mainRef` is a merge,
+ * and the main-relative PR-own delta since `fromHead` is empty, so the PR-own patch is unchanged. Reuses
+ * {@link captureMainRelativeChangedFilesSince}; an unresolved `mainRef` (`reduced: false`) is never base-only.
+ */
+export async function isBaseOnlyMergeSince({ fromHead, head, mainRef, repoRoot, runGit = runGitCommand }) {
+  const ancestor = await runGit(["merge-base", "--is-ancestor", fromHead, head], { repoRoot });
+  if (ancestor.code !== 0) return false;
+  const nonMerges = await runGit(["rev-list", "--no-merges", "--count", `${fromHead}..${head}`, `^${mainRef}`], { repoRoot });
+  if (nonMerges.code !== 0 || nonMerges.stdout.trim() !== "0") return false;
+  const delta = await captureMainRelativeChangedFilesSince({ base: fromHead, mainRef, head, repoRoot, runGit });
+  return delta.reduced && delta.changedFiles.length === 0;
+}

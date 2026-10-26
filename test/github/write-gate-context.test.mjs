@@ -8617,6 +8617,7 @@ test("CLI closure round is detected from the main-anchored ledger when the conte
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   const priorExitCode = process.exitCode;
   try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
     await seedClosedRounds(repoRoot, 47, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
     process.exitCode = undefined;
     await main(["--repo", "owner/repo", "--pr", "47", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", headSha, "--tmp-root", "relocated"], { repoRoot, run: stubGhRun });
@@ -8639,6 +8640,7 @@ test("CLI closure round diffs from the cap round head, records scope.closureRoun
     const ordinary = await readGateContext({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha }, { repoRoot });
     assert.equal("closureRound" in ordinary.scope, false);
 
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
     await seedClosedRounds(repoRoot, 43, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
     process.exitCode = undefined;
     // headSha differs from fromHead (baseSha) and as a base would resolve an empty change set, so a diff from it would fail.
@@ -8651,6 +8653,68 @@ test("CLI closure round diffs from the cap round head, records scope.closureRoun
     assert.equal(closure.scope.closureRound.ignoredBase, headSha);
     assert.deepEqual(closure.scope.closureRound.priorActItems.map((i) => i.title), ["Guard is missing"]);
   } finally {
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ADR 0197 (#2937 S4b): the cap round (ledger at headSha) is followed by a merge of origin/main, whose content is not the PR's own.
+async function mergeBaseIntoPr(repoRoot, baseSha) {
+  const branch = git(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+  git(repoRoot, ["checkout", "-q", "-b", "side", baseSha]);
+  await writeFile(path.join(repoRoot, "main-only.md"), "main content\n", "utf8");
+  git(repoRoot, ["add", "main-only.md"]);
+  git(repoRoot, ["commit", "-q", "-m", "main moves"]);
+  git(repoRoot, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  git(repoRoot, ["checkout", "-q", branch]);
+  git(repoRoot, ["merge", "-q", "--no-ff", "-m", "merge origin/main", "origin/main"]);
+  return git(repoRoot, ["rev-parse", "HEAD"]).trim();
+}
+
+async function runClosureCli(repoRoot, pr, mergedHead) {
+  process.exitCode = undefined;
+  await main(["--repo", "owner/repo", "--pr", String(pr), "--gate", "draft_gate", "--head-sha", mergedHead, "--angles", '["scope"]', "--base", "origin/main"], { repoRoot, run: stubGhRun });
+}
+
+test("closure bundle holds only the PR-own changes since fromHead and excludes the merged base content (ADR 0197)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  try {
+    await seedClosedRounds(repoRoot, 48, ["1".repeat(40), "2".repeat(40), "3".repeat(40), headSha]);
+    await mergeBaseIntoPr(repoRoot, baseSha);
+    await writeFile(path.join(repoRoot, "src/dep.mjs"), "export function helper() { return 2; }\n", "utf8");
+    git(repoRoot, ["add", "src/dep.mjs"]);
+    git(repoRoot, ["commit", "-q", "-m", "own change after the merge"]);
+    const mergedHead = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    await runClosureCli(repoRoot, 48, mergedHead);
+    assert.notEqual(process.exitCode, 1);
+    const closure = await readGateContext({ repo: "owner/repo", pr: 48, gate: "draft_gate", headSha: mergedHead }, { repoRoot });
+    assert.deepEqual(closure.scope.changedFiles, ["src/dep.mjs"], "main-only.md came from the merged base");
+    assert.equal(closure.scope.closureRound.fromHead, headSha);
+  } finally {
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("closure round refuses with closure_delta_no_pr_own_change when the PR-own delta since fromHead is empty (ADR 0197)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  const stderrWrite = process.stderr.write.bind(process.stderr);
+  const stdoutWrite = process.stdout.write.bind(process.stdout);
+  let out = "";
+  try {
+    await seedClosedRounds(repoRoot, 49, ["1".repeat(40), "2".repeat(40), "3".repeat(40), headSha]);
+    const mergedHead = await mergeBaseIntoPr(repoRoot, baseSha);
+    process.stdout.write = (chunk) => { out += String(chunk); return true; };
+    process.stderr.write = (chunk) => { out += String(chunk); return true; };
+    await runClosureCli(repoRoot, 49, mergedHead);
+    assert.equal(process.exitCode, 1);
+    assert.match(out, /closure_delta_no_pr_own_change/);
+    assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-49", `draft_gate-${mergedHead}.json`)), false, "no artifact, never clean");
+  } finally {
+    process.stdout.write = stdoutWrite;
+    process.stderr.write = stderrWrite;
     process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });
   }
