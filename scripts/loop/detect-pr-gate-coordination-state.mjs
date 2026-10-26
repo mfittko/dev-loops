@@ -1357,7 +1357,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   // GATE-EXEC-COPILOT-BODY-TO-JUDGE routes an earlier-head body-only finding to
   // the judge, so it no longer blocks the clean fallback here. A significant
   // post-convergence change on any other ROUND_CAP_REACHED shape opens a new
-  // Copilot cycle instead, matching the cap reopen in copilot-pr-handoff.mjs.
+  // Copilot cycle instead. For the earlier-head body-only shape this
+  // intentionally diverges from the cap reopen in copilot-pr-handoff.mjs until
+  // S3b: gate coordination wins and goes to the judge.
   const reopenedInterpretation = postConvergenceSignificantChange
     && context.interpretation?.state === STATE.ROUND_CAP_REACHED
     ? reopenRoundCapCycle(context.interpretation)
