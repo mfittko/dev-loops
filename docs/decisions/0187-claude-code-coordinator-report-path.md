@@ -20,7 +20,7 @@ On Claude Code the report path has three parts.
 2. A pause is a turn end while the run is not finished. It ends the turn with plain text and never calls `SubagentHandback`. After a refused `SubagentHandback` the coordinator makes no further call and ends the turn with the full report as plain text.
 3. The orchestrator reads the last assistant message of the coordinator's output file before it resumes or re-asks the coordinator. It sends all decisions for one block in one message.
 
-Every hand-back names the last relayed message it consumed, by first line and arrival time, or states that it consumed none. A report sent while a child is in flight names each child, and its parent treats the reporter as still running.
+Every hand-back names the last relayed message it consumed, by first line and arrival time, or states that it consumed none. On Claude Code the dev-loop coordinator never calls `SubagentHandback` while a child is in flight. It reports that state as a plain-text pause that names each child, and its parent treats the reporter as still running.
 
 Relaying interim reports through `SendMessage` was rejected because its availability varies by session (PR 2602).
 

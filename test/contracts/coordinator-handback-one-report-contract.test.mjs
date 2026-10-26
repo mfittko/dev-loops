@@ -67,6 +67,12 @@ test("both agent files cite the hand-back rule and embed no rule body", async ()
   for (const text of [agent, mirror]) assert.deepEqual(findEmbeddedRuleBodies(text, sources).map((def) => def.id), []);
 });
 
+test("the packet list cites the hand-back rule and no hand-back goes out with a child in flight", async () => {
+  assert.match(await readRepo(MAIN), /compact relay packet.*also carries the consumed relayed message under `COORDINATOR-HANDBACK-ONE-REPORT`/s);
+  assert.match(await rule(ONE), /never calls `SubagentHandback` while a child is in flight/);
+  assert.match(await readRepo(GATE), /on Pi a hand-back, on Claude Code a plain-text pause under `COORDINATOR-HANDBACK-ONE-REPORT`/);
+});
+
 test("required-rules lists both rules", async () => {
   const { requiredRules: rules } = JSON.parse(await readRepo("skills/docs/required-rules.json"));
   for (const id of [ONE, READ]) assert.ok(rules.some((r) => r.id === id), `${id} listed`);

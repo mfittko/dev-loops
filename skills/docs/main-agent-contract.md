@@ -179,7 +179,7 @@ through authoritative state, not through the relay: the successor recovers round
 evidence and open findings by re-running the detectors at resume.
 
 A child hand-back is a **compact relay packet** only: unit identity, status, `nextAction`, evidence
-links (including the startup-output path that unit ran), and an open question if one is needed. No
+links (including the startup-output path that unit ran), and an open question if one is needed. On Claude Code the packet also carries the consumed relayed message under `COORDINATOR-HANDBACK-ONE-REPORT`. No
 transcript, tool output or review text. A relay is the dispatch trigger, never the successor's
 context.
 
@@ -195,6 +195,7 @@ stays outside the sections harness-specific mirrors drop.
 - A pause ends the turn with plain text and never calls `SubagentHandback`. The harness "report has not been delivered" prompt after a pause is answered in plain text too.
 - An answer to a question typed into the dev-loop coordinator's thread, and a duplicate child wake, are pauses when a child is in flight and the run state did not change (no dispatch, push, gate result or new stop). With no child in flight, the dev-loop coordinator answers and continues its runnable next step in the same turn.
 - The one `SubagentHandback` call of a run carries its final report: the hand-back at the first `unitBoundaries.handBackAfter` boundary, `final_approval_ready`, or a stop that needs a caller decision.
+- The dev-loop coordinator never calls `SubagentHandback` while a child is in flight. Every report with a child in flight is a plain-text pause.
 - A turn end with no child in flight is never a pause. The dev-loop coordinator never ends silently while its next step is runnable.
 - After a refused `SubagentHandback`, the dev-loop coordinator makes no further call in that run and ends the turn with the full report as plain text.
 - Every hand-back names the last relayed message it consumed, by first line and arrival time, or states that it consumed none.
