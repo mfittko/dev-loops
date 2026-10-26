@@ -101,6 +101,8 @@ for (const claimOffset of [-1000, 0, 1000]) for (const mode of ["claim", "takeov
 test(`handoff evidence cannot displace a new ${mode} with timestamp offset ${claimOffset}`, async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-handoff-reclaim-"));
   const options = { repo: "owner/repo", pr: 17, cwd, runId: "owner" };
+  const prevMaxAge = process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+  process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = String(STALE_RUNNER_DEFAULT_MAX_AGE_MS);
   try {
     const now = Date.now();
     await claimRunnerOwnership({ ...options, now: new Date(now - 2000).toISOString() });
@@ -120,9 +122,39 @@ test(`handoff evidence cannot displace a new ${mode} with timestamp offset ${cla
     await recordExitSignalForRunner({ ...options, now: new Date(now + 2000).toISOString() });
     await claimRunnerOwnership(options);
     assert.equal((await detectStaleRunner(options)).error, "exit_signal_recorded", "same-owner refresh preserves current-claim evidence");
-  } finally { await rm(cwd, { recursive: true, force: true }); }
+  } finally {
+    if (prevMaxAge === undefined) delete process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+    else process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = prevMaxAge;
+    await rm(cwd, { recursive: true, force: true });
+  }
 });
 }
+
+test("retained pre-claim exit signal cannot displace a fresh owner", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-retained-signal-"));
+  const options = { repo: "owner/repo", pr: 17, cwd, runId: "owner" };
+  const prevMaxAge = process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+  process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = String(STALE_RUNNER_DEFAULT_MAX_AGE_MS);
+  try {
+    const now = Date.now();
+    const claim = await claimRunnerOwnership({ ...options, now: new Date(now).toISOString() });
+    const signalAt = new Date(now - 1000).toISOString();
+    await recordExitSignalForRunner({ ...options, now: signalAt });
+    const before = await readFile(claim.filePath, "utf8");
+    assert.deepEqual(JSON.parse(before).exitSignals.map(({ runId, at }) => ({ runId, at })),
+      [{ runId: "owner", at: signalAt }]);
+    const detected = await detectStaleRunner(options);
+    assert.equal(detected.status, "fresh_runner");
+    assert.equal(detected.exitSignal, null);
+    const result = await ensureAsyncRunnerOwnership({ ...options, env: { DEVLOOPS_RUN_ID: "competitor" }, supersedeStale: true });
+    assert.equal(result.error, "ownership_lost");
+    assert.equal(await readFile(claim.filePath, "utf8"), before);
+  } finally {
+    if (prevMaxAge === undefined) delete process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+    else process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = prevMaxAge;
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
 
 // Builds a throwaway git repo with a linked worktree so cross-CWD coordination
 // path resolution (git-common-dir anchoring) can be exercised for real.
