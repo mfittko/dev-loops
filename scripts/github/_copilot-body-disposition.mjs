@@ -107,7 +107,7 @@ async function isFixAfterReviewAndInHead({ repo, fixSha, reviewCommitSha, headSh
  * is the commit the review was submitted on; a `fix` record clears only when
  * its commit is strictly after that commit and contained in the head.
  *
- * @returns {Promise<{ cleared: boolean, disposition: object|null, reason: string }>}
+ * @returns {Promise<{ cleared: boolean, disposition: object|null, reason: string, reasonCode?: string }>}
  */
 export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewId, reviewCommitSha }, runtime = {}) {
   const notCleared = (reason) => ({ cleared: false, disposition: null, reason });
@@ -234,12 +234,16 @@ export function reviewHasOwnThread(reviewThreads, reviewId) {
  *
  * The comment stream is read only when one of those two findings exists.
  *
- * `dispositionRequired` names the exit when either flag blocks: the review a
+ * `dispositionRequired` names the exit when either flag is set: the review a
  * copilot-body-disposition record must name (`reviewId`, null for an
- * ambiguous tie that no record can clear), its commit, and the reason. It is
- * null when neither flag blocks.
+ * ambiguous tie that no record can clear), its commit, the reason, an optional
+ * `reasonCode` and the nullable `markerLine`. It is null when neither flag is
+ * set. Gate coordination reads it as a non-blocking advisory per
+ * GATE-EXEC-COPILOT-BODY-TO-JUDGE; the loop detector, request tool and merge
+ * path still block on the flags. `judgeFinding` is the finding routed to the
+ * judge, or null.
  *
- * @returns {Promise<{ copilotBodyFeedbackUnresolved: boolean, copilotPriorHeadBodyFeedbackUnresolved: boolean, bodyDisposition: object|null, dispositionRequired: { reviewId: string|null, reviewCommitSha: string|null, reason: string }|null }>}
+ * @returns {Promise<{ copilotBodyFeedbackUnresolved: boolean, copilotPriorHeadBodyFeedbackUnresolved: boolean, bodyDisposition: object|null, dispositionRequired: { reviewId: string|null, reviewCommitSha: string|null, reason: string, reasonCode?: string, markerLine: string|null }|null, judgeFinding: object|null }>}
  */
 export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, reviewSummary, reviewThreads }, runtime = {}) {
   const settled = { copilotBodyFeedbackUnresolved: false, copilotPriorHeadBodyFeedbackUnresolved: false, bodyDisposition: null, dispositionRequired: null, judgeFinding: null };

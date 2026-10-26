@@ -122,7 +122,7 @@ The interpreter applies rules in priority order. The first matching rule wins.
 8. `copilotReviewRequestStatus === "requested" || copilotReviewRequestStatus === "already-requested"` → `waiting_for_copilot_review`
    *(A current-head Copilot review request is still active or pending; the wait is not concluded until that request status settles, even when a submitted current-head review is already visible.)*
 9. `copilotReviewPresent && (ciStatus === "failure" || (copilotReviewOnCurrentHead && copilotPriorHeadBodyFeedbackUnresolved))` → `blocked_needs_user_decision`
-   *(The second clause: a later body-only finding on an earlier commit outranks a clean current-head review. A re-request stops at the same-head clean suppression, so the loop reports blocked and `copilotBodyDispositionRequired` names the review a record must name. The CI opt-out below does not skip this clause.)*
+   *(The second clause: a later body-only finding on an earlier commit outranks a clean current-head review. A re-request stops at the same-head clean suppression, so the loop reports blocked. The operator clears it with the marker form in COPILOT-STATE-BODY-DISPOSITION-RECORD. Gate coordination reports the exact `markerLine` in `copilotBodyDispositionRequired`. The CI opt-out below does not skip this clause.)*
 10. `copilotReviewPresent && (ciStatus === "pending" || ciStatus === "none")` → `waiting_for_ci`
 11. `copilotReviewPresent` → `ready_to_rerequest_review`
 12. `ciStatus === "failure"` → `blocked_needs_user_decision`

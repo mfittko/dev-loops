@@ -1397,12 +1397,17 @@ test("detect-pr-gate-coordination-state allows pre_approval_gate (not an impossi
 // evaluateCopilotConvergence fails. The current head carries the latest
 // Copilot review, so no post-convergence compare fires (last-reviewed head
 // === current head).
-function pathAGhEntries({ reviewBody, threadNodes = [], atCap = true, bodyOnEarlierHead = false }) {
+function pathAGhEntries({ reviewBody, threadNodes = [], atCap = true, bodyOnEarlierHead = false, cleanCurrentThenEarlierBody = false }) {
   const currentHead = "def56789abcdef".padEnd(40, "0");
   // At the round cap (default) two submitted rounds are present (cap = 2 in the
   // fixture .devloops); below the cap only the single current-head review exists.
   // bodyOnEarlierHead puts the latest (body-bearing) review on an earlier head.
-  const reviews = bodyOnEarlierHead
+  const reviews = cleanCurrentThenEarlierBody
+    ? [
+        { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: currentHead }, submittedAt: "2026-05-31T20:00:00Z" },
+        { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "1111111111111111111111111111111111111111" }, body: reviewBody, submittedAt: "2026-05-31T20:10:00Z" },
+      ]
+    : bodyOnEarlierHead
     ? [
         { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "0000000000000000000000000000000000000001" }, submittedAt: "2026-05-31T20:00:00Z" },
         { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "1111111111111111111111111111111111111111" }, body: reviewBody, submittedAt: "2026-05-31T20:10:00Z" },
@@ -1521,6 +1526,15 @@ test("detect-pr-gate-coordination-state ALLOWS pre_approval for an at-cap curren
 
 test("detect-pr-gate-coordination-state ALLOWS pre_approval for an at-cap earlier-head 🟡 when the judge file is written (#2937)", async () => {
   const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body.", bodyOnEarlierHead: true }));
+  const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+  assert.equal(result.code, 0);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.copilotBodyJudgeFileError, null);
+  assert.ok(parsed.allowedNextActions.includes("run_pre_approval_gate"));
+});
+
+test("detect-pr-gate-coordination-state ALLOWS pre_approval for a clean current-head review plus a later earlier-head 🟡 at the cap when the judge file is written (#2937)", async () => {
+  const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body.", cleanCurrentThenEarlierBody: true }));
   const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
   assert.equal(result.code, 0);
   const parsed = JSON.parse(result.stdout);
@@ -4102,6 +4116,21 @@ test("a failed derived judge file write keeps gate entry blocked for an earlier-
     await writeFile(path.join(root, ".devloops"), await readFile(path.join(capFixtureRepoRoot, ".devloops"), "utf8"), "utf8");
     await writeFile(path.join(root, "tmp"), "not a directory", "utf8");
     const entries = pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body.", bodyOnEarlierHead: true });
+    const found = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 266 }, buildMockRuntime(writeGhStub(null, entries), { repoRoot: root }));
+    assert.equal(typeof found.copilotBodyJudgeFileError, "string");
+    assert.ok(found.forbiddenActions.includes("run_pre_approval_gate"));
+    assert.notEqual(found.nextAction, "run_pre_approval_gate");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed derived judge file write keeps gate entry blocked for a clean current-head review plus a later earlier-head body finding at the cap (#2937)", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-body-judge-fail-converged-"));
+  try {
+    await writeFile(path.join(root, ".devloops"), await readFile(path.join(capFixtureRepoRoot, ".devloops"), "utf8"), "utf8");
+    await writeFile(path.join(root, "tmp"), "not a directory", "utf8");
+    const entries = pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body.", cleanCurrentThenEarlierBody: true });
     const found = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 266 }, buildMockRuntime(writeGhStub(null, entries), { repoRoot: root }));
     assert.equal(typeof found.copilotBodyJudgeFileError, "string");
     assert.ok(found.forbiddenActions.includes("run_pre_approval_gate"));

@@ -1066,10 +1066,15 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     if (copilotBodyJudgeFinding) copilotBodyJudgeFileError = error instanceof Error ? error.message : String(error);
   }
   // A finding the judge cannot receive (failed write) stays blocking: fail closed.
-  const bodyRoutedToJudge = (bodyFeedback.copilotBodyFeedbackUnresolved || bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved)
-    && copilotBodyJudgeFileError === null;
+  const bodyFindingPresent = bodyFeedback.copilotBodyFeedbackUnresolved || bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved;
+  const bodyRoutedToJudge = bodyFindingPresent && copilotBodyJudgeFileError === null;
+  // One rule for every finding shape: a finding that is not routed keeps gate
+  // entry blocked, even when evaluateCopilotConvergence (current-head reviews
+  // only) is ok for a clean current-head review.
   const copilotBodyConvergence = bodyRoutedToJudge
     ? { ...evaluatedBodyConvergence, ok: true, reason: "Copilot body feedback is routed to the judge (GATE-EXEC-COPILOT-BODY-TO-JUDGE)" }
+    : bodyFindingPresent
+    ? { ...evaluatedBodyConvergence, ok: false, reason: "Copilot body finding is not routed to the judge (derived file write failed); gate entry stays blocked" }
     : (bodyFeedback.bodyDisposition && !evaluatedBodyConvergence.ok
       ? { ...evaluatedBodyConvergence, ok: true, reason: "body finding cleared by a recorded copilot-body-disposition", bodyDisposition: bodyFeedback.bodyDisposition }
       : evaluatedBodyConvergence);
