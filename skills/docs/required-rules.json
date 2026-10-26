@@ -89,6 +89,11 @@
       "enforcementNote": "Seeking explicit confirmation is agent judgment; no script can require it."
     },
     {
+      "id": "COORDINATOR-HANDBACK-ONE-REPORT",
+      "enforcement": "agent",
+      "enforcementNote": "Whether a turn end is a pause is coordinator judgment; no hook classifies it."
+    },
+    {
       "id": "COORDINATOR-VERIFY-BOUNDARY",
       "enforcement": "runtime"
     },
@@ -622,6 +627,11 @@
     },
     {
       "id": "LOCAL-TRACKER-NO-DIRECT-MERGE"
+    },
+    {
+      "id": "MAIN-AGENT-COORDINATOR-REPORT-READ",
+      "enforcement": "agent",
+      "enforcementNote": "Reading the coordinator output file is an orchestrator step; no script observes it."
     },
     {
       "id": "MAIN-AGENT-FILING-BLOCKER-ONLY",

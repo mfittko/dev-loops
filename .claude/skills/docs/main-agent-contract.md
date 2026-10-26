@@ -179,7 +179,7 @@ through authoritative state, not through the relay: the successor recovers round
 evidence and open findings by re-running the detectors at resume.
 
 A child hand-back is a **compact relay packet** only: unit identity, status, `nextAction`, evidence
-links (including the startup-output path that unit ran), and an open question if one is needed. No
+links (including the startup-output path that unit ran), and an open question if one is needed. On Claude Code the packet also carries the consumed relayed message under `COORDINATOR-HANDBACK-ONE-REPORT`. On Pi a hand-back sent with a child in flight also carries the child list under `GATE-EXEC-HARNESS-JOIN` in [Gate review sub-loop contract](./gate-review-sub-loop-contract.md). No
 transcript, tool output or review text. A relay is the dispatch trigger, never the successor's
 context.
 
@@ -188,4 +188,22 @@ single-response input count, not cumulative traffic); on a Codex root at most 10
 measured against root turns rather than wait duration. A missing or ambiguous native measurement is
 reported as unavailable, never zero. The rule binds the unit coordinator on every harness, so it
 stays outside the sections harness-specific mirrors drop.
+
+<!-- rule: COORDINATOR-HANDBACK-ONE-REPORT -->
+`COORDINATOR-HANDBACK-ONE-REPORT`: Claude Code only. A pause is a turn end while the dev-loop coordinator's run is not finished, for example while a child it dispatched runs.
+
+- A pause ends the turn with plain text and never calls `SubagentHandback`. The harness "report has not been delivered" prompt after a pause is answered in plain text too.
+- An answer to a question typed into the dev-loop coordinator's thread, and a duplicate child wake, are pauses when a child is in flight and the run state did not change (no dispatch, push, gate result or new stop). With no child in flight, the dev-loop coordinator answers and continues its runnable next step in the same turn.
+- The one `SubagentHandback` call of a run carries its final report: the hand-back at the first `unitBoundaries.handBackAfter` boundary, `final_approval_ready`, a stop that needs a caller decision, or the route's own terminal completion (for example a headless standalone `review` that has posted its review).
+- The dev-loop coordinator never calls `SubagentHandback` while a child is in flight. Every report with a child in flight is a plain-text pause.
+- A turn end with no child in flight is never a pause. The dev-loop coordinator never ends silently while its next step is runnable.
+- After a refused `SubagentHandback`, the dev-loop coordinator makes no further call in that run and ends the turn with the full report as plain text.
+- Every hand-back names the last relayed message it consumed, by first line and arrival time, or states that it consumed none.
+
+<!-- rule: MAIN-AGENT-COORDINATOR-REPORT-READ -->
+`MAIN-AGENT-COORDINATOR-REPORT-READ`: Claude Code only. When a coordinator notification says the result is "not repeated here", or the coordinator went idle without a delivered report, the orchestrator reads the last assistant message of the coordinator's output file before it resumes or re-asks it.
+
+- The orchestrator sends all decisions for one block in one message.
+- The orchestrator reads the latest hand-back before it re-instructs.
+- On the next notification of a reporter that named children in flight, read its output file before acting.
 
