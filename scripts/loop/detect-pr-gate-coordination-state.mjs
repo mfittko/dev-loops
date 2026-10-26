@@ -37,13 +37,13 @@ import { detectPostConvergenceSignificantChange } from "./_post-convergence-chan
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
 import { evaluateCopilotConvergence } from "@dev-loops/core/loop/merge-approval";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
-import { resolveCurrentHeadBodyFeedback } from "../github/_copilot-body-disposition.mjs";
+import { copilotBodyJudgePath, resolveCurrentHeadBodyFeedback } from "../github/_copilot-body-disposition.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
 import { fetchCopilotRequested, resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 // Gate-coordination terminal stop actions where the dev-loop run is completing
 // or stopping (success OR stop). The runner-coordination lock is auto-released
@@ -1040,6 +1040,25 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // GATE-EXEC-COPILOT-BODY-TO-JUDGE: a body-only finding (current or earlier
   // head) with no operator marker goes to the judge and never blocks gate entry.
   const copilotBodyJudgeFinding = bodyFeedback.judgeFinding ?? null;
+  // The judge emit pins this file by default; a stale file for the head is removed.
+  const copilotBodyJudgePathForHead = copilotBodyJudgePath({
+    tmpRoot: resolveGateArtifactTmpRoot(runtime.repoRoot ?? resolveRepoRoot(process.cwd())),
+    repo: options.repo,
+    pr: options.pr,
+    headSha: currentHeadSha,
+  });
+  let copilotBodyJudgeFile = null;
+  try {
+    if (copilotBodyJudgeFinding) {
+      await mkdir(path.dirname(copilotBodyJudgePathForHead), { recursive: true });
+      await writeFile(copilotBodyJudgePathForHead, `${JSON.stringify(copilotBodyJudgeFinding, null, 2)}\n`);
+      copilotBodyJudgeFile = copilotBodyJudgePathForHead;
+    } else {
+      await rm(copilotBodyJudgePathForHead, { force: true });
+    }
+  } catch {
+    // best effort: the result still carries the finding
+  }
   const bodyRoutedToJudge = bodyFeedback.copilotBodyFeedbackUnresolved || bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved;
   const copilotBodyConvergence = bodyRoutedToJudge
     ? { ...evaluatedBodyConvergence, ok: true, reason: "Copilot body feedback is routed to the judge (GATE-EXEC-COPILOT-BODY-TO-JUDGE)" }
@@ -1165,6 +1184,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     copilotBodyDisposition: bodyFeedback.bodyDisposition,
     copilotBodyDispositionRequired: null,
     copilotBodyJudgeFinding,
+    copilotBodyJudgeFile,
     fixerDisposition,
   };
 }
@@ -1448,6 +1468,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   result.copilotBodyDisposition = context.copilotBodyDisposition ?? null;
   result.copilotBodyDispositionRequired = context.copilotBodyDispositionRequired ?? null;
   result.copilotBodyJudgeFinding = context.copilotBodyJudgeFinding ?? null;
+  result.copilotBodyJudgeFile = context.copilotBodyJudgeFile ?? null;
   // Auto-release the runner-coordination lock at gate-coordination terminal stop
   // boundaries — see TERMINAL_RUNNER_RELEASE_ACTIONS above for the rationale
   // (success-or-stop release vs 30-min TTL; env-aware, best-effort,

@@ -325,7 +325,7 @@
     {
       "id": "GATE-EXEC-COPILOT-BODY-TO-JUDGE",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by detect-pr-gate-coordination-state.mjs (copilotBodyJudgeFinding, no gate-entry block) and emit-judge-work-order.mjs (--copilot-body-file pinned read)"
+      "enforcementNote": "Enforced by detect-pr-gate-coordination-state.mjs (copilotBodyJudgeFinding, no gate-entry block) and emit-judge-work-order.mjs (derived copilotBodyJudgeFile pinned read; --copilot-body-file overrides)"
     },
     {
       "id": "GATE-EXEC-DEFERRAL-RECORD",

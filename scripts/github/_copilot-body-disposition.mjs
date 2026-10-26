@@ -23,7 +23,12 @@ import {
   isCopilotLogin,
   stripMarkdownCodeForScan,
 } from "@dev-loops/core/github/copilot-helpers";
+import path from "node:path";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
+import { repoSlugFor } from "./_gate-artifact-paths.mjs";
+
+// File the gate detector writes the body finding to and the judge emit pins.
+export const copilotBodyJudgePath = ({ tmpRoot, repo, pr, headSha }) => path.join(tmpRoot, "gate-judge", repoSlugFor(repo), `pr-${pr}`, `copilot-body-${headSha}.json`);
 
 const MARKER_RE = /<!--\s*dev-loops:copilot-body-disposition\s+review=(\S+)\s+head=([0-9a-fA-F]{40})\s+(?:fix=([0-9a-fA-F]{40})|operator)\s*-->/;
 

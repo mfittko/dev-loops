@@ -13,7 +13,7 @@ In the v1.0.8 drain, a Copilot body-only finding on PR 2932 blocked `run_pre_app
 ## Decision
 
 - The judge is the prime authority for a Copilot body-only finding at the current head or an earlier head. Gate coordination reports `copilotBodyConvergence` as ok, sets `copilotBodyJudgeFinding`, and does not block gate entry. Unresolved review threads still block.
-- The judge work order carries the finding as a pinned `copilot-body-feedback` read and adjudicates it like an inline finding. The finding never blocks by itself.
+- The detector writes the finding to a derived file and the judge emit pins it automatically (`--copilot-body-file` overrides). The judge work order carries the finding as a pinned `copilot-body-feedback` read and adjudicates it like an inline finding. The finding never blocks by itself.
 - The operator marker stays optional and overrides. A trusted marker that clears the review leaves `copilotBodyJudgeFinding` null.
 - The marker path applies one more rule: a trusted marker for the current head whose `review=` is a numeric id while the review id is a GraphQL node id (`PRR_...`) is refused with the typed reason `review_id_mismatch`, which names both ids. The emitted marker line carries the node id.
 - The rule ID is `GATE-EXEC-COPILOT-BODY-TO-JUDGE` in `skills/docs/gate-review-sub-loop-contract.md`.

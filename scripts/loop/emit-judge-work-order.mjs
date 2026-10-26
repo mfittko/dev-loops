@@ -6,7 +6,7 @@
  * reader and receipt stay in _work-order-protocol.mjs.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -20,12 +20,13 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { isFindingsLogName, resolveGateRound } from "../github/_gate-finding-surface.mjs";
 
 const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--tmp-root <path>] [--copilot-body-file <path>]
---copilot-body-file pins the Copilot body-feedback finding (the gate detector's copilotBodyJudgeFinding, JSON) as a required read.
+--copilot-body-file pins the Copilot body-feedback finding (JSON) as a required read. It defaults to the file the gate detector wrote for this head (copilotBodyJudgeFile) when that file exists.
 Derives the judge's work order from the round's authoritative inputs: the consolidated
 ledger (consolidate-fanin --ledger-out), the structured spec and identity stamp
 (spec-context.mjs --spec-out/--identity-out), the gate-context evidence read and the
@@ -134,7 +135,10 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   if (evidence.read.sha256 !== evidenceRead.sha256) throw new Refusal(`gate-context evidence ${evidenceRead.path} changed since the round was built; rebuild the round context`);
   const priors = [];
   for (const prior of priorVerdicts) priors.push(await readSource("prior-judge-verdict", abs(prior)));
-  const copilotBody = copilotBodyFile ? await readSource("copilot-body-feedback", abs(copilotBodyFile)) : null;
+  // --copilot-body-file overrides the detector's derived file, pinned when it exists.
+  const derivedBodyFile = copilotBodyJudgePath({ tmpRoot: resolveGateArtifactTmpRoot(checkoutRoot), repo, pr, headSha });
+  const bodyFile = copilotBodyFile ? abs(copilotBodyFile) : (existsSync(derivedBodyFile) ? derivedBodyFile : null);
+  const copilotBody = bodyFile ? await readSource("copilot-body-feedback", bodyFile) : null;
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
   const workOrder = {
     role: "judge",

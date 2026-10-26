@@ -9,6 +9,7 @@ import { initGitFixture, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, wri
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
 import { detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
@@ -323,6 +324,7 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
       copilotBodyDisposition: null,
       copilotBodyDispositionRequired: null,
       copilotBodyJudgeFinding: null,
+      copilotBodyJudgeFile: null,
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1052,7 +1054,7 @@ test("detect-pr-gate-coordination-state output equals a direct evaluatePrGateCoo
     assert.equal(parsed.carriedConvergence, null);
     assert.equal(parsed.copilotBodyDisposition, null);
     assert.equal(parsed.copilotBodyDispositionRequired, null);
-    const { carriedConvergence: _carried, copilotBodyDisposition: _bodyDisposition, copilotBodyDispositionRequired: _dispositionRequired, copilotBodyJudgeFinding: _judgeFinding, ...evaluatorOwned } = parsed;
+    const { carriedConvergence: _carried, copilotBodyDisposition: _bodyDisposition, copilotBodyDispositionRequired: _dispositionRequired, copilotBodyJudgeFinding: _judgeFinding, copilotBodyJudgeFile: _judgeFile, ...evaluatorOwned } = parsed;
     assert.deepEqual({ ...evaluatorOwned, copilotReviewRoundCount: directResult.copilotReviewRoundCount }, directResult);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -4053,3 +4055,23 @@ for (const [name, handoffHead] of [["an abbreviated", "abc9988"], ["an upper-cas
     });
   });
 }
+
+test("the detector writes the body finding to the derived judge file and removes it when the finding clears (#2937)", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-body-judge-"));
+  try {
+    await writeFile(path.join(root, ".devloops"), await readFile(path.join(capFixtureRepoRoot, ".devloops"), "utf8"), "utf8");
+    const load = (reviewBody) => loadPrGateCoordinationContext(
+      { repo: "owner/repo", pr: 266 },
+      buildMockRuntime(writeGhStub(null, pathAGhEntries({ reviewBody, atCap: false })), { repoRoot: root }),
+    );
+    const found = await load("### 🟡 Changes recommended\n\nActionable feedback in the body.");
+    assert.equal(found.copilotBodyJudgeFile, copilotBodyJudgePath({ tmpRoot: path.join(root, "tmp"), repo: "owner/repo", pr: 266, headSha: found.currentHeadSha }));
+    assert.deepEqual(JSON.parse(await readFile(found.copilotBodyJudgeFile, "utf8")), found.copilotBodyJudgeFinding);
+    const cleared = await load("### 🟢 Approval recommended\n\nFindings: None");
+    assert.equal(cleared.copilotBodyJudgeFinding, null);
+    assert.equal(cleared.copilotBodyJudgeFile, null);
+    await assert.rejects(readFile(found.copilotBodyJudgeFile, "utf8"), { code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
