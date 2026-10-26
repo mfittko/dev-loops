@@ -8,7 +8,8 @@ export function normalizeBaseBranch(base) {
 /** True for a plain branch name; false for HEAD and revision expressions. A hex-only value is a valid name; callers probe the remote to tell a SHA from a branch. `/` is allowed only on request. */
 export function isBranchName(base, { allowSlash = false } = {}) {
   return typeof base === "string" && base !== "" && base !== "HEAD"
-    &&!(allowSlash ? /[\s\\~^:@?*\[\]{}]/u : /[\s/\\~^:@?*\[\]{}]/u).test(base)
+    && base !== "@"
+    &&!(allowSlash ? /[\s\\~^:?*\[\]{}]/u : /[\s/\\~^:?*\[\]{}]/u).test(base)
     && !base.startsWith("-") && !base.includes("..");
 }
 

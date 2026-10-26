@@ -8238,9 +8238,9 @@ async function makeOriginFixture() {
 test("issue 2885: write-gate-context records baseFreshness on a current base and refuses once origin advanced", async () => {
   const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
   try {
-    const argv = ["--repo", "owner/repo", "--pr", "70", "--gate", "review", "--head-sha", headSha, "--base", "main", "--angles", '["correctness"]'];
+    const argv = ["--repo", "owner/repo", "--pr", "70", "--gate", "draft_gate", "--head-sha", headSha, "--base", "main", "--angles", '["correctness"]'];
     await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
-    const artifact = await readGateContext({ repo: "owner/repo", pr: 70, gate: "review", headSha }, { repoRoot: clone });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha }, { repoRoot: clone });
     assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
     await advanceOrigin();
     // The caller never fetches: the preflight itself must see the advanced origin.
@@ -8282,9 +8282,9 @@ async function expectRefusal(argv, runtime, pattern, clone) {
 test("issue 2885 AC6: a run without --base checks the PR base branch, records baseFreshness and refuses once origin advanced", async () => {
   const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
   try {
-    const argv = ["--repo", "owner/repo", "--pr", "74", "--gate", "review", "--head-sha", headSha, "--angles", '["correctness"]'];
+    const argv = ["--repo", "owner/repo", "--pr", "74", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["correctness"]'];
     await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
-    const artifact = await readGateContext({ repo: "owner/repo", pr: 74, gate: "review", headSha }, { repoRoot: clone });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 74, gate: "draft_gate", headSha }, { repoRoot: clone });
     assert.equal(artifact.scope.diffSource, "none");
     assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
     await advanceOrigin();
@@ -8302,7 +8302,7 @@ test("issue 2885 AC6: the freshness verdict describes --head-sha, not the checko
     git(clone, ["fetch", "-q", "origin"]);
     git(clone, ["merge", "-q", "--no-edit", "origin/main"]);
     // The checkout HEAD contains origin/main, but the reviewed head (pre-merge) lacks it.
-    const argv = ["--repo", "owner/repo", "--pr", "75", "--gate", "review", "--head-sha", headSha, "--angles", '["correctness"]'];
+    const argv = ["--repo", "owner/repo", "--pr", "75", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["correctness"]'];
     await expectRefusal(argv, { repoRoot: clone, run: stubGhRun }, /base_stale_integrate_first/u, clone);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -8318,16 +8318,16 @@ test("issue 2885 AC6: a SHA, revision-expression or non-origin remote --base is 
     const bases = [sha, "HEAD~1", "upstream/main"];
     for (const base of bases) {
       await rm(path.join(clone, "tmp"), { recursive: true, force: true });
-      const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "review", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
+      const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "draft_gate", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
       await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
-      const artifact = await readGateContext({ repo: "owner/repo", pr: 71, gate: "review", headSha }, { repoRoot: clone });
+      const artifact = await readGateContext({ repo: "owner/repo", pr: 71, gate: "draft_gate", headSha }, { repoRoot: clone });
       assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
       assert.equal(artifact.scope.diffSource, "base");
     }
     await advanceOrigin();
     for (const base of bases) {
       await rm(path.join(clone, "tmp"), { recursive: true, force: true });
-      const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "review", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
+      const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "draft_gate", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
       await expectRefusal(argv, { repoRoot: clone, run: stubGhRun }, /base_stale_integrate_first/u, clone);
     }
   } finally {
@@ -8342,8 +8342,28 @@ test("issue 2885 AC6: an unreadable PR base refuses with base_unresolved and wri
       const res = await stubGhRun(command, args);
       return args[0] === "pr" ? { ...res, stdout: JSON.stringify({ body: "b", closingIssuesReferences: [] }) } : res;
     };
-    const argv = ["--repo", "owner/repo", "--pr", "75", "--gate", "review", "--head-sha", headSha, "--angles", '["correctness"]'];
+    const argv = ["--repo", "owner/repo", "--pr", "75", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["correctness"]'];
     await expectRefusal(argv, { repoRoot: clone, run: noBase }, /base_unresolved/u, clone);
+    // A failed `gh pr view` for baseRefName refuses the same way.
+    const failingRead = async (command, args) => (args[0] === "pr" && args[args.indexOf("--json") + 1] === "baseRefName"
+      ? { code: 1, stdout: "", stderr: "boom" }
+      : stubGhRun(command, args));
+    await expectRefusal(argv, { repoRoot: clone, run: failingRead }, /base_unresolved/u, clone);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885: the review gate records a stale base in baseFreshness and still writes the artifact", async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    await advanceOrigin();
+    const argv = ["--repo", "owner/repo", "--pr", "76", "--gate", "review", "--head-sha", headSha, "--angles", '["correctness"]'];
+    const before = process.exitCode;
+    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+    assert.equal(process.exitCode, before);
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 76, gate: "review", headSha }, { repoRoot: clone });
+    assert.deepEqual(artifact.baseFreshness, { status: "base_stale_integrate_first", base: "main" });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -8354,7 +8374,7 @@ test("issue 2885: a failed preflight fetch exits 1 with base_fetch_failed, the P
   try {
     let received;
     const failing = async ({ base }) => { received = base; return { ok: false, error: "base_fetch_failed", base, message: "x" }; };
-    const argv = ["--repo", "owner/repo", "--pr", "72", "--gate", "review", "--head-sha", headSha, "--base", "origin/main", "--angles", '["correctness"]'];
+    const argv = ["--repo", "owner/repo", "--pr", "72", "--gate", "draft_gate", "--head-sha", headSha, "--base", "origin/main", "--angles", '["correctness"]'];
     const before = process.exitCode;
     const realWrite = process.stderr.write.bind(process.stderr);
     let errText = "";

@@ -16,17 +16,18 @@ const lines = (s) => s.split(/\r?\n/u).map((l) => l.trim()).filter((l) => l.leng
  * commits on it that HEAD lacks. `foreignFiles` are files whose content differs from origin/<base>
  * (two-dot) but that the branch never touched (three-dot), the stale-base signature.
  */
-export async function checkBaseFreshness({ base: rawBase, head: rawHead = "HEAD", cwd = process.cwd(), env = process.env, gitCommand = "git", fetchTimeoutMs = 60_000 }) {
+export async function checkBaseFreshness({ base: rawBase, head: rawHead = "HEAD", cwd = process.cwd(), env = process.env, gitCommand = "git", fetchTimeoutMs = 60_000, trusted = false }) {
   // Scrub the git-dir overrides so every spawn targets cwd, never an inherited repository.
   const gitEnv = { ...env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C", LANGUAGE: "C" };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"]) delete gitEnv[key];
   const git = async (args) => lines((await runCommand(gitCommand, args, { cwd, env: gitEnv })).stdout);
-  const base = normalizeBaseBranch(rawBase);
+  // `trusted`: the caller passes GitHub's baseRefName, which is always an origin branch, so skip the user-input remote-name probe.
+  const base = trusted ? rawBase : normalizeBaseBranch(rawBase);
   const notBranch = (message) => ({ ok: false, error: "base_not_origin_branch", base: rawBase, message });
   if (!isBranchName(base, { allowSlash: true }) || base.startsWith("refs/") || base.startsWith("origin/")) return notBranch(`${rawBase} is not an origin branch name`);
   // A full-length SHA is never an origin branch: classify it before any network call.
   if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(base)) return notBranch(`${rawBase} is a SHA, not an origin branch`);
-  if (base.includes("/")) {
+  if (!trusted && base.includes("/")) {
     const remote = base.split("/")[0];
     if (remote !== "origin" && (await git(["remote"]).catch(() => [])).includes(remote)) return notBranch(`${rawBase} names the remote ${remote}, not an origin branch`);
   }

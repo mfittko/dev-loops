@@ -400,3 +400,20 @@ test("checkBaseFreshness retries a ref-lock fetch failure and then reports base_
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("checkBaseFreshness accepts @ inside a branch name, rejects @{ and a bare @, and trusts a baseRefName with a remote-named segment", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: false });
+  try {
+    execFileSync("git", ["remote", "add", "upstream", "/nonexistent"], { cwd: clone });
+    for (const base of ["team@v2", "release@2"]) {
+      execFileSync("git", ["push", "-q", "origin", `HEAD:refs/heads/${base}`], { cwd: clone });
+      assert.deepEqual(await checkBaseFreshness({ base, cwd: clone }), { ok: true, status: "base_current", base }, base);
+    }
+    for (const base of ["a@{1}", "@"]) assert.equal((await checkBaseFreshness({ base, cwd: clone })).error, "base_not_origin_branch", base);
+    execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/upstream/x"], { cwd: clone });
+    assert.equal((await checkBaseFreshness({ base: "upstream/x", cwd: clone })).error, "base_not_origin_branch");
+    assert.deepEqual(await checkBaseFreshness({ base: "upstream/x", trusted: true, cwd: clone }), { ok: true, status: "base_current", base: "upstream/x" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

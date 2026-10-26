@@ -407,7 +407,7 @@ before validation, before push and before every gate dispatch. It exits nonzero 
 `base_stale_integrate_first`, the newer commits and any `foreignFiles` (files that differ from
 `origin/<base>` only because the base moved), with `base_fetch_failed` when the fetch fails or times
 out, or with `base_not_origin_branch` for a SHA, revision expression or non-origin remote ref.
-Every `write-gate-context.mjs` run, with or without `--base`, checks the reviewed PR head against `origin/<PR base>` and refuses with `base_stale_integrate_first`, `base_fetch_failed`, `base_unresolved` or `base_head_unresolved`, writing no artifact.
+Every `write-gate-context.mjs` run, with or without `--base`, checks the reviewed PR head against `origin/<PR base>`. A `draft_gate` or `pre_approval_gate` run refuses with `base_stale_integrate_first`, `base_fetch_failed` or `base_head_unresolved`, writing no artifact. A `review` run records the non-current status in `baseFreshness` and continues. An unreadable PR base (`base_unresolved`) refuses on every gate.
 
 ## Fallback when worktrees are unavailable
 

@@ -29,4 +29,6 @@ test("normalizeBaseBranch strips one origin prefix; isBranchName keeps short hex
   assert.equal(isBranchName("beef"), true);
   assert.equal(isBranchName("abc12"), true);
   assert.equal(isBranchName("HEAD~1"), false);
+  for (const ok of ["team@v2", "release@2"]) assert.equal(isBranchName(ok), true, ok);
+  for (const bad of ["a@{1}", "@"]) assert.equal(isBranchName(bad), false, bad);
 });
