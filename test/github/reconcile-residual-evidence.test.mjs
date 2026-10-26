@@ -45,7 +45,7 @@ test("acceptance requires an explicit canonical snapshot and rejects mixed modes
   assert.equal(typeof verifyResidualEvidenceAcceptance, "function");
 });
 
-async function fixture(fn, harness = "pi", alterReads, continuation = false, mixed = false) {
+async function fixture(fn, harness = "pi", alterReads, continuation = false, mixed = false, foreignOutput = false) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "residual-evidence-")));
   try {
     const git = (args, input) => execFileSync("git", args, { cwd: root, input, stdio: ["pipe", "pipe", "pipe"] });
@@ -72,7 +72,7 @@ async function fixture(fn, harness = "pi", alterReads, continuation = false, mix
       workOrderRef: `fixer:o/r#7:${BASE}:f1799999999000-1234abcd`,
       workOrder: { role: "fixer", phase: continuation ? "commit_only" : "full", source: "act-list", gate: "pre_approval_gate", target: { repo: "o/r", pr: 7 }, headSha: BASE,
         mutationAuthority: { branch: "fixture", allowedPaths: ["qualification.json"] }, executionRules: { contract: path.resolve(import.meta.dirname, "../../agents/fixer.agent.md"), mutation: "scoped", validation: "targeted" },
-        requiredReads: reads, outputRefs: [path.join(fixerDir, "f1799999999000-1234abcd", "fixer-disposition.json")] } };
+        requiredReads: reads, outputRefs: [path.join(fixerDir, foreignOutput ? "foreign" : "f1799999999000-1234abcd", "fixer-disposition.json")] } };
     fixer.workOrder.authority = { sourceDigest: sha256Hex(act).slice(7), deltaResultDigest: sha256Hex(delta).slice(7) };
     fixer.workOrderDigest = workOrderDigest(fixer.workOrder);
     fixer.promptPath = path.join(fixerDir, "work-orders", `${fixer.executionIdentity}.md`);
@@ -120,7 +120,10 @@ async function fixture(fn, harness = "pi", alterReads, continuation = false, mix
         if (continuation === "legacy-bad-marker") await put(`${prior.workOrder.outputRefs[0]}.constructed`, "altered");
         legacy = continuation === "foreign-legacy" ? { ...tuple(prior), workOrderDigest: `sha256:${"0".repeat(64)}` } : tuple(prior);
       }
-      await makeFull("f1799999999001-1234abcd", legacy ? { legacyRevalidation: { originalFull: legacy } } : {});
+      const identity = "f1799999999001-1234abcd";
+      const originOverride = { "same-origin": { ...origin, executionIdentity: identity }, "foreign-origin": { ...origin, workOrderDigest: `sha256:${"0".repeat(64)}` } }[continuation];
+      if (continuation === "full-original") await put(path.join(fixerDir, original.executionIdentity, "original-fixer-emit-plan.json"), { ...original, workOrder: { ...original.workOrder, phase: "full" } });
+      await makeFull(identity, { ...(legacy ? { legacyRevalidation: { originalFull: legacy } } : {}), ...(originOverride ? { origin: originOverride } : {}) });
     }
     const decisionPath = path.join(tmpRoot, "gate-delta", `${BASE}.json`);
     await put(decisionPath, decision);
@@ -202,7 +205,7 @@ async function fixture(fn, harness = "pi", alterReads, continuation = false, mix
   } finally { await rm(root, { recursive: true, force: true }); }
 }
 
-async function acceptanceFixture(fn, harness = "pi", findings = [], continuation = false, mixed = false, resultTime) {
+async function acceptanceFixture(fn, harness = "pi", findings = [], continuation = false, mixed = false, resultTime, foreignOutput = false) {
   return fixture(async (f) => {
     const raw = JSON.parse(await readFile(f.resultPath));
     raw.findings = findings;
@@ -236,7 +239,7 @@ async function acceptanceFixture(fn, harness = "pi", findings = [], continuation
     const snapshot = await snapshotResidualEvidence(f.options, f.deps);
     f.options = { ...f.options, accept: true, record: false, snapshot: snapshot.snapshotPath };
     await fn({ ...f, ledgerPath });
-  }, harness, undefined, continuation, mixed);
+  }, harness, undefined, continuation, mixed, foreignOutput);
 }
 
 // One base, one hour ahead of the run, so the fixer report mtime (wall clock) always precedes the pinned times.
@@ -769,6 +772,21 @@ test("continuation with an altered legacy full-phase constructed marker is refus
   await assert.rejects(acceptResidualEvidence(f.options, f.deps), /foreign constructed report/);
   await assert.rejects(readdir(path.join(path.dirname(path.dirname(f.options.snapshot)), "accepted")), /ENOENT/);
 }, "codex", [], "legacy-bad-marker"));
+
+for (const [name, mode, refusal] of [
+  ["repeats the current execution identity", "same-origin", /missing distinct continuation origin/],
+  ["names a foreign origin workOrderDigest", "foreign-origin", /foreign continuation origin/],
+  ["names a full-phase original plan", "full-original", /foreign continuation origin/],
+]) test(`continuation whose origin ${name} is refused with no accepted write`, async () => acceptanceFixture(async (f) => {
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), refusal);
+  await assert.rejects(readdir(path.join(path.dirname(path.dirname(f.options.snapshot)), "accepted")), /ENOENT/);
+}, "codex", [], mode));
+
+// The plan, digest, prompt, receipt and index are all consistent; only the output path is outside the execution-owned directory.
+test("fixer plan whose outputRefs names a non-execution-owned path is refused with no accepted write", async () => acceptanceFixture(async (f) => {
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), /foreign fixer output ownership/);
+  await assert.rejects(readdir(path.join(path.dirname(path.dirname(f.options.snapshot)), "accepted")), /ENOENT/);
+}, "pi", [], false, false, undefined, true));
 
 test("delivery check runs the verifier through the default runChild without a stdin or cwd argument", async () => acceptanceFixture(async (f) => {
   const { runChild } = await import("../../scripts/_cli-primitives.mjs");
