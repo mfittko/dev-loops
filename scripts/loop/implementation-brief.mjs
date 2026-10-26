@@ -106,8 +106,38 @@ an unreadable body file, or another runtime error.`;
 
 const SOURCE_FILE_RE = /\.(?:mjs|cjs|js|ts)$/u;
 const EXPORT_DECL_RE = /^export\s+(?:async\s+)?(?:function\*?|const|let|var|class|interface|type|enum|abstract\s+class)\s+([A-Za-z_$][\w$]*)/gmu;
-const EXPORT_LIST_RE = /^export\s*\{([^}]*)\}/gmu;
-const IMPORT_SPECIFIER_RE = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\(\s*)["'](\.[^"']*)["']/gu;
+const EXPORT_LIST_RE = /^export\s*(?:type\s*)?\{([^}]*)\}/gmu;
+// A string literal is an import specifier only when the code just before it is import syntax.
+const IMPORT_PREFIX_RE = /(?:\bfrom|\bimport\s*\(?|\brequire\s*\(\s*)\s*$/u;
+
+/** Relative specifiers named by real import/export/require syntax; comments, other strings and templates are skipped. */
+function relativeSpecifiers(source) {
+  const specifiers = [];
+  let code = "";
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (ch === "/" && next === "/") {
+      while (i < source.length && source[i] !== "\n") i += 1;
+    } else if (ch === "/" && next === "*") {
+      const end = source.indexOf("*/", i + 2);
+      i = end === -1 ? source.length : end + 2;
+      code += " ";
+    } else if (ch === '"' || ch === "'" || ch === "`") {
+      let j = i + 1;
+      while (j < source.length && source[j] !== ch && (ch === "`" || source[j] !== "\n")) j += source[j] === "\\" ? 2 : 1;
+      const text = source.slice(i + 1, j);
+      if (ch !== "`" && text.startsWith(".") && IMPORT_PREFIX_RE.test(code)) specifiers.push(text);
+      code += '""';
+      i = j + 1;
+    } else {
+      code += ch;
+      i += 1;
+    }
+  }
+  return specifiers;
+}
 const execFileAsync = promisify(execFile);
 
 const REQUIRED_READS = Object.freeze(["skills/docs/structural-quality.md", "changes/README.md"]);
@@ -374,11 +404,11 @@ async function helperInventory(root, touchedPaths, resolved, tracked) {
   return { modules: inline, overflowModules };
 }
 
-/** Paths a relative specifier can name: as is, with an extension, as a directory index, or a .js specifier for a .ts file. */
-function specifierCandidates(joined) {
-  const exts = ["mjs", "cjs", "js", "ts"];
+/** Paths a relative specifier can name: as is, with an extension, as a directory index, or (TypeScript importers only) a .js specifier for a .ts file. */
+function specifierCandidates(joined, importerIsTs) {
+  const exts = importerIsTs ? ["mjs", "cjs", "js", "ts"] : ["mjs", "cjs", "js"];
   const candidates = [joined, ...exts.map((ext) => `${joined}.${ext}`), ...exts.map((ext) => `${joined}/index.${ext}`)];
-  if (joined.endsWith(".js")) candidates.push(`${joined.slice(0, -3)}.ts`);
+  if (importerIsTs && joined.endsWith(".js")) candidates.push(`${joined.slice(0, -3)}.ts`);
   return candidates;
 }
 
@@ -391,9 +421,9 @@ async function importersByModule(root, touchedPaths, resolved, tracked) {
   for (const file of tracked) {
     const source = await readTextOrNull(path.join(root, ...file.split("/")));
     if (source == null) continue;
-    for (const [, specifier] of source.matchAll(IMPORT_SPECIFIER_RE)) {
+    for (const specifier of relativeSpecifiers(source)) {
       const resolvedSpecifier = path.posix.join(path.posix.dirname(file), specifier);
-      for (const candidate of specifierCandidates(resolvedSpecifier)) {
+      for (const candidate of specifierCandidates(resolvedSpecifier, file.endsWith(".ts"))) {
         const hit = found.get(candidate);
         if (hit && file !== candidate && !hit.includes(file)) hit.push(file);
       }

@@ -968,7 +968,7 @@ test("the helper inventory lists sorted exported names per module in touched dir
     modules: [
       { path: "scripts/lib/util.mjs", exports: ["Util"] },
       { path: "src/a.mjs", exports: ["alpha", "mid", "zeta"] },
-      { path: "src/t.ts", exports: ["Base", "Id", "Mode", "Options", "Opts"] },
+      { path: "src/t.ts", exports: ["Base", "Hidden", "Id", "Mode", "Options", "Opts"] },
     ],
     overflowModules: [],
   });
@@ -1016,7 +1016,8 @@ test("importers match extensionless, directory-index and .js-for-.ts relative sp
     "src/c.ts": "export const c = 1;\n",
     "src/t/a.ts": "export const t = 1;\n",
     "src/exact.cjs": 'require("./a.cjs");\n',
-    "src/b.cjs": 'require("./a");\nrequire("./lib");\nrequire("./c.js");\n',
+    "src/b.cjs": 'require("./a");\nrequire("./lib");\n',
+    "src/c-user.ts": 'import { c } from "./c.js";\n',
     "src/t/user.ts": 'import { t } from "./a";\n',
     "src/near.cjs": 'require("./ab");\nrequire("./a.cjs.bak");\nrequire("a");\nrequire("./a/b");\n',
   });
@@ -1024,9 +1025,32 @@ test("importers match extensionless, directory-index and .js-for-.ts relative sp
   assert.deepEqual(brief.importers, {
     "src/a.cjs": { files: ["src/b.cjs", "src/exact.cjs"] },
     "src/lib/index.js": { files: ["src/b.cjs"] },
-    "src/c.ts": { files: ["src/b.cjs"] },
+    "src/c.ts": { files: ["src/c-user.ts"] },
     "src/t/a.ts": { files: ["src/t/user.ts"] },
   });
+});
+
+test("importers ignore import text inside comments, strings and templates", async () => {
+  const root = await trackedRepo({
+    "src/a.mjs": "export const a = 1;\n",
+    "src/e1.mjs": "const example = 'import { a } from \"./a.mjs\";';\n",
+    "src/e2.mjs": "// import { a } from \"./a.mjs\";\n/* require(\"./a.mjs\") */\n",
+    "src/e3.mjs": "const t = `import(\"./a.mjs\")`;\n",
+    "src/z-real.mjs": "import { a } from \"./a.mjs\";\n",
+  });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
+  assert.deepEqual(brief.importers, { "src/a.mjs": { files: ["src/z-real.mjs"] } });
+});
+
+test("a JavaScript importer of ./a.js does not count as a caller of a.ts, a TypeScript importer does", async () => {
+  const root = await trackedRepo({
+    "src/a.js": "export const a = 1;\n",
+    "src/a.ts": "export const a = 1;\n",
+    "src/js-user.mjs": "import { a } from \"./a.js\";\n",
+    "src/ts-user.ts": "import { a } from \"./a.js\";\n",
+  });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.ts"] });
+  assert.deepEqual(brief.importers, { "src/a.ts": { files: ["src/ts-user.ts"] } });
 });
 
 test("a filesystem error on a tracked entry is a runtime error, not an importers_unavailable finding", { skip: SKIP_UNDER_ROOT }, async () => {
