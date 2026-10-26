@@ -9,6 +9,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import {
   assertRunnerOwnership,
   claimRunnerOwnership,
+  handoffRunnerOwnership,
   loadRunnerCoordinationState,
   releaseRunnerOwnership,
 } from "./_pr-runner-coordination.mjs";
@@ -18,9 +19,11 @@ const USAGE = `Usage:
   pr-runner-coordination.mjs takeover --repo <owner/name> --pr <number> [--run-id <id>]
   pr-runner-coordination.mjs assert --repo <owner/name> --pr <number> [--run-id <id>] [--require-existing]
   pr-runner-coordination.mjs release --repo <owner/name> --pr <number> [--run-id <id>]
+  pr-runner-coordination.mjs handoff --repo <owner/name> --pr <number> [--run-id <id>]
 Durable one-runner-per-PR coordination helper.
 If --run-id is omitted for claim/assert/release/takeover, DEVLOOPS_RUN_ID is used
 (via DEVLOOPS_RUN_ID).
+handoff requires verified runtime identity; --run-id only asserts that identity.
 Output:
   stdout: { "ok": true, ... }
   stderr: { "ok": false, "error": "...", ... }
@@ -91,7 +94,7 @@ function parseCliArgs(argv) {
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
-  const validCommands = new Set(["status", "claim", "takeover", "assert", "release"]);
+  const validCommands = new Set(["status", "claim", "takeover", "assert", "release", "handoff"]);
   if (!validCommands.has(options.command)) {
     throw parseError(`Unknown subcommand: ${options.command}`);
   }
@@ -121,6 +124,9 @@ export async function runPrRunnerCoordination(options, { env = process.env, cwd 
       filePath,
       state,
     };
+  }
+  if (options.command === "handoff") {
+    return handoffRunnerOwnership({ repo: options.repo, pr: options.pr, runId: options.runId, env, cwd });
   }
   const runId = resolveRunId(options.runId, env);
   if (options.command === "claim") {

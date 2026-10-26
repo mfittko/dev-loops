@@ -755,6 +755,49 @@ export async function releaseRunnerOwnership({
     };
   });
 }
+export async function handoffRunnerOwnership({
+  repo, pr, runId, env = process.env, cwd = process.cwd(), filePath = null,
+  now = new Date().toISOString(),
+} = {}) {
+  const normalizedRepo = normalizeRepoSlug(repo);
+  const normalizedPr = normalizePr(pr);
+  const verifiedRunId = normalizeRunId(resolveRunId(env));
+  const requestedRunId = normalizeRunId(runId);
+  const resolvedPath = filePath ?? defaultRunnerCoordinationFilePathForTarget({ repo: normalizedRepo, pr: normalizedPr }, cwd);
+  const target = { repo: normalizedRepo, pr: normalizedPr, runId: verifiedRunId, filePath: resolvedPath };
+  if (verifiedRunId === null) {
+    return buildConflict({ ...target, error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED, activeRun: null,
+      message: "Runner coordination handoff requires a verified runtime run id." });
+  }
+  if (requestedRunId !== null && requestedRunId !== verifiedRunId) {
+    return buildConflict({ ...target, error: RUNNER_OWNERSHIP_ERROR.OWNERSHIP_LOST, activeRun: null,
+      message: "Requested handoff run id does not match the verified runtime identity." });
+  }
+  return withRunnerStateFileLock(resolvedPath, async () => {
+    const raw = await loadRunnerStateFile(resolvedPath);
+    const state = raw === null ? null : normalizeRunnerCoordinationState(raw, { repo: normalizedRepo, pr: normalizedPr });
+    if (!state?.activeRun) {
+      return { ok: true, status: "handoff_noop", ...target, activeRun: null,
+        previousRun: state?.previousRun ?? null, exitSignals: state?.exitSignals ?? [] };
+    }
+    if (state.activeRun.runId !== verifiedRunId) {
+      return buildConflict({ ...target, error: RUNNER_OWNERSHIP_ERROR.OWNERSHIP_LOST,
+        activeRun: state.activeRun, exitSignals: state.exitSignals,
+        message: `Cannot hand off PR ${normalizedRepo}#${normalizedPr}: active owner is ${state.activeRun.runId}, not ${verifiedRunId}.` });
+    }
+    // Preserve unrelated raw authority and schema fields; normalize only to validate ownership.
+    const nextState = {
+      ...raw,
+      activeRun: null,
+      previousRun: { runId: verifiedRunId, replacedAt: now, replacedByRunId: null },
+      exitSignals: [...state.exitSignals, { runId: verifiedRunId, at: now, reason: "handoff" }],
+      history: [...state.history, { type: "handoff", runId: verifiedRunId, at: now }],
+    };
+    await saveRunnerStateFile(resolvedPath, nextState);
+    return { ok: true, status: "handoff_recorded", ...target, activeRun: null,
+      previousRun: nextState.previousRun, exitSignals: nextState.exitSignals };
+  });
+}
 export async function recordExitSignalForRunner({
   repo,
   pr,

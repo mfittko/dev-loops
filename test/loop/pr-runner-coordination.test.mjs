@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +13,7 @@ import {
   claimRunnerOwnership,
   defaultRunnerCoordinationFilePathForTarget,
   ensureAsyncRunnerOwnership,
+  handoffRunnerOwnership,
   loadRunnerCoordinationState,
   recordExitSignalForRunner,
   recordWatchClaim,
@@ -35,6 +36,82 @@ const releaseClaimsFromKnownRoot = (options) => releaseRunClaimsOnExit({
   ...options,
 });
 const execFileAsync = promisify(execFile);
+
+test("handoff atomically clears its owner, preserves authority and noops without writing", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-handoff-"));
+  const options = { repo: "owner/repo", pr: 17, cwd, env: { DEVLOOPS_RUN_ID: "owner" } };
+  try {
+    const absent = await handoffRunnerOwnership(options);
+    assert.equal(absent.status, "handoff_noop");
+    assert.equal(absent.previousRun, null);
+    await assert.rejects(readFile(absent.filePath), { code: "ENOENT" });
+    const claimed = await claimRunnerOwnership({ ...options, runId: "owner" });
+    const raw = JSON.parse(await readFile(claimed.filePath, "utf8"));
+    raw.schemaVersion = 1;
+    raw.authority = { branch: "branch", head: "head", rounds: 4 };
+    raw.target.extension = "preserved";
+    await writeFile(claimed.filePath, JSON.stringify(raw));
+    const neighbor = path.join(cwd, "gate.json");
+    await writeFile(neighbor, '{"verdict":"pass","delta":3}');
+    const result = await handoffRunnerOwnership({ ...options, runId: "owner" });
+    assert.equal(result.status, "handoff_recorded");
+    assert.equal(result.activeRun, null);
+    assert.equal(result.previousRun.runId, "owner");
+    assert.equal(result.previousRun.replacedByRunId, null);
+    assert.equal(result.exitSignals.length, 1);
+    const afterBytes = await readFile(claimed.filePath, "utf8");
+    const after = JSON.parse(afterBytes);
+    assert.deepEqual(after, { ...raw, activeRun: null, previousRun: result.previousRun,
+      exitSignals: result.exitSignals, history: [...raw.history, { type: "handoff", runId: "owner", at: result.exitSignals[0].at }] });
+    assert.equal(await readFile(neighbor, "utf8"), '{"verdict":"pass","delta":3}');
+    assert.equal((await handoffRunnerOwnership(options)).status, "handoff_noop");
+    assert.equal(await readFile(claimed.filePath, "utf8"), afterBytes);
+    const status = await runPrRunnerCoordination({ ...options, command: "status" }, { cwd });
+    assert.equal(status.state.activeRun, null);
+    assert.equal(status.state.previousRun.runId, "owner");
+    assert.equal((await claimRunnerOwnership({ ...options, runId: "fresh" })).status, "claimed_new");
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("handoff refuses unverified, mismatched and foreign identities without writing", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-handoff-refusal-"));
+  const options = { repo: "owner/repo", pr: 17, cwd };
+  try {
+    const claim = await claimRunnerOwnership({ ...options, runId: "owner" });
+    const before = await readFile(claim.filePath, "utf8");
+    for (const [env, runId, error] of [
+      [{}, "owner", "run_id_required"],
+      [{ DEVLOOPS_RUN_ID: "owner" }, "foreign", "ownership_lost"],
+      [{ DEVLOOPS_RUN_ID: "foreign" }, undefined, "ownership_lost"],
+    ]) {
+      assert.equal((await handoffRunnerOwnership({ ...options, env, runId })).error, error);
+      assert.equal(await readFile(claim.filePath, "utf8"), before);
+    }
+    for (const raw of ["{", JSON.stringify({ ...JSON.parse(before), schemaVersion: 99 }),
+      JSON.stringify({ ...JSON.parse(before), target: { repo: "other/repo", pr: 17 } }),
+      JSON.stringify({ ...JSON.parse(before), target: { repo: "owner/repo", pr: 18 } })]) {
+      await writeFile(claim.filePath, raw);
+      await assert.rejects(handoffRunnerOwnership({ ...options, env: { DEVLOOPS_RUN_ID: "owner" } }));
+      assert.equal(await readFile(claim.filePath, "utf8"), raw);
+    }
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("a handoff signal cannot displace the same run after a later claim", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-handoff-reclaim-"));
+  const options = { repo: "owner/repo", pr: 17, cwd, runId: "owner" };
+  try {
+    const now = Date.now();
+    await claimRunnerOwnership({ ...options, now: new Date(now - 2000).toISOString() });
+    await handoffRunnerOwnership({ ...options, env: { DEVLOOPS_RUN_ID: "owner" }, now: new Date(now - 1000).toISOString() });
+    const claim = await claimRunnerOwnership({ ...options, now: new Date(now).toISOString() });
+    const before = await readFile(claim.filePath, "utf8");
+    const result = await ensureAsyncRunnerOwnership({ ...options, env: { DEVLOOPS_RUN_ID: "competitor" }, supersedeStale: true });
+    assert.equal(result.error, "ownership_lost");
+    assert.equal(await readFile(claim.filePath, "utf8"), before);
+    assert.equal((await detectStaleRunner(options)).exitSignal, null);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
 
 // Builds a throwaway git repo with a linked worktree so cross-CWD coordination
 // path resolution (git-common-dir anchoring) can be exercised for real.
@@ -1038,7 +1115,7 @@ test("runner coordination claim succeeds from a native Pi async-runner env with 
   }
 });
 
-test("native Codex runner claims use the shared child identity and reject missing evidence", async () => {
+test("native Codex runner claims and CLI handoff require the shared child identity", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "runner-codex-"));
   try {
     const id = "01a15519-285b-74b3-8f36-01e51619bba3";
@@ -1053,8 +1130,35 @@ test("native Codex runner claims use the shared child identity and reject missin
     const result = await runPrRunnerCoordination(options, { env, cwd: root });
     assert.equal(result.ok, true);
     assert.equal(result.activeRun.runId, `codex-thread-${id}`);
+    const args = ["handoff", "--repo", "owner/repo", "--pr", "17"];
+    const cli = (extra = []) => runNode(cliScript, [...args, ...extra], { cwd: root, env });
+    const mismatch = await cli(["--run-id", "foreign"]);
+    assert.equal(mismatch.code, 1);
+    assert.equal(JSON.parse(mismatch.stderr).error, "ownership_lost");
+    const handed = await cli();
+    assert.equal(handed.code, 0);
+    assert.equal(JSON.parse(handed.stdout).status, "handoff_recorded");
+    assert.equal((await cli(["--jq", ".status"])).stdout.trim(), "handoff_noop");
+    const silent = await cli(["--silent"]);
+    assert.equal(silent.code, 0);
+    assert.equal(silent.stdout, "");
+    for (const extra of [["--run-id"], ["--unknown"]]) {
+      const invalid = await cli(extra);
+      assert.equal(invalid.code, 1);
+      assert.match(invalid.stderr, /usage/i);
+    }
+    await runPrRunnerCoordination(options, { env, cwd: root });
+    const before = await readFile(result.filePath, "utf8");
+    await writeFile(file, "invalid metadata\n");
+    const malformed = await cli(["--run-id", result.runId]);
+    assert.equal(malformed.code, 1);
+    assert.equal(JSON.parse(malformed.stderr).error, "run_id_required");
     await rm(file);
     assert.equal((await runPrRunnerCoordination(options, { env, cwd: root })).error, "run_id_required");
+    const missing = await cli(["--run-id", result.runId]);
+    assert.equal(missing.code, 1);
+    assert.equal(JSON.parse(missing.stderr).error, "run_id_required");
+    assert.equal(await readFile(result.filePath, "utf8"), before);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -1102,7 +1206,11 @@ test("automatic ownership preserves native Pi, Claude and nonasync context", asy
       const result = await ensureAsyncRunnerOwnership({ repo: "owner/repo", pr: 17, cwd: root, env });
       assert.equal(result.ok, true);
       assert.equal(result.runId, runId);
-      if (runId) await releaseRunnerOwnership({ repo: "owner/repo", pr: 17, cwd: root, runId });
+      if (runId) {
+        const handed = await handoffRunnerOwnership({ repo: "owner/repo", pr: 17, cwd: root, env });
+        assert.equal(handed.status, "handoff_recorded");
+        assert.equal(handed.runId, runId);
+      }
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
