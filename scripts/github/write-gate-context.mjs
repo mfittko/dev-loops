@@ -3665,6 +3665,11 @@ export async function main(
     const freshness = await checkBaseFreshness({ base: prBase, head: options.headSha, cwd: repoRoot, env, trusted: true });
     // GATE-EXEC-BASE-REFRESH scopes the refusal to draft_gate and pre_approval_gate: a review run records the non-current result and continues.
     const refuses = options.gate === "draft_gate" || options.gate === "pre_approval_gate";
+    if (refuses && !freshness.ok) {
+      // A same-head retry that finds the base advanced must not leave the earlier base_current context or emit plan for emit-fanout-dispatch to consume.
+      const key = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" };
+      await Promise.all([buildGateContextPath(key), buildGateEmitPlanPath(key)].map((p) => rm(path.resolve(repoRoot, p), { force: true })));
+    }
     if (freshness.ok) {
       options.baseFreshness = { status: freshness.status, base: freshness.base };
     } else if (!refuses) {

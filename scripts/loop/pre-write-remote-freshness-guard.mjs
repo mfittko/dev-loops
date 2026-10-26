@@ -24,9 +24,11 @@ export async function checkBaseFreshness({ base: rawBase, head: rawHead = "HEAD"
   // `trusted`: the caller passes GitHub's baseRefName, which is always an origin branch, so skip the user-input remote-name probe.
   const base = trusted ? rawBase : normalizeBaseBranch(rawBase);
   const notBranch = (message) => ({ ok: false, error: "base_not_origin_branch", base: rawBase, message });
-  if (!isBranchName(base, { allowSlash: true }) || base.startsWith("refs/") || base.startsWith("origin/")) return notBranch(`${rawBase} is not an origin branch name`);
-  // A full-length SHA is never an origin branch: classify it before any network call.
-  if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(base)) return notBranch(`${rawBase} is a SHA, not an origin branch`);
+  if (!isBranchName(base, { allowSlash: true })) return notBranch(`${rawBase} is not an origin branch name`);
+  // A trusted baseRefName is already a branch (even `origin/release` or 40 hex characters): only untrusted input needs the ambiguity checks.
+  if (!trusted && (base.startsWith("refs/") || base.startsWith("origin/"))) return notBranch(`${rawBase} is not an origin branch name`);
+  // A full-length SHA is never an untrusted origin branch: classify it before any network call.
+  if (!trusted && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(base)) return notBranch(`${rawBase} is a SHA, not an origin branch`);
   if (!trusted && base.includes("/")) {
     const remote = base.split("/")[0];
     if (remote !== "origin" && (await git(["remote"]).catch(() => [])).includes(remote)) return notBranch(`${rawBase} names the remote ${remote}, not an origin branch`);
@@ -55,10 +57,12 @@ export async function checkBaseFreshness({ base: rawBase, head: rawHead = "HEAD"
     head = (await git(["rev-parse", "--verify", "--quiet", `${rawHead}^{commit}`]).catch(() => []))[0];
     if (!head) return unresolved;
   }
-  const newerCommits = await git(["log", `${head}..origin/${base}`, "--no-decorate", "--no-show-signature", "--format=%h %s"]);
+  // Fully qualified: a bare `origin/<base>` can resolve to a same-named tag or branch before the fetched remote-tracking ref.
+  const remoteRef = `refs/remotes/origin/${base}`;
+  const newerCommits = await git(["log", `${head}..${remoteRef}`, "--no-decorate", "--no-show-signature", "--format=%h %s"]);
   if (newerCommits.length === 0) return { ok: true, status: "base_current", base };
-  const touched = new Set(await git(["diff", "--name-only", `origin/${base}...${head}`]));
-  const foreignFiles = (await git(["diff", "--name-only", `origin/${base}..${head}`])).filter((f) => !touched.has(f));
+  const touched = new Set(await git(["diff", "--name-only", `${remoteRef}...${head}`]));
+  const foreignFiles = (await git(["diff", "--name-only", `${remoteRef}..${head}`])).filter((f) => !touched.has(f));
   return {
     ok: false,
     error: "base_stale_integrate_first",

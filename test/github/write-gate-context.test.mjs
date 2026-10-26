@@ -8244,7 +8244,12 @@ test("issue 2885: write-gate-context records baseFreshness on a current base and
     assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
     await advanceOrigin();
     // The caller never fetches: the preflight itself must see the advanced origin.
-    await rm(path.join(clone, "tmp"), { recursive: true, force: true });
+    // The earlier base_current context and an emit plan stay on disk: the refused retry must remove both.
+    const key = { repo: "owner/repo", pr: 70, gate: "draft_gate", headSha, tmpRoot: "tmp" };
+    const contextFile = path.join(clone, buildGateContextPath(key));
+    const planFile = path.join(clone, buildGateEmitPlanPath(key));
+    await writeFile(planFile, "{}\n", "utf8");
+    assert.equal(existsSync(contextFile), true);
     const before = process.exitCode;
     const realWrite = process.stderr.write.bind(process.stderr);
     let errText = "";
@@ -8257,7 +8262,8 @@ test("issue 2885: write-gate-context records baseFreshness on a current base and
       process.stderr.write = realWrite;
       process.exitCode = before;
     }
-    assert.equal(existsSync(path.join(clone, "tmp/gate-context")), false);
+    assert.equal(existsSync(contextFile), false);
+    assert.equal(existsSync(planFile), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

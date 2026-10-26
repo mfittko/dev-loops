@@ -417,3 +417,27 @@ test("checkBaseFreshness accepts @ inside a branch name, rejects @{ and a bare @
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("checkBaseFreshness judges refs/remotes/origin/<base>, not a same-named tag", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: true });
+  try {
+    runGitFixture(clone, ["tag", "origin/main", "HEAD"]);
+    const result = await checkBaseFreshness({ base: "main", cwd: clone });
+    assert.equal(result.error, "base_stale_integrate_first");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness fetches a trusted origin/-prefixed or 40-hex baseRefName", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: false });
+  try {
+    const hex = "a".repeat(40);
+    for (const base of ["origin/release", hex]) {
+      runGitFixture(clone, ["push", "-q", "origin", `HEAD:refs/heads/${base}`]);
+      assert.deepEqual(await checkBaseFreshness({ base, trusted: true, cwd: clone }), { ok: true, status: "base_current", base }, base);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
