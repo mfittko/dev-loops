@@ -306,11 +306,10 @@ export async function emitFixerWorkOrder({
     if (cap > 0 && round === cap) {
       const repoRoot = resolveRepoRoot(cwd);
       const ledgerFile = path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }));
-      let ledgerFindings = [];
-      if (existsSync(ledgerFile)) {
-        try { ledgerFindings = JSON.parse(readFileSync(ledgerFile, "utf8")).findings; } catch { ledgerFindings = null; }
-        if (!Array.isArray(ledgerFindings)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} is unreadable; failing closed at the cap round`);
-      }
+      if (!existsSync(ledgerFile)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist; failing closed at the cap round`);
+      let ledgerFindings;
+      try { ledgerFindings = JSON.parse(readFileSync(ledgerFile, "utf8")).findings; } catch { ledgerFindings = null; }
+      if (!Array.isArray(ledgerFindings)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} is unreadable; failing closed at the cap round`);
       const blockers = pastCapBlockers([...ledgerFindings, ...source.parsed], { pr: Number(pr), round, cap }); // Number(pr): the CLI pr is a string; a non-integer yields NaN and fails closed in pastCapBlockers.
       if (blockers.length > 0) {
         throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the cap round (cap ${cap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);

@@ -698,18 +698,36 @@ function stubDeferralDeps({ closing = [], listed = [] } = {}) {
   return { deps: { run, commentIssue }, runCalls, commentCalls };
 }
 
-async function runDeferRound({ findings, dispositions, deps, config, pr = "1658", gate = "draft_gate" }) {
+async function runDeferRound({ findings, dispositions, deps, config, pr = "1658", gate = "draft_gate", durable }) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-defer-"));
+  // A durable findings log written before the pass (write-gate-findings-log --judge-verdict never records a defer target).
+  const durablePath = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", `pr-${pr}`, `${gate}-${HEAD}.json`);
+  if (durable) {
+    await mkdir(path.dirname(durablePath), { recursive: true });
+    await writeFile(durablePath, JSON.stringify({ findings: durable }));
+  }
   if (config) await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify(config));
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
   await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions })));
   const payload = await judgePassCli(
-    { repo: "mfittko/dev-loops", pr, gate, headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", ...(gate === "review" ? {} : { out: "./act.json" }), ledgerOut: "./enriched.json" },
+    { repo: "mfittko/dev-loops", pr, gate, headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", ...(gate === "review" ? {} : { out: "./act.json" }), ledgerOut: "./enriched.json", ...(durable ? { tmpRoot: "./tmp" } : {}) },
     { repoRoot: tmpDir, ...deps },
   );
   const enriched = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8"));
-  return { payload, enriched, tmpDir };
+  return { payload, enriched, tmpDir, durableLog: durable ? JSON.parse(await readFile(durablePath, "utf8")) : undefined };
 }
+
+test("judgePassCli: the defer target reaches the durable findings log the cap-round fixer check reads (AC4a)", async () => {
+  const { deps } = stubDeferralDeps({ closing: [2425] });
+  const durable = [finding({ summary: "fix this", judgeDisposition: "act" }), finding({ summary: "defer this", severity: "medium", judgeDisposition: "defer" })];
+  const { durableLog } = await runDeferRound({
+    findings: [finding({ summary: "fix this" }), finding({ summary: "defer this", severity: "medium" })],
+    dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" }, { index: 1, ...DEFER }],
+    deps, durable,
+  });
+  assert.equal(durableLog.findings[1].followUpIssueNumber, 2425);
+  assert.equal(durableLog.findings[0].followUpIssueNumber, undefined, "an act item gets no target");
+});
 
 const DEFER = { disposition: "defer", title: "t", detail: "d", fix: "f", reason: "r", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } };
 
