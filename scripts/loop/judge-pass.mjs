@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -32,9 +32,10 @@ import {
   validateSpecAuthorityVerdict,
 } from "@dev-loops/core/loop/spec-authority";
 import { findEscalations, recurrenceFiles } from "@dev-loops/core/loop/gate-recurrence";
-import { commentDeferredFindings, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
+import { commentDeferredFindings, fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
 import { readClosedPriorRoundLogs, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
+import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
@@ -570,6 +571,26 @@ async function applyDeferralComment(enriched, { repo, pr, trackerProvider }, dep
 }
 
 /**
+ * Copy each stamped defer target onto the durable findings log for the round, matched by fingerprint, so the cap-round fixer check
+ * (emit-fixer-work-order) reads the same followUpIssueNumber as the verdict poster. An absent log is left untouched; a log that readGateFindingsLedger rejects fails the pass.
+ */
+async function stampDurableDeferTargets(enriched, options, resolvedRoot) {
+  const targets = new Map(enriched.filter((f) => f.judgeDisposition === "defer" && Number.isInteger(f.followUpIssueNumber)).map((f) => [f.fingerprint, f.followUpIssueNumber]));
+  if (targets.size === 0) return;
+  const logPath = path.resolve(resolvedRoot, buildLogPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }));
+  if (!(await access(logPath).then(() => true, (err) => (err?.code === "ENOENT" ? false : Promise.reject(err))))) return;
+  // One validity rule for the ledger: the canonical reader rejects a malformed log. It normalizes in memory, so the raw log is re-read to stamp it.
+  await readGateFindingsLedger(logPath);
+  const log = JSON.parse(await readFile(logPath, "utf8"));
+  let changed = false;
+  for (const f of log.findings) {
+    const target = f?.judgeDisposition === "defer" && f.followUpIssueNumber == null ? targets.get(fingerprintFinding(f)) : undefined;
+    if (target !== undefined) { f.followUpIssueNumber = target; changed = true; }
+  }
+  if (changed) await writeFile(logPath, JSON.stringify(log, null, 2) + "\n");
+}
+
+/**
  * Read + parse a JSON artifact from disk, failing closed with an actionable
  * message. Shared by the spec-file and spec-authority-verdict loads.
  */
@@ -1014,6 +1035,7 @@ export async function judgePassCli(
       { repo: options.repo, pr: Number(options.pr), trackerProvider },
       { env, ghCommand, run, commentIssue },
     );
+    await stampDurableDeferTargets(result.enriched, options, resolvedRoot);
   }
 
   // Recurrence escalation: an act item whose surface appears in act items of three counted

@@ -317,6 +317,25 @@ test("writeGateFindingsLog accepts a valid 16-hex fingerprint", async () => {
   }
 });
 
+test("writeGateFindingsLog keeps failOpen on a pre-judged --findings entry written without --judge-verdict (ADR 0191)", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-failopen-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "medium", angle: "scope", summary: "x", judgeDisposition: "reject", judgeReason: "not reproducible", failOpen: true }]),
+      tmpRoot: dir,
+    });
+    const written = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(written.findings[0].failOpen, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("writeGateFindingsLog rejects a defer judgeDisposition with no followUpDraft", async () => {
   await assert.rejects(async () => {
     await writeGateFindingsLog({

@@ -3778,6 +3778,22 @@ test("renderStructuredFindings renders no double-space and no dangling em-dash w
   assert.doesNotMatch(unknown, /^- {2}/m, "no double space for an unknown-severity finding");
 });
 
+test("renderStructuredFindings posts the judge reason and defer target for a closed finding (#2462)", () => {
+  const angles = normalizeStructuredFindings([
+    {
+      angle: "correctness",
+      verdict: "findings_present",
+      findings: [
+        { severity: "medium", summary: "deferred one", judgeDisposition: "defer", judgeReason: "tracked elsewhere", followUpIssueNumber: 77 },
+        { severity: "medium", summary: "rejected one", judgeDisposition: "reject", judgeReason: "not reproducible" },
+      ],
+    },
+  ]);
+  const body = renderStructuredFindings(angles);
+  assert.match(body, /deferred one — judge: _`defer`_ \(follow-up 77\) - tracked elsewhere/);
+  assert.match(body, /rejected one — judge: _`reject`_ - not reproducible/);
+});
+
 test("renderGateReviewCommentBody aggregate **Inline findings:** line breaks severities down in SEVERITY_ORDER and dedups touched angles (#1942)", () => {
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
