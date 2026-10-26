@@ -13,7 +13,7 @@ On PR 2922, the `draft_gate` round 5 composed `blocked` with a `round_cap_reache
 ## Decision
 
 - Constant. `DRAFT_ROUND_CAP_EFFECTIVE_AT` is `2026-10-26T08:51:13Z`, the merge time of PR 2932.
-- Count. A closed prior ledger counts toward the cap only when its `loggedAt` is at or after `DRAFT_ROUND_CAP_EFFECTIVE_AT`. A closed prior ledger whose `loggedAt` is missing or unparseable counts. An unreadable in-range ledger counts regardless of date. The round being posted counts.
+- Count. A closed prior ledger is skipped only when its `loggedAt` is a UTC timestamp in `toISOString` form earlier than `DRAFT_ROUND_CAP_EFFECTIVE_AT`, and every other closed ledger counts. An unreadable in-range ledger counts regardless of date. The round being posted counts.
 - Source. `loggedAt` is a property of the round record, written by the findings-log writer. No commit author date is read.
 
 ## Consequences

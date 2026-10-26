@@ -1908,7 +1908,7 @@ export const DRAFT_ROUND_CAP_EFFECTIVE_AT = "2026-10-26T08:51:13Z";
 
 /**
  * Completed-round count for the round cap: the closed prior rounds logged at or after
- * DRAFT_ROUND_CAP_EFFECTIVE_AT (a missing, non-string or unparseable `loggedAt` counts), plus an unreadable ledger at an
+ * DRAFT_ROUND_CAP_EFFECTIVE_AT (a closed ledger is skipped only when its `loggedAt` is a UTC timestamp in toISOString form earlier than the cutoff; every other value counts), plus an unreadable ledger at an
  * in-range head (counted regardless of date, since it has no readable `loggedAt`), plus the round being posted. Foreign, mismatched and unclosed ledgers never count.
  */
 export async function countCompletedRounds(options, { repoRoot }) {
