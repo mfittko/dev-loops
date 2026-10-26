@@ -225,7 +225,7 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
       if (options.profile === "targeted" && JSON.stringify(checkout.validation.paths ?? []) !== JSON.stringify(base.validation.paths ?? [])) {
         const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `origin/HEAD...${options.headSha}`], { cwd: repoRoot, encoding: "utf8", env: gitEnv, stdio: ["ignore", "pipe", "ignore"] }).split("\0").filter(Boolean).sort();
         const selected = resolveTargetedValidation(changed, base.validation.paths ?? []);
-        if (selected.profile !== "targeted" || selected.gateSuites.length === 0 || changed.some((p) => resolveTargetedValidation([p], base.validation.paths ?? []).gateSuites.length === 0)) return incomplete(selected.profile !== "targeted" ? "the base branch validation paths select full-repository validation for the changed paths" : "a changed path selects no base gate suite");
+        if (selected.profile !== "targeted" || selected.gateSuites.length === 0) return incomplete(selected.profile !== "targeted" ? "the base branch validation paths select full-repository validation for the changed paths" : "the base branch validation paths select no gate suite for the changed paths");
         runOptions = { ...options, suites: selected.gateSuites };
       }
       const classification = classifyPackageSuites(runOptions.suites, scripts);

@@ -757,27 +757,31 @@ test("a paths-only edit with a full-repository base selection resolves incomplet
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
-test("a paths-only edit with a changed path whose base rule selects no gate suite resolves incomplete", async () => {
-  const { repoRoot } = await fixture();
-  try {
-    // The docs rule also matches .devloops, so every changed path matches a gateSuites rule except tools/b.txt (commands, no gateSuites); the combined selection is targeted and only the per-path clause refuses.
-    await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:docs").replace('"**"', '["docs/**", ".devloops"]') + '    - match: "tools/**"\n      surface: all\n      commands: [node tools/check.mjs]\n');
-    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "base paths"], { cwd: repoRoot });
-    execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/main"], { cwd: repoRoot });
-    execFileSync("git", ["fetch", "-q", "origin"], { cwd: repoRoot });
-    await mkdir(path.join(repoRoot, "docs"), { recursive: true });
-    await mkdir(path.join(repoRoot, "tools"), { recursive: true });
-    await writeFile(path.join(repoRoot, "docs", "a.md"), "a\n");
-    await writeFile(path.join(repoRoot, "tools", "b.txt"), "x\n");
-    await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:scripts"));
-    execFileSync("git", ["add", "docs/a.md", "tools/b.txt"], { cwd: repoRoot });
-    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "pr edit"], { cwd: repoRoot });
-    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
-    const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:docs"]), { repoRoot });
-    assert.equal(result.status, "incomplete");
-    assert.match(result.reason, /a changed path selects no base gate suite/);
-  } finally { await rm(repoRoot, { recursive: true, force: true }); }
-});
+const commandsOnlyRules = () => pathsRule("test:docs").replace('"**"', '["docs/**", ".devloops"]') + '    - match: "tools/**"\n      surface: all\n      commands: [node tools/check.mjs]\n';
+
+// ADR 0192: a changed path whose base rule has commands but no gateSuites contributes no suite; it does not refuse.
+for (const [name, editPaths] of [["a paths-only edit", true], ["equal paths", false]]) {
+  test(`${name} with a commands-only changed path completes with the base-selected suites`, async () => {
+    const { repoRoot } = await fixture();
+    try {
+      await writeFile(path.join(repoRoot, ".devloops"), commandsOnlyRules());
+      execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "base paths"], { cwd: repoRoot });
+      execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/main"], { cwd: repoRoot });
+      execFileSync("git", ["fetch", "-q", "origin"], { cwd: repoRoot });
+      await mkdir(path.join(repoRoot, "docs"), { recursive: true });
+      await mkdir(path.join(repoRoot, "tools"), { recursive: true });
+      await writeFile(path.join(repoRoot, "docs", "a.md"), "a\n");
+      await writeFile(path.join(repoRoot, "tools", "b.txt"), "x\n");
+      if (editPaths) await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:scripts"));
+      execFileSync("git", ["add", "docs/a.md", "tools/b.txt"], { cwd: repoRoot });
+      execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "pr edit"], { cwd: repoRoot });
+      const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+      const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:docs"]), { repoRoot });
+      assert.equal(result.status, "complete");
+      assert.deepEqual(result.artifact.suites.map((s) => s.command), ["bun run test:docs"]);
+    } finally { await rm(repoRoot, { recursive: true, force: true }); }
+  });
+}
 
 test("a hung CI read times out so the gate resolves incomplete", async () => {
   await assert.rejects(defaultReadCi({ repo: "o/r", pr: 1 }, { read: () => new Promise(() => {}), timeoutMs: 20 }), /timed out/);
