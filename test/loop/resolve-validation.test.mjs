@@ -757,18 +757,20 @@ test("a paths-only edit with a full-repository base selection resolves incomplet
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
-test("a paths-only edit with a changed path that no base rule maps resolves incomplete", async () => {
+test("a paths-only edit with a changed path whose base rule selects no gate suite resolves incomplete", async () => {
   const { repoRoot } = await fixture();
   try {
-    await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:docs").replace('"**"', '"docs/**"'));
+    // Every changed path matches a base rule and the combined selection is targeted; only the tools/ rule has commands but no gateSuites.
+    await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:docs").replace('"**"', '"docs/**"') + '    - match: "tools/**"\n      surface: all\n      commands: [node tools/check.mjs]\n');
     execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "base paths"], { cwd: repoRoot });
     execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/main"], { cwd: repoRoot });
     execFileSync("git", ["fetch", "-q", "origin"], { cwd: repoRoot });
     await mkdir(path.join(repoRoot, "docs"), { recursive: true });
+    await mkdir(path.join(repoRoot, "tools"), { recursive: true });
     await writeFile(path.join(repoRoot, "docs", "a.md"), "a\n");
-    await writeFile(path.join(repoRoot, "other.txt"), "x\n");
+    await writeFile(path.join(repoRoot, "tools", "b.txt"), "x\n");
     await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:scripts"));
-    execFileSync("git", ["add", "docs/a.md", "other.txt"], { cwd: repoRoot });
+    execFileSync("git", ["add", "docs/a.md", "tools/b.txt"], { cwd: repoRoot });
     execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "pr edit"], { cwd: repoRoot });
     const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
     const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:docs"]), { repoRoot });
