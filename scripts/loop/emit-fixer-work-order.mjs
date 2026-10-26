@@ -304,7 +304,10 @@ export async function emitFixerWorkOrder({
     // whose changes since the cap-round head are merges of the PR base with an unchanged PR-own patch, is still the cap round: the cap-round ledger and posted verdict are read at the cap-round head.
     if (cap > 0 && round === cap + 1 && !existsSync(path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate, headSha, tmpRoot })))) {
       try {
-        const fromHead = closureFromHeadOf(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd) }));
+        let unreadable = 0;
+        const fromHead = closureFromHeadOf(await readClosedPriorRoundLogs({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: resolveRepoRoot(cwd), onUnreadable: () => { unreadable += 1; } }));
+        // An unreadable ledger counts toward the cap but is dropped above, so the cap-round authority could be an earlier round: fail closed.
+        if (unreadable > 0) throw new Error("unreadable prior ledger");
         const baseRefName = (await fetchPr({ repo, pr }))?.baseRefName;
         if (typeof baseRefName === "string" && baseRefName && await isBaseOnlyMergeSince({ fromHead, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd })) {
           round = cap;
@@ -445,7 +448,7 @@ export async function emitFixerWorkOrder({
     outputRefs: [outputRef],
     siteCoverage: actListFile && !completion ? buildSiteCoverageSkeleton(source.parsed) : undefined,
     handbackCheck: phase === "commit_only" && actListFile
-      ? `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(abs(actListFile))} --baseline ${headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(outputRef)}`
+      ? `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(abs(actListFile))} --baseline ${capRoundHead} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(outputRef)}`
       : undefined,
     executionRules: {
       contract: fileURLToPath(new URL("agents/fixer.agent.md", PACKAGE_ROOT)),
