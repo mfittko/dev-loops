@@ -1408,7 +1408,7 @@ export function pastCapBlockers(findings, { pr, round, cap } = {}) {
       ? nonBlank(f.judgeReason)
       : Number.isInteger(pr) && Number.isInteger(f?.followUpIssueNumber) && f.followUpIssueNumber > 0 && f.followUpIssueNumber !== pr;
     const closedBlocks = closed && (severity === "high" || (severity === "medium" && !isFinal));
-    if (!JUDGE_DISPOSITIONS.includes(f?.judgeDisposition) || !VALID_SEVERITIES.has(severity) || f?.failOpen === true || closedBlocks) {
+    if (!JUDGE_DISPOSITIONS.includes(f?.judgeDisposition) || !VALID_SEVERITIES.has(severity) || (closed && f?.failOpen === true) || closedBlocks) {
       blockers.push({ kind: "round_cap_reached", reason: "severity_disagreement", item: label(f, "severity_disagreement") });
     }
   }

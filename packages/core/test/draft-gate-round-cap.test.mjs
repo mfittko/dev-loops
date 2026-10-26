@@ -148,6 +148,10 @@ describe("draft_gate round cap", () => {
       assert.deepEqual(blockerReasons([act("medium", { failOpen: true })], at(4)), ["new_act"]);
     });
 
+    test("a failOpen evidence_only act item at the cap round has no blocker", () => {
+      assert.deepEqual(pastCapBlockers([act("medium", { ...fix, failOpen: true, remedyKind: "evidence_only" })], at(4)), []);
+    });
+
     test("a failOpen reject or defer at the cap round blocks", () => {
       const sd = ["severity_disagreement"];
       assert.deepEqual(blockerReasons([closed("medium", "reject", { judgeReason: "r", failOpen: true })], at(4)), sd);
