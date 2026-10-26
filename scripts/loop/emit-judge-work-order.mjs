@@ -19,10 +19,10 @@ import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "..
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
-import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
-import { resolveGateRound } from "../github/_gate-finding-surface.mjs";
+import { isFindingsLogName, resolveGateRound } from "../github/_gate-finding-surface.mjs";
 
 const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--tmp-root <path>]
 Derives the judge's work order from the round's authoritative inputs: the consolidated
@@ -72,7 +72,7 @@ This permits only pinned reads and concrete dependency widening already authoriz
 
 Adjudicate every finding in the \`findings\` read per agents/judge.agent.md, against the COMPLETE spec in the \`spec\` read.
 Dispose each cluster once, never each raw finding: \`dispositions[].index\` is the cluster's \`clusterId\`, and one \`act\`, \`defer\` or \`reject\` with one rationale applies to every member. Severity, the \`round\` and the \`mediumFixWindow\` in the work order are inputs to your decision. No rule defers a finding from severity or round alone, so decide \`act\`, \`defer\` or \`reject\` for every cluster in every round. One exception holds: a cluster that contains a \`high\` or a \`question\`, and an all-\`nit\` cluster, is never deferred, so only \`act\` or \`reject\` is valid for it and a \`defer\` fails the judge pass closed.
-Each disposition carries \`title\` (the one-line defect), \`detail\` (the concrete path through the code and why it breaks), \`fix\` (the remedy and the test to add) and, for \`defer\` and \`reject\`, \`reason\` (one sentence). A disposition missing any required field fails closed. Write plain sentences with no em dashes and no arrows.
+Each disposition carries \`title\` (the one-line defect), \`detail\` (the concrete path through the code and why it breaks), \`fix\` (the remedy and the test to add) and, for \`defer\` and \`reject\`, \`reason\` (one sentence). A disposition missing any required field fails closed. When a cluster repeats an entry of \`priorActItems\` (another instance at the same file and guard counts), set \`resurfaces\` on its disposition to that entry's \`fingerprint\`. Write plain sentences with no em dashes and no arrows.
 Read every \`required\` entry below IN FULL before any judgment. If one is missing, unreadable, or its sha256 differs, stop and report which read failed; never write a verdict.
 Write exactly two artifacts: the relevance verdict to \`${verdictPath}\` and the spec-authority verdict to \`${specVerdictPath}\`.
 Widening: ${JUDGE_WIDENING_RULE}.
@@ -107,7 +107,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     const ledgerTmpRoot = resolveGateArtifactTmpRoot(checkoutRoot);
     const resolved = await resolveGateRound({ repo, pr, gate, headSha, reviews: [], issueComments: [], tmpRoot: ledgerTmpRoot, repoRoot: checkoutRoot });
     const currentLedger = path.resolve(checkoutRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot }));
-    const prior = (await readdir(path.dirname(currentLedger)).catch(() => [])).filter((name) => name.startsWith(`${gate}-`) && name.endsWith(".json") && `${gate}-${headSha}.json` !== name).length;
+    const prior = (await readdir(path.dirname(currentLedger)).catch(() => [])).filter((name) => isFindingsLogName(gate, name) && `${gate}-${headSha}.json` !== name).length;
     round = Math.max(resolved, prior + 1);
   }
   tmpRoot ??= path.join(checkoutRoot, "tmp");
@@ -143,6 +143,8 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     // Judge inputs, never a deferral rule: the gate round and the medium fix window. The judge decides act, defer or reject for every cluster in every round.
     round,
     mediumFixWindow: resolveGateConfig(config, GATE_CONFIG_KEY[gate] ?? "preApproval").mediumFixWindow,
+    // Act items of the closed prior rounds. A cluster that repeats one sets `resurfaces` to its fingerprint; every other act item is new.
+    priorActItems: await listPriorActItems({ repo, pr, gate, headSha, tmpRoot: resolveGateArtifactTmpRoot(checkoutRoot) }, { repoRoot: checkoutRoot }),
     configSha256: sha256(JSON.stringify(config ?? {})),
     authority: {
       specDigest,
