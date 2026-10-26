@@ -76,8 +76,9 @@ export const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);
  * (equivalent to `;`), and the Claude Code Bash tool accepts multi-line command
  * strings — so a segment must break on them too, else `echo hi\ngh pr create` evades
  * the gate. Used by all segment-splitting sites (DRY).
+ * A `&` that belongs to a redirection (`2>&1`, `>&2`, `&>f`) is not a separator.
  */
-const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||&|\n|\r)\s*/;
+const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||(?<![<>])&(?!>)|\n|\r)\s*/;
 
 /**
  * Strip a single balanced surrounding quote pair (`'…'` or `"…"`) from a shell arg value.
@@ -1152,7 +1153,12 @@ function interpreterRegex(bin) {
 }
 
 // Bare `-` stdin script, or a heredoc token (`<<EOF`, `-<<EOF`, or one attached to a flag: `-I<<EOF`).
-const isStdinScriptToken = (t) => t === "-" || t.startsWith("<<") || (t.startsWith("-") && t.includes("<<"));
+const isStdinScriptToken = (t) => t === "-" || t.startsWith("<<") || (t.startsWith("-") && t.includes("<<")) || /^\d+<</.test(t);
+// A redirection token (`2>&1`, `2>/dev/null`, `>out`, `&>x`) between flags and the heredoc is not the script path. Returns how many tokens to skip: 0 (not a redirection), 1, or 2 (operator alone, its target is the next token).
+const REDIRECTION_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)/;
+const REDIRECTION_OPERATOR_ONLY_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)$/;
+const redirectionSkip = (t) => (!t.includes("<<") && REDIRECTION_RE.test(t) ? (REDIRECTION_OPERATOR_ONLY_RE.test(t) ? 2 : 1) : 0);
+const SCRIPT_EXT_RE = /\.(?:[cm]?js|[cm]?ts)$/;
 
 /**
  * OPS-NO-INLINE-INTERPRETER: an inline interpreter — `node -e`/`--eval`/`-p`, `python3 -c`, or a
@@ -1167,7 +1173,7 @@ export function commandContainsInlineInterpreter(command) {
     if (interpreterRegex("node").test(s)) {
       const code = s.replace(interpreterRegex("node"), "").trim();
       const tokens = code.split(/\s+/).filter(Boolean);
-      // ponytail: closed list of value flags. An unlisted `--long value` flag fails closed: a non-flag token that follows a `--flag` without `=` is skipped as its value and the scan continues (a boolean long flag before a script then over-refuses a later `-`/heredoc; accepted).
+      // ponytail: closed list of value flags. an unlisted `--long value` flag fails closed: a non-flag token that follows a `--flag` (not `--`, no `=`) is skipped as its value and the scan continues, unless it ends in a script extension (.js/.mjs/.cjs/.ts/.mts/.cts) and so is the script. Ceiling: an extensionless script after a boolean long flag is still read as a value.
       // Node value-taking flags (short + long) each consume the following token. Consuming them lets
       // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
       // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value.
@@ -1179,9 +1185,11 @@ export function commandContainsInlineInterpreter(command) {
         // prefix match catches; break at the first non-flag token so a later `-e` on a script path
         // is a script argument.
         if (t === "-e" || t.startsWith("-e") || t === "--eval" || t.startsWith("--eval=") || t === "-p" || t.startsWith("-p")) return true;
+        const skip = redirectionSkip(t);
+        if (skip) { i += skip - 1; continue; }
         if (!t.startsWith("-")) {
           const prev = tokens[i - 1];
-          if (prev?.startsWith("--") && !prev.includes("=")) { if (t.includes("<<")) return true; continue; } // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
+          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !SCRIPT_EXT_RE.test(t)) { if (t.includes("<<")) return true; continue; } // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
           break; // script path reached — a later `-e` is a script argument
         }
         if (NODE_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
@@ -1195,8 +1203,10 @@ export function commandContainsInlineInterpreter(command) {
         const t = tokens[i];
         if (isStdinScriptToken(t)) return true;
         if (t === "-c" || t.startsWith("-c")) return true;
+        const skip = redirectionSkip(t);
+        if (skip) { i += skip - 1; continue; }
         if (!t.startsWith("-")) break; // script path reached — a later `-c` is a script argument
-        if (PYTHON_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
+        if (PYTHON_VALUE_FLAGS.has(t) || /^-[A-Za-z]*[WX]$/.test(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
       }
     }
     return false;
