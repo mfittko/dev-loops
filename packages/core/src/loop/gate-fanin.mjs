@@ -1269,8 +1269,8 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
         throw new Error(`judge disposition for cluster ${d.index} defers a cluster whose severity is ${blocked}; a high, a question or an all-nit cluster is never deferred (GATE-EXEC-THREAD-DISPOSITION) — fail closed`);
       }
     }
-    // ADR 0188: an `act` on an all-low/nit cluster is coerced. failOpen promotes to medium and keeps act in every
-    // round; else an all-nit cluster stays act only in draft round 1 below the cap (the fixer fixes it) and rejects after;
+    // ADR 0188: an `act` on an all-low/nit cluster is coerced. failOpen promotes a cluster holding a low to medium and
+    // keeps act in every round; else (failOpen is ignored on an all-nit cluster) an all-nit cluster stays act only in draft round 1 below the cap (the fixer fixes it) and rejects after;
     // a cluster with a low (its nit members ride along, one disposition per cluster) stays act below the round cap and defers at or past it.
     let disposition = d.disposition;
     let reason = d.reason;
@@ -1281,7 +1281,7 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
     // Unstamped (legacy) ledgers cluster later, so a low could share a cluster with a medium: coerce only when the whole ledger is low/nit.
     const allNit = clusterMembers.every((f) => normalizeSeverity(f.severity) === "nit");
     if (disposition === "act" && clusterMembers.every(lowOrNit) && (stamped || enriched.every(lowOrNit))) {
-      if (d.failOpen === true) {
+      if (d.failOpen === true && !allNit) {
         promote = true;
       } else if (allNit ? !(round === 1 && !pastCap) : pastCap) {
         disposition = allNit ? "reject" : "defer";

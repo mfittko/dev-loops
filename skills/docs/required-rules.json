@@ -679,10 +679,6 @@
       "enforcement": "doc"
     },
     {
-      "id": "PLAN-SPLIT-BEFORE-OVERSIZE",
-      "enforcement": "doc"
-    },
-    {
       "id": "PLAN-SIZE-BAND",
       "enforcement": "runtime"
     },

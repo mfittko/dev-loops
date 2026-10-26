@@ -26,6 +26,11 @@ async function walk(dir) {
   return out;
 }
 
+test("FIXED_CAP matches the fixed-cap phrases it guards against", () => {
+  assert.match("at most 2 fixer cycles", FIXED_CAP);
+  assert.match("fixer cycle cap of 3", FIXED_CAP);
+});
+
 test("no agent, skill or brief imposes a fixed fixer-cycle cap", async () => {
   const briefs = (await readdir(path.join(repoRoot, "scripts/loop"))).filter((n) => n.includes("brief")).map((n) => path.join(repoRoot, "scripts/loop", n));
   const files = [...(await walk(path.join(repoRoot, "agents"))), ...(await walk(path.join(repoRoot, "skills"))), ...briefs].filter((f) => /\.(md|mjs)$/.test(f));

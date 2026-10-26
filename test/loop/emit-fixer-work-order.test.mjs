@@ -816,6 +816,24 @@ test("delta gate: a three-thread Copilot fix cannot reach --phase full without a
   });
 });
 
+test("ADR 0188: the round count comes from the canonical ledger root, even with a custom --tmp-root", async () => {
+  await withFixture(async ({ root, wt, files, emit }) => {
+    const closedPrior = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`, `draft_gate-${"d".repeat(40)}.json`);
+    await mkdir(path.dirname(closedPrior), { recursive: true });
+    await writeFile(closedPrior, JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+    // Draft round 2 below the default cap: a nit-only list refuses, a low-only list still emits.
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "nit" })]));
+    await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap" && /outside draft_gate round 1/.test(e.message));
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low" })]));
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    // Cap 2: round 2 is at the cap. A custom --tmp-root with no ledgers must not read round 1.
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    const custom = path.join(path.dirname(root), "custom-tmp");
+    await assert.rejects(emit({ tmpRoot: custom }), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
+    await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
+  });
+});
+
 test("F1: free-form brief, payload override and summary-file substitution exit 2", () => {
   for (const flag of ["--brief", "--payload", "--summary-file"]) {
     const result = spawnSync("node", [EMITTER, "--repo", REPO, "--pr", "7", "--head-sha", "a".repeat(40), "--phase", "full", "--threads-file", "t.json", flag, "x"], { encoding: "utf8", env: runIdFreeEnv() });

@@ -1583,6 +1583,13 @@ describe("applyJudgeDispositions (#1525)", () => {
       }
     });
 
+    test("failOpen on an all-nit cluster is ignored: it becomes reject with nit severity outside draft round 1", () => {
+      for (const options of [{ pastCap: false, round: 2 }, { pastCap: false, round: 0 }]) {
+        const { findings } = applyJudgeDispositions(cluster("nit", "nit"), judgeVerdict([{ index: 0, ...act, failOpen: true }]), options);
+        assert.deepEqual(findings.map((f) => [f.severity, f.judgeDisposition]), [["nit", "reject"], ["nit", "reject"]], JSON.stringify(options));
+      }
+    });
+
     test("a cluster with a medium member stays act", () => {
       const { findings } = applyJudgeDispositions(cluster("medium", "low"), judgeVerdict([{ index: 0, ...act }]));
       assert.deepEqual(findings.map((f) => [f.severity, f.judgeDisposition]), [["medium", "act"], ["low", "act"]]);

@@ -1,6 +1,6 @@
 // ADR 0188: the autonomy principles are rules with one owner, a trigger, an actor, an outcome and a typed refusal code.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { test } from "bun:test";
 
@@ -13,7 +13,6 @@ const OWNERS = {
   "GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE": "skills/docs/gate-review-sub-loop-contract.md",
   "GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH": "skills/docs/gate-review-sub-loop-contract.md",
   "ADR-OVER-WAIVER": "skills/docs/decision-record-contract.md",
-  "PLAN-SPLIT-BEFORE-OVERSIZE": "skills/docs/local-planning.md",
   "GATE-EXEC-FIXER-CYCLE-BOUND": "skills/docs/gate-review-sub-loop-contract.md",
 };
 const ruleText = (id) => read(OWNERS[id]).split("\n").find((l) => l.startsWith(`\`${id}\``) || l.includes(`rule: ${id} --> \`${id}\``));
@@ -56,4 +55,26 @@ test("the low/nit refusal and coercion code is pinned to the rule text", async (
   const code = "low_fix_until_cap";
   assert.match(read("scripts/loop/emit-fixer-work-order.mjs"), new RegExp(`"${code}", \`${code} \\(GATE-EXEC-LOW-FIX-UNTIL-CAP\\)`));
   assert.match(read("packages/core/src/loop/gate-fanin.mjs"), new RegExp(`${code} \\(GATE-EXEC-LOW-FIX-UNTIL-CAP\\)`));
+});
+
+// A paraphrased restatement of a rule outcome is a second definition even when no verbatim body is pasted (AC10).
+const OUTCOME_PHRASES = {
+  "GATE-EXEC-LOW-FIX-UNTIL-CAP": [/at or past the cap\b.{0,80}\bdefer\b/i, /\bdefer\b.{0,80}at or past the cap\b/i, /\bfrom round 2\b.{0,80}\bnit\b/i, /\bnit\b.{0,80}\bfrom round 2\b/i, /\bis `act` below the round cap/i],
+};
+
+test("S1 rule outcome phrases appear under agents/ and skills/ only in the owning rule line", () => {
+  const files = ["agents", "skills"].flatMap((dir) => readdirSync(new URL(`../../${dir}`, import.meta.url), { recursive: true }).filter((f) => f.endsWith(".md")).map((f) => `${dir}/${f}`));
+  assert.ok(files.length > 10);
+  for (const [id, phrases] of Object.entries(OUTCOME_PHRASES)) {
+    const owner = ruleText(id);
+    assert.ok(phrases.some((phrase) => phrase.test(owner)), `${id} owner line states its outcome`);
+    for (const file of files) {
+      for (const [n, line] of read(file).split("\n").entries()) {
+        if (file === OWNERS[id] && line === owner) continue;
+        for (const phrase of phrases) assert.doesNotMatch(line, phrase, `${file}:${n + 1} restates ${id}`);
+      }
+    }
+  }
+  // Negative fixture: the judge-brief wording this guard exists for is detected.
+  assert.match("at or past the cap a `low` is `defer`", OUTCOME_PHRASES["GATE-EXEC-LOW-FIX-UNTIL-CAP"][0]);
 });
