@@ -8231,8 +8231,8 @@ test("countCompletedRounds skips closed ledgers logged before DRAFT_ROUND_CAP_EF
     assert.equal(await count(), 1, "four pre-cap ledgers do not count, the posted round does");
     await seed(["2026-10-26T08:51:13Z", "2026-10-27T00:00:00.000Z", "2026-10-28T00:00:00.000Z"]);
     assert.equal(await count(), 4, "three ledgers at or after the landing plus the posted round");
-    await seed([undefined, "not a date", "", 2026, null]);
-    assert.equal(await count(), 6, "a missing, empty, non-string, null or unparseable loggedAt counts");
+    await seed([undefined, "not a date", "", 2026, null, "2026", "1", "2026-10-01"]);
+    assert.equal(await count(), 9, "a missing, empty, non-string, null, non-ISO or lenient-parse loggedAt counts");
   } finally {
     await rm(tmpRoot, { recursive: true, force: true });
   }

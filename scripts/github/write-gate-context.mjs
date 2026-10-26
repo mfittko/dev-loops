@@ -1914,7 +1914,10 @@ export const DRAFT_ROUND_CAP_EFFECTIVE_AT = "2026-10-26T08:51:13Z";
 export async function countCompletedRounds(options, { repoRoot }) {
   let unreadable = 0;
   const closed = await readClosedPriorRoundLogs(options, { repoRoot, onUnreadable: () => { unreadable += 1; } });
-  return closed.filter((log) => typeof log.loggedAt !== "string" || !(Date.parse(log.loggedAt) < Date.parse(DRAFT_ROUND_CAP_EFFECTIVE_AT))).length + unreadable + 1;
+  const cutoff = Date.parse(DRAFT_ROUND_CAP_EFFECTIVE_AT);
+  // Only a strict toISOString-form UTC timestamp earlier than the cutoff is skipped; any other value counts (fails toward the cap).
+  const preCap = (loggedAt) => typeof loggedAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(loggedAt) && Date.parse(loggedAt) < cutoff;
+  return closed.filter((log) => !preCap(log.loggedAt)).length + unreadable + 1;
 }
 
 /** Act items of the closed prior rounds as `{ fingerprint, file, line, title }`, one per fingerprint. */
