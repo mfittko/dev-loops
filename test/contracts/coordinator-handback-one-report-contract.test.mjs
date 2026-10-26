@@ -10,8 +10,8 @@ const GATE = "skills/docs/gate-review-sub-loop-contract.md";
 const ONE = "COORDINATOR-HANDBACK-ONE-REPORT";
 const READ = "MAIN-AGENT-COORDINATOR-REPORT-READ";
 
-async function rule(id, file = MAIN) {
-  const content = await readRepo(file);
+async function rule(id) {
+  const content = await readRepo(MAIN);
   assert.equal(content.split(`<!-- rule: ${id} -->`).length - 1, 1, `${id} defined once`);
   const start = content.indexOf(`<!-- rule: ${id} -->`);
   const ends = ["\n<!-- rule:", "\n## "].map((m) => content.indexOf(m, start + 1)).filter((i) => i !== -1);
@@ -54,7 +54,7 @@ test("GATE-EXEC-HARNESS-JOIN names children in flight and cites the read rule", 
   assert.match(text, /report sent while a child is in flight.*`COORDINATOR-HANDBACK-ONE-REPORT`/s);
   assert.match(text, /names every such child: agent id, expected artifact path or hand-back, and the next step/);
   assert.match(text, /gate coordinator child the expected hand-back is its round result/);
-  assert.match(text, /treats the reporter as still running and reads its output file on the reporter's next notification \(`MAIN-AGENT-COORDINATOR-REPORT-READ`.*terminal hand-back, not a pause.*keeps the child list\. The wait command cancels no child, so the parent treats each listed child as still running\./s);
+  assert.match(text, /treats the reporter as still running\. On Claude Code the parent reads the reporter's output file on its next notification \(`MAIN-AGENT-COORDINATOR-REPORT-READ`.*terminal hand-back, not a pause.*keeps the child list\. The wait command cancels no child, so the parent treats each listed child as still running\./s);
   assert.ok(!/last assistant message/.test(text), "the read rule is cited, not restated");
 });
 
