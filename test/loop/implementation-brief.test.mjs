@@ -1007,6 +1007,36 @@ test("importers lists the sorted tracked files that import a touched module, and
   });
 });
 
+test("importers match extensionless, directory-index and .js-for-.ts relative specifiers, and reject near misses", async () => {
+  const root = await trackedRepo({
+    "src/a.cjs": "module.exports = 1;\n",
+    "src/lib/index.js": "export const l = 1;\n",
+    "src/c.ts": "export const c = 1;\n",
+    "src/t/a.ts": "export const t = 1;\n",
+    "src/exact.cjs": 'require("./a.cjs");\n',
+    "src/b.cjs": 'require("./a");\nrequire("./lib");\nrequire("./c.js");\n',
+    "src/t/user.ts": 'import { t } from "./a";\n',
+    "src/near.cjs": 'require("./ab");\nrequire("./a.cjs.bak");\nrequire("a");\nrequire("./a/b");\n',
+  });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.cjs", "src/lib/index.js", "src/c.ts", "src/t/a.ts"] });
+  assert.deepEqual(brief.importers, {
+    "src/a.cjs": { files: ["src/b.cjs", "src/exact.cjs"] },
+    "src/lib/index.js": { files: ["src/b.cjs"] },
+    "src/c.ts": { files: ["src/b.cjs"] },
+    "src/t/a.ts": { files: ["src/t/user.ts"] },
+  });
+});
+
+test("a filesystem error on a tracked entry is a runtime error, not an importers_unavailable finding", async () => {
+  const root = await trackedRepo({ "src/a.mjs": "export const a = 1;\n", "locked/x.mjs": "export const x = 1;\n" });
+  await chmod(path.join(root, "locked"), 0o000);
+  try {
+    await assert.rejects(buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] }), (error) => error.code === "EACCES");
+  } finally {
+    await chmod(path.join(root, "locked"), 0o755);
+  }
+});
+
 test("a git ls-files failure yields null importers and an importers_unavailable finding", async () => {
   const root = await fixtureRepo({ files: { "src/a.mjs": "export const a = 1;\n" }, git: false });
   const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });

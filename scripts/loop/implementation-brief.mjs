@@ -316,31 +316,33 @@ function exportedNames(source) {
  * discovering an enclosing repository when --repo-root is a nested non-git directory.
  */
 async function trackedSourceFiles(root, rootReal) {
+  let stdout;
   try {
     const env = { ...gitEnvNoDirOverrides(), GIT_CEILING_DIRECTORIES: path.dirname(rootReal) };
-    const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "-z"], { env, maxBuffer: 64 * 1024 * 1024 });
-    const files = [];
-    for (const file of stdout.split("\0").filter((entry) => SOURCE_FILE_RE.test(entry)).sort()) {
-      // A tracked symlink counts only when it resolves to a file inside the root;
-      // a gitlink or directory entry named like a module is skipped.
-      const target = path.join(root, ...file.split("/"));
-      const info = await lstat(target).catch((error) => {
-        if (isMissing(error)) return null;
-        throw error;
-      });
-      if (!info) continue;
-      if (!info.isFile()) {
-        if (!info.isSymbolicLink()) continue;
-        const real = await realpath(target).catch(() => null);
-        if (real === null || !real.startsWith(rootReal + path.sep) || !(await stat(real)).isFile()) continue;
-      }
-      files.push(file);
-    }
-    return { files };
+    ({ stdout } = await execFileAsync("git", ["-C", root, "ls-files", "-z"], { env, maxBuffer: 64 * 1024 * 1024 }));
   } catch {
     // Fixed text keeps the brief byte-identical across checkout roots.
     return { files: null, error: "git ls-files failed under --repo-root (not a git work tree, or git is unavailable)" };
   }
+  // A filesystem error on a tracked entry is a runtime error (exit 2), not a git failure.
+  const files = [];
+  for (const file of stdout.split("\0").filter((entry) => SOURCE_FILE_RE.test(entry)).sort()) {
+    // A tracked symlink counts only when it resolves to a file inside the root;
+    // a gitlink or directory entry named like a module is skipped.
+    const target = path.join(root, ...file.split("/"));
+    const info = await lstat(target).catch((error) => {
+      if (isMissing(error)) return null;
+      throw error;
+    });
+    if (!info) continue;
+    if (!info.isFile()) {
+      if (!info.isSymbolicLink()) continue;
+      const real = await realpath(target).catch(() => null);
+      if (real === null || !real.startsWith(rootReal + path.sep) || !(await stat(real)).isFile()) continue;
+    }
+    files.push(file);
+  }
+  return { files };
 }
 
 /** Exported names of the tracked source modules beside each touched path and in scripts/lib/. */
@@ -374,6 +376,14 @@ async function helperInventory(root, touchedPaths, resolved, tracked) {
   return { modules: inline, overflowModules };
 }
 
+/** Paths a relative specifier can name: as is, with an extension, as a directory index, or a .js specifier for a .ts file. */
+function specifierCandidates(joined) {
+  const exts = ["mjs", "cjs", "js", "ts"];
+  const candidates = [joined, ...exts.map((ext) => `${joined}.${ext}`), ...exts.map((ext) => `${joined}/index.${ext}`)];
+  if (joined.endsWith(".js")) candidates.push(`${joined.slice(0, -3)}.ts`);
+  return candidates;
+}
+
 /** Tracked files that import each existing touched source module by relative specifier. */
 async function importersByModule(root, touchedPaths, resolved, tracked) {
   if (tracked === null) return null;
@@ -385,8 +395,10 @@ async function importersByModule(root, touchedPaths, resolved, tracked) {
     if (source == null) continue;
     for (const [, specifier] of source.matchAll(IMPORT_SPECIFIER_RE)) {
       const resolvedSpecifier = path.posix.join(path.posix.dirname(file), specifier);
-      const hit = found.get(resolvedSpecifier);
-      if (hit && file !== resolvedSpecifier && !hit.includes(file)) hit.push(file);
+      for (const candidate of specifierCandidates(resolvedSpecifier)) {
+        const hit = found.get(candidate);
+        if (hit && file !== candidate && !hit.includes(file)) hit.push(file);
+      }
     }
   }
   return Object.fromEntries(targets.map((target) => {
