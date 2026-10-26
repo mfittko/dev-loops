@@ -16,7 +16,7 @@
  * authority drift.
  */
 import { execFile } from "node:child_process";
-import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
@@ -311,8 +311,9 @@ function exportedNames(source) {
 /**
  * Tracked source files, from one offline `git ls-files`. The inventory and the
  * importers both read this list: it matches names case-exactly, holds no
- * untracked or ignored file and lists nothing beneath a directory symlink, so
- * two checkouts of one commit agree. GIT_CEILING_DIRECTORIES stops git from
+ * untracked or ignored file and keeps an entry only when its fully resolved real
+ * path is a file under the root (so nothing beneath a directory symlink that
+ * leaves the root is read), so two checkouts of one commit agree. GIT_CEILING_DIRECTORIES stops git from
  * discovering an enclosing repository when --repo-root is a nested non-git directory.
  */
 async function trackedSourceFiles(root, rootReal) {
@@ -327,19 +328,14 @@ async function trackedSourceFiles(root, rootReal) {
   // A filesystem error on a tracked entry is a runtime error (exit 2), not a git failure.
   const files = [];
   for (const file of stdout.split("\0").filter((entry) => SOURCE_FILE_RE.test(entry)).sort()) {
-    // A tracked symlink counts only when it resolves to a file inside the root;
-    // a gitlink or directory entry named like a module is skipped.
+    // An entry counts only when its real path (every path component resolved) is a
+    // file inside the root; a gitlink, directory or missing entry is skipped.
     const target = path.join(root, ...file.split("/"));
-    const info = await lstat(target).catch((error) => {
-      if (isMissing(error)) return null;
+    const real = await realpath(target).catch((error) => {
+      if (isMissing(error) || error?.code === "ELOOP") return null;
       throw error;
     });
-    if (!info) continue;
-    if (!info.isFile()) {
-      if (!info.isSymbolicLink()) continue;
-      const real = await realpath(target).catch(() => null);
-      if (real === null || !real.startsWith(rootReal + path.sep) || !(await stat(real)).isFile()) continue;
-    }
+    if (real === null || !real.startsWith(rootReal + path.sep) || !(await stat(real)).isFile()) continue;
     files.push(file);
   }
   return { files };

@@ -385,7 +385,7 @@ test("--help documents the flags, the output shape and the exit codes", async ()
   const output = io();
   assert.equal((await run(output, ["--help"])).code, 0);
   const usage = output.stdout.read();
-  for (const fragment of ["--body-file", "--paths", "--repo-root", "--jq", "Exit codes", "adrTripwirePaths", "requiredReads"]) {
+  for (const fragment of ["--body-file", "--paths", "--repo-root", "--jq", "Exit codes", "adrTripwirePaths", "requiredReads", "helperInventory", "importers", "importers_unavailable"]) {
     assert.ok(usage.includes(fragment), `--help must document ${fragment}`);
   }
 });
@@ -1027,7 +1027,7 @@ test("importers match extensionless, directory-index and .js-for-.ts relative sp
   });
 });
 
-test("a filesystem error on a tracked entry is a runtime error, not an importers_unavailable finding", async () => {
+test("a filesystem error on a tracked entry is a runtime error, not an importers_unavailable finding", { skip: SKIP_UNDER_ROOT }, async () => {
   const root = await trackedRepo({ "src/a.mjs": "export const a = 1;\n", "locked/x.mjs": "export const x = 1;\n" });
   await chmod(path.join(root, "locked"), 0o000);
   try {
@@ -1067,6 +1067,27 @@ test("the inventory and importers skip tracked directory symlinks and symlinks l
   const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
   assert.deepEqual(brief.helperInventory.modules.map((m) => m.path), ["src/a.mjs"]);
   assert.deepEqual(brief.importers, { "src/a.mjs": { files: [] } });
+});
+
+test("a tracked entry beneath a directory symlink leaving the root, a directory entry and a missing entry are skipped", async () => {
+  const root = await trackedRepo({ "src/a.mjs": "export const a = 1;\n", "vendor/x.mjs": "export const v = 1;\n", "src/gone.mjs": "export const g = 1;\n", "src/d.mjs/inner.txt": "x\n" });
+  const outside = await mkdtemp(path.join(os.tmpdir(), "implementation-brief-outside-"));
+  tempDirs.push(outside);
+  await writeFile(path.join(outside, "x.mjs"), 'export const leaked = 1;\nimport "../src/a.mjs";\n');
+  await rm(path.join(root, "vendor"), { recursive: true });
+  await symlink(outside, path.join(root, "vendor"));
+  await rm(path.join(root, "src", "gone.mjs"));
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
+  assert.deepEqual(brief.helperInventory.modules.map((m) => m.path), ["src/a.mjs"]);
+  assert.deepEqual(brief.importers, { "src/a.mjs": { files: [] } });
+});
+
+test("a tracked file symlink resolving to a file inside the root stays listed", async () => {
+  const root = await trackedRepo({ "src/a.mjs": "export const a = 1;\n", "src/real.mjs": "export const r = 1;\n" });
+  await symlink(path.join(root, "src", "real.mjs"), path.join(root, "src", "alias.mjs"));
+  runGitFixture(root, ["add", "-A"]);
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
+  assert.deepEqual(brief.helperInventory.modules.map((m) => m.path), ["src/a.mjs", "src/alias.mjs", "src/real.mjs"]);
 });
 
 test("the inventory omits untracked and ignored source files", async () => {
