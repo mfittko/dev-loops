@@ -57,6 +57,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
+import { captureMainRelativeChangedFilesSince } from "../lib/git-delta.mjs";
 
 /**
  * Up-front gate-ORDERING tripwire (pure). Given the target gate and the raw
@@ -2444,9 +2445,10 @@ export const DIFF_ISOLATION_FLAGS = [
   "-c", "core.abbrev=12",
   "-c", "core.autocrlf=false",
 ];
-export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 1024 }) {
+export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 1024, paths = [] }) {
+  const pathspec = paths.length > 0 ? ["--", ...paths] : []; // closure round (ADR 0197): only the PR-own files
   const range = `${base}...HEAD`;
-  const isolation = DIFF_ISOLATION_FLAGS;
+  const isolation = paths.length > 0 ? ["--literal-pathspecs", ...DIFF_ISOLATION_FLAGS] : DIFF_ISOLATION_FLAGS;
   const runGit = (args) => execFileSync("git", [...isolation, ...args], {
     cwd: repoRoot,
     encoding: "utf8",
@@ -2459,7 +2461,7 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
   // FAIL-CLOSED: --name-status feeds changedFiles + adjacentCode (the bundle's core).
   let nameStatusOutput;
   try {
-    nameStatusOutput = runGit(["diff", "--no-ext-diff", "--name-status", range]);
+    nameStatusOutput = runGit(["diff", "--no-ext-diff", "--name-status", range, ...pathspec]);
   } catch (err) {
     throw new Error(`git diff against --base ${JSON.stringify(base)} failed: ${err?.message ?? err}`);
   }
@@ -2467,7 +2469,7 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
   // failure degrade to an empty diffOutput (diffPath becomes null downstream).
   let diffOutput = "";
   try {
-    diffOutput = runGit(["diff", "--no-ext-diff", range]);
+    diffOutput = runGit(["diff", "--no-ext-diff", range, ...pathspec]);
   } catch (err) {
     process.stderr.write(`[gate-context] full-diff capture against --base ${JSON.stringify(base)} failed (continuing without scope.diffPath): ${err?.message ?? err}\n`);
     diffOutput = "";
@@ -3693,7 +3695,16 @@ export async function main(
       // A fetched origin/<prBase> (base_current or stale) makes a --base naming that branch diff against that ref, never a possibly stale local one.
       const baseFetched = ["base_current", "base_stale_integrate_first"].includes(options.baseFreshness.status);
       options.base = baseFetched && normalizeBaseBranch(options.base) === options.baseFreshness.base ? `origin/${options.baseFreshness.base}` : anchorBaseRef(options.base, { repoRoot });
-      diff = captureDiffFromBase(options.base, { repoRoot });
+      // ADR 0197: the closure bundle holds the PR-own changes since fromHead; the content of a merged-in base is excluded. No PR-own change refuses (never clean).
+      let closurePaths;
+      if (options.closureRound) {
+        const own = await captureMainRelativeChangedFilesSince({ base: options.closureRound.fromHead, mainRef: `origin/${prBase}`, repoRoot });
+        if (!own.reduced || own.changedFiles.length === 0) {
+          throw new Error(`closure_delta_no_pr_own_change: the closure round's PR-own delta since ${options.closureRound.fromHead} is ${own.reduced ? "empty (the commits since then only merged the base)" : `unproven (origin/${prBase} does not resolve)`}; refusing a bundle without the PR's own changes (GATE-EXEC-ROUND-CAP).`);
+        }
+        closurePaths = own.changedFiles;
+      }
+      diff = captureDiffFromBase(options.base, { repoRoot, paths: closurePaths });
       const scope = await resolveDiffScope(
         { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" },
         { repoRoot },

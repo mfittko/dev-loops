@@ -27,6 +27,7 @@ import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
+import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
 import { clearSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import {
   DELTA_MAX_INVOCATIONS,
@@ -42,6 +43,7 @@ import { collectStaleSurface } from "@dev-loops/core/loop/stale-surface-hits";
 import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
 import { HEAD_SHA_RE } from "@dev-loops/core/loop/spec-authority";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
 
@@ -254,12 +256,20 @@ export function gitStaleSurfaceHits(worktreeArg, baseline, head) {
 }
 
 // The findings log writer stamps `headSha`; the log must be the baseline round's and carry provenance.perAngle.
-function roundAnglesOf(findingsLogPath, baseline) {
+// A log at an earlier head is accepted when the baseline is a base-only merge of it (the closure round after a cap round, ADR 0197); any error fails closed.
+async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerge }) {
   if (!findingsLogPath) return [];
   const log = JSON.parse(readFileSync(findingsLogPath, "utf8"));
   const perAngle = log?.provenance?.perAngle;
   const logHead = typeof log?.headSha === "string" ? log.headSha.trim().toLowerCase() : "";
-  if (!HEAD_SHA_RE.test(logHead) || !(logHead.startsWith(baseline) || baseline.startsWith(logHead))) {
+  const sameHead = HEAD_SHA_RE.test(logHead) && (logHead.startsWith(baseline) || baseline.startsWith(logHead));
+  const earlierHead = !sameHead && HEAD_SHA_RE.test(logHead)
+    && await Promise.resolve().then(async () => {
+      const { config, errors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(worktree) });
+      if (errors?.length) throw new Error(`.devloops failed to load (${errors.length} error(s)): the earlier-head findings log fails closed`);
+      return baseOnlyMerge({ fromHead: logHead, head: baseline, mainRef: `origin/${resolveBaseBranch(config, { cwd: worktree })}`, repoRoot: worktree });
+    }).catch(() => false);
+  if (!sameHead && !earlierHead) {
     throw new Error(`--findings-log ${findingsLogPath} records head ${log?.headSha ?? "(none)"}, not the baseline ${baseline}: pass the findings log of the reviewed round`);
   }
   // An inline_single_agent round writes no provenance: take the angles of its findings.
@@ -312,7 +322,7 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
 
 export async function runCli(
   argv = process.argv.slice(2),
-  { revParse = gitRevParse, diffPatch = gitDiffPatch, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, stdout = process.stdout, tmpRoot } = {},
+  { revParse = gitRevParse, diffPatch = gitDiffPatch, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, baseOnlyMerge = isBaseOnlyMergeSince, stdout = process.stdout, tmpRoot } = {},
 ) {
   const options = parseCheckPrePushDeltaArgs(argv);
   if (options.help) {
@@ -406,7 +416,7 @@ export async function runCli(
       mkdirSync(path.dirname(patchPath), { recursive: true });
       writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead));
     }
-    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;
