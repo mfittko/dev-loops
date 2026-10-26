@@ -31,6 +31,7 @@ import {
   resolveRejectForeignAngles,
   resolveGateAnglesDynamic,
   resolveGateTier,
+  resolveReviewerRole,
   resolveAnglePool,
   resolveWorkflowConfig,
   resolveLightMode,
@@ -3730,20 +3731,13 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
       assert.ok(role.prompt && role.prompt.startsWith(promptStart), `${angle} prompt should start with ${JSON.stringify(promptStart)}, got ${JSON.stringify(role.prompt?.slice(0, 60))}`);
     }
 
-    // "threat-model" is genuinely disabled (dropped) from every one of this
-    // repo's shipped gates, same as pre-#1404 (it was likewise absent from
-    // every resolved angle pool there — its old top-level personas[angle]
-    // entry was reachable ONLY because that registry was global and
-    // independent of any gate's angle list, a property D3's per-gate angle
-    // entries deliberately don't reproduce for a name disabled everywhere:
-    // findAngleEntry has no live caller that queries a name outside some
-    // gate's enabled, resolved angle list). It still resolves via
-    // BUILTIN_PERSONAS (persona "review", no prompt there either) rather
-    // than the generic default-reviewer fallback, since it IS a known builtin
-    // persona name — just with no reachable prompt override anymore.
+    // "threat-model" is disabled in every one of this repo's shipped gates, but
+    // the SECURITY_SENSITIVE_SEAM override can still add it to a round, so
+    // findAngleEntry falls back to the disabled entry and the role carries the
+    // shipped trust-boundary checklist prompt.
     const threatModel = resolveReviewerRole(config, "threat-model");
     assert.equal(threatModel.persona, "review");
-    assert.equal(threatModel.prompt, null);
+    assert.match(threatModel.prompt, /trust-boundary CHECKLIST/);
     assert.equal(threatModel.fallback, false);
   });
 
@@ -5586,6 +5580,186 @@ test("parseGitNumstat skips excluded paths, counts binaries as 0 lines, and fail
 // resolveGateAnglesDynamic tests
 // ============================================================================
 
+describe("resolveGateAnglesDynamic: SECURITY_SENSITIVE_SEAM threat-model override", () => {
+  const config = {
+    version: 1,
+    gates: {
+      draft: { angles: ["scope", "correctness", { name: "threat-model", enabled: false }, { name: "yagni", enabled: false }] },
+    },
+  };
+  const seamDiff = {
+    nameStatusOutput: "M\tscripts/x.mjs",
+    diffOutput: "diff --git a/scripts/x.mjs b/scripts/x.mjs\n--- a/scripts/x.mjs\n+++ b/scripts/x.mjs\n@@ -1 +1,2 @@\n a\n+spawn(cmd);\n",
+  };
+  const plainDiff = {
+    nameStatusOutput: "M\tscripts/x.mjs",
+    diffOutput: "diff --git a/scripts/x.mjs b/scripts/x.mjs\n--- a/scripts/x.mjs\n+++ b/scripts/x.mjs\n@@ -1 +1,2 @@\n a\n+const b = 1;\n",
+  };
+
+  test("a seam diff keeps threat-model despite enabled:false and records an added entry", async () => {
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: seamDiff });
+    assert.ok(result.recommendedAngles.includes("threat-model"));
+    assert.deepEqual(result.addedAngles, ["threat-model"]);
+    assert.equal(result.addedReasons["threat-model"], "SECURITY_SENSITIVE_SEAM");
+    assert.ok(resolveGateAngleContract(config, "draft").pool.includes("threat-model"));
+    const { rationaleFromResolver } = await import("../../../scripts/github/write-gate-context.mjs");
+    assert.deepEqual(
+      rationaleFromResolver(result).rationale.find((r) => r.angle === "threat-model"),
+      { angle: "threat-model", action: "added", reason: "SECURITY_SENSITIVE_SEAM" },
+    );
+  });
+
+  test("the static path (dynamic subtractive off) keeps threat-model on a seam diff", async () => {
+    const staticConfig = { ...config, gates: { draft: { ...config.gates.draft, dynamic: { subtractive: false } } } };
+    const result = await resolveGateAnglesDynamic(staticConfig, "draft", { diff: seamDiff });
+    assert.ok(result.recommendedAngles.includes("threat-model"));
+    assert.deepEqual(result.addedAngles, ["threat-model"]);
+    const { rationaleFromResolver } = await import("../../../scripts/github/write-gate-context.mjs");
+    assert.deepEqual(
+      rationaleFromResolver(result).rationale.find((r) => r.angle === "threat-model"),
+      { angle: "threat-model", action: "added", reason: "SECURITY_SENSITIVE_SEAM" },
+    );
+    const plain = await resolveGateAnglesDynamic(staticConfig, "draft", { diff: plainDiff });
+    assert.ok(!plain.recommendedAngles.includes("threat-model"));
+  });
+
+  test("a code-kind tier match still runs threat-model on a seam diff", async () => {
+    const tierConfig = {
+      ...config,
+      gates: { draft: { ...config.gates.draft, tiers: [{ name: "small-code", match: { kinds: ["code"], maxLines: 50 }, angles: ["correctness"] }] } },
+    };
+    const result = await resolveGateAnglesDynamic(tierConfig, "draft", { diff: seamDiff });
+    assert.ok(result.recommendedAngles.includes("correctness"));
+    assert.ok(result.recommendedAngles.includes("threat-model"));
+    assert.deepEqual(result.addedAngles, ["threat-model"]);
+    assert.equal(result.addedReasons["threat-model"], "SECURITY_SENSITIVE_SEAM");
+    const plain = await resolveGateAnglesDynamic(tierConfig, "draft", { diff: plainDiff });
+    assert.ok(!plain.recommendedAngles.includes("threat-model"));
+  });
+
+  test("a degenerate pool on a seam diff resolves to the static pool plus threat-model, never threat-model alone", async () => {
+    const degenerate = { version: 1, gates: { draft: { angles: ["kiss", { name: "threat-model", enabled: false }] } } };
+    const result = await resolveGateAnglesDynamic(degenerate, "draft", { diff: seamDiff });
+    assert.ok(result.recommendedAngles.includes("kiss"));
+    assert.ok(result.recommendedAngles.includes("threat-model"));
+  });
+
+  test("preApproval without seamFirstRound does not add threat-model on a seam diff", async () => {
+    const pre = { version: 1, gates: { preApproval: { angles: ["scope", { name: "threat-model", enabled: false }] } } };
+    const result = await resolveGateAnglesDynamic(pre, "preApproval", { diff: seamDiff });
+    assert.ok(!result.recommendedAngles.includes("threat-model"));
+  });
+
+  test("preApproval with no draft round at the head adds threat-model on a seam diff; after a draft round it does not", async () => {
+    const pre = { version: 1, gates: { preApproval: { angles: ["scope", { name: "threat-model", enabled: false }] } } };
+    const noDraft = await resolveGateAnglesDynamic(pre, "preApproval", { diff: seamDiff, seamFirstRound: true });
+    assert.ok(noDraft.recommendedAngles.includes("threat-model"));
+    assert.equal(noDraft.addedReasons["threat-model"], "SECURITY_SENSITIVE_SEAM");
+    const afterDraft = await resolveGateAnglesDynamic(pre, "preApproval", { diff: seamDiff, seamFirstRound: false });
+    assert.ok(!afterDraft.recommendedAngles.includes("threat-model"));
+  });
+
+  test("with no draft round at the head the preApproval override fires on a pool that does not list threat-model", async () => {
+    const pre = (angles) => ({ version: 1, gates: { preApproval: { angles } } });
+    const disabled = pre(["scope", { name: "threat-model", enabled: false }]);
+    const fired = await resolveGateAnglesDynamic(disabled, "preApproval", { diff: seamDiff, seamFirstRound: true });
+    assert.ok(fired.recommendedAngles.includes("threat-model"));
+    assert.ok(resolveGateAngleContract(disabled, "preApproval").pool.includes("threat-model"));
+    // Shipped-style pool [scope]: threat-model is added as an added angle and is in the contract pool.
+    const absent = pre(["scope"]);
+    const added = await resolveGateAnglesDynamic(absent, "preApproval", { diff: seamDiff, seamFirstRound: true });
+    assert.ok(added.recommendedAngles.includes("threat-model"));
+    assert.deepEqual(added.addedAngles, ["threat-model"]);
+    assert.equal(added.addedReasons["threat-model"], "SECURITY_SENSITIVE_SEAM");
+    assert.ok(resolveGateAngleContract(absent, "preApproval").pool.includes("threat-model"));
+    const plain = await resolveGateAnglesDynamic(absent, "preApproval", { diff: plainDiff, seamFirstRound: true });
+    assert.ok(!plain.recommendedAngles.includes("threat-model"));
+  });
+
+  test("resolveReviewerRole finds a seam-added angle's prompt: enabled entry wins, a disabled-only entry is the fallback, no entry stays null", () => {
+    const withPrompt = (extra) => ({ name: "threat-model", persona: "review", prompt: "Check trust boundaries.", ...extra });
+    const disabledOnly = { version: 1, gates: { draft: { angles: ["scope", withPrompt({ enabled: false })] } } };
+    assert.equal(resolveReviewerRole(disabledOnly, "threat-model").prompt, "Check trust boundaries.");
+    const enabledElsewhere = {
+      version: 1,
+      gates: {
+        draft: { angles: [{ name: "threat-model", enabled: false }] },
+        preApproval: { angles: [{ name: "threat-model", persona: "review", prompt: "Enabled prompt." }] },
+      },
+    };
+    assert.equal(resolveReviewerRole(enabledElsewhere, "threat-model").prompt, "Enabled prompt.");
+    const none = { version: 1, gates: { draft: { angles: ["scope"] } } };
+    assert.equal(resolveReviewerRole(none, "threat-model").prompt, null);
+  });
+
+  test("a tier listing threat-model still falls back on a gate that does not configure it", () => {
+    const cfg = {
+      version: 1,
+      gates: { preApproval: { angles: ["scope"], tiers: [{ name: "small-code", match: { kinds: ["code"], maxLines: 50 }, angles: ["threat-model"] }] } },
+    };
+    const tier = resolveGateTier(cfg, "preApproval", { changedFiles: ["scripts/x.mjs"], filesChanged: 1, linesChanged: 2 });
+    assert.equal(tier.reason, "angle_outside_pool");
+  });
+
+  test("the spike gate gets no seam widening", () => {
+    const cfg = { version: 1, gates: { spike: { angles: ["scope"] } } };
+    assert.ok(!resolveGateAngleContract(cfg, "spike").pool.includes("threat-model"));
+  });
+
+  test("a seam diff outside the first gate round keeps the config drop", async () => {
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: seamDiff, seamFirstRound: false });
+    assert.ok(!result.recommendedAngles.includes("threat-model"));
+  });
+
+  test("an explicit angle set on a seam diff gets threat-model as an added angle", async () => {
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: seamDiff, explicitAngles: ["scope"] });
+    assert.deepEqual(result.recommendedAngles, ["scope", "threat-model"]);
+    assert.deepEqual(result.addedAngles, ["threat-model"]);
+    assert.equal(result.addedReasons["threat-model"], "SECURITY_SENSITIVE_SEAM");
+    assert.equal(result.reasons.yagni, "config_disabled");
+    const plain = await resolveGateAnglesDynamic(config, "draft", { diff: plainDiff, explicitAngles: ["scope"] });
+    assert.deepEqual(plain.recommendedAngles, ["scope"]);
+    assert.equal(plain.reasons["threat-model"], "config_disabled");
+  });
+
+  test("an explicit empty angle set on a seam diff stays empty", async () => {
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: seamDiff, explicitAngles: [] });
+    assert.deepEqual(result.recommendedAngles, []);
+    assert.deepEqual(result.addedAngles, []);
+  });
+
+  test("an enabled threat-model on a seam diff appears once and is not relabeled as added", async () => {
+    const enabled = { version: 1, gates: { draft: { angles: ["scope", "correctness", "threat-model"] } } };
+    const result = await resolveGateAnglesDynamic(enabled, "draft", { diff: seamDiff });
+    assert.equal(result.recommendedAngles.filter((a) => a === "threat-model").length, 1);
+    assert.equal(result.addedReasons["threat-model"], undefined);
+  });
+
+  test("a tier listing a config-disabled threat-model falls back on a non-seam diff", async () => {
+    const tierConfig = {
+      ...config,
+      gates: { draft: { ...config.gates.draft, tiers: [{ name: "small-code", match: { kinds: ["code"], maxLines: 50 }, angles: ["correctness", "threat-model"] }] } },
+    };
+    const plain = await resolveGateAnglesDynamic(tierConfig, "draft", { diff: plainDiff });
+    assert.ok(!plain.recommendedAngles.includes("threat-model"));
+    const seam = await resolveGateAnglesDynamic(tierConfig, "draft", { diff: seamDiff });
+    assert.equal(seam.addedReasons["threat-model"], "SECURITY_SENSITIVE_SEAM");
+  });
+
+  test("a diff without the seam keeps the config drop", async () => {
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: plainDiff });
+    assert.ok(!result.recommendedAngles.includes("threat-model"));
+  });
+
+  test("every config-disabled angle absent from the resolved set has a dropped reason", async () => {
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff: plainDiff });
+    for (const angle of ["threat-model", "yagni"]) {
+      assert.ok(result.skippedAngles.includes(angle), `${angle} must be dropped`);
+      assert.equal(result.reasons[angle], "config_disabled");
+    }
+  });
+});
+
 describe("resolveGateAnglesDynamic", () => {
   test("returns full angle list when dynamicAngles is false", async () => {
     const config = {
@@ -5654,7 +5828,7 @@ describe("resolveGateAnglesDynamic", () => {
     });
     assert.equal(result.dynamicAnglesActive, true);
     assert.ok(!result.recommendedAngles.includes("kiss"));
-    assert.ok(!result.skippedAngles.includes("kiss")); // excluded before dynamic resolution
+    assert.equal(result.reasons.kiss, "config_disabled"); // excluded before dynamic resolution, recorded as dropped
   });
 
   test("returns reasons for skipped angles", async () => {
@@ -6898,7 +7072,7 @@ describe("resolveGateAngleContract (#1196 — shared angle enforcement contract)
     };
     const { mandatoryAngles, pool } = resolveGateAngleContract(config, "preApproval");
     assert.deepEqual(mandatoryAngles, ["pr-checklist"]);
-    assert.deepEqual(pool, ["pr-checklist", "dry", "kiss"]);
+    assert.deepEqual(pool, ["pr-checklist", "dry", "kiss", "threat-model"]);
   });
 
   test("an excluded mandatory angle is dropped from BOTH sides (no missing-mandatory/foreign deadlock)", () => {
