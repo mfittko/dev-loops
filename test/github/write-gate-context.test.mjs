@@ -8233,8 +8233,8 @@ test("countCompletedRounds skips closed ledgers logged before DRAFT_ROUND_CAP_EF
     assert.equal(await count(), 4, "three ledgers at or after the landing plus the posted round");
     await seed([undefined, "not a date", "", 2026, null, "2026", "1", "2026-10-01"]);
     assert.equal(await count(), 9, "a missing, empty, non-string, null, non-ISO or lenient-parse loggedAt counts");
-    await seed(["2026-02-30T00:00:00.000Z", "2026-10-25T24:00:00.000Z", "2026-10-25T00:00:00.0000Z"]);
-    assert.equal(await count(), 4, "an impossible date, hour 24 or four fraction digits is noncanonical and counts");
+    await seed(["2026-02-30T00:00:00.000Z", "2026-10-25T24:00:00.000Z", "2026-10-25T00:00:00.0000Z", "2026-13-01T00:00:00Z", "2026-10-25T25:00:00Z"]);
+    assert.equal(await count(), 6, "an impossible date, month 13, hour 24/25 or four fraction digits is noncanonical and counts");
   } finally {
     await rm(tmpRoot, { recursive: true, force: true });
   }
