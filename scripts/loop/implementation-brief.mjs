@@ -15,9 +15,10 @@
  * check-adr-tripwire. A second parser for any of those surfaces would be
  * authority drift.
  */
+import { execFile } from "node:child_process";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 
 import { detectAcDodMatrix, readNonGoalItems } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { extractSection } from "@dev-loops/core/loop/markdown-sections";
@@ -28,8 +29,12 @@ import {
   collectContractMarkdownFiles,
   extractRuleDefinitions,
 } from "../docs/validate-rule-ownership.mjs";
+import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
 import { CONTRACT_DOC_RE, DEVLOOPS_CONFIG_PATHS, GATE_CONFIG_PATH } from "./check-adr-tripwire.mjs";
 import { citedAdrNumbers, indexDecisionRecords, inForceAmenders, loadKnownRuleIds, stripFencedCode } from "./spec-lint.mjs";
+
+const INVENTORY_CHAR_LIMIT = 2000;
+const IMPORTERS_LIMIT = 50;
 
 const USAGE = `Usage: dev-loops loop implementation-brief --body-file <path> [--paths <p,...>] [--repo-root <path>]
 
@@ -46,6 +51,8 @@ Output (stdout, JSON):
     "adrs": [{ "number", "title": "<text>" | null, "path", "amendedBy": [{ "number", "title", "path" }],
       "supersededBy": { "number", "title", "path" } | null }],
     "adrNeed": "<section text>" | "unstated", "adrTripwirePaths": ["..."],
+    "helperInventory": { "modules": [{ "path", "exports": ["<name>"] }], "overflowModules": ["<path>"] },
+    "importers": { "<touched source module>": { "files": ["<path>"], "importersTruncated"?: true } },
     "requiredReads": ["skills/docs/structural-quality.md", "changes/README.md"],
     "findings": [{ "kind", "reason" }] }
 
@@ -74,6 +81,15 @@ those against the diff.
 list markers. "findings" carries missing_decision_records when the checkout has
 no docs/decisions directory and missing_adr_record for a cited ADR with no record.
 
+"helperInventory" lists the sorted exported names of every module in each touched
+path's directory and in scripts/lib/; inline names stop at ${INVENTORY_CHAR_LIMIT} characters
+and the remaining modules are listed by path only in "overflowModules".
+"importers" has one entry per touched source module (.mjs/.cjs/.js/.ts): the sorted
+tracked files (git ls-files, offline) that import it by relative specifier, capped
+at ${IMPORTERS_LIMIT} with "importersTruncated": true beyond; an empty "files" list means no
+importer. A non-source touched path has no entry. Check each listed importer
+before hand-back.
+
 ${JQ_OUTPUT_USAGE}
 
 Exit codes: 0 brief produced (with or without findings); 1 usage error, a missing
@@ -83,7 +99,13 @@ a --repo-root that is not an existing directory, or a --paths entry whose real
 target resolves outside --repo-root; 2 malformed skills/docs/required-rules.json,
 an unreadable body file, or another runtime error.`;
 
-const REQUIRED_READS = Object.freeze(["skills/docs/structural-quality.md", "changes/README.md"]);
+const SOURCE_FILE_RE = /\.(?:mjs|cjs|js|ts)$/u;
+const EXPORT_DECL_RE = /^export\s+(?:async\s+)?(?:function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gmu;
+const EXPORT_LIST_RE = /^export\s*\{([^}]*)\}/gmu;
+const IMPORT_SPECIFIER_RE = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\(\s*)["'](\.[^"']*)["']/gu;
+const execFileAsync = promisify(execFile);
+
+const REQUIRED_READS =Object.freeze(["skills/docs/structural-quality.md", "changes/README.md"]);
 const ADR_NEED_UNSTATED = "unstated";
 // Repo-relative path citation, including an ./-prefixed extensionless entry
 // (./LICENSE). A token never ends on a dot, so sentence punctuation stays out. Leading
@@ -270,6 +292,70 @@ function namesTouchedPath(text, relPath, kind) {
   return false;
 }
 
+function exportedNames(source) {
+  const names = new Set();
+  for (const [, name] of source.matchAll(EXPORT_DECL_RE)) names.add(name);
+  for (const [, list] of source.matchAll(EXPORT_LIST_RE)) {
+    for (const item of list.split(",")) {
+      const name = item.trim().split(/\s+as\s+/u).pop();
+      if (name && name !== "default") names.add(name);
+    }
+  }
+  return [...names].sort();
+}
+
+/** Exported names of the source modules beside each touched path and in scripts/lib/. */
+async function helperInventory(root, touchedPaths, resolved) {
+  const dirs = new Set(["scripts/lib"]);
+  for (const relPath of touchedPaths) {
+    const dir = resolved.get(relPath) === "directory" ? relPath : path.posix.dirname(relPath);
+    dirs.add(dir === "." ? "" : dir);
+  }
+  const modules = [];
+  for (const dir of [...dirs].sort()) {
+    const names = await readdir(path.join(root, ...dir.split("/"))).catch((error) => {
+      if (isMissing(error)) return [];
+      throw error;
+    });
+    for (const name of names.filter((n) => SOURCE_FILE_RE.test(n))) modules.push(dir === "" ? name : `${dir}/${name}`);
+  }
+  const inline = [];
+  const overflowModules = [];
+  let used = 0;
+  for (const modulePath of sortedUnique(modules)) {
+    const source = await readTextOrNull(path.join(root, ...modulePath.split("/")));
+    if (source == null) continue;
+    const exports = exportedNames(source);
+    used += exports.join(",").length;
+    if (used > INVENTORY_CHAR_LIMIT || overflowModules.length > 0) overflowModules.push(modulePath);
+    else inline.push({ path: modulePath, exports });
+  }
+  return { modules: inline, overflowModules };
+}
+
+/** Tracked files that import each touched source module by relative specifier. */
+async function importersByModule(root, touchedPaths, resolved) {
+  const targets = touchedPaths.filter((relPath) => resolved.get(relPath) === "file" && SOURCE_FILE_RE.test(relPath));
+  if (targets.length === 0) return {};
+  const tracked = await execFileAsync("git", ["-C", root, "ls-files", "-z"], { env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 })
+    .then(({ stdout }) => stdout.split("\0").filter((file) => SOURCE_FILE_RE.test(file)).sort())
+    .catch(() => []);
+  const found = new Map(targets.map((target) => [target, []]));
+  for (const file of tracked) {
+    const source = await readTextOrNull(path.join(root, ...file.split("/")));
+    if (source == null) continue;
+    for (const [, specifier] of source.matchAll(IMPORT_SPECIFIER_RE)) {
+      const resolvedSpecifier = path.posix.join(path.posix.dirname(file), specifier);
+      const hit = found.get(resolvedSpecifier);
+      if (hit && file !== resolvedSpecifier && !hit.includes(file)) hit.push(file);
+    }
+  }
+  return Object.fromEntries(targets.map((target) => {
+    const files = found.get(target);
+    return [target, files.length > IMPORTERS_LIMIT ? { files: files.slice(0, IMPORTERS_LIMIT), importersTruncated: true } : { files }];
+  }));
+}
+
 /**
  * Build the brief for one spec body. All inputs are files: `paths` is the
  * declared touch set (`--paths`), `repoRoot` is the only checkout reference, so
@@ -419,6 +505,8 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
     adrs,
     adrNeed: adrNeed === "" ? ADR_NEED_UNSTATED : adrNeed,
     adrTripwirePaths: touchedPaths.filter(matchesAdrTripwire),
+    helperInventory: await helperInventory(root, touchedPaths, resolved),
+    importers: await importersByModule(root, touchedPaths, resolved),
     requiredReads: [...REQUIRED_READS],
     findings,
   };

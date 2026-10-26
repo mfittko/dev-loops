@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -902,7 +903,7 @@ test("both the developer agent source and its generated mirror carry the brief i
   assert.ok(generated.includes("dev-loops-run cli/index.mjs loop implementation-brief"));
   assert.ok(!generated.includes("<dev-loops-package-root>"), "the Pi token must not reach the Claude mirror");
   for (const doc of [source, generated]) {
-    for (const fragment of ["adrTripwirePaths", "adrNeed", "first commit", "--jq .issue.body", "--jq .pr.body"]) {
+    for (const fragment of ["adrTripwirePaths", "adrNeed", "first commit", "--jq .issue.body", "--jq .pr.body", "helperInventory", "`importers`", "before hand-back"]) {
       assert.ok(doc.includes(fragment), `both agent surfaces must carry ${fragment}`);
     }
   }
@@ -941,4 +942,73 @@ test("a checkbox non-goal yields the same item as the canonical spec reader", as
   const body = `${MATRIX}\n## Non-goals\n\n- [ ] No gate credit.\n`;
   const brief = await buildImplementationBrief({ body, repoRoot: root });
   assert.deepEqual(brief.nonGoals, ["No gate credit."]);
+});
+
+async function trackedRepo(files) {
+  const root = await fixtureRepo({ files });
+  const git = (...args) => execFileSync("git", ["-C", root, ...args], { stdio: "ignore" });
+  git("init", "-q");
+  git("add", "-A");
+  return root;
+}
+
+test("the helper inventory lists sorted exported names per module in touched dirs and scripts/lib", async () => {
+  const root = await fixtureRepo({
+    files: {
+      "src/a.mjs": "export function zeta() {}\nexport const alpha = 1;\nconst x = 1;\nexport { x as mid };\n",
+      "src/notes.md": "export const ignored = 1;\n",
+      "scripts/lib/util.mjs": "export class Util {}\n",
+    },
+  });
+  const { helperInventory } = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
+  assert.deepEqual(helperInventory, {
+    modules: [
+      { path: "scripts/lib/util.mjs", exports: ["Util"] },
+      { path: "src/a.mjs", exports: ["alpha", "mid", "zeta"] },
+    ],
+    overflowModules: [],
+  });
+});
+
+test("inline inventory names stop at 2,000 characters and the overflow lists module paths only", async () => {
+  const names = (prefix) => Array.from({ length: 60 }, (_, i) => `export const ${prefix}${String(i).padStart(3, "0")}_${"x".repeat(12)} = 1;`).join("\n");
+  const root = await fixtureRepo({ files: { "src/a.mjs": names("a"), "src/b.mjs": names("b"), "src/c.mjs": names("c") } });
+  const { helperInventory } = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src"] });
+  const inline = helperInventory.modules.flatMap((m) => m.exports).join(",").length;
+  assert.ok(inline > 0 && inline <= 2000);
+  assert.deepEqual(helperInventory.modules.map((m) => m.path), ["src/a.mjs", "src/b.mjs"].slice(0, helperInventory.modules.length));
+  assert.deepEqual(helperInventory.overflowModules, ["src/a.mjs", "src/b.mjs", "src/c.mjs"].slice(helperInventory.modules.length));
+  assert.ok(helperInventory.overflowModules.length >= 1);
+});
+
+test("importers lists the sorted tracked files that import a touched module, and an empty list when none", async () => {
+  const root = await trackedRepo({
+    "src/a.mjs": "export const a = 1;\n",
+    "src/lonely.mjs": "export const l = 1;\n",
+    "src/z-user.mjs": 'import { a } from "./a.mjs";\n',
+    "lib/b-user.mjs": 'export { a } from "../src/a.mjs";\nconst m = await import("../src/a.mjs");\n',
+    "lib/other.mjs": 'import x from "../src/lonely-not.mjs";\n',
+  });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs", "src/lonely.mjs"] });
+  assert.deepEqual(brief.importers, {
+    "src/a.mjs": { files: ["lib/b-user.mjs", "src/z-user.mjs"] },
+    "src/lonely.mjs": { files: [] },
+  });
+});
+
+test("a non-source touched path has no importers entry", async () => {
+  const root = await trackedRepo({ "docs/readme.md": "Text.\n" });
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["docs/readme.md"] });
+  assert.deepEqual(brief.importers, {});
+});
+
+test("more than 50 importers are capped and flagged importersTruncated", async () => {
+  const files = { "src/a.mjs": "export const a = 1;\n" };
+  for (let i = 0; i < 55; i += 1) files[`use/u${String(i).padStart(2, "0")}.mjs`] = 'import { a } from "../src/a.mjs";\n';
+  const root = await trackedRepo(files);
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
+  const entry = brief.importers["src/a.mjs"];
+  assert.equal(entry.files.length, 50);
+  assert.equal(entry.importersTruncated, true);
+  assert.deepEqual(entry.files, [...entry.files].sort());
 });
