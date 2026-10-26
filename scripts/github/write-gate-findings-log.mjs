@@ -231,6 +231,7 @@ function validateFindingsArray(parsed, flagLabel) {
       entry.judgeDisposition = jd;
     }
     if (f.remedyKind === "evidence_only") entry.remedyKind = "evidence_only";
+    if (f.failOpen === true) entry.failOpen = true;
     // Kept in the ledger only when it names a closed prior round's act fingerprint (writeGateFindingsLog checks).
     if (typeof f.resurfaces === "string" && /^[0-9a-f]{16}$/.test(f.resurfaces.trim())) entry.resurfaces = f.resurfaces.trim();
     if (typeof f.judgeRationale === "string" && f.judgeRationale.trim().length > 0) {

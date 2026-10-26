@@ -1332,8 +1332,9 @@ export function capClosedFor(finding, { round, cap }) {
 
 /**
  * Blockers a past-cap draft_gate round composes into `blocked`. A new act item and a re-surfaced high or medium
- * act item block, unless every act item is low or nit (the low/nit convergence rule applies instead). A reviewer high or medium that the judge defers or
- * rejects, a missing disposition and an unknown severity block as `severity_disagreement`.
+ * act item block, unless every act item is low or nit (the low/nit convergence rule applies instead). A high, a `failOpen: true` finding, a missing
+ * disposition, an unknown severity, a medium `defer` without `followUpIssueNumber` and a medium `reject` without `judgeReason` block as
+ * `severity_disagreement`. A medium rejected with a reason or deferred with a target issue is final (ADR 0191).
  * @returns {Array<{ kind: "round_cap_reached", reason: "new_act"|"resurfaced"|"severity_disagreement", item: string }>}
  */
 export function pastCapBlockers(findings) {
@@ -1353,7 +1354,11 @@ export function pastCapBlockers(findings) {
     if (isOpenActItem(f)) continue;
     const severity = normalizeSeverity(f?.severity);
     const closed = f?.judgeDisposition === "defer" || f?.judgeDisposition === "reject";
-    if (!JUDGE_DISPOSITIONS.includes(f?.judgeDisposition) || !VALID_SEVERITIES.has(severity) || (closed && (severity === "high" || severity === "medium"))) {
+    const isFinal = f?.judgeDisposition === "reject"
+      ? String(f.judgeReason ?? "").trim().length > 0
+      : Number.isInteger(f?.followUpIssueNumber) && f.followUpIssueNumber > 0;
+    const closedBlocks = closed && (severity === "high" || (severity === "medium" && !isFinal));
+    if (!JUDGE_DISPOSITIONS.includes(f?.judgeDisposition) || !VALID_SEVERITIES.has(severity) || f?.failOpen === true || closedBlocks) {
       blockers.push({ kind: "round_cap_reached", reason: "severity_disagreement", item: label(f, "severity_disagreement") });
     }
   }

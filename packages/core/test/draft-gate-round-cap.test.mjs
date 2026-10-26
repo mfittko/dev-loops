@@ -38,10 +38,37 @@ describe("draft_gate round cap", () => {
     assert.deepEqual(reasons([act("low", { resurfaces: "abcd" }), act("nit", { resurfaces: "ef01" })]), []);
   });
 
-  test("defer and reject of low or nit are cap-closed without a blocker; high or medium is a severity_disagreement", () => {
+  test("defer and reject of low or nit are cap-closed without a blocker; a high is a severity_disagreement", () => {
     assert.deepEqual(reasons([closed("low", "defer"), closed("nit", "reject")]), []);
-    assert.deepEqual(reasons([closed("medium", "reject")]), ["round_cap_reached/severity_disagreement"]);
-    assert.deepEqual(reasons([closed("high", "defer")]), ["round_cap_reached/severity_disagreement"]);
+    assert.deepEqual(reasons([closed("high", "defer", { followUpIssueNumber: 7 })]), ["round_cap_reached/severity_disagreement"]);
+    assert.deepEqual(reasons([closed("high", "reject", { judgeReason: "why" })]), ["round_cap_reached/severity_disagreement"]);
+  });
+
+  test("a medium rejected with a reason or deferred with a target issue is final and raises no blocker", () => {
+    assert.deepEqual(reasons([closed("medium", "reject", { judgeReason: "out of scope" }), closed("medium", "defer", { followUpIssueNumber: 2940 })]), []);
+  });
+
+  test("a medium reject without a reason, a medium defer without a target and a failOpen finding still block", () => {
+    const blocked = ["round_cap_reached/severity_disagreement"];
+    assert.deepEqual(reasons([closed("medium", "reject")]), blocked);
+    assert.deepEqual(reasons([closed("medium", "reject", { judgeReason: "  " })]), blocked);
+    assert.deepEqual(reasons([closed("medium", "defer")]), blocked);
+    assert.deepEqual(reasons([closed("medium", "defer", { followUpIssueNumber: 0 })]), blocked);
+    assert.deepEqual(reasons([closed("medium", "reject", { judgeReason: "r", failOpen: true })]), blocked);
+    assert.deepEqual(reasons([closed("low", "reject", { judgeReason: "r", failOpen: true })]), blocked);
+  });
+
+  test("replay of the PR 2940 round 4 ledger shape composes no blocker", () => {
+    const r = { judgeReason: "recorded reason" };
+    const ledger = [
+      closed("medium", "reject", r), closed("medium", "reject", r), closed("medium", "reject", r),
+      closed("medium", "reject", { ...r, resurfaces: "0123456789abcdef" }),
+      closed("medium", "defer", { followUpIssueNumber: 2940 }),
+      ...Array.from({ length: 4 }, () => closed("low", "reject", r)),
+      ...Array.from({ length: 4 }, () => closed("nit", "reject", r)),
+    ];
+    assert.equal(ledger.length, 13);
+    assert.deepEqual(pastCapBlockers(ledger), []);
   });
 
   test("a missing disposition or an unknown severity is a severity_disagreement", () => {
