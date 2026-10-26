@@ -299,7 +299,7 @@ export async function emitFixerWorkOrder({
   let capRoundHead = headSha; // the head whose ledger and posted verdict the act list belongs to (ADR 0197)
   if (actListFile && (gate === "draft_gate" || lowNitOnly)) {
     // The round state comes from the same --tmp-root as the ledger writer, judge-pass and the verdict poster.
-    let { pastCap, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot },{ repoRoot: resolveRepoRoot(cwd) });
+    let { lowFixCapped, round, cap } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot },{ repoRoot: resolveRepoRoot(cwd) });
     // ADR 0197: a base-only merge after the cap round neither counts as a round nor consumes the closure round. The head with no ledger of its own,
     // whose changes since the cap-round head are merges of the PR base with an unchanged PR-own patch, is still the cap round: the cap-round ledger and posted verdict are read at the cap-round head.
     if (cap > 0 && round === cap + 1 && !existsSync(path.resolve(resolveRepoRoot(cwd), buildLogPath({ repo, pr, gate, headSha, tmpRoot })))) {
@@ -308,7 +308,7 @@ export async function emitFixerWorkOrder({
         const baseRefName = (await fetchPr({ repo, pr }))?.baseRefName;
         if (typeof baseRefName === "string" && baseRefName && await isBaseOnlyMergeSince({ fromHead, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd })) {
           round = cap;
-          pastCap = isPastRoundCap(round, cap);
+          lowFixCapped = isPastRoundCap(round, cap);
           capRoundHead = fromHead;
         }
       } catch { /* an unreadable cap-round head or base fails closed: the round_cap_reached refusal below stands */ }
@@ -328,8 +328,10 @@ export async function emitFixerWorkOrder({
         throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the cap round (cap ${cap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
       }
     }
-    if (lowNitOnly && (pastCap || (actSeverities.every((s) => s === "nit") && round !== 1))) {
-      throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${actListFile} holds only low or nit items ${pastCap ? "at or past the draft_gate round cap" : "outside draft_gate round 1"}; low and nit findings no longer reach the fixer`);
+    if (lowNitOnly && (lowFixCapped || (actSeverities.every((s) => s === "nit") && round !== 1))) {
+      const cappedAt = gate === "pre_approval_gate" ? "at pre_approval_gate" : "at or past the draft_gate round cap";
+      const where = lowFixCapped ? cappedAt : "outside draft_gate round 1";
+      throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${actListFile} holds only low or nit items ${where}; low and nit findings no longer reach the fixer`);
     }
   }
   // The verify-time act-thread guard matches open gate threads by fingerprint, so a missing or wrong one would let a matching thread pass as threadless.

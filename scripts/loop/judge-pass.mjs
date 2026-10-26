@@ -454,7 +454,7 @@ export function validateCliArgs(options) {
  * @param {Array<object>} findings — the flat consolidated findings array (already unwrapped)
  * @param {object} judgeVerdict — the judge agent's verdict artifact (JSON object)
  * @param {string} headSha — the round's current head (the verdict must be current-head)
- * @param {{ pastCap?: boolean, round?: number }} [options] — draft_gate round-cap state, from `resolveDraftRoundCap`
+ * @param {{ pastCap?: boolean, round?: number }} [options] — `pastCap` receives the `lowFixCapped` state from `resolveDraftRoundCap`, true at or past the draft_gate cap and at pre_approval_gate
  * @returns {{ enriched: Array<object>, act: Array<object>, scopeDrift: object,
  *             counts: { act: number, defer: number, reject: number } (act excludes evidence-only remedies), headSha: string }}
  */
@@ -553,7 +553,7 @@ function validateFindingsArray(parsed, flagLabel) {
  * already the judge-pass's own fresh copy from `applyJudgeDispositions`). A
  * re-run does not append a fingerprint the target already lists.
  */
-async function applyDeferralComment(enriched, { repo, pr, trackerProvider }, deps) {
+async function applyDeferralComment(enriched, { repo, pr, gate, trackerProvider }, deps) {
   for (const f of enriched) {
     f.fingerprint = fingerprintFinding(f);
   }
@@ -568,6 +568,15 @@ async function applyDeferralComment(enriched, { repo, pr, trackerProvider }, dep
   }));
   const { issueNumber } = await commentDeferredFindings({ repo, pr, entries, trackerProvider }, deps);
   for (const f of deferred) f.followUpIssueNumber = issueNumber;
+  // #2724 slice 0: a pre_approval_gate low_fix_until_cap defer needs a target other than the PR itself; with none the whole cluster (nit members included) is a reject.
+  if (gate === "pre_approval_gate" && issueNumber === pr) {
+    for (const f of enriched) {
+      if (f.judgeDisposition !== "defer" || !f.judgeReason?.startsWith("low_fix_until_cap ")) continue;
+      f.judgeDisposition = "reject";
+      delete f.followUpDraft;
+      delete f.followUpIssueNumber;
+    }
+  }
 }
 
 /**
@@ -576,7 +585,9 @@ async function applyDeferralComment(enriched, { repo, pr, trackerProvider }, dep
  */
 async function stampDurableDeferTargets(enriched, options, resolvedRoot) {
   const targets = new Map(enriched.filter((f) => f.judgeDisposition === "defer" && Number.isInteger(f.followUpIssueNumber)).map((f) => [f.fingerprint, f.followUpIssueNumber]));
-  if (targets.size === 0) return;
+  // A defer that applyDeferralComment converted to reject (the PR is the only target, #2724 slice 0) is rewritten to reject on the durable log too.
+  const rejects = new Set(enriched.filter((f) => f.judgeDisposition === "reject" && f.judgeReason?.startsWith("low_fix_until_cap ")).map((f) => f.fingerprint));
+  if (targets.size === 0 && rejects.size === 0) return;
   const logPath = path.resolve(resolvedRoot, buildLogPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }));
   if (!(await access(logPath).then(() => true, (err) => (err?.code === "ENOENT" ? false : Promise.reject(err))))) return;
   // One validity rule for the ledger: the canonical reader rejects a malformed log. It normalizes in memory, so the raw log is re-read to stamp it.
@@ -584,8 +595,11 @@ async function stampDurableDeferTargets(enriched, options, resolvedRoot) {
   const log = JSON.parse(await readFile(logPath, "utf8"));
   let changed = false;
   for (const f of log.findings) {
-    const target = f?.judgeDisposition === "defer" && f.followUpIssueNumber == null ? targets.get(fingerprintFinding(f)) : undefined;
+    if (f?.judgeDisposition !== "defer" || f.followUpIssueNumber != null) continue;
+    const fp = fingerprintFinding(f);
+    const target = targets.get(fp);
     if (target !== undefined) { f.followUpIssueNumber = target; changed = true; }
+    else if (rejects.has(fp)) { f.judgeDisposition = "reject"; delete f.followUpDraft; changed = true; }
   }
   if (changed) await writeFile(logPath, JSON.stringify(log, null, 2) + "\n");
 }
@@ -952,8 +966,8 @@ export async function judgePassCli(
     "--judge-verdict",
     parseError,
   );
-  const { pastCap, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
-  const result = runJudgePass(findings, judgeVerdict, options.headSha, { pastCap, round });
+  const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
+  const result = runJudgePass(findings, judgeVerdict, options.headSha, { pastCap: lowFixCapped, round });
 
   // Immutable spec-authority gate (opt-in via --spec-file). A spec_cannot_decide
   // outcome fails closed here so the loop stops at the human-spec-decision state
@@ -1032,10 +1046,11 @@ export async function judgePassCli(
   } else {
     await applyDeferralComment(
       result.enriched,
-      { repo: options.repo, pr: Number(options.pr), trackerProvider },
+      { repo: options.repo, pr: Number(options.pr), gate: options.gate, trackerProvider },
       { env, ghCommand, run, commentIssue },
     );
     await stampDurableDeferTargets(result.enriched, options, resolvedRoot);
+    result.counts = countByDisposition(result.enriched);
   }
 
   // Recurrence escalation: an act item whose surface appears in act items of three counted

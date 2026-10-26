@@ -2594,6 +2594,27 @@ test("writeGateFindingsLog counts rounds from the custom --tmp-root it persists 
   }
 });
 
+test("writeGateFindingsLog at pre_approval_gate defers a judge-acted low with low_fix_until_cap (#2724 wiring)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-pre-approval-"));
+  try {
+    const judgeVerdict = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdict, JSON.stringify({
+      headSha: CAP_HEAD,
+      scopeDrift: { verdict: "within_scope", rationale: "r", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "why" }],
+    }), "utf8");
+    await writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate: "pre_approval_gate", headSha: CAP_HEAD, verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "low", angle: "docs", summary: "tidy wording" }]), judgeVerdict, tmpRoot: tmpDir,
+    }, { repoRoot: tmpDir });
+    const [finding] = JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-42", `pre_approval_gate-${CAP_HEAD}.json`), "utf8")).findings;
+    assert.equal(finding.judgeDisposition, "defer");
+    assert.match(finding.judgeReason, /^low_fix_until_cap/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("writeGateFindingsLog keeps resurfaces only for a closed prior round's act fingerprint", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-resurfaces-"));
   try {
