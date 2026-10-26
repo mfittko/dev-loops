@@ -25,7 +25,7 @@ before(async () => {
   // only the verdict composition.
   repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-act-list-repo-"));
   const real = await readFile(path.resolve(".devloops"), "utf8");
-  const patched = real.replace("requireFanoutEvidence: true", "requireFanoutEvidence: false");
+  const patched = real.replace("requireFanoutEvidence: true", "requireFanoutEvidence: false").replace("\n  draft:\n", "\n  draft:\n    maxReviewRounds: 0\n");
   assert.notEqual(patched, real);
   await writeFile(path.join(repoRoot, ".devloops"), patched, "utf8");
 });

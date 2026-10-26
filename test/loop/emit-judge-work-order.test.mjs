@@ -357,6 +357,31 @@ test("an omitted --round derives from the gate's local ledgers, so a second head
   });
 });
 
+test("the work order gives the judge the closed prior rounds' act items with file and line, and sidecars do not count as a round", async () => {
+  await withDir(async (root) => {
+    const first = await seed(root, { headSha: "e".repeat(40) });
+    const priorHead = HEAD;
+    const ledger = (name) => path.join(root, path.dirname(buildLogPath({ repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha: priorHead, tmpRoot: "tmp" })), name);
+    const prior = {
+      repo: "o/r", pr: 7, gate: "pre_approval_gate", headSha: priorHead, verdict: "findings_present", loggedAt: "2026-10-01T00:00:00.000Z",
+      findings: [
+        { severity: "medium", summary: "guard missing", files: ["src/a.mjs"], line: 12, judgeDisposition: "act", judgeTitle: "Guard is missing" },
+        { severity: "low", summary: "rejected one", files: ["src/b.mjs"], line: 3, judgeDisposition: "reject" },
+      ],
+    };
+    await mkdir(path.dirname(ledger("x")), { recursive: true });
+    await writeFile(ledger(`pre_approval_gate-${priorHead}.json`), JSON.stringify(prior));
+    await writeFile(ledger(`pre_approval_gate-${priorHead}.act-list.json`), "[]");
+    await writeFile(ledger(`pre_approval_gate-${priorHead}.judged-ledger.json`), "{}");
+    const plan = await emitJudgeWorkOrder(first);
+    assert.deepEqual(plan.workOrder.priorActItems.map(({ fingerprint, ...rest }) => (assert.match(fingerprint, /^[0-9a-f]{16}$/), rest)), [
+      { file: "src/a.mjs", line: 12, title: "Guard is missing" },
+    ]);
+    assert.equal(plan.workOrder.round, 2);
+    assert.match(await readFile(plan.promptPath, "utf8"), /set `resurfaces` on its disposition/);
+  });
+});
+
 test("a configured mediumFixWindow, or only the deprecated alias, reaches a draft_gate work order", async () => {
   for (const [yaml, expected] of [
     ["version: 1\ngates:\n  draft:\n    mediumFixWindow: 2\n", 2],
