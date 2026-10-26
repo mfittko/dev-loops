@@ -16,7 +16,7 @@ Issue 2579 already replaced the universal blocking join with a harness-scoped jo
 
 On Claude Code the report path has three parts.
 
-1. A coordinator run makes one `SubagentHandback` call. It carries the final report: `final_approval_ready`, or a stop that needs a caller decision.
+1. A dev-loop coordinator run makes one `SubagentHandback` call. It carries the final report: `final_approval_ready`, or a stop that needs a caller decision.
 2. A pause is a turn end while the run is not finished. It ends the turn with plain text and never calls `SubagentHandback`. After a refused `SubagentHandback` the coordinator makes no further call and ends the turn with the full report as plain text.
 3. The orchestrator reads the last assistant message of the coordinator's output file before it resumes or re-asks the coordinator. It sends all decisions for one block in one message.
 

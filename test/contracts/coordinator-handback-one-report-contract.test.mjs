@@ -24,7 +24,7 @@ test("COORDINATOR-HANDBACK-ONE-REPORT defines pauses as plain text", async () =>
   assert.match(text, /pause is a turn end while the dev-loop coordinator's run is not finished/);
   assert.match(text, /plain text and never calls `SubagentHandback`/);
   assert.match(text, /"report has not been delivered" prompt.*plain text/);
-  assert.match(text, /dev-loop coordinator's thread.*duplicate child wake.*run state did not change/s);
+  assert.match(text, /dev-loop coordinator's thread.*duplicate child wake.*child is in flight and the run state did not change.*no child in flight.*continues its runnable next step/s);
 });
 
 test("COORDINATOR-HANDBACK-ONE-REPORT carries one final report and the refusal path", async () => {
@@ -37,6 +37,7 @@ test("COORDINATOR-HANDBACK-ONE-REPORT carries one final report and the refusal p
 
 test("MAIN-AGENT-COORDINATOR-REPORT-READ defines the orchestrator read path", async () => {
   const text = await rule(READ);
+  assert.match(text, /^`MAIN-AGENT-COORDINATOR-REPORT-READ`: Claude Code only\./m);
   assert.match(text, /"not repeated here".*idle without a delivered report.*last assistant message of the coordinator's output file before it resumes or re-asks/s);
   assert.match(text, /all decisions for one block in one message/);
   assert.match(text, /latest hand-back before it re-instructs/);
@@ -69,4 +70,9 @@ test("both agent files cite the hand-back rule and embed no rule body", async ()
 test("required-rules lists both rules", async () => {
   const { requiredRules: rules } = JSON.parse(await readRepo("skills/docs/required-rules.json"));
   for (const id of [ONE, READ]) assert.ok(rules.some((r) => r.id === id), `${id} listed`);
+});
+
+test("the Claude mirror of the main-agent contract carries both rules", async () => {
+  const mirror = await readRepo(".claude/skills/docs/main-agent-contract.md");
+  for (const id of [ONE, READ]) assert.ok(mirror.includes(`<!-- rule: ${id} -->`), `${id} in .claude mirror`);
 });

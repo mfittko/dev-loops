@@ -189,3 +189,20 @@ measured against root turns rather than wait duration. A missing or ambiguous na
 reported as unavailable, never zero. The rule binds the unit coordinator on every harness, so it
 stays outside the sections harness-specific mirrors drop.
 
+<!-- rule: COORDINATOR-HANDBACK-ONE-REPORT -->
+`COORDINATOR-HANDBACK-ONE-REPORT`: Claude Code only. A pause is a turn end while the dev-loop coordinator's run is not finished, for example while a child it dispatched runs.
+
+- A pause ends the turn with plain text and never calls `SubagentHandback`. The harness "report has not been delivered" prompt after a pause is answered in plain text too.
+- An answer to a question typed into the dev-loop coordinator's thread, and a duplicate child wake, are pauses when a child is in flight and the run state did not change (no dispatch, push, gate result or new stop). With no child in flight, the dev-loop coordinator answers and continues its runnable next step in the same turn.
+- The one `SubagentHandback` call of a run carries its final report: `final_approval_ready`, or a stop that needs a caller decision.
+- A turn end with no child in flight is never a pause. The dev-loop coordinator never ends silently while its next step is runnable.
+- After a refused `SubagentHandback`, the dev-loop coordinator makes no further call in that run and ends the turn with the full report as plain text.
+- Every hand-back names the last relayed message it consumed, by first line and arrival time, or states that it consumed none.
+
+<!-- rule: MAIN-AGENT-COORDINATOR-REPORT-READ -->
+`MAIN-AGENT-COORDINATOR-REPORT-READ`: Claude Code only. When a coordinator notification says the result is "not repeated here", or the coordinator went idle without a delivered report, the orchestrator reads the last assistant message of the coordinator's output file before it resumes or re-asks it.
+
+- The orchestrator sends all decisions for one block in one message.
+- The orchestrator reads the latest hand-back before it re-instructs.
+- On the next notification of a reporter that named children in flight, read its output file before acting.
+
