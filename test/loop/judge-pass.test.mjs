@@ -448,7 +448,7 @@ for (const [label, maxReviewRounds, expectedActs] of [["at the round cap", 1, 0]
   );
   const payload = await judgePassCli(
     { repo: "mfittko/dev-loops", pr: "2243", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
-    { repoRoot: tmpDir },
+    { repoRoot: tmpDir, ...stubDeferralDeps().deps },
   );
   assert.equal(payload.ok, true);
   assert.equal(payload.actCount, expectedActs);
