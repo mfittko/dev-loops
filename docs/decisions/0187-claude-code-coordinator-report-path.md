@@ -4,7 +4,7 @@
 
 Accepted — 2026-10-26 ([issue 2611](https://github.com/mfittko/dev-loops/issues/2611), slice 1).
 
-Amends [0056](0056-bounded-parallel-gate-dispatch.md). The body of 0056 is unchanged. Its "No mid-chain turn-ending" and "Blocking join for a nested single-child step" bullets will hold for Pi only once the remaining slice of [issue 2611](https://github.com/mfittko/dev-loops/issues/2611) lands. Related: [0069](0069-claude-harness-fanout-concurrency-clamp.md), [0095](0095-single-wave-gate-fanout.md), [0112](0112-gate-coordinator-agent-joins-the-agent-taxonomy.md).
+Amends [0056](0056-bounded-parallel-gate-dispatch.md). The body of 0056 is unchanged. On Claude Code, the dev-loop coordinator may end its turn as a plain-text pause while a child runs, so the "No mid-chain turn-ending" bullet of 0056 no longer binds that coordinator there. Pi is unchanged. Related: [0069](0069-claude-harness-fanout-concurrency-clamp.md), [0095](0095-single-wave-gate-fanout.md), [0112](0112-gate-coordinator-agent-joins-the-agent-taxonomy.md).
 
 ## Context
 
@@ -24,7 +24,7 @@ Every hand-back names the last relayed message it consumed, by first line and ar
 
 Relaying interim reports through `SendMessage` was rejected because its availability varies by session (PR 2602).
 
-The rules are `COORDINATOR-HANDBACK-ONE-REPORT` and `MAIN-AGENT-COORDINATOR-REPORT-READ` in `skills/docs/main-agent-contract.md`. The join stays harness-scoped as issue 2579 landed it (`GATE-EXEC-HARNESS-JOIN`).
+The rules are `COORDINATOR-HANDBACK-ONE-REPORT` and `MAIN-AGENT-COORDINATOR-REPORT-READ` in the [main-agent contract](../../skills/docs/main-agent-contract.md). The join stays harness-scoped as issue 2579 landed it (`GATE-EXEC-HARNESS-JOIN`).
 
 ## Consequences
 
