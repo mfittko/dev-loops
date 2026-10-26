@@ -1371,8 +1371,8 @@ export function capClosedFor(finding, { round, cap }) {
 }
 
 /**
- * Blockers a past-cap draft_gate round composes into `blocked`. A new act item and a re-surfaced high or medium
- * act item block, unless every act item is low or nit in the cap round (GATE-EXEC-LOW-FIX-UNTIL-CAP applies instead); a mixed cap-round list follows the remedy rule below. A high, a `failOpen: true` finding that is not an act item with a `judgeFix` at the cap round, a missing
+ * Blockers a past-cap draft_gate round composes into `blocked`. A new act item and, after the cap round, a re-surfaced act item of any severity
+ * block (at the cap round a re-surfaced high or medium blocks only without a `judgeFix`), unless every act item is low or nit in the cap round (GATE-EXEC-LOW-FIX-UNTIL-CAP applies instead); a mixed cap-round list follows the remedy rule below. A high, a `failOpen: true` finding that is not an act item with a `judgeFix` at the cap round, a missing
  * disposition, an unknown severity, a medium `defer` without `followUpIssueNumber` and a medium `reject` without `judgeReason` block as
  * `severity_disagreement`. A defer to the PR itself (`pr`) is not a target, and a medium defer is never final when `pr` is not an integer (fail closed). A medium rejected with a reason or deferred with a target issue is final (ADR 0191).
  * At the cap round (`round === cap`) an act item of a known severity with a string `judgeFix` does not block: the round composes

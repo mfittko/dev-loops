@@ -882,6 +882,23 @@ test("GATE-EXEC-ROUND-CAP: the cap round is refused when the current-head round 
   });
 });
 
+test("GATE-EXEC-ROUND-CAP: the cap round with a string pr (the CLI form) and a targeted medium defer emits; a defer to the PR itself refuses", async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    const dir = path.join(root, "tmp", "gate-findings", "o-r", `pr-${PR}`);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `draft_gate-${"d".repeat(40)}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: "d".repeat(40), verdict: "findings_present", findings: [] }));
+    const medium = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
+    const current = (followUpIssueNumber) => writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "findings_present",
+      findings: [medium, { severity: "medium", angle: "x", summary: "later", judgeDisposition: "defer", followUpIssueNumber }] }));
+    await writeFile(files.actList, JSON.stringify([medium]));
+    await current(99);
+    assert.equal((await emit({ pr: String(PR), phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    await current(PR);
+    await assert.rejects(emit({ pr: String(PR), phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached");
+  });
+});
+
 test("an act item whose clusterSeverities is empty, not an array or holds an unknown severity is refused (invalid_cluster_severities)", async () => {
   await withFixture(async ({ files, emit }) => {
     for (const bad of [[], "low", ["low", "critical"], [1]]) {

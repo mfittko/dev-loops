@@ -482,7 +482,7 @@
     {
       "id": "GATE-EXEC-ROUND-CAP",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by upsert-checkpoint-verdict.mjs (choke point, count, past-cap composition via pastCapBlockers in packages/core/src/loop/gate-fanin.mjs) and countCompletedRounds and resolveClosureRound in write-gate-context.mjs, and capClosedFor at write-gate-findings-log.mjs; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+      "enforcementNote": "Enforced by upsert-checkpoint-verdict.mjs (choke point, count, past-cap composition via pastCapBlockers in packages/core/src/loop/gate-fanin.mjs) and countCompletedRounds and resolveClosureRound in write-gate-context.mjs, and capClosedFor at write-gate-findings-log.mjs, and emit-fixer-work-order.mjs (refuses round_cap_reached after the cap round and at a blocked cap round); the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-ROUND-RETIREMENT",

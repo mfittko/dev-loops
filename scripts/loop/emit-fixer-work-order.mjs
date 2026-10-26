@@ -311,7 +311,7 @@ export async function emitFixerWorkOrder({
         try { ledgerFindings = JSON.parse(readFileSync(ledgerFile, "utf8")).findings; } catch { ledgerFindings = null; }
         if (!Array.isArray(ledgerFindings)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} is unreadable; failing closed at the cap round`);
       }
-      const blockers = pastCapBlockers([...ledgerFindings, ...source.parsed], { pr, round, cap });
+      const blockers = pastCapBlockers([...ledgerFindings, ...source.parsed], { pr: Number(pr), round, cap }); // Number(pr): the CLI pr is a string; a non-integer yields NaN and fails closed in pastCapBlockers.
       if (blockers.length > 0) {
         throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the cap round (cap ${cap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);
       }
