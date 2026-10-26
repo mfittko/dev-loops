@@ -2526,7 +2526,7 @@ async function writeCapPrior(tmpDir, { pr = 42, head, findings, gate = "draft_ga
   const dir = path.join(tmpDir, "gate-findings", "owner-repo", `pr-${pr}`);
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, `${gate}-${head}.json`), JSON.stringify({
-    repo: "owner/repo", pr, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-10-0${head[0]}T00:00:00.000Z`, findings,
+    repo: "owner/repo", pr, gate, headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${head[0]}T00:00:00.000Z`, findings,
   }), "utf8");
 }
 async function writeCapRound(tmpDir, rawFindings, dispositions) {

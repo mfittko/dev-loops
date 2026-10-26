@@ -1903,14 +1903,18 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
   return rounds.map((round) => round.log);
 }
 
+/** Merge time of the round cap (PR 2932); a closed prior ledger logged before it never counts (ADR 0189). */
+export const DRAFT_ROUND_CAP_EFFECTIVE_AT = "2026-10-26T08:51:13Z";
+
 /**
- * Completed-round count for the round cap: the closed prior rounds, plus an unreadable ledger at an
- * in-range head, plus the round being posted. Foreign, mismatched and unclosed ledgers never count.
+ * Completed-round count for the round cap: the closed prior rounds logged at or after
+ * DRAFT_ROUND_CAP_EFFECTIVE_AT (a missing, non-string or unparseable `loggedAt` counts), plus an unreadable ledger at an
+ * in-range head (counted regardless of date, since it has no readable `loggedAt`), plus the round being posted. Foreign, mismatched and unclosed ledgers never count.
  */
 export async function countCompletedRounds(options, { repoRoot }) {
   let unreadable = 0;
   const closed = await readClosedPriorRoundLogs(options, { repoRoot, onUnreadable: () => { unreadable += 1; } });
-  return closed.length + unreadable + 1;
+  return closed.filter((log) => typeof log.loggedAt !== "string" || !(Date.parse(log.loggedAt) < Date.parse(DRAFT_ROUND_CAP_EFFECTIVE_AT))).length + unreadable + 1;
 }
 
 /** Act items of the closed prior rounds as `{ fingerprint, file, line, title }`, one per fingerprint. */

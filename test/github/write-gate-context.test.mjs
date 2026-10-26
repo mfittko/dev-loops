@@ -8199,7 +8199,7 @@ test("countCompletedRounds counts an in-range identity-matching ledger with a mi
     const dir = path.join(tmpRoot, "gate-findings", "owner-repo", "pr-5");
     await mkdir(dir, { recursive: true });
     const heads = ["1", "2", "3", "4", "6"].map((c) => c.repeat(40));
-    const ledger = (head, extra) => JSON.stringify({ repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: head, loggedAt: "2026-10-01T00:00:00.000Z", ...extra });
+    const ledger = (head, extra) => JSON.stringify({ repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: head, loggedAt: "2026-10-27T00:00:00.000Z", ...extra });
     await writeFile(path.join(dir, `draft_gate-${heads[0]}.json`), ledger(heads[0], { verdict: "findings_present" }), "utf8");
     await writeFile(path.join(dir, `draft_gate-${heads[1]}.json`), ledger(heads[1], {}), "utf8");
     await writeFile(path.join(dir, `draft_gate-${heads[2]}.json`), ledger(heads[2], { verdict: "bogus" }), "utf8");
@@ -8207,6 +8207,32 @@ test("countCompletedRounds counts an in-range identity-matching ledger with a mi
     await writeFile(path.join(dir, `draft_gate-${heads[4]}.json`), ledger(heads[4], { verdict: "blocked" }), "utf8");
     const round = await countCompletedRounds({ repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: "5".repeat(40), tmpRoot }, { repoRoot: tmpRoot });
     assert.equal(round, 1 + 2 + 1, "one closed + two unreadable + the posted round; the foreign and blocked ledgers are excluded");
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("countCompletedRounds skips closed ledgers logged before DRAFT_ROUND_CAP_EFFECTIVE_AT, counts a missing or unparseable loggedAt", async () => {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-round-landing-"));
+  try {
+    const dir = path.join(tmpRoot, "gate-findings", "owner-repo", "pr-5");
+    const count = async () => countCompletedRounds({ repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: "9".repeat(40), tmpRoot }, { repoRoot: tmpRoot });
+    const seed = async (loggedAts) => {
+      await rm(dir, { recursive: true, force: true });
+      await mkdir(dir, { recursive: true });
+      for (const [i, loggedAt] of loggedAts.entries()) {
+        const head = String(i + 1).repeat(40);
+        const log = { repo: "owner/repo", pr: 5, gate: "draft_gate", headSha: head, verdict: "clean", ...(loggedAt === undefined ? {} : { loggedAt }) };
+        await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify(log), "utf8");
+      }
+    };
+    const pre = "2026-10-26T08:51:12Z";
+    await seed([pre, pre, pre, pre]);
+    assert.equal(await count(), 1, "four pre-cap ledgers do not count, the posted round does");
+    await seed(["2026-10-26T08:51:13Z", "2026-10-27T00:00:00.000Z", "2026-10-28T00:00:00.000Z"]);
+    assert.equal(await count(), 4, "three ledgers at or after the landing plus the posted round");
+    await seed([undefined, "not a date", "", 2026, null]);
+    assert.equal(await count(), 6, "a missing, empty, non-string, null or unparseable loggedAt counts");
   } finally {
     await rm(tmpRoot, { recursive: true, force: true });
   }
