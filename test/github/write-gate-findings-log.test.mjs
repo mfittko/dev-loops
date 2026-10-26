@@ -2737,7 +2737,7 @@ test("writeGateFindingsLog accepts a clean wrapper with non-blocking judge-act f
         overallVerdict: "clean",
         findings: [
           { severity: "medium", angle: "correctness", summary: "worth fixing now", disposition: "accepted-for-fix" },
-          { severity: "medium", angle: "docs", summary: "rename variable", disposition: "accepted-for-fix" },
+          { severity: "low", angle: "docs", summary: "rename variable", disposition: "accepted-for-fix" },
         ],
       }),
       judgeVerdict: judgeVerdictPath,
@@ -3073,3 +3073,32 @@ test("writeGateFindingsLog refuses a clusterId outside the array or naming an en
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+// ADR 0188: the ledger writer coerces a low act only at or past the draft round cap; a nit act is rejected in every round.
+for (const [cap, lowDisposition] of [[4, "act"], [1, "defer"]]) {
+  test(`writeGateFindingsLog with maxReviewRounds ${cap} records a judged low act as ${lowDisposition} and a nit act as reject (ADR 0188)`, async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-low-cap-"));
+    try {
+      const headSha = "e5".repeat(20);
+      const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+      await writeFile(judgeVerdictPath, JSON.stringify({
+        headSha,
+        scopeDrift: { verdict: "within_scope", rationale: "within AC", driftedAreas: [] },
+        dispositions: [0, 1].map((index) => ({ index, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting" })),
+      }), "utf8");
+      await writeFile(path.join(tmpDir, ".devloops"), `version: 1\ngates:\n  draft:\n    maxReviewRounds: ${cap}\n`, "utf8");
+      await writeGateFindingsLog({
+        repo: "owner/repo", pr: 2243, gate: "draft_gate", headSha, verdict: "findings_present",
+        findings: JSON.stringify([
+          { severity: "low", angle: "docs", summary: "rename variable" },
+          { severity: "nit", angle: "docs", summary: "tidy comment" },
+        ]),
+        judgeVerdict: judgeVerdictPath, tmpRoot: tmpDir,
+      }, { repoRoot: tmpDir });
+      const parsed = JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-2243", `draft_gate-${headSha}.json`), "utf8"));
+      assert.deepEqual(parsed.findings.map((f) => f.judgeDisposition), [lowDisposition, "reject"]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+}

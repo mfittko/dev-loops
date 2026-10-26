@@ -25,7 +25,7 @@ import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWo
 import { repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding } from "../github/_gate-finding-surface.mjs";
-import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { renderRequiredReadLine, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../github/_fixer-emission-evidence.mjs";
@@ -288,9 +288,10 @@ export async function emitFixerWorkOrder({
   if (actListFile && !(Array.isArray(source.parsed) && source.parsed.length > 0 && source.parsed.every(isActItem))) {
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   }
-  // ADR 0188: low and nit findings never reach the fixer (backstop for hand-built or legacy ledgers).
-  if (actListFile && source.parsed.every((f) => f.severity === "low" || f.severity === "nit")) {
-    throw new WorkOrderRefusal("low_nit_never_blocks", `low_nit_never_blocks (GATE-EXEC-LOW-NIT-NEVER-BLOCKS): act list ${actListFile} holds only low or nit items; low and nit findings never reach the fixer`);
+  // ADR 0188: at or past the draft_gate round cap, low and nit findings never reach the fixer (backstop for hand-built or legacy ledgers). Below the cap a low act is fixed.
+  if (actListFile && source.parsed.every((f) => f.severity === "low" || f.severity === "nit")
+    && (await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: cwd })).pastCap) {
+    throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${actListFile} holds only low or nit items at or past the draft_gate round cap; low and nit findings no longer reach the fixer`);
   }
   // The verify-time act-thread guard matches open gate threads by fingerprint, so a missing or wrong one would let a matching thread pass as threadless.
   const badFingerprint = actListFile ? source.parsed.find((f) => f.fingerprint !== fingerprintFinding(f)) : undefined;

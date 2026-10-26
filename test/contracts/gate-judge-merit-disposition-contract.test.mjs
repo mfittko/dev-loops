@@ -46,14 +46,14 @@ function assertClaims(block, claims, label) {
 test("agents/judge.agent.md states severity is an INPUT and a real defect (incl. a low) is act regardless of its label", async () => {
   const text = await read("agents/judge.agent.md");
   assert.match(text, /Severity is an INPUT[\s\S]{0,60}never an auto-gate/, "judge contract must state severity is an INPUT, never an auto-gate");
-  assert.match(text, /`GATE-EXEC-LOW-NIT-NEVER-BLOCKS`[\s\S]{0,200}`failOpen: true`/, "judge contract must cite the low/nit rule and failOpen");
+  assert.match(text, /`GATE-EXEC-LOW-FIX-UNTIL-CAP`[\s\S]{0,200}`failOpen: true`/, "judge contract must cite the low/nit rule and failOpen");
   assert.doesNotMatch(text, OLD_AUTODEFER_RE, "judge contract must NOT re-introduce the severity-based auto-defer sentence for lows");
 });
 
 test("agents/judge.agent.md keeps the net-reduction bar: a real AC-relevant low is act, a cosmetic low still rejects", async () => {
   const text = await read("agents/judge.agent.md");
-  // ADR 0188: a real low defers; the act path is the explicit failOpen promotion.
-  assert.match(text, /A real `low` is `defer` \(above: `act` only with `failOpen: true`\)/, "a real low must defer, act only with failOpen");
+  // ADR 0188: a real low is act below the round cap; at or past it, defer (act only with failOpen).
+  assert.match(text, /A real `low` is `act` below the round cap[\s\S]{0,160}at or past the cap is `defer` \(above: `act` only with `failOpen: true`\)/, "a real low is act below the cap, defer at or past it");
   // AC2: a genuinely cosmetic low is still rejected (net-reduction preserved).
   assert.match(text, /cosmetic `low`[\s\S]{0,60}defaults to `reject`/, "a genuinely cosmetic low must still default to reject (net-reduction)");
 });
@@ -67,7 +67,7 @@ test("the Phase 3.5 judge contract states no severity auto-defer and adjudicates
   assertClaims(body, [
     ["Severity is an INPUT", "never an auto-gate"],
     ["EVERY finding", "`low`", "merits"],
-    ["`GATE-EXEC-LOW-NIT-NEVER-BLOCKS`"],
+    ["`GATE-EXEC-LOW-FIX-UNTIL-CAP`"],
     ["cosmetic `low`", "defaults to", "`reject`"],
   ], "Phase 3.5 merit disposition");
   assert.doesNotMatch(body, OLD_AUTODEFER_RE, "Phase 3.5 must NOT re-introduce the severity-based auto-defer sentence for lows");

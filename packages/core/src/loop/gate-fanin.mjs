@@ -1245,9 +1245,10 @@ export function assertNoProjectedForbiddenDefer(enriched, clusters) {
  *
  * @param {Array<object>} findings — the flat consolidated findings array
  * @param {object} judgeVerdict — the validated judge verdict artifact
+ * @param {{ pastCap?: boolean }} [options] — `pastCap`: the draft_gate round is at or past `gates.draft.maxReviewRounds` (default false)
  * @returns {{ findings: Array<object>, scopeDrift: object }}
  */
-export function applyJudgeDispositions(findings, judgeVerdict) {
+export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false } = {}) {
   const validated = validateJudgeVerdict(judgeVerdict);
   const list = Array.isArray(findings) ? findings : [];
   const enriched = list.map((f) => ({ ...f }));
@@ -1268,8 +1269,8 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
         throw new Error(`judge disposition for cluster ${d.index} defers a cluster whose severity is ${blocked}; a high, a question or an all-nit cluster is never deferred (GATE-EXEC-THREAD-DISPOSITION) — fail closed`);
       }
     }
-    // ADR 0188: low and nit findings never block. An `act` on an all-low/nit cluster is coerced
-    // (failOpen promotes to medium and keeps act; else all-nit rejects, a low defers).
+    // ADR 0188: an `act` on an all-low/nit cluster is coerced. failOpen promotes to medium and keeps act in every
+    // round; else all-nit rejects in every round; a cluster with a low stays act below the round cap and defers at or past it.
     let disposition = d.disposition;
     let reason = d.reason;
     let followUpDraft = d.followUpDraft;
@@ -1280,9 +1281,9 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
     if (disposition === "act" && clusterMembers.every(lowOrNit) && (stamped || enriched.every(lowOrNit))) {
       if (d.failOpen === true) {
         promote = true;
-      } else {
+      } else if (clusterMembers.every((f) => normalizeSeverity(f.severity) === "nit") || pastCap) {
         disposition = clusterMembers.every((f) => normalizeSeverity(f.severity) === "nit") ? "reject" : "defer";
-        if (typeof reason !== "string" || reason.trim().length === 0) reason = "low_nit_never_blocks (GATE-EXEC-LOW-NIT-NEVER-BLOCKS)";
+        if (typeof reason !== "string" || reason.trim().length === 0) reason = "low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP)";
         if (disposition === "defer" && !followUpDraft) followUpDraft = { title: d.title.trim(), body: d.detail.trim() };
       }
     }

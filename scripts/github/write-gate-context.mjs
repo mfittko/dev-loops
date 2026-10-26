@@ -28,10 +28,10 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { baseAngleName, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { baseAngleName, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef } from "../lib/anchor-base-ref.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";
@@ -1911,6 +1911,19 @@ export async function countCompletedRounds(options, { repoRoot }) {
   let unreadable = 0;
   const closed = await readClosedPriorRoundLogs(options, { repoRoot, onUnreadable: () => { unreadable += 1; } });
   return closed.length + unreadable + 1;
+}
+
+/**
+ * Round-cap state of the round being posted (GATE-EXEC-ROUND-CAP). The cap exists only for draft_gate, so any
+ * other gate is never past it. One resolver for the judge pass, the ledger writer and the fixer emitter.
+ * @returns {Promise<{ pastCap: boolean, round: number, cap: number }>}
+ */
+export async function resolveDraftRoundCap(options, { repoRoot }) {
+  if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0 };
+  const { config } = await loadDevLoopConfigStrict({ repoRoot });
+  const cap = resolveGateConfig(config, "draft").maxReviewRounds;
+  const round = await countCompletedRounds(options, { repoRoot });
+  return { pastCap: isPastRoundCap(round, cap), round, cap };
 }
 
 /** Act items of the closed prior rounds as `{ fingerprint, file, line, title }`, one per fingerprint. */

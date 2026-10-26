@@ -1,10 +1,10 @@
-# 0188. Low and nit findings never block a gate round or reach the fixer
+# 0188. Fix lows until the draft-gate round cap; nits never block
 
 ## Status
 
 Accepted — 2026-10-26 ([issue 2937](https://github.com/mfittko/dev-loops/issues/2937))
 
-Amends ADR 0183 (judge owns every disposition) for this case only: the judge still disposes every cluster, and severity now floors a `low` or `nit` cluster at `defer` or `reject` unless the judge marks it fail-open. Amends [ADR 0168](./0168-draft-gate-low-nit-convergence.md) for this case only: its trigger (an all-low/nit act list) no longer arises from judge output. The converged-draft machinery stays for legacy ledgers until a later slice removes it. The records that introduced those rules stay unedited.
+Amends ADR 0183 (judge owns every disposition) for this case only: the judge still disposes every cluster, and severity floors a `nit` cluster at `reject` in every round, and a `low` cluster at `defer` at or past the draft-gate round cap (ADR 0185), unless the judge marks it fail-open. Amends [ADR 0168](./0168-draft-gate-low-nit-convergence.md) for this case only: its trigger (an all-low/nit act list) arises again only below the round cap, because at or past the cap the judge output and the emitter exclude it. The records that introduced those rules stay unedited.
 
 ## Context
 
@@ -12,13 +12,13 @@ In the v1.0.8 drain, lows and nits marked `act` forced extra fixer cycles and ga
 
 ## Decision
 
-- `applyJudgeDispositions` coerces a cluster whose members are all `low` or `nit` and whose judge disposition is `act`. A disposition with `failOpen: true` promotes the members to `medium` and keeps `act`. Otherwise an all-`nit` cluster becomes `reject` and a cluster holding a `low` becomes `defer`. A cluster with a `medium`, `high` or `question` member is untouched.
-- `emit-fixer-work-order.mjs` refuses an act list that holds only `low` or `nit` items.
+- `applyJudgeDispositions(findings, verdict, { pastCap })` coerces a cluster whose members are all `low` or `nit` and whose judge disposition is `act`. A disposition with `failOpen: true` promotes the members to `medium` and keeps `act` in every round. Otherwise an all-`nit` cluster becomes `reject` in every round. A cluster holding a `low` stays `act` below the cap and becomes `defer` at or past it. A cluster with a `medium`, `high` or `question` member is untouched. Operator decision 2026-10-26: fix lows until the cap.
+- `emit-fixer-work-order.mjs` refuses an act list that holds only `low` or `nit` items, for `draft_gate` at or past the cap only. `pre_approval_gate` has no cap, so it is never past it. The cap state comes from one resolver, `resolveDraftRoundCap`, over the ADR 0185 round count.
 - No contract or brief sets a fixed fixer-cycle cap. The bound is a new `high`, size growth past the forecast band, or the closure-only round cap.
-- The durable autonomy principles live in the repo, each as one rule ID in one contract. The judge is the prime authority (`GATE-EXEC-JUDGE-PRIME-AUTHORITY`). For gate-round dispositions, an operator line is needed only where the judge or orchestrator cannot decide or the repo requires human approval, for example approve merge for escalated size (`GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE`) and release tag and publish (`GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH`). An ADR replaces a waiver comment (`ADR-OVER-WAIVER`). An issue is split before an oversized PR, at the resolved `softLoc` (`PLAN-SPLIT-BEFORE-OVERSIZE`, `PLAN-SIZE-BAND`). Low and nit findings defer by default (`GATE-EXEC-LOW-NIT-NEVER-BLOCKS`). No fixed fixer-cycle cap exists (`GATE-EXEC-FIXER-CYCLE-BOUND`).
-- `GATE-EXEC-LOW-NIT-NEVER-BLOCKS` supersedes `GATE-EXEC-LOW-NIT-CONVERGENCE`: the emitter refuses an all-low/nit act list, so the converged-draft pass cannot start. A legacy ledger with such an `act` recovers by re-running `judge-pass.mjs`, which re-coerces it. See also [ADR 0183](./0183-judge-owns-every-disposition-verdict-and-next-action.md). <!-- secret-scan:allow Relative ADR link; not a credential -->
-- Tooling that decides a rule refuses with a typed code that names the rule ID: `low_nit_never_blocks` for `GATE-EXEC-LOW-NIT-NEVER-BLOCKS`.
+- The durable autonomy principles live in the repo, each as one rule ID in one contract. The judge is the prime authority (`GATE-EXEC-JUDGE-PRIME-AUTHORITY`). For gate-round dispositions, an operator line is needed only where the judge or orchestrator cannot decide or the repo requires human approval, for example approve merge for escalated size (`GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE`) and release tag and publish (`GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH`). An ADR replaces a waiver comment (`ADR-OVER-WAIVER`). An issue is split before an oversized PR, at the resolved `softLoc` (`PLAN-SPLIT-BEFORE-OVERSIZE`, `PLAN-SIZE-BAND`). The fixer fixes lows until the round cap and a nit is rejected (`GATE-EXEC-LOW-FIX-UNTIL-CAP`). No fixed fixer-cycle cap exists (`GATE-EXEC-FIXER-CYCLE-BOUND`).
+- `GATE-EXEC-LOW-NIT-CONVERGENCE` stays reachable below the cap, where an all-low/nit act list can again occur. At or past the cap `GATE-EXEC-LOW-FIX-UNTIL-CAP` keeps such a list from the fixer. A legacy ledger with such an `act` past the cap recovers by re-running `judge-pass.mjs`, which re-coerces it. See also [ADR 0183](./0183-judge-owns-every-disposition-verdict-and-next-action.md). <!-- secret-scan:allow Relative ADR link; not a credential -->
+- Tooling that decides a rule refuses with a typed code that names the rule ID: `low_fix_until_cap` for `GATE-EXEC-LOW-FIX-UNTIL-CAP`.
 
 ## Consequences
 
-A round with only low and nit findings composes `clean` and emits no fixer work order. A real low defect is deferred and listed in the verdict unless the judge marks it fail-open.
+Below the cap a real low is fixed. At or past the cap a round with only low and nit findings composes `clean` and emits no fixer work order, and a real low defect is deferred and listed in the verdict unless the judge marks it fail-open.

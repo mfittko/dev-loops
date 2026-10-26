@@ -42,8 +42,8 @@ async function withCase({ siblingVerdict, identity = { specDigest, headSha: HEAD
     const run = () => writeGateFindingsLog({
       repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: HEAD, verdict: "clean",
       findings: JSON.stringify([
-        { severity: "medium", angle: "scope", summary: "conflicts with the spec" },
-        { severity: "medium", angle: "docs", summary: "valid gap" },
+        { severity: "low", angle: "scope", summary: "conflicts with the spec" },
+        { severity: "low", angle: "docs", summary: "valid gap" },
       ]),
       judgeVerdict, specAuthority, tmpRoot: tmpDir,
     });

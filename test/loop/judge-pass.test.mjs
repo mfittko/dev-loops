@@ -393,7 +393,7 @@ test("judgePassCli accepts a clean verdict whose acts are all non-blocking, prod
       overallVerdict: "clean",
       findings: [
         finding({ severity: "medium", summary: "medium worth fixing now" }),
-        finding({ severity: "medium", summary: "cheap polish" }),
+        finding({ severity: "low", summary: "cheap polish" }),
       ],
     }),
   );
@@ -426,8 +426,9 @@ test("judgePassCli accepts a clean verdict whose acts are all non-blocking, prod
   );
 });
 
-test("judgePassCli: an act verdict on 3 low + 1 nit findings is coerced, leaves the act list empty and composes clean (ADR 0188)", async () => {
+for (const [label, maxReviewRounds, expectedActs] of [["at the round cap", 1, 0], ["below the round cap", 4, 3]]) test(`judgePassCli: an act verdict on 3 low + 1 nit findings ${label} leaves ${expectedActs} act items (ADR 0188)`, async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-low-nit-"));
+  await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds } } }));
   await writeFile(
     path.join(tmpDir, "ledger.json"),
     JSON.stringify({
@@ -450,8 +451,8 @@ test("judgePassCli: an act verdict on 3 low + 1 nit findings is coerced, leaves 
     { repoRoot: tmpDir },
   );
   assert.equal(payload.ok, true);
-  assert.equal(payload.actCount, 0);
-  assert.deepEqual(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")), []);
+  assert.equal(payload.actCount, expectedActs);
+  assert.equal(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")).length, expectedActs);
 });
 
 test("runJudgePass never defers an unstamped [low, medium] duplicate cluster through the low-nit coercion (ADR 0188)", () => {
@@ -575,7 +576,7 @@ test("judgePassCli fails closed when the gate config cannot be loaded (#2246)", 
       { judgePlan: plan.planPath, ...options, judgeVerdict: plan.workOrder.outputRefs[0] },
       { repoRoot: tmpDir, receiptTmpRoot },
     ),
-    /could not be fully loaded\/validated/,
+    /invalid dev-loops config/, // the round-cap resolver reads the config first and fails closed (ADR 0188)
   );
 });
 

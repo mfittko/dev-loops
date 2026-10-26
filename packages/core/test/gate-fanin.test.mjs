@@ -1536,27 +1536,38 @@ describe("applyJudgeDispositions (#1525)", () => {
     assert.equal(applyJudgeDispositions(findings, verdict).findings[1].judgeDisposition, "defer");
   });
 
-  // ADR 0188: low and nit findings never block.
+  // ADR 0188: lows are fixed until the round cap; nits are rejected in every round.
   describe("low and nit act coercion (ADR 0188)", () => {
     const act = { disposition: "act", title: "t", detail: "d", fix: "f", rationale: "r" };
     const cluster = (...severities) => severities.map((s, i) => ({ severity: s, angle: `a${i}`, summary: `finding ${i}`, clusterId: 0 }));
 
-    test("an act on an all-nit cluster becomes reject with a default reason", () => {
-      const { findings } = applyJudgeDispositions(cluster("nit", "nit"), judgeVerdict([{ index: 0, ...act }]));
-      assert.deepEqual(findings.map((f) => f.judgeDisposition), ["reject", "reject"]);
-      assert.match(findings[0].judgeReason, /^low_nit_never_blocks \(GATE-EXEC-LOW-NIT-NEVER-BLOCKS\)$/);
+    test("an act on an all-nit cluster becomes reject with a default reason in every round", () => {
+      for (const pastCap of [false, true]) {
+        const { findings } = applyJudgeDispositions(cluster("nit", "nit"), judgeVerdict([{ index: 0, ...act }]), { pastCap });
+        assert.deepEqual(findings.map((f) => f.judgeDisposition), ["reject", "reject"]);
+        assert.match(findings[0].judgeReason, /^low_fix_until_cap \(GATE-EXEC-LOW-FIX-UNTIL-CAP\)$/);
+      }
     });
 
-    test("an act on a cluster holding a low becomes defer with a synthesized follow-up draft", () => {
-      const { findings } = applyJudgeDispositions(cluster("low", "nit"), judgeVerdict([{ index: 0, ...act, reason: "kept reason" }]));
+    test("below the cap an act on a cluster holding a low stays act", () => {
+      for (const options of [undefined, { pastCap: false }]) {
+        const { findings } = applyJudgeDispositions(cluster("low", "nit"), judgeVerdict([{ index: 0, ...act }]), options);
+        assert.deepEqual(findings.map((f) => f.judgeDisposition), ["act", "act"]);
+      }
+    });
+
+    test("at or past the cap an act on a cluster holding a low becomes defer with a synthesized follow-up draft", () => {
+      const { findings } = applyJudgeDispositions(cluster("low", "nit"), judgeVerdict([{ index: 0, ...act, reason: "kept reason" }]), { pastCap: true });
       assert.equal(findings[0].judgeDisposition, "defer");
       assert.equal(findings[0].judgeReason, "kept reason");
       assert.deepEqual(findings[1].followUpDraft, { title: "t", body: "d" });
     });
 
-    test("failOpen promotes the low members to medium and keeps act", () => {
-      const { findings } = applyJudgeDispositions(cluster("low", "nit"), judgeVerdict([{ index: 0, ...act, failOpen: true }]));
-      assert.deepEqual(findings.map((f) => [f.severity, f.judgeDisposition]), [["medium", "act"], ["medium", "act"]]);
+    test("failOpen promotes the low members to medium and keeps act in every round", () => {
+      for (const pastCap of [false, true]) {
+        const { findings } = applyJudgeDispositions(cluster("low", "nit"), judgeVerdict([{ index: 0, ...act, failOpen: true }]), { pastCap });
+        assert.deepEqual(findings.map((f) => [f.severity, f.judgeDisposition]), [["medium", "act"], ["medium", "act"]]);
+      }
     });
 
     test("a cluster with a medium member stays act", () => {
@@ -1568,11 +1579,19 @@ describe("applyJudgeDispositions (#1525)", () => {
       assert.throws(() => applyJudgeDispositions(cluster("low"), judgeVerdict([{ index: 0, ...act, failOpen: "yes" }])), /failOpen must be a boolean/);
     });
 
-    test("a ledger of 3 low and 1 nit judged act composes clean with no open act items", () => {
+    test("at the cap a ledger of 3 low and 1 nit judged act composes clean with no open act items", () => {
       const findings = ["low", "low", "low", "nit"].map((s, i) => ({ severity: s, angle: `a${i}`, summary: `finding ${i}`, clusterId: i }));
-      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict(findings.map((_f, i) => ({ index: i, ...act }))));
+      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict(findings.map((_f, i) => ({ index: i, ...act }))), { pastCap: true });
       assert.equal(listOpenActItems(out).length, 0);
       assert.equal(composeReviewVerdict("findings_present", out), "clean");
+    });
+
+    test("below the cap the same ledger keeps the 3 lows as act items and rejects the nit", () => {
+      const findings = ["low", "low", "low", "nit"].map((s, i) => ({ severity: s, angle: `a${i}`, summary: `finding ${i}`, clusterId: i }));
+      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict(findings.map((_f, i) => ({ index: i, ...act }))), { pastCap: false });
+      assert.equal(listOpenActItems(out).length, 3);
+      assert.equal(out[3].judgeDisposition, "reject");
+      assert.equal(composeReviewVerdict("findings_present", out), "findings_present");
     });
   });
 
@@ -1775,7 +1794,7 @@ describe("applyJudgeDispositions (#1525)", () => {
       : { ...f }));
     const verdict = judgeVerdict([
       { index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in-scope", criterion: "AC-1" },
-      { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "now in-scope, no longer deferred", criterion: "AC-2", failOpen: true },
+      { index: 1, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "now in-scope, no longer deferred", criterion: "AC-2" },
     ]);
     const { findings } = applyJudgeDispositions(alreadyEnriched, verdict);
     assert.equal(findings[1].judgeDisposition, "act");
@@ -1942,7 +1961,7 @@ describe("composeReviewVerdict / listOpenActItems", () => {
 describe("fan-in never disposes; the judge disposes each cluster and authors its prose", () => {
   const scopeDrift = { verdict: "within_scope", rationale: "diff matches the AC", driftedAreas: [] };
   const prose = { title: "t", detail: "d", fix: "f" };
-  const member = (angle, clusterId) => ({ severity: "medium", angle, summary: `finding ${angle}`, clusterId });
+  const member = (angle, clusterId) => ({ severity: "low", angle, summary: `finding ${angle}`, clusterId });
 
   test("every fan-in finding is unjudged and keeps its severity, and no severity-to-disposition rule exists", () => {
     const { findings } = consolidateFanin({

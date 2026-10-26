@@ -6,7 +6,7 @@ import { test } from "bun:test";
 const read = (p) => readFileSync(new URL(`../../${p}`, import.meta.url), "utf8");
 const OWNERS = {
   "GATE-EXEC-JUDGE-PRIME-AUTHORITY": "skills/docs/gate-review-sub-loop-contract.md",
-  "GATE-EXEC-LOW-NIT-NEVER-BLOCKS": "skills/docs/gate-review-sub-loop-contract.md",
+  "GATE-EXEC-LOW-FIX-UNTIL-CAP": "skills/docs/gate-review-sub-loop-contract.md",
   "GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE": "skills/docs/gate-review-sub-loop-contract.md",
   "GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH": "skills/docs/gate-review-sub-loop-contract.md",
   "ADR-OVER-WAIVER": "skills/docs/decision-record-contract.md",
@@ -33,9 +33,9 @@ test("remaining operator lines state why the judge cannot decide them", () => {
 });
 
 test("the low/nit refusal and coercion code is pinned to the rule text", async () => {
-  const text = ruleText("GATE-EXEC-LOW-NIT-NEVER-BLOCKS");
-  assert.match(text, /`low_nit_never_blocks`/);
-  const code = "low_nit_never_blocks";
-  assert.match(read("scripts/loop/emit-fixer-work-order.mjs"), new RegExp(`"${code}", \`${code} \\(GATE-EXEC-LOW-NIT-NEVER-BLOCKS\\)`));
-  assert.match(read("packages/core/src/loop/gate-fanin.mjs"), new RegExp(`${code} \\(GATE-EXEC-LOW-NIT-NEVER-BLOCKS\\)`));
+  const text = ruleText("GATE-EXEC-LOW-FIX-UNTIL-CAP");
+  assert.match(text, /`low_fix_until_cap`/);
+  const code = "low_fix_until_cap";
+  assert.match(read("scripts/loop/emit-fixer-work-order.mjs"), new RegExp(`"${code}", \`${code} \\(GATE-EXEC-LOW-FIX-UNTIL-CAP\\)`));
+  assert.match(read("packages/core/src/loop/gate-fanin.mjs"), new RegExp(`${code} \\(GATE-EXEC-LOW-FIX-UNTIL-CAP\\)`));
 });
