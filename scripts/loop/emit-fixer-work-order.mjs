@@ -24,7 +24,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
-import { fingerprintFinding } from "../github/_gate-finding-surface.mjs";
+import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
 import { renderRequiredReadLine, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
@@ -307,9 +307,7 @@ export async function emitFixerWorkOrder({
       const repoRoot = resolveRepoRoot(cwd);
       const ledgerFile = path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }));
       if (!existsSync(ledgerFile)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} does not exist; failing closed at the cap round`);
-      let ledgerFindings;
-      try { ledgerFindings = JSON.parse(readFileSync(ledgerFile, "utf8")).findings; } catch { ledgerFindings = null; }
-      if (!Array.isArray(ledgerFindings)) throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the draft_gate findings log ${ledgerFile} is unreadable; failing closed at the cap round`);
+      const { findings: ledgerFindings } = await readGateFindingsLedger(ledgerFile, { errorFactory: (m) => new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): ${m}; failing closed at the cap round`) });
       const blockers = pastCapBlockers([...ledgerFindings, ...source.parsed], { pr: Number(pr), round, cap }); // Number(pr): the CLI pr is a string; a non-integer yields NaN and fails closed in pastCapBlockers.
       if (blockers.length > 0) {
         throw new WorkOrderRefusal("round_cap_reached", `round_cap_reached (GATE-EXEC-ROUND-CAP): the cap round (cap ${cap}) composes blocked (${blockers.map((b) => b.item).join("; ")}); the verdict is blocked and no fixer order follows it`);

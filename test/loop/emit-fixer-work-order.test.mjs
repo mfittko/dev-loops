@@ -892,6 +892,9 @@ test("GATE-EXEC-ROUND-CAP: the cap round is refused when the current-head round 
     // An unreadable current-head log fails closed.
     await writeFile(path.join(dir, `draft_gate-${head}.json`), "{not json");
     await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached");
+    // A malformed finding in the current-head log is refused by the shared ledger reader.
+    await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "findings_present", findings: [{ summary: "no severity" }] }));
+    await assert.rejects(emit({ phase: "commit_only", deltaResult: undefined }), (e) => e.refusal === "round_cap_reached" && /malformed/.test(e.message));
   });
 });
 

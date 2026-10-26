@@ -59,7 +59,7 @@ import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
-import { buildValidationResultsPath, countCompletedRounds, readClosedPriorRoundLogs } from "./write-gate-context.mjs";
+import { buildValidationResultsPath, closureFromHeadOf, countCompletedRounds, readClosedPriorRoundLogs } from "./write-gate-context.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -3049,7 +3049,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ? await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot })
       : 0;
     if (completedRound > 0 && completedRound === cap + 1) {
-      closureFromHead = (await readClosedPriorRoundLogs({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot })).at(-1)?.headSha?.trim().toLowerCase() ?? null;
+      closureFromHead = closureFromHeadOf(await readClosedPriorRoundLogs({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot }));
     }
     const gateBlockers = [
       ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),

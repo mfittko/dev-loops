@@ -422,3 +422,11 @@ test("the closure round (count cap+1) posts the closure round line with the last
     assert.doesNotMatch((await post(["--findings-ledger", ledger])).body, /closure round: diff from/, "the cap round has no closure line");
   }, { prefix: "dev-loops-round-cap-closure-line-" });
 });
+
+test("closureFromHeadOf, shared by the poster and resolveClosureRound, refuses a blank or non-string last head with one message", async () => {
+  const { closureFromHeadOf } = await import("../../scripts/github/write-gate-context.mjs");
+  const message = /closure round reached but the latest closed prior round's head cannot be recovered/;
+  for (const headSha of ["", "  ", 7, undefined]) assert.throws(() => closureFromHeadOf([{ headSha }]), message);
+  assert.throws(() => closureFromHeadOf([]), message);
+  assert.equal(closureFromHeadOf([{ headSha: ` ${"A".repeat(40)} ` }]), "a".repeat(40));
+});

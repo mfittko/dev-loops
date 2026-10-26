@@ -1946,6 +1946,13 @@ export async function listPriorActItems(options, { repoRoot }) {
   return [...items.values()];
 }
 
+/** The one closure-round fromHead derivation: the head of the latest closed ledger; throws when it is not a non-blank string. */
+export function closureFromHeadOf(closed) {
+  const last = closed.at(-1)?.headSha;
+  if (typeof last !== "string" || last.trim().length === 0) throw new Error("closure round reached but the latest closed prior round's head cannot be recovered (its ledgers are unreadable); refusing to build the context");
+  return last.trim().toLowerCase();
+}
+
 /**
  * The one past-cap closure round (GATE-EXEC-ROUND-CAP): a draft_gate round whose completed-round count is cap+1.
  * Returns null for any other round; otherwise the head of the latest closed prior round (the fix delta starts there) and the prior act items to verify.
@@ -1954,10 +1961,7 @@ export async function resolveClosureRound(options, { repoRoot, cap }) {
   if (options.gate !== "draft_gate" || !(cap > 0)) return null;
   if (await countCompletedRounds(options, { repoRoot }) !== cap + 1) return null;
   const closed = await readClosedPriorRoundLogs(options, { repoRoot });
-  const last = closed.at(-1)?.headSha;
-  if (typeof last !== "string" || last.trim().length === 0) throw new Error("closure round reached but the latest closed prior round's head cannot be recovered (its ledgers are unreadable); refusing to build the context");
-  const fromHead = last.trim().toLowerCase();
-  return { fromHead, priorActItems: await listPriorActItems(options, { repoRoot }) };
+  return { fromHead: closureFromHeadOf(closed), priorActItems: await listPriorActItems(options, { repoRoot }) };
 }
 
 /**
