@@ -834,10 +834,10 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   assert.equal(commandContainsInlineInterpreter("python3 - <<'EOF'\n...\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter("node - <<'EOF'\n...\nEOF"), true);
   // stdin script / heredoc AFTER interpreter flags (#2943)
-  for (const c of ["python3 -I - <<EOF", "python3 -u - <<'EOF'", "node --input-type=module - <<EOF", "node - <<EOF", "node --input-type=module <<EOF", "python3 -I -<<EOF", "python3 -W ignore - <<EOF", "python3 -X dev - <<EOF", "node --input-type module - <<EOF", "node --require x.js - <<EOF", "cat s.py | python3 -I -", "cat x.mjs | node --input-type=module -", "node --title x - <<EOF", "node --disable-warning DEP0040 - <<EOF", "node --watch-path src - <<EOF", "node --redirect-warnings w.log - <<EOF", "python3 --check-hash-based-pycs never - <<EOF"]) {
+  for (const c of ["python3 -I - <<EOF", "python3 -u - <<'EOF'", "node --input-type=module - <<EOF", "node - <<EOF", "node --input-type=module <<EOF", "python3 -I -<<EOF", "python3 -I<<EOF", "node --input-type=module<<EOF", "node --env-file-if-exists .env - <<EOF", "python3 -W ignore - <<EOF", "python3 -X dev - <<EOF", "node --input-type module - <<EOF", "node --require x.js - <<EOF", "cat s.py | python3 -I -", "cat x.mjs | node --input-type=module -", "node --title x - <<EOF", "node --disable-warning DEP0040 - <<EOF", "node --watch-path src - <<EOF", "node --redirect-warnings w.log - <<EOF", "python3 --check-hash-based-pycs never - <<EOF"]) {
     assert.equal(commandContainsInlineInterpreter(c), true, c);
   }
-  for (const c of ["python3 -I script.py", "node scripts/x.mjs", "python3 script.py <<EOF", "grep node <<EOF", "node scripts/x.mjs --flag -", "node --require x.js script.mjs", "python3 -m json.tool <<EOF", "python3 -I script.py", "node --title x scripts/x.mjs", "node --disable-warning DEP0040 scripts/x.mjs", "python3 --check-hash-based-pycs never script.py"]) {
+  for (const c of ["python3 -I script.py", "node scripts/x.mjs", "python3 script.py <<EOF", "grep node <<EOF", "node scripts/x.mjs --flag -", "node --require x.js script.mjs", "python3 -m json.tool <<EOF", "python3 script.py<<EOF", "node --env-file-if-exists .env scripts/x.mjs", "node --title x scripts/x.mjs", "node --disable-warning DEP0040 scripts/x.mjs", "python3 --check-hash-based-pycs never script.py"]) {
     assert.equal(commandContainsInlineInterpreter(c), false, c);
   }
   // sanctioned script invocations and plain reads are NOT inline interpreters
