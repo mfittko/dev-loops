@@ -58,6 +58,7 @@ import { readFileSync } from "node:fs";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
+import { commandContainsInlineInterpreter } from "@dev-loops/core/loop/bash-command-classify";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]
@@ -148,17 +149,7 @@ function classifySegment(rawSegment) {
   // `node scripts/....mjs` (or any script path) is allowed tooling; only inline
   // eval forms are violations. Check node first so script invocations pass.
   if (/^node\b/.test(segment)) {
-    // Inline eval (`-e`/`--eval`) is a violation only before the script path:
-    // once a non-flag token (the script) appears, a later `--eval` is just a
-    // script argument, not Node's inline-eval mode (avoids false positives).
-    const tokens = segment.split(/\s+/).slice(1);
-    for (const tok of tokens) {
-      if (tok === "-e" || tok === "--eval" || /^--eval=/.test(tok)) {
-        return { kind: "violation", tool: "node -e" };
-      }
-      if (!tok.startsWith("-")) break; // script path reached
-    }
-    return { kind: "clean" };
+    return commandContainsInlineInterpreter(segment) ? { kind: "violation", tool: "node -e" } : { kind: "clean" };
   }
   if (/^gh\b/.test(segment)) {
     if (ALLOWED_WRITE_OPS.some((re) => re.test(segment))) {

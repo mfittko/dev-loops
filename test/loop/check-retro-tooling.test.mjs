@@ -9,6 +9,17 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { analyzeTranscript, run } from "../../scripts/loop/check-retro-tooling.mjs";
+import { commandContainsInlineInterpreter } from "@dev-loops/core/loop/bash-command-classify";
+import { readFileSync } from "node:fs";
+
+test("retro node verdict matches the shared classifier (#2943)", () => {
+  for (const [cmd, bad] of [["node --input-type=module - <<EOF", true], ["node scripts/x.mjs", false]]) {
+    assert.equal(analyzeTranscript(cmd).violations.length > 0, bad, cmd);
+    assert.equal(commandContainsInlineInterpreter(cmd), bad, cmd);
+  }
+  const src = readFileSync(fileURLToPath(new URL("../../scripts/loop/check-retro-tooling.mjs", import.meta.url)), "utf8");
+  assert.match(src, /from "@dev-loops\/core\/loop\/bash-command-classify"/);
+});
 
 test("clean transcript: dev-loops tooling + node scripts only — no violations", () => {
   const transcript = [

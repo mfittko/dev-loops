@@ -1151,6 +1151,9 @@ function interpreterRegex(bin) {
   return new RegExp(`^${SHELL_EXEC_PREFIX}${bin}(?:\\s|$)`, "i");
 }
 
+// Bare `-` stdin script, or a heredoc/herestring token (`<<EOF`, `-<<EOF`).
+const isStdinScriptToken = (t) => t === "-" || t.startsWith("<<") || t.startsWith("-<<");
+
 /**
  * OPS-NO-INLINE-INTERPRETER: an inline interpreter — `node -e`/`--eval`/`-p`, `python3 -c`, or a
  * heredoc fed to node/python (`node - <<EOF`, `python3 - <<EOF`). Sanctioned output parsing uses
@@ -1163,9 +1166,6 @@ export function commandContainsInlineInterpreter(command) {
     const s = segment.trim();
     if (interpreterRegex("node").test(s)) {
       const code = s.replace(interpreterRegex("node"), "").trim();
-      // Heredoc fed straight to node where node is the command head (`node - <<EOF`, `node <<EOF`),
-      // so `grep node <<EOF` (interpreter is grep) does not false-positive as an inline interpreter.
-      if (/^(?:-\s*)?<</i.test(code)) return true;
       const tokens = code.split(/\s+/).filter(Boolean);
       // Node value-taking flags (short + long) each consume the following token. Consuming them lets
       // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
@@ -1173,6 +1173,7 @@ export function commandContainsInlineInterpreter(command) {
       const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd"]);
       for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
+        if (isStdinScriptToken(t)) return true;
         // `-e`/`-p` may be directly attached to the code (`node -e"console.log(1)"`), which a
         // prefix match catches; break at the first non-flag token so a later `-e` on a script path
         // is a script argument.
@@ -1183,10 +1184,9 @@ export function commandContainsInlineInterpreter(command) {
     }
     if (interpreterRegex("python3?").test(s)) {
       const code = s.replace(interpreterRegex("python3?"), "").trim();
-      // Heredoc fed straight to python where python is the command head (`python3 - <<EOF`).
-      if (/^(?:-\s*)?<</i.test(code)) return true;
       const tokens = code.split(/\s+/).filter(Boolean);
       for (const t of tokens) {
+        if (isStdinScriptToken(t)) return true;
         if (t === "-c" || t.startsWith("-c")) return true;
         if (!t.startsWith("-")) break; // script path reached — a later `-c` is a script argument
       }

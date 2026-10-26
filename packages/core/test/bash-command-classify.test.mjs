@@ -833,6 +833,13 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   assert.equal(commandContainsInlineInterpreter('python -c "print(1)"'), true);
   assert.equal(commandContainsInlineInterpreter("python3 - <<'EOF'\n...\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter("node - <<'EOF'\n...\nEOF"), true);
+  // stdin script / heredoc AFTER interpreter flags (#2943)
+  for (const c of ["python3 -I - <<EOF", "python3 -u - <<'EOF'", "node --input-type=module - <<EOF", "node - <<EOF", "node --input-type=module <<EOF", "python3 -I -<<EOF"]) {
+    assert.equal(commandContainsInlineInterpreter(c), true, c);
+  }
+  for (const c of ["python3 -I script.py", "node scripts/x.mjs", "python3 script.py <<EOF"]) {
+    assert.equal(commandContainsInlineInterpreter(c), false, c);
+  }
   // sanctioned script invocations and plain reads are NOT inline interpreters
   assert.equal(commandContainsInlineInterpreter("node scripts/github/comment-issue.mjs 5"), false);
   assert.equal(commandContainsInlineInterpreter("node -v"), false);
