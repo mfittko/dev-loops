@@ -2058,6 +2058,20 @@ test("judgePassCli at pre_approval_gate rewrites the durable log entry to reject
   assert.equal(durableLog.findings[0].followUpIssueNumber, undefined);
 });
 
+test("judgePassCli at pre_approval_gate rejects every member of a mixed low+nit cluster when the only target is the PR itself", async () => {
+  const low = finding({ severity: "low", summary: "low member", clusterId: 0 });
+  const nit = finding({ severity: "nit", summary: "nit member", clusterId: 0 });
+  const { enriched, durableLog } = await runDeferRound({
+    findings: [low, nit],
+    dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting to fix" }],
+    deps: stubDeferralDeps().deps, pr: "2724", gate: "pre_approval_gate",
+    durable: [{ ...low, judgeDisposition: "defer", followUpDraft: { title: "t", body: "d" } }, { ...nit, judgeDisposition: "defer", followUpDraft: { title: "t", body: "d" } }],
+  });
+  assert.deepEqual(enriched.findings.map((f) => f.judgeDisposition), ["reject", "reject"]);
+  assert.deepEqual(durableLog.findings.map((f) => f.judgeDisposition), ["reject", "reject"]);
+  assert.deepEqual(durableLog.findings.map((f) => f.followUpIssueNumber), [undefined, undefined]);
+});
+
 test("pre_approval_gate: failOpen low stays a medium act, mixed medium and low keeps the medium act, a question stays open", () => {
   const failOpen = runJudgePass([PR2945_ROUND5_LOW], pre2945Verdict({ failOpen: true }), HEAD, { pastCap: true });
   assert.deepEqual(failOpen.act.map((f) => f.severity), ["medium"]);

@@ -567,12 +567,15 @@ async function applyDeferralComment(enriched, { repo, pr, gate, trackerProvider 
     summary: f.summary,
   }));
   const { issueNumber } = await commentDeferredFindings({ repo, pr, entries, trackerProvider }, deps);
-  for (const f of deferred) {
-    // #2724 slice 0: a pre_approval_gate low_fix_until_cap defer needs a target other than the PR itself; with none it is a reject.
-    if (gate === "pre_approval_gate" && issueNumber === pr && f.judgeReason?.startsWith("low_fix_until_cap ")) {
+  for (const f of deferred) f.followUpIssueNumber = issueNumber;
+  // #2724 slice 0: a pre_approval_gate low_fix_until_cap defer needs a target other than the PR itself; with none the whole cluster (nit members included) is a reject.
+  if (gate === "pre_approval_gate" && issueNumber === pr) {
+    for (const f of enriched) {
+      if (f.judgeDisposition !== "defer" || !f.judgeReason?.startsWith("low_fix_until_cap ")) continue;
       f.judgeDisposition = "reject";
       delete f.followUpDraft;
-    } else f.followUpIssueNumber = issueNumber;
+      delete f.followUpIssueNumber;
+    }
   }
 }
 
