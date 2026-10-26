@@ -8239,6 +8239,43 @@ test("buildGateContext passes seamFirstRoundFor to the resolver: a pre_approval 
   }
 });
 
+// Wiring pin: deleting `seamFirstRound: await seamFirstRoundFor(options, repoRoot)`
+// in main() restores the resolver default (false for preApproval) and must fail this test.
+test("main() passes seamFirstRoundFor to the resolver: a pre_approval seam round adds threat-model only when no draft artifact at the head lists it", async () => {
+  const { repoRoot, baseSha } = await makeBaseDiffRepo();
+  try {
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      ["version: 1", "gates:", "  preApproval:", "    angles:", "      - scope", "      - name: threat-model", "        enabled: false"].join("\n") + "\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "src/changed.mjs"),
+      'import { helper } from "./dep.mjs";\nexport function changed() { spawn(cmd); return helper() + 1; }\n',
+      "utf8",
+    );
+    git(repoRoot, ["add", "src/changed.mjs"]);
+    git(repoRoot, ["commit", "-q", "-m", "seam"]);
+    const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    const id = { repo: "owner/repo", pr: 92, headSha };
+    const run = async () => {
+      await main(["--repo", id.repo, "--pr", String(id.pr), "--gate", "pre_approval_gate", "--head-sha", headSha, "--base", baseSha], {
+        repoRoot,
+        run: stubGhRun,
+        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true } }),
+      });
+      return (await readGateContext({ ...id, gate: "pre_approval_gate" }, { repoRoot })).resolvedAngles;
+    };
+    assert.ok((await run()).includes("threat-model"), "no draft artifact at the head");
+    const draftPath = path.join(repoRoot, buildGateContextPath({ ...id, gate: "draft_gate" }));
+    await mkdir(path.dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, JSON.stringify({ resolvedAngles: ["scope", "threat-model"] }));
+    assert.ok(!(await run()).includes("threat-model"), "draft artifact lists threat-model");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("countCompletedRounds counts an in-range identity-matching ledger with a missing or unknown verdict, never a foreign one", async () => {
   const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-round-count-"));
   try {
