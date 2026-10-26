@@ -13,10 +13,10 @@ ADR 0137 refuses any difference between the checkout `.devloops` validation bloc
 ## Decision
 
 - Rule `ADR0192-PATHS-ONLY-ADMIT`. The gate compares the checkout validation block to the base (`origin/HEAD`) block with `paths` left out. Equal blocks admit the difference, and the run resolves as if there were no difference.
-- Execution source. Execution reads only the base block (`mode`, `commands`, `paths`). The candidate block never supplies a gate mode, command or suite.
+- Execution source. Execution reads only the base block (`mode`, `fullCommand`, `paths`). The candidate block never supplies a gate mode, command or suite.
 - Still refused. A `mode` or `fullCommand` difference, alone or mixed with `paths`, stays typed `incomplete` with `suites: []`. A later slice may add an authenticated operator review receipt. This change adds no receipt mechanism, CLI override, waiver or gate exemption.
 - Single owner. `validationDifferenceRefusal` in `scripts/loop/resolve-validation.mjs` owns the comparison. `resolveValidation` and the `local` producer in `scripts/loop/validation-record.mjs` both call it.
-- Self-gate. The self-gate of ADR 0137 triggers only when the PR itself edits `.devloops`. This change does not edit `.devloops`.
+- Config-source refusal. The ADR 0137 config-source refusal applies to a PR that edits its own validation block. This change edits no `.devloops` file.
 
 ## Consequences
 
