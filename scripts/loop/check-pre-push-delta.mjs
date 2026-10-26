@@ -265,8 +265,7 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
   const sameHead = HEAD_SHA_RE.test(logHead) && (logHead.startsWith(baseline) || baseline.startsWith(logHead));
   const earlierHead = !sameHead && HEAD_SHA_RE.test(logHead)
     && await Promise.resolve().then(async () => {
-      let config = null;
-      try { ({ config } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(worktree) })); } catch { config = null; }
+      const { config } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(worktree) });
       return baseOnlyMerge({ fromHead: logHead, head: baseline, mainRef: `origin/${resolveBaseBranch(config, { cwd: worktree })}`, repoRoot: worktree });
     }).catch(() => false);
   if (!sameHead && !earlierHead) {
