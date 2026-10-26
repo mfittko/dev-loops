@@ -30,6 +30,9 @@ test("COORDINATOR-HANDBACK-ONE-REPORT defines pauses as plain text", async () =>
 test("COORDINATOR-HANDBACK-ONE-REPORT carries one final report and the refusal path", async () => {
   const text = await rule(ONE);
   assert.match(text, /one `SubagentHandback` call of a run carries its final report.*handBackAfter.*`final_approval_ready`.*caller decision/s);
+  assert.match(text, /`final_approval_ready`.*caller decision.*route's own terminal completion.*headless standalone `review`/s);
+  assert.match(await readRepo("docs/decisions/0187-claude-code-coordinator-report-path.md"), /route's own terminal completion.*headless standalone `review`/s);
+  assert.match(await readRepo(GATE), /`units_stalled` or `round_retired` makes a terminal hand-back, not a pause.*keeps the child list/s);
   assert.match(text, /no child in flight is never a pause.*never ends silently while its next step is runnable/s);
   assert.match(text, /refused `SubagentHandback`.*no further call.*full report as plain text/s);
   assert.match(text, /names the last relayed message it consumed, by first line and arrival time, or states that it consumed none/);
