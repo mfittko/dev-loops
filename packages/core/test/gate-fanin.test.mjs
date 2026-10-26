@@ -1536,17 +1536,30 @@ describe("applyJudgeDispositions (#1525)", () => {
     assert.equal(applyJudgeDispositions(findings, verdict).findings[1].judgeDisposition, "defer");
   });
 
-  // ADR 0188: lows are fixed until the round cap; nits are rejected in every round.
+  // ADR 0188: lows are fixed until the round cap; a nit is fixed in draft round 1 and rejected from round 2 on.
   describe("low and nit act coercion (ADR 0188)", () => {
     const act = { disposition: "act", title: "t", detail: "d", fix: "f", rationale: "r" };
     const cluster = (...severities) => severities.map((s, i) => ({ severity: s, angle: `a${i}`, summary: `finding ${i}`, clusterId: 0 }));
 
-    test("an act on an all-nit cluster becomes reject with a default reason in every round", () => {
-      for (const pastCap of [false, true]) {
-        const { findings } = applyJudgeDispositions(cluster("nit", "nit"), judgeVerdict([{ index: 0, ...act }]), { pastCap });
-        assert.deepEqual(findings.map((f) => f.judgeDisposition), ["reject", "reject"]);
+    test("an act on an all-nit cluster becomes reject with a default reason outside draft round 1", () => {
+      // round 2 below the cap, round 1 at the cap (cap of 1), the past-cap rounds, and no round count (pre_approval_gate, round 0).
+      for (const options of [{ pastCap: false, round: 2 }, { pastCap: true, round: 1 }, { pastCap: true, round: 3 }, { pastCap: false, round: 0 }, undefined]) {
+        const { findings } = applyJudgeDispositions(cluster("nit", "nit"), judgeVerdict([{ index: 0, ...act }]), options);
+        assert.deepEqual(findings.map((f) => f.judgeDisposition), ["reject", "reject"], JSON.stringify(options));
         assert.match(findings[0].judgeReason, /^low_fix_until_cap \(GATE-EXEC-LOW-FIX-UNTIL-CAP\)$/);
       }
+    });
+
+    test("in draft round 1 below the cap an act on an all-nit cluster stays act", () => {
+      const { findings } = applyJudgeDispositions(cluster("nit", "nit"), judgeVerdict([{ index: 0, ...act }]), { pastCap: false, round: 1 });
+      assert.deepEqual(findings.map((f) => f.judgeDisposition), ["act", "act"]);
+      assert.equal(findings[0].judgeReason, undefined);
+    });
+
+    test("a cluster holding a low and a nit is one disposition: act in round 2 below the cap, defer at the cap", () => {
+      const verdict = judgeVerdict([{ index: 0, ...act }]);
+      assert.deepEqual(applyJudgeDispositions(cluster("low", "nit"), verdict, { pastCap: false, round: 2 }).findings.map((f) => f.judgeDisposition), ["act", "act"]);
+      assert.deepEqual(applyJudgeDispositions(cluster("low", "nit"), verdict, { pastCap: true, round: 3 }).findings.map((f) => f.judgeDisposition), ["defer", "defer"]);
     });
 
     test("below the cap an act on a cluster holding a low stays act", () => {
@@ -1588,7 +1601,7 @@ describe("applyJudgeDispositions (#1525)", () => {
 
     test("below the cap the same ledger keeps the 3 lows as act items and rejects the nit", () => {
       const findings = ["low", "low", "low", "nit"].map((s, i) => ({ severity: s, angle: `a${i}`, summary: `finding ${i}`, clusterId: i }));
-      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict(findings.map((_f, i) => ({ index: i, ...act }))), { pastCap: false });
+      const { findings: out } = applyJudgeDispositions(findings, judgeVerdict(findings.map((_f, i) => ({ index: i, ...act }))), { pastCap: false, round: 2 });
       assert.equal(listOpenActItems(out).length, 3);
       assert.equal(out[3].judgeDisposition, "reject");
       assert.equal(composeReviewVerdict("findings_present", out), "findings_present");

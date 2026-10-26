@@ -3074,9 +3074,9 @@ test("writeGateFindingsLog refuses a clusterId outside the array or naming an en
   }
 });
 
-// ADR 0188: the ledger writer coerces a low act only at or past the draft round cap; a nit act is rejected in every round.
-for (const [cap, lowDisposition] of [[4, "act"], [1, "defer"]]) {
-  test(`writeGateFindingsLog with maxReviewRounds ${cap} records a judged low act as ${lowDisposition} and a nit act as reject (ADR 0188)`, async () => {
+// ADR 0188: the ledger writer coerces a low act only at or past the draft round cap; a nit act stays act only in draft round 1 below the cap.
+for (const [cap, lowDisposition, nitDisposition] of [[4, "act", "act"], [1, "defer", "reject"]]) {
+  test(`writeGateFindingsLog with maxReviewRounds ${cap} records a judged low act as ${lowDisposition} and a nit act as ${nitDisposition} (ADR 0188)`, async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-low-cap-"));
     try {
       const headSha = "e5".repeat(20);
@@ -3096,7 +3096,7 @@ for (const [cap, lowDisposition] of [[4, "act"], [1, "defer"]]) {
         judgeVerdict: judgeVerdictPath, tmpRoot: tmpDir,
       }, { repoRoot: tmpDir });
       const parsed = JSON.parse(await readFile(path.join(tmpDir, "gate-findings", "owner-repo", "pr-2243", `draft_gate-${headSha}.json`), "utf8"));
-      assert.deepEqual(parsed.findings.map((f) => f.judgeDisposition), [lowDisposition, "reject"]);
+      assert.deepEqual(parsed.findings.map((f) => f.judgeDisposition), [lowDisposition, nitDisposition]);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

@@ -853,6 +853,13 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
     // pre_approval_gate has no cap, so a low-only act list is never past it.
     assert.equal((await emit({ gate: "pre_approval_gate", phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
     await rm(path.join(wt, ".devloops.json"));
+    // A nit-only list is fixable in draft round 1 below the cap; refused at the cap and on a gate with no round count.
+    await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "nit" })]));
+    assert.equal((await emit({ phase: "commit_only", deltaResult: undefined })).workOrder.source, "act-list");
+    await assert.rejects(emit({ gate: "pre_approval_gate" }), (e) => e.refusal === "low_fix_until_cap" && /outside draft_gate round 1/.test(e.message));
+    await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 1 } } }));
+    await assert.rejects(emit(), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
+    await rm(path.join(wt, ".devloops.json"));
     await writeFile(files.actList, JSON.stringify(ACT));
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ autonomy: { humanMergeOnly: "nope" } }));
     await assert.rejects(emit(), /dev-loops config is invalid/);

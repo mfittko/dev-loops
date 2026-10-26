@@ -1245,10 +1245,10 @@ export function assertNoProjectedForbiddenDefer(enriched, clusters) {
  *
  * @param {Array<object>} findings — the flat consolidated findings array
  * @param {object} judgeVerdict — the validated judge verdict artifact
- * @param {{ pastCap?: boolean }} [options] — `pastCap`: the draft_gate round is at or past `gates.draft.maxReviewRounds` (default false)
+ * @param {{ pastCap?: boolean, round?: number }} [options] — `pastCap`: the draft_gate round is at or past `gates.draft.maxReviewRounds` (default false); `round`: the draft_gate round number from the same resolver (0 without a round count, e.g. pre_approval_gate)
  * @returns {{ findings: Array<object>, scopeDrift: object }}
  */
-export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false } = {}) {
+export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false, round = 0 } = {}) {
   const validated = validateJudgeVerdict(judgeVerdict);
   const list = Array.isArray(findings) ? findings : [];
   const enriched = list.map((f) => ({ ...f }));
@@ -1270,7 +1270,8 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
       }
     }
     // ADR 0188: an `act` on an all-low/nit cluster is coerced. failOpen promotes to medium and keeps act in every
-    // round; else all-nit rejects in every round; a cluster with a low stays act below the round cap and defers at or past it.
+    // round; else an all-nit cluster stays act only in draft round 1 below the cap (the fixer fixes it) and rejects after;
+    // a cluster with a low (its nit members ride along, one disposition per cluster) stays act below the round cap and defers at or past it.
     let disposition = d.disposition;
     let reason = d.reason;
     let followUpDraft = d.followUpDraft;
@@ -1278,11 +1279,12 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
     const lowOrNit = (f) => ["low", "nit"].includes(normalizeSeverity(f.severity));
     const clusterMembers = enriched.filter((_f, i) => clusterOf(i) === d.index);
     // Unstamped (legacy) ledgers cluster later, so a low could share a cluster with a medium: coerce only when the whole ledger is low/nit.
+    const allNit = clusterMembers.every((f) => normalizeSeverity(f.severity) === "nit");
     if (disposition === "act" && clusterMembers.every(lowOrNit) && (stamped || enriched.every(lowOrNit))) {
       if (d.failOpen === true) {
         promote = true;
-      } else if (clusterMembers.every((f) => normalizeSeverity(f.severity) === "nit") || pastCap) {
-        disposition = clusterMembers.every((f) => normalizeSeverity(f.severity) === "nit") ? "reject" : "defer";
+      } else if (allNit ? !(round === 1 && !pastCap) : pastCap) {
+        disposition = allNit ? "reject" : "defer";
         if (typeof reason !== "string" || reason.trim().length === 0) reason = "low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP)";
         if (disposition === "defer" && !followUpDraft) followUpDraft = { title: d.title.trim(), body: d.detail.trim() };
       }

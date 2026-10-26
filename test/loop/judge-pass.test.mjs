@@ -426,7 +426,7 @@ test("judgePassCli accepts a clean verdict whose acts are all non-blocking, prod
   );
 });
 
-for (const [label, maxReviewRounds, expectedActs] of [["at the round cap", 1, 0], ["below the round cap", 4, 3]]) test(`judgePassCli: an act verdict on 3 low + 1 nit findings ${label} leaves ${expectedActs} act items (ADR 0188)`, async () => {
+for (const [label, maxReviewRounds, expectedActs] of [["at the round cap", 1, 0], ["in draft round 1 below the round cap", 4, 4]]) test(`judgePassCli: an act verdict on 3 low + 1 nit findings ${label} leaves ${expectedActs} act items (ADR 0188)`, async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-low-nit-"));
   await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds } } }));
   await writeFile(

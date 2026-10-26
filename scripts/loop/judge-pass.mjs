@@ -446,11 +446,11 @@ export function validateCliArgs(options) {
  * @param {Array<object>} findings — the flat consolidated findings array (already unwrapped)
  * @param {object} judgeVerdict — the judge agent's verdict artifact (JSON object)
  * @param {string} headSha — the round's current head (the verdict must be current-head)
- * @param {{ pastCap?: boolean }} [options] — draft_gate round-cap state, from `resolveDraftRoundCap`
+ * @param {{ pastCap?: boolean, round?: number }} [options] — draft_gate round-cap state, from `resolveDraftRoundCap`
  * @returns {{ enriched: Array<object>, act: Array<object>, scopeDrift: object,
  *             counts: { act: number, defer: number, reject: number } (act excludes evidence-only remedies), headSha: string }}
  */
-export function runJudgePass(findings, judgeVerdict, headSha, { pastCap = false } = {}) {
+export function runJudgePass(findings, judgeVerdict, headSha, { pastCap = false, round = 0 } = {}) {
   const validated = validateJudgeVerdict(judgeVerdict);
   const verdictHead = validated.headSha.trim().toLowerCase();
   const currentHead = String(headSha).trim().toLowerCase();
@@ -462,7 +462,7 @@ export function runJudgePass(findings, judgeVerdict, headSha, { pastCap = false 
   // applyJudgeDispositions fails closed on both an out-of-range index and an
   // undisposed finding (the coverage check lives in that shared pure seam),
   // so runJudgePass inherits fail-closed coverage without restating it here.
-  const applied = applyJudgeDispositions(findings, judgeVerdict, { pastCap });
+  const applied = applyJudgeDispositions(findings, judgeVerdict, { pastCap, round });
   // Cluster duplicate root-cause findings, then project the representative
   // member's judge disposition onto every other member — one judge decision
   // per root cause, not one per reviewer that happened to report it.
@@ -921,8 +921,8 @@ export async function judgePassCli(
     "--judge-verdict",
     parseError,
   );
-  const { pastCap } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: resolveGateArtifactTmpRoot(resolvedRoot) }, { repoRoot: resolvedRoot });
-  const result = runJudgePass(findings, judgeVerdict, options.headSha, { pastCap });
+  const { pastCap, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: resolveGateArtifactTmpRoot(resolvedRoot) }, { repoRoot: resolvedRoot });
+  const result = runJudgePass(findings, judgeVerdict, options.headSha, { pastCap, round });
 
   // Immutable spec-authority gate (opt-in via --spec-file). A spec_cannot_decide
   // outcome fails closed here so the loop stops at the human-spec-decision state

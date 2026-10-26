@@ -873,7 +873,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     } catch (error) {
       throw parseError(`--judge-verdict could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const enriched = applyJudgeDispositions(rawFindings, judgeVerdict, { pastCap: (await roundCapState()).pastCap });
+    const { pastCap, round } = await roundCapState();
+    const enriched = applyJudgeDispositions(rawFindings, judgeVerdict, { pastCap, round });
     // Same cluster projection judge-pass applies: one judge decision per root cause, so the durable ledger
     // matches judge-pass's --ledger-out instead of dropping the cluster-normalized dispositions.
     const stamped = enriched.findings.every((f) => Number.isInteger(f?.clusterId));

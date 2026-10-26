@@ -289,9 +289,12 @@ export async function emitFixerWorkOrder({
     throw new Refusal(`act list ${actListFile} is not a non-empty judge-pass --out array of { judgeDisposition: "act", severity, summary } findings`);
   }
   // ADR 0188: at or past the draft_gate round cap, low and nit findings never reach the fixer (backstop for hand-built or legacy ledgers). Below the cap a low act is fixed.
-  if (actListFile && source.parsed.every((f) => f.severity === "low" || f.severity === "nit")
-    && (await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: cwd })).pastCap) {
-    throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${actListFile} holds only low or nit items at or past the draft_gate round cap; low and nit findings no longer reach the fixer`);
+  // A nit-only list is fixable in draft round 1 only; any other round, and any gate without a round count, refuses it (the judge pass would have rejected it).
+  if (actListFile && source.parsed.every((f) => f.severity === "low" || f.severity === "nit")) {
+    const { pastCap, round } = await resolveDraftRoundCap({ repo, pr, gate, headSha, tmpRoot }, { repoRoot: cwd });
+    if (pastCap || (source.parsed.every((f) => f.severity === "nit") && round !== 1)) {
+      throw new WorkOrderRefusal("low_fix_until_cap", `low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): act list ${actListFile} holds only low or nit items ${pastCap ? "at or past the draft_gate round cap" : "outside draft_gate round 1"}; low and nit findings no longer reach the fixer`);
+    }
   }
   // The verify-time act-thread guard matches open gate threads by fingerprint, so a missing or wrong one would let a matching thread pass as threadless.
   const badFingerprint = actListFile ? source.parsed.find((f) => f.fingerprint !== fingerprintFinding(f)) : undefined;
