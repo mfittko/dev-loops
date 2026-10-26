@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { closeSync, createReadStream } from "node:fs";
-import { mkdir, mkdtemp, open, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -113,7 +113,30 @@ export async function discoverRepositoryTests(repoRoot = DEFAULT_ROOT) {
   return files;
 }
 
-export async function resolveBunTestFiles(args, { discover = discoverRepositoryTests } = {}) {
+export async function resolveBunTestFiles(args, { repoRoot = DEFAULT_ROOT, discover = () => discoverRepositoryTests(repoRoot) } = {}) {
+  if (args.some((arg) => arg.startsWith("--referencing="))) throw new Error("--referencing requires a separate path value (use `--referencing <path>`)");
+  const index = args.indexOf("--referencing");
+  if (index !== -1) {
+    if (args.lastIndexOf("--referencing") !== index) throw new Error("--referencing may be supplied only once");
+    const reference = args[index + 1];
+    if (!reference || reference.startsWith("-")) throw new Error("--referencing requires a path value");
+    if (args.includes("--all")) throw new Error("--referencing cannot be combined with --all");
+    // Positionals (files or directories) would be silently dropped on zero matches
+    // (false exit 0). Only flags and the values of known value-taking flags may remain.
+    for (let i = 0; i < args.length; i += 1) {
+      if (i === index) { i += 1; continue; }
+      // Skip a flag's value only when buildBunTestArgs consumes it; otherwise it stays a positional.
+      const value = args[i + 1];
+      if ((args[i] === "--timeout" && /^\d+$/.test(value ?? "")) || (args[i] === "--reporter" && value === "dots")
+        || (args[i] === "--path-ignore-patterns" && PATH_IGNORE_PATTERNS.includes(value))) { i += 1; continue; }
+      if (!args[i].startsWith("-")) throw new Error("--referencing cannot be combined with positional test files");
+    }
+    const matches = [];
+    for (const file of await discover()) {
+      if ((await readFile(path.join(repoRoot, file), "utf8")).includes(reference)) matches.push(file);
+    }
+    return matches.length ? [...args.slice(0, index), ...args.slice(index + 2), ...matches] : [];
+  }
   if (!args.includes("--all")) return args;
   if (args.filter((arg) => arg === "--all").length > 1) throw new Error("--all may be supplied only once");
   return [...args.filter((arg) => arg !== "--all"), ...await discover()];
@@ -492,6 +515,11 @@ export async function runBunTest(args, {
   stdout = process.stdout, stderr = process.stderr, captureFactory = createOutputCapture,
   progressFactory = createTestProgress,
 } = {}) {
+  const files = await resolveBunTestFiles(args);
+  if (args.includes("--referencing") && files.length === 0) {
+    stdout.write(`No tests reference ${args[args.indexOf("--referencing") + 1]}\n`);
+    return 0;
+  }
   let capture;
   let captureFinished = false;
   let result;
@@ -509,7 +537,7 @@ export async function runBunTest(args, {
     // is left untouched.
     const childEnv = { ...env };
     for (const marker of [...ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER]) delete childEnv[marker];
-    const child = spawnImpl(command, buildBunTestArgs(await resolveBunTestFiles(args), env), {
+    const child = spawnImpl(command, buildBunTestArgs(files, env), {
       env: childEnv, stdio: ["ignore", capture.fd, capture.fd],
     });
     result = await childResult(child);

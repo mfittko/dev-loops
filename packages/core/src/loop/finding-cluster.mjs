@@ -201,6 +201,8 @@ export function projectClusterDisposition(enrichedFindings, clusters) {
         if (representative[field] !== undefined) target[field] = representative[field];
         else delete target[field];
       }
+      if (representative.resurfaces !== undefined) target.resurfaces = representative.resurfaces;
+      else delete target.resurfaces;
     }
   }
   return result;
