@@ -4,7 +4,7 @@
 
 Accepted — 2026-10-26 ([issue 2937](https://github.com/mfittko/dev-loops/issues/2937))
 
-Amends ADR 0183 (judge owns every disposition) for this case only: the judge still disposes every cluster, and severity floors a `nit` cluster at `reject` from draft round 2 on (a nit may be fixed in round 1, operator amendment 2026-10-26), and a `low` cluster at `defer` at or past the draft-gate round cap (ADR 0185), unless the judge marks it fail-open. Amends [ADR 0168](./0168-draft-gate-low-nit-convergence.md) for this case only: its trigger (an all-low/nit act list) arises again only below the round cap, because at or past the cap the judge output and the emitter exclude it. The records that introduced those rules stay unedited.
+Amends ADR 0183 (judge owns every disposition) for this case only: the judge still disposes every cluster, and severity floors a `nit` cluster at `reject` from draft round 2 on (a nit may be fixed in round 1, operator amendment 2026-10-26), and a `low` cluster at `defer` at or past the draft-gate round cap (ADR 0185), unless the judge marks it fail-open. Amends [ADR 0168](./0168-draft-gate-low-nit-convergence.md) for this case only: its trigger (an all-low/nit act list) arises again only below the round cap, because at or past the cap the judge output and the emitter exclude it. Amends [ADR 0185](./0185-draft-gate-round-cap-and-post-convergence-no-code-commit.md) for the past-cap low/nit case only: a past-cap round whose act items are all low or nit follows `GATE-EXEC-LOW-FIX-UNTIL-CAP` instead of converging by ADR 0168. The records that introduced those rules stay unedited.
 
 ## Context
 
