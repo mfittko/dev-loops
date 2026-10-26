@@ -8,7 +8,7 @@
  * gone through internal dev-loops tooling:
  *   - `gh ...` (incl. `gh api`, `gh ... --jq`)
  *   - `python` / `python3`
- *   - `node -e` / `node --eval`
+ *   - `node` inline interpreter forms (`-e`/`--eval`/`-p`, stdin `-`, heredoc)
  *
  * These three are the same breach: reaching past the dev-loops tooling to read
  * or parse tool output with a raw call. The verifier returns the list of
@@ -37,7 +37,7 @@
  *   - `gh ...` at the start of a command segment (start of line, or after
  *     `&&`, `||`, `|`, `;`) that is not in the write-op allowlist.
  *   - `python` / `python3` at the start of a command segment.
- *   - `node -e` / `node --eval` (inline eval) at the start of a command segment.
+ *   - `node` inline interpreter (`-e`/`--eval`/`-p`, stdin `-`, heredoc; the OPS-NO-INLINE-INTERPRETER forms) at the start of a command segment.
  *
  * Head normalization (before classifying a segment, fail-closed):
  *   - strips leading `NAME=value ` env-assignment prefixes (`GH_TOKEN=x gh api`)
@@ -149,7 +149,7 @@ function classifySegment(rawSegment) {
   // `node scripts/....mjs` (or any script path) is allowed tooling; only inline
   // eval forms are violations. Check node first so script invocations pass.
   if (/^node\b/.test(segment)) {
-    return commandContainsInlineInterpreter(segment) ? { kind: "violation", tool: "node -e" } : { kind: "clean" };
+    return commandContainsInlineInterpreter(segment) ? { kind: "violation", tool: "node inline" } : { kind: "clean" };
   }
   if (/^gh\b/.test(segment)) {
     if (ALLOWED_WRITE_OPS.some((re) => re.test(segment))) {

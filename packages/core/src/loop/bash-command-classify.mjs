@@ -1170,7 +1170,7 @@ export function commandContainsInlineInterpreter(command) {
       // Node value-taking flags (short + long) each consume the following token. Consuming them lets
       // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
       // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value.
-      const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type"]);
+      const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type", "--title", "--disable-warning", "--watch-path", "--redirect-warnings"]);
       for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
         if (isStdinScriptToken(t)) return true;
@@ -1185,7 +1185,7 @@ export function commandContainsInlineInterpreter(command) {
     if (interpreterRegex("python3?").test(s)) {
       const code = s.replace(interpreterRegex("python3?"), "").trim();
       const tokens = code.split(/\s+/).filter(Boolean);
-      const PYTHON_VALUE_FLAGS = new Set(["-W", "-X"]);
+      const PYTHON_VALUE_FLAGS = new Set(["-W", "-X", "--check-hash-based-pycs"]);
       for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
         if (isStdinScriptToken(t)) return true;

@@ -56,7 +56,7 @@ test("node -e and node --eval are violations; node scripts/x.mjs is not", () => 
   ].join("\n");
   const { violations } = analyzeTranscript(transcript);
   assert.equal(violations.length, 2);
-  assert.ok(violations.every((v) => v.startsWith("node -e:")));
+  assert.ok(violations.every((v) => v.startsWith("node inline:")));
 });
 
 test("--eval after the script path is a script arg, not inline eval — clean", () => {
@@ -131,7 +131,7 @@ test("env-prefixed, wrapper-prefixed, and path-prefixed raw calls are violations
     ["TIMEOUT 60 gh api foo", "gh"],
     ["timeout .5 gh api foo", "gh"],
     ["timeout 1e3 gh api foo", "gh"],
-    ["NODE_OPTIONS=x node -e 'x'", "node -e"],
+    ["NODE_OPTIONS=x node -e 'x'", "node inline"],
     ["./node_modules/.bin/gh pr view 1", "gh"],
     ["/usr/bin/python3 -c 'x'", "python3"],
   ];

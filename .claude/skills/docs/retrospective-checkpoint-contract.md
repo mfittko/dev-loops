@@ -184,7 +184,7 @@ The loop's own execution should use internal dev-loops tooling, not agent-level 
 are reported as advisory findings via the envelope + PR comment.
 
 **Flagged as raw-call violations:** `gh ...` (including `gh api`, `gh ... --jq`),
-`python` / `python3`, `node -e` / `node --eval` (inline eval). **Allowed (NOT
+`python` / `python3`, inline `node` (`-e` / `--eval` / `-p`, stdin `-`, heredoc; the `OPS-NO-INLINE-INTERPRETER` forms). **Allowed (NOT
 violations):** dev-loops subcommands and `node scripts/*.mjs` invocations — those
 scripts legitimately call `gh`/GraphQL internally; that is the tooling. The rule
 targets the agent's own top-level shell calls, not a script's internals.
@@ -208,7 +208,7 @@ agent-level call is flagged. None of these findings block anything.
 `node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]` reads a
 newline-delimited transcript of the shell commands the agent ran (one top-level
 command per line, via `--transcript` or stdin) and reports agent-level raw
-`gh`/`python`/`python3`/`node -e`/`node --eval` calls. It is a **findings-producer**:
+`gh`/`python`/`python3`/inline `node` (`-e`/`--eval`/`-p`/stdin/heredoc) calls. It is a **findings-producer**:
 its JSON output (`{ ok, internalToolingOnly, rawCallViolations, allowedWriteOps }`)
 is returned to the conductor via the envelope's `retrospectiveFindings` field (normalized
 to `{ internalToolingOnly, rawCallViolations, allowedWriteOps }`). It is **not** written to a
