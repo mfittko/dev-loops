@@ -1,4 +1,4 @@
-# 0189. The draft round cap counts only rounds logged at or after the cap landing
+# 0189. The draft round cap skips a ledger whose toISOString loggedAt precedes the cap landing
 
 ## Status
 
