@@ -2814,7 +2814,9 @@ export function resolveAnglePool(config) {
  * mandatory angle cannot deadlock every fanout write (missing-mandatory if
  * omitted, foreign if recorded). `pool` is resolveGateAngles, widened to the
  * global catalog (resolveAnglePool) when `additiveAngles` is on, with
- * excludeAngles still a hard ceiling; a null pool skips the foreign check.
+ * excludeAngles still a hard ceiling (except the SECURITY_SENSITIVE_SEAM
+ * `threat-model` exception, which is always added to `pool` when excluded);
+ * a null pool skips the foreign check.
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
  * @returns {{ mandatoryAngles: string[], pool: string[]|null }}
@@ -3097,8 +3099,8 @@ export function resolveReviewProportionality(config, gate, {
  * @param {boolean} [options.hasFullLabel] — `gate:full` label present on the PR (bypasses tier resolution)
  * @param {boolean} [options.checkFloors] — opt into the GATE-EXEC-PROPORTIONALITY floor check above
  * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [options.sizeOutcome] — only consulted when `checkFloors` is true
- * @param {boolean} [options.seamFirstRound] — true in a draft_gate round, or in pre_approval_gate when draft-first is off (the default); only then does a SECURITY_SENSITIVE_SEAM diff force threat-model past `enabled: false`, so a head reviewed only by pre_approval_gate under draft-first does not run it
- * @param {string[]} [options.explicitAngles] — caller-supplied verbatim override (e.g. CLI `--angles`); wins over tier/dynamic resolution but NEVER over a fired floor above (a fired floor refuses the override and continues to tier/dynamic best-effort selection); the security-seam override still adds threat-model to it
+ * @param {boolean} [options.seamFirstRound] — true in a draft_gate round, or in a pre_approval_gate round at a head where no draft_gate round ran (caller-derived; defaults to true only for `draft`); only then does a SECURITY_SENSITIVE_SEAM diff force threat-model past `enabled: false`, so a pre_approval_gate round after a draft round at the same head does not re-run it
+ * @param {string[]} [options.explicitAngles] — caller-supplied verbatim override (e.g. CLI `--angles`); wins over tier/dynamic resolution but NEVER over a fired floor above (a fired floor refuses the override and continues to tier/dynamic best-effort selection); a SECURITY_SENSITIVE_SEAM diff still adds threat-model to the explicit set (when seamFirstRound)
  * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: boolean, dynamicAnglesActive: boolean, addedAngles: string[], addedReasons: Record<string,string> }}
  */
 export async function resolveGateAnglesDynamic(config, gate, options = {}) {
@@ -3143,7 +3145,7 @@ async function applySeamOverride(config, gate, diff, result, seamFirstRound) {
   };
 }
 
-async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = false, checkFloors = false, sizeOutcome, explicitAngles, seamFirstRound = gate === "draft" || !resolveWorkflowConfig(config, "requireDraftFirst") } = {}) {
+async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = false, checkFloors = false, sizeOutcome, explicitAngles, seamFirstRound = gate === "draft" } = {}) {
   // Tier scope facts: changedFiles/filesChanged from T0, linesChanged from T1's
   // real added+deleted count (analyzeDiff's inferred-category path reports a
   // fake 0 for an unambiguous docs-only diff — see analyzeT1/analyzeDiff).
@@ -3292,8 +3294,8 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
   );
 
   // Security-seam override: threat-model runs on a seam diff regardless of
-  // `enabled: false` in a draft round (or pre_approval when draft-first is
-  // off), and is recorded as an added angle so the override is never silent.
+  // `enabled: false` in a draft round (or a pre_approval round with no draft
+  // round at the head), and is recorded as an added angle so the override is never silent.
   const seamOverride = seamFirstRound && seamEligible && categories.includes("SECURITY_SENSITIVE_SEAM")
     && !filteredMandatory.includes(SECURITY_SEAM_ANGLE)
     && !dynamicResult.recommendedAngles.includes(SECURITY_SEAM_ANGLE)

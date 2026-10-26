@@ -5606,21 +5606,30 @@ describe("resolveGateAnglesDynamic: SECURITY_SENSITIVE_SEAM threat-model overrid
     assert.ok(result.recommendedAngles.includes("threat-model"));
   });
 
-  test("preApproval under the default requireDraftFirst:true does not re-add threat-model at the same head", async () => {
+  test("preApproval with requireDraftFirst:true does not add threat-model on a seam diff", async () => {
     const pre = { version: 1, workflow: { requireDraftFirst: true }, gates: { preApproval: { angles: ["scope", { name: "threat-model", enabled: false }] } } };
     const result = await resolveGateAnglesDynamic(pre, "preApproval", { diff: seamDiff });
     assert.ok(!result.recommendedAngles.includes("threat-model"));
   });
 
-  test("with requireDraftFirst:false the preApproval override fires only where threat-model is in the contract pool", async () => {
+  test("preApproval with no draft round at the head adds threat-model on a seam diff; after a draft round it does not", async () => {
+    const pre = { version: 1, workflow: { requireDraftFirst: true }, gates: { preApproval: { angles: ["scope", { name: "threat-model", enabled: false }] } } };
+    const noDraft = await resolveGateAnglesDynamic(pre, "preApproval", { diff: seamDiff, seamFirstRound: true });
+    assert.ok(noDraft.recommendedAngles.includes("threat-model"));
+    assert.equal(noDraft.addedReasons["threat-model"], "SECURITY_SENSITIVE_SEAM");
+    const afterDraft = await resolveGateAnglesDynamic(pre, "preApproval", { diff: seamDiff, seamFirstRound: false });
+    assert.ok(!afterDraft.recommendedAngles.includes("threat-model"));
+  });
+
+  test("with no draft round at the head the preApproval override fires only where threat-model is in the contract pool", async () => {
     const pre = (angles) => ({ version: 1, workflow: { requireDraftFirst: false }, gates: { preApproval: { angles } } });
     const disabled = pre(["scope", { name: "threat-model", enabled: false }]);
-    const fired = await resolveGateAnglesDynamic(disabled, "preApproval", { diff: seamDiff });
+    const fired = await resolveGateAnglesDynamic(disabled, "preApproval", { diff: seamDiff, seamFirstRound: true });
     assert.ok(fired.recommendedAngles.includes("threat-model"));
     assert.ok(resolveGateAngleContract(disabled, "preApproval").pool.includes("threat-model"));
     // Not a pool member and not excluded: the override must not mint a foreign angle.
     const absent = pre(["scope"]);
-    const skipped = await resolveGateAnglesDynamic(absent, "preApproval", { diff: seamDiff });
+    const skipped = await resolveGateAnglesDynamic(absent, "preApproval", { diff: seamDiff, seamFirstRound: true });
     assert.ok(!skipped.recommendedAngles.includes("threat-model"));
     assert.ok(!resolveGateAngleContract(absent, "preApproval").pool.includes("threat-model"));
   });

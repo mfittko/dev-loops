@@ -24,7 +24,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -237,7 +237,7 @@ Required:
   --head-sha <sha>
 Optional:
   --harness <pi|claude|codex> Active reviewer harness (default: active CLI harness).
-  --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is a verbatim explicit override only when no proportionality floor fires; a fired floor refuses it and continues with tier-or-best-effort selection. An empty list (\`[]\`) is refused (exit 1, no artifact written) at every entry point — the CLI dynamic path, this flag, and the exported buildGateContext/writeGateContext API — because a gate-context bundle must carry at least one review angle; the non-empty verbatim/floor behavior is unchanged.
+  --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is a verbatim explicit override only when no proportionality floor fires, and a SECURITY_SENSITIVE_SEAM diff adds threat-model to the explicit set (draft round, or pre_approval round with no draft round at that head); a fired floor refuses it and continues with tier-or-best-effort selection. An empty list (\`[]\`) is refused (exit 1, no artifact written) at every entry point — the CLI dynamic path, this flag, and the exported buildGateContext/writeGateContext API — because a gate-context bundle must carry at least one review angle; the non-empty verbatim/floor behavior is unchanged.
   --rationale <json>             JSON array of {angle, action, reason} entries
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
@@ -3074,6 +3074,18 @@ function detectRefinementHasAcChecklist(prBody) {
   return artifact.acItems.length > 0;
 }
 
+// SECURITY_SENSITIVE_SEAM override scope: a draft round, or a pre_approval round
+// at a head where no draft_gate round wrote a gate-context artifact.
+export async function seamFirstRoundFor({ gate, repo, pr, headSha, tmpRoot }, repoRoot) {
+  if (gate !== "pre_approval_gate") return true;
+  try {
+    await access(path.resolve(repoRoot, buildGateContextPath({ repo, pr, gate: "draft_gate", headSha, tmpRoot })));
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 export async function buildGateContext(input, { repoRoot = process.cwd() } = {}) {
   const isReviewGate = input.gate === "review";
   // review has no config key of its own (resolveGateAnglesDynamic only
@@ -3115,6 +3127,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
         // before.
         checkFloors: input.checkFloors === true,
         sizeOutcome: input.sizeOutcome,
+        seamFirstRound: await seamFirstRoundFor(input, repoRoot),
       });
   const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
 
@@ -3601,7 +3614,8 @@ export async function main(
     // Angle resolution: when --angles is omitted, resolve dynamically from the
     // loaded config (.devloops) + the captured --base diff — the SAME path the
     // programmatic buildGateContext API uses (resolveGateAnglesDynamic). When
-    // --angles IS supplied, it is used as an explicit selector, BUT the
+    // --angles IS supplied, it is used as an explicit selector (a
+    // SECURITY_SENSITIVE_SEAM diff adds threat-model to it), BUT the
     // GATE-EXEC-PROPORTIONALITY floors are non-overridable: draft/preApproval
     // always run explicit angles through resolveGateAnglesDynamic's handling
     // below. With no floor the override is verbatim; a fired floor refuses it
@@ -3658,6 +3672,7 @@ export async function main(
           checkFloors: Boolean(options.base),
           sizeOutcome,
           explicitAngles: Array.isArray(options.angles) ? options.angles : undefined,
+          seamFirstRound: await seamFirstRoundFor(options, repoRoot),
         });
       }
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
