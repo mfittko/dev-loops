@@ -4058,6 +4058,24 @@ for (const [name, handoffHead] of [["an abbreviated", "abc9988"], ["an upper-cas
   });
 }
 
+test("a failed derived judge file write keeps the finding and keeps gate entry blocked (#2937)", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-body-judge-fail-"));
+  try {
+    await writeFile(path.join(root, ".devloops"), await readFile(path.join(capFixtureRepoRoot, ".devloops"), "utf8"), "utf8");
+    await writeFile(path.join(root, "tmp"), "not a directory", "utf8");
+    const found = await loadPrGateCoordinationContext(
+      { repo: "owner/repo", pr: 266 },
+      buildMockRuntime(writeGhStub(null, pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body.", atCap: false })), { repoRoot: root }),
+    );
+    assert.equal(typeof found.copilotBodyJudgeFileError, "string");
+    assert.equal(found.copilotBodyJudgeFile, null);
+    assert.notEqual(found.copilotBodyJudgeFinding, null);
+    assert.equal(found.copilotBodyConvergence.ok, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("the detector writes the body finding to the derived judge file and removes it when the finding clears (#2937)", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-body-judge-"));
   try {

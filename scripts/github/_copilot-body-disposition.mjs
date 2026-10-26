@@ -29,8 +29,8 @@ import { repoSlugFor } from "./_gate-artifact-paths.mjs";
 
 // File the gate detector writes the body finding to and the judge emit pins.
 export const copilotBodyJudgePath = ({ tmpRoot, repo, pr, headSha }) => {
-  if (!Number.isInteger(Number(pr)) || Number(pr) <= 0) throw new Error(`copilotBodyJudgePath: pr must be a positive integer, got ${pr}`);
-  if (typeof headSha !== "string" || !/^[0-9a-f]{40,64}$/.test(headSha)) throw new Error(`copilotBodyJudgePath: headSha must be 40-64 lowercase hex chars, got ${headSha}`);
+  if (!/^[1-9][0-9]*$/.test(String(pr))) throw new Error(`copilotBodyJudgePath: pr must be a positive integer, got ${pr}`);
+  if (typeof headSha !== "string" || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Error(`copilotBodyJudgePath: headSha must be 40 or 64 lowercase hex chars, got ${headSha}`);
   return path.join(tmpRoot, "gate-judge", repoSlugFor(repo), `pr-${Number(pr)}`, `copilot-body-${headSha}.json`);
 };
 
@@ -184,7 +184,7 @@ function reviewSubmittedAt(review) {
  * two or more tied latest reviews are body-blocking: no single review owns
  * the finding, so no disposition record can clear it.
  *
- * @returns {{ review: object|null, ambiguousBlockingTie: boolean }}
+ * @returns {{ review: object|null, ambiguousBlockingTie: boolean, blockingReviews?: object[] }}
  */
 export function resolveLatestCopilotReview(prData) {
   const reviews = Array.isArray(prData?.reviews) ? prData.reviews : [];
@@ -202,6 +202,7 @@ export function resolveLatestCopilotReview(prData) {
   return {
     review: blocking[0] ?? tied[0],
     ambiguousBlockingTie: blocking.length > 1,
+    blockingReviews: blocking,
   };
 }
 
@@ -265,7 +266,7 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
         judgeFinding: buildJudgeFinding(currentReview),
       };
   }
-  const { review, ambiguousBlockingTie } = resolveLatestCopilotReview({ reviews: reviewSummary?.effectiveCopilotReviews });
+  const { review, ambiguousBlockingTie, blockingReviews } = resolveLatestCopilotReview({ reviews: reviewSummary?.effectiveCopilotReviews });
   const reviewCommitSha = review?.commit?.oid ?? review?.commit_id ?? null;
   if (!review || typeof headSha !== "string" || reviewCommitSha === headSha || !isBodyOnlyBlockingReview(review)) {
     return settled;
@@ -280,10 +281,11 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
         reason: "two or more tied latest Copilot reviews carry body-only feedback, so no single copilot-body-disposition record can clear it",
         markerLine: null,
       },
-      judgeFinding: buildJudgeFinding(review),
+      // Every tied blocking body reaches the judge: no marker can clear a tie.
+      judgeFinding: { angle: "copilot-body", findings: blockingReviews.flatMap((r) => buildJudgeFinding(r).findings) },
     };
   }
-  const reviewId = review.id !== null && review.id !== undefined ? String(review.id) : null;
+  const reviewId =review.id !== null && review.id !== undefined ? String(review.id) : null;
   if (reviewHasOwnThread(reviewThreads, reviewId)) {
     return settled;
   }

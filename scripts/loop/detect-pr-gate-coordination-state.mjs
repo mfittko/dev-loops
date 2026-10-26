@@ -1064,7 +1064,9 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     // Removing a stale file is best effort; only an unwritten finding is an error.
     if (copilotBodyJudgeFinding) copilotBodyJudgeFileError = error instanceof Error ? error.message : String(error);
   }
-  const bodyRoutedToJudge = bodyFeedback.copilotBodyFeedbackUnresolved || bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved;
+  // A finding the judge cannot receive (failed write) stays blocking: fail closed.
+  const bodyRoutedToJudge = (bodyFeedback.copilotBodyFeedbackUnresolved || bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved)
+    && copilotBodyJudgeFileError === null;
   const copilotBodyConvergence = bodyRoutedToJudge
     ? { ...evaluatedBodyConvergence, ok: true, reason: "Copilot body feedback is routed to the judge (GATE-EXEC-COPILOT-BODY-TO-JUDGE)" }
     : (bodyFeedback.bodyDisposition && !evaluatedBodyConvergence.ok
@@ -1345,9 +1347,10 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     },
     runtime,
   );
-  // An earlier-head body-only finding blocks the clean fallback at the cap, but
-  // a significant post-convergence change opens a new Copilot cycle instead,
-  // matching the cap reopen in copilot-pr-handoff.mjs.
+  // GATE-EXEC-COPILOT-BODY-TO-JUDGE routes an earlier-head body-only finding to
+  // the judge, so it no longer blocks the clean fallback here. A significant
+  // post-convergence change on any other ROUND_CAP_REACHED shape opens a new
+  // Copilot cycle instead, matching the cap reopen in copilot-pr-handoff.mjs.
   const reopenedInterpretation = postConvergenceSignificantChange
     && context.interpretation?.state === STATE.ROUND_CAP_REACHED
     ? reopenRoundCapCycle(context.interpretation)

@@ -56,4 +56,22 @@ test("copilotBodyJudgePath rejects a bad pr or head", () => {
   assert.throws(() => copilotBodyJudgePath({ tmpRoot: "t", repo: "o/r", pr: 0, headSha: HEAD }));
   assert.throws(() => copilotBodyJudgePath({ tmpRoot: "t", repo: "o/r", pr: 1, headSha: "../x" }));
   assert.ok(copilotBodyJudgePath({ tmpRoot: "t", repo: "o/r", pr: 1, headSha: HEAD }).endsWith(`copilot-body-${HEAD}.json`));
+  assert.ok(copilotBodyJudgePath({ tmpRoot: "t", repo: "o/r", pr: 2940, headSha: "b".repeat(64) }).includes("pr-2940"));
+  for (const pr of ["0x10", "1e1", " 7 "]) {
+    assert.throws(() => copilotBodyJudgePath({ tmpRoot: "t", repo: "o/r", pr, headSha: HEAD }), /positive integer/);
+  }
+  assert.throws(() => copilotBodyJudgePath({ tmpRoot: "t", repo: "o/r", pr: 1, headSha: "a".repeat(41) }), /40 or 64/);
+  assert.throws(() => copilotBodyJudgePath({ tmpRoot: "t", repo: "o/r", pr: 1, headSha: "a".repeat(63) }), /40 or 64/);
+});
+
+test("an ambiguous blocking tie on an earlier head carries every tied body to the judge", async () => {
+  const OLD = "c".repeat(40);
+  const tied = (id, text) => ({ ...review, id, commit: { oid: OLD }, body: `### 🟡 Changes recommended\n\n${text}` });
+  const feedback = await resolveCurrentHeadBodyFeedback(
+    { repo: "o/r", pr: 1, headSha: HEAD, reviewSummary: { effectiveCopilotReviews: [tied("PRR_a", "First body."), tied("PRR_b", "Second body.")] }, reviewThreads: [] },
+    runtimeWith(NODE_ID),
+  );
+  assert.equal(feedback.dispositionRequired.reviewId, null);
+  const summaries = feedback.judgeFinding.findings.map((f) => f.summary).sort();
+  assert.deepEqual(summaries, ["First body.", "Second body."]);
 });
