@@ -64,7 +64,7 @@ Write a single JSON object to the deterministic path your work order names (unde
       "detail": "<the concrete path through the code and why it breaks>",
       "fix": "<the concrete remedy and the test to add>",
       "reason": "<one sentence; required on defer and reject>",
-      "failOpen": true,
+      "failOpen": "<optional boolean; true only on a low act that is a fail-open defect>",
       "followUpDraft": { "title": "...", "body": "..." }
     }
   ]

@@ -18,7 +18,7 @@ const OWNERS = {
 const RULE_OUTCOME = {
   "GATE-EXEC-JUDGE-PRIME-AUTHORITY": /the judge decides it/,
   "GATE-EXEC-LOW-FIX-UNTIL-CAP": /At or past the cap it becomes `defer`/,
-  "GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE": /`merge-pr.mjs` refuses until it exists/,
+  "GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE": /`merge-pr.mjs` refuses until a fresh human APPROVED review or the head-pinned `approve merge <sha>` line/,
   "GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH": /no agent pushes a stable tag or publishes/,
   "ADR-OVER-WAIVER": /the orchestrator adds the ADR to the PR/,
   "GATE-EXEC-FIXER-CYCLE-BOUND": /the orchestrator dispatches another fixer cycle/,
