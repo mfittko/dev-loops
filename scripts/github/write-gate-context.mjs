@@ -28,10 +28,10 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveGateConfig, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { baseAngleName, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { baseAngleName, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef } from "../lib/anchor-base-ref.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";
@@ -54,7 +54,7 @@ import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_c
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
-import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 
 /**
@@ -1919,6 +1919,19 @@ export async function countCompletedRounds(options, { repoRoot }) {
   // The calendar round trip rejects values Date.parse normalizes (2026-02-30, T24:00:00); at most 3 fraction digits.
   const preCap = (loggedAt) => typeof loggedAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(loggedAt) && Number.isFinite(Date.parse(loggedAt)) && new Date(loggedAt).toISOString().slice(0, 19) === loggedAt.slice(0, 19) && Date.parse(loggedAt) < cutoff;
   return closed.filter((log) => !preCap(log.loggedAt)).length + unreadable + 1;
+}
+
+/**
+ * Round-cap state of the round being posted (GATE-EXEC-ROUND-CAP). The cap exists only for draft_gate, so any
+ * other gate is never past it. One resolver for the judge pass, the ledger writer and the fixer emitter.
+ * @returns {Promise<{ pastCap: boolean, round: number, cap: number }>}
+ */
+export async function resolveDraftRoundCap(options, { repoRoot }) {
+  if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0 };
+  const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
+  const cap = resolveGateConfig(config, "draft").maxReviewRounds;
+  const round = await countCompletedRounds(options, { repoRoot });
+  return { pastCap: isPastRoundCap(round, cap), round, cap };
 }
 
 /** Act items of the closed prior rounds as `{ fingerprint, file, line, title }`, one per fingerprint. */

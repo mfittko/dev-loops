@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
+import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { parseUpsertCheckpointVerdictCliArgs, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
 // GATE-EXEC-ROUND-CAP: the cap reads only the judged ledger, counts completed rounds, and past the cap a new
@@ -351,4 +352,34 @@ test("at the cap round an act item without judgeFix still blocks", async () => {
     const out = await pastCap(tempDir, [finding("medium", "act")]);
     assert.equal(verdictOf(out), "blocked");
   }, { prefix: "dev-loops-round-cap-closure-nofix-" });
+});
+
+// ADR 0188 + ADR 0191: the judge-marked failOpen enters through --judge-verdict, is stamped on the ledger finding and read by pastCapBlockers.
+async function judgedLedgerPath(raw, disposition) {
+  const judgeVerdict = path.join(repoRoot, "judge-verdict.json");
+  await writeFile(judgeVerdict, JSON.stringify({
+    headSha: HEAD, scopeDrift: { verdict: "within_scope", rationale: "r", driftedAreas: [] },
+    dispositions: [{ index: 0, title: "t", detail: "d", fix: "the remedy and the test to add", reason: "r", rationale: "why", failOpen: true, ...disposition }],
+  }), "utf8");
+  await writeGateFindingsLog({
+    repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD, verdict: "findings_present", findings: JSON.stringify([raw]), judgeVerdict, tmpRoot: path.join(repoRoot, "tmp"),
+  }, { repoRoot });
+  return path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-17", `draft_gate-${HEAD}.json`);
+}
+const rawMedium = { severity: "medium", angle: "correctness", summary: "fail-open medium", disposition: "accepted-for-fix" };
+
+test("a judge-marked failOpen medium rejected with a judgeReason past the cap blocks as severity_disagreement", async () => {
+  await seedPrior(repoRoot, priorHeads);
+  const out = await post(["--findings-ledger", await judgedLedgerPath(rawMedium, { disposition: "reject" })]);
+  assert.equal(out.error, undefined);
+  assert.equal(verdictOf(out), "blocked");
+  assert.match(out.body, /severity_disagreement/);
+});
+
+test("a judge-marked failOpen act item with a judgeFix at the cap round goes to the closure fixer without a blocker", async () => {
+  await seedPrior(repoRoot, priorHeads);
+  const out = await post(["--findings-ledger", await judgedLedgerPath(rawMedium, { disposition: "act" })]);
+  assert.equal(out.error, undefined);
+  assert.equal(verdictOf(out), "findings_present");
+  assert.doesNotMatch(out.body, /round_cap_reached/);
 });
