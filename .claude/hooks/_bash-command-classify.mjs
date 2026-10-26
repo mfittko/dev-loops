@@ -1154,7 +1154,7 @@ function interpreterRegex(bin) {
 }
 
 // Bare `-` stdin script, or a heredoc token (`<<EOF`, `-<<EOF`, or one attached to a flag: `-I<<EOF`).
-const isStdinScriptToken = (t) => t === "-" || t.startsWith("<<") || (t.startsWith("-") && t.includes("<<")) || /^\d+<</.test(t);
+const isStdinScriptToken = (t) => t === "-" || t.startsWith("<<") || (t.startsWith("-") && t.includes("<<")) || (REDIRECTION_RE.test(t) && t.includes("<<"));
 // A redirection token (`2>&1`, `2>/dev/null`, `>out`, `&>x`) between flags and the heredoc is not the script path. Returns how many tokens to skip: 0 (not a redirection), 1, or 2 (operator alone, its target is the next token).
 const REDIRECTION_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)/;
 const REDIRECTION_OPERATOR_ONLY_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)$/;
@@ -1178,7 +1178,7 @@ export function commandContainsInlineInterpreter(command) {
       // Node value-taking flags (short + long) each consume the following token. Consuming them lets
       // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
       // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value.
-      const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type", "--title", "--disable-warning", "--watch-path", "--redirect-warnings", "--env-file-if-exists"]);
+      const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type", "--title", "--disable-warning", "--watch-path", "--redirect-warnings", "--env-file-if-exists", "--test-reporter"]);
       for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
         if (isStdinScriptToken(t)) return true;
@@ -1190,7 +1190,7 @@ export function commandContainsInlineInterpreter(command) {
         if (skip) { i += skip - 1; continue; }
         if (!t.startsWith("-")) {
           const prev = tokens[i - 1];
-          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !SCRIPT_EXT_RE.test(t)) { if (t.includes("<<")) return true; continue; } // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
+          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !SCRIPT_EXT_RE.test(stripSurroundingQuotes(t))) { if (t.includes("<<")) return true; continue; } // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
           break; // script path reached — a later `-e` is a script argument
         }
         if (NODE_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
