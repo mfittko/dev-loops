@@ -955,7 +955,7 @@ test("ADR 0188: the round count comes from the --tmp-root the ledger writer uses
     await writeCurrentLog(custom, head);
     await writeCurrentLog(path.join(root, "tmp"), head);
     await assert.rejects(emit({ tmpRoot: custom }), (e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
-    await assert.rejects(emit(),(e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message));
+    await assert.rejects(emit(),(e) => e.refusal === "low_fix_until_cap" && /at or past the draft_gate round cap/.test(e.message) && !/pre_approval_gate/.test(e.message));
     // A subdirectory cwd reads the repo cap, not the default 4.
     const sub = path.join(wt, "scripts");
     await mkdir(sub, { recursive: true });

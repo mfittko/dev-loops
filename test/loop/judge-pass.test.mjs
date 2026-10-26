@@ -2015,6 +2015,21 @@ test("PR 2945 round 5 replay: a low-only pre_approval_gate round has no act item
   assert.match(result.enriched[0].judgeReason, /^low_fix_until_cap /);
 });
 
+test("judgePassCli at pre_approval_gate defers a low-only act verdict with low_fix_until_cap (#2724 wiring)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-pre-approval-"));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "clean", findings: [finding({ severity: "low", summary: "low one" })] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting to fix" }] })));
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "2724", gate: "pre_approval_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
+    { repoRoot: tmpDir, ...stubDeferralDeps().deps },
+  );
+  assert.equal(payload.ok, true);
+  assert.equal(payload.actCount, 0);
+  const enriched = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings[0];
+  assert.equal(enriched.judgeDisposition, "defer");
+  assert.match(enriched.judgeReason, /^low_fix_until_cap /);
+});
+
 test("pre_approval_gate: failOpen low stays a medium act, mixed medium and low keeps the medium act, a question stays open", () => {
   const failOpen = runJudgePass([PR2945_ROUND5_LOW], pre2945Verdict({ failOpen: true }), HEAD, { pastCap: true });
   assert.deepEqual(failOpen.act.map((f) => f.severity), ["medium"]);

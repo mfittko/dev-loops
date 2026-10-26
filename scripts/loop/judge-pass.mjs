@@ -454,7 +454,7 @@ export function validateCliArgs(options) {
  * @param {Array<object>} findings — the flat consolidated findings array (already unwrapped)
  * @param {object} judgeVerdict — the judge agent's verdict artifact (JSON object)
  * @param {string} headSha — the round's current head (the verdict must be current-head)
- * @param {{ pastCap?: boolean, round?: number }} [options] — draft_gate round-cap state, from `resolveDraftRoundCap`
+ * @param {{ pastCap?: boolean, round?: number }} [options] — `pastCap` receives the `lowFixCapped` state from `resolveDraftRoundCap`, true at or past the draft_gate cap and at pre_approval_gate
  * @returns {{ enriched: Array<object>, act: Array<object>, scopeDrift: object,
  *             counts: { act: number, defer: number, reject: number } (act excludes evidence-only remedies), headSha: string }}
  */
