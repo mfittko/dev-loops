@@ -87,11 +87,13 @@ ${INVENTORY_CHAR_LIMIT} characters and the remaining modules are listed by path 
 "overflowModules".
 "importers" has one entry per existing touched source file (.mjs/.cjs/.js/.ts): the sorted
 tracked files that import it by relative specifier, capped at ${IMPORTERS_LIMIT} with
-"importersTruncated": true beyond; an empty "files" list means no importer. A non-source
+"importersTruncated": true beyond; an empty "files" list means no tracked file imports it by relative specifier. String-path
+references (such as the cli/index.mjs registry) and package-name imports are not listed. A non-source
 touched path and an unresolved touched path (a planned file that does not exist yet) have
 no entry. When git ls-files fails (including a non-git --repo-root nested in another work
 tree), "helperInventory" is empty, "importers" is null and "findings" carries
-importers_unavailable with the reason. Check each listed importer before hand-back.
+importers_unavailable with the reason. Check each listed importer before hand-back and search
+for string-path and package-name references yourself.
 
 ${JQ_OUTPUT_USAGE}
 

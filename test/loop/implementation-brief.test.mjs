@@ -1151,3 +1151,13 @@ test("more than 50 importers are capped and flagged importersTruncated", async (
   assert.equal(entry.importersTruncated, true);
   assert.deepEqual(entry.files, [...entry.files].sort());
 });
+
+test("exactly 50 importers are listed without importersTruncated", async () => {
+  const files = { "src/a.mjs": "export const a = 1;\n" };
+  for (let i = 0; i < 50; i += 1) files[`use/u${String(i).padStart(2, "0")}.mjs`] = 'import { a } from "../src/a.mjs";\n';
+  const root = await trackedRepo(files);
+  const brief = await buildImplementationBrief({ body: MATRIX, repoRoot: root, paths: ["src/a.mjs"] });
+  const entry = brief.importers["src/a.mjs"];
+  assert.equal(entry.files.length, 50);
+  assert.equal("importersTruncated" in entry, false);
+});
