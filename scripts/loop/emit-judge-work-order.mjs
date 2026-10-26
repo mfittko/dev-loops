@@ -53,6 +53,8 @@ class Refusal extends Error {}
 
 async function readSource(kind, filePath) {
   const bytes = await readFile(filePath).catch(() => null);
+  const copilotBodyKind = kind === "copilot-body-feedback";
+  if (bytes === null && copilotBodyKind) throw new Refusal(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: required judge source ${kind} is missing or unreadable: ${filePath}`);
   if (bytes === null) throw new Refusal(`required judge source ${kind} is missing or unreadable: ${filePath}`);
   return { read: { kind, path: filePath, sha256: sha256(bytes), bytes: bytes.length, required: true }, bytes };
 }

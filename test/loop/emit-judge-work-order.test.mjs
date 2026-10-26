@@ -454,3 +454,10 @@ test("GATE-EXEC-COPILOT-BODY-TO-JUDGE: the detector's derived file is pinned wit
     assert.equal(plan.workOrder.requiredReads.find((read) => read.kind === "copilot-body-feedback")?.path, derived);
   });
 });
+
+test("J1: an unreadable --copilot-body-file refuses citing GATE-EXEC-COPILOT-BODY-TO-JUDGE", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    await assert.rejects(emitJudgeWorkOrder({ ...sources, copilotBodyFile: path.join(root, "absent.json") }), /^Error: GATE-EXEC-COPILOT-BODY-TO-JUDGE: required judge source copilot-body-feedback is missing/);
+  });
+});
