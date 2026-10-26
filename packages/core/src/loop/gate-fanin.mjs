@@ -29,6 +29,7 @@
 
 import { scheduleParallelWaves } from "./queue-parallel.mjs";
 import { trimmedOrNull } from "./normalize.mjs";
+import { clusterFindings } from "./finding-cluster.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "./reviewer-unit-bound.mjs";
 
 /**
@@ -1179,6 +1180,9 @@ export function validateJudgeVerdict(verdict) {
         throw new Error(`judge verdict.dispositions[${i}].${field} must be a non-empty string (the judge authors each cluster's prose)`);
       }
     }
+    if (entry.failOpen !== undefined && typeof entry.failOpen !== "boolean") {
+      throw new Error(`judge verdict.dispositions[${i}].failOpen must be a boolean when present`);
+    }
     if (entry.disposition !== "act" && (typeof entry.reason !== "string" || entry.reason.trim().length === 0)) {
       throw new Error(`judge verdict.dispositions[${i}].reason must be a non-empty one-sentence string on a ${entry.disposition} disposition`);
     }
@@ -1242,9 +1246,10 @@ export function assertNoProjectedForbiddenDefer(enriched, clusters) {
  *
  * @param {Array<object>} findings — the flat consolidated findings array
  * @param {object} judgeVerdict — the validated judge verdict artifact
+ * @param {{ pastCap?: boolean, round?: number }} [options] — `pastCap`: the draft_gate round is at or past `gates.draft.maxReviewRounds` (default false); `round`: the draft_gate round number from the same resolver (0 without a round count, e.g. pre_approval_gate)
  * @returns {{ findings: Array<object>, scopeDrift: object }}
  */
-export function applyJudgeDispositions(findings, judgeVerdict) {
+export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false, round = 0 } = {}) {
   const validated = validateJudgeVerdict(judgeVerdict);
   const list = Array.isArray(findings) ? findings : [];
   const enriched = list.map((f) => ({ ...f }));
@@ -1254,15 +1259,46 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
   const stamped = enriched.every((f) => Number.isInteger(f?.clusterId));
   const clusterOf = (i) => (stamped ? enriched[i].clusterId : i);
   const clusterIds = new Set(enriched.map((_f, i) => clusterOf(i)));
+  // Unstamped (legacy) ledgers cluster later (judge-pass and the ledger writer), so the coercion reads the same clusters up front.
+  const projectedClusters = stamped ? [] : clusterFindings(enriched, { headSha: validated.headSha }).clusters;
+  const originalSeverities = enriched.map((f) => normalizeSeverity(f.severity));
   for (const d of validated.dispositions) {
     if (!clusterIds.has(d.index)) {
       throw new Error(`judge disposition index ${d.index} is out of range (findings has ${enriched.length} entries) or is not a clusterId`);
     }
+    const memberIndices = stamped
+      ? enriched.flatMap((_f, i) => (clusterOf(i) === d.index ? [i] : []))
+      : projectedClusters.find((c) => c.memberIndices.includes(d.index)).memberIndices;
     if (d.disposition === "defer") {
       // GATE-EXEC-THREAD-DISPOSITION: a high, a question and an all-nit cluster are never deferred.
-      const blocked = neverDeferredSeverity(enriched.filter((_f, i) => clusterOf(i) === d.index));
+      const blocked = neverDeferredSeverity(memberIndices.map((i) => enriched[i]));
       if (blocked) {
         throw new Error(`judge disposition for cluster ${d.index} defers a cluster whose severity is ${blocked}; a high, a question or an all-nit cluster is never deferred (GATE-EXEC-THREAD-DISPOSITION) — fail closed`);
+      }
+    }
+    // ADR 0188: an `act` on a cluster is coerced from the cluster each finding is projected into and the ORIGINAL severities
+    // (read before any promotion, so the result never depends on disposition order). failOpen promotes a cluster holding a low
+    // to medium and keeps act in every round; else (failOpen is ignored on an all-nit cluster) an all-nit cluster stays act only in
+    // draft round 1 below the cap (the fixer fixes it) and rejects after; a low/nit cluster with a low (its nit members ride along,
+    // one disposition per cluster) stays act below the round cap and defers at or past it.
+    let disposition = d.disposition;
+    let reason = d.reason;
+    let followUpDraft = d.followUpDraft;
+    let promote = false;
+    // The projection copies one member's disposition onto the rest, so any act failOpen inside the projected cluster counts.
+    // Unstamped only: on a stamped ledger `index` is a clusterId, not a finding position.
+    const failOpen = d.failOpen === true || (!stamped && validated.dispositions.some((o) => o.disposition === "act" && o.failOpen === true && memberIndices.includes(o.index)));
+    const severities = memberIndices.map((i) => originalSeverities[i]);
+    const lowOrNitOnly = severities.every((s) => s === "low" || s === "nit");
+    const allNit = severities.every((s) => s === "nit");
+    if (disposition === "act") {
+      if (failOpen && lowOrNitOnly && severities.includes("low")) {
+        promote = true;
+      } else if (lowOrNitOnly && (allNit ? !(round === 1 && !pastCap) : pastCap)) {
+        disposition = allNit ? "reject" : "defer";
+        const code = "low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP)";
+        reason = typeof reason === "string" && reason.trim().length > 0 ? `${code}: ${reason.trim()}` : code;
+        if (disposition === "defer" && !followUpDraft) followUpDraft = { title: d.title.trim(), body: d.detail.trim() };
       }
     }
     for (const [i, target] of enriched.entries()) {
@@ -1273,17 +1309,20 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
       delete target.judgeCriterion;
       delete target.followUpDraft;
       delete target.judgeReason;
-      target.judgeDisposition = d.disposition;
+      if (promote) target.severity = "medium";
+      delete target.resurfaces;
+      if (typeof d.resurfaces === "string" && d.resurfaces.trim().length > 0) target.resurfaces = d.resurfaces.trim();
+      target.judgeDisposition = disposition;
       target.judgeRationale = d.rationale;
       target.judgeTitle = d.title.trim();
       target.judgeDetail = d.detail.trim();
       target.judgeFix = d.fix.trim();
-      if (typeof d.reason === "string" && d.reason.trim().length > 0) target.judgeReason = d.reason.trim();
+      if (typeof reason === "string" && reason.trim().length > 0) target.judgeReason = reason.trim();
       if (typeof d.criterion === "string" && d.criterion.trim().length > 0) {
         target.judgeCriterion = d.criterion.trim();
       }
-      if (d.disposition === "defer" && d.followUpDraft) {
-        target.followUpDraft = d.followUpDraft;
+      if (disposition === "defer" && followUpDraft) {
+        target.followUpDraft = followUpDraft;
       }
     }
   }
@@ -1311,6 +1350,51 @@ export const isOpenActItem = (f) => Boolean(f) && f.judgeDisposition === "act" &
  */
 export function listOpenActItems(findings) {
   return (Array.isArray(findings) ? findings : []).filter(isOpenActItem);
+}
+
+/** A round is past the cap when its completed-round count (the posted round included) reaches a positive cap. */
+export const isPastRoundCap = (round, cap) => cap > 0 && round >= cap;
+
+/**
+ * The `capClosed` record of a past-cap judge defer or reject, or null for any other finding. A locatable question
+ * keeps its thread and is never cap-closed.
+ */
+export function capClosedFor(finding, { round, cap }) {
+  const judgeDisposition = finding?.judgeDisposition;
+  if (judgeDisposition !== "defer" && judgeDisposition !== "reject") return null;
+  const severity = normalizeSeverity(finding.severity);
+  if (severity === "question" && hasLocatableShape(finding)) return null;
+  return { judgeDisposition, severity, round, cap };
+}
+
+/**
+ * Blockers a past-cap draft_gate round composes into `blocked`. A new act item and a re-surfaced high or medium
+ * act item block, unless every act item is low or nit (the low/nit convergence rule applies instead). A reviewer high or medium that the judge defers or
+ * rejects, a missing disposition and an unknown severity block as `severity_disagreement`.
+ * @returns {Array<{ kind: "round_cap_reached", reason: "new_act"|"resurfaced"|"severity_disagreement", item: string }>}
+ */
+export function pastCapBlockers(findings) {
+  const list = Array.isArray(findings) ? findings : [];
+  const label = (f, reason) => `[${normalizeSeverity(f?.severity)}] ${String(f?.summary ?? "").trim()} (${reason})`;
+  const acts = list.filter(isOpenActItem);
+  const lowNitOnly = acts.every((f) => ["low", "nit"].includes(normalizeSeverity(f.severity)));
+  const blockers = [];
+  if (!lowNitOnly) {
+    for (const f of acts) {
+      const severity = normalizeSeverity(f.severity);
+      const reason = !f.resurfaces ? "new_act" : severity === "high" || severity === "medium" ? "resurfaced" : null;
+      if (reason) blockers.push({ kind: "round_cap_reached", reason, item: label(f, reason) });
+    }
+  }
+  for (const f of list) {
+    if (isOpenActItem(f)) continue;
+    const severity = normalizeSeverity(f?.severity);
+    const closed = f?.judgeDisposition === "defer" || f?.judgeDisposition === "reject";
+    if (!JUDGE_DISPOSITIONS.includes(f?.judgeDisposition) || !VALID_SEVERITIES.has(severity) || (closed && (severity === "high" || severity === "medium"))) {
+      blockers.push({ kind: "round_cap_reached", reason: "severity_disagreement", item: label(f, "severity_disagreement") });
+    }
+  }
+  return blockers;
 }
 
 /** True when the list is non-empty and every finding carries a judge disposition. Pure. */

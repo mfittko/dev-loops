@@ -20,7 +20,7 @@ import {
   renderGateReviewCommentBody,
   renderStructuredFindings,
   summarizeCheckpointVerdictText,
-  upsertCheckpointVerdict,
+  upsertCheckpointVerdict as upsertWithCap,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { buildFanoutEnforcement, buildPreMergeGateCheck, deriveEvidenceState, detectCheckpointEvidence, EVIDENCE_STATE, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
@@ -29,6 +29,24 @@ import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../../scripts/g
 import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
+
+// The legacy input shapes in this file predate the round cap. A fixture repo root that does not set the cap gets
+// maxReviewRounds: 0 (the cap has its own tests in upsert-checkpoint-verdict-round-cap.test.mjs).
+async function capOff(dir) {
+  if (!dir || path.resolve(dir) === process.cwd()) return;
+  const file = path.join(dir, ".devloops");
+  const text = await readFile(file, "utf8").catch(() => "version: 1\n");
+  if (/maxReviewRounds/.test(text)) return;
+  const draft = "  draft:\n    maxReviewRounds: 0\n";
+  const patched = /^  draft:.*\n/m.test(text) ? text.replace(/^  draft:.*\n/m, (m) => `${m}    maxReviewRounds: 0\n`)
+    : /^gates:.*\n/m.test(text) ? text.replace(/^gates:.*\n/m, (m) => `${m}${draft}`)
+      : `${text.replace(/\n?$/, "\n")}gates:\n${draft}`;
+  await writeFile(file, patched, "utf8");
+}
+const upsertCheckpointVerdict = async (options, deps = {}) => {
+  await capOff(deps.repoRoot);
+  return upsertWithCap(options, deps);
+};
 // #1592: several fixtures below deliberately keep pre-rename severity
 // spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
 // intentional backward-compat coverage (normalizeSeverity normalizes them on
@@ -80,7 +98,8 @@ before(async () => {
   // (the repo pins refinement.maxCopilotRounds to 2 for test isolation).
   // Assertions are unchanged; the replace is a
   // no-op when the ambient value is already 2 (e.g. main).
-  const patched = fanoutOff.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2");
+  // The legacy input shapes below predate the round cap, so the default fixture turns it off (the cap has its own tests).
+  const patched = fanoutOff.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2").replace("\n  draft:\n", "\n  draft:\n    maxReviewRounds: 0\n");
   assert.match(patched, /maxCopilotRounds: 2/, "expected refinement.maxCopilotRounds in the repo's own .devloops to pin for test isolation");
   await writeFile(path.join(fanoutDisabledRepoRoot, ".devloops"), patched, "utf8");
 });
@@ -5024,7 +5043,7 @@ test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict inste
     // resolved config is otherwise bare defaults — disable fan-out evidence
     // enforcement explicitly; this repro is about the draft-transition
     // self-heal deadlock, not fan-out evidence.
-    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n  draft:\n    maxReviewRounds: 0\n", "utf8");
     const headSha = "abc1234000000000000000000000000000000000";
     const cleanPreApprovalComment = {
       id: 501,
