@@ -704,16 +704,42 @@ test("an unreadable or malformed base validation block resolves incomplete and r
   }
 });
 
-test("a checkout-only validation.paths edit never supplies a gate suite", async () => {
+const pathsRule = (suite) => `version: 1\nvalidation:\n  mode: local\n  paths:\n    - match: "**"\n      surface: all\n      commands: [bun run ${suite}]\n      gateSuites: [${suite}]\n`;
+
+test("with a paths-only edit, resolveValidation runs the requested suites that match the base paths", async () => {
   const { repoRoot } = await fixture();
   try {
-    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\nvalidation:\n  mode: local\n  paths:\n    - match: src/**\n      surface: src\n      commands: [bun run passing]\n      gateSuites: [passing]\n");
+    await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:docs"));
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "base paths"], { cwd: repoRoot });
+    execFileSync("git", ["push", "-q", "origin", "HEAD:refs/heads/main"], { cwd: repoRoot });
+    execFileSync("git", ["fetch", "-q", "origin"], { cwd: repoRoot });
+    await writeFile(path.join(repoRoot, "x.txt"), "x\n");
+    await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:scripts"));
+    execFileSync("git", ["add", "x.txt"], { cwd: repoRoot });
     execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "pr edit"], { cwd: repoRoot });
     const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
-    // Only the caller's --suite values run; the checkout gateSuites (passing) supply nothing.
     const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:docs"]), { repoRoot });
     assert.equal(result.status, "complete");
     assert.deepEqual(result.artifact.suites.map((s) => s.command), ["bun run test:docs"]);
+    // The checkout-selected suite is not the base-selected one, so it resolves incomplete.
+    const checkoutSuite = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot });
+    assert.equal(checkoutSuite.status, "incomplete");
+    assert.match(checkoutSuite.reason, /base branch validation paths/);
+    assert.equal(checkoutSuite.artifact, undefined);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
+test("a checkout-only validation.paths edit that selects suites the base paths do not select resolves incomplete", async () => {
+  const { repoRoot } = await fixture();
+  try {
+    await writeFile(path.join(repoRoot, ".devloops"), pathsRule("test:scripts"));
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qam", "pr edit"], { cwd: repoRoot });
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    const result = await resolveValidation(parseResolveValidationArgs([...args(headSha, "targeted"), "--suite", "test:scripts"]), { repoRoot });
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /base branch validation paths/);
+    assert.equal(result.artifact, undefined);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
@@ -781,7 +807,7 @@ async function secondGate(rewrite, firstProfile = "full-repository", secondProfi
   const readPrTitle = async () => "feat: x";
   const { repoRoot, headSha } = await fixture();
   try {
-    const suite = (profile) => profile === "targeted" ? ["--suite", "passing"] : [];
+    const suite = (profile) => profile === "targeted" ? ["--suite", "test:scripts"] : [];
     const first = await resolveValidation(parseResolveValidationArgs([...args(headSha, firstProfile), ...suite(firstProfile)]), { repoRoot, readPrTitle });
     const file = path.join(repoRoot, first.artifactPath);
     if (rewrite) await writeFile(file, JSON.stringify(rewrite(first.artifact)));

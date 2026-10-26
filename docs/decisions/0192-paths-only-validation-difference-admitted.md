@@ -8,7 +8,7 @@ Amends [ADR 0137](./0137-validation-modes-and-consumer-configured-commands.md) f
 
 ## Context
 
-ADR 0137 refuses any difference between the checkout `.devloops` validation block and the base block. PR 2851 edits only `validation.paths` (22 rules on the base, 24 on the head). The refusal left that PR `incomplete`. The gate never executes `paths`. The `ci-only` branch reads neither the checkout nor the base `paths`. The `local` path takes suites from caller `--suite` values. The only gate-side consumer of `paths` is `validation-record.mjs`, and it passes the base block's `paths`.
+ADR 0137 refuses any difference between the checkout `.devloops` validation block and the base block. PR 2851 edits only `validation.paths` (22 rules on the base, 24 on the head). The refusal left that PR `incomplete`. The gate never executes `paths`. The `ci-only` branch reads neither the checkout nor the base `paths`. Two gate-side callers derive suites from `paths`. `validation-record.mjs` passes the base block's `paths`. The gate preamble passes `gateSuites` from `resolveTargetedValidation(changedPaths)` as `--suite`, and that function reads the checkout `paths` by default. For a targeted request with differing `paths`, `resolveValidation` recomputes the expected suites from the base `paths` and resolves `incomplete` unless the requested suite set equals them.
 
 ## Decision
 

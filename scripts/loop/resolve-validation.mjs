@@ -7,6 +7,7 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 
 import { ValidationConfig, resolveValidationConfig } from "@dev-loops/core/config";
+import { resolveTargetedValidation } from "@dev-loops/core/loop/validation-classify";
 import { LOOP_DERIVED_CI_CHECK_NAMES, deriveLoopCiStatusFromRollup, partitionEntriesByCheckName } from "@dev-loops/core/loop/copilot-ci-status";
 
 import { parsePrNumber } from "../_cli-primitives.mjs";
@@ -109,7 +110,8 @@ export function readCheckoutValidation(repoRoot) {
 }
 
 // ADR 0192 (ADR0192-PATHS-ONLY-ADMIT): `paths` is never executed by the gate, so a difference in `paths`
-// alone is admitted. Any other difference refuses. Execution reads only the base block.
+// alone is admitted. Any other difference refuses. Execution reads only the base block, and a targeted
+// request's suites are checked against the base paths in `resolveValidation`.
 export function validationDifferenceRefusal(checkout, base) {
   const { paths: _checkoutPaths, ...checkoutRest } = checkout;
   const { paths: _basePaths, ...baseRest } = base;
@@ -221,6 +223,13 @@ export async function resolveValidation(options, { repoRoot = resolveRepoRoot(pr
       if (options.profile === "targeted" && classification === "full-repository") return incomplete("targeted profile cannot run full-repository validation");
       if (options.profile === "targeted" && classification !== "targeted") return incomplete("targeted profile requires a validation suite");
       if (options.profile === "full-repository" && classification !== "full-repository") return incomplete("verify script is not classified as full-repository validation");
+      // ADR 0192: an admitted paths-only difference must not let checkout `paths` choose the suites.
+      // The requested suites must equal those the base paths select for the PR's changed paths.
+      if (options.profile === "targeted" && JSON.stringify(checkout.validation.paths ?? []) !== JSON.stringify(base.validation.paths ?? [])) {
+        const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `origin/HEAD...${options.headSha}`], { cwd: repoRoot, encoding: "utf8", env: gitEnv, stdio: ["ignore", "pipe", "ignore"] }).split("\0").filter(Boolean).sort();
+        const expected = resolveTargetedValidation(changed, base.validation.paths ?? []).gateSuites;
+        if (JSON.stringify([...new Set(options.suites)].sort()) !== JSON.stringify(expected)) return incomplete("requested suites differ from the suites the base branch validation paths select for the changed paths");
+      }
       // Reuse another lifecycle gate's passing artifact for the same head, profile, toolchain and suites.
       // The suites consume the PR title (DEVLOOPS_PR_TITLE), so the title is part of the match key; an unreadable title never reuses.
       // ponytail: reused suites keep the source gate's outputPath log; a rerun of that gate at the same head may overwrite it.
