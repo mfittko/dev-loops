@@ -652,6 +652,17 @@ test("the base-only merge is checked against the configured base, not a hardcode
   } finally { fs.rmSync(cfg, { force: true }); }
 });
 
+test("input mode rejects an earlier-head findings log when .devloops fails to load", async () => {
+  const { actList } = fixture();
+  const cfg = path.join(coverageRepo, ".devloops");
+  try {
+    const seam = { ...headAt("c".repeat(40)), baseOnlyMerge: async () => true };
+    const bound = await boundArgs(["--act-list", actList, "--baseline", B, "--spec-identity", "s", "--findings-log", logFor(A)], seam);
+    fs.writeFileSync(cfg, "version: 1\nworkflow:\n  baseBranch: develop\nbogusKey: true\n");
+    await assert.rejects(runDeltaCli(bound.args, bound.seam), /not the baseline/);
+  } finally { fs.rmSync(cfg, { force: true }); }
+});
+
 test("input mode still rejects an earlier-head findings log after a PR-own change or a seam error", async () => {
   const { actList } = fixture();
   for (const baseOnlyMerge of [async () => false, async () => { throw new Error("git failed"); }]) {

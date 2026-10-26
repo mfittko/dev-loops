@@ -265,7 +265,8 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
   const sameHead = HEAD_SHA_RE.test(logHead) && (logHead.startsWith(baseline) || baseline.startsWith(logHead));
   const earlierHead = !sameHead && HEAD_SHA_RE.test(logHead)
     && await Promise.resolve().then(async () => {
-      const { config } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(worktree) });
+      const { config, errors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(worktree) });
+      if (errors?.length) throw new Error(`.devloops failed to load (${errors.length} error(s)): the earlier-head findings log fails closed`);
       return baseOnlyMerge({ fromHead: logHead, head: baseline, mainRef: `origin/${resolveBaseBranch(config, { cwd: worktree })}`, repoRoot: worktree });
     }).catch(() => false);
   if (!sameHead && !earlierHead) {
