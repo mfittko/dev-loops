@@ -1949,7 +1949,7 @@ export async function listPriorActItems(options, { repoRoot }) {
 /** The one closure-round fromHead derivation: the head of the latest closed ledger; throws when it is not a non-blank string. */
 export function closureFromHeadOf(closed) {
   const last = closed.at(-1)?.headSha;
-  if (typeof last !== "string" || last.trim().length === 0) throw new Error("closure round reached but the latest closed prior round's head cannot be recovered (its ledgers are unreadable); refusing to build the context");
+  if (typeof last !== "string" || last.trim().length === 0) throw new Error("closure round reached but the latest closed prior round's head cannot be recovered (its ledgers are unreadable)");
   return last.trim().toLowerCase();
 }
 
