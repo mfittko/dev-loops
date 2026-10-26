@@ -58,9 +58,13 @@ test("changed surfaces select existing checks and unknown changes fail closed", 
     [["scripts/loop/run-gate-validation.mjs"], ["bun run test:scripts"], ["test:scripts"]],
     [["scripts/claude/generate-claude-assets.mjs"], ["bun run assets:check", "bun run test:doc-guard"], ["assets:check", "test:doc-guard"]],
     [["test/loop/run-gate-validation.test.mjs"], ["bun scripts/run-bun-test.mjs test/loop/run-gate-validation.test.mjs"], ["test:scripts"]],
-    [["skills/docs/validation-contract.md"], ["bun run test:doc-guard", "bun run test:docs"], ["test:doc-guard", "test:docs"]],
-    [["skills/loop-grill/SKILL.md"], ["bun run test:doc-guard", "bun run test:docs"], ["test:doc-guard", "test:docs"]],
-    [["skills/loop-grill/SKILL.md", "skills/docs/validation-contract.md"], ["bun run test:doc-guard", "bun run test:docs"], ["test:doc-guard", "test:docs"]],
+    [["skills/docs/validation-contract.md"], ["bun run test:doc-guard", "bun run test:docs", "bun scripts/run-bun-test.mjs --referencing skills/docs/validation-contract.md"], ["test:doc-guard", "test:docs"]],
+    [["skills/loop-grill/SKILL.md"], ["bun run test:doc-guard", "bun run test:docs", "bun scripts/run-bun-test.mjs --referencing skills/loop-grill/SKILL.md"], ["test:doc-guard", "test:docs"]],
+    [["skills/loop-grill/SKILL.md", "skills/docs/validation-contract.md"], ["bun run test:doc-guard", "bun run test:docs", "bun scripts/run-bun-test.mjs --referencing skills/docs/validation-contract.md", "bun scripts/run-bun-test.mjs --referencing skills/loop-grill/SKILL.md"], ["test:doc-guard", "test:docs"]],
+    [["docs/x.md"], ["bun run test:doc-guard", "bun run test:docs"], ["test:doc-guard", "test:docs"]],
+    [["changes/x.md"], ["bun run test:docs"], ["test:docs"]],
+    [["packages/core/src/loop/validation-classify.mjs", "changes/x.md"], ["bun run assets:check", "bun run test:core", "bun run test:docs"], ["assets:check", "test:core", "test:docs"]],
+    [["skills/docs/validation-contract.md", ".claude/skills/docs/validation-contract.md"], ["bun run assets:check", "bun run test:assets", "bun run test:doc-guard", "bun run test:docs", "bun scripts/run-bun-test.mjs --referencing skills/docs/validation-contract.md"], ["assets:check", "test:assets", "test:doc-guard", "test:docs"]],
     [[".github/workflows/ci.yml"], ["bun run test:workflows"], ["test:workflows"]],
     [["extension/index.ts"], ["bun run test:extension"], ["test:extension"]],
     [["packages/core/src/x.mjs", "extension/index.ts"], ["bun run assets:check", "bun run test:core", "bun run test:extension"], ["assets:check", "test:core", "test:extension"]],
@@ -86,7 +90,7 @@ test("mixed core and docs checks form a sorted unique union independent of path 
   const paths = ["packages/core/src/loop/validation-classify.mjs", "skills/docs/validation-contract.md", "packages/core/src/loop/validation-classify.mjs"];
   const expected = {
     profile: "targeted",
-    commands: ["bun run assets:check", "bun run test:core", "bun run test:doc-guard", "bun run test:docs"],
+    commands: ["bun run assets:check", "bun run test:core", "bun run test:doc-guard", "bun run test:docs", "bun scripts/run-bun-test.mjs --referencing skills/docs/validation-contract.md"],
     gateSuites: ["assets:check", "test:core", "test:doc-guard", "test:docs"],
   };
   assert.deepEqual(resolveTargetedValidation(paths), expected);
