@@ -16,6 +16,13 @@ test("GATE-EXEC-ROUND-CAP states the cap-round fix, the one closure round and th
   assert.ok(!rule.includes("unchanged in this slice"));
 });
 
+test("GATE-EXEC-FIXER-CYCLE-BOUND cites GATE-EXEC-ROUND-CAP for the closure-only cap", async () => {
+  const contract = await read("skills/docs/gate-review-sub-loop-contract.md");
+  const line = contract.split("\n").find((l) => l.startsWith("`GATE-EXEC-FIXER-CYCLE-BOUND`"));
+  assert.ok(line.includes("`GATE-EXEC-ROUND-CAP`"));
+  assert.ok(!line.includes("Until slice S4 lands"));
+});
+
 test("the judge brief carries the closure-round rule and cites the owning rule", async () => {
   const judge = await read("agents/judge.agent.md");
   assert.match(judge, /closure round \(work order `closureRound: true`, `GATE-EXEC-ROUND-CAP`\)/);
