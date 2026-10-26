@@ -1170,7 +1170,7 @@ export function commandContainsInlineInterpreter(command) {
       // Node value-taking flags (short + long) each consume the following token. Consuming them lets
       // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
       // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value.
-      const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd"]);
+      const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type"]);
       for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
         if (isStdinScriptToken(t)) return true;
@@ -1185,10 +1185,13 @@ export function commandContainsInlineInterpreter(command) {
     if (interpreterRegex("python3?").test(s)) {
       const code = s.replace(interpreterRegex("python3?"), "").trim();
       const tokens = code.split(/\s+/).filter(Boolean);
-      for (const t of tokens) {
+      const PYTHON_VALUE_FLAGS = new Set(["-W", "-X"]);
+      for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
         if (isStdinScriptToken(t)) return true;
         if (t === "-c" || t.startsWith("-c")) return true;
         if (!t.startsWith("-")) break; // script path reached — a later `-c` is a script argument
+        if (PYTHON_VALUE_FLAGS.has(t)) { i += 1; continue; } // skip the flag's value token
       }
     }
     return false;

@@ -2,18 +2,17 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-import { analyzeTranscript, run } from "../../scripts/loop/check-retro-tooling.mjs";
 import { commandContainsInlineInterpreter } from "@dev-loops/core/loop/bash-command-classify";
-import { readFileSync } from "node:fs";
+import { analyzeTranscript, run } from "../../scripts/loop/check-retro-tooling.mjs";
 
 test("retro node verdict matches the shared classifier (#2943)", () => {
-  for (const [cmd, bad] of [["node --input-type=module - <<EOF", true], ["node scripts/x.mjs", false]]) {
+  for (const [cmd, bad] of [["node --input-type=module - <<EOF", true], ["node -p 1", true], ["node --require x.js - <<EOF", true], ["node scripts/x.mjs", false]]) {
     assert.equal(analyzeTranscript(cmd).violations.length > 0, bad, cmd);
     assert.equal(commandContainsInlineInterpreter(cmd), bad, cmd);
   }

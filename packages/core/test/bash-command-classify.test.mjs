@@ -834,10 +834,10 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   assert.equal(commandContainsInlineInterpreter("python3 - <<'EOF'\n...\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter("node - <<'EOF'\n...\nEOF"), true);
   // stdin script / heredoc AFTER interpreter flags (#2943)
-  for (const c of ["python3 -I - <<EOF", "python3 -u - <<'EOF'", "node --input-type=module - <<EOF", "node - <<EOF", "node --input-type=module <<EOF", "python3 -I -<<EOF"]) {
+  for (const c of ["python3 -I - <<EOF", "python3 -u - <<'EOF'", "node --input-type=module - <<EOF", "node - <<EOF", "node --input-type=module <<EOF", "python3 -I -<<EOF", "python3 -W ignore - <<EOF", "python3 -X dev - <<EOF", "node --input-type module - <<EOF", "node --require x.js - <<EOF"]) {
     assert.equal(commandContainsInlineInterpreter(c), true, c);
   }
-  for (const c of ["python3 -I script.py", "node scripts/x.mjs", "python3 script.py <<EOF"]) {
+  for (const c of ["python3 -I script.py", "node scripts/x.mjs", "python3 script.py <<EOF", "grep node <<EOF", "node scripts/x.mjs --flag -", "node --require x.js script.mjs", "python3 -m json.tool <<EOF"]) {
     assert.equal(commandContainsInlineInterpreter(c), false, c);
   }
   // sanctioned script invocations and plain reads are NOT inline interpreters
