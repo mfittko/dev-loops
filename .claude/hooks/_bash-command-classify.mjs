@@ -1168,7 +1168,7 @@ export function commandContainsInlineInterpreter(command) {
     if (interpreterRegex("node").test(s)) {
       const code = s.replace(interpreterRegex("node"), "").trim();
       const tokens = code.split(/\s+/).filter(Boolean);
-      // ponytail: closed list of value flags; an unlisted one ends the scan early. Add flags as found.
+      // ponytail: closed list of value flags. An unlisted `--long value` flag fails closed: when the scan breaks on a non-flag token that follows a `--flag` without `=`, a stdin-script token right after it is refused.
       // Node value-taking flags (short + long) each consume the following token. Consuming them lets
       // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
       // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value.
@@ -1180,8 +1180,12 @@ export function commandContainsInlineInterpreter(command) {
         // prefix match catches; break at the first non-flag token so a later `-e` on a script path
         // is a script argument.
         if (t === "-e" || t.startsWith("-e") || t === "--eval" || t.startsWith("--eval=") || t === "-p" || t.startsWith("-p")) return true;
-        if (!t.startsWith("-")) break; // script path reached — a later `-e` is a script argument
-        if (NODE_VALUE_FLAGS.has(t)) { i += 1; continue; } // skip the flag's value token
+        if (!t.startsWith("-")) {
+          const prev = tokens[i - 1];
+          if (prev?.startsWith("--") && !prev.includes("=") && isStdinScriptToken(tokens[i + 1] ?? "")) return true;
+          break; // script path reached — a later `-e` is a script argument
+        }
+        if (NODE_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
       }
     }
     if (interpreterRegex("python3?").test(s)) {
@@ -1193,7 +1197,7 @@ export function commandContainsInlineInterpreter(command) {
         if (isStdinScriptToken(t)) return true;
         if (t === "-c" || t.startsWith("-c")) return true;
         if (!t.startsWith("-")) break; // script path reached — a later `-c` is a script argument
-        if (PYTHON_VALUE_FLAGS.has(t)) { i += 1; continue; } // skip the flag's value token
+        if (PYTHON_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
       }
     }
     return false;
