@@ -101,7 +101,7 @@ describe("draft_gate round cap", () => {
 
     test("the PR 2944 round 4 shape raises no blocker at the cap round and blocks at cap+1 and cap+2", () => {
       assert.deepEqual(pastCapBlockers(replay(), at(4)), []);
-      assert.equal(blockerReasons(replay(), at(5)).filter((r) => r === "resurfaced").length, 2);
+      assert.equal(blockerReasons(replay(), at(5)).filter((r) => r === "resurfaced").length, 3);
       assert.ok(blockerReasons(replay(), at(5)).length >= 3);
       assert.ok(blockerReasons(replay(), at(6)).length >= 3, "a second closure round is refused");
     });
@@ -188,5 +188,17 @@ describe("draft_gate round cap", () => {
     assert.equal(capClosedFor(act("low"), ctx), null);
     assert.equal(capClosedFor(closed("question", "reject", { file: "a.mjs", line: 3 }), ctx), null);
     assert.notEqual(capClosedFor(closed("question", "reject"), ctx), null);
+  });
+});
+
+describe("rounds after the cap round block on any act item", () => {
+  const after = { pr: 9999, round: 5, cap: 4 };
+  const blockerReasons = (findings, c) => pastCapBlockers(findings, c).map((b) => b.reason);
+
+  test("an all-low or all-nit act list blocks at cap+1 and raises none at the cap round", () => {
+    assert.deepEqual(blockerReasons([act("low"), act("nit")], after), ["new_act", "new_act"]);
+    assert.deepEqual(blockerReasons([act("nit", { resurfaces: "abcd" })], after), ["resurfaced"]);
+    assert.deepEqual(blockerReasons([act("low")], { ...after, round: 4 }), []);
+    assert.deepEqual(blockerReasons([act("low")], { ...after, round: 3 }), []);
   });
 });

@@ -401,3 +401,24 @@ test("a judge-marked failOpen act item with a judgeFix at the cap round goes to 
   assert.equal(verdictOf(out), "findings_present");
   assert.doesNotMatch(out.body, /round_cap_reached/);
 });
+
+test("in the closure round a low or nit act item blocks, though the cap round keeps it for the fixer", async () => {
+  await withTempDir(async (tempDir) => {
+    for (const severity of ["low", "nit"]) {
+      await seedPrior(repoRoot, [...priorHeads, extraPriors[0]]);
+      const out = await post(["--findings-ledger", await writeLedger(tempDir, { findings: [finding(severity, "act")] })]);
+      assert.equal(verdictOf(out), "blocked", severity);
+      assert.match(out.body, /round_cap_reached/);
+    }
+  }, { prefix: "dev-loops-round-cap-closure-lownit-" });
+});
+
+test("the closure round (count cap+1) posts the closure round line with the last closed ledger head", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledger = await writeLedger(tempDir, { overallVerdict: "clean", findings: [] });
+    await seedPrior(repoRoot, [...priorHeads, extraPriors[0]]);
+    assert.match((await post(["--findings-ledger", ledger])).body, new RegExp(`closure round: diff from ${extraPriors[0]}`));
+    await seedPrior(repoRoot, priorHeads);
+    assert.doesNotMatch((await post(["--findings-ledger", ledger])).body, /closure round: diff from/, "the cap round has no closure line");
+  }, { prefix: "dev-loops-round-cap-closure-line-" });
+});

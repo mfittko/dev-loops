@@ -1372,11 +1372,11 @@ export function capClosedFor(finding, { round, cap }) {
 
 /**
  * Blockers a past-cap draft_gate round composes into `blocked`. A new act item and a re-surfaced high or medium
- * act item block, unless every act item is low or nit (GATE-EXEC-LOW-FIX-UNTIL-CAP applies instead). A high, a `failOpen: true` finding that is not an act item with a `judgeFix` at the cap round, a missing
+ * act item block, unless every act item is low or nit in the cap round or below it (GATE-EXEC-LOW-FIX-UNTIL-CAP applies instead). A high, a `failOpen: true` finding that is not an act item with a `judgeFix` at the cap round, a missing
  * disposition, an unknown severity, a medium `defer` without `followUpIssueNumber` and a medium `reject` without `judgeReason` block as
  * `severity_disagreement`. A defer to the PR itself (`pr`) is not a target, and a medium defer is never final when `pr` is not an integer (fail closed). A medium rejected with a reason or deferred with a target issue is final (ADR 0191).
  * At the cap round (`round === cap`) an act item of a known severity with a string `judgeFix` does not block: the round composes
- * `findings_present` and the fixer fixes it. In every round after the cap round any act item blocks and no fixer runs (GATE-EXEC-ROUND-CAP).
+ * `findings_present` and the fixer fixes it. In every round after the cap round any act item blocks, a low or nit and a re-surfaced one included, and no fixer runs (GATE-EXEC-ROUND-CAP).
  * A `judgeFix` or `judgeReason` counts only as a non-blank string.
  * @returns {Array<{ kind: "round_cap_reached", reason: "new_act"|"resurfaced"|"severity_disagreement", item: string }>}
  */
@@ -1388,13 +1388,15 @@ export function pastCapBlockers(findings, { pr, round, cap } = {}) {
   const list = Array.isArray(findings) ? findings : [];
   const label = (f, reason) => `[${normalizeSeverity(f?.severity)}] ${String(f?.summary ?? "").trim()} (${reason})`;
   const acts = list.filter(isOpenActItem);
-  const lowNitOnly = acts.every((f) => ["low", "nit"].includes(normalizeSeverity(f.severity)));
+  const afterCap = cap > 0 && round > cap;
+  // An all-low/nit list follows GATE-EXEC-LOW-FIX-UNTIL-CAP in the cap round and below it; in a round after the cap round any act item blocks.
+  const lowNitOnly = !afterCap && acts.every((f) => ["low", "nit"].includes(normalizeSeverity(f.severity)));
   const blockers = [];
   if (!lowNitOnly) {
     for (const f of acts) {
       if (atCap && hasRemedy(f)) continue;
       const severity = normalizeSeverity(f.severity);
-      const reason = !f.resurfaces ? "new_act" : severity === "high" || severity === "medium" ? "resurfaced" : null;
+      const reason = !f.resurfaces ? "new_act" : afterCap || severity === "high" || severity === "medium" ? "resurfaced" : null;
       if (reason) blockers.push({ kind: "round_cap_reached", reason, item: label(f, reason) });
     }
   }
