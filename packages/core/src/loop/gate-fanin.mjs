@@ -1285,7 +1285,8 @@ export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false
         promote = true;
       } else if (allNit ? !(round === 1 && !pastCap) : pastCap) {
         disposition = allNit ? "reject" : "defer";
-        if (typeof reason !== "string" || reason.trim().length === 0) reason = "low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP)";
+        const code = "low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP)";
+        reason = typeof reason === "string" && reason.trim().length > 0 ? `${code}: ${reason.trim()}` : code;
         if (disposition === "defer" && !followUpDraft) followUpDraft = { title: d.title.trim(), body: d.detail.trim() };
       }
     }

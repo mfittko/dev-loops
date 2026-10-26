@@ -1,7 +1,10 @@
 // ADR 0188: the autonomy principles are rules with one owner, a trigger, an actor, an outcome and a typed refusal code.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { test } from "bun:test";
+
+import { collectContractMarkdownFiles, extractRuleDefinitions, findEmbeddedRuleBodies } from "../../scripts/docs/validate-rule-ownership.mjs";
 
 const read = (p) => readFileSync(new URL(`../../${p}`, import.meta.url), "utf8");
 const OWNERS = {
@@ -15,7 +18,22 @@ const OWNERS = {
 };
 const ruleText = (id) => read(OWNERS[id]).split("\n").find((l) => l.startsWith(`\`${id}\``) || l.includes(`rule: ${id} --> \`${id}\``));
 
-test("each rule has one owner, no loose modal wording and names a trigger, actor and outcome", () => {
+test("no S1 rule has a second definition or an embedded body outside its owner", async () => {
+  const sources = (await collectContractMarkdownFiles()).map((file) => ({ file, content: readFileSync(file, "utf8") }));
+  const ids = new Set(Object.keys(OWNERS));
+  const defs = sources.flatMap(({ file, content }) => extractRuleDefinitions(content, file)).filter((def) => ids.has(def.id));
+  for (const id of ids) {
+    assert.deepEqual(defs.filter((def) => def.id === id).map((def) => def.file.split(path.sep).join("/")).map((f) => f.slice(f.indexOf(OWNERS[id]))), [OWNERS[id]], `${id} has exactly one definition, in its owner`);
+  }
+  const embedded = (text, own) => findEmbeddedRuleBodies(text, sources).filter((def) => ids.has(def.id) && def.file !== own).map((def) => def.id);
+  for (const { file, content } of sources) assert.deepEqual(embedded(content, file), [], `${file} embeds an S1 rule body`);
+  // Negative fixture: a pasted S1 rule body is detected; a bare citation is not.
+  const [pasted] = defs;
+  assert.deepEqual(embedded(`See \`${pasted.id}\`.`, "x.md"), []);
+  assert.deepEqual(embedded(`${pasted.body}`, "x.md"), [pasted.id]);
+});
+
+test("each rule has an owner-line with no loose modal wording that names a trigger, actor and outcome", () => {
   for (const id of Object.keys(OWNERS)) {
     const text = ruleText(id);
     assert.ok(text, id);

@@ -1572,7 +1572,7 @@ describe("applyJudgeDispositions (#1525)", () => {
     test("at or past the cap an act on a cluster holding a low becomes defer with a synthesized follow-up draft", () => {
       const { findings } = applyJudgeDispositions(cluster("low", "nit"), judgeVerdict([{ index: 0, ...act, reason: "kept reason" }]), { pastCap: true });
       assert.equal(findings[0].judgeDisposition, "defer");
-      assert.equal(findings[0].judgeReason, "kept reason");
+      assert.equal(findings[0].judgeReason, "low_fix_until_cap (GATE-EXEC-LOW-FIX-UNTIL-CAP): kept reason");
       assert.deepEqual(findings[1].followUpDraft, { title: "t", body: "d" });
     });
 
