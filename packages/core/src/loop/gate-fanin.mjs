@@ -1246,7 +1246,7 @@ export function assertNoProjectedForbiddenDefer(enriched, clusters) {
  *
  * @param {Array<object>} findings — the flat consolidated findings array
  * @param {object} judgeVerdict — the validated judge verdict artifact
- * @param {{ pastCap?: boolean, round?: number }} [options] — `pastCap`: the draft_gate round is at or past `gates.draft.maxReviewRounds` (default false); `round`: the draft_gate round number from the same resolver (0 without a round count, e.g. pre_approval_gate)
+ * @param {{ pastCap?: boolean, round?: number }} [options] — `pastCap`: the `lowFixCapped` state from `resolveDraftRoundCap`, true at or past `gates.draft.maxReviewRounds` and at pre_approval_gate in every round (default false); `round`: the draft_gate round number from the same resolver (0 without a round count, e.g. pre_approval_gate)
  * @returns {{ findings: Array<object>, scopeDrift: object }}
  */
 export function applyJudgeDispositions(findings, judgeVerdict, { pastCap = false, round = 0 } = {}) {

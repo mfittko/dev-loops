@@ -1926,14 +1926,16 @@ export async function countCompletedRounds(options, { repoRoot }) {
 /**
  * Round-cap state of the round being posted (GATE-EXEC-ROUND-CAP). The cap exists only for draft_gate, so any
  * other gate is never past it. One resolver for the judge pass, the ledger writer and the fixer emitter.
- * @returns {Promise<{ pastCap: boolean, round: number, cap: number }>}
+ * @returns {Promise<{ pastCap: boolean, round: number, cap: number, lowFixCapped: boolean }>}
  */
 export async function resolveDraftRoundCap(options, { repoRoot }) {
-  if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0 };
+  // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate has no round count and applies the past-cap low/nit coercion in every round.
+  if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0, lowFixCapped: options.gate === "pre_approval_gate" };
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
   const cap = resolveGateConfig(config, "draft").maxReviewRounds;
   const round = await countCompletedRounds(options, { repoRoot });
-  return { pastCap: isPastRoundCap(round, cap), round, cap };
+  const pastCap = isPastRoundCap(round, cap);
+  return { pastCap, round, cap, lowFixCapped: pastCap };
 }
 
 /** Act items of the closed prior rounds as `{ fingerprint, file, line, title }`, one per fingerprint. */
