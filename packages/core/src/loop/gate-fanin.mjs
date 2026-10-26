@@ -1274,8 +1274,10 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
     let reason = d.reason;
     let followUpDraft = d.followUpDraft;
     let promote = false;
+    const lowOrNit = (f) => ["low", "nit"].includes(normalizeSeverity(f.severity));
     const clusterMembers = enriched.filter((_f, i) => clusterOf(i) === d.index);
-    if (disposition === "act" && clusterMembers.every((f) => ["low", "nit"].includes(normalizeSeverity(f.severity)))) {
+    // Unstamped (legacy) ledgers cluster later, so a low could share a cluster with a medium: coerce only when the whole ledger is low/nit.
+    if (disposition === "act" && clusterMembers.every(lowOrNit) && (stamped || enriched.every(lowOrNit))) {
       if (d.failOpen === true) {
         promote = true;
       } else {

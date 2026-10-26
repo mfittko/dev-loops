@@ -11,6 +11,7 @@ const OWNERS = {
   "GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH": "skills/docs/gate-review-sub-loop-contract.md",
   "ADR-OVER-WAIVER": "skills/docs/decision-record-contract.md",
   "PLAN-SPLIT-BEFORE-OVERSIZE": "skills/docs/local-planning.md",
+  "GATE-EXEC-FIXER-CYCLE-BOUND": "skills/docs/gate-review-sub-loop-contract.md",
 };
 const ruleText = (id) => read(OWNERS[id]).split("\n").find((l) => l.startsWith(`\`${id}\``) || l.includes(`rule: ${id} --> \`${id}\``));
 

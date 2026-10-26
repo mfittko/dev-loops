@@ -39,5 +39,5 @@ test("no agent, skill or brief imposes a fixed fixer-cycle cap", async () => {
 test("the gate contract states the fixer-cycle bound", async () => {
   const text = (await readFile(path.join(repoRoot, "skills/docs/gate-review-sub-loop-contract.md"), "utf8")).replace(/\s+/g, " ");
   assert.match(text, /<!-- rule: GATE-EXEC-FIXER-CYCLE-BOUND -->/);
-  assert.match(text, /`GATE-EXEC-FIXER-CYCLE-BOUND`: No contract, agent brief or orchestrator brief sets a fixed fixer-cycle cap\. .{0,40}new `high` finding, .{0,20}size-band growth past the forecast .{0,20}closure-only round cap/);
+  assert.match(text, /`GATE-EXEC-FIXER-CYCLE-BOUND`: No contract, agent brief or orchestrator brief sets a fixed fixer-cycle cap\. .{0,120}new `high` finding, .{0,20}size-band growth past the forecast .{0,20}closure-only round cap/);
 });

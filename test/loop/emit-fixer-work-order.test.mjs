@@ -606,7 +606,7 @@ test("verdict_not_posted: an act-list order refuses without a posted verdict for
 const threadsOnly = { actListFile: undefined, gate: undefined, phase: "full" };
 const THREE = { ...THREADS, threads: ["T1", "T2", "T3"].map((threadId, i) => ({ ...THREADS.threads[0], threadId, commentId: i + 1 })) };
 
-test("F1: a judge-act finding below the inline floor still reaches the work order through the act list", async () => {
+test("F1: a judge-act finding reaches the work order through the act list", async () => {
   await withFixture(async ({ files, emit }) => {
     const lowAct = [{ severity: "medium", angle: "naming", summary: "rename the local", judgeDisposition: "act" }].map(withFp);
     await writeFile(files.actList, JSON.stringify(lowAct));
@@ -847,7 +847,7 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
     }
     // ADR 0188: an act list of only low/nit items never reaches the fixer.
     await writeFile(files.actList, JSON.stringify([withFp({ ...ACT[0], severity: "low" }), withFp({ ...ACT[0], severity: "nit", summary: "rename" })]));
-    await assert.rejects(emit(), /low_nit_never_blocks \(GATE-EXEC-LOW-NIT-NEVER-BLOCKS\).*only low or nit items/);
+    await assert.rejects(emit(), (e) => e.refusal === "low_nit_never_blocks" && /GATE-EXEC-LOW-NIT-NEVER-BLOCKS.*only low or nit items/.test(e.message));
     await writeFile(files.actList, JSON.stringify(ACT));
     await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ autonomy: { humanMergeOnly: "nope" } }));
     await assert.rejects(emit(), /dev-loops config is invalid/);

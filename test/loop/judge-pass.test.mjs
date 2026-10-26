@@ -426,6 +426,44 @@ test("judgePassCli accepts a clean verdict whose acts are all non-blocking, prod
   );
 });
 
+test("judgePassCli: an act verdict on 3 low + 1 nit findings is coerced, leaves the act list empty and composes clean (ADR 0188)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-low-nit-"));
+  await writeFile(
+    path.join(tmpDir, "ledger.json"),
+    JSON.stringify({
+      overallVerdict: "clean",
+      findings: [
+        finding({ severity: "low", summary: "low one" }),
+        finding({ severity: "low", summary: "low two" }),
+        finding({ severity: "low", summary: "low three" }),
+        finding({ severity: "nit", summary: "a nit" }),
+      ],
+    }),
+  );
+  const act = { disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "tempting to fix" };
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(verdict({ dispositions: [0, 1, 2, 3].map((index) => ({ index, ...act })) })),
+  );
+  const payload = await judgePassCli(
+    { repo: "mfittko/dev-loops", pr: "2243", gate: "draft_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json", out: "./act.json", ledgerOut: "./enriched.json" },
+    { repoRoot: tmpDir },
+  );
+  assert.equal(payload.ok, true);
+  assert.equal(payload.actCount, 0);
+  assert.deepEqual(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")), []);
+});
+
+test("runJudgePass never defers an unstamped [low, medium] duplicate cluster through the low-nit coercion (ADR 0188)", () => {
+  const findings = ledger(
+    locatedFinding({ severity: "low", angle: "correctness", summary: "null deref (low report)" }),
+    locatedFinding({ severity: "medium", angle: "security", summary: "null deref (medium report)" }),
+  );
+  const act = { disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "in scope" };
+  const result = runJudgePass(findings, verdict({ dispositions: [{ index: 0, ...act }, { index: 1, ...act }] }), HEAD);
+  assert.deepEqual(result.enriched.map((f) => f.judgeDisposition), ["act", "act"]);
+});
+
 // #2246: the fail-closed half of the same rule — a clean verdict with an act on
 // a BLOCKING severity (high, in this repo's block set) is genuinely invalid: an
 // acted high is unresolved blocking work, so the round cannot be clean.
