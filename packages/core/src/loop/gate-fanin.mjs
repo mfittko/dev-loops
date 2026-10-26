@@ -1332,7 +1332,7 @@ export function capClosedFor(finding, { round, cap }) {
 
 /**
  * Blockers a past-cap draft_gate round composes into `blocked`. A new act item and a re-surfaced high or medium
- * act item block, unless every act item is low or nit (the low/nit convergence rule applies instead). A high, a `failOpen: true` finding, a missing
+ * act item block, unless every act item is low or nit (the low/nit convergence rule applies instead). A high, a `failOpen: true` finding that is not an act item with a `judgeFix` at the cap round, a missing
  * disposition, an unknown severity, a medium `defer` without `followUpIssueNumber` and a medium `reject` without `judgeReason` block as
  * `severity_disagreement`. A defer to the PR itself (`pr`) is not a target. A medium rejected with a reason or deferred with a target issue is final (ADR 0191).
  * At the cap round (`round === cap`) an act item with a judge-specified remedy (`judgeFix`) does not block: the round composes
@@ -1341,7 +1341,7 @@ export function capClosedFor(finding, { round, cap }) {
  */
 export function pastCapBlockers(findings, { pr, round, cap } = {}) {
   const atCap = cap > 0 && round === cap;
-  const hasRemedy = (f) => f.failOpen !== true && String(f.judgeFix ?? "").trim().length > 0;
+  const hasRemedy = (f) => String(f.judgeFix ?? "").trim().length > 0;
   const list = Array.isArray(findings) ? findings : [];
   const label = (f, reason) => `[${normalizeSeverity(f?.severity)}] ${String(f?.summary ?? "").trim()} (${reason})`;
   const acts = list.filter(isOpenActItem);
