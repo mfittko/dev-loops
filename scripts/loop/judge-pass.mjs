@@ -952,8 +952,8 @@ export async function judgePassCli(
     "--judge-verdict",
     parseError,
   );
-  const { pastCap, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
-  const result = runJudgePass(findings, judgeVerdict, options.headSha, { pastCap, round });
+  const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
+  const result = runJudgePass(findings, judgeVerdict, options.headSha, { pastCap: lowFixCapped, round });
 
   // Immutable spec-authority gate (opt-in via --spec-file). A spec_cannot_decide
   // outcome fails closed here so the loop stops at the human-spec-decision state

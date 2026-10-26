@@ -13,6 +13,7 @@ import {
   validateCliArgs,
 } from "../../scripts/loop/judge-pass.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { resolveDraftRoundCap } from "../../scripts/github/write-gate-context.mjs";
 import { dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
@@ -1996,4 +1997,31 @@ test("judgePassCli counts the round from --tmp-root, like the ledger writer and 
   };
   assert.equal(await run({ tmpRoot: custom }), 0);
   assert.equal(await run({}), 1);
+});
+
+// GATE-EXEC-LOW-FIX-UNTIL-CAP at pre_approval_gate (#2724 slice 0). Shape of the PR 2945 round 5 ledger at 77a28e84: 0 high, 0 medium, one judge-acted low.
+const PR2945_ROUND5_LOW = { severity: "low", angle: "contradiction-lens", summary: "GATE-EXEC-FIXER-CYCLE-BOUND still names the draft round cap as the fixer stop", clusterId: 0, files: ["skills/docs/gate-review-sub-loop-contract.md"], line: 173 };
+const pre2945Verdict = (extra) => ({ headSha: HEAD, scopeDrift: { verdict: "within_scope", rationale: "r", driftedAreas: [] }, dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", rationale: "r", ...extra }] });
+
+test("pre_approval_gate resolves the low/nit coercion state with no round count", async () => {
+  const state = await resolveDraftRoundCap({ gate: "pre_approval_gate" }, { repoRoot: process.cwd() });
+  assert.deepEqual(state, { pastCap: false, round: 0, cap: 0, lowFixCapped: true });
+});
+
+test("PR 2945 round 5 replay: a low-only pre_approval_gate round has no act item", () => {
+  const result = runJudgePass([PR2945_ROUND5_LOW], pre2945Verdict(), HEAD, { pastCap: true, round: 0 });
+  assert.deepEqual(result.act, []);
+  assert.equal(result.enriched[0].judgeDisposition, "defer");
+  assert.match(result.enriched[0].judgeReason, /^low_fix_until_cap /);
+});
+
+test("pre_approval_gate: failOpen low stays a medium act, mixed medium and low keeps the medium act, a question stays open", () => {
+  const failOpen = runJudgePass([PR2945_ROUND5_LOW], pre2945Verdict({ failOpen: true }), HEAD, { pastCap: true });
+  assert.deepEqual(failOpen.act.map((f) => f.severity), ["medium"]);
+  const mixed = runJudgePass([{ ...PR2945_ROUND5_LOW, severity: "medium", clusterId: 0 }, { ...PR2945_ROUND5_LOW, clusterId: 1, summary: "other" }], {
+    ...pre2945Verdict(), dispositions: [0, 1].map((index) => ({ ...pre2945Verdict().dispositions[0], index })),
+  }, HEAD, { pastCap: true });
+  assert.deepEqual(mixed.enriched.map((f) => [f.severity, f.judgeDisposition]), [["medium", "act"], ["low", "defer"]]);
+  const question = runJudgePass([{ ...PR2945_ROUND5_LOW, severity: "question" }], pre2945Verdict(), HEAD, { pastCap: true });
+  assert.equal(question.act.length, 1);
 });
