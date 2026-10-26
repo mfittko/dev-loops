@@ -206,9 +206,10 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   execution, untrusted network fetch, or destructive filesystem / local-file-upload ops — the
   resolver selects the `threat-model` angle (recommended when configured; added from the pool in
   additive mode). It is never dropped for such a diff, regardless of change size: the resolver
-  runs it past `enabled: false` in a `draft_gate` round, or in `pre_approval_gate` when
-  draft-first is off, and records it as an added angle. An explicit `--angles` set receives the
-  same override. A head reviewed only by `pre_approval_gate` under draft-first does not run it. Its prompt returns an exhaustive trust-boundary checklist, not a spot-check. `input-validation` is likewise part of the core `LOGIC_CHANGE` subset, not pool-only.
+  runs it past `enabled: false` in a `draft_gate` round, or in a `pre_approval_gate` round at a
+  head where no `draft_gate` round ran, and records it as an added angle. An explicit `--angles`
+  set receives the same override. A `pre_approval_gate` round after a `draft_gate` round at the
+  same head does not re-run it. Its prompt returns an exhaustive trust-boundary checklist, not a spot-check. `input-validation` is likewise part of the core `LOGIC_CHANGE` subset, not pool-only.
 - the preamble produces one or more review handoff artifacts (branch, head SHA, PR/issue
   scope, acceptance criteria, touched files, validation posture). The resolved angle set
   and its rationale are written as a deterministic handoff artifact under
