@@ -331,6 +331,8 @@ export async function claimRunnerOwnership({
     if (activeRun === null) {
       const nextState = {
         ...state,
+        // Prior evidence cannot belong to a new claim, even when wall-clock timestamps overlap.
+        exitSignals: state.exitSignals.filter((entry) => entry.runId !== normalizedRunId),
         activeRun: {
           runId: normalizedRunId,
           claimedAt: now,
@@ -388,6 +390,7 @@ export async function claimRunnerOwnership({
     }
     const nextState = {
       ...state,
+      exitSignals: state.exitSignals.filter((entry) => entry.runId !== normalizedRunId),
       activeRun: {
         runId: normalizedRunId,
         claimedAt: now,

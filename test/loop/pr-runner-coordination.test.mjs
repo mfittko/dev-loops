@@ -97,21 +97,32 @@ test("handoff refuses unverified, mismatched and foreign identities without writ
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
 
-test("a handoff signal cannot displace the same run after a later claim", async () => {
+for (const claimOffset of [-1000, 0, 1000]) for (const mode of ["claim", "takeover"]) {
+test(`handoff evidence cannot displace a new ${mode} with timestamp offset ${claimOffset}`, async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-handoff-reclaim-"));
   const options = { repo: "owner/repo", pr: 17, cwd, runId: "owner" };
   try {
     const now = Date.now();
     await claimRunnerOwnership({ ...options, now: new Date(now - 2000).toISOString() });
-    await handoffRunnerOwnership({ ...options, env: { DEVLOOPS_RUN_ID: "owner" }, now: new Date(now - 1000).toISOString() });
-    const claim = await claimRunnerOwnership({ ...options, now: new Date(now).toISOString() });
+    await handoffRunnerOwnership({ ...options, env: { DEVLOOPS_RUN_ID: "owner" }, now: new Date(now).toISOString() });
+    if (mode === "takeover") {
+      await claimRunnerOwnership({ ...options, runId: "other" });
+      await recordExitSignalForRunner({ ...options, runId: "other" });
+    }
+    const claim = await claimRunnerOwnership({ ...options, mode, now: new Date(now + claimOffset).toISOString() });
+    assert.equal(claim.exitSignals.some((entry) => entry.runId === "owner"), false);
+    assert.equal(claim.exitSignals.length, mode === "takeover" ? 1 : 0);
     const before = await readFile(claim.filePath, "utf8");
     const result = await ensureAsyncRunnerOwnership({ ...options, env: { DEVLOOPS_RUN_ID: "competitor" }, supersedeStale: true });
     assert.equal(result.error, "ownership_lost");
     assert.equal(await readFile(claim.filePath, "utf8"), before);
     assert.equal((await detectStaleRunner(options)).exitSignal, null);
+    await recordExitSignalForRunner({ ...options, now: new Date(now + 2000).toISOString() });
+    await claimRunnerOwnership(options);
+    assert.equal((await detectStaleRunner(options)).error, "exit_signal_recorded", "same-owner refresh preserves current-claim evidence");
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
+}
 
 // Builds a throwaway git repo with a linked worktree so cross-CWD coordination
 // path resolution (git-common-dir anchoring) can be exercised for real.

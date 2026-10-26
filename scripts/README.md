@@ -534,7 +534,9 @@ Explicit completion handoff:
   calling it. Native Codex producer-to-consumer operation remains an operator-pending trial;
   this command does not establish production Codex support.
 - Exit-signal recovery ignores signals older than the active claim, so a later claim by
-  the same run is not displaced by its earlier handoff. Typed recovery reporting and broad
+  the same run is not displaced by its earlier handoff. A new claim or takeover also
+  removes prior signals for the incoming run under the state lock, independent of clock
+  ordering; same-owner refresh preserves current-claim signals. Typed recovery reporting and broad
   coordinator handoff guidance remain separate work.
 
 State path:
