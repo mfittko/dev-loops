@@ -19,3 +19,5 @@ On PR 2944, the `draft_gate` cap round 4 at `e869fb2f8f8ac9c425bd703ea4bbe8aa0e1
 ## Consequences
 
 A PR at the cap round that merges its base can continue through the fixer pass and the closure round without an operator line. A PR that changed its own patch after the cap round is still counted by its ledgers. A closure round over a base-only merge refuses with a typed code in place of an unreviewable bundle.
+
+Known ceilings. `isBaseOnlyMergeSince` returns false when the merged base touches a file the PR also changes. It fails closed and keeps `round_cap_reached`. An overlapping file in the closure diff may still carry merged base hunks. A rename source is not in the closure pathspec.

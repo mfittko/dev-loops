@@ -137,6 +137,23 @@ export async function captureMainRelativeChangedFilesSince({ base, mainRef = "or
   if (mainResult.code !== 0) throw new Error(`git diff ${mainRange} failed: ${mainResult.stderr.trim() || `exit ${mainResult.code}`}`);
   const prOwn = new Set(parseChangedFiles(mainResult.stdout));
 
+  // Paths the merged base touched (mergeBase..mainRef, rename endpoints included).
+  // A PR-side revert/delete toward main equals main at head, so it is absent from
+  // prOwn yet is not a base-side change; it stays PR-own. Unresolved merge-base:
+  // baseSide stays null and behavior is unchanged.
+  let baseSide = null;
+  const mb = await runGit(["merge-base", normalizedBase, normalizedMain], { repoRoot });
+  if (mb.code === 0 && mb.stdout.trim()) {
+    const baseRange = `${mb.stdout.trim()}..${normalizedMain}`;
+    const baseResult = await runGit([...GIT_ISOLATION, "diff", "--no-ext-diff", "--name-status", baseRange], { repoRoot });
+    if (baseResult.code === 0) {
+      baseSide = new Set();
+      for (const line of baseResult.stdout.split("\n")) {
+        for (const c of line.replace(/\r$/, "").split("\t").slice(1)) if (c.trim()) baseSide.add(c.trim());
+      }
+    }
+  }
+
   // Keep only incremental entries whose destination path is genuinely PR-own.
   // Parse the name-status per line here (rather than via parseChangedFiles) so a
   // surviving rename entry's R-status is tracked for hasRename.
@@ -173,7 +190,8 @@ export async function captureMainRelativeChangedFilesSince({ base, mainRef = "or
     // Adding source membership can only RETAIN renames, never over-exclude: a
     // rename replayed from main has neither endpoint in prOwn and stays dropped.
     const prOwnEntry = prOwn.has(file) || (isRenameOrCopy && src.length > 0 && prOwn.has(src));
-    if (!prOwnEntry) continue; // already on main at head — exclude
+    const prSideOnly = baseSide !== null && !baseSide.has(file) && !(src.length > 0 && baseSide.has(src));
+    if (!prOwnEntry && !prSideOnly) continue; // already on main at head — exclude
     changedFiles.push(file);
     if (isRenameOrCopy) hasRename = true;
   }

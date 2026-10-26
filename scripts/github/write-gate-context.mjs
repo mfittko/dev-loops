@@ -2446,7 +2446,7 @@ export const DIFF_ISOLATION_FLAGS = [
 export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 1024, paths = [] }) {
   const pathspec = paths.length > 0 ? ["--", ...paths] : []; // closure round (ADR 0197): only the PR-own files
   const range = `${base}...HEAD`;
-  const isolation = DIFF_ISOLATION_FLAGS;
+  const isolation = paths.length > 0 ? ["--literal-pathspecs", ...DIFF_ISOLATION_FLAGS] : DIFF_ISOLATION_FLAGS;
   const runGit = (args) => execFileSync("git", [...isolation, ...args], {
     cwd: repoRoot,
     encoding: "utf8",
