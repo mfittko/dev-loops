@@ -324,7 +324,7 @@ const acceptanceNegatives = {
   findingsMarkerOverCleanRound: async (f) => { f.state.comments[0].body = f.state.comments[0].body.replace("**Verdict:** clean", "**Verdict:** findings_present"); },
   oldGate: async (f) => { f.state.comments[0].updated_at = "2020-01-01T00:00:00Z"; },
   foreignLedgerProvenance: async (f, ledger) => { ledger.provenance.perAngle[1].dispatchId = ledger.provenance.perAngle[0].dispatchId; },
-  missingAngle: async (f) => { await rm(f.plan.units[0].workOrder.outputRefs[0]); },
+  missingAngleResult: async (f) => { await rm(f.plan.units[0].workOrder.outputRefs[0]); },
   carriedResult: async (f) => { const result = JSON.parse(await readFile(f.resultPath)); await put(f.resultPath, { ...result, carriedFromHead: BASE }); },
   pendingCi: async (f) => { f.state.checks = [{ name: "tests", status: "in_progress", conclusion: null }]; },
   failedCi: async (f) => { f.state.checks = [{ name: "tests", status: "completed", conclusion: "failure" }]; },
@@ -355,7 +355,7 @@ const acceptanceRefusals = {
   findingsMarkerOverCleanRound: /visible full gate verdict or temporal order mismatch/,
   oldGate: /visible full gate verdict or temporal order mismatch/,
   foreignLedgerProvenance: /foreign full gate ledger provenance/,
-  missingAngle: /ENOENT/,
+  missingAngleResult: /ENOENT/,
   carriedResult: /stale or carried result/,
   pendingCi: /ci_pending/,
   failedCi: /ci_failed/,
@@ -707,6 +707,37 @@ test("acceptance refuses reviewer pairing that contradicts the resolved fan-out 
   await assert.rejects(verifyResidualEvidenceAcceptance(f.options, f.deps), /independent reviewer pairing/);
 }));
 
+test("acceptance refuses a round that lacks a configured mandatory angle, with no accepted write", async () => acceptanceFixture(async (f) => {
+  await put(path.join(f.root, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - name: absent-from-plan\n        mandatory: true\n");
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), /incomplete fresh full gate angles/);
+  await assert.rejects(readdir(path.join(path.dirname(path.dirname(f.options.snapshot)), "accepted")), { code: "ENOENT" });
+}));
+
+const capClosedOf = (finding, over = {}) => ({ judgeDisposition: finding.judgeDisposition, severity: finding.severity, round: 3, cap: 3, ...over });
+test("acceptance accepts the writer's resurfaces and capClosed metadata", async () => acceptanceFixture(async (f) => {
+  const ledger = JSON.parse(await readFile(f.ledgerPath));
+  acceptingBaseline(f, ledger);
+  ledger.findings[0].resurfaces = "0123456789abcdef";
+  ledger.findings[0].capClosed = capClosedOf(ledger.findings[0]);
+  await put(f.ledgerPath, ledger);
+  assert.equal((await verifyResidualEvidenceAcceptance(f.options, f.deps)).proof.verdict, "clean");
+}, "pi", negativeFindings));
+
+for (const [name, alter, refusal] of [
+  ["non-hex resurfaces", (l) => { l.findings[0].resurfaces = "not-a-fingerprint"; }, /invalid resurfaces fingerprint/],
+  ["short resurfaces", (l) => { l.findings[0].resurfaces = "0123456789abcde"; }, /invalid resurfaces fingerprint/],
+  ["capClosed with an unknown key", (l) => { l.findings[0].capClosed = { ...capClosedOf(l.findings[0]), extra: 1 }; }, /invalid capClosed record/],
+  ["capClosed with a foreign disposition", (l) => { l.findings[0].capClosed = capClosedOf(l.findings[0], { judgeDisposition: "defer" }); }, /invalid capClosed record/],
+  ["capClosed with a non-integer round", (l) => { l.findings[0].capClosed = capClosedOf(l.findings[0], { round: "3" }); }, /invalid capClosed record/],
+  ["capClosed that is not an object", (l) => { l.findings[0].capClosed = true; }, /invalid capClosed record/],
+]) test(`acceptance refuses ${name}`, async () => acceptanceFixture(async (f) => {
+  const ledger = JSON.parse(await readFile(f.ledgerPath));
+  acceptingBaseline(f, ledger);
+  alter(ledger);
+  await put(f.ledgerPath, ledger);
+  await assert.rejects(acceptResidualEvidence(f.options, f.deps), refusal);
+}, "pi", negativeFindings));
+
 test("acceptance proof source order follows the plan angle order, not read completion", async () => acceptanceFixture(async (f) => {
   const resultPaths = f.plan.units.flatMap((u) => u.angles.map((a) => path.join(path.dirname(f.resultPath), `${a}.json`)));
   for (let i = 0; i < 3; i++) {
@@ -733,14 +764,18 @@ test("continuation with an altered legacy full-phase constructed marker is refus
 
 test("delivery check runs the verifier through the default runChild without a stdin or cwd argument", async () => acceptanceFixture(async (f) => {
   const { runChild } = await import("../../scripts/_cli-primitives.mjs");
-  const seen = [], inner = f.deps.runChild;
+  const seen = [], inner = f.deps.runChild, stub = await mkdtemp(path.join(os.tmpdir(), "stub-gh-"));
+  // A stub gh first on PATH fails at once, so the child never makes a live call.
+  await writeFile(path.join(stub, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   f.deps.runChild = async (command, args, env, ...rest) => {
-    if (command === process.execPath && args[0].endsWith("verify-fixer-disposition.mjs")) { seen.push(rest); return runChild(command, args, env, ...rest); }
+    if (command === process.execPath && args[0].endsWith("verify-fixer-disposition.mjs")) { seen.push(rest); return runChild(command, args, { ...env, PATH: `${stub}${path.delimiter}${env.PATH}` }, ...rest); }
     return inner(command, args, env, ...rest);
   };
-  // The real verifier cannot reach a live PR here; it must still run as a child and refuse, not reject on a misused argument.
-  await assert.rejects(acceptResidualEvidence(f.options, f.deps), /full delivery check failed|JSON/);
-  assert.deepEqual(seen, [[]]);
+  try {
+    // The stubbed verifier cannot reach a live PR here; it must still run as a child and refuse, not reject on a misused argument.
+    await assert.rejects(acceptResidualEvidence(f.options, f.deps), /full delivery check failed|JSON/);
+    assert.deepEqual(seen, [[]]);
+  } finally { await rm(stub, { recursive: true, force: true }); }
 }));
 
 test("delivery check passes the resolved artifact tmp root to the verifier child", async () => acceptanceFixture(async (f) => {

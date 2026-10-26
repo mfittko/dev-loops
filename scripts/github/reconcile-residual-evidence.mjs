@@ -394,7 +394,7 @@ export async function verifyResidualEvidenceAcceptance(options, deps = {}) {
   requireProof(Object.keys(ledger).every((k) => "repo pr headSha gate executionMode provenance findings overallVerdict verdict loggedAt verifiedItems scopeDrift specAuthority".split(" ").includes(k)), "unknown gate ledger field");
   requireProof(ledger.repo === repo && ledger.pr === pr && ledger.headSha === headSha && ledger.gate === "draft_gate"
     && ledger.executionMode === "fanout_fanin" && isDeepStrictEqual(ledger.provenance, provenance), "foreign full gate ledger provenance");
-  const additive = new Set("judgeDisposition judgeRationale judgeTitle judgeDetail judgeFix judgeReason judgeCriterion fingerprint followUpIssueNumber followUpDraft remedyKind operatorVisible resolvedIn".split(" "));
+  const additive = new Set("judgeDisposition judgeRationale judgeTitle judgeDetail judgeFix judgeReason judgeCriterion fingerprint followUpIssueNumber followUpDraft remedyKind operatorVisible resolvedIn resurfaces capClosed".split(" "));
   validateJudgeVerdict({ headSha, scopeDrift: ledger.scopeDrift === undefined ? { verdict: "within_scope", rationale: "acceptance", driftedAreas: [] } : ledger.scopeDrift,
     dispositions: ledger.findings.map((finding, index) => ({ index, disposition: finding.judgeDisposition, rationale: finding.judgeRationale, title: finding.judgeTitle, detail: finding.judgeDetail, fix: finding.judgeFix, reason: finding.judgeReason, followUpDraft: finding.followUpDraft })) });
   const remaining = [...expected], clusters = new Map();
@@ -414,6 +414,14 @@ export async function verifyResidualEvidenceAcceptance(options, deps = {}) {
     requireProof(finding.followUpIssueNumber === undefined || Number.isSafeInteger(finding.followUpIssueNumber) && finding.followUpIssueNumber > 0, "invalid deferral target");
     requireProof(finding.operatorVisible === undefined || typeof finding.operatorVisible === "boolean" && finding.severity === "low", "invalid operator visibility");
     requireProof(finding.resolvedIn === undefined || /^[a-f0-9]{7,64}$/i.test(finding.resolvedIn), "invalid resolution metadata");
+    requireProof(finding.resurfaces === undefined || typeof finding.resurfaces === "string" && /^[a-f0-9]{16}$/.test(finding.resurfaces), "invalid resurfaces fingerprint");
+    // The capClosedFor shape (@dev-loops/core/loop/gate-fanin): only a defer or reject finding carries it, with its own disposition and severity.
+    const cc = finding.capClosed;
+    requireProof(cc === undefined || cc !== null && typeof cc === "object" && !Array.isArray(cc)
+      && isDeepStrictEqual(Object.keys(cc).sort(), ["cap", "judgeDisposition", "round", "severity"])
+      && (finding.judgeDisposition === "defer" || finding.judgeDisposition === "reject")
+      && cc.judgeDisposition === finding.judgeDisposition && cc.severity === finding.severity
+      && Number.isSafeInteger(cc.round) && Number.isSafeInteger(cc.cap) && cc.cap > 0 && cc.round >= cc.cap, "invalid capClosed record");
   }
   for (const members of clusters.values()) { // GATE-EXEC-THREAD-DISPOSITION, as write-gate-findings-log enforces
     requireProof(!members.some((f) => f.judgeDisposition === "defer") || neverDeferredSeverity(members) === null, "judge defer reaches a never-deferred cluster");
