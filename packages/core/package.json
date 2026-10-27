@@ -1,6 +1,6 @@
 {
   "name": "@dev-loops/core",
-  "version": "1.0.8-pre.2",
+  "version": "1.0.8-pre.3",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -39,6 +39,7 @@
     "./loop/copilot-loop-iterations": "./src/loop/copilot-loop-iterations.mjs",
     "./loop/copilot-loop-state": "./src/loop/copilot-loop-state.mjs",
     "./loop/base-merge-verdict-carry": "./src/loop/base-merge-verdict-carry.mjs",
+    "./loop/codex-execution-evidence": "./src/loop/codex-execution-evidence.mjs",
     "./loop/finding-cluster": "./src/loop/finding-cluster.mjs",
     "./loop/fix-push-authority": "./src/loop/fix-push-authority.mjs",
     "./loop/fixer-disposition": "./src/loop/fixer-disposition.mjs",

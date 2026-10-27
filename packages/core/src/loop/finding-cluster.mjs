@@ -203,6 +203,8 @@ export function projectClusterDisposition(enrichedFindings, clusters) {
       }
       if (representative.resurfaces !== undefined) target.resurfaces = representative.resurfaces;
       else delete target.resurfaces;
+      if (representative.failOpen === true) target.failOpen = true;
+      else delete target.failOpen;
     }
   }
   return result;
@@ -298,6 +300,9 @@ function mergeRemediationScope(kept, sibling) {
     const entry = typeof sibling.fingerprint === "string" && sibling.fingerprint.trim() ? { fingerprint: sibling.fingerprint.trim(), ...sibling_ } : sibling_;
     set("siblingRemediations", [...(Array.isArray(kept.siblingRemediations) ? kept.siblingRemediations : []), entry]);
   }
+  // The kept member stands for the whole cluster, so it carries every member severity (the fixer's low/nit guard reads these).
+  const severities = [...new Set([...(Array.isArray(kept.clusterSeverities) ? kept.clusterSeverities : [kept.severity]), sibling.severity].filter((s) => typeof s === "string"))];
+  if (severities.length > 1) set("clusterSeverities", severities);
   return merged;
 }
 

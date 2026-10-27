@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { test } from "bun:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { runGitFixture, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
-import { parseRemoteFreshnessGuardCliArgs, runCli } from "../../scripts/loop/pre-write-remote-freshness-guard.mjs";
+import { checkBaseFreshness, parseRemoteFreshnessGuardCliArgs, runCli } from "../../scripts/loop/pre-write-remote-freshness-guard.mjs";
 
 const scriptPath = path.resolve("scripts/loop/pre-write-remote-freshness-guard.mjs");
 
@@ -49,7 +49,7 @@ async function writeGitStub(tempDir, { commits = [], logFile } = {}) {
 }
 
 test("parseRemoteFreshnessGuardCliArgs rejects missing --branch", () => {
-  assert.throws(() => parseRemoteFreshnessGuardCliArgs([]), /--branch .* is required/i);
+  assert.throws(() => parseRemoteFreshnessGuardCliArgs([]), /--branch <name> or --base <name> is required/u);
 });
 
 test("parseRemoteFreshnessGuardCliArgs parses --branch", () => {
@@ -203,4 +203,241 @@ test("parseRemoteFreshnessGuardCliArgs rejects single-dash flag-like value for -
     () => parseRemoteFreshnessGuardCliArgs(["--branch", "-x"]),
     /Missing value for --branch/i,
   );
+});
+
+// Issue 2885: real throwaway repos with a bare origin; origin/main advances after the branch forked.
+async function makeStaleBaseFixture({ advance }) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "freshness-base-"));
+  const g = runGitFixture;
+  const origin = path.join(root, "origin.git");
+  const other = path.join(root, "other");
+  const clone = path.join(root, "clone");
+  g(root, ["init", "-q", "--bare", "-b", "main", origin]);
+  g(root, ["clone", "-q", origin, other]);
+  for (const dir of [other]) { g(dir, ["config", "user.email", "t@example.com"]); g(dir, ["config", "user.name", "t"]); }
+  await writeFile(path.join(other, "a.txt"), "a\n");
+  g(other, ["add", "a.txt"]);
+  g(other, ["commit", "-qm", "init"]);
+  g(other, ["push", "-q", "origin", "main"]);
+  g(root, ["clone", "-q", origin, clone]);
+  g(clone, ["config", "user.email", "t@example.com"]);
+  g(clone, ["config", "user.name", "t"]);
+  g(clone, ["checkout", "-q", "-b", "feature"]);
+  await writeFile(path.join(clone, "b.txt"), "b\n");
+  g(clone, ["add", "b.txt"]);
+  g(clone, ["commit", "-qm", "feature"]);
+  if (advance) {
+    await writeFile(path.join(other, "c.txt"), "c\n");
+    g(other, ["add", "c.txt"]);
+    g(other, ["commit", "-qm", "newer base commit"]);
+    g(other, ["push", "-q", "origin", "main"]);
+  }
+  return { root, clone };
+}
+
+test("checkBaseFreshness passes with no warning when the branch contains origin/<base>", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: false });
+  try {
+    assert.deepEqual(await checkBaseFreshness({ base: "main", cwd: clone }), { ok: true, status: "base_current", base: "main" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness refuses a behind-base branch, names the newer commit and the foreign file", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: true });
+  try {
+    const result = await checkBaseFreshness({ base: "main", cwd: clone });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "base_stale_integrate_first");
+    assert.equal(result.newerCommits.length, 1);
+    assert.match(result.newerCommits[0], /newer base commit/u);
+    // c.txt differs from origin/main two-dot but the branch never touched it.
+    assert.deepEqual(result.foreignFiles, ["c.txt"]);
+    assert.match(result.remedy, /resolve-pr-conflicts\.mjs/u);
+    assert.match(result.remedy, /Never force-push/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("runCli --base exits nonzero when the base is stale", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: true });
+  const saved = process.exitCode;
+  try {
+    const sink = { write: () => {} };
+    const result = await runCli(["--base", "main"], { stdout: sink, stderr: sink, cwd: clone });
+    assert.equal(result.error, "base_stale_integrate_first");
+    assert.equal(process.exitCode, 1);
+  } finally {
+    process.exitCode = saved;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness judges the head option, not the checkout HEAD, and fails closed on an unresolvable head", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: true });
+  try {
+    const g = (args) => runGitFixture(clone, args);
+    const staleHead = g(["rev-parse", "HEAD"]);
+    g(["fetch", "-q", "origin"]);
+    g(["-c", "user.email=t@example.com", "-c", "user.name=t", "merge", "-q", "--no-edit", "origin/main"]);
+    // The checkout HEAD now contains origin/main; only the named head is stale.
+    assert.equal((await checkBaseFreshness({ base: "main", cwd: clone })).ok, true);
+    const stale = await checkBaseFreshness({ base: "main", head: staleHead, cwd: clone });
+    assert.equal(stale.error, "base_stale_integrate_first");
+    assert.equal((await checkBaseFreshness({ base: "main", head: g(["rev-parse", "HEAD"]), cwd: clone })).ok, true);
+    for (const head of ["0123456789abcdef0123456789abcdef01234567", "--output=x", "not-a-sha"]) {
+      assert.equal((await checkBaseFreshness({ base: "main", head, cwd: clone })).error, "base_head_unresolved", head);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness normalizes every origin spelling of the base and rejects non-branch values with a typed error", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: false });
+  try {
+    runGitFixture(clone, ["remote", "add", "upstream", "/nonexistent"]);
+    for (const base of ["main", "origin/main", "refs/heads/main", "refs/remotes/origin/main"]) {
+      assert.deepEqual(await checkBaseFreshness({ base, cwd: clone }), { ok: true, status: "base_current", base: "main" }, base);
+    }
+    runGitFixture(clone, ["push", "-q", "origin", "HEAD:refs/heads/release/1.0"]);
+    assert.equal((await checkBaseFreshness({ base: "release/1.0", cwd: clone })).ok, true);
+    for (const base of ["HEAD~1", "refs/heads/refs/heads/main", "origin/origin/main", "upstream/main", "a".repeat(40)]) {
+      const result = await checkBaseFreshness({ base, cwd: clone });
+      assert.equal(result.error, "base_not_origin_branch", base);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness treats a hex-only branch name as a branch and fetches it", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: false });
+  try {
+    // No such origin branch: an abbreviated SHA (4-6 or 7+ hex) is unchecked, not a fetch failure.
+    for (const base of ["abc12", "beef", "deadbeef"]) assert.equal((await checkBaseFreshness({ base, cwd: clone })).error, "base_not_origin_branch", base);
+    for (const base of ["beef", "deadbeef"]) {
+      runGitFixture(clone, ["push", "-q", "origin", `HEAD:refs/heads/${base}`]);
+      assert.equal((await checkBaseFreshness({ base, cwd: clone })).ok, true, base);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness classifies a full-length SHA as unchecked without a fetch", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "freshness-sha-"));
+  try {
+    const stub = path.join(dir, "git");
+    await writeFile(stub, "#!/bin/sh\nexit 1\n");
+    await chmod(stub, 0o755);
+    for (const base of ["a".repeat(40), "b".repeat(64)]) {
+      assert.equal((await checkBaseFreshness({ base, cwd: dir, gitCommand: stub })).error, "base_not_origin_branch", base);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness ignores an inherited GIT_DIR and reports the cwd repository", async () => {
+  const stale = await makeStaleBaseFixture({ advance: true });
+  const current = await makeStaleBaseFixture({ advance: false });
+  try {
+    const env = { ...process.env, GIT_DIR: path.join(current.clone, ".git"), GIT_WORK_TREE: current.clone };
+    const result = await checkBaseFreshness({ base: "main", cwd: stale.clone, env });
+    assert.equal(result.error, "base_stale_integrate_first");
+  } finally {
+    await rm(stale.root, { recursive: true, force: true });
+    await rm(current.root, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness maps a hung fetch to base_fetch_failed within the timeout", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "freshness-hang-"));
+  try {
+    const stub = path.join(dir, "git");
+    await writeFile(stub, "#!/bin/sh\ncase \"$1\" in fetch) exec sleep 30;; *) exit 0;; esac\n");
+    await chmod(stub, 0o755);
+    const started = Date.now();
+    const result = await checkBaseFreshness({ base: "main", cwd: dir, gitCommand: stub, fetchTimeoutMs: 200 });
+    assert.equal(result.error, "base_fetch_failed");
+    assert.match(result.message, /timed out/u);
+    assert.ok(Date.now() - started < 10_000);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness returns a typed base_fetch_failed error when the fetch fails", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "freshness-nofetch-"));
+  try {
+    runGitFixture(root, ["init", "-q"]);
+    const result = await checkBaseFreshness({ base: "main", cwd: root });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "base_fetch_failed");
+    assert.equal(result.base, "main");
+    assert.equal(typeof result.message, "string");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("parseRemoteFreshnessGuardCliArgs rejects --branch together with --base", () => {
+  assert.throws(() => parseRemoteFreshnessGuardCliArgs(["--branch", "a", "--base", "b"]), /mutually exclusive/u);
+});
+
+test("checkBaseFreshness retries a ref-lock fetch failure and then reports base_current", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "freshness-lock-"));
+  try {
+    const stub = path.join(dir, "git");
+    const marker = path.join(dir, "locked-once");
+    await writeFile(stub, `#!/bin/sh\ncase "$1" in fetch) if [ ! -e "${marker}" ]; then : > "${marker}"; echo "fatal: cannot lock ref 'refs/remotes/origin/main'" >&2; exit 1; fi;; esac\nexit 0\n`);
+    await chmod(stub, 0o755);
+    assert.deepEqual(await checkBaseFreshness({ base: "main", cwd: dir, gitCommand: stub }), { ok: true, status: "base_current", base: "main" });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness accepts @ inside a branch name, rejects @{ and a bare @, and trusts a baseRefName with a remote-named segment", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: false });
+  try {
+    runGitFixture(clone, ["remote", "add", "upstream", "/nonexistent"]);
+    for (const base of ["team@v2", "release@2"]) {
+      runGitFixture(clone, ["push", "-q", "origin", `HEAD:refs/heads/${base}`]);
+      assert.deepEqual(await checkBaseFreshness({ base, cwd: clone }), { ok: true, status: "base_current", base }, base);
+    }
+    for (const base of ["a@{1}", "@"]) assert.equal((await checkBaseFreshness({ base, cwd: clone })).error, "base_not_origin_branch", base);
+    runGitFixture(clone, ["push", "-q", "origin", "HEAD:refs/heads/upstream/x"]);
+    assert.equal((await checkBaseFreshness({ base: "upstream/x", cwd: clone })).error, "base_not_origin_branch");
+    assert.deepEqual(await checkBaseFreshness({ base: "upstream/x", trusted: true, cwd: clone }), { ok: true, status: "base_current", base: "upstream/x" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness judges refs/remotes/origin/<base>, not a same-named tag", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: true });
+  try {
+    runGitFixture(clone, ["tag", "origin/main", "HEAD"]);
+    const result = await checkBaseFreshness({ base: "main", cwd: clone });
+    assert.equal(result.error, "base_stale_integrate_first");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkBaseFreshness fetches a trusted origin/-prefixed or 40-hex baseRefName", async () => {
+  const { root, clone } = await makeStaleBaseFixture({ advance: false });
+  try {
+    const hex = "a".repeat(40);
+    for (const base of ["origin/release", hex]) {
+      runGitFixture(clone, ["push", "-q", "origin", `HEAD:refs/heads/${base}`]);
+      assert.deepEqual(await checkBaseFreshness({ base, trusted: true, cwd: clone }), { ok: true, status: "base_current", base }, base);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

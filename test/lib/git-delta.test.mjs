@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { captureChangedFilesBetween, captureMainRelativeChangedFilesSince } from "../../scripts/lib/git-delta.mjs";
+import { captureChangedFilesBetween, captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince } from "../../scripts/lib/git-delta.mjs";
 
 // Scrub inherited git config / leaked repo pointers so host-side signing, hooks,
 // or an exported GIT_DIR cannot steer these fixtures (same convention as the
@@ -41,7 +41,7 @@ async function write(root, rel, content) {
 // it there (byte-identical content) — so the base-move merge replays a rename
 // from already-merged main, exercising the rename-status columns in
 // captureMainRelativeChangedFilesSince's per-line parse.
-async function makeBaseMoveRepo({ prExtra, mainRename = false } = {}) {
+async function makeBaseMoveRepo({ prExtra, mainRename = false, round1Extra = null } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "git-delta-basemove-"));
   git(root, ["init", "-q", "-b", "main"]);
   git(root, ["config", "user.email", "test@example.com"]);
@@ -57,6 +57,7 @@ async function makeBaseMoveRepo({ prExtra, mainRename = false } = {}) {
   // PR branch reviewed at prevHead: touches docs/guide.md only.
   git(root, ["checkout", "-q", "-b", "pr", fork]);
   await write(root, "docs/guide.md", "# Guide\n\nPR edit.\n");
+  if (round1Extra) await write(root, round1Extra, "export const added = 1;\n");
   git(root, ["add", "-A"]);
   git(root, ["commit", "-q", "-m", "PR round 1 (reviewed)"]);
   const prevHead = git(root, ["rev-parse", "HEAD"]).trim().toLowerCase();
@@ -105,7 +106,8 @@ test("incrementalFiles keeps both rename and copy endpoints before base reductio
   for (const status of ["R100", "C100"]) {
     const runGit = async (args) => {
       if (args.includes("--name-status")) {
-        return { code: 0, stdout: args.at(-1) === "old..HEAD" ? `${status}\t.devloops\tother.txt\n` : "", stderr: "" };
+        const range = args.at(-1);
+        return { code: 0, stdout: range === "old..HEAD" || range === "abc123..origin/main" ? `${status}\t.devloops\tother.txt\n` : "", stderr: "" };
       }
       return { code: 0, stdout: "abc123\n", stderr: "" };
     };
@@ -137,6 +139,38 @@ test("genuine PR-own commit after the base-move still appears in the main-relati
     assert.equal(mainRel.reduced, true);
     assert.ok(mainRel.changedFiles.includes("src/bar.mjs"), "a real PR-own change is kept → its angle re-runs");
     assert.ok(!mainRel.changedFiles.includes("src/other.mjs"), "the merged-main file stays excluded");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a PR-side revert toward main stays PR-own", async () => {
+  const { root, prevHead } = await makeBaseMoveRepo({
+    prExtra: async (r) => {
+      await write(r, "docs/guide.md", "# Guide\n");
+      git(r, ["add", "-A"]);
+      git(r, ["commit", "-q", "-m", "PR reverts its guide edit"]);
+    },
+  });
+  try {
+    const mainRel = await captureMainRelativeChangedFilesSince({ base: prevHead, mainRef: "origin/main", repoRoot: root });
+    assert.deepEqual(mainRel.changedFiles, ["docs/guide.md"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a PR-side delete toward main stays PR-own", async () => {
+  const { root, prevHead } = await makeBaseMoveRepo({
+    round1Extra: "src/added.mjs",
+    prExtra: async (r) => {
+      git(r, ["rm", "-q", "src/added.mjs"]);
+      git(r, ["commit", "-q", "-m", "PR deletes its added file"]);
+    },
+  });
+  try {
+    const mainRel = await captureMainRelativeChangedFilesSince({ base: prevHead, mainRef: "origin/main", repoRoot: root });
+    assert.deepEqual(mainRel.changedFiles, ["src/added.mjs"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -250,6 +284,69 @@ test("falls back to the plain two-dot delta when origin/main does not resolve (r
     const mainRel = await captureMainRelativeChangedFilesSince({ base: prevHead, mainRef: "origin/main", repoRoot: root });
     assert.equal(mainRel.reduced, false, "no origin/main → cannot reduce");
     assert.deepEqual(mainRel.changedFiles, ["src/foo.mjs"], "falls back to the raw two-dot incremental delta");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// ADR 0197: isBaseOnlyMergeSince fixtures. Each rewinds the PR branch to prevHead and rebuilds the head by hand.
+async function mainCommit(root, rel, content) {
+  git(root, ["checkout", "-q", "main"]);
+  await write(root, rel, content);
+  git(root, ["add", "-A"]);
+  git(root, ["commit", "-q", "-m", `main edits ${rel}`]);
+  git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  git(root, ["checkout", "-q", "pr"]);
+}
+
+async function baseOnly(root, prevHead, overrides = {}) {
+  return isBaseOnlyMergeSince({ fromHead: prevHead, head: git(root, ["rev-parse", "HEAD"]).trim(), mainRef: "origin/main", repoRoot: root, ...overrides });
+}
+
+test("isBaseOnlyMergeSince: a clean base merge is base-only, also after the base advances over a merged file", async () => {
+  const { root, prevHead } = await makeBaseMoveRepo();
+  try {
+    assert.equal(await baseOnly(root, prevHead), true);
+    await mainCommit(root, "src/other.mjs", "export const other = 3;\n");
+    assert.equal(await baseOnly(root, prevHead), true, "compares against the merged base point, not the moving tip");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("isBaseOnlyMergeSince: an evil merge that edits a PR file is not base-only", async () => {
+  const { root, prevHead } = await makeBaseMoveRepo();
+  try {
+    git(root, ["reset", "-q", "--hard", prevHead]);
+    git(root, ["merge", "-q", "--no-commit", "--no-ff", "origin/main"]);
+    await write(root, "docs/guide.md", "# Guide\n\nPR edit.\n\nSmuggled in the merge.\n");
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-q", "-m", "evil merge"]);
+    assert.equal(await baseOnly(root, prevHead), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("isBaseOnlyMergeSince: a merge that takes the base version of a PR-changed file is not base-only", async () => {
+  const { root, prevHead } = await makeBaseMoveRepo();
+  try {
+    git(root, ["reset", "-q", "--hard", prevHead]);
+    await mainCommit(root, "docs/guide.md", "# Guide\n\nMain edit.\n");
+    git(root, ["merge", "-q", "--no-edit", "-X", "theirs", "origin/main"]);
+    assert.equal(git(root, ["show", "HEAD:docs/guide.md"]), "# Guide\n\nMain edit.\n");
+    assert.equal(await baseOnly(root, prevHead), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("isBaseOnlyMergeSince: a non-ancestor fromHead and an unresolved mainRef are not base-only", async () => {
+  const { root, prevHead } = await makeBaseMoveRepo();
+  try {
+    const stray = git(root, ["commit-tree", "HEAD^{tree}", "-m", "stray"]).trim();
+    assert.equal(await baseOnly(root, stray), false);
+    assert.equal(await baseOnly(root, prevHead, { mainRef: "origin/missing" }), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

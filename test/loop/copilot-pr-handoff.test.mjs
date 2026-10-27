@@ -11,6 +11,7 @@ import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { isBehindBaseMergeState, isConflictingMergeState, parseHandoffCliArgs, runBasePickupPreflight, runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
 import { STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState, recordExitSignalForRunner } from "../../scripts/loop/_pr-runner-coordination.mjs";
+import { STALE_RUNNER_DEFAULT_MAX_AGE_MS } from "../../scripts/loop/_stale-runner-detection.mjs";
 import { EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY } from "../../packages/core/src/loop/timeout-policy.mjs";
 
 const scriptPath = path.resolve("scripts/loop/copilot-pr-handoff.mjs");
@@ -2095,9 +2096,13 @@ test("copilot-pr-handoff supersedes a confirmed-dead run's claim and proceeds in
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-supersede-"));
 
   try {
-    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-dead", cwd: tempDir, now: new Date().toISOString() });
+    // Both writes pin `now`, so the claim-scoped signal match never depends on the
+    // host clock stepping forward between them.
+    const claimedAt = "2026-06-07T08:00:00.000Z";
+    const signalAt = "2026-06-07T08:05:00.000Z";
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-dead", cwd: tempDir, now: claimedAt });
     // run-dead dies without releasing — record its exit signal (confirmed death)
-    const sig = await recordExitSignalForRunner({ repo: "owner/repo", pr: 17, runId: "run-dead", reason: "crashed", cwd: tempDir });
+    const sig = await recordExitSignalForRunner({ repo: "owner/repo", pr: 17, runId: "run-dead", reason: "crashed", cwd: tempDir, now: signalAt });
     assert.equal(sig.ok, true);
 
     const BOT_COMMENT = JSON.stringify({
@@ -2116,7 +2121,7 @@ test("copilot-pr-handoff supersedes a confirmed-dead run's claim and proceeds in
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], {
       cwd: tempDir,
-      env: { ...env, DEVLOOPS_RUN_ID: "run-new" },
+      env: { ...env, DEVLOOPS_RUN_ID: "run-new", DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: String(STALE_RUNNER_DEFAULT_MAX_AGE_MS) },
     });
 
     assert.equal(result.code, 0);
@@ -2126,6 +2131,13 @@ test("copilot-pr-handoff supersedes a confirmed-dead run's claim and proceeds in
     assert.equal(output.runnerOwnership.status, "taken_over");
     assert.equal(output.runnerOwnership.activeRun.runId, "run-new");
     assert.notEqual(output.state, "blocked_needs_user_decision");
+    // The documented consumer surface: the typed recovery rides the forwarded
+    // runnerOwnership result, with its evidence label, displaced owner and window.
+    assert.deepEqual(output.runnerOwnership.recovery, {
+      evidence: "exit_signal",
+      displacedRunId: "run-dead",
+      maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS,
+    });
 
     const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
     assert.equal(loaded.state.activeRun.runId, "run-new");

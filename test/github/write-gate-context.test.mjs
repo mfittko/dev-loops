@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, link, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +9,7 @@ import { test } from "bun:test";
 
 import { GATE_ANGLE_SCOPES, loadDevLoopConfig, resolveGateAngles, resolveGateAnglesDynamic, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildAngleRequestGroups, composeReviewerPromptText, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/review-dispatch-plan";
-import { initGitFixture, makeGhMock } from "../_helpers.mjs";
+import { initGitFixture, makeGhMock, runGitFixture } from "../_helpers.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
 import {
@@ -31,7 +31,7 @@ import {
   collapsePureSubstitutionRuns,
   prematureGateOrderingRefusal,
   ISSUE_BODY_ABSENT_SENTINEL,
-  main,
+  main as mainImpl,
   mapGateToConfigKey,
   parseChangedFiles,
   parseWriteGateContextCliArgs,
@@ -42,6 +42,7 @@ import {
   resolvePrSpecContext,
   resolvePriorDispositions,
   countCompletedRounds,
+  resolveClosureRound,
   readGateContext,
   renderBriefingEvidence,
   renderBriefingPrefix,
@@ -76,7 +77,7 @@ function git(cwd, args) {
 // that has a body and closes no issue — the shape most of these tests assume.
 async function stubGhRun(_command, args) {
   if (args[0] === "pr" && args[1] === "view") {
-    return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [] }), stderr: "" };
+    return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [], baseRefName: "main" }), stderr: "" };
   }
   if (args[0] === "issue" && args[1] === "view") {
     return { code: 0, stdout: JSON.stringify({ body: "stub issue body" }), stderr: "" };
@@ -269,7 +270,7 @@ function stubGhRunWithLabels(labelsAnswer) {
         }
         return { code: 0, stdout: JSON.stringify({ labels: labelsAnswer }), stderr: "" };
       }
-      return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [] }), stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ body: "stub PR body", closingIssuesReferences: [], baseRefName: "main" }), stderr: "" };
     }
     if (args[0] === "issue" && args[1] === "view") {
       return { code: 0, stdout: JSON.stringify({ body: "stub issue body" }), stderr: "" };
@@ -886,11 +887,10 @@ test("rationaleFromResolver marks addedAngles entries as 'added' with their adde
   });
 });
 
-test("rationaleFromResolver treats addedAngles entries as 'kept' when dynamicAnglesActive is not true (defensive guard)", () => {
-  // resolveGateAnglesDynamic never produces a non-empty addedAngles with
-  // dynamicAnglesActive false, but a hand-constructed/malformed resolverResult
-  // could. The "added" classification must stay gated on dynamicActive so
-  // rationale semantics remain internally consistent.
+test("rationaleFromResolver records addedAngles entries as 'added' even when dynamicAnglesActive is false (static-path seam override)", () => {
+  // The static path (dynamic subtractive off) can add threat-model for a
+  // SECURITY_SENSITIVE_SEAM diff with dynamicAnglesActive false; the override
+  // must be recorded as added, never silent.
   const { rationale } = rationaleFromResolver({
     recommendedAngles: ["some-angle"],
     skippedAngles: [],
@@ -900,7 +900,7 @@ test("rationaleFromResolver treats addedAngles entries as 'kept' when dynamicAng
     dynamicAnglesActive: false,
   });
   assert.deepEqual(rationale, [
-    { angle: "some-angle", action: "kept", reason: "static pool (dynamic angle resolution inactive)" },
+    { angle: "some-angle", action: "added", reason: "Added: triggered by change category CI_ONLY" },
   ]);
 });
 
@@ -4375,14 +4375,18 @@ test("dogfood: an orchestrator-supplied --prefix-file record verifies clean via 
   }
 });
 
-test("main: --prefix-file never touches GitHub for spec resolution, even with no --pr-body/--issue-body/--acceptance-criteria flags", async () => {
+test("main: --prefix-file reads only the PR base branch from GitHub, never spec resolution, even with no --pr-body/--issue-body/--acceptance-criteria flags", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
     await mkdir(path.join(repoRoot, "tmp"), { recursive: true });
     const prefixPath = path.join(repoRoot, "tmp", "orchestrator-prefix.txt");
     await writeFile(prefixPath, "# Orchestrator briefing\n\nbytes.\n", "utf8");
 
-    const run = async () => { throw new Error("must not call gh under --prefix-file"); };
+    // Only the base-branch read (AC6 freshness) may reach GitHub; spec fields never.
+    const run = async (_c, args) => {
+      assert.equal(args[args.indexOf("--json") + 1], "baseRefName", "must not read spec fields under --prefix-file");
+      return { code: 0, stdout: JSON.stringify({ baseRefName: "main" }), stderr: "" };
+    };
     await main([
       "--repo", "owner/repo", "--pr", "91", "--gate", "draft_gate",
       "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
@@ -4420,7 +4424,7 @@ function specStubRun({
   return async (_command, args) => {
     if (args[0] === "pr" && args[1] === "view") {
       if (prFails) return { code: 1, stdout: "", stderr: "gh: could not resolve PR" };
-      return { code: 0, stdout: JSON.stringify({ body: prBody, closingIssuesReferences: closing }), stderr: "" };
+      return { code: 0, stdout: JSON.stringify({ body: prBody, closingIssuesReferences: closing, baseRefName: "main" }), stderr: "" };
     }
     if (args[0] === "issue" && args[1] === "view") {
       if (issueFails) return { code: 1, stdout: "", stderr: "gh: could not resolve issue" };
@@ -8193,6 +8197,310 @@ test("resolvePrSpecContext (review): caller-supplied spec flags leave the formal
   assert.equal(options.hasFormalPrSpec, undefined);
 });
 
+// Issue 2885: fixtures without an origin remote cannot fetch; default to a stub that reports the PR base as current.
+// The stale-base tests below call mainImpl with a real or stale checker instead.
+const currentBase = async ({ base }) => ({ ok: true, status: "base_current", base });
+function main(argv, runtime = {}) {
+  return mainImpl(argv, { checkBaseFreshness: currentBase, ...runtime });
+}
+
+// Real throwaway repos: bare origin, a clone at the PR head, then origin/main advances.
+async function makeOriginFixture() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "gate-context-stale-base-"));
+  const origin = path.join(root, "origin.git");
+  const clone = path.join(root, "clone");
+  const other = path.join(root, "other");
+  runGitFixture(root, ["init", "-q", "--bare", "-b", "main", origin]);
+  runGitFixture(root, ["clone", "-q", origin, other]);
+  runGitFixture(other, ["config", "user.email", "t@example.com"]);
+  runGitFixture(other, ["config", "user.name", "t"]);
+  await writeFile(path.join(other, "a.txt"), "a\n");
+  runGitFixture(other, ["add", "a.txt"]);
+  runGitFixture(other, ["commit", "-qm", "init"]);
+  runGitFixture(other, ["push", "-q", "origin", "main"]);
+  runGitFixture(root, ["clone", "-q", origin, clone]);
+  runGitFixture(clone, ["config", "user.email", "t@example.com"]);
+  runGitFixture(clone, ["config", "user.name", "t"]);
+  runGitFixture(clone, ["checkout", "-q", "-b", "feature"]);
+  await writeFile(path.join(clone, "b.txt"), "b\n");
+  runGitFixture(clone, ["add", "b.txt"]);
+  runGitFixture(clone, ["commit", "-qm", "feature"]);
+  const headSha = runGitFixture(clone, ["rev-parse", "HEAD"]).trim();
+  const advanceOrigin = async () => {
+    await writeFile(path.join(other, "c.txt"), "c\n");
+    runGitFixture(other, ["add", "c.txt"]);
+    runGitFixture(other, ["commit", "-qm", "newer base commit"]);
+    runGitFixture(other, ["push", "-q", "origin", "main"]);
+  };
+  return { root, clone, headSha, advanceOrigin };
+}
+
+test("issue 2885: write-gate-context records baseFreshness on a current base and refuses once origin advanced", async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    const argv = ["--repo", "owner/repo", "--pr", "70", "--gate", "draft_gate", "--head-sha", headSha, "--base", "main", "--angles", '["correctness"]'];
+    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha }, { repoRoot: clone });
+    assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
+    await advanceOrigin();
+    // The caller never fetches: the preflight itself must see the advanced origin.
+    // The earlier base_current context and an emit plan stay on disk: the refused retry must remove both.
+    const key = { repo: "owner/repo", pr: 70, gate: "draft_gate", headSha, tmpRoot: "tmp" };
+    const contextFile = path.join(clone, buildGateContextPath(key));
+    const planFile = path.join(clone, buildGateEmitPlanPath(key));
+    await writeFile(planFile, "{}\n", "utf8");
+    assert.equal(existsSync(contextFile), true);
+    const before = process.exitCode;
+    const realWrite = process.stderr.write.bind(process.stderr);
+    let errText = "";
+    process.stderr.write = (chunk) => { errText += String(chunk); return true; };
+    try {
+      await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+      assert.equal(process.exitCode, 1);
+      assert.match(errText, /base_stale_integrate_first[^]*newer base commit[^]*resolve-pr-conflicts/u);
+    } finally {
+      process.stderr.write = realWrite;
+      process.exitCode = before;
+    }
+    assert.equal(existsSync(contextFile), false);
+    assert.equal(existsSync(planFile), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("seamFirstRoundFor: pre_approval is a seam-first round only when no draft_gate round ran threat-model at the head", async () => {
+  const { seamFirstRoundFor } = await import("../../scripts/github/write-gate-context.mjs");
+  const root = await mkdtemp(path.join(os.tmpdir(), "seam-first-"));
+  try {
+    const id = { repo: "o/r", pr: 7, headSha: "a".repeat(40), tmpRoot: "tmp" };
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "draft_gate" }, root), true);
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "review" }, root), false);
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "pre_approval_gate" }, root), true);
+    const draftPath = path.join(root, buildGateContextPath({ ...id, gate: "draft_gate" }));
+    await mkdir(path.dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, JSON.stringify({ resolvedAngles: ["scope"] }));
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "pre_approval_gate" }, root), true, "draft artifact without threat-model");
+    await writeFile(draftPath, "{not json");
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "pre_approval_gate" }, root), true, "malformed draft artifact");
+    await writeFile(draftPath, JSON.stringify({ resolvedAngles: ["scope", "threat-model"] }));
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "pre_approval_gate" }, root), false);
+    assert.equal(await seamFirstRoundFor({ ...id, tmpRoot: "", gate: "pre_approval_gate" }, root), false, "empty tmpRoot shares the writer's normalization");
+    assert.equal(await seamFirstRoundFor({ ...id, gate: "draft_gate" }, root), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function expectRefusal(argv, runtime, pattern, clone) {
+  const before = process.exitCode;
+  const realWrite = process.stderr.write.bind(process.stderr);
+  let errText = "";
+  process.stderr.write = (chunk) => { errText += String(chunk); return true; };
+  try {
+    await mainImpl(argv, runtime);
+    assert.equal(process.exitCode, 1);
+    assert.match(errText, pattern);
+  } finally {
+    process.stderr.write = realWrite;
+    process.exitCode = before;
+  }
+  assert.equal(existsSync(path.join(clone, "tmp/gate-context")), false);
+}
+
+for (const gate of ["draft_gate", "pre_approval_gate"]) test(`issue 2885 AC6: a run without --base checks the PR base branch, records baseFreshness and refuses once origin advanced (${gate})`, async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    const argv = ["--repo", "owner/repo", "--pr", "74", "--gate", gate, "--head-sha", headSha, "--angles", '["correctness"]'];
+    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 74, gate, headSha }, { repoRoot: clone });
+    assert.equal(artifact.scope.diffSource, "none");
+    assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
+    await advanceOrigin();
+    await rm(path.join(clone, "tmp"), { recursive: true, force: true });
+    await expectRefusal(argv, { repoRoot: clone, run: stubGhRun }, /base_stale_integrate_first[^]*newer base commit/u, clone);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885 AC6: the freshness verdict describes --head-sha, not the checkout HEAD", async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    await advanceOrigin();
+    runGitFixture(clone, ["fetch", "-q", "origin"]);
+    runGitFixture(clone, ["merge", "-q", "--no-edit", "origin/main"]);
+    // The checkout HEAD contains origin/main, but the reviewed head (pre-merge) lacks it.
+    const argv = ["--repo", "owner/repo", "--pr", "75", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["correctness"]'];
+    await expectRefusal(argv, { repoRoot: clone, run: stubGhRun }, /base_stale_integrate_first/u, clone);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885 AC6: a SHA, revision-expression or non-origin remote --base is checked against the PR base branch", async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    const sha = runGitFixture(clone, ["rev-parse", "HEAD~1"]).trim();
+    runGitFixture(clone, ["remote", "add", "upstream", runGitFixture(clone, ["remote", "get-url", "origin"]).trim()]);
+    runGitFixture(clone, ["fetch", "-q", "upstream"]);
+    const bases = [sha, "HEAD~1", "upstream/main"];
+    for (const base of bases) {
+      await rm(path.join(clone, "tmp"), { recursive: true, force: true });
+      const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "draft_gate", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
+      await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+      const artifact = await readGateContext({ repo: "owner/repo", pr: 71, gate: "draft_gate", headSha }, { repoRoot: clone });
+      assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
+      assert.equal(artifact.scope.diffSource, "base");
+    }
+    await advanceOrigin();
+    for (const base of bases) {
+      await rm(path.join(clone, "tmp"), { recursive: true, force: true });
+      const argv = ["--repo", "owner/repo", "--pr", "71", "--gate", "draft_gate", "--head-sha", headSha, "--base", base, "--angles", '["correctness"]'];
+      await expectRefusal(argv, { repoRoot: clone, run: stubGhRun }, /base_stale_integrate_first/u, clone);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885 AC6: an unreadable PR base refuses with base_unresolved and writes no artifact", async () => {
+  const { root, clone, headSha } = await makeOriginFixture();
+  try {
+    const noBase = async (command, args) => {
+      const res = await stubGhRun(command, args);
+      return args[0] === "pr" ? { ...res, stdout: JSON.stringify({ body: "b", closingIssuesReferences: [] }) } : res;
+    };
+    const argv = ["--repo", "owner/repo", "--pr", "75", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["correctness"]'];
+    await expectRefusal(argv, { repoRoot: clone, run: noBase }, /base_unresolved/u, clone);
+    // A failed `gh pr view` for baseRefName refuses the same way.
+    const failingRead = async (command, args) => (args[0] === "pr" && args[args.indexOf("--json") + 1] === "baseRefName"
+      ? { code: 1, stdout: "", stderr: "boom" }
+      : stubGhRun(command, args));
+    await expectRefusal(argv, { repoRoot: clone, run: failingRead }, /base_unresolved/u, clone);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885: the review gate records a stale base in baseFreshness and still writes the artifact", async () => {
+  const { root, clone, headSha, advanceOrigin } = await makeOriginFixture();
+  try {
+    await advanceOrigin();
+    const argv = ["--repo", "owner/repo", "--pr", "76", "--gate", "review", "--head-sha", headSha, "--angles", '["correctness"]'];
+    const before = process.exitCode;
+    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+    assert.equal(process.exitCode, before);
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 76, gate: "review", headSha }, { repoRoot: clone });
+    assert.deepEqual(artifact.baseFreshness, { status: "base_stale_integrate_first", base: "main" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885: a failed preflight fetch exits 1 with base_fetch_failed, the PR base and no artifact", async () => {
+  const { root, clone, headSha } = await makeOriginFixture();
+  try {
+    let received;
+    const failing = async ({ base }) => { received = base; return { ok: false, error: "base_fetch_failed", base, message: "x" }; };
+    const argv = ["--repo", "owner/repo", "--pr", "72", "--gate", "draft_gate", "--head-sha", headSha, "--base", "origin/main", "--angles", '["correctness"]'];
+    const before = process.exitCode;
+    const realWrite = process.stderr.write.bind(process.stderr);
+    let errText = "";
+    process.stderr.write = (chunk) => { errText += String(chunk); return true; };
+    try {
+      await mainImpl(argv, { repoRoot: clone, run: stubGhRun, checkBaseFreshness: failing });
+      assert.equal(process.exitCode, 1);
+      assert.match(errText, /base_fetch_failed/u);
+    } finally {
+      process.stderr.write = realWrite;
+      process.exitCode = before;
+    }
+    assert.equal(received, "main");
+    assert.equal(existsSync(path.join(clone, "tmp/gate-context")), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("issue 2885: a stale local refs/heads/main base diffs against origin/main, not the local ref", async () => {
+  const { root, clone, advanceOrigin } = await makeOriginFixture();
+  try {
+    await advanceOrigin();
+    runGitFixture(clone, ["fetch", "-q", "origin"]);
+    runGitFixture(clone, ["merge", "-q", "--no-edit", "origin/main"]);
+    const headSha = runGitFixture(clone, ["rev-parse", "HEAD"]).trim();
+    const argv = ["--repo", "owner/repo", "--pr", "73", "--gate", "review", "--head-sha", headSha, "--base", "refs/heads/main", "--angles", '["correctness"]'];
+    await mainImpl(argv, { repoRoot: clone, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 73, gate: "review", headSha }, { repoRoot: clone });
+    assert.deepEqual(artifact.baseFreshness, { status: "base_current", base: "main" });
+    assert.deepEqual(artifact.scope.changedFiles, ["b.txt"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// Wiring pin: deleting the seamFirstRound line in buildGateContext restores the
+// resolver default (false for preApproval) and must fail this test.
+test("buildGateContext passes seamFirstRoundFor to the resolver: a pre_approval seam round adds threat-model only when no draft artifact at the head lists it", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-seam-wiring-"));
+  try {
+    const config = { version: 1, gates: { preApproval: { angles: ["scope", { name: "threat-model", enabled: false }] } } };
+    const seamDiff = {
+      nameStatusOutput: "M\tscripts/x.mjs",
+      diffOutput: "diff --git a/scripts/x.mjs b/scripts/x.mjs\n--- a/scripts/x.mjs\n+++ b/scripts/x.mjs\n@@ -1 +1,2 @@\n a\n+spawn(cmd);\n",
+    };
+    const id = { repo: "owner/repo", pr: 12, headSha: "a".repeat(40) };
+    const build = () => buildGateContext({ config, gate: "pre_approval_gate", diff: seamDiff, ...id, branch: "issue-1" }, { repoRoot });
+    const noDraft = await build();
+    assert.ok(noDraft.artifact.resolvedAngles.includes("threat-model"), "no draft artifact at the head");
+    const draftPath = path.join(repoRoot, buildGateContextPath({ ...id, gate: "draft_gate" }));
+    await mkdir(path.dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, JSON.stringify({ resolvedAngles: ["scope", "threat-model"] }));
+    const afterDraft = await build();
+    assert.ok(!afterDraft.artifact.resolvedAngles.includes("threat-model"), "draft artifact lists threat-model");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Wiring pin: deleting `seamFirstRound: await seamFirstRoundFor(options, repoRoot)`
+// in main() restores the resolver default (false for preApproval) and must fail this test.
+test("main() passes seamFirstRoundFor to the resolver: a pre_approval seam round adds threat-model only when no draft artifact at the head lists it", async () => {
+  const { repoRoot, baseSha } = await makeBaseDiffRepo();
+  try {
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      ["version: 1", "gates:", "  preApproval:", "    angles:", "      - scope", "      - name: threat-model", "        enabled: false"].join("\n") + "\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "src/changed.mjs"),
+      'import { helper } from "./dep.mjs";\nexport function changed() { spawn(cmd); return helper() + 1; }\n',
+      "utf8",
+    );
+    git(repoRoot, ["add", "src/changed.mjs"]);
+    git(repoRoot, ["commit", "-q", "-m", "seam"]);
+    const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    const id = { repo: "owner/repo", pr: 92, headSha };
+    const run = async () => {
+      await main(["--repo", id.repo, "--pr", String(id.pr), "--gate", "pre_approval_gate", "--head-sha", headSha, "--base", baseSha], {
+        repoRoot,
+        run: stubGhRun,
+        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true } }),
+      });
+      return (await readGateContext({ ...id, gate: "pre_approval_gate" }, { repoRoot })).resolvedAngles;
+    };
+    assert.ok((await run()).includes("threat-model"), "no draft artifact at the head");
+    const draftPath = path.join(repoRoot, buildGateContextPath({ ...id, gate: "draft_gate" }));
+    await mkdir(path.dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, JSON.stringify({ resolvedAngles: ["scope", "threat-model"] }));
+    assert.ok(!(await run()).includes("threat-model"), "draft artifact lists threat-model");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("countCompletedRounds counts an in-range identity-matching ledger with a missing or unknown verdict, never a foreign one", async () => {
   const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-round-count-"));
   try {
@@ -8237,5 +8545,202 @@ test("countCompletedRounds skips closed ledgers logged before DRAFT_ROUND_CAP_EF
     assert.equal(await count(), 6, "an impossible date, month 13, hour 24/25 or four fraction digits is noncanonical and counts");
   } finally {
     await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+// ADR 0191 (#2937 S4a): the one closure round diffs from the cap round's head.
+async function seedClosedRounds(repoRoot, pr, heads) {
+  const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", `pr-${pr}`);
+  await mkdir(dir, { recursive: true });
+  for (const [i, head] of heads.entries()) {
+    const findings = i === heads.length - 1 ? [{ severity: "medium", summary: "guard missing", files: ["src/changed.mjs"], line: 2, judgeDisposition: "act", judgeTitle: "Guard is missing", judgeFix: "add the guard" }] : [];
+    await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
+      repo: "owner/repo", pr, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings,
+    }), "utf8");
+  }
+}
+
+test("resolveClosureRound returns the cap round head and the prior act items only at count cap+1 of a draft_gate", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 41, gate: "draft_gate", headSha };
+    await seedClosedRounds(repoRoot, 41, ["1".repeat(40), "2".repeat(40), "3".repeat(40)]);
+    assert.equal(await resolveClosureRound(opts, { repoRoot, cap: 4 }), null, "the cap round is not a closure round");
+    await seedClosedRounds(repoRoot, 41, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    assert.equal(await resolveClosureRound(opts, { repoRoot, cap: 0 }), null, "cap 0 disables");
+    assert.equal(await resolveClosureRound({ ...opts, gate: "pre_approval_gate" }, { repoRoot, cap: 4 }), null);
+    const closure = await resolveClosureRound(opts, { repoRoot, cap: 4 });
+    assert.equal(closure.fromHead, baseSha);
+    assert.deepEqual(closure.priorActItems.map((i) => i.title), ["Guard is missing"]);
+    await seedClosedRounds(repoRoot, 41, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha, "5".repeat(40)]);
+    assert.equal(await resolveClosureRound(opts, { repoRoot, cap: 4 }), null, "a round counted cap+2 is not a closure round");
+    // A blocked closure ledger does not count, so the next head is again counted cap+1 and resolves from the last closed head.
+    await seedClosedRounds(repoRoot, 44, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    const blockedHead = "6".repeat(40);
+    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-44", `draft_gate-${blockedHead}.json`), JSON.stringify({
+      repo: "owner/repo", pr: 44, gate: "draft_gate", headSha: blockedHead, verdict: "blocked", loggedAt: "2026-11-09T00:00:00.000Z", findings: [],
+    }), "utf8");
+    const again = await resolveClosureRound({ ...opts, pr: 44 }, { repoRoot, cap: 4 });
+    assert.equal(again?.fromHead, baseSha, "a blocked closure ledger leaves the next round a closure round from the last closed head");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveClosureRound refuses when the closure count is reached but no closed prior ledger is readable", async () => {
+  const { repoRoot, headSha } = await makeBaseDiffRepo();
+  try {
+    await seedClosedRounds(repoRoot, 46, ["1".repeat(40), "2".repeat(40), "3".repeat(40), "4".repeat(40)]);
+    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-46");
+    for (const name of await readdir(dir)) await writeFile(path.join(dir, name), "{not json", "utf8");
+    await assert.rejects(resolveClosureRound({ repo: "owner/repo", pr: 46, gate: "draft_gate", headSha }, { repoRoot, cap: 4 }), /cannot be recovered/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveClosureRound returns the trimmed, lowercased ledger headSha as fromHead", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await seedClosedRounds(repoRoot, 45, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    const file = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-45", `draft_gate-${baseSha}.json`);
+    const log = JSON.parse(await readFile(file, "utf8"));
+    await writeFile(file, JSON.stringify({ ...log, headSha: ` ${baseSha.toUpperCase()} ` }), "utf8");
+    const closure = await resolveClosureRound({ repo: "owner/repo", pr: 45, gate: "draft_gate", headSha }, { repoRoot, cap: 4 });
+    assert.equal(closure.fromHead, baseSha);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI closure round is detected from the main-anchored ledger when the context bundle is relocated with --tmp-root", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  try {
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+    await seedClosedRounds(repoRoot, 47, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    process.exitCode = undefined;
+    await main(["--repo", "owner/repo", "--pr", "47", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", headSha, "--tmp-root", "relocated"], { repoRoot, run: stubGhRun });
+    assert.notEqual(process.exitCode, 1);
+    const closure = await readGateContext({ repo: "owner/repo", pr: 47, gate: "draft_gate", headSha, tmpRoot: "relocated" }, { repoRoot });
+    assert.equal(closure.scope.closureRound.fromHead, baseSha);
+    assert.equal(closure.scope.closureRound.ignoredBase, headSha);
+  } finally {
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI closure round diffs from the cap round head, records scope.closureRound and overrides a different --base; an ordinary round records none", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  try {
+    const args = (pr, base) => ["--repo", "owner/repo", "--pr", String(pr), "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]', ...(base ? ["--base", base] : [])];
+    await main(args(42, baseSha), { repoRoot, run: stubGhRun });
+    const ordinary = await readGateContext({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal("closureRound" in ordinary.scope, false);
+
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", baseSha]);
+    await seedClosedRounds(repoRoot, 43, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    process.exitCode = undefined;
+    // headSha differs from fromHead (baseSha) and as a base would resolve an empty change set, so a diff from it would fail.
+    await main(args(43, headSha), { repoRoot, run: stubGhRun });
+    assert.notEqual(process.exitCode, 1, "a --base that differs from the cap round head is overridden, not refused");
+    const closure = await readGateContext({ repo: "owner/repo", pr: 43, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal(closure.scope.diffSource, "base");
+    assert.deepEqual(closure.scope.changedFiles, ["src/changed.mjs"]);
+    assert.equal(closure.scope.closureRound.fromHead, baseSha);
+    assert.equal(closure.scope.closureRound.ignoredBase, headSha);
+    assert.deepEqual(closure.scope.closureRound.priorActItems.map((i) => i.title), ["Guard is missing"]);
+  } finally {
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ADR 0197 (#2937 S4b): the cap round (ledger at headSha) is followed by a merge of origin/main, whose content is not the PR's own.
+async function mergeBaseIntoPr(repoRoot, baseSha) {
+  const branch = git(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+  git(repoRoot, ["checkout", "-q", "-b", "side", baseSha]);
+  await writeFile(path.join(repoRoot, "main-only.md"), "main content\n", "utf8");
+  git(repoRoot, ["add", "main-only.md"]);
+  git(repoRoot, ["commit", "-q", "-m", "main moves"]);
+  git(repoRoot, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  git(repoRoot, ["checkout", "-q", branch]);
+  git(repoRoot, ["merge", "-q", "--no-ff", "-m", "merge origin/main", "origin/main"]);
+  return git(repoRoot, ["rev-parse", "HEAD"]).trim();
+}
+
+async function runClosureCli(repoRoot, pr, mergedHead) {
+  process.exitCode = undefined;
+  await main(["--repo", "owner/repo", "--pr", String(pr), "--gate", "draft_gate", "--head-sha", mergedHead, "--angles", '["scope"]', "--base", "origin/main"], { repoRoot, run: stubGhRun });
+}
+
+test("closure bundle holds only the PR-own changes since fromHead and excludes the merged base content (ADR 0197)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  try {
+    await seedClosedRounds(repoRoot, 48, ["1".repeat(40), "2".repeat(40), "3".repeat(40), headSha]);
+    await mergeBaseIntoPr(repoRoot, baseSha);
+    await writeFile(path.join(repoRoot, "src/dep.mjs"), "export function helper() { return 2; }\n", "utf8");
+    git(repoRoot, ["add", "src/dep.mjs"]);
+    git(repoRoot, ["commit", "-q", "-m", "own change after the merge"]);
+    const mergedHead = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    await runClosureCli(repoRoot, 48, mergedHead);
+    assert.notEqual(process.exitCode, 1);
+    const closure = await readGateContext({ repo: "owner/repo", pr: 48, gate: "draft_gate", headSha: mergedHead }, { repoRoot });
+    assert.deepEqual(closure.scope.changedFiles, ["src/dep.mjs"], "main-only.md came from the merged base");
+    assert.equal(closure.scope.closureRound.fromHead, headSha);
+  } finally {
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("closure round refuses with closure_delta_no_pr_own_change when the PR-own delta since fromHead is empty (ADR 0197)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  const stderrWrite = process.stderr.write.bind(process.stderr);
+  const stdoutWrite = process.stdout.write.bind(process.stdout);
+  let out = "";
+  try {
+    await seedClosedRounds(repoRoot, 49, ["1".repeat(40), "2".repeat(40), "3".repeat(40), headSha]);
+    const mergedHead = await mergeBaseIntoPr(repoRoot, baseSha);
+    process.stdout.write = (chunk) => { out += String(chunk); return true; };
+    process.stderr.write = (chunk) => { out += String(chunk); return true; };
+    await runClosureCli(repoRoot, 49, mergedHead);
+    assert.equal(process.exitCode, 1);
+    assert.match(out, /closure_delta_no_pr_own_change/);
+    assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-49", `draft_gate-${mergedHead}.json`)), false, "no artifact, never clean");
+  } finally {
+    process.stdout.write = stdoutWrite;
+    process.stderr.write = stderrWrite;
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("closure round refuses with closure_delta_no_pr_own_change (unproven) when origin/<base> does not resolve (ADR 0197)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  const stderrWrite = process.stderr.write.bind(process.stderr);
+  const stdoutWrite = process.stdout.write.bind(process.stdout);
+  let out = "";
+  try {
+    await seedClosedRounds(repoRoot, 50, ["1".repeat(40), "2".repeat(40), "3".repeat(40), headSha]);
+    const mergedHead = await mergeBaseIntoPr(repoRoot, baseSha);
+    git(repoRoot, ["update-ref", "-d", "refs/remotes/origin/main"]);
+    process.stdout.write = (chunk) => { out += String(chunk); return true; };
+    process.stderr.write = (chunk) => { out += String(chunk); return true; };
+    await runClosureCli(repoRoot, 50, mergedHead);
+    assert.equal(process.exitCode, 1);
+    assert.match(out, /closure_delta_no_pr_own_change/);
+    assert.match(out, /unproven/);
+    assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-50", `draft_gate-${mergedHead}.json`)), false, "no artifact");
+  } finally {
+    process.stdout.write = stdoutWrite;
+    process.stderr.write = stderrWrite;
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
   }
 });

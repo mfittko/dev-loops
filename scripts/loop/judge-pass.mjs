@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -32,9 +32,10 @@ import {
   validateSpecAuthorityVerdict,
 } from "@dev-loops/core/loop/spec-authority";
 import { findEscalations, recurrenceFiles } from "@dev-loops/core/loop/gate-recurrence";
-import { commentDeferredFindings, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
-import { readClosedPriorRoundLogs } from "../github/write-gate-context.mjs";
+import { commentDeferredFindings, fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
+import { readClosedPriorRoundLogs, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
+import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
@@ -48,7 +49,7 @@ import {
   matchJqOutputToken,
 } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>]
+const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>] [--tmp-root <path>]
 
 Bridge the judge pass between gate fan-in (Phase 3) and the fixer pass (Phase 4).
 Reads the judge agent's verdict artifact, enforces current-head freshness, applies
@@ -115,6 +116,8 @@ Inputs:
                                stamped thread by its thread marker plus resolving reply). This tool never
                                creates an issue. A re-run does not append a fingerprint
                                the target already lists.
+  --tmp-root <path>            Ledger root for the round count and prior-round reads; pass the
+                               ledger writer's --tmp-root. Default: the main checkout's tmp/.
   --repo-root <path>           Root used to resolve relative --findings-file /
                                --judge-verdict / --out / --ledger-out paths
                                (default: process.cwd()).
@@ -220,6 +223,7 @@ export function parseJudgePassCliArgs(argv) {
       out: { type: "string" },
       "ledger-out": { type: "string" },
       "repo-root": { type: "string" },
+      "tmp-root": { type: "string" },
       "spec-file": { type: "string" },
       "content-digest": { type: "string" },
       "spec-authority-verdict": { type: "string" },
@@ -281,6 +285,10 @@ export function parseJudgePassCliArgs(argv) {
     }
     if (token.name === "ledger-out") {
       options.ledgerOut = token.value;
+      continue;
+    }
+    if (token.name === "tmp-root") {
+      options.tmpRoot = token.value;
       continue;
     }
     if (token.name === "repo-root") {
@@ -446,10 +454,11 @@ export function validateCliArgs(options) {
  * @param {Array<object>} findings — the flat consolidated findings array (already unwrapped)
  * @param {object} judgeVerdict — the judge agent's verdict artifact (JSON object)
  * @param {string} headSha — the round's current head (the verdict must be current-head)
+ * @param {{ pastCap?: boolean, round?: number }} [options] — `pastCap` receives the `lowFixCapped` state from `resolveDraftRoundCap`, true at or past the draft_gate cap and at pre_approval_gate
  * @returns {{ enriched: Array<object>, act: Array<object>, scopeDrift: object,
  *             counts: { act: number, defer: number, reject: number } (act excludes evidence-only remedies), headSha: string }}
  */
-export function runJudgePass(findings, judgeVerdict, headSha) {
+export function runJudgePass(findings, judgeVerdict, headSha, { pastCap = false, round = 0 } = {}) {
   const validated = validateJudgeVerdict(judgeVerdict);
   const verdictHead = validated.headSha.trim().toLowerCase();
   const currentHead = String(headSha).trim().toLowerCase();
@@ -461,7 +470,7 @@ export function runJudgePass(findings, judgeVerdict, headSha) {
   // applyJudgeDispositions fails closed on both an out-of-range index and an
   // undisposed finding (the coverage check lives in that shared pure seam),
   // so runJudgePass inherits fail-closed coverage without restating it here.
-  const applied = applyJudgeDispositions(findings, judgeVerdict);
+  const applied = applyJudgeDispositions(findings, judgeVerdict, { pastCap, round });
   // Cluster duplicate root-cause findings, then project the representative
   // member's judge disposition onto every other member — one judge decision
   // per root cause, not one per reviewer that happened to report it.
@@ -544,7 +553,7 @@ function validateFindingsArray(parsed, flagLabel) {
  * already the judge-pass's own fresh copy from `applyJudgeDispositions`). A
  * re-run does not append a fingerprint the target already lists.
  */
-async function applyDeferralComment(enriched, { repo, pr, trackerProvider }, deps) {
+async function applyDeferralComment(enriched, { repo, pr, gate, trackerProvider }, deps) {
   for (const f of enriched) {
     f.fingerprint = fingerprintFinding(f);
   }
@@ -559,6 +568,40 @@ async function applyDeferralComment(enriched, { repo, pr, trackerProvider }, dep
   }));
   const { issueNumber } = await commentDeferredFindings({ repo, pr, entries, trackerProvider }, deps);
   for (const f of deferred) f.followUpIssueNumber = issueNumber;
+  // #2724 slice 0: a pre_approval_gate low_fix_until_cap defer needs a target other than the PR itself; with none the whole cluster (nit members included) is a reject.
+  if (gate === "pre_approval_gate" && issueNumber === pr) {
+    for (const f of enriched) {
+      if (f.judgeDisposition !== "defer" || !f.judgeReason?.startsWith("low_fix_until_cap ")) continue;
+      f.judgeDisposition = "reject";
+      delete f.followUpDraft;
+      delete f.followUpIssueNumber;
+    }
+  }
+}
+
+/**
+ * Copy each stamped defer target onto the durable findings log for the round, matched by fingerprint, so the cap-round fixer check
+ * (emit-fixer-work-order) reads the same followUpIssueNumber as the verdict poster. An absent log is left untouched; a log that readGateFindingsLedger rejects fails the pass.
+ */
+async function stampDurableDeferTargets(enriched, options, resolvedRoot) {
+  const targets = new Map(enriched.filter((f) => f.judgeDisposition === "defer" && Number.isInteger(f.followUpIssueNumber)).map((f) => [f.fingerprint, f.followUpIssueNumber]));
+  // A defer that applyDeferralComment converted to reject (the PR is the only target, #2724 slice 0) is rewritten to reject on the durable log too.
+  const rejects = new Set(enriched.filter((f) => f.judgeDisposition === "reject" && f.judgeReason?.startsWith("low_fix_until_cap ")).map((f) => f.fingerprint));
+  if (targets.size === 0 && rejects.size === 0) return;
+  const logPath = path.resolve(resolvedRoot, buildLogPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }));
+  if (!(await access(logPath).then(() => true, (err) => (err?.code === "ENOENT" ? false : Promise.reject(err))))) return;
+  // One validity rule for the ledger: the canonical reader rejects a malformed log. It normalizes in memory, so the raw log is re-read to stamp it.
+  await readGateFindingsLedger(logPath);
+  const log = JSON.parse(await readFile(logPath, "utf8"));
+  let changed = false;
+  for (const f of log.findings) {
+    if (f?.judgeDisposition !== "defer" || f.followUpIssueNumber != null) continue;
+    const fp = fingerprintFinding(f);
+    const target = targets.get(fp);
+    if (target !== undefined) { f.followUpIssueNumber = target; changed = true; }
+    else if (rejects.has(fp)) { f.judgeDisposition = "reject"; delete f.followUpDraft; changed = true; }
+  }
+  if (changed) await writeFile(logPath, JSON.stringify(log, null, 2) + "\n");
 }
 
 /**
@@ -632,9 +675,10 @@ async function enforceSpecAuthority(options, findings, resolvedRoot) {
   );
   let validated;
   try {
-    validated = validateSpecAuthorityVerdict(verdict, { findingsCount: findings.length, criterionIds });
+    validated = validateSpecAuthorityVerdict(verdict, { findingsCount: findings.length, criterionIds, clusterIds: findings.map((f) => f?.clusterId) });
   } catch (error) {
-    throw new Error(`spec-authority verdict failed validation: ${error instanceof Error ? error.message : String(error)}`);
+    const code = error?.code;
+    throw Object.assign(new Error(`spec-authority verdict failed validation${code ? ` [${code}]` : ""}: ${error instanceof Error ? error.message : String(error)}`), code ? { code } : {});
   }
   if (validated.specDigest !== specDigest) {
     throw new Error(
@@ -882,7 +926,7 @@ async function resolveEscalations(result, options, resolvedRoot, specDigest, { r
     return { escalations: [], skipped: `GATE-EXEC-RECURRENCE-ESCALATION cannot read the head's sources: round head ${result.headSha} is not available in this repository, so escalation was not evaluated` };
   }
   const priorLogs = await readPriorLogs(
-    { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: resolveGateArtifactTmpRoot(resolvedRoot) },
+    { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) },
     { repoRoot: resolvedRoot },
   );
   const sources = new Map();
@@ -908,6 +952,9 @@ export function gitShowSource(cwd, sha, file) {
   return out.status === 0 ? out.stdout : null;
 }
 
+// The ledger root of the round history: the writer's --tmp-root, else the canonical root.
+const historyRoot = (options, resolvedRoot) => (options.tmpRoot ? path.resolve(resolvedRoot, options.tmpRoot) : resolveGateArtifactTmpRoot(resolvedRoot));
+
 export async function judgePassCli(
   options,
   { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot, readPriorLogs = readClosedPriorRoundLogs, hasCommit = hasCommitInRepo, readSource = gitShowSource } = {},
@@ -920,7 +967,8 @@ export async function judgePassCli(
     "--judge-verdict",
     parseError,
   );
-  const result = runJudgePass(findings, judgeVerdict, options.headSha);
+  const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
+  const result = runJudgePass(findings, judgeVerdict, options.headSha, { pastCap: lowFixCapped, round });
 
   // Immutable spec-authority gate (opt-in via --spec-file). A spec_cannot_decide
   // outcome fails closed here so the loop stops at the human-spec-decision state
@@ -974,7 +1022,9 @@ export async function judgePassCli(
   // blocking severities come from the same config the consolidator used to
   // compute overallVerdict, so the two cannot disagree on what "blocking" means.
   const { blockingSeverities, trackerProvider } = await resolveGateSettings(options, resolvedRoot);
-  assertCleanImpliesNoBlockingAct(overallVerdict, result.act, blockingSeverities);
+  // A failOpen promotion (ADR 0188) raised a low to medium after the consolidator computed overallVerdict, so check the ORIGINAL severities.
+  const actAtInputSeverity = result.enriched.flatMap((f, i) => (isOpenActItem(f) ? [{ ...f, severity: findings[i]?.severity ?? f.severity }] : []));
+  assertCleanImpliesNoBlockingAct(overallVerdict, actAtInputSeverity, blockingSeverities);
 
   // Persist the durable approval record AFTER the act list is finalized, so a
   // round with remaining act findings approves nothing (re-entry stays honest).
@@ -997,9 +1047,11 @@ export async function judgePassCli(
   } else {
     await applyDeferralComment(
       result.enriched,
-      { repo: options.repo, pr: Number(options.pr), trackerProvider },
+      { repo: options.repo, pr: Number(options.pr), gate: options.gate, trackerProvider },
       { env, ghCommand, run, commentIssue },
     );
+    await stampDurableDeferTargets(result.enriched, options, resolvedRoot);
+    result.counts = countByDisposition(result.enriched);
   }
 
   // Recurrence escalation: an act item whose surface appears in act items of three counted

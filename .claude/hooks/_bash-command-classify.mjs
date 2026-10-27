@@ -77,8 +77,12 @@ export const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);
  * (equivalent to `;`), and the Claude Code Bash tool accepts multi-line command
  * strings — so a segment must break on them too, else `echo hi\ngh pr create` evades
  * the gate. Used by all segment-splitting sites (DRY).
+ * A `&` that belongs to a redirection (`2>&1`, `>&2`, `&>f`) is not a separator. This changes
+ * segmentation for every gate that uses this regex (merge, stash, detached-wait, PR-number and
+ * repo-flag extraction, and the Pi extension via extension/post-merge-update.ts). It is needed so
+ * a redirection before a heredoc (`python3 -I 2>&1 <<EOF`) still reaches the interpreter scan.
  */
-const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||&|\n|\r)\s*/;
+const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||(?<!(?<!\\)[<>])&(?!>)|\n|\r)\s*/;
 
 /**
  * Strip a single balanced surrounding quote pair (`'…'` or `"…"`) from a shell arg value.
@@ -1152,6 +1156,16 @@ function interpreterRegex(bin) {
   return new RegExp(`^${SHELL_EXEC_PREFIX}${bin}(?:\\s|$)`, "i");
 }
 
+// Bare `-` stdin script, or a heredoc token (`<<EOF`, `-<<EOF`, or one attached to a flag: `-I<<EOF`).
+const isStdinScriptToken = (t) => t === "-" || t.startsWith("<<") || (t.startsWith("-") && t.includes("<<")) || (REDIRECTION_RE.test(t) && t.includes("<<"));
+// A redirection token (`2>&1`, `2>/dev/null`, `>out`, `&>x`) between flags and the heredoc is not the script path. Returns how many tokens to skip: 0 (not a redirection), 1, or 2 (operator alone, its target is the next token).
+const REDIRECTION_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)/;
+const REDIRECTION_OPERATOR_ONLY_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)$/;
+const redirectionSkip = (t) => (!t.includes("<<") && REDIRECTION_RE.test(t) ? (REDIRECTION_OPERATOR_ONLY_RE.test(t) ? 2 : 1) : 0);
+const SCRIPT_EXT_RE = /\.(?:[cm]?js|[cm]?ts)$/;
+// Closed allow-list of known boolean node flags: the token after one is the script, not a value. Any unlisted `--flag` is treated as value-taking (the refusing direction), so a new value-taking flag can never slip through as boolean.
+const NODE_BOOLEAN_FLAGS = new Set(["--no-warnings", "--no-deprecation", "--trace-warnings", "--trace-deprecation", "--trace-uncaught", "--enable-source-maps", "--experimental-vm-modules", "--experimental-strip-types", "--experimental-transform-types", "--experimental-detect-module", "--experimental-require-module", "--experimental-websocket", "--experimental-sqlite", "--experimental-permission", "--permission", "--watch", "--expose-gc", "--abort-on-uncaught-exception", "--pending-deprecation", "--throw-deprecation", "--no-experimental-fetch"]);
+
 /**
  * OPS-NO-INLINE-INTERPRETER: an inline interpreter — `node -e`/`--eval`/`-p`, `python3 -c`, or a
  * heredoc fed to node/python (`node - <<EOF`, `python3 - <<EOF`). Sanctioned output parsing uses
@@ -1164,32 +1178,41 @@ export function commandContainsInlineInterpreter(command) {
     const s = segment.trim();
     if (interpreterRegex("node").test(s)) {
       const code = s.replace(interpreterRegex("node"), "").trim();
-      // Heredoc fed straight to node where node is the command head (`node - <<EOF`, `node <<EOF`),
-      // so `grep node <<EOF` (interpreter is grep) does not false-positive as an inline interpreter.
-      if (/^(?:-\s*)?<</i.test(code)) return true;
       const tokens = code.split(/\s+/).filter(Boolean);
+      // ponytail: closed list of value flags. an unlisted `--long value` flag fails closed: a non-flag token that follows a `--flag` (not `--`, no `=`) is skipped as its value and the scan continues, unless it ends in a script extension (.js/.mjs/.cjs/.ts/.mts/.cts) and so is the script. A relative path-like token (starts with `.` or has a non-leading `/`) is the script, not a value. Path-valued flags (--report-dir, --diagnostic-dir, --cpu-prof-dir, ...) are on the closed list so a relative value is skipped. Ceiling: a relative path value after an UNLISTED path-valued long flag is read as the script (fail-open); a bare extensionless name or absolute path after a boolean long flag is still read as a value.
       // Node value-taking flags (short + long) each consume the following token. Consuming them lets
       // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
       // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value.
-      const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd"]);
+      const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type", "--title", "--disable-warning", "--watch-path", "--redirect-warnings", "--env-file-if-exists", "--test-reporter", "--report-dir", "--diagnostic-dir", "--cpu-prof-dir", "--heap-prof-dir", "--snapshot-blob", "--test-reporter-destination", "--localstorage-file", "--openssl-config", "--icu-data-dir", "--tls-keylog", "--experimental-config-file", "--experimental-sea-config", "--trace-event-file-pattern"]);
       for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
+        if (isStdinScriptToken(t)) return true;
         // `-e`/`-p` may be directly attached to the code (`node -e"console.log(1)"`), which a
         // prefix match catches; break at the first non-flag token so a later `-e` on a script path
         // is a script argument.
         if (t === "-e" || t.startsWith("-e") || t === "--eval" || t.startsWith("--eval=") || t === "-p" || t.startsWith("-p")) return true;
-        if (!t.startsWith("-")) break; // script path reached — a later `-e` is a script argument
-        if (NODE_VALUE_FLAGS.has(t)) { i += 1; continue; } // skip the flag's value token
+        const skip = redirectionSkip(t);
+        if (skip) { if (skip === 2 && tokens[i + 1]?.includes("<<")) return true; i += skip - 1; continue; }
+        if (!t.startsWith("-")) {
+          const prev = tokens[i - 1];
+          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !NODE_BOOLEAN_FLAGS.has(prev) &&!SCRIPT_EXT_RE.test(stripSurroundingQuotes(t.split("<<")[0])) && !/^\.|^[^/]+\//.test(t)) { if (t.includes("<<")) return true; continue; } // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
+          break; // script path reached — a later `-e` is a script argument
+        }
+        if (NODE_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
       }
     }
     if (interpreterRegex("python3?").test(s)) {
       const code = s.replace(interpreterRegex("python3?"), "").trim();
-      // Heredoc fed straight to python where python is the command head (`python3 - <<EOF`).
-      if (/^(?:-\s*)?<</i.test(code)) return true;
       const tokens = code.split(/\s+/).filter(Boolean);
-      for (const t of tokens) {
+      const PYTHON_VALUE_FLAGS = new Set(["-W", "-X", "--check-hash-based-pycs"]);
+      for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        if (isStdinScriptToken(t)) return true;
         if (t === "-c" || t.startsWith("-c")) return true;
+        const skip = redirectionSkip(t);
+        if (skip) { if (skip === 2 && tokens[i + 1]?.includes("<<")) return true; i += skip - 1; continue; }
         if (!t.startsWith("-")) break; // script path reached — a later `-c` is a script argument
+        if (PYTHON_VALUE_FLAGS.has(t) || /^-[A-Za-z]*[WX]$/.test(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
       }
     }
     return false;

@@ -6,6 +6,7 @@ import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "bun:test";
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, pullReceiptPath, pullWorkOrder, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { withTempDir } from "../_helpers.mjs";
@@ -421,5 +422,47 @@ test("J1: the --round CLI accepts only /^[1-9][0-9]*$/ and carries it to the wor
       const body = await run(["--round", round]);
       assert.equal(body.refusal, "invalid_round", JSON.stringify(round));
     }
+  });
+});
+
+test("GATE-EXEC-COPILOT-BODY-TO-JUDGE: the detector's derived file is pinned without the flag; no file means no read (#2937)", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const kinds = (plan) => plan.workOrder.requiredReads.map((read) => read.kind);
+    assert.ok(!kinds(await emitJudgeWorkOrder(sources)).includes("copilot-body-feedback"));
+    const derived = copilotBodyJudgePath({ tmpRoot: path.join(root, "tmp"), repo: sources.repo, pr: sources.pr, headSha: sources.headSha });
+    await mkdir(path.dirname(derived), { recursive: true });
+    await writeFile(derived, JSON.stringify({ angle: "copilot-body", findings: [{ severity: "medium", summary: "s", recommendation: "r" }] }));
+    const plan = await emitJudgeWorkOrder(sources);
+    assert.equal(plan.workOrder.requiredReads.find((read) => read.kind === "copilot-body-feedback")?.path, derived);
+    assert.match(await readFile(plan.promptPath, "utf8"), /A `copilot-body-feedback` read holds a Copilot review body/);
+  });
+});
+
+test("J1: a derived copilot body file that is not an angle result refuses citing GATE-EXEC-COPILOT-BODY-TO-JUDGE", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const derived = copilotBodyJudgePath({ tmpRoot: path.join(root, "tmp"), repo: sources.repo, pr: sources.pr, headSha: sources.headSha });
+    await mkdir(path.dirname(derived), { recursive: true });
+    await writeFile(derived, "{ not json");
+    await assert.rejects(emitJudgeWorkOrder(sources), /GATE-EXEC-COPILOT-BODY-TO-JUDGE: .* is not JSON with an angle and a findings array/);
+  });
+});
+
+test("a closure round's gate context (scope.closureRound) adds closureRound: true; an ordinary round adds none (GATE-EXEC-ROUND-CAP)", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root, { gate: "draft_gate" });
+    const ordinary = await emitJudgeWorkOrder(sources);
+    assert.equal("closureRound" in ordinary.workOrder, false);
+    const contextPath = path.join(root, buildGateContextPath({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: HEAD }));
+    const context = JSON.parse(await readFile(contextPath, "utf8"));
+    await writeFile(contextPath, JSON.stringify({ ...context, scope: { closureRound: { fromHead: "c".repeat(40), priorActItems: [] } } }));
+    const closure = await emitJudgeWorkOrder(sources);
+    assert.equal(closure.workOrder.closureRound, true);
+    assert.ok(Array.isArray(closure.workOrder.priorActItems));
+    // The closure context's own list is copied, not rebuilt from this checkout's history.
+    const items = [{ fingerprint: "abcd", file: "a.mjs", line: 3, title: "t" }];
+    await writeFile(contextPath, JSON.stringify({ ...context, scope: { closureRound: { fromHead: "c".repeat(40), priorActItems: items } } }));
+    assert.deepEqual((await emitJudgeWorkOrder(sources)).workOrder.priorActItems, items);
   });
 });
