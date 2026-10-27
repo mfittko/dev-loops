@@ -775,6 +775,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "PURPOSE-HIGHEST-SAFE-AUTONOMY",
+      "enforcement": "doc"
+    },
+    {
       "id": "QUEUE-BOARD-DEVLOOPS-RESOLUTION"
     },
     {
