@@ -166,7 +166,7 @@ test("fan-in routes judged findings through the spec-bound act-list bridge", asy
   assertRuleOwned("GATE-EXEC-JUDGE-AUTHORITY-SPLIT", SUB_LOOP_CONTRACT);
   assertJudgeBridge(step.replace("Before the durable write", "Before persisting findings").replace(/\. /g, ".\n   "));
   for (const changed of [
-    step.replace("--out <act-list-path>", "--out <ledger-path>"),
+    step.replaceAll("--out <act-list-path>", "--out <ledger-path>"),
     step.replaceAll("--judge-verdict <judge-verdict-path>", ""),
     step.replace("--spec-authority-verdict <spec-authority-verdict-path>", "") + "\n`other-command --spec-authority-verdict <spec-authority-verdict-path>`",
   ]) assert.throws(() => assertJudgeBridge(changed));
