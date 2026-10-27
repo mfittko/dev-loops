@@ -289,6 +289,12 @@ function fileUriToPath(value) {
     if (url.protocol !== "file:") return null;
     // A foreign host is not this filesystem's authority; never coerce it to a local path.
     if (url.host && url.host !== "localhost") return null;
+    // An encoded path separator never stands for a separator in a local file path, so a
+    // URI carrying one names no directory this adapter can bind: `decodeURIComponent`
+    // would turn `%2F` into a real `/` and bind the recorded cwd to it. `fileURLToPath`
+    // is not a portable guard (Bun decodes `%5C` and passes malformed escapes straight
+    // through), so the separator check is explicit and the escape still has to decode.
+    if (/%2f|%5c/i.test(url.pathname)) return null;
     return path.resolve(decodeURIComponent(url.pathname));
   } catch {
     return null;

@@ -327,6 +327,16 @@ test("C2: a cwd whose file: URI authority or encoding cannot be trusted stays ty
   // Rejected: a pathname that cannot be decoded is not a path this adapter can bind.
   assertUnknown(reconcile(writeJournal([commandExecution({ cwd: `file://${REPO_ROOT}/%zz` })])),
     EVIDENCE_REASONS.SCHEMA_DRIFT);
+  // Rejected: an encoded path separator is not a separator. `decodeURIComponent` turns
+  // `...dev-loops%2Ftmp%2F...` into this worktree's own path, so a URI that never named
+  // that directory passes both cwd bindings and reports completed — invalid
+  // working-directory evidence clearing the cleanup blocker.
+  for (const cwd of [
+    "file:///work/dev-loops%2Ftmp%2Fworktrees%2Fdev-loops%2Fissue-2878",
+    "file:///work/dev-loops%5Ctmp%5Cworktrees%5Cdev-loops%5Cissue-2878",
+  ]) {
+    assertUnknown(reconcile(writeJournal([commandExecution({ cwd })])), EVIDENCE_REASONS.SCHEMA_DRIFT);
+  }
 });
 
 test("C2: a journal that is not a regular file or cannot be stat'ed reports its own reason", () => {
