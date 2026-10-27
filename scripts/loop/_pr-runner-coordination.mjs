@@ -41,6 +41,12 @@ function normalizeRunId(runId) {
     ? runId.trim()
     : null;
 }
+function normalizeClaimGeneration(claim) {
+  return {
+    claimedAt: typeof claim?.claimedAt === "string" ? claim.claimedAt : null,
+    updatedAt: typeof claim?.updatedAt === "string" ? claim.updatedAt : null,
+  };
+}
 function normalizeSignalReason(reason) {
   if (typeof reason !== "string") return null;
   const trimmed = reason.trim();
@@ -307,6 +313,7 @@ export async function claimRunnerOwnership({
   mode = "claim",
   now = new Date().toISOString(),
   expectPreviousRunId = null,
+  expectPreviousClaim = null,
 } = {}) {
   const normalizedRepo = normalizeRepoSlug(repo);
   const normalizedPr = normalizePr(pr);
@@ -314,6 +321,13 @@ export async function claimRunnerOwnership({
   // Normalized once, like every other run-id input: an absent, null or padded
   // expectation behaves like the rest of this module rather than refusing raw.
   const expectedPreviousRunId = normalizeRunId(expectPreviousRunId);
+  // The claim generation the recovery-authorizing read observed, compared
+  // literally under the lock: a member the record normalizes to `null` (an
+  // absent or non-string timestamp) stays `null` here too, so it can never
+  // silently match a different generation.
+  const expectedPreviousClaim = expectPreviousClaim === null || expectPreviousClaim === undefined
+    ? null
+    : normalizeClaimGeneration(expectPreviousClaim);
   if (normalizedRunId === null) {
     return buildConflict({
       error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED,
@@ -420,6 +434,24 @@ export async function claimRunnerOwnership({
         filePath: resolvedPath,
         exitSignals: state.exitSignals,
         message: `PR ${normalizedRepo}#${normalizedPr} is owned by ${activeRun.runId}, not the displaced run ${expectedPreviousRunId}. Takeover failed closed.`,
+      });
+    }
+    // The same run id is not the same claim: a heartbeat keeps the run id and
+    // bumps only `updatedAt`, and a same-run release plus re-claim retires that
+    // claim's exit signals while keeping the id. Refuse when the generation the
+    // detector judged dead is no longer the locked one, so the takeover can never
+    // displace a live owner the detection read did not observe.
+    if (expectedPreviousClaim !== null
+      && (activeRun.claimedAt !== expectedPreviousClaim.claimedAt || activeRun.updatedAt !== expectedPreviousClaim.updatedAt)) {
+      return buildConflict({
+        error: RUNNER_OWNERSHIP_ERROR.ACTIVE_RUN_EXISTS,
+        repo: normalizedRepo,
+        pr: normalizedPr,
+        runId: normalizedRunId,
+        activeRun,
+        filePath: resolvedPath,
+        exitSignals: state.exitSignals,
+        message: `PR ${normalizedRepo}#${normalizedPr} is owned by a claim of run ${activeRun.runId} that changed after the stale read (claimed ${JSON.stringify(activeRun.claimedAt)}, updated ${JSON.stringify(activeRun.updatedAt)}). Takeover failed closed.`,
       });
     }
     const nextState = {
@@ -917,10 +949,16 @@ export async function recordExitSignalForRunner({
  *
  * The detector returns exactly two recoverable verdicts; anything else maps to
  * `null`, so a takeover can never report a successful recovery it cannot name.
+ * A claim whose `claimedAt`/`updatedAt` do not parse arrives as the ordinary
+ * `stale_runner` verdict carrying `staleRunner.corruptedTimestamp`, and no clock
+ * comparison produced it: corruption maps to `null` rather than to a max-age
+ * recovery the evidence never supported.
  */
 function resolveRecoveryEvidence(stale) {
   if (stale?.error === STALE_RUNNER_ERROR.EXIT_SIGNAL_RECORDED) return "exit_signal";
-  if (stale?.error === STALE_RUNNER_ERROR.STALE_RUNNER) return "stale_max_age";
+  if (stale?.error === STALE_RUNNER_ERROR.STALE_RUNNER && stale.staleRunner?.corruptedTimestamp !== true) {
+    return "stale_max_age";
+  }
   return null;
 }
 export async function ensureAsyncRunnerOwnership({
@@ -994,6 +1032,10 @@ export async function ensureAsyncRunnerOwnership({
           cwd,
           mode: "takeover",
           expectPreviousRunId: stale.activeRun?.runId ?? null,
+          expectPreviousClaim: {
+            claimedAt: stale.activeRun?.claimedAt ?? null,
+            updatedAt: stale.activeRun?.updatedAt ?? null,
+          },
         });
         if (!takenOver.ok || takenOver.status !== "taken_over") {
           return takenOver;

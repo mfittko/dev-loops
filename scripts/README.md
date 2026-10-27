@@ -569,7 +569,18 @@ Release-on-death & dead-claim supersession (#1706):
 - A result that displaced nobody — a fresh claim, a same-owner refresh or a fail-closed conflict —
   carries no `recovery` field either, so a consumer can tell a recovery from ordinary ownership.
 - A detector verdict that is neither a recorded exit signal nor an expired claim takes over
-  nothing: the handoff stays fail-closed on the ownership conflict and writes no state.
+  nothing: the handoff stays fail-closed on the ownership conflict and writes no state. A claim
+  whose `claimedAt`/`updatedAt` do not parse is corruption rather than an expired claim, so it
+  refuses the same way instead of reporting a `stale_max_age` recovery.
+- The takeover guard pins the claim the detection read observed, not only its owner: the claim
+  helper accepts `expectPreviousRunId` (the observed run id) plus `expectPreviousClaim`
+  (`{ claimedAt, updatedAt }`) and refuses with `active_run_exists`, writing no state, when the
+  locked claim's run id, `claimedAt` or `updatedAt` differ from what the detector saw. A same-run
+  heartbeat, or a same-run release and re-claim, between the detection read and the lock therefore
+  refuses instead of displacing a live owner.
+- `ensureAsyncRunnerOwnership` also accepts an injectable `detectStale` detector: it is a test-only
+  seam for exercising the production supersede wiring without a live stale claim, and production
+  callers never pass it.
 - Anti-trap: a fresh heartbeat on a runner-coordination claim/lock is not proof of a live driver. The
   claim may be held by a completed/control run that claimed at takeover then ended without releasing,
   yet the heartbeat still reads fresh — which this rc.6 drive saw as repeated false "live owner /

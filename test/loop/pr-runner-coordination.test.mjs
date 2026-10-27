@@ -755,10 +755,11 @@ test("typed recovery prefers the claim-scoped exit signal over the stale window"
   }
 });
 
-// R1/DESIGN-SIMPLEST-FIRST: a detector verdict that is neither a recorded exit
-// signal nor an expired claim authorizes no takeover, so the handoff stays
-// fail-closed on the ownership conflict instead of recovering untyped.
-test("an unrecognized detector verdict refuses the takeover without a state write", async () => {
+// R1/R2: a claim whose timestamps do not parse arrives as the detector's
+// ordinary `stale_runner` verdict carrying `staleRunner.corruptedTimestamp`, and
+// no clock comparison authorized that recovery, so the handoff stays fail-closed
+// on the ownership conflict instead of reporting a max-age recovery.
+test("a corrupted claim timestamp refuses the takeover without a state write", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
 
   try {
@@ -772,7 +773,92 @@ test("an unrecognized detector verdict refuses the takeover without a state writ
       env: { DEVLOOPS_RUN_ID: "run-next" },
       claimIfMissing: true,
       supersedeStale: true,
-      detectStale: async () => ({ ok: false, error: "corrupt_timestamp", activeRun: { runId: "run-owner" } }),
+      // The verdict shape `detectStaleRunner` reports for an unparseable claim.
+      detectStale: async () => ({
+        ok: false,
+        error: STALE_RUNNER_ERROR.STALE_RUNNER,
+        status: "stale_runner",
+        activeRun: owned.activeRun,
+        staleRunner: {
+          runId: owned.activeRun.runId,
+          claimedAt: owned.activeRun.claimedAt,
+          updatedAt: "(corrupt)",
+          claimedAgeMs: -1,
+          updatedAgeMs: -1,
+          maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS,
+          corruptedTimestamp: true,
+        },
+        exitSignal: null,
+        maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS,
+      }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "ownership_lost");
+    assert.equal("recovery" in result, false);
+    assert.equal(await readFile(owned.filePath, "utf8"), ownedBytes, "a corrupted claim writes nothing");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// R1/R2: the corruption path end to end. The record itself carries the
+// unparseable timestamp and the real detector reports it, so the takeover is
+// never labeled a max-age recovery for a claim whose age was never compared.
+test("a stored claim with an unparseable timestamp refuses the takeover as corruption", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    const owned = await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 43,
+      runId: "run-corrupt",
+      cwd: tempDir,
+      now: new Date(Date.now() - 40 * 60 * 1000).toISOString(),
+    });
+    const record = JSON.parse(await readFile(owned.filePath, "utf8"));
+    record.activeRun.updatedAt = "not-a-timestamp";
+    await writeFile(owned.filePath, `${JSON.stringify(record, null, 2)}\n`);
+    const corruptedBytes = await readFile(owned.filePath, "utf8");
+
+    const detected = await detectStaleRunner({ repo: "owner/repo", pr: 43, cwd: tempDir });
+    assert.equal(detected.error, STALE_RUNNER_ERROR.STALE_RUNNER);
+    assert.equal(detected.staleRunner.corruptedTimestamp, true);
+
+    const result = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 43,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-next", DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: "60000" },
+      claimIfMissing: true,
+      supersedeStale: true,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "ownership_lost");
+    assert.equal("recovery" in result, false);
+    assert.equal(await readFile(owned.filePath, "utf8"), corruptedBytes, "a corrupted claim writes nothing");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// R1/DESIGN-SIMPLEST-FIRST: a verdict code the production detector cannot emit
+// authorizes no takeover either, because the mapping covers exactly the two
+// recoverable verdicts.
+test("an unrecognized detector verdict authorizes no takeover and writes no state", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    const owned = await claimRunnerOwnership({ repo: "owner/repo", pr: 39, runId: "run-owner", cwd: tempDir });
+    const ownedBytes = await readFile(owned.filePath, "utf8");
+
+    const result = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 39,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-next" },
+      claimIfMissing: true,
+      supersedeStale: true,
+      detectStale: async () => ({ ok: false, error: "unexpected_verdict", activeRun: owned.activeRun }),
     });
     assert.equal(result.ok, false);
     assert.equal(result.error, "ownership_lost");
@@ -811,6 +897,147 @@ test("supersedeStale refuses a takeover whose detected owner is no longer active
     assert.equal(result.error, "active_run_exists");
     assert.equal(result.activeRun.runId, "run-1");
     assert.equal(await readFile(owned.filePath, "utf8"), ownedBytes, "a refused takeover writes nothing");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// R2: the same run id is not the same claim. A live owner that heartbeats
+// between the lock-free detection read and the locked takeover keeps its run id
+// and `claimedAt`, so only the observed generation refuses the displacement.
+test("supersedeStale refuses a takeover whose claim was refreshed after the stale read", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  const maxAgeMs = STALE_RUNNER_DEFAULT_MAX_AGE_MS;
+
+  try {
+    await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 45,
+      runId: "run-1",
+      cwd: tempDir,
+      now: new Date(Date.now() - 40 * 60 * 1000).toISOString(),
+    });
+    const observed = (await loadRunnerCoordinationState({ repo: "owner/repo", pr: 45, cwd: tempDir })).state.activeRun;
+    const filePath = defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 45 }, tempDir);
+    let refreshedBytes = null;
+
+    const result = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 45,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-2", DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: String(maxAgeMs) },
+      claimIfMissing: true,
+      supersedeStale: true,
+      detectStale: async () => {
+        // The owner heartbeats after the detection read returned `observed`: the
+        // run id and `claimedAt` stay, only `updatedAt` moves.
+        await assertRunnerOwnership({ repo: "owner/repo", pr: 45, runId: "run-1", cwd: tempDir });
+        refreshedBytes = await readFile(filePath, "utf8");
+        return {
+          ok: false,
+          error: STALE_RUNNER_ERROR.STALE_RUNNER,
+          activeRun: observed,
+          staleRunner: { ...observed, claimedAgeMs: -1, updatedAgeMs: -1, maxAgeMs, corruptedTimestamp: false },
+          maxAgeMs,
+        };
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "active_run_exists");
+    assert.equal("recovery" in result, false);
+    assert.equal(result.activeRun.runId, "run-1");
+    assert.equal(await readFile(filePath, "utf8"), refreshedBytes, "a refreshed live claim is never displaced");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// R2: a same-run release and re-claim retires that run's exit signals while
+// keeping its run id, so the generation the detector judged dead is gone even
+// though the owner identity still matches.
+test("supersedeStale refuses a takeover whose claim was released and re-claimed", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  const maxAgeMs = STALE_RUNNER_DEFAULT_MAX_AGE_MS;
+
+  try {
+    await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 47,
+      runId: "run-1",
+      cwd: tempDir,
+      now: new Date(Date.now() - 40 * 60 * 1000).toISOString(),
+    });
+    const observed = (await loadRunnerCoordinationState({ repo: "owner/repo", pr: 47, cwd: tempDir })).state.activeRun;
+    let reclaimedBytes = null;
+    const filePath = defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 47 }, tempDir);
+
+    const result = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 47,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-2", DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: String(maxAgeMs) },
+      claimIfMissing: true,
+      supersedeStale: true,
+      detectStale: async () => {
+        await releaseRunnerOwnership({ repo: "owner/repo", pr: 47, runId: "run-1", cwd: tempDir });
+        await claimRunnerOwnership({ repo: "owner/repo", pr: 47, runId: "run-1", cwd: tempDir });
+        reclaimedBytes = await readFile(filePath, "utf8");
+        return {
+          ok: false,
+          error: STALE_RUNNER_ERROR.STALE_RUNNER,
+          activeRun: observed,
+          staleRunner: { ...observed, claimedAgeMs: -1, updatedAgeMs: -1, maxAgeMs, corruptedTimestamp: false },
+          maxAgeMs,
+        };
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "active_run_exists");
+    assert.equal("recovery" in result, false);
+    assert.equal(result.activeRun.runId, "run-1");
+    assert.equal(await readFile(filePath, "utf8"), reclaimedBytes, "a re-claimed owner is never displaced");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// R1: the typed recovery field is gated on the takeover status. A claim released
+// between the lock-free stale read and the locked claim lands on `claimed_new`,
+// whose `previousRun` is copied from the prior state and names the run that
+// released itself rather than one this claim displaced; attaching `recovery`
+// there would report a displacement that never happened.
+test("a claim released after the stale read reports no recovery field", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  const maxAgeMs = STALE_RUNNER_DEFAULT_MAX_AGE_MS;
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 46, runId: "run-older", cwd: tempDir });
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 46, runId: "run-stale", cwd: tempDir, mode: "takeover" });
+    const observed = (await loadRunnerCoordinationState({ repo: "owner/repo", pr: 46, cwd: tempDir })).state.activeRun;
+
+    const result = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 46,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-next", DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: String(maxAgeMs) },
+      claimIfMissing: true,
+      supersedeStale: true,
+      detectStale: async () => {
+        // The owner releases after the detection read, so the locked claim finds
+        // no active run and lands on the ordinary `claimed_new` branch.
+        await releaseRunnerOwnership({ repo: "owner/repo", pr: 46, runId: "run-stale", cwd: tempDir });
+        return {
+          ok: false,
+          error: STALE_RUNNER_ERROR.STALE_RUNNER,
+          activeRun: observed,
+          staleRunner: { ...observed, claimedAgeMs: -1, updatedAgeMs: -1, maxAgeMs, corruptedTimestamp: false },
+          maxAgeMs,
+        };
+      },
+    });
+    assert.equal(result.status, "claimed_new");
+    assert.equal(result.previousRun.runId, "run-stale", "previousRun still names the released owner, not a displaced one");
+    assert.equal("recovery" in result, false, "a fresh claim never reports recovery evidence");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
