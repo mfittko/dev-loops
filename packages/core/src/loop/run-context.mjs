@@ -133,13 +133,57 @@ export function validateNativeCodexMetadata(header, threadId) {
  * Discovery failure codes, mapped back to the header reader's existing prose so the
  * bounded discovery can be shared without changing the identity reader's contract.
  */
-const CODEX_DISCOVERY_REASONS = Object.freeze({
+const CODEX_DISCOVERY_PROSE = Object.freeze({
   entry_bound: "Native Codex discovery directory exceeds entry bound.",
   not_regular_file: "Native Codex metadata is not a regular file.",
   ambiguous: "Native Codex metadata is ambiguous.",
   not_found: "Native Codex session metadata not found.",
   unreadable: "Native Codex metadata is unreadable or malformed.",
 });
+
+/**
+ * Operator prose for one bounded-discovery failure code.
+ *
+ * Total by construction. A code this reader has no prose for yet (a future discovery
+ * branch) must still leave a rejected result carrying a diagnostic, so the lookup
+ * falls back to the unreadable prose rather than yielding `undefined`.
+ *
+ * @param {string} code
+ * @returns {string}
+ */
+export function describeCodexDiscoveryFailure(code) {
+  return CODEX_DISCOVERY_PROSE[code] ?? CODEX_DISCOVERY_PROSE.unreadable;
+}
+
+/** Native Codex thread identities are UUIDv7; one validator serves both readers. */
+const UUIDV7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/**
+ * True when `value` is the UUIDv7 shape native Codex thread identities use.
+ *
+ * Shared so request validation in the terminal-evidence adapter and discovery here
+ * cannot drift to two different notions of a valid lookup key.
+ *
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+export function isNativeCodexThreadId(value) {
+  return typeof value === "string" && UUIDV7_PATTERN.test(value);
+}
+
+/**
+ * The one native Codex home resolution.
+ *
+ * Both the header-only identity reader and the terminal-evidence adapter derive the
+ * native store from here, so a change (a new alias, a different default) moves both
+ * to the same root instead of separating one reader's probe from the other's read.
+ *
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {string}
+ */
+export function resolveNativeCodexHome(env = process.env) {
+  return env?.CODEX_HOME || (env?.HOME ? path.join(env.HOME, ".codex") : path.join(os.homedir(), ".codex"));
+}
 
 /**
  * Resolve the one rollout journal belonging to a native Codex thread.
@@ -149,6 +193,10 @@ const CODEX_DISCOVERY_REASONS = Object.freeze({
  * header-only identity reader and the terminal-evidence adapter so both bind to
  * the same single journal file instead of adding a second locator.
  *
+ * A lookup key that is not a UUIDv7 identity is reported as `not_found`: it names no
+ * thread, so there is nothing to read. Reporting it as `unreadable` (a thrown parse
+ * error surfacing as IO prose) would mislabel the failure class.
+ *
  * @param {object} params
  * @param {string} params.threadId - UUIDv7 thread identity used as the filename suffix.
  * @param {Record<string, string|undefined>} [params.env]
@@ -156,8 +204,8 @@ const CODEX_DISCOVERY_REASONS = Object.freeze({
  * @returns {{ ok: true, file: string } | { ok: false, code: "entry_bound"|"not_regular_file"|"ambiguous"|"not_found"|"unreadable" }}
  */
 export function resolveCodexRolloutJournal({ threadId, env = process.env, fs = fsDefault } = {}) {
-  if (typeof threadId !== "string" || threadId === "") return { ok: false, code: "not_found" };
-  const home = env?.CODEX_HOME || (env?.HOME ? path.join(env.HOME, ".codex") : path.join(os.homedir(), ".codex"));
+  if (!isNativeCodexThreadId(threadId)) return { ok: false, code: "not_found" };
+  const home = resolveNativeCodexHome(env);
   const createdAt = Number.parseInt(threadId.slice(0, 13).replaceAll("-", ""), 16);
   const matches = [];
   try {
@@ -174,9 +222,7 @@ export function resolveCodexRolloutJournal({ threadId, env = process.env, fs = f
         while ((entry = dir.readSync()) !== null) {
           if (++count > 4096) return { ok: false, code: "entry_bound" };
           if (entry.name.startsWith("rollout-") && entry.name.endsWith(`-${threadId}.jsonl`)) {
-            if (!entry.isFile()) return { ok: false, code: "not_regular_file" };
-            matches.push(path.join(directory, entry.name));
-            if (matches.length > 1) return { ok: false, code: "ambiguous" };
+            matches.push({ file: path.join(directory, entry.name), isFile: entry.isFile() });
           }
         }
       } finally { dir.closeSync(); }
@@ -184,7 +230,11 @@ export function resolveCodexRolloutJournal({ threadId, env = process.env, fs = f
   } catch {
     return { ok: false, code: "unreadable" };
   }
-  return matches.length === 1 ? { ok: true, file: matches[0] } : { ok: false, code: "not_found" };
+  // Decide once, after every bounded date directory is scanned, so the typed reason
+  // never depends on the order readSync happens to return entries in.
+  if (matches.length > 1) return { ok: false, code: "ambiguous" };
+  if (matches.length === 1) return matches[0].isFile ? { ok: true, file: matches[0].file } : { ok: false, code: "not_regular_file" };
+  return { ok: false, code: "not_found" };
 }
 
 /** Finite UUIDv7-date discovery and first-record-only IO; no recursive history scan or cache. */
@@ -192,11 +242,11 @@ export function resolveNativeCodexContext({ env = process.env, fs = fsDefault } 
   const reject = (reason) => ({ status: "rejected", reason });
   const threadId = env?.CODEX_THREAD_ID;
   if (env?.DEVLOOPS_DETACHED === "1") return reject("Detached execution is not a native Codex async child.");
-  if (typeof threadId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(threadId)) {
+  if (!isNativeCodexThreadId(threadId)) {
     return reject("Native Codex context requires a supported UUIDv7 CODEX_THREAD_ID lookup key.");
   }
   const found = resolveCodexRolloutJournal({ threadId, env, fs });
-  if (!found.ok) return reject(CODEX_DISCOVERY_REASONS[found.code]);
+  if (!found.ok) return reject(describeCodexDiscoveryFailure(found.code));
   try {
     const fd = fs.openSync(found.file, "r");
     try {

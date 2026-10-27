@@ -24,11 +24,15 @@
  * | ownerThreadId | `/payload/thread_id` | UUIDv7 string |
  * | executionId | `/payload/item/process_id` | opaque string |
  * | terminalTimestamp | `/timestamp` | ISO-8601 string |
- * | terminalStatus | `/payload/item/status` | `completed` or `failed` |
+ * | terminalStatus | `/payload/item/status` | completed or failed |
  * | exitCode | `/payload/item/exit_code` | integer |
  * | command | `/payload/item/command` | string array |
- * | cwd | `/payload/item/cwd` | `file:` URI string |
+ * | cwd | `/payload/item/cwd` | file: URI string |
  * | retainedOutput | `/payload/item/aggregated_output` | string |
+ *
+ * This table is the only vocabulary for the disclosed schema: the `SCHEMA` data below
+ * carries these same pointer and shape words, and a test asserts that every `SCHEMA`
+ * row appears here, so the two copies cannot drift apart.
  *
  * `executionId` binds to the journal's `process_id` path, where the native journal
  * records a tool session identifier. Despite the name, that value stays an opaque
@@ -37,10 +41,9 @@
 
 import crypto from "node:crypto";
 import fsDefault from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
-import { resolveCodexRolloutJournal } from "./run-context.mjs";
+import { isNativeCodexThreadId, resolveCodexRolloutJournal, resolveNativeCodexHome } from "./run-context.mjs";
 
 /** Disclosed terminal-status values of a `CommandExecution` item. */
 export const CODEX_TERMINAL_STATUSES = Object.freeze(["completed", "failed"]);
@@ -59,6 +62,11 @@ export const CODEX_TERMINAL_STATUSES = Object.freeze(["completed", "failed"]);
  *
  * `unsupported` — this runtime exposes no native Codex session store, so neither a
  * supported session/result API nor the journal is available.
+ *
+ * A malformed *request* is also `unknown` with `reason: invalid_request`, but it is a
+ * caller bug rather than an evidence outcome: it is reported before any journal read,
+ * and a caller maps it to its own argument-error path (the CLI contract's exit 2 with
+ * `{ ok: false, error }`) instead of to a typed evidence status.
  */
 export const EVIDENCE_STATUSES = Object.freeze({
   COMPLETED: "completed",
@@ -90,9 +98,15 @@ export const EVIDENCE_REASONS = Object.freeze({
 /** Byte bound on the journal read; a larger journal cannot be verified whole. */
 const MAX_JOURNAL_BYTES = 32 * 1024 * 1024;
 
-const UUIDV7_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 
+/**
+ * Discovery failure codes mapped to this adapter's typed reasons.
+ *
+ * Every code the shared helper can return is listed. The lookup still fails closed
+ * to `owner_journal_unreadable`, the same direction the header reader's prose mapping
+ * takes, so a code added to discovery later can never surface here as `undefined`.
+ */
 const DISCOVERY_REASONS = Object.freeze({
   not_found: EVIDENCE_REASONS.OWNER_JOURNAL_NOT_FOUND,
   ambiguous: EVIDENCE_REASONS.OWNER_JOURNAL_AMBIGUOUS,
@@ -101,17 +115,27 @@ const DISCOVERY_REASONS = Object.freeze({
   entry_bound: EVIDENCE_REASONS.OWNER_JOURNAL_DISCOVERY_BOUND,
 });
 
+function discoveryReason(code) {
+  return DISCOVERY_REASONS[code] ?? EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE;
+}
+
+/**
+ * The disclosed pointer table as data, in the documented shape vocabulary.
+ *
+ * These words are the table's own vocabulary (see the module header), so a caller
+ * mirroring this data into the owning contract publishes what the header documents.
+ */
 const SCHEMA = Object.freeze([
-  { field: "eventDiscriminator", pointer: "/type", shape: "event_msg" },
-  { field: "eventKind", pointer: "/payload/type", shape: "item_completed" },
-  { field: "itemType", pointer: "/payload/item/type", shape: "CommandExecution" },
-  { field: "ownerThreadId", pointer: "/payload/thread_id", shape: "uuidv7" },
-  { field: "executionId", pointer: "/payload/item/process_id", shape: "opaque_string" },
-  { field: "terminalTimestamp", pointer: "/timestamp", shape: "iso_timestamp" },
-  { field: "terminalStatus", pointer: "/payload/item/status", shape: "terminal_status" },
+  { field: "eventDiscriminator", pointer: "/type", shape: `"event_msg"` },
+  { field: "eventKind", pointer: "/payload/type", shape: `"item_completed"` },
+  { field: "itemType", pointer: "/payload/item/type", shape: `"CommandExecution"` },
+  { field: "ownerThreadId", pointer: "/payload/thread_id", shape: "UUIDv7 string" },
+  { field: "executionId", pointer: "/payload/item/process_id", shape: "opaque string" },
+  { field: "terminalTimestamp", pointer: "/timestamp", shape: "ISO-8601 string" },
+  { field: "terminalStatus", pointer: "/payload/item/status", shape: "completed or failed" },
   { field: "exitCode", pointer: "/payload/item/exit_code", shape: "integer" },
-  { field: "command", pointer: "/payload/item/command", shape: "string_array" },
-  { field: "cwd", pointer: "/payload/item/cwd", shape: "file_uri" },
+  { field: "command", pointer: "/payload/item/command", shape: "string array" },
+  { field: "cwd", pointer: "/payload/item/cwd", shape: "file: URI string" },
   { field: "retainedOutput", pointer: "/payload/item/aggregated_output", shape: "string" },
 ]);
 
@@ -147,23 +171,25 @@ function pointerValue(record, pointer) {
 
 function matchesShape(value, shape) {
   switch (shape) {
-    case "event_msg":
-    case "item_completed":
-    case "CommandExecution":
-      return value === shape;
-    case "uuidv7":
-      return typeof value === "string" && UUIDV7_RE.test(value);
-    case "opaque_string":
+    case `"event_msg"`:
+      return value === "event_msg";
+    case `"item_completed"`:
+      return value === "item_completed";
+    case `"CommandExecution"`:
+      return value === "CommandExecution";
+    case "UUIDv7 string":
+      return isNativeCodexThreadId(value);
+    case "opaque string":
       return typeof value === "string" && value.trim().length > 0;
-    case "iso_timestamp":
+    case "ISO-8601 string":
       return typeof value === "string" && ISO_TIMESTAMP_RE.test(value) && !Number.isNaN(Date.parse(value));
-    case "terminal_status":
+    case "completed or failed":
       return CODEX_TERMINAL_STATUSES.includes(value);
     case "integer":
       return Number.isSafeInteger(value);
-    case "string_array":
+    case "string array":
       return Array.isArray(value) && value.length > 0 && value.every((entry) => typeof entry === "string");
-    case "file_uri":
+    case "file: URI string":
       return typeof value === "string" && value.startsWith("file:") && fileUriToPath(value) !== null;
     case "string":
       return typeof value === "string";
@@ -208,7 +234,13 @@ function result(status, reason, owner, execution) {
  * A runtime with no native session store at all is reported as `unsupported`: it
  * cannot offer a supported session/result API and cannot serve the journal either.
  * Every other failure is a typed owner-journal reason the caller maps to its own
- * exit-code contract (`not_found`/`ambiguous`/`unreadable` fail closed).
+ * exit-code contract: `owner_journal_not_found`, `owner_journal_ambiguous`,
+ * `owner_journal_unreadable`, `owner_journal_not_regular_file` (a discovered name
+ * that is not a regular file) and `owner_journal_discovery_bound` (the bounded
+ * directory scan hit its entry cap) all fail closed, as does `invalid_request`.
+ *
+ * The `sessions/` root comes from the same shared resolution the discovery helper
+ * uses, so this probe and that discovery always agree on the one native root.
  *
  * @param {object} params
  * @param {string} params.ownerThreadId - UUIDv7 owner thread identity.
@@ -218,12 +250,10 @@ function result(status, reason, owner, execution) {
  */
 export function resolveCodexExecutionJournal({ ownerThreadId, env = process.env, fs: fsImpl = fsDefault } = {}) {
   const unsupported = { ok: false, reason: EVIDENCE_REASONS.UNSUPPORTED_RUNTIME_CAPABILITY };
-  if (typeof ownerThreadId !== "string" || !UUIDV7_RE.test(ownerThreadId)) {
+  if (!isNativeCodexThreadId(ownerThreadId)) {
     return { ok: false, reason: EVIDENCE_REASONS.INVALID_REQUEST };
   }
-  // Same home expression the shared discovery helper uses, so both read one place.
-  const home = env?.CODEX_HOME || (env?.HOME ? path.join(env.HOME, ".codex") : path.join(os.homedir(), ".codex"));
-  const sessionsRoot = path.join(home, "sessions");
+  const sessionsRoot = path.join(resolveNativeCodexHome(env), "sessions");
   let sessionsStat;
   try {
     sessionsStat = fsImpl.statSync(sessionsRoot);
@@ -232,7 +262,7 @@ export function resolveCodexExecutionJournal({ ownerThreadId, env = process.env,
   }
   if (!sessionsStat.isDirectory()) return { ok: false, reason: EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE };
   const found = resolveCodexRolloutJournal({ threadId: ownerThreadId, env, fs: fsImpl });
-  return found.ok ? { ok: true, path: found.file } : { ok: false, reason: DISCOVERY_REASONS[found.code] ?? EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE };
+  return found.ok ? { ok: true, path: found.file } : { ok: false, reason: discoveryReason(found.code) };
 }
 
 /**
@@ -240,11 +270,28 @@ export function resolveCodexExecutionJournal({ ownerThreadId, env = process.env,
  *
  * Read-only and deterministic: the journal is inspected and never written.
  *
+ * `owner` echoes the request: `{ threadId, repoRoot, cwd }` as supplied.
+ *
+ * `execution` is the recorded terminal evidence, unchanged, when the status is
+ * `completed`, and `null` otherwise:
+ *
+ * - `id` — the opaque execution/session identifier from `/payload/item/process_id`
+ * - `exitStatus` — `/payload/item/status`, `completed` or `failed`
+ * - `exitCode` — `/payload/item/exit_code`
+ * - `endedAt` — `/timestamp`, the terminal ISO-8601 timestamp
+ * - `command` — `/payload/item/command`, copied
+ * - `cwd` — `/payload/item/cwd`, the recorded `file:` URI
+ * - `retainedOutput` — `{ bytes, sha256 }` of `/payload/item/aggregated_output`
+ *
+ * A caller that serializes this result emits exactly
+ * `{ ok, status, reason, owner, execution, cleanup }`.
+ *
  * @param {object} params
- * @param {string} params.ownerThreadId
- * @param {string} params.executionId - Opaque tool session identifier.
- * @param {string} params.repoRoot - Expected repository root.
- * @param {string} params.cwd - Expected working directory (inside `repoRoot`).
+ * @param {string} params.ownerThreadId - UUIDv7 owner thread identity.
+ * @param {string} params.executionId - Opaque tool session identifier; compared exactly,
+ *   so a padded or whitespace-padded value is a malformed request, not a mismatch.
+ * @param {string} params.repoRoot - Absolute expected repository root.
+ * @param {string} params.cwd - Absolute expected working directory (inside `repoRoot`).
  * @param {string} [params.journalPath] - Explicit owner journal (fixtures); owner
  *   binding is still validated field by field.
  * @param {Record<string, string|undefined>} [params.env]
@@ -263,10 +310,12 @@ export function reconcileCodexExecution({
   const owner = { threadId: ownerThreadId ?? null, repoRoot: repoRoot ?? null, cwd: cwd ?? null };
   const unknown = (reason) => result(EVIDENCE_STATUSES.UNKNOWN, reason, owner, null);
 
-  if (typeof ownerThreadId !== "string" || !UUIDV7_RE.test(ownerThreadId) ||
-      typeof executionId !== "string" || executionId.trim() === "" ||
-      typeof repoRoot !== "string" || repoRoot === "" ||
-      typeof cwd !== "string" || cwd === "") {
+  // A relative or home-prefixed root cannot be bound deterministically: path.resolve
+  // would reinterpret it against whatever directory this process happens to run in.
+  if (!isNativeCodexThreadId(ownerThreadId) ||
+      typeof executionId !== "string" || executionId.trim() === "" || executionId !== executionId.trim() ||
+      typeof repoRoot !== "string" || !path.isAbsolute(repoRoot) ||
+      typeof cwd !== "string" || !path.isAbsolute(cwd)) {
     return unknown(EVIDENCE_REASONS.INVALID_REQUEST);
   }
 
@@ -314,6 +363,14 @@ export function reconcileCodexExecution({
   }
   if (items.length === 0) return unknown(EVIDENCE_REASONS.TERMINAL_RECORD_MISSING);
 
+  const executionItems = items.filter((record) => pointerValue(record, "/payload/item/process_id") === executionId);
+  // A record for the requested execution whose owner pointer is absent or not a UUIDv7
+  // is malformed, not an ownership mismatch: reporting it as owner_thread_mismatch would
+  // label schema drift with the wrong failure class.
+  if (executionItems.some((record) => !isNativeCodexThreadId(pointerValue(record, "/payload/thread_id")))) {
+    return unknown(EVIDENCE_REASONS.SCHEMA_DRIFT);
+  }
+
   const owned = items.filter((record) => pointerValue(record, "/payload/thread_id") === ownerThreadId);
   if (owned.length === 0) return unknown(EVIDENCE_REASONS.OWNER_THREAD_MISMATCH);
 
@@ -321,8 +378,7 @@ export function reconcileCodexExecution({
     .filter((record) => pointerValue(record, "/payload/type") === "item_completed")
     .filter((record) => pointerValue(record, "/payload/item/process_id") === executionId);
   if (terminals.length === 0) {
-    const seen = owned.some((record) => pointerValue(record, "/payload/item/process_id") === executionId);
-    return unknown(seen ? EVIDENCE_REASONS.TERMINAL_RECORD_MISSING : EVIDENCE_REASONS.EXECUTION_ID_MISMATCH);
+    return unknown(executionItems.length > 0 ? EVIDENCE_REASONS.TERMINAL_RECORD_MISSING : EVIDENCE_REASONS.EXECUTION_ID_MISMATCH);
   }
   if (terminals.length > 1) return unknown(EVIDENCE_REASONS.CONFLICTING_TERMINAL_RECORDS);
 

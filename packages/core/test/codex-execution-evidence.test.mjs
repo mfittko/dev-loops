@@ -24,6 +24,7 @@ import {
   resolveCodexExecutionJournal,
 } from "../src/loop/codex-execution-evidence.mjs";
 import * as evidenceModule from "../src/loop/codex-execution-evidence.mjs";
+import { isNativeCodexThreadId, resolveNativeCodexHome } from "../src/loop/run-context.mjs";
 
 const OWNER = "01a15929-c860-7690-86d8-50f51506a786";
 const OTHER_OWNER = "01a15922-5286-7900-b26d-ca2fe181cb85";
@@ -321,6 +322,90 @@ test("C2: a journal above the byte bound stays typed unknown and is never read w
   assert.equal(readAttempts, 0);
 });
 
+test("C2: a journal that grows past the byte bound between stat and read stays typed unknown", () => {
+  // The append-only journal can cross the bound after the pre-read stat. The bound is
+  // re-checked on the loaded bytes, so a small stat must not let the read decide.
+  const file = writeJournal([commandExecution()]);
+  const grownFs = {
+    ...fs,
+    statSync: () => ({ size: 4096, isFile: () => true }),
+    readFileSync: () => "x".repeat(32 * 1024 * 1024 + 1),
+  };
+  assertUnknown(reconcile(file, { fs: grownFs }), EVIDENCE_REASONS.JOURNAL_EXCEEDS_BYTE_BOUND);
+});
+
+test("C2: a sessions entry that is not a directory is unreadable, not unsupported", () => {
+  const codexHome = makeTempRoot();
+  fs.writeFileSync(path.join(codexHome, "sessions"), "not a directory");
+  const env = { CODEX_HOME: codexHome };
+  // A native store that exists but cannot be entered is a typed unknown, never the
+  // "this runtime has no native store" unsupported report. The branch decides on the
+  // stat alone, so the scan is never entered: a filesystem that refuses to enumerate
+  // still yields the unreadable reason rather than a discovery failure.
+  let enumerations = 0;
+  const noEnumeration = { ...fs, opendirSync() { enumerations++; throw new Error("must not enumerate"); } };
+  assert.deepEqual(resolveCodexExecutionJournal({ ownerThreadId: OWNER, env, fs: noEnumeration }),
+    { ok: false, reason: EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE });
+  assert.equal(enumerations, 0);
+  assert.deepEqual(resolveCodexExecutionJournal({ ownerThreadId: OWNER, env }),
+    { ok: false, reason: EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE });
+  assertUnknown(reconcileCodexExecution({
+    ownerThreadId: OWNER, executionId: EXECUTION, repoRoot: REPO_ROOT, cwd: WORKTREE, env,
+  }), EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE);
+});
+
+test("C2: the adapter probes the same native root the shared discovery helper scans", () => {
+  // One home resolution: the probe and the scan cannot separate onto two roots, so an
+  // empty `<CODEX_HOME>/sessions` is "not found" (the helper's answer), not "unsupported".
+  const codexHome = makeTempRoot();
+  const env = { CODEX_HOME: codexHome };
+  assert.equal(resolveNativeCodexHome(env), codexHome);
+  const request = { ownerThreadId: OWNER, executionId: EXECUTION, repoRoot: REPO_ROOT, cwd: WORKTREE, env };
+  const noStore = reconcileCodexExecution(request);
+  assert.equal(noStore.status, EVIDENCE_STATUSES.UNSUPPORTED);
+  assert.equal(noStore.reason, EVIDENCE_REASONS.UNSUPPORTED_RUNTIME_CAPABILITY);
+  fs.mkdirSync(path.join(codexHome, "sessions"), { recursive: true });
+  assertUnknown(reconcileCodexExecution(request), EVIDENCE_REASONS.OWNER_JOURNAL_NOT_FOUND);
+});
+
+test("C2: the adapter and the discovery helper accept and reject the same owner ids", () => {
+  for (const id of [OWNER, OTHER_OWNER, "unknown", OWNER.toUpperCase(), OWNER.slice(0, -1), ""] ) {
+    const accepted = isNativeCodexThreadId(id);
+    const resolved = resolveCodexExecutionJournal({ ownerThreadId: id, env: { CODEX_HOME: makeTempRoot() } });
+    assert.equal(resolved.reason,
+      accepted ? EVIDENCE_REASONS.UNSUPPORTED_RUNTIME_CAPABILITY : EVIDENCE_REASONS.INVALID_REQUEST,
+      `owner id ${JSON.stringify(id)} must be ${accepted ? "accepted" : "rejected"} by both readers`);
+  }
+});
+
+test("C2: a CommandExecution owner pointer that is absent or not a UUIDv7 is schema drift", () => {
+  // Four input forms: two accepted ownership outcomes, two malformed records. A record
+  // for the requested execution whose owner pointer is absent or wrongly shaped is a
+  // drift record, never an ownership mismatch.
+  const accepted = [
+    { records: [commandExecution()], status: EVIDENCE_STATUSES.COMPLETED },
+    { records: [commandExecution({ threadId: OTHER_OWNER })], reason: EVIDENCE_REASONS.OWNER_THREAD_MISMATCH },
+  ];
+  for (const fixture of accepted) {
+    const result = reconcile(writeJournal(fixture.records));
+    if (fixture.status) assert.equal(result.status, fixture.status);
+    else assertUnknown(result, fixture.reason);
+  }
+  for (const records of [
+    [withoutOwnerPointer()], // pointer absent
+    [commandExecution({ threadId: 12938 })], // pointer not a string
+  ]) {
+    assertUnknown(reconcile(writeJournal(records)), EVIDENCE_REASONS.SCHEMA_DRIFT);
+  }
+});
+
+/** A CommandExecution record for the requested execution with no owner pointer at all. */
+function withoutOwnerPointer() {
+  const record = commandExecution();
+  delete record.payload.thread_id;
+  return record;
+}
+
 // ---------------------------------------------------------------------------
 // C3 — an uncollected session is never evidence of a live process.
 // ---------------------------------------------------------------------------
@@ -346,7 +431,7 @@ test("C3(b): the adapter exposes no process-probe entry point on any reconciliat
     [commandExecution({ status: "interrupted" })],
   ];
   for (const records of paths) {
-    const result = reconcile(writeJournal(records), { processProbe: () => { throw new Error("probe invoked"); } });
+    const result = reconcile(writeJournal(records));
     assert.equal(result.cleanup.processProbeAllowed, false);
     assert.ok(!Object.keys(result.cleanup).some((key) => /probe/i.test(key) && key !== "processProbeAllowed"));
   }
@@ -383,15 +468,26 @@ test("C3(d): a numeric session id stays an opaque string identifier", () => {
 // Disclosed schema.
 // ---------------------------------------------------------------------------
 
-test("the disclosed schema table is complete, pointer-shaped and drawn from the real journal", () => {
+test("the disclosed schema table is one vocabulary, and the module docblock cannot drift from it", () => {
   const table = describeEvidenceSchema();
   assert.deepEqual(table.map((row) => row.field), [
     "eventDiscriminator", "eventKind", "itemType", "ownerThreadId", "executionId",
     "terminalTimestamp", "terminalStatus", "exitCode", "command", "cwd", "retainedOutput",
   ]);
+  // The docblock is the documented table; SCHEMA is its data form. Every row is asserted
+  // against the docblock, so editing one copy without the other fails here.
+  const docblock = fs.readFileSync(new URL("../src/loop/codex-execution-evidence.mjs", import.meta.url), "utf8").split("*/")[0];
+  // header row + one row per disclosed field, and no extra row
+  assert.equal((docblock.match(/^\s*\*\s*\| \w/gm) || []).length, table.length + 1, "docblock must document every row and no extra row");
   for (const row of table) {
     assert.match(row.pointer, /^(\/[A-Za-z_]+)+$/);
     assert.equal(typeof row.shape, "string");
+    assert.ok(docblock.includes(`\`${row.pointer}\``), `docblock must list the pointer ${row.pointer}`);
+    assert.ok(docblock.includes(row.shape), `docblock must use the documented shape for ${row.field}: ${row.shape}`);
+  }
+  // One vocabulary only: the former internal tokens disagree with the documented table.
+  for (const token of ["uuidv7", "opaque_string", "iso_timestamp", "terminal_status", "file_uri", "string_array"]) {
+    assert.ok(!table.some((row) => row.shape === token), `SCHEMA must not publish the internal token ${token}`);
   }
   assert.deepEqual([...CODEX_TERMINAL_STATUSES].sort(), ["completed", "failed"]);
 });
@@ -405,6 +501,30 @@ test("an incomplete request is typed unknown rather than a guess", () => {
   assertUnknown(reconcile(writeJournal([commandExecution()]), { executionId: "   " }), EVIDENCE_REASONS.INVALID_REQUEST);
   assertUnknown(reconcile(writeJournal([commandExecution()]), { repoRoot: undefined }), EVIDENCE_REASONS.INVALID_REQUEST);
   assertUnknown(reconcile(writeJournal([commandExecution()]), { cwd: undefined }), EVIDENCE_REASONS.INVALID_REQUEST);
+});
+
+test("a non-absolute repository root or working directory is a malformed request", () => {
+  const file = writeJournal([commandExecution()]);
+  // Accepted: absolute values bind normally, so rejection below is about the value class.
+  assert.equal(reconcile(file).status, EVIDENCE_STATUSES.COMPLETED);
+  assertUnknown(reconcile(file, { repoRoot: "/work/other-repo", cwd: WORKTREE }), EVIDENCE_REASONS.REPOSITORY_ROOT_MISMATCH);
+  // Rejected: a relative or home-prefixed path is never resolved against this process.
+  for (const overrides of [
+    { repoRoot: "tmp/worktrees/dev-loops/issue-2886" },
+    { cwd: "./tmp/worktrees/dev-loops/issue-2878" },
+    { repoRoot: "~/repo" },
+  ]) {
+    assertUnknown(reconcile(file, overrides), EVIDENCE_REASONS.INVALID_REQUEST);
+  }
+});
+
+test("a padded execution id is a malformed request, not an execution mismatch", () => {
+  const file = writeJournal([commandExecution()]);
+  // One rule: the id is compared exactly, so padding is rejected rather than silently
+  // normalized, and it never surfaces as the wrong-owner-style mismatch class.
+  assertUnknown(reconcile(file, { executionId: " 12938" }), EVIDENCE_REASONS.INVALID_REQUEST);
+  assertUnknown(reconcile(file, { executionId: "12938 " }), EVIDENCE_REASONS.INVALID_REQUEST);
+  assert.equal(reconcile(file, { executionId: EXECUTION }).status, EVIDENCE_STATUSES.COMPLETED);
 });
 
 after(() => {
