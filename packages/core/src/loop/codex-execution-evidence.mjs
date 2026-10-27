@@ -31,8 +31,8 @@
  * | retainedOutput | `/payload/item/aggregated_output` | string |
  *
  * This table is the only vocabulary for the disclosed schema: the `SCHEMA` data below
- * carries these same pointer and shape words, and a test asserts that every `SCHEMA`
- * row appears here, so the two copies cannot drift apart.
+ * carries these same field, pointer and shape words, and a test asserts every `SCHEMA`
+ * row against its own row here, so the two copies cannot drift apart.
  *
  * `executionId` binds to the journal's `process_id` path, where the native journal
  * records a tool session identifier. Despite the name, that value stays an opaque
@@ -57,8 +57,8 @@ export const CODEX_TERMINAL_STATUSES = Object.freeze(["completed", "failed"]);
  * output are reported unchanged; the journal is never rewritten.
  *
  * `unknown` — every other readable-journal outcome: absent, mismatched or
- * conflicting evidence, malformed records and schema drift. It is never reported
- * as completion and never as a live process.
+ * conflicting evidence, malformed records, a record still landing at the journal's
+ * end and schema drift. It is never reported as completion and never as a live process.
  *
  * `unsupported` — this runtime exposes no native Codex session store, so neither a
  * supported session/result API nor the journal is available.
@@ -84,6 +84,7 @@ export const EVIDENCE_REASONS = Object.freeze({
   OWNER_JOURNAL_NOT_REGULAR_FILE: "owner_journal_not_regular_file",
   OWNER_JOURNAL_DISCOVERY_BOUND: "owner_journal_discovery_bound",
   JOURNAL_EXCEEDS_BYTE_BOUND: "journal_exceeds_byte_bound",
+  JOURNAL_TAIL_IN_FLIGHT: "journal_tail_in_flight",
   MALFORMED_RECORD: "malformed_record",
   OWNER_THREAD_MISMATCH: "owner_thread_mismatch",
   EXECUTION_ID_MISMATCH: "execution_id_mismatch",
@@ -206,6 +207,65 @@ function isCommandExecutionItem(record) {
   return pointerValue(record, "/payload/item/type") === "CommandExecution";
 }
 
+/**
+ * A `"type"` a record has already flushed as a direct child of its `payload` object.
+ * The negated character class keeps the match inside that object, so a nested value
+ * deeper in the record can never be mistaken for it.
+ */
+const SETTLED_PAYLOAD_TYPE_RE = /"payload"\s*:\s*\{[^{}]*?"type"\s*:\s*"([^"]*)"/u;
+
+/**
+ * Could an unfinished record prefix still grow into a terminal record?
+ *
+ * Only a prefix that already flushed a `payload.type` other than `item_completed` is
+ * proven not to be one; every other prefix keeps the journal unverifiable, so a torn
+ * second terminal record can never pass as the journal's single terminal record.
+ */
+function couldBecomeTerminalRecord(prefix) {
+  const settled = SETTLED_PAYLOAD_TYPE_RE.exec(prefix);
+  return settled === null || settled[1] === "item_completed";
+}
+
+/**
+ * Classify an unterminated final journal line by its content.
+ *
+ * `whole` — a closed object (or nothing) the parser reads like any other record;
+ * `prefix` — a record still landing, whose flushed bytes are a valid object prefix;
+ * `invalid` — bytes that cannot extend into a record.
+ */
+function classifyJournalTail(tail) {
+  const text = tail.trim();
+  if (!text.startsWith("{")) return text === "" ? "whole" : "invalid";
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (const character of text) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+    } else if (character === '"') {
+      inString = true;
+    } else if (character === "{" || character === "[") {
+      depth += 1;
+    } else if (character === "}" || character === "]") {
+      depth -= 1;
+      if (depth < 0) return "invalid";
+      if (depth === 0) return "whole";
+    }
+  }
+  return inString || depth > 0 ? "prefix" : "invalid";
+}
+
+/** A supplied journal path is a path parameter like `repoRoot` and `cwd`: never relative. */
+function isAbsolutePathWhenSupplied(value) {
+  return value === undefined || (typeof value === "string" && path.isAbsolute(value));
+}
+
+function isTerminalRecord(record) {
+  return pointerValue(record, "/payload/type") === "item_completed";
+}
+
 function fileUriToPath(value) {
   try {
     const url = new URL(value);
@@ -292,8 +352,8 @@ export function resolveCodexExecutionJournal({ ownerThreadId, env = process.env,
  *   so a padded or whitespace-padded value is a malformed request, not a mismatch.
  * @param {string} params.repoRoot - Absolute expected repository root.
  * @param {string} params.cwd - Absolute expected working directory (inside `repoRoot`).
- * @param {string} [params.journalPath] - Explicit owner journal (fixtures); owner
- *   binding is still validated field by field.
+ * @param {string} [params.journalPath] - Absolute explicit owner journal (fixtures);
+ *   owner binding is still validated field by field.
  * @param {Record<string, string|undefined>} [params.env]
  * @param {typeof import("node:fs")} [params.fs]
  * @returns {{ status: string, reason: string, owner: object, execution: object|null, cleanup: object }}
@@ -315,7 +375,8 @@ export function reconcileCodexExecution({
   if (!isNativeCodexThreadId(ownerThreadId) ||
       typeof executionId !== "string" || executionId.trim() === "" || executionId !== executionId.trim() ||
       typeof repoRoot !== "string" || !path.isAbsolute(repoRoot) ||
-      typeof cwd !== "string" || !path.isAbsolute(cwd)) {
+      typeof cwd !== "string" || !path.isAbsolute(cwd) ||
+      !isAbsolutePathWhenSupplied(journalPath)) {
     return unknown(EVIDENCE_REASONS.INVALID_REQUEST);
   }
 
@@ -345,9 +406,18 @@ export function reconcileCodexExecution({
   if (Buffer.byteLength(text, "utf8") > MAX_JOURNAL_BYTES) return unknown(EVIDENCE_REASONS.JOURNAL_EXCEEDS_BYTE_BOUND);
 
   const lines = text.split("\n");
-  // An unterminated trailing line may be a record still being flushed. Dropping it can
-  // only remove evidence, so it can never turn absence into completion.
-  if (text.length > 0 && !text.endsWith("\n")) lines.pop();
+  // The final line is decided by its content, never by whether the writer flushed a
+  // terminator: a whole record reads as a record, an unfinished object prefix is a
+  // record still landing, and any other unterminated bytes are malformed.
+  if (text.length > 0 && !text.endsWith("\n")) {
+    const tail = lines[lines.length - 1];
+    const tailKind = classifyJournalTail(tail);
+    if (tailKind === "invalid") return unknown(EVIDENCE_REASONS.MALFORMED_RECORD);
+    if (tailKind === "prefix") {
+      if (couldBecomeTerminalRecord(tail)) return unknown(EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
+      lines.pop();
+    }
+  }
 
   // An unparseable line inside the journal means absence of evidence cannot be proven.
   const items = [];
@@ -375,9 +445,12 @@ export function reconcileCodexExecution({
   if (owned.length === 0) return unknown(EVIDENCE_REASONS.OWNER_THREAD_MISMATCH);
 
   const terminals = owned
-    .filter((record) => pointerValue(record, "/payload/type") === "item_completed")
+    .filter(isTerminalRecord)
     .filter((record) => pointerValue(record, "/payload/item/process_id") === executionId);
   if (terminals.length === 0) {
+    // A terminal record for the requested execution under another valid owner thread is
+    // the wrong-owner class, not missing evidence: the record exists and is mis-owned.
+    if (executionItems.some(isTerminalRecord)) return unknown(EVIDENCE_REASONS.OWNER_THREAD_MISMATCH);
     return unknown(executionItems.length > 0 ? EVIDENCE_REASONS.TERMINAL_RECORD_MISSING : EVIDENCE_REASONS.EXECUTION_ID_MISMATCH);
   }
   if (terminals.length > 1) return unknown(EVIDENCE_REASONS.CONFLICTING_TERMINAL_RECORDS);

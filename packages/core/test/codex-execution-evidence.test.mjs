@@ -251,14 +251,57 @@ test("C2: malformed JSON stays typed unknown and leaves the journal bytes unchan
   assert.equal(sha256(fs.readFileSync(file)), before);
 });
 
-test("C2: an unterminated trailing line is dropped rather than treated as a torn record", () => {
+test("C2: an unterminated tail is decided by its content, never by the writer's final newline", () => {
   const root = makeTempRoot();
   const file = path.join(root, "journal.jsonl");
-  fs.writeFileSync(file, `${JSON.stringify(commandExecution())}\n{"type":"event_msg","payload":{"item":{"type":"CommandExecu`);
-  // The dropped suffix can only remove evidence, so it never manufactures completion.
+  const terminal = JSON.stringify(commandExecution());
+  // Every line terminated, one terminal record: completion.
+  fs.writeFileSync(file, `${JSON.stringify(workerStop())}\n${terminal}\n`);
   assert.equal(reconcile(file).status, EVIDENCE_STATUSES.COMPLETED);
-  fs.writeFileSync(file, `${JSON.stringify(commandExecution())}\nnot json`);
+  // A whole record without a final newline is a record, not a torn tail.
+  fs.writeFileSync(file, terminal);
   assert.equal(reconcile(file).status, EVIDENCE_STATUSES.COMPLETED);
+  // The same corrupt bytes reconcile to the same typed reason with and without a newline.
+  for (const body of [`${terminal}\nnot json`, `${terminal}\nnot json\n`]) {
+    fs.writeFileSync(file, body);
+    assertUnknown(reconcile(file), EVIDENCE_REASONS.MALFORMED_RECORD);
+  }
+  // A record still landing is never completion: a torn second terminal record keeps the
+  // journal unverifiable instead of reducing two terminals to one.
+  const torn = `${terminal}\n{"type":"event_msg","payload":{"type":"item_completed","thread_id":"${OWNER}","item":{"type":"CommandExecution","process_id":"${EXECUTION}"`;
+  fs.writeFileSync(file, torn);
+  const pending = reconcile(file);
+  assertUnknown(pending, EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
+  assert.equal(pending.cleanup.blocker, "unknown");
+  // Once that second terminal record lands, the same journal is the conflict class.
+  fs.writeFileSync(file, `${torn},"exit_code":1}}}\n`);
+  assertUnknown(reconcile(file), EVIDENCE_REASONS.CONFLICTING_TERMINAL_RECORDS);
+  // A tail that cannot become a terminal record is tolerated, so the journal still
+  // reconciles from its terminated evidence.
+  fs.writeFileSync(file, `${terminal}\n{"timestamp":"2026-10-20T11:58:44.000Z","type":"event_msg","payload":{"type":"token_count"`);
+  assert.equal(reconcile(file).status, EVIDENCE_STATUSES.COMPLETED);
+});
+
+test("C2: a cwd whose file: URI authority or encoding cannot be trusted stays typed unknown", () => {
+  // Accepted: the recorded cwd is this filesystem's authority and decodes cleanly.
+  assert.equal(reconcile(writeJournal([commandExecution()])).status, EVIDENCE_STATUSES.COMPLETED);
+  // Rejected: another host's authority is never coerced into a local path, which would
+  // otherwise satisfy the repository and cwd binding.
+  assertUnknown(reconcile(writeJournal([commandExecution({ cwd: `file://evil.example${WORKTREE}` })])),
+    EVIDENCE_REASONS.SCHEMA_DRIFT);
+  // Rejected: a pathname that cannot be decoded is not a path this adapter can bind.
+  assertUnknown(reconcile(writeJournal([commandExecution({ cwd: `file://${REPO_ROOT}/%zz` })])),
+    EVIDENCE_REASONS.SCHEMA_DRIFT);
+});
+
+test("C2: a journal that is not a regular file or cannot be stat'ed reports its own reason", () => {
+  const directory = path.join(makeTempRoot(), "journal-as-directory");
+  fs.mkdirSync(directory);
+  // A supplied path that is not a regular file is its own class, not a read failure.
+  assertUnknown(reconcile(directory), EVIDENCE_REASONS.OWNER_JOURNAL_NOT_REGULAR_FILE);
+  // A stat that fails is unreadable rather than a guess about the path.
+  const denied = { ...fs, statSync() { throw Object.assign(new Error("denied"), { code: "EACCES" }); } };
+  assertUnknown(reconcile(writeJournal([commandExecution()]), { fs: denied }), EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE);
 });
 
 test("C2: a journal with no execution records reports missing terminal evidence", () => {
@@ -301,6 +344,28 @@ test("C2: an unresolvable owner journal stays typed unknown and never guesses", 
   const unreadable = { ...fs, opendirSync() { throw Object.assign(new Error("boom"), { code: "EACCES" }); } };
   assertUnknown(reconcile(fileWithRecords(), { fs: unreadable, journalPath: undefined, env: { CODEX_HOME: codexHome }, ownerThreadId: OWNER }),
     EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE);
+});
+
+test("C2: a terminal record for the requested execution under another owner is a wrong-owner report", () => {
+  const ownerActivity = commandExecution({ payloadType: "item_started", executionId: "999", item: { status: undefined, exit_code: undefined } });
+  const records = [ownerActivity, commandExecution({ threadId: OTHER_OWNER })];
+  // The requested execution's terminal record exists and is mis-owned, so the class is
+  // the wrong owner thread rather than missing evidence.
+  assertUnknown(reconcile(writeJournal(records)), EVIDENCE_REASONS.OWNER_THREAD_MISMATCH);
+  // The owner-only sibling reports the execution-id class, so the mis-owned terminal is
+  // what moves the reason.
+  assertUnknown(reconcile(writeJournal([ownerActivity])), EVIDENCE_REASONS.EXECUTION_ID_MISMATCH);
+});
+
+test("a relative journal path is a malformed request, like a relative root or cwd", () => {
+  const file = writeJournal([commandExecution()]);
+  // Accepted: an absolute journal path binds normally.
+  assert.equal(reconcile(file).status, EVIDENCE_STATUSES.COMPLETED);
+  // Rejected: one path rule for all three path parameters, so a relative value is never
+  // resolved against whatever directory this process happens to run in.
+  for (const journalPath of ["journal.jsonl", "./journal.jsonl", "~/journal.jsonl"]) {
+    assertUnknown(reconcile(journalPath), EVIDENCE_REASONS.INVALID_REQUEST);
+  }
 });
 
 function fileWithRecords() {
@@ -468,22 +533,64 @@ test("C3(d): a numeric session id stays an opaque string identifier", () => {
 // Disclosed schema.
 // ---------------------------------------------------------------------------
 
-test("the disclosed schema table is one vocabulary, and the module docblock cannot drift from it", () => {
+/**
+ * Parse the module header's disclosed table into `field -> { pointer, shape }`.
+ *
+ * Row-aligned on purpose: a whole-docblock substring test cannot see a single row's
+ * field, pointer or shape change when another row carries the same words.
+ */
+function parseDocblockTable(source) {
+  const rows = new Map();
+  for (const line of source.split("*/")[0].split("\n")) {
+    const tableLine = line.match(/^\s*\*\s*\|(.+)\|\s*$/u);
+    if (tableLine === null) continue;
+    const cells = tableLine[1].split("|").map((cell) => cell.trim());
+    if (cells.length !== 3 || !cells[1].startsWith("`")) continue;
+    rows.set(cells[0], { pointer: cells[1].replaceAll("`", ""), shape: cells[2].replaceAll("`", "") });
+  }
+  return rows;
+}
+
+/** Every row-aligned way the documented copy and the data copy disagree. */
+function schemaRowDrift(schema, documented) {
+  const drift = [];
+  const documentedFields = [...documented.keys()].join(",");
+  const schemaFields = schema.map((row) => row.field).join(",");
+  if (documentedFields !== schemaFields) drift.push(`rows [${documentedFields}] != [${schemaFields}]`);
+  for (const row of schema) {
+    const documentedRow = documented.get(row.field);
+    if (documentedRow === undefined) {
+      drift.push(`${row.field} is undocumented`);
+      continue;
+    }
+    if (documentedRow.pointer !== row.pointer) drift.push(`${row.field} pointer`);
+    if (documentedRow.shape !== row.shape) drift.push(`${row.field} shape`);
+  }
+  return drift;
+}
+
+test("the disclosed schema table is one vocabulary, and every SCHEMA row matches its own docblock row", () => {
+  const source = fs.readFileSync(new URL("../src/loop/codex-execution-evidence.mjs", import.meta.url), "utf8");
   const table = describeEvidenceSchema();
   assert.deepEqual(table.map((row) => row.field), [
     "eventDiscriminator", "eventKind", "itemType", "ownerThreadId", "executionId",
     "terminalTimestamp", "terminalStatus", "exitCode", "command", "cwd", "retainedOutput",
   ]);
-  // The docblock is the documented table; SCHEMA is its data form. Every row is asserted
-  // against the docblock, so editing one copy without the other fails here.
-  const docblock = fs.readFileSync(new URL("../src/loop/codex-execution-evidence.mjs", import.meta.url), "utf8").split("*/")[0];
-  // header row + one row per disclosed field, and no extra row
-  assert.equal((docblock.match(/^\s*\*\s*\| \w/gm) || []).length, table.length + 1, "docblock must document every row and no extra row");
+  // The docblock is the documented table; SCHEMA is its data form. Rows are compared one
+  // against one, in order, so neither copy can change a row alone.
+  const documented = parseDocblockTable(source);
+  assert.deepEqual(schemaRowDrift(table, documented), []);
+  // A single row's shape edit is drift even when another row carries the same word, which
+  // a whole-docblock substring check cannot see (`string` also documents retainedOutput).
+  assert.deepEqual(schemaRowDrift(table.map((row) => (row.field === "command" ? { ...row, shape: "string" } : row)), documented),
+    ["command shape"]);
+  // A field renamed in the data copy or in the docblock is drift too.
+  assert.notDeepEqual(schemaRowDrift(table.map((row) => (row.field === "command" ? { ...row, field: "argv" } : row)), documented), []);
+  const renamedDocblock = new Map([...documented].map(([field, row]) => [field === "command" ? "argv" : field, row]));
+  assert.notDeepEqual(schemaRowDrift(table, renamedDocblock), []);
   for (const row of table) {
     assert.match(row.pointer, /^(\/[A-Za-z_]+)+$/);
     assert.equal(typeof row.shape, "string");
-    assert.ok(docblock.includes(`\`${row.pointer}\``), `docblock must list the pointer ${row.pointer}`);
-    assert.ok(docblock.includes(row.shape), `docblock must use the documented shape for ${row.field}: ${row.shape}`);
   }
   // One vocabulary only: the former internal tokens disagree with the documented table.
   for (const token of ["uuidv7", "opaque_string", "iso_timestamp", "terminal_status", "file_uri", "string_array"]) {
