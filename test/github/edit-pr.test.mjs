@@ -454,3 +454,20 @@ test("editPr: the closing-reference refusal still fails closed when currentBody 
     /CLOSING-REF-BRANCH-MISMATCH.*fail closed/s,
   );
 });
+
+test("editPr (#2898): refuses a body that unticks checked rows, naming them; --allow-untick lets it through", async () => {
+  const rows = Array.from({ length: 15 }, (_, i) => `row ${i + 1}`);
+  const live = rows.map((r) => `- [x] ${r}`).join("\n");
+  const next = rows.map((r) => `- [ ] ${r}`).join("\n");
+  const fetchPrContext = async () => ({ headRefName: "x", closingIssuesReferences: [], body: live });
+  const refused = stubGh();
+  await assert.rejects(
+    () => editPr({ repo: "o/n", pr: 5, body: next, addAssignees: [], removeAssignees: [] }, { run: refused.run, fetchPrContext }),
+    /untick 15 checked row.*"row 1".*"row 15"/s,
+  );
+  assert.equal(refused.calls.length, 0);
+  const allowed = stubGh();
+  await editPr({ repo: "o/n", pr: 5, body: next, addAssignees: [], removeAssignees: [], allowUntick: true }, { run: allowed.run, fetchPrContext });
+  assert.equal(allowed.calls.length, 1);
+  assert.equal(parseEditPrCliArgs(["--repo", "o/n", "--pr", "5", "--body", "x", "--allow-untick"]).allowUntick, true);
+});

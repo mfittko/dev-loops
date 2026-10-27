@@ -2332,7 +2332,15 @@ function anglesPassCoverage(entries, config, gate) {
 // labels no reviewer verified stay unchecked in it and still block. Only lines
 // inside the AC/DoD sections (the AC section for an issue body) are flipped, so
 // the same label under another heading stays unchecked.
-async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordinationContext }, { env, ghCommand, runChild }) {
+// dryRun computes the ticked artifact without editing and queues each edit in
+// pendingWrites; skipLabels (labels an open act item names) are never ticked.
+async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified, coordinationContext, dryRun = false, pendingWrites = [], skipLabels = new Set() }, { env, ghCommand, runChild }) {
+  const verifiedItems = allVerified.filter((label) => !skipLabels.has(String(label).trim()));
+  const tick = async (body, labels, write, scope) => {
+    const result = await applyTick(body, labels, dryRun, write, scope);
+    if (dryRun && result.flipped.length > 0) pendingWrites.push(() => applyTick(body, labels, false, write, scope));
+    return result;
+  };
   const prData = coordinationContext.prData;
   if (typeof prData?.body !== "string") {
     throw new Error(`Cannot tick reviewer-verified items on PR ${pr}: the PR body is not a string.`);
@@ -2346,7 +2354,7 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordination
     const indices = checklistSectionLineIndices(body, options);
     return (index) => indices.has(index);
   };
-  const prTick = await applyTick(prData.body, inList([...(artifact?.prBodyUncheckedAcItems ?? []), ...(artifact?.prBodyUncheckedDodItems ?? [])]), false, (bodyFile) =>
+  const prTick = await tick(prData.body, inList([...(artifact?.prBodyUncheckedAcItems ?? []), ...(artifact?.prBodyUncheckedDodItems ?? [])]), (bodyFile) =>
     editPr({ repo, pr, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild, currentBody: prData.body }),
   inSections(prData.body));
   const issueLabels = inList(artifact?.uncheckedAcItems);
@@ -2354,7 +2362,7 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordination
   if (Array.isArray(artifact?.uncheckedAcItems) && artifact.uncheckedAcItems.length > 0) {
     for (const issue of artifact.uncheckedAcIssues ?? []) {
       const issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
-      const issueTick = await applyTick(issueBody, issueLabels, false, (bodyFile) =>
+      const issueTick = await tick(issueBody, issueLabels,(bodyFile) =>
         editIssue({ repo, issue, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
       inSections(issueBody, { acOnly: true }));
       tickedIssueBodies.push(issueTick.body);
@@ -2371,7 +2379,8 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordination
   // drop them and let an unverified issue AC item pass the clean guard.
   // Union with the reload's list so the result is never smaller than either source.
   const local = tickedIssueBodies.flatMap((body) => detectIssueRefinementArtifact({ body }).uncheckedAcItems);
-  const uncheckedAcItems = [...new Set([...(reloaded.uncheckedAcItems ?? []), ...local])];
+  // A dry run edited nothing, so the reload's re-fetch is stale: use the local list alone.
+  const uncheckedAcItems = dryRun ? local : [...new Set([...(reloaded.uncheckedAcItems ?? []), ...local])];
   return { ...reloaded, uncheckedAcItems };
 }
 
@@ -3013,15 +3022,23 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // must also pass the angle-coverage checks, and so must --findings-json when
   // present: its throwing coverage check runs later, so an input it refuses
   // must tick nothing.
+  const pendingTickWrites = [];
   const tickCoverageOk = (options.executionMode ?? DEFAULT_EXECUTION_MODE) !== "fanout_fanin"
     || (ledgerPassesAngleCoverage(preloadedFindingsLedger, config, options.gate)
       && (!structuredFindings || (anglesPassCoverage(rawFindingsInput, config, options.gate) && anglesPassCoverage(structuredFindings, config, options.gate))));
   if (options.gate === "pre_approval_gate" && preloadedFindingsLedger?.verifiedItems?.length > 0 && ledgerVerifiesChecklist(preloadedFindingsLedger) && tickCoverageOk) {
+    // Dry run: the composition and clean guards read the would-be ticked artifact; the edits run after the last refusal (pendingTickWrites).
+    const namedByOpenAct = new Set(listOpenActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems])
+      .flatMap((f) => [f.judgeCriterion, ...(Array.isArray(f.checkedCriteria) ? f.checkedCriteria : [])])
+      .filter((c) => typeof c === "string").map((c) => c.trim()));
     coordinationContext.refinementArtifact = await tickReviewerVerifiedItems({
       repo: options.repo,
       pr: options.pr,
       verifiedItems: preloadedFindingsLedger.verifiedItems,
       coordinationContext,
+      dryRun: true,
+      pendingWrites: pendingTickWrites,
+      skipLabels: namedByOpenAct,
     }, gh);
   }
   // Set only when the posted checkpoint verdict differs from the ledger's review
@@ -3424,6 +3441,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const findingsLedgerWarning = ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin" && options.findingsJson && !options.findingsLedger)
     ? "WARNING: --findings-json without --findings-ledger files zero inline comments — the --findings-ledger (consolidate-fanin --ledger-out → write-gate-findings-log) is the only inline-comment source. Pass --findings-ledger to file inline findings."
     : null;
+  // Every refusal has passed: apply the queued reviewer-verified ticks now, so a refused post leaves no ticked box.
+  for (const write of pendingTickWrites) await write();
   // PENDING-REVIEW RESOLUTION: GitHub allows only ONE pending review
   // per user per PR (PR-scoped, NOT head-scoped), so a --gate review --submit
   // re-run must RESOLVE the caller's own pending review rather than POST a

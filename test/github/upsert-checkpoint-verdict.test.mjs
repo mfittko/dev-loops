@@ -10715,10 +10715,10 @@ function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKE
 // fresh acceptance-criteria (or pr-checklist) review.
 const TICK_PROVENANCE = { distinctReviewers: 1, perAngle: [{ angle: "acceptance-criteria", reviewer: "reviewer-ac" }] };
 
-async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [], verifiedItems, provenance = verifiedItems === undefined ? undefined : TICK_PROVENANCE, issueBody, failBodyEdit, failIssueViewAfter, closingIssues }, fn) {
+async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [], verifiedItems, provenance = verifiedItems === undefined ? undefined : TICK_PROVENANCE, issueBody, failBodyEdit, failIssueViewAfter, closingIssues, findings }, fn) {
   const repoRoot = await stageConfigRepoRoot(requireFanoutEvidence);
   try {
-    const ledgerPath = await writeVerdictLedger(repoRoot, { overallVerdict, gate, verifiedItems, provenance });
+    const ledgerPath = await writeVerdictLedger(repoRoot, { overallVerdict, gate, verifiedItems, provenance, findings });
     const ledgerBefore = await readFile(ledgerPath, "utf8");
     const { runChild, calls, editedBodies, control } = gate === "draft_gate"
       ? makeAcRunChild({ isDraft: true, prBody })
@@ -11104,10 +11104,10 @@ test("tick: a failed post-tick issue re-fetch cannot drop the unverified issue A
     );
     assert.equal(reviewPosted(calls), false);
   });
-  await withCompositionRound(round, async ({ post, postedBody }) => {
-    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
-    assert.match(postedBody(), /\*\*Verdict:\*\* blocked/);
-    assert.deepEqual(result.gateBlockers, [{ kind: "unticked spec-of-record Acceptance criteria", item: "unverified issue criterion" }]);
+  // The queued issue edit re-reads the issue after the refusals; that read fails too, so nothing is posted (fail closed).
+  await withCompositionRound(round, async ({ post, calls }) => {
+    await assert.rejects(() => post({ findingsSeverityCounts: CLEAN_COUNTS }), /ADR-TRIPWIRE-STANDING-WAIVER/);
+    assert.equal(reviewPosted(calls), false);
   });
 });
 
@@ -12307,4 +12307,22 @@ test("deriveEffectiveNextAction derives from the act list on review, draft_gate 
   assert.equal(deriveEffectiveNextAction("findings_present", "pre_approval_gate", act), "rerun gate");
   assert.equal(deriveEffectiveNextAction("clean", "draft_gate", []), null);
   assert.equal(deriveEffectiveNextAction("clean", "pre_approval_gate", []), null);
+});
+
+test("tick (#2898): a refused verdict post changes no PR body", async () => {
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS }, async ({ post, calls, editedBodies }) => {
+    await assert.rejects(() => post({ verdict: "clean", findingsSeverityCounts: CLEAN_COUNTS }), /contradicts the consolidated ledger/);
+    assert.equal(editedBodies.length, 0);
+    assert.equal(calls.some((c) => c.args[1] === "edit" && (c.args.includes("--body") || c.args.includes("--body-file"))), false);
+  });
+});
+
+test("tick (#2898): a row an open act item names stays unticked; the other verified rows are ticked", async () => {
+  const act = { angle: "acceptance-criteria", severity: "medium", summary: "no evidence for that row", judgeDisposition: "act", judgeCriterion: TICK_ITEMS[12] };
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [act] }, async ({ post, editedBodies }) => {
+    await post();
+    assert.equal(editedBodies.length, 1);
+    assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${TICK_ITEMS[12]}$`, "m"));
+    assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[0]}$`, "m"));
+  });
 });
