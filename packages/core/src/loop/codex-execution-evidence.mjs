@@ -105,7 +105,10 @@ export const EVIDENCE_REASONS = Object.freeze({
 /** Byte bound on the journal read; a larger journal cannot be verified whole. */
 const MAX_JOURNAL_BYTES = 32 * 1024 * 1024;
 
-/** Chunk size of the bounded journal read; peak allocation stays near one chunk over the bound. */
+/**
+ * Chunk size of the bounded journal read. The cap bounds the bytes read; the retained
+ * chunk copies plus the join result reach roughly twice that.
+ */
 const READ_CHUNK_BYTES = 1024 * 1024;
 
 /**
@@ -267,7 +270,9 @@ const JSON_HEX_DIGITS_RE = /^[0-9a-fA-F]{0,4}$/u;
 const JSON_HEX_QUAD_RE = /^[0-9a-fA-F]{4}$/u;
 const JSON_NUMBER_TOKEN_CHARS = /[-+0-9.eE]/u;
 const JSON_NUMBER_TOKEN_RE = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/u;
-const JSON_NUMBER_TOKEN_PREFIX_RE = /^-?(?:0|[1-9][0-9]*)?(?:\.[0-9]*)?(?:[eE][+-]?[0-9]*)?$/u;
+// The integer part is mandatory: a token starting with `.` cannot become a number, so a
+// flushed `.5` or `-.` is decided invalid rather than left waiting for a continuation.
+const JSON_NUMBER_TOKEN_PREFIX_RE = /^(?:-|-?(?:0|[1-9][0-9]*)(?:\.[0-9]*)?(?:[eE][+-]?[0-9]*)?)$/u;
 
 const READ_COMPLETE = "complete";
 const READ_UNTERMINATED = "unterminated";

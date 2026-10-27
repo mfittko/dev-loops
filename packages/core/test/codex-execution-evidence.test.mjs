@@ -317,6 +317,12 @@ test("C2: only the root payload discriminator decides whether a torn tail may be
   // malformed evidence, never a tail this adapter may drop.
   write('{"type":"event_msg","payload":{"type":"token_count"},"ordinal":01');
   assertUnknown(reconcile(file), EVIDENCE_REASONS.MALFORMED_RECORD);
+  // A number token cannot start with a dot: a flushed `.`, `.5`, `-.` or `-.5` cannot grow
+  // into a number, so the settled non-terminal discriminator may not be dropped for it.
+  for (const number of [".", ".5", "-.", "-.5"]) {
+    write(`{"payload":{"type":"token_count"},"ordinal":${number}`);
+    assertUnknown(reconcile(file), EVIDENCE_REASONS.MALFORMED_RECORD);
+  }
   // A syntactically invalid tail is malformed in its own right, whatever it has flushed.
   write('{"type":"event_msg","payload":{"type" "token_count"');
   assertUnknown(reconcile(file), EVIDENCE_REASONS.MALFORMED_RECORD);
