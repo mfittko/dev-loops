@@ -393,6 +393,11 @@ describe("verdict-level coverage and escalation", () => {
       const out = validateSpecAuthorityVerdict(verdictFor([0, 1, 2]), ctx([0, 1, 2], 3));
       assert.equal(out.decisions.length, 3);
     });
+
+    test("per-finding decisions with agreeing outcomes pass under a non-identity cluster stamp", () => {
+      const out = validateSpecAuthorityVerdict(verdictFor([0, 1, 2, 3, 4]), ctx([0, 1, 2, 0, 4]));
+      assert.equal(out.decisions.length, 5);
+    });
   });
 
   test("every finding must be disposed exactly once", () => {
