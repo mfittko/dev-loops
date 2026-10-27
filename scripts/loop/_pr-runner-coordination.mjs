@@ -325,6 +325,21 @@ export async function claimRunnerOwnership({
       message: "Runner coordination claim requires a non-empty run id.",
     });
   }
+  // An expectation supplied by the caller must still name a run: a malformed
+  // value collapses to null, so refusing here keeps it from disabling the
+  // takeover race guard below (only an absent, null or undefined expectation
+  // is inactive).
+  if (expectPreviousRunId !== null && expectPreviousRunId !== undefined && expectedPreviousRunId === null) {
+    return buildConflict({
+      error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED,
+      repo: normalizedRepo,
+      pr: normalizedPr,
+      runId: normalizedRunId,
+      activeRun: null,
+      filePath: filePath ?? defaultRunnerCoordinationFilePathForTarget({ repo: normalizedRepo, pr: normalizedPr }, cwd),
+      message: "Runner coordination takeover requires a non-empty expectPreviousRunId when one is supplied.",
+    });
+  }
   const resolvedPath = filePath ?? defaultRunnerCoordinationFilePathForTarget({ repo: normalizedRepo, pr: normalizedPr }, cwd);
   return withRunnerStateFileLock(resolvedPath, async () => {
     const raw = await loadRunnerStateFile(resolvedPath);

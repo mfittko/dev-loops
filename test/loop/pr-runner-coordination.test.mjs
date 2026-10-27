@@ -870,6 +870,36 @@ test("claimRunnerOwnership takeover refuses an expectPreviousRunId that names an
   }
 });
 
+// A supplied expectation that cannot name a run refuses instead of collapsing to
+// null, which would silently disable the race guard for that takeover.
+for (const form of [
+  { label: "a whitespace-only string", expectation: "   " },
+  { label: "a non-string", expectation: 42 },
+]) {
+  test(`claimRunnerOwnership takeover refuses ${form.label} expectPreviousRunId`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+    try {
+      const owned = await claimRunnerOwnership({ repo: "owner/repo", pr: 42, runId: "run-1", cwd: tempDir });
+      const ownedBytes = await readFile(owned.filePath, "utf8");
+
+      const refused = await claimRunnerOwnership({
+        repo: "owner/repo",
+        pr: 42,
+        runId: "run-2",
+        cwd: tempDir,
+        mode: "takeover",
+        expectPreviousRunId: form.expectation,
+      });
+      assert.equal(refused.ok, false);
+      assert.equal(refused.error, "run_id_required");
+      assert.equal(await readFile(owned.filePath, "utf8"), ownedBytes, "a malformed expectation writes nothing");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
 test("ensureAsyncRunnerOwnership reports typed recovery evidence (stale max age)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
 

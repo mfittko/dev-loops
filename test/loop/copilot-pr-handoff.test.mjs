@@ -2096,9 +2096,13 @@ test("copilot-pr-handoff supersedes a confirmed-dead run's claim and proceeds in
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-supersede-"));
 
   try {
-    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-dead", cwd: tempDir, now: new Date().toISOString() });
+    // Both writes pin `now`, so the claim-scoped signal match never depends on the
+    // host clock stepping forward between them.
+    const claimedAt = "2026-06-07T08:00:00.000Z";
+    const signalAt = "2026-06-07T08:05:00.000Z";
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-dead", cwd: tempDir, now: claimedAt });
     // run-dead dies without releasing — record its exit signal (confirmed death)
-    const sig = await recordExitSignalForRunner({ repo: "owner/repo", pr: 17, runId: "run-dead", reason: "crashed", cwd: tempDir });
+    const sig = await recordExitSignalForRunner({ repo: "owner/repo", pr: 17, runId: "run-dead", reason: "crashed", cwd: tempDir, now: signalAt });
     assert.equal(sig.ok, true);
 
     const BOT_COMMENT = JSON.stringify({
