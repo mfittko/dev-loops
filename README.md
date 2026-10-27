@@ -1,5 +1,7 @@
 # dev-loops
 
+dev-loops ships reviewed, tested PRs with the highest autonomy that is still safe. Deterministic gates and a judge decide; humans decide only what tooling cannot, or what the repo requires.
+
 Turn a GitHub issue into a merged PR autonomously, up to a human-approval checkpoint.
 
 **Harness-agnostic by design.** The same dev loop runs three ways over one shared core (`packages/core`): as a **Claude Code plugin**, as a **Pi extension**, and as a standalone **CLI**. Routing, gates, and phases are defined once in the core; the plugin and extension are thin integrations over that shared workflow.
