@@ -2367,7 +2367,7 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
     const allowed = new Set(Array.isArray(list) ? list : []);
     return verifiedItems.filter((label) => allowed.has(String(label).trim()));
   };
-  const namedCategories = new Set(namedCriteria.flatMap((c) => [...c.matchAll(/(?:^|\s)(ac|dod):\d+\b/giu)].map((m) => m[1].toLowerCase())));
+  const namedCategories = new Set(namedCriteria.flatMap((c) => [...c.matchAll(/\b(ac|dod):\d+\b/giu)].map((m) => m[1].toLowerCase())));
   const prSkipped = new Set([
     ...(namedCategories.has("ac") ? artifact?.prBodyUncheckedAcItems ?? [] : []),
     ...(namedCategories.has("dod") ? artifact?.prBodyUncheckedDodItems ?? [] : []),

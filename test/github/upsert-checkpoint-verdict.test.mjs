@@ -12345,7 +12345,7 @@ test("tick (#2898): a row an open act item names by label stays unticked; a crit
 });
 
 test("tick (#2898): a spec id (dod:<n> / ac:<n>) skips every PR row of its category, whatever order the PR body lists them", async () => {
-  const dod = ["dod:1", "dod:0 The tick never flips a row that an open act item names."];
+  const dod = ["dod:1", "(dod:1)", "dod:0 The tick never flips a row that an open act item names."];
   for (const judgeCriterion of dod) {
     await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
       await post();
@@ -12358,6 +12358,13 @@ test("tick (#2898): a spec id (dod:<n> / ac:<n>) skips every PR row of its categ
     for (const item of TICK_ITEMS.slice(0, 12)) assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${item}$`, "m"));
     for (const item of TICK_ITEMS.slice(12)) assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${item}$`, "m"));
   });
+  // ponytail: a second id after a slash or comma names its category too; with both named nothing is ticked.
+  for (const judgeCriterion of ["ac:0/dod:1", "ac:0,dod:1", "(ac:0) (dod:1)"]) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
+      await post();
+      for (const item of TICK_ITEMS) assert.doesNotMatch(editedBodies[0]?.body ?? "", new RegExp(`^- \\[x\\] ${item}$`, "m"));
+    });
+  }
 });
 
 test("tick (#2898): an open act item carrying checkedCriteria and no judgeCriterion keeps the named category unticked", async () => {
