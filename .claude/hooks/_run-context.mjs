@@ -130,15 +130,35 @@ export function validateNativeCodexMetadata(header, threadId) {
     agentPath: spawn.agent_path, agentRole: spawn.agent_role };
 }
 
-/** Finite UUIDv7-date discovery and first-record-only IO; no recursive history scan or cache. */
-export function resolveNativeCodexContext({ env = process.env, fs = fsDefault } = {}) {
-  const reject = (reason) => ({ status: "rejected", reason });
-  const threadId = env?.CODEX_THREAD_ID;
-  if (env?.DEVLOOPS_DETACHED === "1") return reject("Detached execution is not a native Codex async child.");
-  if (typeof threadId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(threadId)) {
-    return reject("Native Codex context requires a supported UUIDv7 CODEX_THREAD_ID lookup key.");
-  }
-  const home = env.CODEX_HOME || (env.HOME ? path.join(env.HOME, ".codex") : path.join(os.homedir(), ".codex"));
+/**
+ * Discovery failure codes, mapped back to the header reader's existing prose so the
+ * bounded discovery can be shared without changing the identity reader's contract.
+ */
+const CODEX_DISCOVERY_REASONS = Object.freeze({
+  entry_bound: "Native Codex discovery directory exceeds entry bound.",
+  not_regular_file: "Native Codex metadata is not a regular file.",
+  ambiguous: "Native Codex metadata is ambiguous.",
+  not_found: "Native Codex session metadata not found.",
+  unreadable: "Native Codex metadata is unreadable or malformed.",
+});
+
+/**
+ * Resolve the one rollout journal belonging to a native Codex thread.
+ *
+ * Finite UUIDv7-date discovery, bounded entry count, one match or none: no
+ * recursive history scan, no global session search and no cache. Shared by the
+ * header-only identity reader and the terminal-evidence adapter so both bind to
+ * the same single journal file instead of adding a second locator.
+ *
+ * @param {object} params
+ * @param {string} params.threadId - UUIDv7 thread identity used as the filename suffix.
+ * @param {Record<string, string|undefined>} [params.env]
+ * @param {typeof import("node:fs")} [params.fs]
+ * @returns {{ ok: true, file: string } | { ok: false, code: "entry_bound"|"not_regular_file"|"ambiguous"|"not_found"|"unreadable" }}
+ */
+export function resolveCodexRolloutJournal({ threadId, env = process.env, fs = fsDefault } = {}) {
+  if (typeof threadId !== "string" || threadId === "") return { ok: false, code: "not_found" };
+  const home = env?.CODEX_HOME || (env?.HOME ? path.join(env.HOME, ".codex") : path.join(os.homedir(), ".codex"));
   const createdAt = Number.parseInt(threadId.slice(0, 13).replaceAll("-", ""), 16);
   const matches = [];
   try {
@@ -153,17 +173,33 @@ export function resolveNativeCodexContext({ env = process.env, fs = fsDefault } 
         let entry;
         let count = 0;
         while ((entry = dir.readSync()) !== null) {
-          if (++count > 4096) return reject("Native Codex discovery directory exceeds entry bound.");
+          if (++count > 4096) return { ok: false, code: "entry_bound" };
           if (entry.name.startsWith("rollout-") && entry.name.endsWith(`-${threadId}.jsonl`)) {
-            if (!entry.isFile()) return reject("Native Codex metadata is not a regular file.");
+            if (!entry.isFile()) return { ok: false, code: "not_regular_file" };
             matches.push(path.join(directory, entry.name));
-            if (matches.length > 1) return reject("Native Codex metadata is ambiguous.");
+            if (matches.length > 1) return { ok: false, code: "ambiguous" };
           }
         }
       } finally { dir.closeSync(); }
     }
-    if (matches.length !== 1) return reject("Native Codex session metadata not found.");
-    const fd = fs.openSync(matches[0], "r");
+  } catch {
+    return { ok: false, code: "unreadable" };
+  }
+  return matches.length === 1 ? { ok: true, file: matches[0] } : { ok: false, code: "not_found" };
+}
+
+/** Finite UUIDv7-date discovery and first-record-only IO; no recursive history scan or cache. */
+export function resolveNativeCodexContext({ env = process.env, fs = fsDefault } = {}) {
+  const reject = (reason) => ({ status: "rejected", reason });
+  const threadId = env?.CODEX_THREAD_ID;
+  if (env?.DEVLOOPS_DETACHED === "1") return reject("Detached execution is not a native Codex async child.");
+  if (typeof threadId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(threadId)) {
+    return reject("Native Codex context requires a supported UUIDv7 CODEX_THREAD_ID lookup key.");
+  }
+  const found = resolveCodexRolloutJournal({ threadId, env, fs });
+  if (!found.ok) return reject(CODEX_DISCOVERY_REASONS[found.code]);
+  try {
+    const fd = fs.openSync(found.file, "r");
     try {
       if (!fs.fstatSync(fd).isFile()) return reject("Native Codex metadata is not a regular file.");
       const header = Buffer.alloc(128 * 1024);
