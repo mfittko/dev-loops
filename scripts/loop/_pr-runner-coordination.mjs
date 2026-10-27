@@ -47,6 +47,21 @@ function normalizeClaimGeneration(claim) {
     updatedAt: typeof claim?.updatedAt === "string" ? claim.updatedAt : null,
   };
 }
+/**
+ * Whether a supplied takeover expectation can name a claim generation: a plain
+ * object carrying `claimedAt` and `updatedAt`, each a string or null. Any other
+ * object-typed value (a `Date`, a `Map`, an array), an absent member or a
+ * non-string member would normalize to the all-null generation and surface as a
+ * lost-race `active_run_exists` for input the caller never sent.
+ */
+function isClaimGeneration(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  return [value.claimedAt, value.updatedAt].every(
+    (member) => member === null || typeof member === "string",
+  );
+}
 function normalizeSignalReason(reason) {
   if (typeof reason !== "string") return null;
   const trimmed = reason.trim();
@@ -357,11 +372,11 @@ export async function claimRunnerOwnership({
       message: "Runner coordination requires a non-empty expectPreviousRunId when one is supplied.",
     });
   }
-  // A non-object claim generation cannot describe one: coercing it to an all-null
-  // generation would surface as a lost-race `active_run_exists` for input the
-  // caller never sent, so it refuses as malformed instead.
-  if (expectPreviousClaim !== null && expectPreviousClaim !== undefined
-    && (typeof expectPreviousClaim !== "object" || Array.isArray(expectPreviousClaim))) {
+  // A supplied value that cannot describe a claim generation refuses here: coercing
+  // a non-generation (a string, an array, a `Date`) or a non-string member to an
+  // all-null generation would surface as a lost-race `active_run_exists` for input
+  // the caller never sent, so it refuses as malformed instead.
+  if (expectPreviousClaim !== null && expectPreviousClaim !== undefined && !isClaimGeneration(expectPreviousClaim)) {
     return buildConflict({
       error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED,
       repo: normalizedRepo,
@@ -369,7 +384,7 @@ export async function claimRunnerOwnership({
       runId: normalizedRunId,
       activeRun: null,
       filePath: filePath ?? defaultRunnerCoordinationFilePathForTarget({ repo: normalizedRepo, pr: normalizedPr }, cwd),
-      message: "Runner coordination requires an object expectPreviousClaim when one is supplied.",
+      message: "Runner coordination requires an expectPreviousClaim object carrying claimedAt and updatedAt when one is supplied.",
     });
   }
   const resolvedPath = filePath ?? defaultRunnerCoordinationFilePathForTarget({ repo: normalizedRepo, pr: normalizedPr }, cwd);

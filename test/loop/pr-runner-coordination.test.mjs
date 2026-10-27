@@ -1169,14 +1169,18 @@ for (const form of [
   });
 }
 
-// A supplied `expectPreviousClaim` that is not an object cannot describe a claim
-// generation. Coercing it to an all-null generation would surface as a lost-race
+// A supplied `expectPreviousClaim` that is not a claim generation cannot describe
+// one. Coercing it to an all-null generation would surface as a lost-race
 // `active_run_exists` diagnostic for input the caller never sent, so it refuses as
 // malformed instead — the same conflict a malformed `expectPreviousRunId` gets.
 for (const form of [
   { label: "a string", expectation: "junk" },
   { label: "a number", expectation: 42 },
   { label: "an array", expectation: ["claimedAt", "updatedAt"] },
+  { label: "a Date", expectation: new Date() },
+  { label: "a Map", expectation: new Map() },
+  { label: "an object with a non-string member", expectation: { claimedAt: 42, updatedAt: null } },
+  { label: "an object missing a member", expectation: { claimedAt: "2026-06-05T08:00:00.000Z" } },
 ]) {
   test(`claimRunnerOwnership takeover refuses ${form.label} expectPreviousClaim`, async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));

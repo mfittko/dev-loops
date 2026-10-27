@@ -583,8 +583,9 @@ Release-on-death & dead-claim supersession (#1706):
   heartbeat, or a same-run release and re-claim, between the detection read and the lock therefore
   refuses instead of displacing a live owner. A supplied expectation that is malformed rather than
   inactive refuses with `run_id_required` before the lock, writing no state: a
-  `expectPreviousRunId` that is not a non-empty string, and an `expectPreviousClaim` that is not an
-  object (`null` and absent stay inactive).
+  `expectPreviousRunId` that is not a non-empty string, and an `expectPreviousClaim` that is not a
+  plain object carrying `claimedAt`/`updatedAt` strings (an array, a `Date`, a missing or numeric
+  member; `null` and absent stay inactive).
 - `ensureAsyncRunnerOwnership` also accepts an injectable `detectStale` detector: it is a test-only
   seam for exercising the production supersede wiring without a live stale claim, and production
   callers never pass it.
