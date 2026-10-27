@@ -22,8 +22,9 @@ const CITING = {
 test("the purpose rule owns the statement and the three reasons, and is registered", () => {
   const guide = read("skills/docs/contract-style-guide.md");
   assert.equal(guide.split(`<!-- rule: ${ID} -->`).length, 2);
-  assert.ok(guide.includes(STATEMENT));
-  assert.match(guide, /quality, safety, or a decision tooling cannot make/);
+  const row = guide.split("\n").find((l) => l.startsWith("|") && l.includes(`<!-- rule: ${ID} -->`));
+  assert.ok(row?.includes(STATEMENT));
+  assert.match(row, /quality, safety, or a decision tooling cannot make/);
   assert.ok(read("skills/docs/required-rules.json").includes(`"id": "${ID}"`));
 });
 
@@ -37,7 +38,7 @@ test("each #2937 rule cites the purpose rule as its parent without restating it"
     const text = read(file);
     for (const id of ids) {
       const line = text.split("\n").find((l) => l.startsWith(`\`${id}\``) || (l.startsWith("|") && l.includes(`<!-- rule: ${id} -->`)));
-      assert.ok(line?.includes(`\`${ID}\``), `${id} cites ${ID}`);
+      assert.match(line ?? "", new RegExp(`[Pp]arent:? \`${ID}\``), `${id} cites ${ID}`);
       assert.ok(!line.includes("highest autonomy"), `${id} does not restate the purpose`);
     }
   }
