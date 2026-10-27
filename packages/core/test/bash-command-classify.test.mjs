@@ -845,6 +845,13 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
     assert.equal(commandContainsInlineInterpreter(c), false, c);
   }
   // sanctioned script invocations and plain reads are NOT inline interpreters
+  for (const c of ["node --experimental-config-file ./node.config.json - <<EOF", "node --experimental-sea-config ./sea.json - <<EOF", "node --trace-event-file-pattern ./trace.log - <<EOF"]) {
+    assert.equal(commandContainsInlineInterpreter(c), true, c);
+  }
+  for (const c of ["node --experimental-config-file ./node.config.json scripts/x.mjs", "node --experimental-sea-config ./sea.json scripts/x.mjs"]) {
+    assert.equal(commandContainsInlineInterpreter(c), false, c);
+  }
+
   assert.equal(commandContainsInlineInterpreter("node scripts/github/comment-issue.mjs 5"), false);
   assert.equal(commandContainsInlineInterpreter("node -v"), false);
   assert.equal(commandContainsInlineInterpreter("python3 script.py"), false);
