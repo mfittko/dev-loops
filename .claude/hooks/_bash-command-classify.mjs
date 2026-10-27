@@ -1174,7 +1174,7 @@ export function commandContainsInlineInterpreter(command) {
     if (interpreterRegex("node").test(s)) {
       const code = s.replace(interpreterRegex("node"), "").trim();
       const tokens = code.split(/\s+/).filter(Boolean);
-      // ponytail: closed list of value flags. an unlisted `--long value` flag fails closed: a non-flag token that follows a `--flag` (not `--`, no `=`) is skipped as its value and the scan continues, unless it ends in a script extension (.js/.mjs/.cjs/.ts/.mts/.cts) and so is the script. Ceiling: an extensionless script after a boolean long flag is still read as a value.
+      // ponytail: closed list of value flags. an unlisted `--long value` flag fails closed: a non-flag token that follows a `--flag` (not `--`, no `=`) is skipped as its value and the scan continues, unless it ends in a script extension (.js/.mjs/.cjs/.ts/.mts/.cts) and so is the script. A relative path-like token (starts with `.` or has a non-leading `/`) is the script, not a value. Ceiling: a bare extensionless name or absolute path after a boolean long flag is still read as a value.
       // Node value-taking flags (short + long) each consume the following token. Consuming them lets
       // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
       // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value.
@@ -1190,7 +1190,7 @@ export function commandContainsInlineInterpreter(command) {
         if (skip) { i += skip - 1; continue; }
         if (!t.startsWith("-")) {
           const prev = tokens[i - 1];
-          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !SCRIPT_EXT_RE.test(stripSurroundingQuotes(t.split("<<")[0]))) { if (t.includes("<<")) return true; continue; } // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
+          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !SCRIPT_EXT_RE.test(stripSurroundingQuotes(t.split("<<")[0])) && !/^\.|^[^/]+\//.test(t)) { if (t.includes("<<")) return true; continue; } // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
           break; // script path reached — a later `-e` is a script argument
         }
         if (NODE_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
