@@ -1,20 +1,21 @@
 /**
  * Read-only reconciliation of an owned Codex execution's terminal evidence.
  *
- * A stopped worker whose tool session already recorded a terminal
- * `CommandExecution` event is not a live process and not an unresolved cleanup
- * blocker. This adapter proves that from the owning native journal and reports a
- * typed result; it never probes, signals or controls a process.
+ * A stopped worker whose tool session already recorded a terminal `CommandExecution`
+ * event is not a live process and not an unresolved cleanup blocker. This adapter
+ * proves that from the owning native journal and reports a typed result; it never
+ * probes, signals or controls a process.
  *
  * ## Disclosed schema
  *
- * The table below is the complete set of JSON pointers this adapter reads. It is
- * pinned from a real native journal, not a guessed schema. A record whose
- * disclosed pointer is absent, of another shape, or carrying an undisclosed
- * terminal-status value is schema drift and reconciles to `unknown`. Extra native
- * keys are deliberately ignored rather than treated as drift: every real record
- * carries bookkeeping paths this adapter has no evidence use for, so a literal
- * unknown-key rule would reject the journal the table was derived from.
+ * The table below is the complete set of terminal-record JSON pointers this adapter
+ * reads, pinned from a real native journal. A record whose disclosed pointer is absent,
+ * of another shape, or carrying an undisclosed terminal-status value is schema drift and
+ * reconciles to `unknown`. Extra native keys are ignored, not drift: every real record
+ * carries bookkeeping paths with no evidence use, so a literal unknown-key rule would
+ * reject the very journal the table came from. The journal's first record is read too —
+ * `/type` `"session_meta"`, `/payload/id` the owning thread — because discovery matches
+ * the file name, which a copy or a rename can disagree with.
  *
  * | field | pointer | shape |
  * | --- | --- | --- |
@@ -32,11 +33,10 @@
  *
  * This table is the only vocabulary for the disclosed schema: the `SCHEMA` data below
  * carries these same field, pointer and shape words, and a test asserts every `SCHEMA`
- * row against its own row here, so the two copies cannot drift apart.
- *
- * `executionId` binds to the journal's `process_id` path, where the native journal
- * records a tool session identifier. Despite the name, that value stays an opaque
- * identifier: it is never parsed as, or turned into, an OS process identifier.
+ * row against its own row here, so the two copies cannot drift apart. `executionId`
+ * binds to the journal's `process_id` path, which records a tool session identifier:
+ * the value stays an opaque identifier, never parsed as or turned into an OS process
+ * identifier.
  */
 
 import crypto from "node:crypto";
@@ -59,7 +59,8 @@ export const CODEX_TERMINAL_STATUSES = Object.freeze(["completed", "failed"]);
  * `unknown` — absent, malformed, conflicting or unsupported records, the C2 row of the
  * owning issue (issue 2886). This adapter reports it as: evidence that is missing or
  * mis-bound to another owner thread, execution id, repository root or working
- * directory; malformed records; conflicting terminal records; schema drift, an absent
+ * directory; an absent, reshaped or mis-owned journal header; malformed records;
+ * conflicting terminal records; schema drift, an absent
  * or reshaped disclosed pointer; a record still landing at the journal's end; and every
  * owner journal it cannot reach — undiscoverable (not found, ambiguous or past the
  * discovery entry bound), unreadable, not a regular file, or over the 32 MiB read bound.
@@ -103,6 +104,45 @@ export const EVIDENCE_REASONS = Object.freeze({
 
 /** Byte bound on the journal read; a larger journal cannot be verified whole. */
 const MAX_JOURNAL_BYTES = 32 * 1024 * 1024;
+
+/** Chunk size of the bounded journal read; peak allocation stays near one chunk over the bound. */
+const READ_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * Read the journal through one descriptor with a hard byte cap.
+ *
+ * The append-only journal can grow between the preceding `stat` and this read, so a
+ * whole-file read would allocate whatever the writer appended before any bound could be
+ * checked. Reading in bounded chunks and stopping as soon as the cap is passed bounds the
+ * I/O and the allocation regardless of how large the file has become.
+ */
+function readJournalText(fsImpl, file) {
+  const chunks = [];
+  let total = 0;
+  let descriptor;
+  try {
+    descriptor = fsImpl.openSync(file, "r");
+    const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+    for (;;) {
+      const read = fsImpl.readSync(descriptor, chunk, 0, chunk.length, total);
+      if (read === 0) break;
+      total += read;
+      if (total > MAX_JOURNAL_BYTES) return { state: "overflow" };
+      chunks.push(Buffer.from(chunk.subarray(0, read)));
+    }
+    return { state: "ok", text: Buffer.concat(chunks).toString("utf8") };
+  } catch {
+    return { state: "unreadable" };
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        fsImpl.closeSync(descriptor);
+      } catch {
+        // A close failure cannot change the result already read above.
+      }
+    }
+  }
+}
 
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 
@@ -212,54 +252,227 @@ function isCommandExecutionItem(record) {
   return pointerValue(record, "/payload/item/type") === "CommandExecution";
 }
 
-/**
- * A `"type"` a record has already flushed as a direct child of its `payload` object.
- * The negated character class keeps the match inside that object, so a nested value
- * deeper in the record can never be mistaken for it.
- */
-const SETTLED_PAYLOAD_TYPE_RE = /"payload"\s*:\s*\{[^{}]*?"type"\s*:\s*"([^"]*)"/u;
+/** The `type` of a journal's first record: the one carrying the session identity. */
+const JOURNAL_HEADER_TYPE = "session_meta";
+
+/** The disclosed `payload.type` of a terminal `CommandExecution` event. */
+const TERMINAL_EVENT_KIND = "item_completed";
+
+/** JSON whitespace between tokens (RFC 8259 section 2). */
+const JSON_WHITESPACE = new Set([" ", "\t", "\n", "\r"]);
+
+const JSON_LITERALS = Object.freeze(["true", "false", "null"]);
+const JSON_ESCAPES = Object.freeze({ '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" });
+const JSON_HEX_DIGITS_RE = /^[0-9a-fA-F]{0,4}$/u;
+const JSON_HEX_QUAD_RE = /^[0-9a-fA-F]{4}$/u;
+const JSON_NUMBER_TOKEN_CHARS = /[-+0-9.eE]/u;
+const JSON_NUMBER_TOKEN_RE = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/u;
+const JSON_NUMBER_TOKEN_PREFIX_RE = /^-?(?:0|[1-9][0-9]*)?(?:\.[0-9]*)?(?:[eE][+-]?[0-9]*)?$/u;
+
+const READ_COMPLETE = "complete";
+const READ_UNTERMINATED = "unterminated";
+const READ_INVALID = "invalid";
 
 /**
- * Could an unfinished record prefix still grow into a terminal record?
+ * Read the JSON string starting at `start`.
  *
- * Only a prefix that already flushed a `payload.type` other than `item_completed` is
- * proven not to be one; every other prefix keeps the journal unverifiable, so a torn
- * second terminal record can never pass as the journal's single terminal record.
+ * `complete` carries its decoded value and end offset, `unterminated` means end-of-input
+ * arrived first, and `invalid` means no continuation can repair the flushed bytes.
  */
-function couldBecomeTerminalRecord(prefix) {
-  const settled = SETTLED_PAYLOAD_TYPE_RE.exec(prefix);
-  return settled === null || settled[1] === "item_completed";
+function readJsonString(text, start) {
+  let index = start + 1;
+  let value = "";
+  while (index < text.length) {
+    const character = text[index];
+    if (character === '"') return { state: READ_COMPLETE, value, next: index + 1 };
+    if (character === "\\") {
+      const escape = text[index + 1];
+      if (escape === undefined) return { state: READ_UNTERMINATED };
+      if (escape === "u") {
+        const digits = text.slice(index + 2, index + 6);
+        if (!JSON_HEX_DIGITS_RE.test(digits)) return { state: READ_INVALID };
+        if (!JSON_HEX_QUAD_RE.test(digits)) return { state: READ_UNTERMINATED };
+        value += String.fromCharCode(Number.parseInt(digits, 16));
+        index += 6;
+        continue;
+      }
+      if (!Object.hasOwn(JSON_ESCAPES, escape)) return { state: READ_INVALID };
+      value += JSON_ESCAPES[escape];
+      index += 2;
+      continue;
+    }
+    if (text.charCodeAt(index) < 0x20) return { state: READ_INVALID };
+    value += character;
+    index += 1;
+  }
+  return { state: READ_UNTERMINATED };
 }
 
 /**
- * Classify an unterminated final journal line by its content.
+ * Read the JSON number token starting at `start`.
  *
- * `whole` — a closed object (or nothing) the parser reads like any other record;
- * `prefix` — a record still landing, whose flushed bytes are a valid object prefix;
- * `invalid` — bytes that cannot extend into a record.
+ * Returns the offset after a complete token, `READ_UNTERMINATED` when only end-of-input
+ * leaves it undecided (`-`, `1.`, `1e+`), and `READ_INVALID` when no number can start here.
  */
-function classifyJournalTail(tail) {
+function readJsonNumber(text, start) {
+  let end = start;
+  while (end < text.length && JSON_NUMBER_TOKEN_CHARS.test(text[end])) end += 1;
+  if (end === start) return READ_INVALID;
+  const token = text.slice(start, end);
+  // A token that cannot even be the start of a number is malformed wherever it ends, so a
+  // flushed leading-zero token such as `01` is decided here instead of being left open.
+  if (!JSON_NUMBER_TOKEN_PREFIX_RE.test(token)) return READ_INVALID;
+  if (end >= text.length) return READ_UNTERMINATED;
+  return JSON_NUMBER_TOKEN_RE.test(token) ? end : READ_INVALID;
+}
+
+/** Read a JSON literal at `start`; same result vocabulary as `readJsonNumber`. */
+function readJsonLiteral(text, start) {
+  const flushed = text.slice(start, start + 5);
+  for (const literal of JSON_LITERALS) {
+    if (flushed.startsWith(literal)) return start + literal.length;
+    if (literal.startsWith(flushed)) return READ_UNTERMINATED;
+  }
+  return READ_INVALID;
+}
+
+/**
+ * Classify an unterminated final journal line and read its root discriminator.
+ *
+ * The scan is iterative because a journal tail is untrusted input, and it tolerates
+ * end-of-input anywhere, which is what makes it a prefix check:
+ *
+ * - `whole` — exactly one closed JSON object, plus optional whitespace;
+ * - `prefix` — valid so far, and still extendable into one;
+ * - `invalid` — a token sequence no continuation can repair.
+ *
+ * A `prefix` carries `rootPayloadType`: the ROOT object's own `payload.type` value once
+ * that member has fully flushed. Only the root object decides it, so a nested object such
+ * as `metadata.payload.type` can never stand in for the record's discriminator, and a
+ * later duplicate root `payload` member clears the earlier one the way `JSON.parse`
+ * reads the record.
+ */
+function scanJournalTail(tail) {
   const text = tail.trim();
-  if (!text.startsWith("{")) return text === "" ? "whole" : "invalid";
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (const character of text) {
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (character === "\\") escaped = true;
-      else if (character === '"') inString = false;
-    } else if (character === '"') {
-      inString = true;
-    } else if (character === "{" || character === "[") {
-      depth += 1;
-    } else if (character === "}" || character === "]") {
-      depth -= 1;
-      if (depth < 0) return "invalid";
-      if (depth === 0) return "whole";
+  if (text === "") return { kind: "whole" };
+  let index = 0;
+  let rootPayloadType;
+  const stack = [];
+  const exhausted = () => index >= text.length;
+  const skipWhitespace = () => {
+    while (!exhausted() && JSON_WHITESPACE.has(text[index])) index += 1;
+  };
+  const prefix = () => ({ kind: "prefix", rootPayloadType });
+  const invalid = () => ({ kind: "invalid" });
+
+  skipWhitespace();
+  if (exhausted() || text[index] !== "{") return invalid();
+  index += 1;
+  stack.push({ kind: "object", role: "root", phase: "keyOrEnd", key: null });
+
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    skipWhitespace();
+    switch (frame.phase) {
+      case "keyOrEnd":
+      case "keyAfterComma": {
+        // Only the root object and its `payload` member can still introduce the
+        // discriminator, so an undecided key there leaves it unproven even though an
+        // earlier duplicate member had settled a value.
+        const discriminatorFrame = frame.role === "root" || frame.role === "payload";
+        if (exhausted()) {
+          if (discriminatorFrame) rootPayloadType = undefined;
+          return prefix();
+        }
+        if (text[index] === "}") {
+          if (frame.phase === "keyAfterComma") return invalid();
+          index += 1;
+          stack.pop();
+          continue;
+        }
+        if (text[index] !== '"') return invalid();
+        const key = readJsonString(text, index);
+        if (key.state === READ_INVALID) return invalid();
+        if (key.state === READ_UNTERMINATED) {
+          if (discriminatorFrame) rootPayloadType = undefined;
+          return prefix();
+        }
+        frame.key = key.value;
+        index = key.next;
+        frame.phase = "colon";
+        if ((frame.role === "root" && key.value === "payload") || (frame.role === "payload" && key.value === "type")) {
+          rootPayloadType = undefined;
+        }
+        continue;
+      }
+      case "colon": {
+        if (exhausted()) return prefix();
+        if (text[index] !== ":") return invalid();
+        index += 1;
+        frame.phase = "value";
+        continue;
+      }
+      case "firstValue":
+      case "valueAfterComma": {
+        if (exhausted()) return prefix();
+        if (text[index] === "]") {
+          if (frame.phase === "valueAfterComma") return invalid();
+          index += 1;
+          stack.pop();
+          continue;
+        }
+        frame.phase = "value";
+        continue;
+      }
+      case "value": {
+        if (exhausted()) return prefix();
+        const character = text[index];
+        const isRootPayload = frame.role === "root" && frame.key === "payload";
+        if (character === "{" || character === "[") {
+          index += 1;
+          frame.phase = "commaOrEnd";
+          stack.push(character === "{"
+            ? { kind: "object", role: isRootPayload ? "payload" : "nested", phase: "keyOrEnd", key: null }
+            : { kind: "array", role: "nested", phase: "firstValue", key: null });
+          continue;
+        }
+        if (character === '"') {
+          const string = readJsonString(text, index);
+          if (string.state === READ_INVALID) return invalid();
+          if (string.state === READ_UNTERMINATED) return prefix();
+          index = string.next;
+          if (frame.role === "payload" && frame.key === "type") rootPayloadType = string.value;
+          frame.phase = "commaOrEnd";
+          continue;
+        }
+        const literal = readJsonLiteral(text, index);
+        const tokenEnd = literal === READ_INVALID ? readJsonNumber(text, index) : literal;
+        if (tokenEnd === READ_INVALID) return invalid();
+        if (tokenEnd === READ_UNTERMINATED) return prefix();
+        index = tokenEnd;
+        frame.phase = "commaOrEnd";
+        continue;
+      }
+      case "commaOrEnd": {
+        if (exhausted()) return prefix();
+        if (text[index] === "}" || text[index] === "]") {
+          if (text[index] !== (frame.kind === "object" ? "}" : "]")) return invalid();
+          index += 1;
+          stack.pop();
+          continue;
+        }
+        if (text[index] !== ",") return invalid();
+        index += 1;
+        frame.phase = frame.kind === "object" ? "keyAfterComma" : "valueAfterComma";
+        continue;
+      }
+      default:
+        return invalid();
     }
   }
-  return inString || depth > 0 ? "prefix" : "invalid";
+
+  skipWhitespace();
+  return exhausted() ? { kind: "whole" } : invalid();
 }
 
 /** A supplied journal path is a path parameter like `repoRoot` and `cwd`: never relative. */
@@ -401,31 +614,31 @@ export function reconcileCodexExecution({
   if (!journalStat.isFile()) return unknown(EVIDENCE_REASONS.OWNER_JOURNAL_NOT_REGULAR_FILE);
   if (journalStat.size > MAX_JOURNAL_BYTES) return unknown(EVIDENCE_REASONS.JOURNAL_EXCEEDS_BYTE_BOUND);
 
-  let text;
-  try {
-    text = fsImpl.readFileSync(journal.path, "utf8");
-  } catch {
-    return unknown(EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE);
-  }
-  // The append-only journal can grow between the stat and the read; bound the bytes actually loaded.
-  if (Buffer.byteLength(text, "utf8") > MAX_JOURNAL_BYTES) return unknown(EVIDENCE_REASONS.JOURNAL_EXCEEDS_BYTE_BOUND);
+  const read = readJournalText(fsImpl, journal.path);
+  if (read.state === "unreadable") return unknown(EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE);
+  // The append-only journal can grow between the stat and the read, so the bound is
+  // enforced on the bytes actually read, not only on the pre-read stat.
+  if (read.state === "overflow") return unknown(EVIDENCE_REASONS.JOURNAL_EXCEEDS_BYTE_BOUND);
+  const text = read.text;
 
   const lines = text.split("\n");
   // The final line is decided by its content, never by whether the writer flushed a
-  // terminator: a whole record reads as a record, an unfinished object prefix is a
-  // record still landing, and any other unterminated bytes are malformed.
+  // terminator: a whole record reads as a record, a valid object prefix that can no
+  // longer carry a terminal discriminator is dropped, and every other unterminated
+  // tail keeps the journal unverifiable.
   if (text.length > 0 && !text.endsWith("\n")) {
-    const tail = lines[lines.length - 1];
-    const tailKind = classifyJournalTail(tail);
-    if (tailKind === "invalid") return unknown(EVIDENCE_REASONS.MALFORMED_RECORD);
-    if (tailKind === "prefix") {
-      if (couldBecomeTerminalRecord(tail)) return unknown(EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
+    const scanned = scanJournalTail(lines[lines.length - 1]);
+    if (scanned.kind === "invalid") return unknown(EVIDENCE_REASONS.MALFORMED_RECORD);
+    if (scanned.kind === "prefix") {
+      if (scanned.rootPayloadType === undefined || scanned.rootPayloadType === TERMINAL_EVENT_KIND) {
+        return unknown(EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
+      }
       lines.pop();
     }
   }
 
   // An unparseable line inside the journal means absence of evidence cannot be proven.
-  const items = [];
+  const records = [];
   for (const line of lines) {
     if (line.trim() === "") continue;
     let record;
@@ -434,9 +647,21 @@ export function reconcileCodexExecution({
     } catch {
       return unknown(EVIDENCE_REASONS.MALFORMED_RECORD);
     }
-    if (isCommandExecutionItem(record)) items.push(record);
+    records.push(record);
   }
+  const items = records.filter(isCommandExecutionItem);
   if (items.length === 0) return unknown(EVIDENCE_REASONS.TERMINAL_RECORD_MISSING);
+
+  // The first record is the journal header and the only authoritative statement of which
+  // thread this file belongs to: discovery matches the file NAME, which a copy or a rename
+  // can disagree with, so a terminal event alone never proves ownership.
+  const [header] = records;
+  if (header === undefined || pointerValue(header, "/type") !== JOURNAL_HEADER_TYPE) {
+    return unknown(EVIDENCE_REASONS.SCHEMA_DRIFT);
+  }
+  const headerThreadId = pointerValue(header, "/payload/id");
+  if (!isNativeCodexThreadId(headerThreadId)) return unknown(EVIDENCE_REASONS.SCHEMA_DRIFT);
+  if (headerThreadId !== ownerThreadId) return unknown(EVIDENCE_REASONS.OWNER_THREAD_MISMATCH);
 
   // A `CommandExecution` item whose execution-id pointer is absent or not a non-empty
   // string is malformed, not a wrong execution: the equality filter below would drop it
@@ -446,6 +671,12 @@ export function reconcileCodexExecution({
   }
 
   const executionItems = items.filter((record) => pointerValue(record, "/payload/item/process_id") === executionId);
+  // A record for the requested execution whose event kind is absent or not a string is
+  // malformed, not a non-terminal event: the terminal filter below would silently drop it
+  // and let a surviving terminal hide the drift.
+  if (executionItems.some((record) => !matchesShape(pointerValue(record, "/payload/type"), "opaque string"))) {
+    return unknown(EVIDENCE_REASONS.SCHEMA_DRIFT);
+  }
   // A record for the requested execution whose owner pointer is absent or not a UUIDv7
   // is malformed, not an ownership mismatch: reporting it as owner_thread_mismatch would
   // label schema drift with the wrong failure class.

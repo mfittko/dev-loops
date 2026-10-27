@@ -76,6 +76,15 @@ function commandExecution({
   };
 }
 
+/** The journal's first record: the native session header naming the owning thread. */
+function sessionMeta({ id = OWNER } = {}) {
+  return {
+    timestamp: "2026-10-20T11:58:00.000Z",
+    type: "session_meta",
+    payload: { id, timestamp: "2026-10-20T11:58:00.000Z", originator: "codex_cli_rs", cli_version: "0.51.0" },
+  };
+}
+
 /** Worker/session stop marker: carries no terminal CommandExecution evidence. */
 function workerStop(timestamp = "2026-10-20T11:58:44.000Z") {
   return { timestamp, type: "event_msg", payload: { type: "task_complete", thread_id: OWNER } };
@@ -88,9 +97,10 @@ function makeTempRoot() {
   return root;
 }
 
-function writeJournal(records, { root = makeTempRoot() } = {}) {
+function writeJournal(records, { root = makeTempRoot(), header = sessionMeta() } = {}) {
   const file = path.join(root, "journal.jsonl");
-  fs.writeFileSync(file, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  const lines = records.map((record) => JSON.stringify(record));
+  fs.writeFileSync(file, `${header === null ? "" : `${JSON.stringify(header)}\n`}${lines.join("\n")}\n`);
   return file;
 }
 
@@ -165,7 +175,7 @@ test("C1: the owner journal is discovered from the bounded native session layout
   const directory = path.join(codexHome, "sessions", ...date.split("-"));
   fs.mkdirSync(directory, { recursive: true });
   const file = path.join(directory, `rollout-2026-10-20T13-54-33-${OWNER}.jsonl`);
-  fs.writeFileSync(file, [workerStop(), commandExecution()].map((r) => JSON.stringify(r)).join("\n") + "\n");
+  fs.writeFileSync(file, [sessionMeta(), workerStop(), commandExecution()].map((r) => JSON.stringify(r)).join("\n") + "\n");
 
   const env = { CODEX_HOME: codexHome };
   const resolved = resolveCodexExecutionJournal({ ownerThreadId: OWNER, env });
@@ -252,33 +262,66 @@ test("C2: malformed JSON stays typed unknown and leaves the journal bytes unchan
 });
 
 test("C2: an unterminated tail is decided by its content, never by the writer's final newline", () => {
-  const root = makeTempRoot();
-  const file = path.join(root, "journal.jsonl");
+  const head = `${JSON.stringify(sessionMeta())}\n`;
+  const file = path.join(makeTempRoot(), "journal.jsonl");
   const terminal = JSON.stringify(commandExecution());
+  const write = (body) => fs.writeFileSync(file, `${head}${body}`);
   // Every line terminated, one terminal record: completion.
-  fs.writeFileSync(file, `${JSON.stringify(workerStop())}\n${terminal}\n`);
+  write(`${JSON.stringify(workerStop())}\n${terminal}\n`);
   assert.equal(reconcile(file).status, EVIDENCE_STATUSES.COMPLETED);
   // A whole record without a final newline is a record, not a torn tail.
-  fs.writeFileSync(file, terminal);
+  write(terminal);
   assert.equal(reconcile(file).status, EVIDENCE_STATUSES.COMPLETED);
   // The same corrupt bytes reconcile to the same typed reason with and without a newline.
   for (const body of [`${terminal}\nnot json`, `${terminal}\nnot json\n`]) {
-    fs.writeFileSync(file, body);
+    write(body);
     assertUnknown(reconcile(file), EVIDENCE_REASONS.MALFORMED_RECORD);
   }
   // A record still landing is never completion: a torn second terminal record keeps the
   // journal unverifiable instead of reducing two terminals to one.
   const torn = `${terminal}\n{"type":"event_msg","payload":{"type":"item_completed","thread_id":"${OWNER}","item":{"type":"CommandExecution","process_id":"${EXECUTION}"`;
-  fs.writeFileSync(file, torn);
+  write(torn);
   const pending = reconcile(file);
   assertUnknown(pending, EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
   assert.equal(pending.cleanup.blocker, "unknown");
   // Once that second terminal record lands, the same journal is the conflict class.
-  fs.writeFileSync(file, `${torn},"exit_code":1}}}\n`);
+  write(`${torn},"exit_code":1}}}\n`);
   assertUnknown(reconcile(file), EVIDENCE_REASONS.CONFLICTING_TERMINAL_RECORDS);
   // A tail that cannot become a terminal record is tolerated, so the journal still
   // reconciles from its terminated evidence.
-  fs.writeFileSync(file, `${terminal}\n{"timestamp":"2026-10-20T11:58:44.000Z","type":"event_msg","payload":{"type":"token_count"`);
+  write(`${terminal}\n{"timestamp":"2026-10-20T11:58:44.000Z","type":"event_msg","payload":{"type":"token_count"`);
+  assert.equal(reconcile(file).status, EVIDENCE_STATUSES.COMPLETED);
+});
+
+test("C2: only the root payload discriminator decides whether a torn tail may be dropped", () => {
+  const head = `${JSON.stringify(sessionMeta())}\n`;
+  const file = path.join(makeTempRoot(), "journal.jsonl");
+  const terminal = JSON.stringify(commandExecution());
+  const write = (tail) => fs.writeFileSync(file, `${head}${terminal}\n${tail}`);
+  // A nested `payload.type` is not the record's discriminator: this tail can still land as
+  // a terminal record, so reading the nested value would discard real evidence.
+  write('{"metadata":{"payload":{"type":"token_count"}},"payload":{"type":"item_completed"');
+  assertUnknown(reconcile(file), EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
+  // A later duplicate root `payload` member wins, exactly as `JSON.parse` reads the record,
+  // including one whose own key or value has not flushed yet: an earlier settled
+  // discriminator can never outvote a member that may still arrive.
+  write('{"payload":{"type":"token_count"},"payload"');
+  assertUnknown(reconcile(file), EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
+  write('{"payload":{"type":"token_count"},"payl');
+  assertUnknown(reconcile(file), EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
+  write('{"payload":{"type":"token_count"},"payload":{"type"');
+  assertUnknown(reconcile(file), EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
+  write('{"payload":{"type":"token_count"},"payload":{"type":"item_completed"');
+  assertUnknown(reconcile(file), EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
+  // A settled non-terminal discriminator followed by bytes no continuation can repair is
+  // malformed evidence, never a tail this adapter may drop.
+  write('{"type":"event_msg","payload":{"type":"token_count"},"ordinal":01');
+  assertUnknown(reconcile(file), EVIDENCE_REASONS.MALFORMED_RECORD);
+  // A syntactically invalid tail is malformed in its own right, whatever it has flushed.
+  write('{"type":"event_msg","payload":{"type" "token_count"');
+  assertUnknown(reconcile(file), EVIDENCE_REASONS.MALFORMED_RECORD);
+  // The same settled non-terminal discriminator with extendable bytes stays a tail in flight.
+  write('{"type":"event_msg","payload":{"type":"token_count"},"ordinal":1');
   assert.equal(reconcile(file).status, EVIDENCE_STATUSES.COMPLETED);
 });
 
@@ -378,31 +421,47 @@ function fileWithRecords() {
   return writeJournal([commandExecution()]);
 }
 
-test("C2: a journal above the byte bound stays typed unknown and is never read whole", () => {
+test("C2: a journal above the byte bound stays typed unknown and is never opened", () => {
   const file = writeJournal([commandExecution()]);
-  let readAttempts = 0;
+  let opens = 0;
   const huge = {
     ...fs,
     statSync(...args) {
       const stat = fs.statSync(...args);
       return { ...stat, size: 64 * 1024 * 1024, isFile: () => true };
     },
-    readFileSync(...args) { readAttempts++; return fs.readFileSync(...args); },
+    openSync(...args) { opens += 1; return fs.openSync(...args); },
   };
   assertUnknown(reconcile(file, { fs: huge }), EVIDENCE_REASONS.JOURNAL_EXCEEDS_BYTE_BOUND);
-  assert.equal(readAttempts, 0);
+  assert.equal(opens, 0);
 });
 
-test("C2: a journal that grows past the byte bound between stat and read stays typed unknown", () => {
-  // The append-only journal can cross the bound after the pre-read stat. The bound is
-  // re-checked on the loaded bytes, so a small stat must not let the read decide.
+test("C2: the journal read is bounded by an explicit cap, not by how large the file has grown", () => {
+  // The append-only journal can cross the bound after the pre-read stat. The read stops one
+  // chunk past the bound, so neither the I/O nor the allocation follows the file's size.
   const file = writeJournal([commandExecution()]);
-  const grownFs = {
+  const bound = 32 * 1024 * 1024;
+  const chunk = 1024 * 1024;
+  let bytesRead = 0;
+  let closes = 0;
+  const growing = {
     ...fs,
     statSync: () => ({ size: 4096, isFile: () => true }),
-    readFileSync: () => "x".repeat(32 * 1024 * 1024 + 1),
+    openSync: () => 7,
+    closeSync(descriptor) { assert.equal(descriptor, 7); closes += 1; },
+    readSync(descriptor, buffer, offset, length, position) {
+      assert.equal(descriptor, 7);
+      assert.equal(offset, 0);
+      assert.equal(position, bytesRead, "the bounded read is sequential");
+      buffer.fill(0x20, offset, offset + length);
+      bytesRead += length;
+      return length;
+    },
   };
-  assertUnknown(reconcile(file, { fs: grownFs }), EVIDENCE_REASONS.JOURNAL_EXCEEDS_BYTE_BOUND);
+  assertUnknown(reconcile(file, { fs: growing }), EVIDENCE_REASONS.JOURNAL_EXCEEDS_BYTE_BOUND);
+  assert.ok(bytesRead > bound, `the read must pass the bound to be bounded: ${bytesRead}`);
+  assert.ok(bytesRead <= bound + chunk, `the read must stop within one chunk of the bound: ${bytesRead}`);
+  assert.equal(closes, 1, "the descriptor is closed on every path");
 });
 
 test("C2: a sessions entry that is not a directory is unreadable, not unsupported", () => {
@@ -491,6 +550,44 @@ test("C2: a CommandExecution owner pointer that is absent or not a UUIDv7 is sch
 function withoutOwnerPointer() {
   const record = commandExecution();
   delete record.payload.thread_id;
+  return record;
+}
+
+test("C2: the journal header is the file's identity, so an absent, reshaped or mis-owned one never completes", () => {
+  const terminal = [commandExecution()];
+  // Accepted: the header names the owning thread, so discovery's file name is corroborated.
+  assert.equal(reconcile(writeJournal(terminal)).status, EVIDENCE_STATUSES.COMPLETED);
+  // Rejected: no header at all. The first record is the terminal event itself, so nothing in
+  // the file states which thread it belongs to, however well the events are bound.
+  assertUnknown(reconcile(writeJournal(terminal, { header: null })), EVIDENCE_REASONS.SCHEMA_DRIFT);
+  // Rejected: a header that is not the disclosed shape (no `payload.id`).
+  assertUnknown(reconcile(writeJournal(terminal, { header: { type: "session_meta", payload: {} } })),
+    EVIDENCE_REASONS.SCHEMA_DRIFT);
+  // Rejected: a header naming another thread is the wrong-owner class, so a copied or renamed
+  // journal can never clear this owner's blocker.
+  assertUnknown(reconcile(writeJournal(terminal, { header: sessionMeta({ id: OTHER_OWNER }) })),
+    EVIDENCE_REASONS.OWNER_THREAD_MISMATCH);
+});
+
+test("C2: a matching execution record whose event kind is absent or not a string is schema drift", () => {
+  // Accepted: a legitimate non-terminal kind for the same execution is not drift.
+  const nonTerminal = commandExecution({ payloadType: "item_started" });
+  assert.equal(reconcile(writeJournal([nonTerminal, commandExecution()])).status, EVIDENCE_STATUSES.COMPLETED);
+  assertUnknown(reconcile(writeJournal([nonTerminal])), EVIDENCE_REASONS.TERMINAL_RECORD_MISSING);
+  // Rejected: the terminal filter drops this record, so without the kind guard one surviving
+  // terminal would hide the drift and report completion.
+  assertUnknown(reconcile(writeJournal([commandExecution(), withoutEventKind()])), EVIDENCE_REASONS.SCHEMA_DRIFT);
+  // Rejected: the malformed record can also be the only one for the execution.
+  assertUnknown(reconcile(writeJournal([withoutEventKind()])), EVIDENCE_REASONS.SCHEMA_DRIFT);
+  const numericKind = commandExecution();
+  numericKind.payload.type = 7;
+  assertUnknown(reconcile(writeJournal([numericKind])), EVIDENCE_REASONS.SCHEMA_DRIFT);
+});
+
+/** A CommandExecution record for the requested execution with no event-kind pointer. */
+function withoutEventKind() {
+  const record = commandExecution();
+  delete record.payload.type;
   return record;
 }
 
