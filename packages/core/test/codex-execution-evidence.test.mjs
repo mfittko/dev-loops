@@ -261,7 +261,7 @@ test("C2: malformed JSON stays typed unknown and leaves the journal bytes unchan
   assert.equal(sha256(fs.readFileSync(file)), before);
 });
 
-test("C2: an unterminated tail is decided by its content, never by the writer's final newline", () => {
+test("C2: an unterminated final line is a tail in flight unless it is a whole record", () => {
   const head = `${JSON.stringify(sessionMeta())}\n`;
   const file = path.join(makeTempRoot(), "journal.jsonl");
   const terminal = JSON.stringify(commandExecution());
@@ -272,11 +272,13 @@ test("C2: an unterminated tail is decided by its content, never by the writer's 
   // A whole record without a final newline is a record, not a torn tail.
   write(terminal);
   assert.equal(reconcile(file).status, EVIDENCE_STATUSES.COMPLETED);
-  // The same corrupt bytes reconcile to the same typed reason with and without a newline.
-  for (const body of [`${terminal}\nnot json`, `${terminal}\nnot json\n`]) {
-    write(body);
-    assertUnknown(reconcile(file), EVIDENCE_REASONS.MALFORMED_RECORD);
-  }
+  // A terminated line that does not parse is malformed evidence in its own right.
+  write(`${terminal}\nnot json\n`);
+  assertUnknown(reconcile(file), EVIDENCE_REASONS.MALFORMED_RECORD);
+  // The same bytes without the final newline are decided as a tail still landing: the
+  // writer has not proven that line complete, so it is never read as malformed evidence.
+  write(`${terminal}\nnot json`);
+  assertUnknown(reconcile(file), EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
   // A record still landing is never completion: a torn second terminal record keeps the
   // journal unverifiable instead of reducing two terminals to one.
   const torn = `${terminal}\n{"type":"event_msg","payload":{"type":"item_completed","thread_id":"${OWNER}","item":{"type":"CommandExecution","process_id":"${EXECUTION}"`;
@@ -287,48 +289,32 @@ test("C2: an unterminated tail is decided by its content, never by the writer's 
   // Once that second terminal record lands, the same journal is the conflict class.
   write(`${torn},"exit_code":1}}}\n`);
   assertUnknown(reconcile(file), EVIDENCE_REASONS.CONFLICTING_TERMINAL_RECORDS);
-  // A tail that cannot become a terminal record is tolerated, so the journal still
-  // reconciles from its terminated evidence.
-  write(`${terminal}\n{"timestamp":"2026-10-20T11:58:44.000Z","type":"event_msg","payload":{"type":"token_count"`);
-  assert.equal(reconcile(file).status, EVIDENCE_STATUSES.COMPLETED);
 });
 
-test("C2: only the root payload discriminator decides whether a torn tail may be dropped", () => {
+test("C2: an unterminated final line is never dropped from the evidence", () => {
   const head = `${JSON.stringify(sessionMeta())}\n`;
   const file = path.join(makeTempRoot(), "journal.jsonl");
   const terminal = JSON.stringify(commandExecution());
   const write = (tail) => fs.writeFileSync(file, `${head}${terminal}\n${tail}`);
-  // A nested `payload.type` is not the record's discriminator: this tail can still land as
-  // a terminal record, so reading the nested value would discard real evidence.
-  write('{"metadata":{"payload":{"type":"token_count"}},"payload":{"type":"item_completed"');
-  assertUnknown(reconcile(file), EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
-  // A later duplicate root `payload` member wins, exactly as `JSON.parse` reads the record,
-  // including one whose own key or value has not flushed yet: an earlier settled
-  // discriminator can never outvote a member that may still arrive.
-  write('{"payload":{"type":"token_count"},"payload"');
-  assertUnknown(reconcile(file), EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
-  write('{"payload":{"type":"token_count"},"payl');
-  assertUnknown(reconcile(file), EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
-  write('{"payload":{"type":"token_count"},"payload":{"type"');
-  assertUnknown(reconcile(file), EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
-  write('{"payload":{"type":"token_count"},"payload":{"type":"item_completed"');
-  assertUnknown(reconcile(file), EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
-  // A settled non-terminal discriminator followed by bytes no continuation can repair is
-  // malformed evidence, never a tail this adapter may drop.
-  write('{"type":"event_msg","payload":{"type":"token_count"},"ordinal":01');
-  assertUnknown(reconcile(file), EVIDENCE_REASONS.MALFORMED_RECORD);
-  // A number token cannot start with a dot: a flushed `.`, `.5`, `-.` or `-.5` cannot grow
-  // into a number, so the settled non-terminal discriminator may not be dropped for it.
-  for (const number of [".", ".5", "-.", "-.5"]) {
-    write(`{"payload":{"type":"token_count"},"ordinal":${number}`);
-    assertUnknown(reconcile(file), EVIDENCE_REASONS.MALFORMED_RECORD);
+  // Every one of these tails used to be dropped once its root discriminator settled a
+  // non-terminal kind, which let a journal report completion while a terminal record for
+  // the same execution was still landing. A prefix scan of any depth is not a record.
+  for (const tail of [
+    '{"type":"event_msg","payload":{"type":"token_count"',
+    '{"type":"event_msg","payload":{"type":"token_count"},"ordinal":1',
+    '{"metadata":{"payload":{"type":"token_count"}},"payload":{"type":"item_completed"',
+    '{"payload":{"type":"token_count"},"payload"',
+    '{"payload":{"type":"token_count"},"ordinal":01',
+    '{"payload":{"type":"token_count"},"ordinal":.5',
+    'not json',
+  ]) {
+    write(tail);
+    assertUnknown(reconcile(file), EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
   }
-  // A syntactically invalid tail is malformed in its own right, whatever it has flushed.
-  write('{"type":"event_msg","payload":{"type" "token_count"');
+  // The terminator is what separates a tail in flight from malformed evidence: the same
+  // bytes flushed whole are a malformed record, never completion and never a drop.
+  write(`${terminal.slice(0, -1)}\n`);
   assertUnknown(reconcile(file), EVIDENCE_REASONS.MALFORMED_RECORD);
-  // The same settled non-terminal discriminator with extendable bytes stays a tail in flight.
-  write('{"type":"event_msg","payload":{"type":"token_count"},"ordinal":1');
-  assert.equal(reconcile(file).status, EVIDENCE_STATUSES.COMPLETED);
 });
 
 test("C2: a cwd whose file: URI authority or encoding cannot be trusted stays typed unknown", () => {

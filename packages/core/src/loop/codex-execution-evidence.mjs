@@ -258,226 +258,20 @@ function isCommandExecutionItem(record) {
 /** The `type` of a journal's first record: the one carrying the session identity. */
 const JOURNAL_HEADER_TYPE = "session_meta";
 
-/** The disclosed `payload.type` of a terminal `CommandExecution` event. */
-const TERMINAL_EVENT_KIND = "item_completed";
-
-/** JSON whitespace between tokens (RFC 8259 section 2). */
-const JSON_WHITESPACE = new Set([" ", "\t", "\n", "\r"]);
-
-const JSON_LITERALS = Object.freeze(["true", "false", "null"]);
-const JSON_ESCAPES = Object.freeze({ '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" });
-const JSON_HEX_DIGITS_RE = /^[0-9a-fA-F]{0,4}$/u;
-const JSON_HEX_QUAD_RE = /^[0-9a-fA-F]{4}$/u;
-const JSON_NUMBER_TOKEN_CHARS = /[-+0-9.eE]/u;
-const JSON_NUMBER_TOKEN_RE = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/u;
-// The integer part is mandatory: a token starting with `.` cannot become a number, so a
-// flushed `.5` or `-.` is decided invalid rather than left waiting for a continuation.
-const JSON_NUMBER_TOKEN_PREFIX_RE = /^(?:-|-?(?:0|[1-9][0-9]*)(?:\.[0-9]*)?(?:[eE][+-]?[0-9]*)?)$/u;
-
-const READ_COMPLETE = "complete";
-const READ_UNTERMINATED = "unterminated";
-const READ_INVALID = "invalid";
-
 /**
- * Read the JSON string starting at `start`.
+ * Whether `line` parses as exactly one JSON record.
  *
- * `complete` carries its decoded value and end offset, `unterminated` means end-of-input
- * arrived first, and `invalid` means no continuation can repair the flushed bytes.
+ * The last line of a journal carries no terminator to prove the writer finished it, so its
+ * content decides: a whole record is readable evidence, and anything else is a line still
+ * landing, which keeps the journal unverifiable instead of dropping it.
  */
-function readJsonString(text, start) {
-  let index = start + 1;
-  let value = "";
-  while (index < text.length) {
-    const character = text[index];
-    if (character === '"') return { state: READ_COMPLETE, value, next: index + 1 };
-    if (character === "\\") {
-      const escape = text[index + 1];
-      if (escape === undefined) return { state: READ_UNTERMINATED };
-      if (escape === "u") {
-        const digits = text.slice(index + 2, index + 6);
-        if (!JSON_HEX_DIGITS_RE.test(digits)) return { state: READ_INVALID };
-        if (!JSON_HEX_QUAD_RE.test(digits)) return { state: READ_UNTERMINATED };
-        value += String.fromCharCode(Number.parseInt(digits, 16));
-        index += 6;
-        continue;
-      }
-      if (!Object.hasOwn(JSON_ESCAPES, escape)) return { state: READ_INVALID };
-      value += JSON_ESCAPES[escape];
-      index += 2;
-      continue;
-    }
-    if (text.charCodeAt(index) < 0x20) return { state: READ_INVALID };
-    value += character;
-    index += 1;
+function isWholeRecord(line) {
+  try {
+    JSON.parse(line);
+    return true;
+  } catch {
+    return false;
   }
-  return { state: READ_UNTERMINATED };
-}
-
-/**
- * Read the JSON number token starting at `start`.
- *
- * Returns the offset after a complete token, `READ_UNTERMINATED` when only end-of-input
- * leaves it undecided (`-`, `1.`, `1e+`), and `READ_INVALID` when no number can start here.
- */
-function readJsonNumber(text, start) {
-  let end = start;
-  while (end < text.length && JSON_NUMBER_TOKEN_CHARS.test(text[end])) end += 1;
-  if (end === start) return READ_INVALID;
-  const token = text.slice(start, end);
-  // A token that cannot even be the start of a number is malformed wherever it ends, so a
-  // flushed leading-zero token such as `01` is decided here instead of being left open.
-  if (!JSON_NUMBER_TOKEN_PREFIX_RE.test(token)) return READ_INVALID;
-  if (end >= text.length) return READ_UNTERMINATED;
-  return JSON_NUMBER_TOKEN_RE.test(token) ? end : READ_INVALID;
-}
-
-/** Read a JSON literal at `start`; same result vocabulary as `readJsonNumber`. */
-function readJsonLiteral(text, start) {
-  const flushed = text.slice(start, start + 5);
-  for (const literal of JSON_LITERALS) {
-    if (flushed.startsWith(literal)) return start + literal.length;
-    if (literal.startsWith(flushed)) return READ_UNTERMINATED;
-  }
-  return READ_INVALID;
-}
-
-/**
- * Classify an unterminated final journal line and read its root discriminator.
- *
- * The scan is iterative because a journal tail is untrusted input, and it tolerates
- * end-of-input anywhere, which is what makes it a prefix check:
- *
- * - `whole` — exactly one closed JSON object, plus optional whitespace;
- * - `prefix` — valid so far, and still extendable into one;
- * - `invalid` — a token sequence no continuation can repair.
- *
- * A `prefix` carries `rootPayloadType`: the ROOT object's own `payload.type` value once
- * that member has fully flushed. Only the root object decides it, so a nested object such
- * as `metadata.payload.type` can never stand in for the record's discriminator, and a
- * later duplicate root `payload` member clears the earlier one the way `JSON.parse`
- * reads the record.
- */
-function scanJournalTail(tail) {
-  const text = tail.trim();
-  if (text === "") return { kind: "whole" };
-  let index = 0;
-  let rootPayloadType;
-  const stack = [];
-  const exhausted = () => index >= text.length;
-  const skipWhitespace = () => {
-    while (!exhausted() && JSON_WHITESPACE.has(text[index])) index += 1;
-  };
-  const prefix = () => ({ kind: "prefix", rootPayloadType });
-  const invalid = () => ({ kind: "invalid" });
-
-  skipWhitespace();
-  if (exhausted() || text[index] !== "{") return invalid();
-  index += 1;
-  stack.push({ kind: "object", role: "root", phase: "keyOrEnd", key: null });
-
-  while (stack.length > 0) {
-    const frame = stack[stack.length - 1];
-    skipWhitespace();
-    switch (frame.phase) {
-      case "keyOrEnd":
-      case "keyAfterComma": {
-        // Only the root object and its `payload` member can still introduce the
-        // discriminator, so an undecided key there leaves it unproven even though an
-        // earlier duplicate member had settled a value.
-        const discriminatorFrame = frame.role === "root" || frame.role === "payload";
-        if (exhausted()) {
-          if (discriminatorFrame) rootPayloadType = undefined;
-          return prefix();
-        }
-        if (text[index] === "}") {
-          if (frame.phase === "keyAfterComma") return invalid();
-          index += 1;
-          stack.pop();
-          continue;
-        }
-        if (text[index] !== '"') return invalid();
-        const key = readJsonString(text, index);
-        if (key.state === READ_INVALID) return invalid();
-        if (key.state === READ_UNTERMINATED) {
-          if (discriminatorFrame) rootPayloadType = undefined;
-          return prefix();
-        }
-        frame.key = key.value;
-        index = key.next;
-        frame.phase = "colon";
-        if ((frame.role === "root" && key.value === "payload") || (frame.role === "payload" && key.value === "type")) {
-          rootPayloadType = undefined;
-        }
-        continue;
-      }
-      case "colon": {
-        if (exhausted()) return prefix();
-        if (text[index] !== ":") return invalid();
-        index += 1;
-        frame.phase = "value";
-        continue;
-      }
-      case "firstValue":
-      case "valueAfterComma": {
-        if (exhausted()) return prefix();
-        if (text[index] === "]") {
-          if (frame.phase === "valueAfterComma") return invalid();
-          index += 1;
-          stack.pop();
-          continue;
-        }
-        frame.phase = "value";
-        continue;
-      }
-      case "value": {
-        if (exhausted()) return prefix();
-        const character = text[index];
-        const isRootPayload = frame.role === "root" && frame.key === "payload";
-        if (character === "{" || character === "[") {
-          index += 1;
-          frame.phase = "commaOrEnd";
-          stack.push(character === "{"
-            ? { kind: "object", role: isRootPayload ? "payload" : "nested", phase: "keyOrEnd", key: null }
-            : { kind: "array", role: "nested", phase: "firstValue", key: null });
-          continue;
-        }
-        if (character === '"') {
-          const string = readJsonString(text, index);
-          if (string.state === READ_INVALID) return invalid();
-          if (string.state === READ_UNTERMINATED) return prefix();
-          index = string.next;
-          if (frame.role === "payload" && frame.key === "type") rootPayloadType = string.value;
-          frame.phase = "commaOrEnd";
-          continue;
-        }
-        const literal = readJsonLiteral(text, index);
-        const tokenEnd = literal === READ_INVALID ? readJsonNumber(text, index) : literal;
-        if (tokenEnd === READ_INVALID) return invalid();
-        if (tokenEnd === READ_UNTERMINATED) return prefix();
-        index = tokenEnd;
-        frame.phase = "commaOrEnd";
-        continue;
-      }
-      case "commaOrEnd": {
-        if (exhausted()) return prefix();
-        if (text[index] === "}" || text[index] === "]") {
-          if (text[index] !== (frame.kind === "object" ? "}" : "]")) return invalid();
-          index += 1;
-          stack.pop();
-          continue;
-        }
-        if (text[index] !== ",") return invalid();
-        index += 1;
-        frame.phase = frame.kind === "object" ? "keyAfterComma" : "valueAfterComma";
-        continue;
-      }
-      default:
-        return invalid();
-    }
-  }
-
-  skipWhitespace();
-  return exhausted() ? { kind: "whole" } : invalid();
 }
 
 /** A supplied journal path is a path parameter like `repoRoot` and `cwd`: never relative. */
@@ -627,19 +421,11 @@ export function reconcileCodexExecution({
   const text = read.text;
 
   const lines = text.split("\n");
-  // The final line is decided by its content, never by whether the writer flushed a
-  // terminator: a whole record reads as a record, a valid object prefix that can no
-  // longer carry a terminal discriminator is dropped, and every other unterminated
-  // tail keeps the journal unverifiable.
-  if (text.length > 0 && !text.endsWith("\n")) {
-    const scanned = scanJournalTail(lines[lines.length - 1]);
-    if (scanned.kind === "invalid") return unknown(EVIDENCE_REASONS.MALFORMED_RECORD);
-    if (scanned.kind === "prefix") {
-      if (scanned.rootPayloadType === undefined || scanned.rootPayloadType === TERMINAL_EVENT_KIND) {
-        return unknown(EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
-      }
-      lines.pop();
-    }
+  // A writer that has not flushed the final terminator leaves one unterminated line. Its
+  // content decides whether that line is evidence: a whole record is, and any other
+  // unterminated line is a tail still landing, so the journal stays unverifiable.
+  if (text.length > 0 && !text.endsWith("\n") && !isWholeRecord(lines[lines.length - 1])) {
+    return unknown(EVIDENCE_REASONS.JOURNAL_TAIL_IN_FLIGHT);
   }
 
   // An unparseable line inside the journal means absence of evidence cannot be proven.
