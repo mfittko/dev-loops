@@ -675,7 +675,7 @@ async function enforceSpecAuthority(options, findings, resolvedRoot) {
   );
   let validated;
   try {
-    validated = validateSpecAuthorityVerdict(verdict, { findingsCount: findings.length, criterionIds });
+    validated = validateSpecAuthorityVerdict(verdict, { findingsCount: findings.length, criterionIds, clusterIds: findings.map((f) => f?.clusterId) });
   } catch (error) {
     throw new Error(`spec-authority verdict failed validation: ${error instanceof Error ? error.message : String(error)}`);
   }

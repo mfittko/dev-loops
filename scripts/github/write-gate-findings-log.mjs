@@ -721,6 +721,7 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
   try {
     validated = validateSpecAuthorityVerdict(JSON.parse(raw), {
       findingsCount: findings.length,
+      clusterIds: findings.map((f) => f?.clusterId),
       criterionIds: identity?.checkedCriteria,
     });
   } catch (error) {

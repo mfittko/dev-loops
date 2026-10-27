@@ -519,11 +519,12 @@ export function validateSpecAuthorityDecision(decision, { specDigest, headSha, c
  * @param {object} context
  * @param {number} context.findingsCount — number of findings the verdict must cover
  * @param {string[]} context.criterionIds — the complete criterion id set
+ * @param {Array<number|undefined>} [context.clusterIds] — per-finding ledger clusterId by position; a decision keyed by a cluster's index is expanded to every member finding
  * @returns {{ specDigest: string, headSha: string, contentDigest: string,
  *   decisions: object[], humanDecisionRequired: boolean,
  *   humanDecisionIndices: number[], outcomeCounts: Record<string, number> }}
  */
-export function validateSpecAuthorityVerdict(verdict, { findingsCount, criterionIds } = {}) {
+export function validateSpecAuthorityVerdict(verdict, { findingsCount, criterionIds, clusterIds } = {}) {
   if (!verdict || typeof verdict !== "object" || Array.isArray(verdict)) {
     throw new Error("spec-authority verdict must be an object");
   }
@@ -554,14 +555,37 @@ export function validateSpecAuthorityVerdict(verdict, { findingsCount, criterion
     if (decision.requiresHumanDecision) humanDecisionIndices.push(decision.index);
     decisions.push(decision);
   }
+  // The judge keys a decision by clusterId; expand it to every member finding.
+  const byIndex = new Map(decisions.map((d) => [d.index, d]));
+  for (let i = 0; i < findingsCount; i += 1) {
+    const clusterDecision = byIndex.get(clusterIds?.[i]);
+    if (!clusterDecision || clusterDecision.index === i) continue;
+    const own = byIndex.get(i);
+    if (own) {
+      if (own.outcome !== clusterDecision.outcome) {
+        const error = new Error(
+          `spec-authority cluster ${clusterDecision.index} decides ${clusterDecision.outcome} but member finding ${i} has its own decision ${own.outcome} (fail closed)`,
+        );
+        error.code = "spec_authority_cluster_conflict";
+        throw error;
+      }
+      continue;
+    }
+    decisions.push({ ...clusterDecision, index: i });
+    seen.add(i);
+    outcomeCounts[clusterDecision.outcome] += 1;
+    if (clusterDecision.requiresHumanDecision) humanDecisionIndices.push(i);
+  }
   const uncovered = [];
   for (let i = 0; i < findingsCount; i += 1) {
     if (!seen.has(i)) uncovered.push(i);
   }
   if (uncovered.length > 0) {
-    throw new Error(
+    const error = new Error(
       `spec-authority verdict does not dispose ${uncovered.length} finding(s) (indexes: ${uncovered.join(", ")}) — every finding needs a whole-spec outcome (fail closed)`,
     );
+    error.code = "spec_authority_uncovered_finding";
+    throw error;
   }
   // Canonical ordering: sort by finding index so a verdict's decisions,
   // humanDecisionIndices, and any downstream join (e.g. the human-decision

@@ -350,6 +350,42 @@ describe("whole-spec judge disposition", () => {
 });
 
 describe("verdict-level coverage and escalation", () => {
+  describe("cluster expansion", () => {
+    const ctx = (clusterIds, n = 5) => ({ findingsCount: n, criterionIds: specCriterionIds(SPEC), clusterIds });
+    const verdictFor = (indexes, overrides = {}) => {
+      const id = identities();
+      return { ...id, decisions: indexes.map((index) => ({ ...wholeSpecDecision(SPEC), ...id, index, ...(overrides[index] ?? {}) })) };
+    };
+
+    test("a cluster decision expands to its member findings", () => {
+      const out = validateSpecAuthorityVerdict(verdictFor([0, 1, 2, 4]), ctx([0, 1, 2, 0, 4]));
+      assert.equal(out.decisions.length, 5);
+      assert.deepEqual(out.decisions.map((d) => d.index), [0, 1, 2, 3, 4]);
+      assert.equal(out.decisions[3].outcome, out.decisions[0].outcome);
+      assert.equal(out.outcomeCounts.valid_compliant, 5);
+    });
+
+    test("an undecided cluster still refuses with spec_authority_uncovered_finding", () => {
+      assert.throws(
+        () => validateSpecAuthorityVerdict(verdictFor([0, 1, 2]), ctx([0, 1, 2, 0, 4])),
+        (e) => /does not dispose/.test(e.message) && e.code === "spec_authority_uncovered_finding",
+      );
+    });
+
+    test("a member decision that differs from its cluster decision refuses", () => {
+      const v = verdictFor([0, 1, 2, 3, 4], { 3: { outcome: SPEC_AUTHORITY_OUTCOMES.SPEC_CANNOT_DECIDE } });
+      assert.throws(
+        () => validateSpecAuthorityVerdict(v, ctx([0, 1, 2, 0, 4])),
+        (e) => e.code === "spec_authority_cluster_conflict" && /fail closed/.test(e.message),
+      );
+    });
+
+    test("per-finding decisions with identity clusterIds pass unchanged", () => {
+      const out = validateSpecAuthorityVerdict(verdictFor([0, 1, 2]), ctx([0, 1, 2], 3));
+      assert.equal(out.decisions.length, 3);
+    });
+  });
+
   test("every finding must be disposed exactly once", () => {
     const id = identities();
     const verdict = { ...id, decisions: [{ ...wholeSpecDecision(SPEC), ...id, index: 0 }] };
