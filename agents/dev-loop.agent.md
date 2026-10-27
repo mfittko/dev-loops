@@ -137,7 +137,8 @@ node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs handoff --repo <ow
 ```
 
 It appends your exit signal and clears the claim in one locked write, so the successor's pre-flight
-recovers deterministically. Statuses: `handoff_recorded` (signal written, claim cleared),
+finds no claim to recover: it claims fresh with no `recovery` field. A `recovery` field appears only
+when the successor actually displaces a claim. Statuses: `handoff_recorded` (signal written, claim cleared),
 `handoff_noop` (nothing to hand off — no state write), `ownership_lost` and `run_id_required` (exit
 1, no state write). It adds no identity override; the run id comes from the verified runtime context.
 

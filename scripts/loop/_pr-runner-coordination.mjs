@@ -339,10 +339,13 @@ export async function claimRunnerOwnership({
       message: "Runner coordination claim requires a non-empty run id.",
     });
   }
-  // An expectation supplied by the caller must still name a run: a malformed
-  // value collapses to null, so refusing here keeps it from disabling the
-  // takeover race guard below (only an absent, null or undefined expectation
-  // is inactive).
+  // A supplied expectation is caller input in either mode, so a malformed one
+  // refuses here: before the lock, with no state write, and with a message that
+  // names the OPTION rather than the mode so a claim and a takeover call read the
+  // same. Only an absent, null or undefined expectation is inactive.
+  //
+  // A run id that collapses to null would silently disable the takeover race
+  // guards below.
   if (expectPreviousRunId !== null && expectPreviousRunId !== undefined && expectedPreviousRunId === null) {
     return buildConflict({
       error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED,
@@ -351,7 +354,22 @@ export async function claimRunnerOwnership({
       runId: normalizedRunId,
       activeRun: null,
       filePath: filePath ?? defaultRunnerCoordinationFilePathForTarget({ repo: normalizedRepo, pr: normalizedPr }, cwd),
-      message: "Runner coordination takeover requires a non-empty expectPreviousRunId when one is supplied.",
+      message: "Runner coordination requires a non-empty expectPreviousRunId when one is supplied.",
+    });
+  }
+  // A non-object claim generation cannot describe one: coercing it to an all-null
+  // generation would surface as a lost-race `active_run_exists` for input the
+  // caller never sent, so it refuses as malformed instead.
+  if (expectPreviousClaim !== null && expectPreviousClaim !== undefined
+    && (typeof expectPreviousClaim !== "object" || Array.isArray(expectPreviousClaim))) {
+    return buildConflict({
+      error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED,
+      repo: normalizedRepo,
+      pr: normalizedPr,
+      runId: normalizedRunId,
+      activeRun: null,
+      filePath: filePath ?? defaultRunnerCoordinationFilePathForTarget({ repo: normalizedRepo, pr: normalizedPr }, cwd),
+      message: "Runner coordination requires an object expectPreviousClaim when one is supplied.",
     });
   }
   const resolvedPath = filePath ?? defaultRunnerCoordinationFilePathForTarget({ repo: normalizedRepo, pr: normalizedPr }, cwd);

@@ -563,7 +563,11 @@ Release-on-death & dead-claim supersession (#1706):
   path: `ensureAsyncRunnerOwnership({ supersedeStale: true })`, and the `runnerOwnership` result that
   `copilot-pr-handoff` forwards, return `recovery: { evidence: "exit_signal" | "stale_max_age",
   displacedRunId, maxAgeMs }`, where `displacedRunId` is the displaced owner recorded as
-  `previousRun.runId` and `maxAgeMs` is the effective stale window.
+  `previousRun.runId` and `maxAgeMs` is the effective stale window. The shipped producer in the
+  shipped flow yields `stale_max_age`: `handoff` writes the exit signal and clears the claim in one
+  locked write, so no signal survives to be read against an active claim. `exit_signal` stays in the
+  documented union for a signal recorded while its claim is still active, which is the state
+  `recordExitSignalForRunner` leaves and the shipped handoff never does.
 - The explicit `takeover` subcommand reports no `recovery` field: it takes over on the caller's
   instruction without reading the detector verdict that names the evidence.
 - A result that displaced nobody — a fresh claim, a same-owner refresh or a fail-closed conflict —
@@ -577,7 +581,10 @@ Release-on-death & dead-claim supersession (#1706):
   (`{ claimedAt, updatedAt }`) and refuses with `active_run_exists`, writing no state, when the
   locked claim's run id, `claimedAt` or `updatedAt` differ from what the detector saw. A same-run
   heartbeat, or a same-run release and re-claim, between the detection read and the lock therefore
-  refuses instead of displacing a live owner.
+  refuses instead of displacing a live owner. A supplied expectation that is malformed rather than
+  inactive refuses with `run_id_required` before the lock, writing no state: a
+  `expectPreviousRunId` that is not a non-empty string, and an `expectPreviousClaim` that is not an
+  object (`null` and absent stay inactive).
 - `ensureAsyncRunnerOwnership` also accepts an injectable `detectStale` detector: it is a test-only
   seam for exercising the production supersede wiring without a live stale claim, and production
   callers never pass it.

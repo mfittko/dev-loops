@@ -885,17 +885,22 @@ test("supersedeStale refuses a takeover whose detected owner is no longer active
       env: { DEVLOOPS_RUN_ID: "run-2" },
       claimIfMissing: true,
       supersedeStale: true,
-      // The owner moved on between the detection read and the locked takeover.
+      // The owner moved on between the detection read and the locked takeover: the
+      // verdict names another run while carrying THIS claim's real generation, so
+      // only the owner-identity guard can produce the refusal below (an all-null
+      // generation would trip the claim-generation guard instead, which has its
+      // own tests).
       detectStale: async () => ({
         ok: false,
         error: STALE_RUNNER_ERROR.STALE_RUNNER,
-        activeRun: { runId: "run-earlier" },
+        activeRun: { ...owned.activeRun, runId: "run-earlier" },
         maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS,
       }),
     });
     assert.equal(result.ok, false);
     assert.equal(result.error, "active_run_exists");
     assert.equal(result.activeRun.runId, "run-1");
+    assert.match(result.message, /not the displaced run run-earlier/, "the owner-identity guard refuses, not the claim-generation guard");
     assert.equal(await readFile(owned.filePath, "utf8"), ownedBytes, "a refused takeover writes nothing");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1043,6 +1048,43 @@ test("a claim released after the stale read reports no recovery field", async ()
   }
 });
 
+// R1/R4: the DOCUMENTED handoff-to-successor sequence runs end to end. The handoff
+// clears the claim in the same locked write that appends the exit signal, so the
+// successor's pre-flight finds no owner to displace: it claims fresh, its
+// `previousRun` names the handed-off owner, and it carries no `recovery` field.
+// A regression that re-created a claim during the handoff, or that attached
+// `recovery` to this `claimed_new` result, fails here.
+test("a handoff successor claims fresh with no recovery field", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 48, runId: "run-owner-a", cwd: tempDir });
+    const handed = await handoffRunnerOwnership({
+      repo: "owner/repo",
+      pr: 48,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-owner-a" },
+    });
+    assert.equal(handed.status, "handoff_recorded");
+    assert.equal(handed.activeRun, null, "the handoff clears the claim in its own locked write");
+
+    const successor = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 48,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-owner-b" },
+      claimIfMissing: true,
+      supersedeStale: true,
+    });
+    assert.equal(successor.ok, true);
+    assert.equal(successor.status, "claimed_new");
+    assert.equal(successor.previousRun.runId, "run-owner-a", "the fresh claim names the handed-off owner");
+    assert.equal("recovery" in successor, false, "a handoff successor displaces nobody, so it reports no recovery");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 // The expectation guard normalizes its input like every other run-id entry point,
 // so an absent, null or padded expectation behaves like an exact one.
 for (const form of [
@@ -1126,6 +1168,62 @@ for (const form of [
     }
   });
 }
+
+// A supplied `expectPreviousClaim` that is not an object cannot describe a claim
+// generation. Coercing it to an all-null generation would surface as a lost-race
+// `active_run_exists` diagnostic for input the caller never sent, so it refuses as
+// malformed instead — the same conflict a malformed `expectPreviousRunId` gets.
+for (const form of [
+  { label: "a string", expectation: "junk" },
+  { label: "a number", expectation: 42 },
+  { label: "an array", expectation: ["claimedAt", "updatedAt"] },
+]) {
+  test(`claimRunnerOwnership takeover refuses ${form.label} expectPreviousClaim`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+    try {
+      const owned = await claimRunnerOwnership({ repo: "owner/repo", pr: 43, runId: "run-1", cwd: tempDir });
+      const ownedBytes = await readFile(owned.filePath, "utf8");
+
+      const refused = await claimRunnerOwnership({
+        repo: "owner/repo",
+        pr: 43,
+        runId: "run-2",
+        cwd: tempDir,
+        mode: "takeover",
+        expectPreviousClaim: form.expectation,
+      });
+      assert.equal(refused.ok, false);
+      assert.equal(refused.error, "run_id_required");
+      assert.equal(await readFile(owned.filePath, "utf8"), ownedBytes, "a malformed expectation writes nothing");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
+// The expectation options are validated the same way in every mode, so a malformed
+// one is caller error on a default claim-mode call too, refused before the lock
+// with no coordination record written.
+test("claimRunnerOwnership refuses a malformed expectation in claim mode", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    const refused = await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 44,
+      runId: "run-1",
+      cwd: tempDir,
+      expectPreviousRunId: 42,
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.error, "run_id_required");
+    const filePath = defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 44 }, tempDir);
+    await assert.rejects(readFile(filePath, "utf8"), "a malformed expectation writes no coordination record");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
 
 test("ensureAsyncRunnerOwnership reports typed recovery evidence (stale max age)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));

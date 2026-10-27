@@ -536,9 +536,11 @@ Before standing down or deciding dispatch, verify actual execution with the harn
 `subagent status`: LIVE means an actively updating `EXECUTING` workflow child.
 A fresh claim heartbeat alone is insufficient; a completed/control run may have left it.
 
-A takeover reports which evidence authorized it as
-`recovery: { evidence: "exit_signal" | "stale_max_age", displacedRunId, maxAgeMs }` on the
-`runnerOwnership` result. A result that displaced nobody carries no `recovery` field, so a
+A takeover driven by the `copilot-pr-handoff` pre-flight (`supersedeStale: true`) reports which
+evidence authorized it as `recovery: { evidence: "exit_signal" | "stale_max_age", displacedRunId,
+maxAgeMs }` on the `runnerOwnership` result. The explicit `takeover` subcommand below carries no
+`recovery` field: it takes over on your instruction and reads no detector verdict. A result that
+displaced nobody carries no `recovery` field either, so a
 handback records a recovery only when that field is present — a plain fresh claim is never
 reported as a recovery.
 
@@ -552,7 +554,10 @@ node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs handoff \
 ```
 
 `handoff` appends the exit signal and clears the claim in one locked write, so the successor's
-pre-flight recovers deterministically, without waiting out the stale window. It adds no
+pre-flight finds no claim to recover: it takes the `no_owner_record` path, claims fresh and returns
+`claimed_new` with a `previousRun` naming the handed-off owner and no `recovery` field, without
+waiting out the stale window. A `recovery` field appears only when the successor actually displaces
+a claim. It adds no
 identity override: the run id comes from the verified runtime context, and `ownership_lost` or
 `run_id_required` exits 1 with no state write.
 
