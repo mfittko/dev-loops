@@ -156,6 +156,7 @@ const CODEX_DISCOVERY_REASONS = Object.freeze({
  * @returns {{ ok: true, file: string } | { ok: false, code: "entry_bound"|"not_regular_file"|"ambiguous"|"not_found"|"unreadable" }}
  */
 export function resolveCodexRolloutJournal({ threadId, env = process.env, fs = fsDefault } = {}) {
+  if (typeof threadId !== "string" || threadId === "") return { ok: false, code: "not_found" };
   const home = env?.CODEX_HOME || (env?.HOME ? path.join(env.HOME, ".codex") : path.join(os.homedir(), ".codex"));
   const createdAt = Number.parseInt(threadId.slice(0, 13).replaceAll("-", ""), 16);
   const matches = [];

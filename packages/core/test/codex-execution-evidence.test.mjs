@@ -249,6 +249,26 @@ test("C2: malformed JSON stays typed unknown and leaves the journal bytes unchan
   assert.equal(sha256(fs.readFileSync(file)), before);
 });
 
+test("C2: an unterminated trailing line is dropped rather than treated as a torn record", () => {
+  const root = makeTempRoot();
+  const file = path.join(root, "journal.jsonl");
+  fs.writeFileSync(file, `${JSON.stringify(commandExecution())}\n{"type":"event_msg","payload":{"item":{"type":"CommandExecu`);
+  // The dropped suffix can only remove evidence, so it never manufactures completion.
+  assert.equal(reconcile(file).status, EVIDENCE_STATUSES.COMPLETED);
+  fs.writeFileSync(file, `${JSON.stringify(commandExecution())}\nnot json`);
+  assert.equal(reconcile(file).status, EVIDENCE_STATUSES.COMPLETED);
+});
+
+test("C2: a journal with no execution records reports missing terminal evidence", () => {
+  for (const records of [[], [workerStop()]]) {
+    assertUnknown(reconcile(writeJournal(records)), EVIDENCE_REASONS.TERMINAL_RECORD_MISSING);
+  }
+  const root = makeTempRoot();
+  const empty = path.join(root, "empty.jsonl");
+  fs.writeFileSync(empty, "");
+  assertUnknown(reconcile(empty), EVIDENCE_REASONS.TERMINAL_RECORD_MISSING);
+});
+
 test("C2: the positive binding is what rejects the mismatches, not a permissive match", () => {
   // Same records, correct binding: completed. Each negative above differs in exactly one field.
   const records = [commandExecution()];
@@ -348,6 +368,8 @@ test("C3(d): a numeric session id stays an opaque string identifier", () => {
   assert.ok(!Object.keys(result.execution).some((key) => /pid/i.test(key)));
   assert.ok(!JSON.stringify(result).includes('"pid"'));
   // Even a purely numeric identifier is never coerced to a number.
+  // A non-string identifier is rejected as a malformed request, never coerced.
+  assertUnknown(reconcile(writeJournal([commandExecution()]), { executionId: 12938 }), EVIDENCE_REASONS.INVALID_REQUEST);
   const numeric = reconcile(writeJournal([commandExecution({ executionId: "12938" })]), { executionId: "12938" });
   assert.equal(numeric.execution.id, "12938");
   assert.notStrictEqual(numeric.execution.id, 12938);

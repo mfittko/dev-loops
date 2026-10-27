@@ -1,7 +1,7 @@
 /**
  * Read-only reconciliation of an owned Codex execution's terminal evidence.
  *
- * A stopped worker whose tool session has already recorded a terminal
+ * A stopped worker whose tool session already recorded a terminal
  * `CommandExecution` event is not a live process and not an unresolved cleanup
  * blocker. This adapter proves that from the owning native journal and reports a
  * typed result; it never probes, signals or controls a process.
@@ -9,12 +9,12 @@
  * ## Disclosed schema
  *
  * The table below is the complete set of JSON pointers this adapter reads. It is
- * derived from the real native journal named by the owning issue (the
- * `CommandExecution` item for tool session `12938`), not from a guessed schema.
- * A record whose disclosed pointer is absent, of another shape, or carrying an
- * undisclosed terminal-status value is schema drift and reconciles to `unknown`.
- * Additional keys present in the native record are ignored, not drift: the native
- * journal carries bookkeeping paths this adapter has no evidence use for.
+ * pinned from a real native journal, not a guessed schema. A record whose
+ * disclosed pointer is absent, of another shape, or carrying an undisclosed
+ * terminal-status value is schema drift and reconciles to `unknown`. Extra native
+ * keys are deliberately ignored rather than treated as drift: every real record
+ * carries bookkeeping paths this adapter has no evidence use for, so a literal
+ * unknown-key rule would reject the journal the table was derived from.
  *
  * | field | pointer | shape |
  * | --- | --- | --- |
@@ -30,12 +30,23 @@
  * | cwd | `/payload/item/cwd` | `file:` URI string |
  * | retainedOutput | `/payload/item/aggregated_output` | string |
  *
- * `executionId` binds to the journal's `process_id` path because that is where the
- * native journal records a tool session identifier. Despite the path name, that
- * value is an opaque identifier: it is never parsed as, or turned into, an OS
- * process identifier, and this module imports no process/spawn/signal surface.
- *
- * ## Typed result
+ * `executionId` binds to the journal's `process_id` path, where the native journal
+ * records a tool session identifier. Despite the name, that value stays an opaque
+ * identifier: it is never parsed as, or turned into, an OS process identifier.
+ */
+
+import crypto from "node:crypto";
+import fsDefault from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { resolveCodexRolloutJournal } from "./run-context.mjs";
+
+/** Disclosed terminal-status values of a `CommandExecution` item. */
+export const CODEX_TERMINAL_STATUSES = Object.freeze(["completed", "failed"]);
+
+/**
+ * The three typed reconciliation statuses.
  *
  * `completed` — exactly one terminal record binds to the supplied owner thread,
  * execution id, repository root and working directory. The recorded terminal
@@ -48,21 +59,7 @@
  *
  * `unsupported` — this runtime exposes no native Codex session store, so neither a
  * supported session/result API nor the journal is available.
- *
- * `cleanup.processProbeAllowed` is `false` on every path, and only `completed`
- * clears `cleanup.blocker`.
  */
-
-import crypto from "node:crypto";
-import fsDefault from "node:fs";
-import path from "node:path";
-
-import { resolveCodexRolloutJournal } from "./run-context.mjs";
-
-/** Disclosed terminal-status values of a `CommandExecution` item. */
-export const CODEX_TERMINAL_STATUSES = Object.freeze(["completed", "failed"]);
-
-/** The three typed reconciliation statuses. */
 export const EVIDENCE_STATUSES = Object.freeze({
   COMPLETED: "completed",
   UNKNOWN: "unknown",
@@ -94,6 +91,7 @@ export const EVIDENCE_REASONS = Object.freeze({
 const MAX_JOURNAL_BYTES = 32 * 1024 * 1024;
 
 const UUIDV7_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 
 const DISCOVERY_REASONS = Object.freeze({
   not_found: EVIDENCE_REASONS.OWNER_JOURNAL_NOT_FOUND,
@@ -158,7 +156,7 @@ function matchesShape(value, shape) {
     case "opaque_string":
       return typeof value === "string" && value.trim().length > 0;
     case "iso_timestamp":
-      return typeof value === "string" && !Number.isNaN(Date.parse(value));
+      return typeof value === "string" && ISO_TIMESTAMP_RE.test(value) && !Number.isNaN(Date.parse(value));
     case "terminal_status":
       return CODEX_TERMINAL_STATUSES.includes(value);
     case "integer":
@@ -186,6 +184,8 @@ function fileUriToPath(value) {
   try {
     const url = new URL(value);
     if (url.protocol !== "file:") return null;
+    // A foreign host is not this filesystem's authority; never coerce it to a local path.
+    if (url.host && url.host !== "localhost") return null;
     return path.resolve(decodeURIComponent(url.pathname));
   } catch {
     return null;
@@ -221,16 +221,16 @@ export function resolveCodexExecutionJournal({ ownerThreadId, env = process.env,
   if (typeof ownerThreadId !== "string" || !UUIDV7_RE.test(ownerThreadId)) {
     return { ok: false, reason: EVIDENCE_REASONS.INVALID_REQUEST };
   }
-  const home = env?.CODEX_HOME || (env?.HOME ? path.join(env.HOME, ".codex") : null);
-  const sessionsRoot = home ? path.join(home, "sessions") : null;
-  if (!sessionsRoot) return unsupported;
+  // Same home expression the shared discovery helper uses, so both read one place.
+  const home = env?.CODEX_HOME || (env?.HOME ? path.join(env.HOME, ".codex") : path.join(os.homedir(), ".codex"));
+  const sessionsRoot = path.join(home, "sessions");
   let sessionsStat;
   try {
     sessionsStat = fsImpl.statSync(sessionsRoot);
   } catch (error) {
     return error?.code === "ENOENT" ? unsupported : { ok: false, reason: EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE };
   }
-  if (!sessionsStat.isDirectory()) return unsupported;
+  if (!sessionsStat.isDirectory()) return { ok: false, reason: EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE };
   const found = resolveCodexRolloutJournal({ threadId: ownerThreadId, env, fs: fsImpl });
   return found.ok ? { ok: true, path: found.file } : { ok: false, reason: DISCOVERY_REASONS[found.code] ?? EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE };
 }
@@ -238,9 +238,7 @@ export function resolveCodexExecutionJournal({ ownerThreadId, env = process.env,
 /**
  * Reconcile one owned execution's terminal evidence from its journal.
  *
- * Read-only and deterministic: the journal is inspected and never written. The
- * `processProbe` option exists so a caller can inject a probe spy and prove that
- * no reconciliation path invokes it; it is never called.
+ * Read-only and deterministic: the journal is inspected and never written.
  *
  * @param {object} params
  * @param {string} params.ownerThreadId
@@ -251,7 +249,8 @@ export function resolveCodexExecutionJournal({ ownerThreadId, env = process.env,
  *   binding is still validated field by field.
  * @param {Record<string, string|undefined>} [params.env]
  * @param {typeof import("node:fs")} [params.fs]
- * @param {Function} [params.processProbe] - Never invoked.
+ * @param {Function} [params.processProbe] - Tripwire seam: accepted so a caller's
+ *   spy can prove non-invocation, and never called on any path.
  * @returns {{ status: string, reason: string, owner: object, execution: object|null, cleanup: object }}
  */
 export function reconcileCodexExecution({
@@ -295,10 +294,17 @@ export function reconcileCodexExecution({
   } catch {
     return unknown(EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE);
   }
+  // The append-only journal can grow between the stat and the read; bound the bytes actually loaded.
+  if (Buffer.byteLength(text, "utf8") > MAX_JOURNAL_BYTES) return unknown(EVIDENCE_REASONS.JOURNAL_EXCEEDS_BYTE_BOUND);
 
-  // An unparseable line means absence of evidence cannot be proven: fail closed.
+  const lines = text.split("\n");
+  // An unterminated trailing line may be a record still being flushed. Dropping it can
+  // only remove evidence, so it can never turn absence into completion.
+  if (text.length > 0 && !text.endsWith("\n")) lines.pop();
+
+  // An unparseable line inside the journal means absence of evidence cannot be proven.
   const items = [];
-  for (const line of text.split("\n")) {
+  for (const line of lines) {
     if (line.trim() === "") continue;
     let record;
     try {
@@ -308,9 +314,10 @@ export function reconcileCodexExecution({
     }
     if (isCommandExecutionItem(record)) items.push(record);
   }
+  if (items.length === 0) return unknown(EVIDENCE_REASONS.TERMINAL_RECORD_MISSING);
 
   const owned = items.filter((record) => pointerValue(record, "/payload/thread_id") === ownerThreadId);
-  if (items.length > 0 && owned.length === 0) return unknown(EVIDENCE_REASONS.OWNER_THREAD_MISMATCH);
+  if (owned.length === 0) return unknown(EVIDENCE_REASONS.OWNER_THREAD_MISMATCH);
 
   const terminals = owned
     .filter((record) => pointerValue(record, "/payload/type") === "item_completed")
