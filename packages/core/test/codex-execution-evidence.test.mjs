@@ -321,6 +321,12 @@ test("C2: the positive binding is what rejects the mismatches, not a permissive 
   // A sibling worktree of the same repository is still a different cwd.
   const sibling = reconcile(writeJournal([commandExecution({ cwd: `file://${REPO_ROOT}/tmp/worktrees/dev-loops/issue-2950` })]));
   assertUnknown(sibling, EVIDENCE_REASONS.CWD_MISMATCH);
+  // A sibling directory that merely shares the root's name prefix is not a child: only
+  // the separator in the containment guard keeps the two apart, so a plain prefix match
+  // would accept this recorded cwd and report completed.
+  const siblingRoot = "/work/dev-loops-other/tmp/w";
+  const prefixed = reconcile(writeJournal([commandExecution({ cwd: `file://${siblingRoot}` })]), { cwd: siblingRoot });
+  assertUnknown(prefixed, EVIDENCE_REASONS.REPOSITORY_ROOT_MISMATCH);
 });
 
 test("C2: an unresolvable owner journal stays typed unknown and never guesses", () => {
@@ -417,6 +423,23 @@ test("C2: a sessions entry that is not a directory is unreadable, not unsupporte
   assertUnknown(reconcileCodexExecution({
     ownerThreadId: OWNER, executionId: EXECUTION, repoRoot: REPO_ROOT, cwd: WORKTREE, env,
   }), EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE);
+  // Only an absent store is the unsupported capability report; every other stat failure
+  // on the sessions root is a store that exists and cannot be read, so a permission error
+  // must never be answered as "this runtime has no native store".
+  const statError = (code) => ({ ...fs, statSync() { throw Object.assign(new Error(code), { code }); } });
+  for (const [code, expected] of [["EACCES", EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE], ["EIO", EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE]]) {
+    const request = { ownerThreadId: OWNER, executionId: EXECUTION, repoRoot: REPO_ROOT, cwd: WORKTREE, env, fs: statError(code) };
+    assert.deepEqual(resolveCodexExecutionJournal({ ownerThreadId: OWNER, env, fs: statError(code) }),
+      { ok: false, reason: expected }, `${code} on the sessions root is ${expected}`);
+    assertUnknown(reconcileCodexExecution(request), expected);
+  }
+  assert.deepEqual(resolveCodexExecutionJournal({ ownerThreadId: OWNER, env, fs: statError("ENOENT") }),
+    { ok: false, reason: EVIDENCE_REASONS.UNSUPPORTED_RUNTIME_CAPABILITY });
+  const noStore = reconcileCodexExecution({
+    ownerThreadId: OWNER, executionId: EXECUTION, repoRoot: REPO_ROOT, cwd: WORKTREE, env, fs: statError("ENOENT"),
+  });
+  assert.equal(noStore.status, EVIDENCE_STATUSES.UNSUPPORTED);
+  assert.equal(noStore.reason, EVIDENCE_REASONS.UNSUPPORTED_RUNTIME_CAPABILITY);
 });
 
 test("C2: the adapter probes the same native root the shared discovery helper scans", () => {
@@ -470,6 +493,17 @@ function withoutOwnerPointer() {
   delete record.payload.thread_id;
   return record;
 }
+
+test("C2: a CommandExecution execution-id pointer that is absent or not a string is schema drift", () => {
+  // Accepted: the requested execution's string process_id binds normally.
+  assert.equal(reconcile(writeJournal([commandExecution()])).status, EVIDENCE_STATUSES.COMPLETED);
+  // Rejected: a numeric process_id never enters the equality filter, so without the shape
+  // guard it would surface as a wrong execution id and mislabel drift as the wrong class.
+  assertUnknown(reconcile(writeJournal([commandExecution({ executionId: 12938 })])), EVIDENCE_REASONS.SCHEMA_DRIFT);
+  // Rejected: the pointer absent and the pointer blank are drift too, never a mismatch.
+  assertUnknown(reconcile(writeJournal([commandExecution({ item: { process_id: undefined } })])), EVIDENCE_REASONS.SCHEMA_DRIFT);
+  assertUnknown(reconcile(writeJournal([commandExecution({ executionId: "" })])), EVIDENCE_REASONS.SCHEMA_DRIFT);
+});
 
 // ---------------------------------------------------------------------------
 // C3 — an uncollected session is never evidence of a live process.

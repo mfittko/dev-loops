@@ -56,9 +56,14 @@ export const CODEX_TERMINAL_STATUSES = Object.freeze(["completed", "failed"]);
  * timestamp, exit status, exit code, command, cwd and a digest of the retained
  * output are reported unchanged; the journal is never rewritten.
  *
- * `unknown` — every other readable-journal outcome: absent, mismatched or
- * conflicting evidence, malformed records, a record still landing at the journal's
- * end and schema drift. It is never reported as completion and never as a live process.
+ * `unknown` — absent, malformed, conflicting or unsupported records, the C2 row of the
+ * owning issue (issue 2886). This adapter reports it as: evidence that is missing or
+ * mis-bound to another owner thread, execution id, repository root or working
+ * directory; malformed records; conflicting terminal records; schema drift, an absent
+ * or reshaped disclosed pointer; a record still landing at the journal's end; and every
+ * owner journal it cannot reach — undiscoverable (not found, ambiguous or past the
+ * discovery entry bound), unreadable, not a regular file, or over the 32 MiB read bound.
+ * It is never reported as completion and never as a live process.
  *
  * `unsupported` — this runtime exposes no native Codex session store, so neither a
  * supported session/result API nor the journal is available.
@@ -432,6 +437,13 @@ export function reconcileCodexExecution({
     if (isCommandExecutionItem(record)) items.push(record);
   }
   if (items.length === 0) return unknown(EVIDENCE_REASONS.TERMINAL_RECORD_MISSING);
+
+  // A `CommandExecution` item whose execution-id pointer is absent or not a non-empty
+  // string is malformed, not a wrong execution: the equality filter below would drop it
+  // and report `execution_id_mismatch`, labelling shape drift with the wrong failure class.
+  if (items.some((record) => !matchesShape(pointerValue(record, "/payload/item/process_id"), "opaque string"))) {
+    return unknown(EVIDENCE_REASONS.SCHEMA_DRIFT);
+  }
 
   const executionItems = items.filter((record) => pointerValue(record, "/payload/item/process_id") === executionId);
   // A record for the requested execution whose owner pointer is absent or not a UUIDv7
