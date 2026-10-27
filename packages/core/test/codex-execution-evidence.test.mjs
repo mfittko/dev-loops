@@ -23,6 +23,7 @@ import {
   reconcileCodexExecution,
   resolveCodexExecutionJournal,
 } from "../src/loop/codex-execution-evidence.mjs";
+import * as evidenceModule from "../src/loop/codex-execution-evidence.mjs";
 
 const OWNER = "01a15929-c860-7690-86d8-50f51506a786";
 const OTHER_OWNER = "01a15922-5286-7900-b26d-ca2fe181cb85";
@@ -331,9 +332,12 @@ test("C3(a): only completed clears the cleanup blocker, and probing is never all
   assert.deepEqual(classifyCleanup(undefined), { blocker: "unknown", processProbeAllowed: false });
 });
 
-test("C3(b): an injected process probe is never called on any reconciliation path", () => {
-  const calls = [];
-  const processProbe = (identity) => { calls.push(identity); return { alive: true }; };
+test("C3(b): the adapter exposes no process-probe entry point on any reconciliation path", () => {
+  // Stronger than an injected spy that is never called: the module cannot be handed a
+  // probe at all, so no caller and no future path can probe through this surface.
+  for (const name of Object.keys(evidenceModule)) {
+    assert.ok(!/probe|spawn|kill|signal|pid/i.test(name), `unexpected process-shaped export ${name}`);
+  }
   const paths = [
     [workerStop(), commandExecution()],
     [commandExecution({ threadId: OTHER_OWNER })],
@@ -342,15 +346,15 @@ test("C3(b): an injected process probe is never called on any reconciliation pat
     [commandExecution({ status: "interrupted" })],
   ];
   for (const records of paths) {
-    const result = reconcile(writeJournal(records), { processProbe });
+    const result = reconcile(writeJournal(records), { processProbe: () => { throw new Error("probe invoked"); } });
     assert.equal(result.cleanup.processProbeAllowed, false);
+    assert.ok(!Object.keys(result.cleanup).some((key) => /probe/i.test(key) && key !== "processProbeAllowed"));
   }
   const unsupported = reconcileCodexExecution({
-    ownerThreadId: OWNER, executionId: EXECUTION, repoRoot: REPO_ROOT, cwd: WORKTREE, processProbe,
+    ownerThreadId: OWNER, executionId: EXECUTION, repoRoot: REPO_ROOT, cwd: WORKTREE,
     env: { CODEX_HOME: makeTempRoot() },
   });
   assert.equal(unsupported.status, EVIDENCE_STATUSES.UNSUPPORTED);
-  assert.deepEqual(calls, []);
 });
 
 test("C3(c): the adapter imports no process, spawn or kill surface", () => {

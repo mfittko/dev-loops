@@ -249,8 +249,6 @@ export function resolveCodexExecutionJournal({ ownerThreadId, env = process.env,
  *   binding is still validated field by field.
  * @param {Record<string, string|undefined>} [params.env]
  * @param {typeof import("node:fs")} [params.fs]
- * @param {Function} [params.processProbe] - Tripwire seam: accepted so a caller's
- *   spy can prove non-invocation, and never called on any path.
  * @returns {{ status: string, reason: string, owner: object, execution: object|null, cleanup: object }}
  */
 export function reconcileCodexExecution({
