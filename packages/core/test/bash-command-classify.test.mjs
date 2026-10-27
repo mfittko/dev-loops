@@ -148,6 +148,10 @@ test("isMergeCapableCommand detects gh pr merge / git merge, ignores aborts and 
   assert.equal(isMergeCapableCommand("git merge --abort"), false);
   assert.equal(isMergeCapableCommand("gh pr merge --help"), false);
   assert.equal(isMergeCapableCommand("npm test"), false);
+  // a redirection `&` stays inside its segment; a plain background `&` still splits
+  assert.equal(isMergeCapableCommand("gh pr merge 5 2>&1"), true);
+  assert.equal(isMergeCapableCommand("gh pr merge 5 &>/dev/null"), true);
+  assert.equal(isMergeCapableCommand("echo hi & gh pr merge 5"), true);
   // merge-pr.mjs runs the post-merge steps itself; the hooks must not re-run them.
   assert.equal(isMergeCapableCommand("node scripts/github/merge-pr.mjs --repo o/r --pr 5 --human-approved-by mfittko"), false);
 });
@@ -833,7 +837,21 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   assert.equal(commandContainsInlineInterpreter('python -c "print(1)"'), true);
   assert.equal(commandContainsInlineInterpreter("python3 - <<'EOF'\n...\nEOF"), true);
   assert.equal(commandContainsInlineInterpreter("node - <<'EOF'\n...\nEOF"), true);
+  // stdin script / heredoc AFTER interpreter flags (#2943)
+  for (const c of ["python3 -I - <<EOF", "python3 -u - <<'EOF'", "node --input-type=module - <<EOF", "node - <<EOF", "node --input-type=module <<EOF", "python3 -I -<<EOF", "python3 -I<<EOF", "node --input-type=module<<EOF", "node --env-file-if-exists .env - <<EOF", "python3 -W ignore - <<EOF", "python3 -X dev - <<EOF", "node --input-type module - <<EOF", "node --require x.js - <<EOF", "cat s.py | python3 -I -", "cat x.mjs | node --input-type=module -", "node --title x - <<EOF", "node --disable-warning DEP0040 - <<EOF", "node --watch-path src - <<EOF", "node --redirect-warnings w.log - <<EOF", "python3 --check-hash-based-pycs never - <<EOF", "node --unhandled-rejections strict - <<EOF", "node --stack-size 2000 - <<EOF", "node --trace-event-categories v8 - <<EOF", "node --experimental-config-file node.config.json - <<EOF", "node --experimental-sea-config sea.json - <<EOF", "node --diagnostic-dir /tmp - <<EOF", "node --require x.js<<EOF", "node --stack-size 2000<<EOF", "node --unhandled-rejections strict<<EOF", "python3 -W ignore<<EOF", "node --unhandled-rejections strict --stack-size 2000 - <<EOF", "node --stack-size 2000 --input-type=module - <<EOF", "python3 -I 2>&1 <<EOF", "node --input-type=module 2>/dev/null <<EOF", "python3 -I 0<<EOF", "python3 -IW ignore - <<EOF", "python3 -I 2>&1<<EOF", "node --input-type=module 2>/dev/null<<EOF", "node --test-reporter ./r.mjs - <<EOF"]) {
+    assert.equal(commandContainsInlineInterpreter(c), true, c);
+  }
+  for (const c of ["node --no-warnings ./node_modules/.bin/tsc -p tsconfig.json", "node --no-warnings bin/cli -", "python3 -I script.py", "node scripts/x.mjs", "python3 script.py <<EOF", "grep node <<EOF", "node scripts/x.mjs --flag -", "node --require x.js script.mjs", "python3 -m json.tool <<EOF", "python3 script.py<<EOF", "node --env-file-if-exists .env scripts/x.mjs", "node --title x scripts/x.mjs", "node --disable-warning DEP0040 scripts/x.mjs", "python3 --check-hash-based-pycs never script.py", "node --require ./setup.js scripts/x.mjs", "node --env-file=.env scripts/x.mjs", "node scripts/x.mjs<<EOF", "node --no-warnings scripts/x.mjs<<EOF", "node --no-warnings scripts/x.mjs<<'EOF'", "node --no-warnings scripts/x.mjs --body-file - <<EOF", "node --trace-warnings scripts/x.mjs --body-file -", "node --experimental-strip-types scripts/x.ts -e foo", "node -- scripts/x.mjs -p 1", "python3 script.py 2>&1", "node --no-warnings \"scripts/x.mjs\" --body-file - <<EOF"]) {
+    assert.equal(commandContainsInlineInterpreter(c), false, c);
+  }
   // sanctioned script invocations and plain reads are NOT inline interpreters
+  for (const c of ["node --experimental-config-file ./node.config.json - <<EOF", "node --experimental-sea-config ./sea.json - <<EOF", "node --trace-event-file-pattern ./trace.log - <<EOF"]) {
+    assert.equal(commandContainsInlineInterpreter(c), true, c);
+  }
+  for (const c of ["node --experimental-config-file ./node.config.json scripts/x.mjs", "node --experimental-sea-config ./sea.json scripts/x.mjs"]) {
+    assert.equal(commandContainsInlineInterpreter(c), false, c);
+  }
+
   assert.equal(commandContainsInlineInterpreter("node scripts/github/comment-issue.mjs 5"), false);
   assert.equal(commandContainsInlineInterpreter("node -v"), false);
   assert.equal(commandContainsInlineInterpreter("python3 script.py"), false);
@@ -847,6 +865,13 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   assert.equal(commandContainsInlineInterpreter('command python3 -c "print(1)"'), true);
   // a value-taking flag BEFORE the interpreter flag must not break the scan for -e/--eval
   assert.equal(commandContainsInlineInterpreter('node --require ./setup.js -e "console.log(1)"'), true);
+  // path-valued node flags with a relative value must not hide a stdin script
+  for (const c of ["node --report-dir out/r - <<EOF", "node --diagnostic-dir ./d - <<EOF", "node --cpu-prof-dir p/x - <<EOF", "node --test-reporter-destination out/x.txt - <<EOF"]) {
+    assert.equal(commandContainsInlineInterpreter(c), true, c);
+  }
+  for (const c of ["node --require ./setup.js scripts/x.mjs", "node --report-dir out/r scripts/x.mjs", "node scripts/x.mjs"]) {
+    assert.equal(commandContainsInlineInterpreter(c), false, c);
+  }
   assert.equal(commandContainsInlineInterpreter('node -r ./x.js --eval "1+1"'), true);
   assert.equal(commandContainsInlineInterpreter('node --import ./m.mjs -p "1+1"'), true);
 });
@@ -1400,4 +1425,20 @@ test("commandContainsTimeoutWrappedSanctionedTool stays linear on long path-like
   assert.equal(commandContainsTimeoutWrappedSanctionedTool(`timeout 5 ${"a/".repeat(5000)}!`), false);
   assert.equal(commandContainsTimeoutWrappedSanctionedTool(`timeout 5 ${"scripts/github/".repeat(5000)}x.mjs`), true);
   assert.ok(Date.now() - started < 1000, "classification must not backtrack catastrophically");
+});
+
+test("review fixes (#2943): escaped redirect operator, spaced redirection heredoc, boolean node flag", () => {
+  // an escaped `\>` is a literal, so the following `&` still separates the merge command
+  assert.equal(commandContainsGhPrMerge("echo \\>& gh pr merge 5"), true);
+  assert.equal(isMergeCapableCommand("echo \\>& gh pr merge 5"), true);
+  // a real `>&` redirection is still not a separator
+  assert.equal(commandContainsGhPrMerge("echo hi >&2"), false);
+  // a spaced redirection operator whose target carries the heredoc
+  for (const c of ["python3 -I 2> /dev/null<<EOF", "node --input-type=module 2> /dev/null<<EOF"]) {
+    assert.equal(commandContainsInlineInterpreter(c), true, c);
+  }
+  // a script name after a boolean long flag is the script, not a flag value
+  for (const c of ["node --no-warnings tool -p 1", "node --no-warnings /tmp/tool --body-file -"]) {
+    assert.equal(commandContainsInlineInterpreter(c), false, c);
+  }
 });
