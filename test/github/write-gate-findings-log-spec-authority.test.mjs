@@ -93,6 +93,37 @@ test("a pr_scope identity with a finding_conflicts sibling on scope:1 persists e
   });
 });
 
+test("a cluster-keyed sibling decision covers every member; a conflicting member decision refuses", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-cluster-"));
+  try {
+    const judgeVerdict = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdict, JSON.stringify({
+      headSha: HEAD,
+      scopeDrift: { verdict: "within_scope", rationale: "in scope", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "act", title: "t", detail: "d", fix: "f", reason: "r", rationale: "relevant" }],
+    }), "utf8");
+    const specAuthority = path.join(tmpDir, "identity.json");
+    await writeFile(specAuthority, JSON.stringify({ specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds }), "utf8");
+    const compliant = (index) => decision(index, "valid_compliant", { authorizedRemediation: "fix it", defectClass: "c", siteQuery: "q" });
+    const run = () => writeGateFindingsLog({
+      repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: HEAD, verdict: "clean",
+      findings: JSON.stringify([
+        { severity: "low", angle: "docs", summary: "gap", clusterId: 0 },
+        { severity: "low", angle: "docs", summary: "same gap", clusterId: 0 },
+      ]),
+      judgeVerdict, specAuthority, tmpRoot: tmpDir,
+    });
+    const sibling = path.join(tmpDir, "spec-authority-verdict.json");
+    await writeFile(sibling, JSON.stringify({ ...VERDICT, decisions: [compliant(0)] }), "utf8");
+    await run();
+    await access(path.join(tmpDir, LEDGER));
+    await writeFile(sibling, JSON.stringify({ ...VERDICT, decisions: [compliant(0), decision(1, "finding_conflicts", { conflictingCriteria: [criterionIds[0]] })] }), "utf8");
+    await assert.rejects(run(), /\[spec_authority_cluster_conflict\]/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("an absent sibling spec-authority verdict keeps the judge dispositions", async () => {
   await withCase({}, async ({ run, ledgerPath }) => {
     await run();

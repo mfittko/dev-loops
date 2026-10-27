@@ -34,6 +34,9 @@ Fail-closed default: when the body carries no matrix, or `detectAcDodMatrix` rep
 <!-- rule: SPEC-AUTHORITY-WHOLE-SPEC-EVAL -->
 `SPEC-AUTHORITY-WHOLE-SPEC-EVAL`: for every finding the judge evaluates the finding AND each proposed remediation against the COMPLETE authoritative AC/DoD/Non-goals identified by `specDigest`. A citation to one supportive criterion is insufficient: a decision's `checkedCriteria` MUST cover every criterion id or it cannot produce a valid disposition (fail closed).
 
+<!-- rule: SPEC-AUTHORITY-CLUSTER-EXPANSION -->
+`SPEC-AUTHORITY-CLUSTER-EXPANSION`: the judge keys each decision by `clusterId`. The validator expands that decision to every member finding of the cluster before the coverage check. A finding in no decided cluster refuses with `spec_authority_uncovered_finding`. A member whose own decision has a different outcome from its cluster decision refuses with `spec_authority_cluster_conflict`.
+
 The judge selects exactly one named, machine-readable outcome per finding:
 
 | Outcome | Meaning | Resolution |
