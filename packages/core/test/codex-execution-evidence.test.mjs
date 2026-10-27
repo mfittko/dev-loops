@@ -240,6 +240,17 @@ const NEGATIVES = [
     records: [commandExecution(), commandExecution({ exitCode: 0, status: "completed", timestamp: "2026-10-20T11:59:41.101Z" })],
     reason: EVIDENCE_REASONS.CONFLICTING_TERMINAL_RECORDS,
   },
+  {
+    // The second terminal binds to another valid thread, so it is not owner-scoped: it is
+    // still a terminal record for the same execution, and the owner's own journal carrying
+    // two contradictory terminal results is the conflict class, not completion.
+    name: "a terminal for the same execution under another valid thread",
+    records: [
+      commandExecution(),
+      commandExecution({ threadId: OTHER_OWNER, exitCode: 0, status: "completed", timestamp: "2026-10-20T11:59:41.101Z" }),
+    ],
+    reason: EVIDENCE_REASONS.CONFLICTING_TERMINAL_RECORDS,
+  },
 ];
 
 for (const negative of NEGATIVES) {

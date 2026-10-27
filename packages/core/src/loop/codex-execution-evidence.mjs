@@ -484,6 +484,12 @@ export function reconcileCodexExecution({
   const owned = items.filter((record) => pointerValue(record, "/payload/thread_id") === ownerThreadId);
   if (owned.length === 0) return unknown(EVIDENCE_REASONS.OWNER_THREAD_MISMATCH);
 
+  // The conflict guard counts every terminal record for the requested execution, not the
+  // owner-bound subset: the zero-terminal branch below already treats a foreign-thread
+  // terminal as evidence (`owner_thread_mismatch`), so hiding it once an owned terminal
+  // exists would report `completed` over a contradictory terminal result.
+  if (executionItems.filter(isTerminalRecord).length > 1) return unknown(EVIDENCE_REASONS.CONFLICTING_TERMINAL_RECORDS);
+
   const terminals = owned
     .filter(isTerminalRecord)
     .filter((record) => pointerValue(record, "/payload/item/process_id") === executionId);
@@ -493,7 +499,6 @@ export function reconcileCodexExecution({
     if (executionItems.some(isTerminalRecord)) return unknown(EVIDENCE_REASONS.OWNER_THREAD_MISMATCH);
     return unknown(executionItems.length > 0 ? EVIDENCE_REASONS.TERMINAL_RECORD_MISSING : EVIDENCE_REASONS.EXECUTION_ID_MISMATCH);
   }
-  if (terminals.length > 1) return unknown(EVIDENCE_REASONS.CONFLICTING_TERMINAL_RECORDS);
 
   const record = terminals[0];
   if (!isDisclosedRecord(record)) return unknown(EVIDENCE_REASONS.SCHEMA_DRIFT);
