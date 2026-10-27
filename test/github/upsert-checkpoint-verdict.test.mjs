@@ -9808,6 +9808,7 @@ function makeAcRunChild({
   failBodyEdit = false,
   // Fail every `gh issue view` after this many successful ones (null: never).
   failIssueViewAfter = null,
+  failIssueViewCount = Infinity,
 } = {}) {
   const calls = [];
   const control = { failBodyEdit };
@@ -9837,7 +9838,12 @@ function makeAcRunChild({
     // gh issue view <n> --json body — the linked-issue spec-of-record fetch.
     if (args[0] === "issue" && args[1] === "view") {
       const issue = args[2];
-      if (failIssueViewAfter !== null && issueViews++ >= failIssueViewAfter) return { code: 1, stdout: "", stderr: "HTTP 502: issue view failed\n" };
+      // A PR is also an issue: the live PR body, after any concurrent edit.
+      if (issue === "17") {
+        if (control.concurrentPrBody !== undefined) currentPrBody = control.concurrentPrBody;
+        return { code: 0, stdout: JSON.stringify({ body: currentPrBody }) + "\n", stderr: "" };
+      }
+      if (failIssueViewAfter !== null && issueViews++ >= failIssueViewAfter && issueViews <= failIssueViewAfter + failIssueViewCount) return { code: 1, stdout: "", stderr: "HTTP 502: issue view failed\n" };
       const body = issueBodies[issue];
       if (body === undefined) return { code: 1, stdout: "", stderr: "not found\n" };
       return { code: 0, stdout: JSON.stringify({ body }) + "\n", stderr: "" };
@@ -10685,15 +10691,16 @@ const COMPOSITION_UNCHECKED_AC_PR_BODY = [
   "- none", "",
 ].join("\n");
 
-function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKED_AC_ISSUE_BODY, failBodyEdit = false, failIssueViewAfter = null, closingIssues = [900] } = {}) {
+function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKED_AC_ISSUE_BODY, failBodyEdit = false, failIssueViewAfter = null, failIssueViewCount, closingIssues = [900], extraIssueBodies = {} } = {}) {
   return makeAcRunChild({
     isDraft: false,
     // Only issue 900 has a body; any other linked issue fails every fetch.
     closingIssues: closingIssues.map((number) => ({ number })),
-    issueBodyByNumber: { 900: issueBody },
+    issueBodyByNumber: { 900: issueBody, ...extraIssueBodies },
     prBody,
     failBodyEdit,
     failIssueViewAfter,
+    failIssueViewCount,
     reviews: [1, 2, 3, 4, 5].map((i) => ({
       author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
       submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
@@ -10715,14 +10722,14 @@ function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKE
 // fresh acceptance-criteria (or pr-checklist) review.
 const TICK_PROVENANCE = { distinctReviewers: 1, perAngle: [{ angle: "acceptance-criteria", reviewer: "reviewer-ac" }] };
 
-async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [], verifiedItems, provenance = verifiedItems === undefined ? undefined : TICK_PROVENANCE, issueBody, failBodyEdit, failIssueViewAfter, closingIssues, findings }, fn) {
+async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [], verifiedItems, provenance = verifiedItems === undefined ? undefined : TICK_PROVENANCE, issueBody, failBodyEdit, failIssueViewAfter, failIssueViewCount, closingIssues, extraIssueBodies, findings }, fn) {
   const repoRoot = await stageConfigRepoRoot(requireFanoutEvidence);
   try {
     const ledgerPath = await writeVerdictLedger(repoRoot, { overallVerdict, gate, verifiedItems, provenance, findings });
     const ledgerBefore = await readFile(ledgerPath, "utf8");
     const { runChild, calls, editedBodies, control } = gate === "draft_gate"
       ? makeAcRunChild({ isDraft: true, prBody })
-      : makeCompositionRunChild(prBody, extraComments, { issueBody, failBodyEdit, failIssueViewAfter, closingIssues });
+      : makeCompositionRunChild(prBody, extraComments, { issueBody, failBodyEdit, failIssueViewAfter, failIssueViewCount, closingIssues, extraIssueBodies });
     const post = (overrides = {}) => upsertCheckpointVerdict({
       repo: "owner/repo", pr: 17, gate, headSha: GATE_FULL_HEAD,
       findingsSummary: "review round summary",
@@ -11095,8 +11102,8 @@ const TICK_ISSUE_BODY_WITH_UNVERIFIED = [
 const reviewPosted = (calls) => calls.some((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
 
 test("tick: a failed post-tick issue re-fetch cannot drop the unverified issue AC item, so no clean is posted", async () => {
-  // Views 1-3 (coordination load, tick fetch, edit-issue guard body read) succeed; the reload re-fetch fails.
-  const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: TICK_ISSUE_BODY_WITH_UNVERIFIED, failIssueViewAfter: 3 };
+  // Views 1-2 (coordination load, tick fetch) succeed; the dry-run reload re-fetch fails.
+  const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: TICK_ISSUE_BODY_WITH_UNVERIFIED, failIssueViewAfter: 2, failIssueViewCount: 1 };
   await withCompositionRound(round, async ({ post, calls }) => {
     await assert.rejects(
       () => post({ verdict: "clean", findingsSeverityCounts: CLEAN_COUNTS }),
@@ -12309,29 +12316,74 @@ test("deriveEffectiveNextAction derives from the act list on review, draft_gate 
   assert.equal(deriveEffectiveNextAction("clean", "pre_approval_gate", []), null);
 });
 
-test("tick (#2898): a refused verdict post changes no PR body", async () => {
-  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS }, async ({ post, calls, editedBodies }) => {
+const bodyEdits = (calls) => calls.filter((c) => c.args[1] === "edit" && (c.args.includes("--body") || c.args.includes("--body-file")));
+const openAct = (extra) => ({ angle: "acceptance-criteria", severity: "medium", summary: "no evidence for that row", judgeDisposition: "act", ...extra });
+const UNTICKED_TICK_ISSUE_BODY = ["## Acceptance criteria", "", "- [ ] criterion number 1", "- [ ] criterion number 2", ""].join("\n");
+
+test("tick (#2898): a refused verdict post changes no PR body and no issue body", async () => {
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, issueBody: UNTICKED_TICK_ISSUE_BODY, verifiedItems: TICK_ITEMS }, async ({ post, calls, editedBodies }) => {
     await assert.rejects(() => post({ verdict: "clean", findingsSeverityCounts: CLEAN_COUNTS }), /contradicts the consolidated ledger/);
     assert.equal(editedBodies.length, 0);
-    assert.equal(calls.some((c) => c.args[1] === "edit" && (c.args.includes("--body") || c.args.includes("--body-file"))), false);
+    assert.equal(bodyEdits(calls).length, 0);
   });
 });
 
-test("tick (#2898): a row an open act item names stays unticked; the other verified rows are ticked", async () => {
-  const act = { angle: "acceptance-criteria", severity: "medium", summary: "no evidence for that row", judgeDisposition: "act", judgeCriterion: TICK_ITEMS[12] };
-  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [act] }, async ({ post, editedBodies }) => {
+test("tick (#2898): a row an open act item names by label stays unticked; a criterion with a prefix or a surrounding clause names it too", async () => {
+  for (const judgeCriterion of [TICK_ITEMS[12], `DoD: ${TICK_ITEMS[12]}`, `the row ${TICK_ITEMS[12]} has no evidence`]) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
+      await post();
+      assert.equal(editedBodies.length, 1);
+      assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${TICK_ITEMS[12]}$`, "m"));
+      assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[1]}$`, "m"));
+    });
+  }
+  // A criterion that does not contain the label names nothing: every verified row is ticked.
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion: "an unrelated clause" })] }, async ({ post, editedBodies }) => {
     await post();
-    assert.equal(editedBodies.length, 1);
-    assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${TICK_ITEMS[12]}$`, "m"));
+    assert.doesNotMatch(editedBodies[0].body, /- \[ \]/);
+  });
+});
+
+test("tick (#2898): a spec id (dod:<n> / ac:<n>) skips every PR row of its category, whatever order the PR body lists them", async () => {
+  const dod = ["dod:1", "dod:0 The tick never flips a row that an open act item names."];
+  for (const judgeCriterion of dod) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
+      await post();
+      for (const item of TICK_ITEMS.slice(12)) assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${item}$`, "m"));
+      for (const item of TICK_ITEMS.slice(0, 12)) assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${item}$`, "m"));
+    });
+  }
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion: "ac:0" })] }, async ({ post, editedBodies }) => {
+    await post();
+    for (const item of TICK_ITEMS.slice(0, 12)) assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${item}$`, "m"));
+    for (const item of TICK_ITEMS.slice(12)) assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${item}$`, "m"));
+  });
+});
+
+test("tick (#2898): an open act item carrying checkedCriteria and no judgeCriterion keeps the named category unticked", async () => {
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ checkedCriteria: ["dod:1"] })] }, async ({ post, editedBodies }) => {
+    await post();
+    for (const item of TICK_ITEMS.slice(12)) assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${item}$`, "m"));
     assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[0]}$`, "m"));
   });
 });
 
-test("tick (#2898): a row an open act item names by spec id (dod:<n>) stays unticked", async () => {
-  const act = { angle: "acceptance-criteria", severity: "medium", summary: "no evidence for that row", judgeDisposition: "act", judgeCriterion: "dod:1" };
-  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [act] }, async ({ post, editedBodies }) => {
-    await post();
-    assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${TICK_ITEMS[13]}$`, "m"));
-    assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[12]}$`, "m"));
+test("tick (#2898): the deferred write re-applies the tick to the live body and keeps a concurrent edit", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS }, async ({ post, editedBodies, control }) => {
+    control.concurrentPrBody = `${TICK_PR_BODY}\nConcurrent note added during the round.\n`;
+    await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(editedBodies.length, 1);
+    assert.match(editedBodies[0].body, /^Concurrent note added during the round\.$/m);
+    for (const item of TICK_ITEMS) assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${item}$`, "m"));
+  });
+});
+
+test("tick (#2898): the dry-run artifact keeps an issue's unticked AC row that only the reload reads", async () => {
+  const extraIssueBodies = { 901: ["## Acceptance criteria", "", "- [ ] only the reload sees this row", ""].join("\n") };
+  // View 1 (coordination load of issue 901) fails once; the tick fetch and the reload then read issue 900 and 901.
+  const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: UNTICKED_TICK_ISSUE_BODY, closingIssues: [900, 901], extraIssueBodies, failIssueViewAfter: 1, failIssueViewCount: 1 };
+  await withCompositionRound(round, async ({ post }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.deepEqual(result.gateBlockers, [{ kind: "unticked spec-of-record Acceptance criteria", item: "only the reload sees this row" }]);
   });
 });

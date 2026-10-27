@@ -37,8 +37,10 @@ At least one edit:
   --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
                                 refuse a body that embeds grill
                                 transcript/synthesis/Q&A headings.
-  --allow-untick                Allow a body that turns a ticked \`[x]\` checkbox row
-                                into \`[ ]\` (refused by default, naming the rows).
+  --allow-untick                Allow a body that unticks or removes a checked
+                                \`[x]\` checkbox row (a flip to \`[ ]\`, a delete
+                                or a reworded label; refused by default, naming
+                                the rows).
   --allow-cross-issue           Waive the branch-derived closing-reference
                                 mismatch guard for a deliberate cross-issue
                                 reference. By default a new body whose closing
@@ -305,12 +307,19 @@ async function buildEditArgs(options) {
   return { args, edited };
 }
 
-// Labels of `[x]` rows in currentBody that nextBody no longer carries as `[x]`.
+// Labels of `[x]` rows in currentBody that nextBody no longer carries as `[x]`:
+// unticked, deleted or reworded rows, across every checkbox in the body. Counts
+// per label, so one lost occurrence of a duplicated label is reported.
 const CHECKBOX_ROW = /^\s*[-*]\s+\[([ xX])\]\s+(.+?)\s*$/u;
 function untickedRows(currentBody, nextBody) {
-  const rows = (body) => body.split(/\r?\n/u).map((l) => CHECKBOX_ROW.exec(l)).filter(Boolean);
-  const stillChecked = new Set(rows(nextBody).filter((m) => m[1] !== " ").map((m) => m[2]));
-  return rows(currentBody).filter((m) => m[1] !== " " && !stillChecked.has(m[2])).map((m) => m[2]);
+  const checked = (body) => body.split(/\r?\n/u).map((l) => CHECKBOX_ROW.exec(l)).filter((m) => m && m[1] !== " ").map((m) => m[2]);
+  const remaining = new Map();
+  for (const label of checked(nextBody)) remaining.set(label, (remaining.get(label) ?? 0) + 1);
+  return checked(currentBody).filter((label) => {
+    const left = remaining.get(label) ?? 0;
+    if (left > 0) remaining.set(label, left - 1);
+    return left === 0;
+  });
 }
 
 export async function editPr(
@@ -348,7 +357,7 @@ export async function editPr(
       if (waiverRefusal) throw new Error(waiverRefusal);
       const unticked = untickedRows(baseline, guardBody);
       if (unticked.length > 0 && !options.allowUntick) {
-        throw new Error(`Refusing to untick ${unticked.length} checked row(s) on PR #${options.pr}: ${unticked.map((l) => JSON.stringify(l)).join("; ")}. Edit from the current body, or pass --allow-untick for a deliberate untick.`);
+        throw new Error(`Refusing to untick or remove ${unticked.length} checked row(s) on PR #${options.pr} (unticked, deleted or reworded): ${unticked.map((l) => JSON.stringify(l)).join("; ")}. Edit from the current body, or pass --allow-untick for a deliberate change.`);
       }
     }
     if (!options.allowCrossIssue && detectClosingKeyword(guardBody)) {

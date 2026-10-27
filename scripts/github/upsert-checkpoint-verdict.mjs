@@ -54,7 +54,7 @@ import {
 } from "./_gate-finding-surface.mjs";
 import { fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { mergeSameDefectFindings, normalizeFindingSummary } from "./_gate-finding-text.mjs";
-import { extractSpecFromBody, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
+import { stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
@@ -2333,12 +2333,29 @@ function anglesPassCoverage(entries, config, gate) {
 // inside the AC/DoD sections (the AC section for an issue body) are flipped, so
 // the same label under another heading stays unchecked.
 // dryRun computes the ticked artifact without editing and queues each edit in
-// pendingWrites; skipLabels (labels an open act item names) are never ticked.
-async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified, coordinationContext, dryRun = false, pendingWrites = [], skipLabels = new Set() }, { env, ghCommand, runChild }) {
-  const verifiedItems = allVerified.filter((label) => !skipLabels.has(String(label).trim()));
-  const tick = async (body, labels, write, scope) => {
-    const result = await applyTick(body, labels, dryRun, write, scope);
-    if (dryRun && result.flipped.length > 0) pendingWrites.push(() => applyTick(body, labels, false, write, scope));
+// pendingWrites; each queued write re-fetches the live body and re-applies the
+// tick to it, so a concurrent body edit is kept and the edit guards compare
+// against the live body. namedCriteria (open act item criterion texts) are never
+// ticked: a verified label that a criterion contains is skipped, and an `ac:<n>` /
+// `dod:<n>` id skips every PR-body row of that category (the ids number the pinned
+// spec, which this tick cannot map to a PR row).
+async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified, coordinationContext, dryRun = false, pendingWrites = [], namedCriteria = [] }, { env, ghCommand, runChild }) {
+  const verifiedItems = allVerified.filter((label) => {
+    const text = String(label).trim();
+    return !text || !namedCriteria.some((c) => c.includes(text));
+  });
+  const inSections = (body, options) => {
+    const indices = checklistSectionLineIndices(body, options);
+    return (index) => indices.has(index);
+  };
+  const tick = async (body, labels, write, liveIssue, options) => {
+    const result = await applyTick(body, labels, dryRun, write, inSections(body, options));
+    if (dryRun && result.flipped.length > 0) {
+      pendingWrites.push(async () => {
+        const live = await fetchIssueBody({ repo, issue: liveIssue }, { env, ghCommand, runChild });
+        return applyTick(live, labels, false, write, inSections(live, options));
+      });
+    }
     return result;
   };
   const prData = coordinationContext.prData;
@@ -2350,21 +2367,26 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
     const allowed = new Set(Array.isArray(list) ? list : []);
     return verifiedItems.filter((label) => allowed.has(String(label).trim()));
   };
-  const inSections = (body, options) => {
-    const indices = checklistSectionLineIndices(body, options);
-    return (index) => indices.has(index);
-  };
-  const prTick = await tick(prData.body, inList([...(artifact?.prBodyUncheckedAcItems ?? []), ...(artifact?.prBodyUncheckedDodItems ?? [])]), (bodyFile) =>
-    editPr({ repo, pr, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild, currentBody: prData.body }),
-  inSections(prData.body));
+  const namedCategories = new Set(namedCriteria.flatMap((c) => [...c.matchAll(/(?:^|\s)(ac|dod):\d+\b/giu)].map((m) => m[1].toLowerCase())));
+  const prSkipped = new Set([
+    ...(namedCategories.has("ac") ? artifact?.prBodyUncheckedAcItems ?? [] : []),
+    ...(namedCategories.has("dod") ? artifact?.prBodyUncheckedDodItems ?? [] : []),
+  ].map((label) => String(label).trim()));
+  const prLabels = inList([...(artifact?.prBodyUncheckedAcItems ?? []), ...(artifact?.prBodyUncheckedDodItems ?? [])])
+    .filter((label) => !prSkipped.has(String(label).trim()));
+  const prTick = await tick(prData.body, prLabels, (bodyFile) =>
+    editPr({ repo, pr, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
+  pr);
   const issueLabels = inList(artifact?.uncheckedAcItems);
   const tickedIssueBodies = [];
+  const flippedIssueLabels = new Set();
   if (Array.isArray(artifact?.uncheckedAcItems) && artifact.uncheckedAcItems.length > 0) {
     for (const issue of artifact.uncheckedAcIssues ?? []) {
       const issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
-      const issueTick = await tick(issueBody, issueLabels,(bodyFile) =>
-        editIssue({ repo, issue, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild, currentBody: issueBody }),
-      inSections(issueBody, { acOnly: true }));
+      const issueTick = await tick(issueBody, issueLabels, (bodyFile) =>
+        editIssue({ repo, issue, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
+      issue, { acOnly: true });
+      issueTick.flipped.forEach((label) => flippedIssueLabels.add(String(label).trim()));
       tickedIssueBodies.push(issueTick.body);
     }
   }
@@ -2379,8 +2401,9 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
   // drop them and let an unverified issue AC item pass the clean guard.
   // Union with the reload's list so the result is never smaller than either source.
   const local = tickedIssueBodies.flatMap((body) => detectIssueRefinementArtifact({ body }).uncheckedAcItems);
-  // A dry run edited nothing, so the reload's re-fetch is stale: use the local list alone.
-  const uncheckedAcItems = dryRun ? local : [...new Set([...(reloaded.uncheckedAcItems ?? []), ...local])];
+  // A dry run edited nothing, so the reload's issue rows still carry the labels this tick would flip: drop those, keep the rest.
+  const reloadedItems = (reloaded.uncheckedAcItems ?? []).filter((label) => !(dryRun && flippedIssueLabels.has(String(label).trim())));
+  const uncheckedAcItems = [...new Set([...reloadedItems, ...local])];
   return { ...reloaded, uncheckedAcItems };
 }
 
@@ -3028,16 +3051,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       && (!structuredFindings || (anglesPassCoverage(rawFindingsInput, config, options.gate) && anglesPassCoverage(structuredFindings, config, options.gate))));
   if (options.gate === "pre_approval_gate" && preloadedFindingsLedger?.verifiedItems?.length > 0 && ledgerVerifiesChecklist(preloadedFindingsLedger) && tickCoverageOk) {
     // Dry run: the composition and clean guards read the would-be ticked artifact; the edits run after the last refusal (pendingTickWrites).
-    // An open act item names a row by label or by spec id (`ac:<n>` / `dod:<n>`, zero-based like specCriterionIds); ids resolve against the PR body's rows.
-    const prSpec = typeof coordinationContext.prData?.body === "string" ? extractSpecFromBody(coordinationContext.prData.body) : {};
-    const rowForId = (c) => {
-      const m = /^(ac|dod):(\d+)$/u.exec(c);
-      return m ? (m[1] === "ac" ? prSpec.acceptanceCriteria : prSpec.definitionOfDone)?.[Number(m[2])] : undefined;
-    };
-    const namedByOpenAct = new Set(listOpenActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems])
+    // An open act item names a row by its label text or by a spec id (`ac:<n>` / `dod:<n>`); see tickReviewerVerifiedItems.
+    const namedCriteria = listOpenActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems])
       .flatMap((f) => [f.defectKey, f.judgeCriterion, ...(Array.isArray(f.checkedCriteria) ? f.checkedCriteria : [])])
-      .filter((c) => typeof c === "string").map((c) => c.trim())
-      .flatMap((c) => [c, rowForId(c)]).filter((c) => typeof c === "string"));
+      .filter((c) => typeof c === "string").map((c) => c.trim()).filter(Boolean);
     coordinationContext.refinementArtifact = await tickReviewerVerifiedItems({
       repo: options.repo,
       pr: options.pr,
@@ -3045,7 +3062,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       coordinationContext,
       dryRun: true,
       pendingWrites: pendingTickWrites,
-      skipLabels: namedByOpenAct,
+      namedCriteria,
     }, gh);
   }
   // Set only when the posted checkpoint verdict differs from the ledger's review
