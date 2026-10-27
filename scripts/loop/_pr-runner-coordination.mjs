@@ -9,7 +9,7 @@ import {
   saveStateFile as saveSharedStateFile,
   withStateFileLock as withSharedStateFileLock,
 } from "./_steering-state-file.mjs";
-import { detectStaleRunner, STALE_RUNNER_ERROR } from "./_stale-runner-detection.mjs";
+import { detectStaleRunner, resolveStaleRunnerMaxAgeMs, STALE_RUNNER_ERROR } from "./_stale-runner-detection.mjs";
 export const RUNNER_COORDINATION_SCHEMA_VERSION = 2;
 export const RUNNER_COORDINATION_SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1, 2]);
 export const RUNNER_COORDINATION_HISTORY_LIMIT = 50; // cap audit trail; heartbeats append per-round, keep the most recent 50 events
@@ -306,6 +306,7 @@ export async function claimRunnerOwnership({
   filePath = null,
   mode = "claim",
   now = new Date().toISOString(),
+  expectPreviousRunId = null,
 } = {}) {
   const normalizedRepo = normalizeRepoSlug(repo);
   const normalizedPr = normalizePr(pr);
@@ -386,6 +387,21 @@ export async function claimRunnerOwnership({
         filePath: resolvedPath,
         exitSignals: state.exitSignals,
         message: `PR ${normalizedRepo}#${normalizedPr} is already owned by run ${activeRun.runId}. Claim failed closed.`,
+      });
+    }
+    // A recovery is authorized by evidence read before this lock. Refuse when the
+    // owner changed in between, so a takeover never displaces a run whose death
+    // was not the one observed.
+    if (expectPreviousRunId !== null && activeRun.runId !== expectPreviousRunId) {
+      return buildConflict({
+        error: RUNNER_OWNERSHIP_ERROR.ACTIVE_RUN_EXISTS,
+        repo: normalizedRepo,
+        pr: normalizedPr,
+        runId: normalizedRunId,
+        activeRun,
+        filePath: resolvedPath,
+        exitSignals: state.exitSignals,
+        message: `PR ${normalizedRepo}#${normalizedPr} is owned by ${activeRun.runId}, not the displaced run ${expectPreviousRunId}. Takeover failed closed.`,
       });
     }
     const nextState = {
@@ -928,20 +944,37 @@ export async function ensureAsyncRunnerOwnership({
     // leaked lock. A genuinely live owner stays fail-closed: the
     // one-runner-per-PR invariant for active work is preserved.
     if (supersedeStale) {
-      const stale = await detectStaleRunner({ repo, pr, cwd });
+      const stale = await detectStaleRunner({
+        repo,
+        pr,
+        cwd,
+        maxAgeMs: resolveStaleRunnerMaxAgeMs({}, { ...process.env, ...env }),
+      });
       if (!stale.ok && stale.status !== "no_owner_record") {
-        const takenOver = await claimRunnerOwnership({ repo, pr, runId, cwd, mode: "takeover" });
-        // Only a completed displacement is reported as a recovery: a takeover
-        // that landed on this run's own claim displaced nobody, so it stays
-        // indistinguishable from an ordinary refresh.
+        const takenOver = await claimRunnerOwnership({
+          repo,
+          pr,
+          runId,
+          cwd,
+          mode: "takeover",
+          expectPreviousRunId: stale.activeRun?.runId ?? null,
+        });
         if (!takenOver.ok || takenOver.status !== "taken_over") {
+          return takenOver;
+        }
+        const evidence = stale.error === STALE_RUNNER_ERROR.EXIT_SIGNAL_RECORDED
+          ? "exit_signal"
+          : stale.error === STALE_RUNNER_ERROR.STALE_RUNNER ? "stale_max_age" : null;
+        // An unrecognized detector verdict recovers nothing it can name, so it
+        // reports no typed evidence rather than guessing a window.
+        if (evidence === null) {
           return takenOver;
         }
         return {
           ...takenOver,
           recovery: {
-            evidence: stale.status === STALE_RUNNER_ERROR.EXIT_SIGNAL_RECORDED ? "exit_signal" : "stale_max_age",
-            displacedRunId: takenOver.previousRun?.runId ?? null,
+            evidence,
+            displacedRunId: takenOver.previousRun.runId,
             maxAgeMs: stale.maxAgeMs,
           },
         };

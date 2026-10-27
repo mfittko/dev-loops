@@ -217,12 +217,28 @@ test("runner coordination fails closed for second claim and allows explicit take
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
 
   try {
-    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir, now: "2026-06-05T08:00:00.000Z" });
+    const owned = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir, now: "2026-06-05T08:00:00.000Z" });
+    const ownedBytes = await readFile(owned.filePath, "utf8");
 
     const conflict = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-2", cwd: tempDir });
     assert.equal(conflict.ok, false);
     assert.equal(conflict.error, "active_run_exists");
     assert.equal(conflict.activeRun.runId, "run-1");
+    assert.equal(await readFile(owned.filePath, "utf8"), ownedBytes, "a refused claim writes nothing");
+
+    // A takeover authorized by evidence about another run must refuse once the owner moved on.
+    const misattributed = await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      runId: "run-2",
+      cwd: tempDir,
+      mode: "takeover",
+      expectPreviousRunId: "run-earlier",
+    });
+    assert.equal(misattributed.ok, false);
+    assert.equal(misattributed.error, "active_run_exists");
+    assert.equal(misattributed.activeRun.runId, "run-1");
+    assert.equal(await readFile(owned.filePath, "utf8"), ownedBytes, "a refused takeover writes nothing");
 
     const takeover = await claimRunnerOwnership({
       repo: "owner/repo",
@@ -305,6 +321,7 @@ test("runner coordination pre-merge assert requires existing owner record for as
     });
     assert.equal(missing.ok, false);
     assert.equal(missing.error, "ownership_missing");
+    assert.equal((await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir })).state, null, "a missing-record refusal writes no coordination record");
 
     await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir });
     const asserted = await assertRunnerOwnership({
@@ -650,6 +667,8 @@ test("ensureAsyncRunnerOwnership keeps a live owner (stand down) even with super
 // so records and handbacks distinguish an exit-signal recovery from a max-age one.
 test("ensureAsyncRunnerOwnership reports typed recovery evidence (exit signal)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  const prevMaxAge = process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+  process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = String(STALE_RUNNER_DEFAULT_MAX_AGE_MS);
 
   try {
     await claimRunnerOwnership({ repo: "owner/repo", pr: 31, runId: "run-dead", cwd: tempDir });
@@ -670,14 +689,17 @@ test("ensureAsyncRunnerOwnership reports typed recovery evidence (exit signal)",
       maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS,
     });
   } finally {
+    if (prevMaxAge === undefined) {
+      delete process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+    } else {
+      process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = prevMaxAge;
+    }
     await rm(tempDir, { recursive: true, force: true });
   }
 });
 
 test("ensureAsyncRunnerOwnership reports typed recovery evidence (stale max age)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
-  const prevMaxAge = process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
-  process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = "60000";
 
   try {
     await claimRunnerOwnership({
@@ -688,11 +710,12 @@ test("ensureAsyncRunnerOwnership reports typed recovery evidence (stale max age)
       now: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
     });
 
+    // The window comes from the caller's env, not the ambient one.
     const result = await ensureAsyncRunnerOwnership({
       repo: "owner/repo",
       pr: 32,
       cwd: tempDir,
-      env: { DEVLOOPS_RUN_ID: "run-fresh" },
+      env: { DEVLOOPS_RUN_ID: "run-fresh", DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: "60000" },
       claimIfMissing: true,
       supersedeStale: true,
     });
@@ -703,11 +726,6 @@ test("ensureAsyncRunnerOwnership reports typed recovery evidence (stale max age)
       maxAgeMs: 60000,
     });
   } finally {
-    if (prevMaxAge === undefined) {
-      delete process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
-    } else {
-      process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = prevMaxAge;
-    }
     await rm(tempDir, { recursive: true, force: true });
   }
 });
@@ -1318,6 +1336,7 @@ for (const invalidation of ["missing", "malformed"]) {
       const claimed = await ensureAsyncRunnerOwnership(options);
       assert.equal(claimed.ok, true);
       assert.equal(claimed.activeRun.runId, `codex-thread-${id}`);
+      const claimedBytes = await readFile(claimed.filePath, "utf8");
       if (invalidation === "missing") await rm(file);
       else await writeFile(file, "invalid metadata\n");
 
@@ -1326,6 +1345,7 @@ for (const invalidation of ["missing", "malformed"]) {
         assert.equal(result.ok, false, "invalid evidence must never skip automatic ownership");
         assert.equal(result.error, "run_id_required");
       }
+      assert.equal(await readFile(claimed.filePath, "utf8"), claimedBytes, "every refusal leaves the coordination record byte-identical");
       const inspected = await ensureAsyncRunnerOwnership({ ...options, claimIfMissing: false, requireExisting: false });
       assert.equal(inspected.ok, true, "read-only inspection remains available without async evidence");
       assert.equal(inspected.status, "skipped_no_async_run_id");
