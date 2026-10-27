@@ -515,7 +515,7 @@ Durable one-runner-per-PR coordination helper.
 Subcommands:
 - `status` — inspect current ownership record for one PR
 - `claim` — claim ownership when no active runner exists; otherwise fail closed with machine-readable conflict details
-- `takeover` — explicit replacement path that records prior/new run ids
+- `takeover` — explicit replacement path that records prior/new run ids; it reads no detector verdict, so its `taken_over` result carries no `recovery` field
 - `assert` — verify the current run still owns the PR; `--require-existing` fails closed when async pre-merge ownership proof is missing
 - `release` — clear ownership when the active run is done
 - `handoff` — atomically record the verified owner's exit signal and clear its claim
@@ -559,11 +559,17 @@ Release-on-death & dead-claim supersession (#1706):
   stale-max-age window, so pre-flight handoff proceeds instead of returning a blocking stop against a
   leaked lock. A genuinely live owner still stands the handoff down (one-runner-per-PR preserved);
   only confirmed-dead or stale claims are superseded.
-- A successful takeover reports which evidence authorized it: `recovery: { evidence:
-  "exit_signal" | "stale_max_age", displacedRunId, maxAgeMs }`, where `displacedRunId` is the
-  displaced owner recorded as `previousRun.runId` and `maxAgeMs` is the effective stale window.
-  A result that displaced nobody — a fresh claim, a same-owner refresh or a fail-closed conflict —
-  carries no `recovery` field, so a consumer can tell a recovery from ordinary ownership.
+- A successful takeover reports which evidence authorized it when it comes from the `supersedeStale`
+  path: `ensureAsyncRunnerOwnership({ supersedeStale: true })`, and the `runnerOwnership` result that
+  `copilot-pr-handoff` forwards, return `recovery: { evidence: "exit_signal" | "stale_max_age",
+  displacedRunId, maxAgeMs }`, where `displacedRunId` is the displaced owner recorded as
+  `previousRun.runId` and `maxAgeMs` is the effective stale window.
+- The explicit `takeover` subcommand reports no `recovery` field: it takes over on the caller's
+  instruction without reading the detector verdict that names the evidence.
+- A result that displaced nobody — a fresh claim, a same-owner refresh or a fail-closed conflict —
+  carries no `recovery` field either, so a consumer can tell a recovery from ordinary ownership.
+- A detector verdict that is neither a recorded exit signal nor an expired claim takes over
+  nothing: the handoff stays fail-closed on the ownership conflict and writes no state.
 - Anti-trap: a fresh heartbeat on a runner-coordination claim/lock is not proof of a live driver. The
   claim may be held by a completed/control run that claimed at takeover then ended without releasing,
   yet the heartbeat still reads fresh — which this rc.6 drive saw as repeated false "live owner /

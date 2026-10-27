@@ -311,6 +311,9 @@ export async function claimRunnerOwnership({
   const normalizedRepo = normalizeRepoSlug(repo);
   const normalizedPr = normalizePr(pr);
   const normalizedRunId = normalizeRunId(runId);
+  // Normalized once, like every other run-id input: an absent, null or padded
+  // expectation behaves like the rest of this module rather than refusing raw.
+  const expectedPreviousRunId = normalizeRunId(expectPreviousRunId);
   if (normalizedRunId === null) {
     return buildConflict({
       error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED,
@@ -392,7 +395,7 @@ export async function claimRunnerOwnership({
     // A recovery is authorized by evidence read before this lock. Refuse when the
     // owner changed in between, so a takeover never displaces a run whose death
     // was not the one observed.
-    if (expectPreviousRunId !== null && activeRun.runId !== expectPreviousRunId) {
+    if (expectedPreviousRunId !== null && activeRun.runId !== expectedPreviousRunId) {
       return buildConflict({
         error: RUNNER_OWNERSHIP_ERROR.ACTIVE_RUN_EXISTS,
         repo: normalizedRepo,
@@ -401,7 +404,7 @@ export async function claimRunnerOwnership({
         activeRun,
         filePath: resolvedPath,
         exitSignals: state.exitSignals,
-        message: `PR ${normalizedRepo}#${normalizedPr} is owned by ${activeRun.runId}, not the displaced run ${expectPreviousRunId}. Takeover failed closed.`,
+        message: `PR ${normalizedRepo}#${normalizedPr} is owned by ${activeRun.runId}, not the displaced run ${expectedPreviousRunId}. Takeover failed closed.`,
       });
     }
     const nextState = {
@@ -893,6 +896,18 @@ export async function recordExitSignalForRunner({
     };
   });
 }
+/**
+ * Map a stale-runner detector verdict onto the typed recovery evidence it
+ * authorizes.
+ *
+ * The detector returns exactly two recoverable verdicts; anything else maps to
+ * `null`, so a takeover can never report a successful recovery it cannot name.
+ */
+function resolveRecoveryEvidence(stale) {
+  if (stale?.error === STALE_RUNNER_ERROR.EXIT_SIGNAL_RECORDED) return "exit_signal";
+  if (stale?.error === STALE_RUNNER_ERROR.STALE_RUNNER) return "stale_max_age";
+  return null;
+}
 export async function ensureAsyncRunnerOwnership({
   repo,
   pr,
@@ -901,6 +916,9 @@ export async function ensureAsyncRunnerOwnership({
   claimIfMissing = true,
   requireExisting = false,
   supersedeStale = false,
+  // The detection read this handoff authorizes a takeover with; tests inject a
+  // verdict to exercise the production wiring without a live stale claim.
+  detectStale = detectStaleRunner,
 } = {}) {
   const runId = normalizeRunId(resolveRunId(env));
   if (runId === null) {
@@ -944,13 +962,16 @@ export async function ensureAsyncRunnerOwnership({
     // leaked lock. A genuinely live owner stays fail-closed: the
     // one-runner-per-PR invariant for active work is preserved.
     if (supersedeStale) {
-      const stale = await detectStaleRunner({
+      const stale = await detectStale({
         repo,
         pr,
         cwd,
         maxAgeMs: resolveStaleRunnerMaxAgeMs({}, { ...process.env, ...env }),
       });
-      if (!stale.ok && stale.status !== "no_owner_record") {
+      const evidence = resolveRecoveryEvidence(stale);
+      // A verdict this recovery cannot name is not evidence to take over on:
+      // fail closed on the original conflict instead of an untyped takeover.
+      if (!stale.ok && evidence !== null) {
         const takenOver = await claimRunnerOwnership({
           repo,
           pr,
@@ -960,14 +981,6 @@ export async function ensureAsyncRunnerOwnership({
           expectPreviousRunId: stale.activeRun?.runId ?? null,
         });
         if (!takenOver.ok || takenOver.status !== "taken_over") {
-          return takenOver;
-        }
-        const evidence = stale.error === STALE_RUNNER_ERROR.EXIT_SIGNAL_RECORDED
-          ? "exit_signal"
-          : stale.error === STALE_RUNNER_ERROR.STALE_RUNNER ? "stale_max_age" : null;
-        // An unrecognized detector verdict recovers nothing it can name, so it
-        // reports no typed evidence rather than guessing a window.
-        if (evidence === null) {
           return takenOver;
         }
         return {

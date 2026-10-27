@@ -22,7 +22,7 @@ import {
   releaseRunnerOwnership,
   RUNNER_COORDINATION_HISTORY_LIMIT,
 } from "../../scripts/loop/_pr-runner-coordination.mjs";
-import { detectStaleRunner, STALE_RUNNER_DEFAULT_MAX_AGE_MS } from "../../scripts/loop/_stale-runner-detection.mjs";
+import { detectStaleRunner, STALE_RUNNER_DEFAULT_MAX_AGE_MS, STALE_RUNNER_ERROR } from "../../scripts/loop/_stale-runner-detection.mjs";
 import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordination.mjs";
 import {
   NATIVE_PI_CHILD_MARKER,
@@ -665,20 +665,29 @@ test("ensureAsyncRunnerOwnership keeps a live owner (stand down) even with super
 
 // R1: a successful supersedeStale recovery reports which evidence authorized it,
 // so records and handbacks distinguish an exit-signal recovery from a max-age one.
+// Both writes pin `now`, so the claim-scoped signal match never depends on the clock.
 test("ensureAsyncRunnerOwnership reports typed recovery evidence (exit signal)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
-  const prevMaxAge = process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
-  process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = String(STALE_RUNNER_DEFAULT_MAX_AGE_MS);
+  const claimedAt = "2026-06-05T08:00:00.000Z";
+  const signalAt = "2026-06-05T08:05:00.000Z";
 
   try {
-    await claimRunnerOwnership({ repo: "owner/repo", pr: 31, runId: "run-dead", cwd: tempDir });
-    await recordExitSignalForRunner({ repo: "owner/repo", pr: 31, runId: "run-dead", reason: "completed", cwd: tempDir });
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 31, runId: "run-dead", cwd: tempDir, now: claimedAt });
+    await recordExitSignalForRunner({
+      repo: "owner/repo",
+      pr: 31,
+      runId: "run-dead",
+      reason: "completed",
+      cwd: tempDir,
+      now: signalAt,
+    });
 
     const result = await ensureAsyncRunnerOwnership({
       repo: "owner/repo",
       pr: 31,
       cwd: tempDir,
-      env: { DEVLOOPS_RUN_ID: "run-next" },
+      // The window comes from the caller's env, not the ambient one.
+      env: { DEVLOOPS_RUN_ID: "run-next", DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: String(STALE_RUNNER_DEFAULT_MAX_AGE_MS) },
       claimIfMissing: true,
       supersedeStale: true,
     });
@@ -689,11 +698,174 @@ test("ensureAsyncRunnerOwnership reports typed recovery evidence (exit signal)",
       maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS,
     });
   } finally {
-    if (prevMaxAge === undefined) {
-      delete process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
-    } else {
-      process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = prevMaxAge;
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// R1 precedence: a crashed owner whose claim also aged out satisfies both evidence
+// branches, and only the detector's evidence order picks `exit_signal`. Only a test
+// holding both branches true pins that tie-breaker.
+test("typed recovery prefers the claim-scoped exit signal over the stale window", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  const now = Date.now();
+  const claimedAt = new Date(now - 40 * 60 * 1000).toISOString();
+  const signalAt = new Date(now - 39 * 60 * 1000).toISOString();
+  const env = { DEVLOOPS_RUN_ID: "run-next", DEVLOOPS_STALE_RUNNER_MAX_AGE_MS: String(STALE_RUNNER_DEFAULT_MAX_AGE_MS) };
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 34, runId: "run-crashed", cwd: tempDir, now: claimedAt });
+    await recordExitSignalForRunner({
+      repo: "owner/repo",
+      pr: 34,
+      runId: "run-crashed",
+      reason: "crashed",
+      cwd: tempDir,
+      now: signalAt,
+    });
+
+    const recovered = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 34,
+      cwd: tempDir,
+      env,
+      claimIfMissing: true,
+      supersedeStale: true,
+    });
+    assert.equal(recovered.status, "taken_over");
+    assert.deepEqual(recovered.recovery, {
+      evidence: "exit_signal",
+      displacedRunId: "run-crashed",
+      maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS,
+    });
+
+    // The same claim shape recovers on the max-age branch alone, so both branches
+    // were true above and only the evidence order chose the label.
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 35, runId: "run-crashed", cwd: tempDir, now: claimedAt });
+    const agedOnly = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 35,
+      cwd: tempDir,
+      env,
+      claimIfMissing: true,
+      supersedeStale: true,
+    });
+    assert.equal(agedOnly.recovery.evidence, "stale_max_age");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// R1/DESIGN-SIMPLEST-FIRST: a detector verdict that is neither a recorded exit
+// signal nor an expired claim authorizes no takeover, so the handoff stays
+// fail-closed on the ownership conflict instead of recovering untyped.
+test("an unrecognized detector verdict refuses the takeover without a state write", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    const owned = await claimRunnerOwnership({ repo: "owner/repo", pr: 36, runId: "run-owner", cwd: tempDir });
+    const ownedBytes = await readFile(owned.filePath, "utf8");
+
+    const result = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 36,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-next" },
+      claimIfMissing: true,
+      supersedeStale: true,
+      detectStale: async () => ({ ok: false, error: "corrupt_timestamp", activeRun: { runId: "run-owner" } }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "ownership_lost");
+    assert.equal("recovery" in result, false);
+    assert.equal(await readFile(owned.filePath, "utf8"), ownedBytes, "an untyped recovery writes nothing");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// R2: the takeover is authorized by the lock-free detection read, so the production
+// supersedeStale wiring must refuse once the observed owner is no longer active.
+test("supersedeStale refuses a takeover whose detected owner is no longer active", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    const owned = await claimRunnerOwnership({ repo: "owner/repo", pr: 37, runId: "run-1", cwd: tempDir });
+    const ownedBytes = await readFile(owned.filePath, "utf8");
+
+    const result = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 37,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-2" },
+      claimIfMissing: true,
+      supersedeStale: true,
+      // The owner moved on between the detection read and the locked takeover.
+      detectStale: async () => ({
+        ok: false,
+        error: STALE_RUNNER_ERROR.STALE_RUNNER,
+        activeRun: { runId: "run-earlier" },
+        maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS,
+      }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "active_run_exists");
+    assert.equal(result.activeRun.runId, "run-1");
+    assert.equal(await readFile(owned.filePath, "utf8"), ownedBytes, "a refused takeover writes nothing");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// The expectation guard normalizes its input like every other run-id entry point,
+// so an absent, null or padded expectation behaves like an exact one.
+for (const form of [
+  { label: "the observed displaced owner", expectation: { expectPreviousRunId: "run-1" } },
+  { label: "null", expectation: { expectPreviousRunId: null } },
+  { label: "undefined", expectation: { expectPreviousRunId: undefined } },
+  { label: "absent", expectation: {} },
+  { label: "whitespace padded", expectation: { expectPreviousRunId: "  run-1  " } },
+]) {
+  test(`claimRunnerOwnership takeover proceeds when expectPreviousRunId is ${form.label}`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+    try {
+      await claimRunnerOwnership({ repo: "owner/repo", pr: 40, runId: "run-1", cwd: tempDir });
+      const takeover = await claimRunnerOwnership({
+        repo: "owner/repo",
+        pr: 40,
+        runId: "run-2",
+        cwd: tempDir,
+        mode: "takeover",
+        ...form.expectation,
+      });
+      assert.equal(takeover.status, "taken_over");
+      assert.equal(takeover.previousRun.runId, "run-1");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
     }
+  });
+}
+
+test("claimRunnerOwnership takeover refuses an expectPreviousRunId that names another run", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    const owned = await claimRunnerOwnership({ repo: "owner/repo", pr: 41, runId: "run-1", cwd: tempDir });
+    const ownedBytes = await readFile(owned.filePath, "utf8");
+
+    const refused = await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 41,
+      runId: "run-2",
+      cwd: tempDir,
+      mode: "takeover",
+      expectPreviousRunId: "run-earlier",
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.error, "active_run_exists");
+    assert.equal(refused.activeRun.runId, "run-1");
+    assert.equal(await readFile(owned.filePath, "utf8"), ownedBytes, "a refused takeover writes nothing");
+  } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 });

@@ -533,7 +533,7 @@ node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs handoff \
 ```
 
 `handoff` appends the exit signal and clears the claim in one locked write, so the successor's
-pre-flight recovers deterministically instead of waiting out the stale window. It adds no
+pre-flight recovers deterministically, without waiting out the stale window. It adds no
 identity override: the run id comes from the verified runtime context, and `ownership_lost` or
 `run_id_required` exits 1 with no state write.
 
