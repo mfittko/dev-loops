@@ -564,7 +564,7 @@ export function validateSpecAuthorityVerdict(verdict, { findingsCount, criterion
     if (own) {
       if (own.outcome !== clusterDecision.outcome) {
         const error = new Error(
-          `spec-authority cluster ${clusterDecision.index} decides ${clusterDecision.outcome} but member finding ${i} has its own decision ${own.outcome} (fail closed)`,
+          `spec-authority cluster ${clusterDecision.index} decides ${clusterDecision.outcome} but member finding ${i} has its own decision ${own.outcome} (fail closed; refusal rule SPEC-AUTHORITY-CLUSTER-EXPANSION)`,
         );
         error.code = "spec_authority_cluster_conflict";
         throw error;
@@ -582,7 +582,7 @@ export function validateSpecAuthorityVerdict(verdict, { findingsCount, criterion
   }
   if (uncovered.length > 0) {
     const error = new Error(
-      `spec-authority verdict does not dispose ${uncovered.length} finding(s) (indexes: ${uncovered.join(", ")}) — every finding needs a whole-spec outcome (fail closed)`,
+      `spec-authority verdict does not dispose ${uncovered.length} finding(s) (indexes: ${uncovered.join(", ")}) — every finding needs a whole-spec outcome (fail closed; refusal rule SPEC-AUTHORITY-CLUSTER-EXPANSION)`,
     );
     error.code = "spec_authority_uncovered_finding";
     throw error;
