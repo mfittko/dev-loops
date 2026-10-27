@@ -23,7 +23,7 @@
  * | itemType | `/payload/item/type` | `"CommandExecution"` |
  * | ownerThreadId | `/payload/thread_id` | UUIDv7 string |
  * | executionId | `/payload/item/process_id` | opaque string |
- * | terminalTimestamp | `/timestamp` | ISO-8601 string |
+ * | terminalTimestamp | `/timestamp` | ISO 8601 string |
  * | terminalStatus | `/payload/item/status` | completed or failed |
  * | exitCode | `/payload/item/exit_code` | integer |
  * | command | `/payload/item/command` | string array |
@@ -131,7 +131,7 @@ const SCHEMA = Object.freeze([
   { field: "itemType", pointer: "/payload/item/type", shape: `"CommandExecution"` },
   { field: "ownerThreadId", pointer: "/payload/thread_id", shape: "UUIDv7 string" },
   { field: "executionId", pointer: "/payload/item/process_id", shape: "opaque string" },
-  { field: "terminalTimestamp", pointer: "/timestamp", shape: "ISO-8601 string" },
+  { field: "terminalTimestamp", pointer: "/timestamp", shape: "ISO 8601 string" },
   { field: "terminalStatus", pointer: "/payload/item/status", shape: "completed or failed" },
   { field: "exitCode", pointer: "/payload/item/exit_code", shape: "integer" },
   { field: "command", pointer: "/payload/item/command", shape: "string array" },
@@ -181,7 +181,7 @@ function matchesShape(value, shape) {
       return isNativeCodexThreadId(value);
     case "opaque string":
       return typeof value === "string" && value.trim().length > 0;
-    case "ISO-8601 string":
+    case "ISO 8601 string":
       return typeof value === "string" && ISO_TIMESTAMP_RE.test(value) && !Number.isNaN(Date.parse(value));
     case "completed or failed":
       return CODEX_TERMINAL_STATUSES.includes(value);
@@ -278,7 +278,7 @@ export function resolveCodexExecutionJournal({ ownerThreadId, env = process.env,
  * - `id` — the opaque execution/session identifier from `/payload/item/process_id`
  * - `exitStatus` — `/payload/item/status`, `completed` or `failed`
  * - `exitCode` — `/payload/item/exit_code`
- * - `endedAt` — `/timestamp`, the terminal ISO-8601 timestamp
+ * - `endedAt` — `/timestamp`, the terminal ISO 8601 timestamp
  * - `command` — `/payload/item/command`, copied
  * - `cwd` — `/payload/item/cwd`, the recorded `file:` URI
  * - `retainedOutput` — `{ bytes, sha256 }` of `/payload/item/aggregated_output`
