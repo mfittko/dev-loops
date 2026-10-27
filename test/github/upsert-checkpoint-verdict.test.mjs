@@ -11104,10 +11104,10 @@ test("tick: a failed post-tick issue re-fetch cannot drop the unverified issue A
     );
     assert.equal(reviewPosted(calls), false);
   });
-  // The queued issue edit re-reads the issue after the refusals; that read fails too, so nothing is posted (fail closed).
-  await withCompositionRound(round, async ({ post, calls }) => {
-    await assert.rejects(() => post({ findingsSeverityCounts: CLEAN_COUNTS }), /ADR-TRIPWIRE-STANDING-WAIVER/);
-    assert.equal(reviewPosted(calls), false);
+  await withCompositionRound(round, async ({ post, postedBody }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.match(postedBody(), /\*\*Verdict:\*\* blocked/);
+    assert.deepEqual(result.gateBlockers, [{ kind: "unticked spec-of-record Acceptance criteria", item: "unverified issue criterion" }]);
   });
 });
 
@@ -12324,5 +12324,14 @@ test("tick (#2898): a row an open act item names stays unticked; the other verif
     assert.equal(editedBodies.length, 1);
     assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${TICK_ITEMS[12]}$`, "m"));
     assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[0]}$`, "m"));
+  });
+});
+
+test("tick (#2898): a row an open act item names by spec id (dod:<n>) stays unticked", async () => {
+  const act = { angle: "acceptance-criteria", severity: "medium", summary: "no evidence for that row", judgeDisposition: "act", judgeCriterion: "dod:1" };
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [act] }, async ({ post, editedBodies }) => {
+    await post();
+    assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${TICK_ITEMS[13]}$`, "m"));
+    assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[12]}$`, "m"));
   });
 });

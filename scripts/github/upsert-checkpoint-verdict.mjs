@@ -54,7 +54,7 @@ import {
 } from "./_gate-finding-surface.mjs";
 import { fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { mergeSameDefectFindings, normalizeFindingSummary } from "./_gate-finding-text.mjs";
-import { stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
+import { extractSpecFromBody, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
@@ -2363,7 +2363,7 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
     for (const issue of artifact.uncheckedAcIssues ?? []) {
       const issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
       const issueTick = await tick(issueBody, issueLabels,(bodyFile) =>
-        editIssue({ repo, issue, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
+        editIssue({ repo, issue, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild, currentBody: issueBody }),
       inSections(issueBody, { acOnly: true }));
       tickedIssueBodies.push(issueTick.body);
     }
@@ -3028,9 +3028,16 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       && (!structuredFindings || (anglesPassCoverage(rawFindingsInput, config, options.gate) && anglesPassCoverage(structuredFindings, config, options.gate))));
   if (options.gate === "pre_approval_gate" && preloadedFindingsLedger?.verifiedItems?.length > 0 && ledgerVerifiesChecklist(preloadedFindingsLedger) && tickCoverageOk) {
     // Dry run: the composition and clean guards read the would-be ticked artifact; the edits run after the last refusal (pendingTickWrites).
+    // An open act item names a row by label or by spec id (`ac:<n>` / `dod:<n>`, zero-based like specCriterionIds); ids resolve against the PR body's rows.
+    const prSpec = typeof coordinationContext.prData?.body === "string" ? extractSpecFromBody(coordinationContext.prData.body) : {};
+    const rowForId = (c) => {
+      const m = /^(ac|dod):(\d+)$/u.exec(c);
+      return m ? (m[1] === "ac" ? prSpec.acceptanceCriteria : prSpec.definitionOfDone)?.[Number(m[2])] : undefined;
+    };
     const namedByOpenAct = new Set(listOpenActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems])
-      .flatMap((f) => [f.judgeCriterion, ...(Array.isArray(f.checkedCriteria) ? f.checkedCriteria : [])])
-      .filter((c) => typeof c === "string").map((c) => c.trim()));
+      .flatMap((f) => [f.defectKey, f.judgeCriterion, ...(Array.isArray(f.checkedCriteria) ? f.checkedCriteria : [])])
+      .filter((c) => typeof c === "string").map((c) => c.trim())
+      .flatMap((c) => [c, rowForId(c)]).filter((c) => typeof c === "string"));
     coordinationContext.refinementArtifact = await tickReviewerVerifiedItems({
       repo: options.repo,
       pr: options.pr,
@@ -3442,6 +3449,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     ? "WARNING: --findings-json without --findings-ledger files zero inline comments — the --findings-ledger (consolidate-fanin --ledger-out → write-gate-findings-log) is the only inline-comment source. Pass --findings-ledger to file inline findings."
     : null;
   // Every refusal has passed: apply the queued reviewer-verified ticks now, so a refused post leaves no ticked box.
+  // A failed write throws before any post; a rerun re-ticks only the rows still unticked.
   for (const write of pendingTickWrites) await write();
   // PENDING-REVIEW RESOLUTION: GitHub allows only ONE pending review
   // per user per PR (PR-scoped, NOT head-scoped), so a --gate review --submit
