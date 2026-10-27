@@ -1163,8 +1163,8 @@ const REDIRECTION_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)/;
 const REDIRECTION_OPERATOR_ONLY_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)$/;
 const redirectionSkip = (t) => (!t.includes("<<") && REDIRECTION_RE.test(t) ? (REDIRECTION_OPERATOR_ONLY_RE.test(t) ? 2 : 1) : 0);
 const SCRIPT_EXT_RE = /\.(?:[cm]?js|[cm]?ts)$/;
-// Long node flags that take no value (`--no-warnings`, `--trace-*`, `--enable-*`, `--experimental-*`, ...): the token after one is the script, not a value.
-const NODE_BOOLEAN_FLAG_RE = /^--(?:no-(?!experimental-default-type)|trace-(?!event-categories$|event-file-pattern$)|enable-source-maps$|experimental-(?!loader$|default-type$|specifier-resolution$|policy$|network-inspection$)|expose-gc$|pending-deprecation$|throw-deprecation$|abort-on-uncaught-exception$)/;
+// Closed allow-list of known boolean node flags: the token after one is the script, not a value. Any unlisted `--flag` is treated as value-taking (the refusing direction), so a new value-taking flag can never slip through as boolean.
+const NODE_BOOLEAN_FLAGS = new Set(["--no-warnings", "--no-deprecation", "--trace-warnings", "--trace-deprecation", "--trace-uncaught", "--enable-source-maps", "--experimental-vm-modules", "--experimental-strip-types", "--experimental-transform-types", "--experimental-detect-module", "--experimental-require-module", "--experimental-websocket", "--experimental-sqlite", "--experimental-permission", "--permission", "--watch", "--expose-gc", "--abort-on-uncaught-exception", "--pending-deprecation", "--throw-deprecation", "--no-experimental-fetch"]);
 
 /**
  * OPS-NO-INLINE-INTERPRETER: an inline interpreter — `node -e`/`--eval`/`-p`, `python3 -c`, or a
@@ -1195,7 +1195,7 @@ export function commandContainsInlineInterpreter(command) {
         if (skip) { if (skip === 2 && tokens[i + 1]?.includes("<<")) return true; i += skip - 1; continue; }
         if (!t.startsWith("-")) {
           const prev = tokens[i - 1];
-          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !NODE_BOOLEAN_FLAG_RE.test(prev) &&!SCRIPT_EXT_RE.test(stripSurroundingQuotes(t.split("<<")[0])) && !/^\.|^[^/]+\//.test(t)) { if (t.includes("<<")) return true; continue; } // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
+          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !NODE_BOOLEAN_FLAGS.has(prev) &&!SCRIPT_EXT_RE.test(stripSurroundingQuotes(t.split("<<")[0])) && !/^\.|^[^/]+\//.test(t)) { if (t.includes("<<")) return true; continue; } // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
           break; // script path reached — a later `-e` is a script argument
         }
         if (NODE_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
