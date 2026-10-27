@@ -563,11 +563,15 @@ Release-on-death & dead-claim supersession (#1706):
   path: `ensureAsyncRunnerOwnership({ supersedeStale: true })`, and the `runnerOwnership` result that
   `copilot-pr-handoff` forwards, return `recovery: { evidence: "exit_signal" | "stale_max_age",
   displacedRunId, maxAgeMs }`, where `displacedRunId` is the displaced owner recorded as
-  `previousRun.runId` and `maxAgeMs` is the effective stale window. The shipped producer in the
-  shipped flow yields `stale_max_age`: `handoff` writes the exit signal and clears the claim in one
-  locked write, so no signal survives to be read against an active claim. `exit_signal` stays in the
-  documented union for a signal recorded while its claim is still active, which is the state
-  `recordExitSignalForRunner` leaves and the shipped handoff never does.
+  `previousRun.runId` and `maxAgeMs` is the effective stale window.
+- The normal `handoff` flow yields no `recovery` field: `handoff` appends the exit signal and clears
+  the claim in one locked write, so the successor's pre-flight finds no owner to displace, claims
+  fresh (`claimed_new`), names the handed-off owner in `previousRun` and reports no recovery. A
+  `recovery` field is reachable only when a competing claim survives to be displaced: `stale_max_age`
+  for an abandoned claim whose `claimedAt`/`updatedAt` are both past the stale window, and
+  `exit_signal` for a claim whose run recorded an exit signal while still holding it — the verdict
+  order `detectStaleRunner` applies, and the state `recordExitSignalForRunner` leaves and the shipped
+  handoff never does.
 - The explicit `takeover` subcommand reports no `recovery` field: it takes over on the caller's
   instruction without reading the detector verdict that names the evidence.
 - A result that displaced nobody — a fresh claim, a same-owner refresh or a fail-closed conflict —
