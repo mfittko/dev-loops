@@ -25,6 +25,7 @@ import {
   isClaudeHarness,
   CLAUDE_HARNESS_MARKER,
   validateNativeCodexMetadata,
+  resolveCodexRolloutJournal,
   resolveNativeCodexContext,
 } from "../src/loop/run-context.mjs";
 
@@ -96,6 +97,19 @@ test("native Codex discovery is bounded, header-only and rejects uncertain IO", 
   fs.unlinkSync(file);
   assert.match(resolveNativeCodexContext({ env }).reason, /not found/i);
   assert.equal(resolveNativeCodexContext({ env: { CODEX_THREAD_ID: "unknown" } }).status, "rejected");
+});
+
+test("native Codex discovery helper binds the one journal the header reader then reads", () => {
+  // Shared locator: the header-only identity reader and the terminal-evidence
+  // adapter must resolve the SAME single file, never two independent locators.
+  const { env, file } = codexFixture();
+  assert.deepEqual(resolveCodexRolloutJournal({ threadId: codexId, env }), { ok: true, file });
+  assert.deepEqual(resolveCodexRolloutJournal({ threadId: codexId.replace(/a3$/, "a4"), env }), { ok: false, code: "not_found" });
+  // The extraction preserves the header-only, byte-bounded read of that file.
+  let bytes = 0;
+  const trackedFs = { ...fs, readSync(...args) { const count = fs.readSync(...args); bytes += count; return count; } };
+  assert.equal(resolveNativeCodexContext({ env, fs: trackedFs }).status, "valid");
+  assert.equal(bytes, fs.readFileSync(file).indexOf(10) + 1);
 });
 
 test("native Codex discovery admits adjacent local dates and stops at its entry bound", () => {

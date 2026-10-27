@@ -1,0 +1,386 @@
+/**
+ * Contract tests for the read-only Codex terminal-evidence adapter.
+ *
+ * The disclosed JSON-pointer table in the implementation is derived from the real
+ * native journal named by the owning issue. These fixtures mirror only that table:
+ * the outer `event_msg` / `item_completed` record with its `CommandExecution` item.
+ * No transcript text is committed as evidence; retained output is asserted by
+ * digest and byte length, never copied into the result.
+ */
+import assert from "node:assert/strict";
+import { afterAll as after, test } from "bun:test";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import {
+  CODEX_TERMINAL_STATUSES,
+  EVIDENCE_REASONS,
+  EVIDENCE_STATUSES,
+  classifyCleanup,
+  describeEvidenceSchema,
+  reconcileCodexExecution,
+  resolveCodexExecutionJournal,
+} from "../src/loop/codex-execution-evidence.mjs";
+
+const OWNER = "01a15929-c860-7690-86d8-50f51506a786";
+const OTHER_OWNER = "01a15922-5286-7900-b26d-ca2fe181cb85";
+// A tool session identifier is an opaque string, never an OS process identifier.
+const EXECUTION = "12938";
+const REPO_ROOT = "/work/dev-loops";
+const WORKTREE = `${REPO_ROOT}/tmp/worktrees/dev-loops/issue-2878`;
+const RETAINED_OUTPUT = "0 passed, 0 skipped, 24 failed, 127.36 seconds\n";
+const EXEC_ITEM_ID = "exec-a18f4b73-f369-4841-9a64-261d9fff244e";
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function commandExecution({
+  payloadType = "item_completed",
+  threadId = OWNER,
+  executionId = EXECUTION,
+  status = "failed",
+  exitCode = 1,
+  cwd = `file://${WORKTREE}`,
+  command = ["/bin/zsh", "-lc", "bun test test/loop/pr-worktree-binding.test.mjs"],
+  retainedOutput = RETAINED_OUTPUT,
+  timestamp = "2026-10-20T11:59:37.885Z",
+  item = {},
+} = {}) {
+  return {
+    timestamp,
+    ordinal: 185,
+    type: "event_msg",
+    payload: {
+      type: payloadType,
+      thread_id: threadId,
+      turn_id: "01a15929-c8f8-7922-8edf-06747fcdef2c",
+      item: {
+        type: "CommandExecution",
+        id: EXEC_ITEM_ID,
+        process_id: executionId,
+        command,
+        cwd,
+        parsed_cmd: [],
+        source: "unified_exec_startup",
+        status,
+        aggregated_output: retainedOutput,
+        exit_code: exitCode,
+        ...item,
+      },
+    },
+  };
+}
+
+/** Worker/session stop marker: carries no terminal CommandExecution evidence. */
+function workerStop(timestamp = "2026-10-20T11:58:44.000Z") {
+  return { timestamp, type: "event_msg", payload: { type: "task_complete", thread_id: OWNER } };
+}
+
+const tempRoots = [];
+function makeTempRoot() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-evidence-"));
+  tempRoots.push(root);
+  return root;
+}
+
+function writeJournal(records, { root = makeTempRoot() } = {}) {
+  const file = path.join(root, "journal.jsonl");
+  fs.writeFileSync(file, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  return file;
+}
+
+function reconcile(journalPath, overrides = {}) {
+  return reconcileCodexExecution({
+    journalPath,
+    ownerThreadId: OWNER,
+    executionId: EXECUTION,
+    repoRoot: REPO_ROOT,
+    cwd: WORKTREE,
+    ...overrides,
+  });
+}
+
+function assertUnknown(result, reason) {
+  assert.equal(result.status, EVIDENCE_STATUSES.UNKNOWN, `expected unknown, got ${result.status} (${result.reason})`);
+  assert.equal(result.reason, reason);
+  assert.equal(result.execution, null);
+  assert.deepEqual(result.cleanup, { blocker: "unknown", processProbeAllowed: false });
+}
+
+// ---------------------------------------------------------------------------
+// C1 — a terminal record that lands after the worker stopped is completion.
+// ---------------------------------------------------------------------------
+
+test("C1: a terminal record after the worker stopped reports completed with the recorded evidence", () => {
+  const file = writeJournal([workerStop(), commandExecution()]);
+  const before = sha256(fs.readFileSync(file));
+
+  const result = reconcile(file);
+
+  assert.equal(result.status, EVIDENCE_STATUSES.COMPLETED);
+  assert.equal(result.reason, EVIDENCE_REASONS.TERMINAL_EVIDENCE_VERIFIED);
+  assert.equal(result.owner.threadId, OWNER);
+  assert.equal(result.execution.id, EXECUTION);
+  // The journal recorded a failed run; the typed status reports verified evidence, not success.
+  assert.equal(result.execution.exitStatus, "failed");
+  assert.equal(result.execution.exitCode, 1);
+  assert.equal(result.execution.endedAt, "2026-10-20T11:59:37.885Z");
+  assert.deepEqual(result.execution.command, ["/bin/zsh", "-lc", "bun test test/loop/pr-worktree-binding.test.mjs"]);
+  assert.equal(result.execution.cwd, `file://${WORKTREE}`);
+  assert.deepEqual(result.execution.retainedOutput, {
+    bytes: Buffer.byteLength(RETAINED_OUTPUT, "utf8"),
+    sha256: sha256(RETAINED_OUTPUT),
+  });
+  assert.deepEqual(result.cleanup, { blocker: false, processProbeAllowed: false });
+  // Retained output is referenced by digest, never copied into the result.
+  assert.ok(!JSON.stringify(result).includes("24 failed"));
+  assert.equal(sha256(fs.readFileSync(file)), before);
+});
+
+test("C1 alternative: a runtime with no native journal store reports unsupported", () => {
+  const codexHome = makeTempRoot(); // exists, but carries no `sessions/` store
+  const result = reconcileCodexExecution({
+    ownerThreadId: OWNER,
+    executionId: EXECUTION,
+    repoRoot: REPO_ROOT,
+    cwd: WORKTREE,
+    env: { CODEX_HOME: codexHome },
+  });
+  assert.equal(result.status, EVIDENCE_STATUSES.UNSUPPORTED);
+  assert.equal(result.reason, EVIDENCE_REASONS.UNSUPPORTED_RUNTIME_CAPABILITY);
+  assert.equal(result.execution, null);
+  assert.deepEqual(result.cleanup, { blocker: "unknown", processProbeAllowed: false });
+  assert.deepEqual(classifyCleanup(EVIDENCE_STATUSES.UNSUPPORTED), { blocker: "unknown", processProbeAllowed: false });
+});
+
+test("C1: the owner journal is discovered from the bounded native session layout", () => {
+  const codexHome = makeTempRoot();
+  const createdAt = Number.parseInt(OWNER.slice(0, 13).replaceAll("-", ""), 16);
+  const date = new Date(createdAt).toISOString().slice(0, 10);
+  const directory = path.join(codexHome, "sessions", ...date.split("-"));
+  fs.mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, `rollout-2026-10-20T13-54-33-${OWNER}.jsonl`);
+  fs.writeFileSync(file, [workerStop(), commandExecution()].map((r) => JSON.stringify(r)).join("\n") + "\n");
+
+  const env = { CODEX_HOME: codexHome };
+  const resolved = resolveCodexExecutionJournal({ ownerThreadId: OWNER, env });
+  assert.deepEqual(resolved, { ok: true, path: file });
+  assert.equal(resolveCodexExecutionJournal({ ownerThreadId: OWNER, env: { CODEX_HOME: makeTempRoot() + "/missing" } }).reason,
+    EVIDENCE_REASONS.UNSUPPORTED_RUNTIME_CAPABILITY);
+
+  const result = reconcileCodexExecution({
+    ownerThreadId: OWNER, executionId: EXECUTION, repoRoot: REPO_ROOT, cwd: WORKTREE, env,
+  });
+  assert.equal(result.status, EVIDENCE_STATUSES.COMPLETED);
+  assert.equal(result.execution.exitCode, 1);
+});
+
+// ---------------------------------------------------------------------------
+// C2 — one negative fixture per failure class, each typed unknown.
+// ---------------------------------------------------------------------------
+
+const NEGATIVES = [
+  {
+    name: "wrong owner thread",
+    records: [commandExecution({ threadId: OTHER_OWNER })],
+    reason: EVIDENCE_REASONS.OWNER_THREAD_MISMATCH,
+  },
+  {
+    name: "wrong execution id",
+    records: [commandExecution({ executionId: "40971" })],
+    reason: EVIDENCE_REASONS.EXECUTION_ID_MISMATCH,
+  },
+  {
+    name: "wrong working directory",
+    records: [commandExecution({ cwd: `file://${REPO_ROOT}/tmp/worktrees/dev-loops/issue-2877` })],
+    reason: EVIDENCE_REASONS.CWD_MISMATCH,
+  },
+  {
+    name: "wrong repository root",
+    records: [commandExecution({ cwd: "file:///work/other-repo/tmp/worktrees/dev-loops/issue-2878" })],
+    reason: EVIDENCE_REASONS.REPOSITORY_ROOT_MISMATCH,
+  },
+  {
+    name: "missing terminal record",
+    records: [workerStop(), commandExecution({ payloadType: "item_started", item: { status: undefined, exit_code: undefined } })],
+    reason: EVIDENCE_REASONS.TERMINAL_RECORD_MISSING,
+  },
+  {
+    name: "schema drift on the terminal status",
+    records: [commandExecution({ status: "interrupted" })],
+    reason: EVIDENCE_REASONS.SCHEMA_DRIFT,
+  },
+  {
+    name: "schema drift on an undisclosed exit code",
+    records: [commandExecution({ item: { exit_code: undefined } })],
+    reason: EVIDENCE_REASONS.SCHEMA_DRIFT,
+  },
+  {
+    name: "schema drift on an undisclosed working-directory form",
+    records: [commandExecution({ cwd: WORKTREE })],
+    reason: EVIDENCE_REASONS.SCHEMA_DRIFT,
+  },
+  {
+    name: "two conflicting terminal records",
+    records: [commandExecution(), commandExecution({ exitCode: 0, status: "completed", timestamp: "2026-10-20T11:59:41.101Z" })],
+    reason: EVIDENCE_REASONS.CONFLICTING_TERMINAL_RECORDS,
+  },
+];
+
+for (const negative of NEGATIVES) {
+  test(`C2: ${negative.name} stays typed unknown and leaves the journal bytes unchanged`, () => {
+    const file = writeJournal(negative.records);
+    const before = sha256(fs.readFileSync(file));
+    assertUnknown(reconcile(file), negative.reason);
+    assert.equal(sha256(fs.readFileSync(file)), before);
+  });
+}
+
+test("C2: malformed JSON stays typed unknown and leaves the journal bytes unchanged", () => {
+  const root = makeTempRoot();
+  const file = path.join(root, "journal.jsonl");
+  const body = `${JSON.stringify(workerStop())}\n{"type":"event_msg","payload":{"item":{"type":"CommandExecu\n`;
+  fs.writeFileSync(file, body);
+  const before = sha256(fs.readFileSync(file));
+  assertUnknown(reconcile(file), EVIDENCE_REASONS.MALFORMED_RECORD);
+  assert.equal(sha256(fs.readFileSync(file)), before);
+});
+
+test("C2: the positive binding is what rejects the mismatches, not a permissive match", () => {
+  // Same records, correct binding: completed. Each negative above differs in exactly one field.
+  const records = [commandExecution()];
+  assert.equal(reconcile(writeJournal(records)).status, EVIDENCE_STATUSES.COMPLETED);
+  // A sibling worktree of the same repository is still a different cwd.
+  const sibling = reconcile(writeJournal([commandExecution({ cwd: `file://${REPO_ROOT}/tmp/worktrees/dev-loops/issue-2950` })]));
+  assertUnknown(sibling, EVIDENCE_REASONS.CWD_MISMATCH);
+});
+
+test("C2: an unresolvable owner journal stays typed unknown and never guesses", () => {
+  const root = makeTempRoot();
+  const codexHome = path.join(root, "codex");
+  const ambiguousDir = path.join(codexHome, "sessions", ...new Date(Number.parseInt(OWNER.slice(0, 13).replaceAll("-", ""), 16)).toISOString().slice(0, 10).split("-"));
+  fs.mkdirSync(ambiguousDir, { recursive: true });
+  for (const prefix of ["a", "b"]) {
+    fs.writeFileSync(path.join(ambiguousDir, `rollout-2026-10-20T13-54-33-${OWNER}.jsonl`.replace("rollout", `rollout-${prefix}`)),
+      [commandExecution()].map((r) => JSON.stringify(r)).join("\n") + "\n");
+  }
+  const ambiguous = resolveCodexExecutionJournal({ ownerThreadId: OWNER, env: { CODEX_HOME: codexHome } });
+  assert.equal(ambiguous.ok, false);
+  assert.equal(ambiguous.reason, EVIDENCE_REASONS.OWNER_JOURNAL_AMBIGUOUS);
+
+  const base = { ownerThreadId: OWNER, executionId: EXECUTION, repoRoot: REPO_ROOT, cwd: WORKTREE };
+  assertUnknown(reconcileCodexExecution({ ...base, env: { CODEX_HOME: codexHome } }), EVIDENCE_REASONS.OWNER_JOURNAL_AMBIGUOUS);
+  const empty = makeTempRoot();
+  fs.mkdirSync(path.join(empty, "sessions"), { recursive: true });
+  assertUnknown(reconcileCodexExecution({ ...base, env: { CODEX_HOME: empty } }), EVIDENCE_REASONS.OWNER_JOURNAL_NOT_FOUND);
+  const unreadable = { ...fs, opendirSync() { throw Object.assign(new Error("boom"), { code: "EACCES" }); } };
+  assertUnknown(reconcile(fileWithRecords(), { fs: unreadable, journalPath: undefined, env: { CODEX_HOME: codexHome }, ownerThreadId: OWNER }),
+    EVIDENCE_REASONS.OWNER_JOURNAL_UNREADABLE);
+});
+
+function fileWithRecords() {
+  return writeJournal([commandExecution()]);
+}
+
+test("C2: a journal above the byte bound stays typed unknown and is never read whole", () => {
+  const file = writeJournal([commandExecution()]);
+  let readAttempts = 0;
+  const huge = {
+    ...fs,
+    statSync(...args) {
+      const stat = fs.statSync(...args);
+      return { ...stat, size: 64 * 1024 * 1024, isFile: () => true };
+    },
+    readFileSync(...args) { readAttempts++; return fs.readFileSync(...args); },
+  };
+  assertUnknown(reconcile(file, { fs: huge }), EVIDENCE_REASONS.JOURNAL_EXCEEDS_BYTE_BOUND);
+  assert.equal(readAttempts, 0);
+});
+
+// ---------------------------------------------------------------------------
+// C3 — an uncollected session is never evidence of a live process.
+// ---------------------------------------------------------------------------
+
+test("C3(a): only completed clears the cleanup blocker, and probing is never allowed", () => {
+  assert.deepEqual(classifyCleanup(EVIDENCE_STATUSES.COMPLETED), { blocker: false, processProbeAllowed: false });
+  assert.deepEqual(classifyCleanup(EVIDENCE_STATUSES.UNKNOWN), { blocker: "unknown", processProbeAllowed: false });
+  assert.deepEqual(classifyCleanup(EVIDENCE_STATUSES.UNSUPPORTED), { blocker: "unknown", processProbeAllowed: false });
+  assert.deepEqual(classifyCleanup(undefined), { blocker: "unknown", processProbeAllowed: false });
+});
+
+test("C3(b): an injected process probe is never called on any reconciliation path", () => {
+  const calls = [];
+  const processProbe = (identity) => { calls.push(identity); return { alive: true }; };
+  const paths = [
+    [workerStop(), commandExecution()],
+    [commandExecution({ threadId: OTHER_OWNER })],
+    [commandExecution({ executionId: "40971" })],
+    [commandExecution({ cwd: `file://${REPO_ROOT}/elsewhere` })],
+    [commandExecution({ status: "interrupted" })],
+  ];
+  for (const records of paths) {
+    const result = reconcile(writeJournal(records), { processProbe });
+    assert.equal(result.cleanup.processProbeAllowed, false);
+  }
+  const unsupported = reconcileCodexExecution({
+    ownerThreadId: OWNER, executionId: EXECUTION, repoRoot: REPO_ROOT, cwd: WORKTREE, processProbe,
+    env: { CODEX_HOME: makeTempRoot() },
+  });
+  assert.equal(unsupported.status, EVIDENCE_STATUSES.UNSUPPORTED);
+  assert.deepEqual(calls, []);
+});
+
+test("C3(c): the adapter imports no process, spawn or kill surface", () => {
+  const source = fs.readFileSync(new URL("../src/loop/codex-execution-evidence.mjs", import.meta.url), "utf8");
+  for (const forbidden of [/node:child_process/, /\bspawn\w*\(/, /\bexecFile\w*\(/, /\.kill\(/, /process\.pid/, /\bpid\b/]) {
+    assert.ok(!forbidden.test(source), `adapter source must not match ${forbidden}`);
+  }
+});
+
+test("C3(d): a numeric session id stays an opaque string identifier", () => {
+  const result = reconcile(writeJournal([commandExecution()]));
+  assert.equal(typeof result.execution.id, "string");
+  assert.equal(result.execution.id, "12938");
+  // No pid-shaped field is ever derived from it.
+  assert.ok(!Object.keys(result.execution).some((key) => /pid/i.test(key)));
+  assert.ok(!JSON.stringify(result).includes('"pid"'));
+  // Even a purely numeric identifier is never coerced to a number.
+  const numeric = reconcile(writeJournal([commandExecution({ executionId: "12938" })]), { executionId: "12938" });
+  assert.equal(numeric.execution.id, "12938");
+  assert.notStrictEqual(numeric.execution.id, 12938);
+});
+
+// ---------------------------------------------------------------------------
+// Disclosed schema.
+// ---------------------------------------------------------------------------
+
+test("the disclosed schema table is complete, pointer-shaped and drawn from the real journal", () => {
+  const table = describeEvidenceSchema();
+  assert.deepEqual(table.map((row) => row.field), [
+    "eventDiscriminator", "eventKind", "itemType", "ownerThreadId", "executionId",
+    "terminalTimestamp", "terminalStatus", "exitCode", "command", "cwd", "retainedOutput",
+  ]);
+  for (const row of table) {
+    assert.match(row.pointer, /^(\/[A-Za-z_]+)+$/);
+    assert.equal(typeof row.shape, "string");
+  }
+  assert.deepEqual([...CODEX_TERMINAL_STATUSES].sort(), ["completed", "failed"]);
+});
+
+test("the three typed statuses are exactly completed, unknown and unsupported", () => {
+  assert.deepEqual(Object.values(EVIDENCE_STATUSES).sort(), ["completed", "unknown", "unsupported"]);
+});
+
+test("an incomplete request is typed unknown rather than a guess", () => {
+  assertUnknown(reconcile(writeJournal([commandExecution()]), { ownerThreadId: undefined }), EVIDENCE_REASONS.INVALID_REQUEST);
+  assertUnknown(reconcile(writeJournal([commandExecution()]), { executionId: "   " }), EVIDENCE_REASONS.INVALID_REQUEST);
+  assertUnknown(reconcile(writeJournal([commandExecution()]), { repoRoot: undefined }), EVIDENCE_REASONS.INVALID_REQUEST);
+  assertUnknown(reconcile(writeJournal([commandExecution()]), { cwd: undefined }), EVIDENCE_REASONS.INVALID_REQUEST);
+});
+
+after(() => {
+  for (const root of tempRoots) fs.rmSync(root, { recursive: true, force: true });
+});
