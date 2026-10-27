@@ -1190,7 +1190,7 @@ export function commandContainsInlineInterpreter(command) {
         if (skip) { i += skip - 1; continue; }
         if (!t.startsWith("-")) {
           const prev = tokens[i - 1];
-          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !SCRIPT_EXT_RE.test(stripSurroundingQuotes(t))) { if (t.includes("<<")) return true; continue; } // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
+          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !SCRIPT_EXT_RE.test(stripSurroundingQuotes(t.split("<<")[0]))) { if (t.includes("<<")) return true; continue; } // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
           break; // script path reached — a later `-e` is a script argument
         }
         if (NODE_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
