@@ -2082,3 +2082,30 @@ test("pre_approval_gate: failOpen low stays a medium act, mixed medium and low k
   const question = runJudgePass([{ ...PR2945_ROUND5_LOW, severity: "question" }], pre2945Verdict(), HEAD, { pastCap: true });
   assert.equal(question.act.length, 1);
 });
+
+async function clusterVerdictRun(indexes, overrides = {}) {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-spec-cluster-"));
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  const dispositions = [0].map((index) => ({ index, disposition: "reject", title: "t", detail: "d", fix: "f", reason: "r", rationale: "out" }));
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding({ clusterId: 0 }), finding({ clusterId: 0 })] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions })));
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: indexes.map((index) => (
+    { index, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q", ...(overrides[index] ?? {}) }
+  )) }));
+  return judgePassCli(...specAuthorityArgs(tmpDir, contentDigest));
+}
+
+test("judgePassCli keeps the cluster-conflict code in the refusal message", async () => {
+  await assert.rejects(
+    clusterVerdictRun([0, 1], { 1: { outcome: "spec_cannot_decide" } }),
+    (e) => /\[spec_authority_cluster_conflict\]/.test(e.message) && e.code === "spec_authority_cluster_conflict",
+  );
+});
+
+test("judgePassCli keeps the uncovered-finding code in the refusal message", async () => {
+  await assert.rejects(
+    clusterVerdictRun([]),
+    (e) => /\[spec_authority_uncovered_finding\]/.test(e.message) && e.code === "spec_authority_uncovered_finding",
+  );
+});

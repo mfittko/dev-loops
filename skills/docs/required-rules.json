@@ -889,6 +889,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "SPEC-AUTHORITY-CLUSTER-EXPANSION",
+      "enforcement": "runtime"
+    },
+    {
       "id": "SPEC-AUTHORITY-CONFLICT-EVIDENCE",
       "enforcement": "runtime"
     },
