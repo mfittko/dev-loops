@@ -1419,3 +1419,19 @@ test("commandContainsTimeoutWrappedSanctionedTool stays linear on long path-like
   assert.equal(commandContainsTimeoutWrappedSanctionedTool(`timeout 5 ${"scripts/github/".repeat(5000)}x.mjs`), true);
   assert.ok(Date.now() - started < 1000, "classification must not backtrack catastrophically");
 });
+
+test("review fixes (#2943): escaped redirect operator, spaced redirection heredoc, boolean node flag", () => {
+  // an escaped `\>` is a literal, so the following `&` still separates the merge command
+  assert.equal(commandContainsGhPrMerge("echo \\>& gh pr merge 5"), true);
+  assert.equal(isMergeCapableCommand("echo \\>& gh pr merge 5"), true);
+  // a real `>&` redirection is still not a separator
+  assert.equal(commandContainsGhPrMerge("echo hi >&2"), false);
+  // a spaced redirection operator whose target carries the heredoc
+  for (const c of ["python3 -I 2> /dev/null<<EOF", "node --input-type=module 2> /dev/null<<EOF"]) {
+    assert.equal(commandContainsInlineInterpreter(c), true, c);
+  }
+  // a script name after a boolean long flag is the script, not a flag value
+  for (const c of ["node --no-warnings tool -p 1", "node --no-warnings /tmp/tool --body-file -"]) {
+    assert.equal(commandContainsInlineInterpreter(c), false, c);
+  }
+});

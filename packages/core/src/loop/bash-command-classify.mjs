@@ -81,7 +81,7 @@ export const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);
  * repo-flag extraction, and the Pi extension via extension/post-merge-update.ts). It is needed so
  * a redirection before a heredoc (`python3 -I 2>&1 <<EOF`) still reaches the interpreter scan.
  */
-const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||(?<![<>])&(?!>)|\n|\r)\s*/;
+const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||(?<!(?<!\\)[<>])&(?!>)|\n|\r)\s*/;
 
 /**
  * Strip a single balanced surrounding quote pair (`'…'` or `"…"`) from a shell arg value.
@@ -1162,6 +1162,8 @@ const REDIRECTION_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)/;
 const REDIRECTION_OPERATOR_ONLY_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)$/;
 const redirectionSkip = (t) => (!t.includes("<<") && REDIRECTION_RE.test(t) ? (REDIRECTION_OPERATOR_ONLY_RE.test(t) ? 2 : 1) : 0);
 const SCRIPT_EXT_RE = /\.(?:[cm]?js|[cm]?ts)$/;
+// Long node flags that take no value (`--no-warnings`, `--trace-*`, `--enable-*`, `--experimental-*`, ...): the token after one is the script, not a value.
+const NODE_BOOLEAN_FLAG_RE = /^--(?:no-|trace-|enable-|experimental-|expose-gc$|pending-deprecation$|throw-deprecation$|abort-on-uncaught-exception$)/;
 
 /**
  * OPS-NO-INLINE-INTERPRETER: an inline interpreter — `node -e`/`--eval`/`-p`, `python3 -c`, or a
@@ -1189,10 +1191,10 @@ export function commandContainsInlineInterpreter(command) {
         // is a script argument.
         if (t === "-e" || t.startsWith("-e") || t === "--eval" || t.startsWith("--eval=") || t === "-p" || t.startsWith("-p")) return true;
         const skip = redirectionSkip(t);
-        if (skip) { i += skip - 1; continue; }
+        if (skip) { if (skip === 2 && tokens[i + 1]?.includes("<<")) return true; i += skip - 1; continue; }
         if (!t.startsWith("-")) {
           const prev = tokens[i - 1];
-          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !SCRIPT_EXT_RE.test(stripSurroundingQuotes(t.split("<<")[0])) && !/^\.|^[^/]+\//.test(t)) { if (t.includes("<<")) return true; continue; } // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
+          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !NODE_BOOLEAN_FLAG_RE.test(prev) &&!SCRIPT_EXT_RE.test(stripSurroundingQuotes(t.split("<<")[0])) && !/^\.|^[^/]+\//.test(t)) { if (t.includes("<<")) return true; continue; } // unlisted `--flag value`: skip the value token and keep scanning, so chained unlisted value flags still reach `-`/heredoc
           break; // script path reached — a later `-e` is a script argument
         }
         if (NODE_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
@@ -1207,7 +1209,7 @@ export function commandContainsInlineInterpreter(command) {
         if (isStdinScriptToken(t)) return true;
         if (t === "-c" || t.startsWith("-c")) return true;
         const skip = redirectionSkip(t);
-        if (skip) { i += skip - 1; continue; }
+        if (skip) { if (skip === 2 && tokens[i + 1]?.includes("<<")) return true; i += skip - 1; continue; }
         if (!t.startsWith("-")) break; // script path reached — a later `-c` is a script argument
         if (PYTHON_VALUE_FLAGS.has(t) || /^-[A-Za-z]*[WX]$/.test(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
       }
