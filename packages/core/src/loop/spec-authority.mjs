@@ -556,9 +556,12 @@ export function validateSpecAuthorityVerdict(verdict, { findingsCount, criterion
     decisions.push(decision);
   }
   // The judge keys a decision by clusterId; expand it to every member finding.
+  // Expand only a well-formed stamp: every entry an integer naming a representative that names itself.
+  const wellFormed = Array.isArray(clusterIds)
+    && Array.from({ length: findingsCount }, (_, i) => clusterIds[i]).every((id) => Number.isInteger(id) && clusterIds[id] === id);
   const byIndex = new Map(decisions.map((d) => [d.index, d]));
   for (let i = 0; i < findingsCount; i += 1) {
-    const clusterDecision = byIndex.get(clusterIds?.[i]);
+    const clusterDecision = wellFormed ? byIndex.get(clusterIds[i]) : undefined;
     if (!clusterDecision || clusterDecision.index === i) continue;
     const own = byIndex.get(i);
     if (own) {

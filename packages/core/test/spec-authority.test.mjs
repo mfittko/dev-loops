@@ -380,6 +380,15 @@ describe("verdict-level coverage and escalation", () => {
       );
     });
 
+    test("a malformed clusterIds array skips expansion and leaves the finding uncovered", () => {
+      for (const [ids, n] of [[[undefined, 0], 2], [[1, 0], 2], [[0, 0.5], 2], [[0, "0"], 2]]) {
+        assert.throws(
+          () => validateSpecAuthorityVerdict(verdictFor([0]), ctx(ids, n)),
+          (e) => e.code === "spec_authority_uncovered_finding",
+        );
+      }
+    });
+
     test("per-finding decisions with identity clusterIds pass unchanged", () => {
       const out = validateSpecAuthorityVerdict(verdictFor([0, 1, 2]), ctx([0, 1, 2], 3));
       assert.equal(out.decisions.length, 3);
