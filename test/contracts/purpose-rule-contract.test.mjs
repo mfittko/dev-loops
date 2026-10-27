@@ -39,7 +39,9 @@ test("each #2937 rule cites the purpose rule as its parent without restating it"
     for (const id of ids) {
       const line = text.split("\n").find((l) => l.startsWith(`\`${id}\``) || (l.startsWith("|") && l.includes(`<!-- rule: ${id} -->`)));
       assert.match(line ?? "", new RegExp(`[Pp]arent:? \`${ID}\``), `${id} cites ${ID}`);
-      assert.ok(!line.includes("highest autonomy"), `${id} does not restate the purpose`);
+      for (const fragment of ["highest autonomy", "humans decide only what tooling cannot"]) {
+        assert.ok(!line.includes(fragment), `${id} does not restate the purpose`);
+      }
     }
   }
 });
