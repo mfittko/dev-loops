@@ -216,7 +216,7 @@ export function parseEditIssueCliArgs(argv) {
   return options;
 }
 
-export async function editIssue(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
+export async function editIssue(options, { env = process.env, ghCommand = "gh", run = runChild, currentBody } = {}) {
   // ADR-TRIPWIRE-STANDING-WAIVER: a PR is also an issue, so `gh issue edit` can
   // rewrite a PR body. A body write may not add, change or remove an
   // `adr-tripwire:allow` line; fail closed when the current body is unreadable.
@@ -229,8 +229,8 @@ export async function editIssue(options, { env = process.env, ghCommand = "gh", 
         throw new Error(`--body-file ${options.bodyFile} is empty`);
       }
     }
-    let baseline;
-    try {
+    let baseline = currentBody;
+    if (typeof baseline !== "string") try {
       const view = await run(ghCommand, ["issue", "view", String(options.issue), "--repo", options.repo, "--json", "body"], env);
       if (view && view.code === 0) baseline = JSON.parse(view.stdout).body;
     } catch {
