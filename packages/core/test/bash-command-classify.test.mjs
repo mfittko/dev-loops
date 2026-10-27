@@ -148,6 +148,10 @@ test("isMergeCapableCommand detects gh pr merge / git merge, ignores aborts and 
   assert.equal(isMergeCapableCommand("git merge --abort"), false);
   assert.equal(isMergeCapableCommand("gh pr merge --help"), false);
   assert.equal(isMergeCapableCommand("npm test"), false);
+  // a redirection `&` stays inside its segment; a plain background `&` still splits
+  assert.equal(isMergeCapableCommand("gh pr merge 5 2>&1"), true);
+  assert.equal(isMergeCapableCommand("gh pr merge 5 &>/dev/null"), true);
+  assert.equal(isMergeCapableCommand("echo hi & gh pr merge 5"), true);
   // merge-pr.mjs runs the post-merge steps itself; the hooks must not re-run them.
   assert.equal(isMergeCapableCommand("node scripts/github/merge-pr.mjs --repo o/r --pr 5 --human-approved-by mfittko"), false);
 });
@@ -854,6 +858,13 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   assert.equal(commandContainsInlineInterpreter('command python3 -c "print(1)"'), true);
   // a value-taking flag BEFORE the interpreter flag must not break the scan for -e/--eval
   assert.equal(commandContainsInlineInterpreter('node --require ./setup.js -e "console.log(1)"'), true);
+  // path-valued node flags with a relative value must not hide a stdin script
+  for (const c of ["node --report-dir out/r - <<EOF", "node --diagnostic-dir ./d - <<EOF", "node --cpu-prof-dir p/x - <<EOF", "node --test-reporter-destination out/x.txt - <<EOF"]) {
+    assert.equal(commandContainsInlineInterpreter(c), true, c);
+  }
+  for (const c of ["node --require ./setup.js scripts/x.mjs", "node --report-dir out/r scripts/x.mjs", "node scripts/x.mjs"]) {
+    assert.equal(commandContainsInlineInterpreter(c), false, c);
+  }
   assert.equal(commandContainsInlineInterpreter('node -r ./x.js --eval "1+1"'), true);
   assert.equal(commandContainsInlineInterpreter('node --import ./m.mjs -p "1+1"'), true);
 });

@@ -77,7 +77,10 @@ export const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);
  * (equivalent to `;`), and the Claude Code Bash tool accepts multi-line command
  * strings — so a segment must break on them too, else `echo hi\ngh pr create` evades
  * the gate. Used by all segment-splitting sites (DRY).
- * A `&` that belongs to a redirection (`2>&1`, `>&2`, `&>f`) is not a separator.
+ * A `&` that belongs to a redirection (`2>&1`, `>&2`, `&>f`) is not a separator. This changes
+ * segmentation for every gate that uses this regex (merge, stash, detached-wait, PR-number and
+ * repo-flag extraction, and the Pi extension via extension/post-merge-update.ts). It is needed so
+ * a redirection before a heredoc (`python3 -I 2>&1 <<EOF`) still reaches the interpreter scan.
  */
 const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||(?<![<>])&(?!>)|\n|\r)\s*/;
 
@@ -1174,11 +1177,11 @@ export function commandContainsInlineInterpreter(command) {
     if (interpreterRegex("node").test(s)) {
       const code = s.replace(interpreterRegex("node"), "").trim();
       const tokens = code.split(/\s+/).filter(Boolean);
-      // ponytail: closed list of value flags. an unlisted `--long value` flag fails closed: a non-flag token that follows a `--flag` (not `--`, no `=`) is skipped as its value and the scan continues, unless it ends in a script extension (.js/.mjs/.cjs/.ts/.mts/.cts) and so is the script. A relative path-like token (starts with `.` or has a non-leading `/`) is the script, not a value. Ceiling: a bare extensionless name or absolute path after a boolean long flag is still read as a value.
+      // ponytail: closed list of value flags. an unlisted `--long value` flag fails closed: a non-flag token that follows a `--flag` (not `--`, no `=`) is skipped as its value and the scan continues, unless it ends in a script extension (.js/.mjs/.cjs/.ts/.mts/.cts) and so is the script. A relative path-like token (starts with `.` or has a non-leading `/`) is the script, not a value. Path-valued flags (--report-dir, --diagnostic-dir, --cpu-prof-dir, ...) are on the closed list so a relative value is skipped. Ceiling: a relative path value after an UNLISTED path-valued long flag is read as the script (fail-open); a bare extensionless name or absolute path after a boolean long flag is still read as a value.
       // Node value-taking flags (short + long) each consume the following token. Consuming them lets
       // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
       // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value.
-      const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type", "--title", "--disable-warning", "--watch-path", "--redirect-warnings", "--env-file-if-exists", "--test-reporter"]);
+      const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd", "--input-type", "--title", "--disable-warning", "--watch-path", "--redirect-warnings", "--env-file-if-exists", "--test-reporter", "--report-dir", "--diagnostic-dir", "--cpu-prof-dir", "--heap-prof-dir", "--snapshot-blob", "--test-reporter-destination", "--localstorage-file", "--openssl-config", "--icu-data-dir", "--tls-keylog"]);
       for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
         if (isStdinScriptToken(t)) return true;
