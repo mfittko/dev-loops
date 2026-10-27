@@ -1,3 +1,4 @@
 ### Fixed
 
-- Codex terminal execution evidence is reconciled from the owned native journal before any process-cleanup escalation: an execution that reached a terminal result after its worker stopped reports `completed` with the recorded timestamp, exit status, exit code, command and working directory, while absent, mismatched, malformed or conflicting evidence stays typed `unknown` and never authorizes process probing (#2886)
+- Codex terminal execution evidence reconciles from the owned native journal before any process-cleanup escalation, so an execution that finished after its worker stopped reports `completed` (#2886)
+- Absent, mismatched, malformed or conflicting evidence stays typed `unknown`, never authorizes process probing, and a tool session id never becomes an OS process id (#2886)
