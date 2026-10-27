@@ -9,7 +9,7 @@ import {
   saveStateFile as saveSharedStateFile,
   withStateFileLock as withSharedStateFileLock,
 } from "./_steering-state-file.mjs";
-import { detectStaleRunner } from "./_stale-runner-detection.mjs";
+import { detectStaleRunner, resolveStaleRunnerMaxAgeMs, STALE_RUNNER_ERROR } from "./_stale-runner-detection.mjs";
 export const RUNNER_COORDINATION_SCHEMA_VERSION = 2;
 export const RUNNER_COORDINATION_SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1, 2]);
 export const RUNNER_COORDINATION_HISTORY_LIMIT = 50; // cap audit trail; heartbeats append per-round, keep the most recent 50 events
@@ -40,6 +40,27 @@ function normalizeRunId(runId) {
   return typeof runId === "string" && runId.trim().length > 0
     ? runId.trim()
     : null;
+}
+function normalizeClaimGeneration(claim) {
+  return {
+    claimedAt: typeof claim?.claimedAt === "string" ? claim.claimedAt : null,
+    updatedAt: typeof claim?.updatedAt === "string" ? claim.updatedAt : null,
+  };
+}
+/**
+ * Whether a supplied takeover expectation can name a claim generation: a plain
+ * object carrying `claimedAt` and `updatedAt`, each a string or null. Any other
+ * object-typed value (a `Date`, a `Map`, an array), an absent member or a
+ * non-string member would normalize to the all-null generation and surface as a
+ * lost-race `active_run_exists` for input the caller never sent.
+ */
+function isClaimGeneration(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  return [value.claimedAt, value.updatedAt].every(
+    (member) => member === null || typeof member === "string",
+  );
 }
 function normalizeSignalReason(reason) {
   if (typeof reason !== "string") return null;
@@ -306,10 +327,22 @@ export async function claimRunnerOwnership({
   filePath = null,
   mode = "claim",
   now = new Date().toISOString(),
+  expectPreviousRunId = null,
+  expectPreviousClaim = null,
 } = {}) {
   const normalizedRepo = normalizeRepoSlug(repo);
   const normalizedPr = normalizePr(pr);
   const normalizedRunId = normalizeRunId(runId);
+  // Normalized once, like every other run-id input: an absent, null or padded
+  // expectation behaves like the rest of this module rather than refusing raw.
+  const expectedPreviousRunId = normalizeRunId(expectPreviousRunId);
+  // The claim generation the recovery-authorizing read observed, compared
+  // literally under the lock: a member the record normalizes to `null` (an
+  // absent or non-string timestamp) stays `null` here too, so it can never
+  // silently match a different generation.
+  const expectedPreviousClaim = expectPreviousClaim === null || expectPreviousClaim === undefined
+    ? null
+    : normalizeClaimGeneration(expectPreviousClaim);
   if (normalizedRunId === null) {
     return buildConflict({
       error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED,
@@ -319,6 +352,39 @@ export async function claimRunnerOwnership({
       activeRun: null,
       filePath: filePath ?? defaultRunnerCoordinationFilePathForTarget({ repo: normalizedRepo, pr: normalizedPr }, cwd),
       message: "Runner coordination claim requires a non-empty run id.",
+    });
+  }
+  // A supplied expectation is caller input in either mode, so a malformed one
+  // refuses here: before the lock, with no state write, and with a message that
+  // names the OPTION rather than the mode so a claim and a takeover call read the
+  // same. Only an absent, null or undefined expectation is inactive.
+  //
+  // A run id that collapses to null would silently disable the takeover race
+  // guards below.
+  if (expectPreviousRunId !== null && expectPreviousRunId !== undefined && expectedPreviousRunId === null) {
+    return buildConflict({
+      error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED,
+      repo: normalizedRepo,
+      pr: normalizedPr,
+      runId: normalizedRunId,
+      activeRun: null,
+      filePath: filePath ?? defaultRunnerCoordinationFilePathForTarget({ repo: normalizedRepo, pr: normalizedPr }, cwd),
+      message: "Runner coordination requires a non-empty expectPreviousRunId when one is supplied.",
+    });
+  }
+  // A supplied value that cannot describe a claim generation refuses here: coercing
+  // a non-generation (a string, an array, a `Date`) or a non-string member to an
+  // all-null generation would surface as a lost-race `active_run_exists` for input
+  // the caller never sent, so it refuses as malformed instead.
+  if (expectPreviousClaim !== null && expectPreviousClaim !== undefined && !isClaimGeneration(expectPreviousClaim)) {
+    return buildConflict({
+      error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED,
+      repo: normalizedRepo,
+      pr: normalizedPr,
+      runId: normalizedRunId,
+      activeRun: null,
+      filePath: filePath ?? defaultRunnerCoordinationFilePathForTarget({ repo: normalizedRepo, pr: normalizedPr }, cwd),
+      message: "Runner coordination requires an expectPreviousClaim object carrying claimedAt and updatedAt when one is supplied.",
     });
   }
   const resolvedPath = filePath ?? defaultRunnerCoordinationFilePathForTarget({ repo: normalizedRepo, pr: normalizedPr }, cwd);
@@ -386,6 +452,39 @@ export async function claimRunnerOwnership({
         filePath: resolvedPath,
         exitSignals: state.exitSignals,
         message: `PR ${normalizedRepo}#${normalizedPr} is already owned by run ${activeRun.runId}. Claim failed closed.`,
+      });
+    }
+    // A recovery is authorized by evidence read before this lock. Refuse when the
+    // owner changed in between, so a takeover never displaces a run whose death
+    // was not the one observed.
+    if (expectedPreviousRunId !== null && activeRun.runId !== expectedPreviousRunId) {
+      return buildConflict({
+        error: RUNNER_OWNERSHIP_ERROR.ACTIVE_RUN_EXISTS,
+        repo: normalizedRepo,
+        pr: normalizedPr,
+        runId: normalizedRunId,
+        activeRun,
+        filePath: resolvedPath,
+        exitSignals: state.exitSignals,
+        message: `PR ${normalizedRepo}#${normalizedPr} is owned by ${activeRun.runId}, not the displaced run ${expectedPreviousRunId}. Takeover failed closed.`,
+      });
+    }
+    // The same run id is not the same claim: a heartbeat keeps the run id and
+    // bumps only `updatedAt`, and a same-run release plus re-claim retires that
+    // claim's exit signals while keeping the id. Refuse when the generation the
+    // detector judged dead is no longer the locked one, so the takeover can never
+    // displace a live owner the detection read did not observe.
+    if (expectedPreviousClaim !== null
+      && (activeRun.claimedAt !== expectedPreviousClaim.claimedAt || activeRun.updatedAt !== expectedPreviousClaim.updatedAt)) {
+      return buildConflict({
+        error: RUNNER_OWNERSHIP_ERROR.ACTIVE_RUN_EXISTS,
+        repo: normalizedRepo,
+        pr: normalizedPr,
+        runId: normalizedRunId,
+        activeRun,
+        filePath: resolvedPath,
+        exitSignals: state.exitSignals,
+        message: `PR ${normalizedRepo}#${normalizedPr} is owned by a claim of run ${activeRun.runId} that changed after the stale read (claimed ${JSON.stringify(activeRun.claimedAt)}, updated ${JSON.stringify(activeRun.updatedAt)}). Takeover failed closed.`,
       });
     }
     const nextState = {
@@ -877,6 +976,24 @@ export async function recordExitSignalForRunner({
     };
   });
 }
+/**
+ * Map a stale-runner detector verdict onto the typed recovery evidence it
+ * authorizes.
+ *
+ * The detector returns exactly two recoverable verdicts; anything else maps to
+ * `null`, so a takeover can never report a successful recovery it cannot name.
+ * A claim whose `claimedAt`/`updatedAt` do not parse arrives as the ordinary
+ * `stale_runner` verdict carrying `staleRunner.corruptedTimestamp`, and no clock
+ * comparison produced it: corruption maps to `null` rather than to a max-age
+ * recovery the evidence never supported.
+ */
+function resolveRecoveryEvidence(stale) {
+  if (stale?.error === STALE_RUNNER_ERROR.EXIT_SIGNAL_RECORDED) return "exit_signal";
+  if (stale?.error === STALE_RUNNER_ERROR.STALE_RUNNER && stale.staleRunner?.corruptedTimestamp !== true) {
+    return "stale_max_age";
+  }
+  return null;
+}
 export async function ensureAsyncRunnerOwnership({
   repo,
   pr,
@@ -885,6 +1002,9 @@ export async function ensureAsyncRunnerOwnership({
   claimIfMissing = true,
   requireExisting = false,
   supersedeStale = false,
+  // The detection read this handoff authorizes a takeover with; tests inject a
+  // verdict to exercise the production wiring without a live stale claim.
+  detectStale = detectStaleRunner,
 } = {}) {
   const runId = normalizeRunId(resolveRunId(env));
   if (runId === null) {
@@ -928,9 +1048,39 @@ export async function ensureAsyncRunnerOwnership({
     // leaked lock. A genuinely live owner stays fail-closed: the
     // one-runner-per-PR invariant for active work is preserved.
     if (supersedeStale) {
-      const stale = await detectStaleRunner({ repo, pr, cwd });
-      if (!stale.ok && stale.status !== "no_owner_record") {
-        return claimRunnerOwnership({ repo, pr, runId, cwd, mode: "takeover" });
+      const stale = await detectStale({
+        repo,
+        pr,
+        cwd,
+        maxAgeMs: resolveStaleRunnerMaxAgeMs({}, { ...process.env, ...env }),
+      });
+      const evidence = resolveRecoveryEvidence(stale);
+      // A verdict this recovery cannot name is not evidence to take over on:
+      // fail closed on the original conflict instead of an untyped takeover.
+      if (!stale.ok && evidence !== null) {
+        const takenOver = await claimRunnerOwnership({
+          repo,
+          pr,
+          runId,
+          cwd,
+          mode: "takeover",
+          expectPreviousRunId: stale.activeRun?.runId ?? null,
+          expectPreviousClaim: {
+            claimedAt: stale.activeRun?.claimedAt ?? null,
+            updatedAt: stale.activeRun?.updatedAt ?? null,
+          },
+        });
+        if (!takenOver.ok || takenOver.status !== "taken_over") {
+          return takenOver;
+        }
+        return {
+          ...takenOver,
+          recovery: {
+            evidence,
+            displacedRunId: takenOver.previousRun.runId,
+            maxAgeMs: stale.maxAgeMs,
+          },
+        };
       }
     }
     return asserted;
