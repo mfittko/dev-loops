@@ -389,6 +389,13 @@ describe("verdict-level coverage and escalation", () => {
       }
     });
 
+    test("a spec_cannot_decide cluster decision escalates every member finding", () => {
+      const v = verdictFor([0], { 0: { outcome: SPEC_AUTHORITY_OUTCOMES.SPEC_CANNOT_DECIDE } });
+      const out = validateSpecAuthorityVerdict(v, ctx([0, 0], 2));
+      assert.equal(out.humanDecisionRequired, true);
+      assert.deepEqual(out.humanDecisionIndices, [0, 1]);
+    });
+
     test("per-finding decisions with identity clusterIds pass unchanged", () => {
       const out = validateSpecAuthorityVerdict(verdictFor([0, 1, 2]), ctx([0, 1, 2], 3));
       assert.equal(out.decisions.length, 3);
