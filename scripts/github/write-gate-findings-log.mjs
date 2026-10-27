@@ -725,7 +725,7 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
       criterionIds: identity?.checkedCriteria,
     });
   } catch (error) {
-    throw parseError(`spec-authority verdict ${verdictPath} failed validation: ${error instanceof Error ? error.message : String(error)}`);
+    throw parseError(`spec-authority verdict ${verdictPath} failed validation${error?.code ? ` [${error.code}]` : ""}: ${error instanceof Error ? error.message : String(error)}`);
   }
   for (const key of ["specDigest", "headSha", "contentDigest"]) {
     if (validated[key] !== identity[key]) {
