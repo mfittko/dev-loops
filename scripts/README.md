@@ -518,6 +518,26 @@ Subcommands:
 - `takeover` — explicit replacement path that records prior/new run ids
 - `assert` — verify the current run still owns the PR; `--require-existing` fails closed when async pre-merge ownership proof is missing
 - `release` — clear ownership when the active run is done
+- `handoff` — atomically record the verified owner's exit signal and clear its claim
+
+Explicit completion handoff:
+- `handoff --repo <owner/name> --pr <number> [--run-id <id>]` requires the existing
+  runtime identity: Pi/Claude run context or a verified native Codex child session. An
+  explicit `--run-id` only asserts that identity; it cannot substitute for missing evidence.
+- Returns `handoff_recorded`, or `handoff_noop` without a state write when no active owner
+  remains. Both exit 0 with JSON stdout containing `repo`, `pr`, `runId`, `activeRun: null`,
+  `previousRun`, `exitSignals` and `filePath`. Unverified identity (`run_id_required`) or
+  mismatched/foreign ownership (`ownership_lost`) exits 1 with JSON stderr and no state write.
+  Existing `--jq`/`--silent` output filtering applies.
+- This command is explicit; existing automatic release paths do not write new exit signals.
+  The coordinator must verify required children are joined using native evidence before
+  calling it. Native Codex producer-to-consumer operation remains an operator-pending trial;
+  this command does not establish production Codex support.
+- Exit-signal recovery ignores signals older than the active claim, so a later claim by
+  the same run is not displaced by its earlier handoff. A new claim or takeover also
+  removes prior signals for the incoming run under the state lock, independent of clock
+  ordering; same-owner refresh preserves current-claim signals. Typed recovery reporting and broad
+  coordinator handoff guidance remain separate work.
 
 State path:
 - `.pi/runner-coordination/<owner>/<repo>/pr-<number>.json`
