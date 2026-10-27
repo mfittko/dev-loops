@@ -1163,7 +1163,7 @@ const REDIRECTION_OPERATOR_ONLY_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)$/;
 const redirectionSkip = (t) => (!t.includes("<<") && REDIRECTION_RE.test(t) ? (REDIRECTION_OPERATOR_ONLY_RE.test(t) ? 2 : 1) : 0);
 const SCRIPT_EXT_RE = /\.(?:[cm]?js|[cm]?ts)$/;
 // Long node flags that take no value (`--no-warnings`, `--trace-*`, `--enable-*`, `--experimental-*`, ...): the token after one is the script, not a value.
-const NODE_BOOLEAN_FLAG_RE = /^--(?:no-|trace-|enable-|experimental-|expose-gc$|pending-deprecation$|throw-deprecation$|abort-on-uncaught-exception$)/;
+const NODE_BOOLEAN_FLAG_RE = /^--(?:no-(?!experimental-default-type)|trace-(?!event-categories$|event-file-pattern$)|enable-source-maps$|experimental-(?!loader$|default-type$|specifier-resolution$|policy$|network-inspection$)|expose-gc$|pending-deprecation$|throw-deprecation$|abort-on-uncaught-exception$)/;
 
 /**
  * OPS-NO-INLINE-INTERPRETER: an inline interpreter — `node -e`/`--eval`/`-p`, `python3 -c`, or a
