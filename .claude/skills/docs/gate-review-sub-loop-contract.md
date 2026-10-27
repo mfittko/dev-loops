@@ -833,7 +833,7 @@ Because the findings ride the verdict review itself, they occupy the same post-v
 ### Phase 3.5 — Judge: relevance disposition (#1525)
 
 <!-- rule: GATE-EXEC-JUDGE-PHASE -->
-`GATE-EXEC-JUDGE-PHASE`: After fan-in (Phase 3) and before the fix pass (Phase 4), the
+`GATE-EXEC-JUDGE-PHASE`: After fan-in (Phase 3) and before the fix pass (Phase 4), except under `GATE-EXEC-JUDGE-SKIP-EMPTY`, the
 gate coordinator dispatches the dedicated `judge` agent (`agents/judge.agent.md`). The judge holds
 the linked issue's acceptance criteria, definition of done, and non-goals, the PR's declared
 scope, and the prior rounds' judge ledgers, and decides — per cluster — whether this PR is
@@ -846,6 +846,9 @@ findings}`), the linked issue's AC / DoD / non-goals, the PR's declared scope, t
 prior-round judge verdict artifacts for this gate, and — engaged by default on every gate
 round (issue 2008 / ADR 0061) — the structured spec plus `specDigest`/`headSha`/`contentDigest`
 the conductor derives via `scripts/loop/spec-context.mjs` (see the Dispatch bridge below).
+
+<!-- rule: GATE-EXEC-JUDGE-SKIP-EMPTY -->
+`GATE-EXEC-JUDGE-SKIP-EMPTY` (issue 2926): On any gate, a round with zero consolidated findings and no carried act item dispatches no judge. The conductor runs `judge-pass.mjs --judge-skip --findings-file <ledger> [--spec-file <spec> --content-digest <digest>] [--ledger-out <path>] [--out <path>]` with no `--judge-verdict`, `--judge-plan` or `--spec-authority-verdict`. It writes a judge-free ledger that composes clean. The result and the ledger record `judgeSkipped.reason`, and `scopeDrift` is derived from the recorded spec identity (`within_scope`). The conductor passes the result's `findingsSummary` verbatim as `--findings-summary`, so the posted gate comment states the judge was skipped and why. A round with a finding, a carried act item (a prior round's unresolved act) or a recurrence escalation (which needs a finding) fails `--judge-skip` closed and still requires the judge pass.
 
 **Dispatch (pull transport, ADR 0106).** The conductor never writes the judge's brief. After
 fan-in it runs the deterministic producer over the round's sources:

@@ -53,5 +53,23 @@ test("an escalation needs a finding, so it still requires the judge", () => {
 });
 
 test("--judge-skip refuses judge artifact flags", () => {
-  assert.throws(() => parseJudgePassCliArgs(["--repo", "o/r", "--pr", "1", "--gate", "draft_gate", "--head-sha", HEAD, "--judge-skip", "--findings-file", "f.json", "--judge-verdict", "v.json"]), /judge-skip takes no --judge-verdict/);
+  assert.throws(() => parseJudgePassCliArgs(["--repo", "o/r", "--pr", "1", "--gate", "draft_gate", "--head-sha", HEAD, "--judge-skip", "--findings-file", "f.json", "--spec-file", "s.json", "--content-digest", `sha256:${"a".repeat(64)}`, "--judge-verdict", "v.json"]), /judge-skip takes no --judge-verdict/);
+});
+
+const BASE = ["--repo", "o/r", "--pr", "1", "--gate", "draft_gate", "--head-sha", HEAD, "--judge-skip", "--findings-file", "f.json"];
+
+test("--judge-skip requires --spec-file and --content-digest", () => {
+  assert.throws(() => parseJudgePassCliArgs(BASE), /--spec-file is required with --judge-skip/);
+  assert.throws(() => parseJudgePassCliArgs([...BASE, "--spec-file", "s.json"]), /--content-digest is required/);
+});
+
+test("--judge-skip refuses the silently ignored flags", () => {
+  const spec = ["--spec-file", "s.json", "--content-digest", `sha256:${"a".repeat(64)}`];
+  for (const flag of ["--approvals-out", "--prior-approvals", "--changed-paths", "--coverage-map", "--carry-forward-proof"]) {
+    assert.throws(() => parseJudgePassCliArgs([...BASE, ...spec, flag, "x.json"]), new RegExp(`judge-skip ignores ${flag}`));
+  }
+});
+
+test("a blocked zero-finding round still requires the judge", () => {
+  assert.match(judgeSkipRefusal({ findings: [], priorActItems: [], overallVerdict: "blocked" }), /blocked/);
 });

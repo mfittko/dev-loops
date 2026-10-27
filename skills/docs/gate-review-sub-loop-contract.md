@@ -833,7 +833,7 @@ Because the findings ride the verdict review itself, they occupy the same post-v
 ### Phase 3.5 — Judge: relevance disposition (#1525)
 
 <!-- rule: GATE-EXEC-JUDGE-PHASE -->
-`GATE-EXEC-JUDGE-PHASE`: After fan-in (Phase 3) and before the fix pass (Phase 4), the
+`GATE-EXEC-JUDGE-PHASE`: After fan-in (Phase 3) and before the fix pass (Phase 4), except under `GATE-EXEC-JUDGE-SKIP-EMPTY`, the
 gate coordinator dispatches the dedicated `judge` agent (`agents/judge.agent.md`). The judge holds
 the linked issue's acceptance criteria, definition of done, and non-goals, the PR's declared
 scope, and the prior rounds' judge ledgers, and decides — per cluster — whether this PR is

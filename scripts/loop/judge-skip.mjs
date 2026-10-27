@@ -6,7 +6,8 @@ import { buildRevisionIdentity, specCriterionIds, stampSpecAuthorityIdentity } f
  * GATE-EXEC-JUDGE-SKIP-EMPTY: why a round must still run the judge, or null when it may skip.
  * A finding, a carried act item (prior-round unresolved act) and a recurrence escalation (which needs a finding) all require a judge.
  */
-export function judgeSkipRefusal({ findings, priorActItems }) {
+export function judgeSkipRefusal({ findings, priorActItems, overallVerdict }) {
+  if (overallVerdict === "blocked") return "the consolidated verdict is blocked, so the round cannot skip the judge";
   if (findings.length > 0) return `${findings.length} consolidated finding(s) need a judge disposition`;
   if (priorActItems.length > 0) return `${priorActItems.length} carried act item(s) from prior rounds need a judge`;
   return null;
@@ -14,7 +15,7 @@ export function judgeSkipRefusal({ findings, priorActItems }) {
 
 /** The judge-free round result: scope drift derived from the recorded spec identity, the skip recorded with its reason. */
 export async function runJudgeSkip(options, resolvedRoot, { findings, overallVerdict, spec, priorActItems }) {
-  const refusal = judgeSkipRefusal({ findings, priorActItems });
+  const refusal = judgeSkipRefusal({ findings, priorActItems, overallVerdict });
   if (refusal) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: --judge-skip refused (fail closed): ${refusal}; run the judge pass`);
   const identity = spec ? buildRevisionIdentity({ spec, headSha: options.headSha, contentDigest: options.contentDigest }) : null;
   const reason = "the round has no consolidated findings and no carried act items, so there is nothing for the judge to dispose";

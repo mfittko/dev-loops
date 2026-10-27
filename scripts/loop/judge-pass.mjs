@@ -352,7 +352,13 @@ function requireValue(value, flag, parseErr) {
 export function validateCliArgs(options) {
   const missing = [];
   if (options.judgeSkip) {
-    // GATE-EXEC-JUDGE-SKIP-EMPTY: a skipped round has no judge artifact to name.
+    // GATE-EXEC-JUDGE-SKIP-EMPTY: a skipped round has no judge artifact to name, never reads the approval/coverage flags, and derives scope drift from a real spec identity.
+    for (const key of ["approvalsOut", "priorApprovals", "changedPaths", "coverageMap", "carryForwardProof"]) {
+      if (options[key] !== undefined) throw parseError(`--judge-skip ignores --${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}; remove it`);
+    }
+    for (const key of ["specFile", "contentDigest"]) {
+      if (options[key] === undefined) throw parseError(`--${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)} is required with --judge-skip`);
+    }
     for (const key of ["judgeVerdict", "judgePlan", "specAuthorityVerdict"]) {
       if (options[key] !== undefined) throw parseError(`--judge-skip takes no --${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`);
     }
