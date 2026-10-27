@@ -517,6 +517,26 @@ Before standing down or deciding dispatch, verify actual execution with the harn
 `subagent status`: LIVE means an actively updating `EXECUTING` workflow child.
 A fresh claim heartbeat alone is insufficient; a completed/control run may have left it.
 
+A takeover reports which evidence authorized it as
+`recovery: { evidence: "exit_signal" | "stale_max_age", displacedRunId, maxAgeMs }` on the
+`runnerOwnership` result. A result that displaced nobody carries no `recovery` field, so a
+handback records a recovery only when that field is present — a plain fresh claim is never
+reported as a recovery.
+
+An async owner that will not reach a terminal stop must not wait for a process boundary to
+free its claim. After verifying with native evidence that its required children are joined,
+run the owner-only handoff before returning its handback and record its status there:
+
+```sh
+node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs handoff \
+  --repo <owner/name> --pr <number>
+```
+
+`handoff` appends the exit signal and clears the claim in one locked write, so the successor's
+pre-flight recovers deterministically instead of waiting out the stale window. It adds no
+identity override: the run id comes from the verified runtime context, and `ownership_lost` or
+`run_id_required` exits 1 with no state write.
+
 If a stale claim still blocks the merge because the completing run could not release it (crash, killed process, or a pre-#1109 run), the sanctioned recovery for a lock held by a COMPLETED run is an explicit takeover by the merge run:
 
 ```sh

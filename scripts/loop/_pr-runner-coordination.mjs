@@ -9,7 +9,7 @@ import {
   saveStateFile as saveSharedStateFile,
   withStateFileLock as withSharedStateFileLock,
 } from "./_steering-state-file.mjs";
-import { detectStaleRunner } from "./_stale-runner-detection.mjs";
+import { detectStaleRunner, STALE_RUNNER_ERROR } from "./_stale-runner-detection.mjs";
 export const RUNNER_COORDINATION_SCHEMA_VERSION = 2;
 export const RUNNER_COORDINATION_SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1, 2]);
 export const RUNNER_COORDINATION_HISTORY_LIMIT = 50; // cap audit trail; heartbeats append per-round, keep the most recent 50 events
@@ -930,7 +930,21 @@ export async function ensureAsyncRunnerOwnership({
     if (supersedeStale) {
       const stale = await detectStaleRunner({ repo, pr, cwd });
       if (!stale.ok && stale.status !== "no_owner_record") {
-        return claimRunnerOwnership({ repo, pr, runId, cwd, mode: "takeover" });
+        const takenOver = await claimRunnerOwnership({ repo, pr, runId, cwd, mode: "takeover" });
+        // Only a completed displacement is reported as a recovery: a takeover
+        // that landed on this run's own claim displaced nobody, so it stays
+        // indistinguishable from an ordinary refresh.
+        if (!takenOver.ok || takenOver.status !== "taken_over") {
+          return takenOver;
+        }
+        return {
+          ...takenOver,
+          recovery: {
+            evidence: stale.status === STALE_RUNNER_ERROR.EXIT_SIGNAL_RECORDED ? "exit_signal" : "stale_max_age",
+            displacedRunId: takenOver.previousRun?.runId ?? null,
+            maxAgeMs: stale.maxAgeMs,
+          },
+        };
       }
     }
     return asserted;

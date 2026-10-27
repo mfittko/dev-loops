@@ -530,14 +530,15 @@ Explicit completion handoff:
   mismatched/foreign ownership (`ownership_lost`) exits 1 with JSON stderr and no state write.
   Existing `--jq`/`--silent` output filtering applies.
 - This command is explicit; existing automatic release paths do not write new exit signals.
-  The coordinator must verify required children are joined using native evidence before
-  calling it. Native Codex producer-to-consumer operation remains an operator-pending trial;
-  this command does not establish production Codex support.
+  A coordinator that owns a PR but will not reach a terminal stop runs it before returning its
+  handback and records the returned status there. The coordinator must verify required children are
+  joined using native evidence before calling it. Native Codex producer-to-consumer operation remains
+  an operator-pending trial; this command does not establish production Codex support.
 - Exit-signal recovery ignores signals older than the active claim, so a later claim by
   the same run is not displaced by its earlier handoff. A new claim or takeover also
   removes prior signals for the incoming run under the state lock, independent of clock
-  ordering; same-owner refresh preserves current-claim signals. Typed recovery reporting and broad
-  coordinator handoff guidance remain separate work.
+  ordering; same-owner refresh preserves current-claim signals. Typed recovery reporting is
+  part of the consumer surface below.
 
 State path:
 - `.pi/runner-coordination/<owner>/<repo>/pr-<number>.json`
@@ -558,6 +559,11 @@ Release-on-death & dead-claim supersession (#1706):
   stale-max-age window, so pre-flight handoff proceeds instead of returning a blocking stop against a
   leaked lock. A genuinely live owner still stands the handoff down (one-runner-per-PR preserved);
   only confirmed-dead or stale claims are superseded.
+- A successful takeover reports which evidence authorized it: `recovery: { evidence:
+  "exit_signal" | "stale_max_age", displacedRunId, maxAgeMs }`, where `displacedRunId` is the
+  displaced owner recorded as `previousRun.runId` and `maxAgeMs` is the effective stale window.
+  A result that displaced nobody — a fresh claim, a same-owner refresh or a fail-closed conflict —
+  carries no `recovery` field, so a consumer can tell a recovery from ordinary ownership.
 - Anti-trap: a fresh heartbeat on a runner-coordination claim/lock is not proof of a live driver. The
   claim may be held by a completed/control run that claimed at takeover then ended without releasing,
   yet the heartbeat still reads fresh — which this rc.6 drive saw as repeated false "live owner /

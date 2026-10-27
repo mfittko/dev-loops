@@ -636,10 +636,107 @@ test("ensureAsyncRunnerOwnership keeps a live owner (stand down) even with super
     assert.equal(result.ok, false);
     assert.equal(result.error, "ownership_lost");
     assert.equal(result.activeRun.runId, "run-live");
+    assert.equal("recovery" in result, false);
 
     // Live owner's claim is untouched.
     const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 23, cwd: tempDir });
     assert.equal(loaded.state.activeRun.runId, "run-live");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// R1: a successful supersedeStale recovery reports which evidence authorized it,
+// so records and handbacks distinguish an exit-signal recovery from a max-age one.
+test("ensureAsyncRunnerOwnership reports typed recovery evidence (exit signal)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 31, runId: "run-dead", cwd: tempDir });
+    await recordExitSignalForRunner({ repo: "owner/repo", pr: 31, runId: "run-dead", reason: "completed", cwd: tempDir });
+
+    const result = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 31,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-next" },
+      claimIfMissing: true,
+      supersedeStale: true,
+    });
+    assert.equal(result.status, "taken_over");
+    assert.deepEqual(result.recovery, {
+      evidence: "exit_signal",
+      displacedRunId: "run-dead",
+      maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS,
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("ensureAsyncRunnerOwnership reports typed recovery evidence (stale max age)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  const prevMaxAge = process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+  process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = "60000";
+
+  try {
+    await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 32,
+      runId: "run-stale",
+      cwd: tempDir,
+      now: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
+    });
+
+    const result = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 32,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-fresh" },
+      claimIfMissing: true,
+      supersedeStale: true,
+    });
+    assert.equal(result.status, "taken_over");
+    assert.deepEqual(result.recovery, {
+      evidence: "stale_max_age",
+      displacedRunId: "run-stale",
+      maxAgeMs: 60000,
+    });
+  } finally {
+    if (prevMaxAge === undefined) {
+      delete process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+    } else {
+      process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = prevMaxAge;
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("ensureAsyncRunnerOwnership omits recovery when it performs no recovery", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+
+  try {
+    const claimed = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 33,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-first" },
+      claimIfMissing: true,
+      supersedeStale: true,
+    });
+    assert.equal(claimed.status, "claimed_new");
+    assert.equal("recovery" in claimed, false);
+
+    const refreshed = await ensureAsyncRunnerOwnership({
+      repo: "owner/repo",
+      pr: 33,
+      cwd: tempDir,
+      env: { DEVLOOPS_RUN_ID: "run-first" },
+      claimIfMissing: true,
+      supersedeStale: true,
+    });
+    assert.equal(refreshed.ok, true);
+    assert.equal("recovery" in refreshed, false);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
