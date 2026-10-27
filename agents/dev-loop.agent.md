@@ -126,6 +126,29 @@ boundary exists to prevent. On a Codex root, keep empty wakeups at most 10% of r
 the runtime's supported bounded join while child work is outstanding — a longest-timeout
 assumption is not a join.
 
+### Releasing the PR claim before the hand-back
+
+A unit that owns a PR claim and returns its hand-back before a terminal stop must not leave that
+claim to the stale window. Once you have verified with native evidence that your required children
+are joined, run the owner-only handoff and record its status in the hand-back:
+
+```sh
+node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs handoff --repo <owner/name> --pr <number>
+```
+
+It appends your exit signal and clears the claim in one locked write, so the successor's pre-flight
+finds no claim to recover: it claims fresh with no `recovery` field. A `recovery` field appears only
+when the successor actually displaces a claim. Statuses: `handoff_recorded` (signal written, claim cleared),
+`handoff_noop` (nothing to hand off — no state write), `ownership_lost` and `run_id_required` (exit
+1, no state write). It adds no identity override; the run id comes from the verified runtime context.
+
+Your successor's recovery is evidence-gated and typed: the handoff `runnerOwnership` result carries
+`recovery: { evidence: "exit_signal" | "stale_max_age", displacedRunId, maxAgeMs }` when a competing
+claim was actually displaced, and carries no `recovery` field otherwise. Report a recovery only from
+that field, never from a fresh claim, and never weaken the one-runner guard: a genuinely live owner
+still blocks. Detailed procedure: [Copilot PR Follow-up](../skills/copilot-pr-followup/SKILL.md)
+"Stale runner-coordination lock held by a completed run".
+
 ## Subagent delegation
 
 <!-- pi-only -->

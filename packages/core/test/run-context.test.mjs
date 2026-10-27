@@ -25,7 +25,11 @@ import {
   isClaudeHarness,
   CLAUDE_HARNESS_MARKER,
   validateNativeCodexMetadata,
+  describeCodexDiscoveryFailure,
+  isNativeCodexThreadId,
+  resolveCodexRolloutJournal,
   resolveNativeCodexContext,
+  resolveNativeCodexHome,
 } from "../src/loop/run-context.mjs";
 
 const codexId = "01a15519-285b-74b3-8f36-01e51619bba3";
@@ -96,6 +100,84 @@ test("native Codex discovery is bounded, header-only and rejects uncertain IO", 
   fs.unlinkSync(file);
   assert.match(resolveNativeCodexContext({ env }).reason, /not found/i);
   assert.equal(resolveNativeCodexContext({ env: { CODEX_THREAD_ID: "unknown" } }).status, "rejected");
+});
+
+test("native Codex discovery helper binds the one journal the header reader then reads", () => {
+  // Shared locator: the header-only identity reader and the terminal-evidence
+  // adapter must resolve the SAME single file, never two independent locators.
+  const { env, file } = codexFixture();
+  assert.deepEqual(resolveCodexRolloutJournal({ threadId: codexId, env }), { ok: true, file });
+  assert.deepEqual(resolveCodexRolloutJournal({ threadId: codexId.replace(/a3$/, "a4"), env }), { ok: false, code: "not_found" });
+  // The extraction preserves the header-only, byte-bounded read of that file.
+  let bytes = 0;
+  const trackedFs = { ...fs, readSync(...args) { const count = fs.readSync(...args); bytes += count; return count; } };
+  assert.equal(resolveNativeCodexContext({ env, fs: trackedFs }).status, "valid");
+  assert.equal(bytes, fs.readFileSync(file).indexOf(10) + 1);
+});
+
+test("native Codex discovery rejects a lookup key that is not a UUIDv7 identity", () => {
+  const { env, file } = codexFixture();
+  assert.deepEqual(resolveCodexRolloutJournal({ threadId: codexId, env }), { ok: true, file });
+  // A non-UUID key names no thread, so it is "not found" — never "unreadable" via a
+  // thrown date parse that would mislabel the failure class.
+  for (const rejected of ["unknown", codexId.slice(0, -1), codexId.toUpperCase(), "", 42, undefined, null]) {
+    assert.deepEqual(resolveCodexRolloutJournal({ threadId: rejected, env }), { ok: false, code: "not_found" });
+  }
+  assert.equal(isNativeCodexThreadId(codexId), true);
+  assert.equal(isNativeCodexThreadId("unknown"), false);
+});
+
+/** A stub fs whose one fixture date directory yields `entries` in the given order. */
+function orderedDiscoveryFs(directory, entries) {
+  return {
+    ...fs,
+    opendirSync(requested) {
+      if (requested !== directory) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      let index = 0;
+      return { readSync: () => (index < entries.length ? entries[index++] : null), closeSync() {} };
+    },
+  };
+}
+
+test("native Codex discovery decides once, so its typed reason never depends on enumeration order", () => {
+  const root = makeTempRoot();
+  const directory = path.join(root, "sessions", "2026", "10", "19");
+  fs.mkdirSync(directory, { recursive: true });
+  const env = { CODEX_HOME: root };
+  const fileEntry = (prefix) => ({ name: `rollout-${prefix}-${codexId}.jsonl`, isFile: () => true });
+  const directoryEntry = { name: `rollout-dir-${codexId}.jsonl`, isFile: () => false };
+
+  // Two matching rollout files plus one matching-name directory: one typed reason for
+  // the same directory state, in either enumeration order.
+  for (const entries of [[fileEntry("a"), fileEntry("b"), directoryEntry], [directoryEntry, fileEntry("a"), fileEntry("b")]]) {
+    assert.deepEqual(resolveCodexRolloutJournal({ threadId: codexId, env, fs: orderedDiscoveryFs(directory, entries) }),
+      { ok: false, code: "ambiguous" });
+  }
+  // A single matching name that is not a regular file keeps its own typed reason.
+  assert.deepEqual(resolveCodexRolloutJournal({ threadId: codexId, env, fs: orderedDiscoveryFs(directory, [directoryEntry]) }),
+    { ok: false, code: "not_regular_file" });
+  assert.deepEqual(resolveCodexRolloutJournal({ threadId: codexId, env, fs: orderedDiscoveryFs(directory, []) }),
+    { ok: false, code: "not_found" });
+});
+
+test("discovery failure prose is total, so a rejected result never carries an undefined reason", () => {
+  const unidentified = "Native Codex metadata is unreadable or malformed.";
+  assert.equal(describeCodexDiscoveryFailure("symlink"), unidentified);
+  assert.equal(describeCodexDiscoveryFailure(undefined), unidentified);
+  const prose = new Set();
+  for (const code of ["entry_bound", "not_regular_file", "ambiguous", "not_found", "unreadable"]) {
+    const described = describeCodexDiscoveryFailure(code);
+    assert.equal(typeof described, "string");
+    assert.ok(described.length > 0);
+    prose.add(described);
+  }
+  // Every known code keeps its own diagnostic; the fallback is only for unknown codes.
+  assert.equal(prose.size, 5);
+});
+
+test("native Codex home resolution is one path both readers share", () => {
+  assert.equal(resolveNativeCodexHome({ CODEX_HOME: "/custom/codex" }), "/custom/codex");
+  assert.equal(resolveNativeCodexHome({ HOME: "/home/operator" }), path.join("/home/operator", ".codex"));
 });
 
 test("native Codex discovery admits adjacent local dates and stops at its entry bound", () => {
