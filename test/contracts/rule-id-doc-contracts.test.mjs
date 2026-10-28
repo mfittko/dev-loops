@@ -39,3 +39,8 @@ test("GATE-EXEC-FINDINGS-LOG-QUARANTINE is owned by the gate review sub-loop con
   assertRuleOwned("GATE-EXEC-FINDINGS-LOG-QUARANTINE", "skills/docs/gate-review-sub-loop-contract.md");
   assert.match(readFileSync(new URL("../../skills/docs/required-rules.json", import.meta.url), "utf8"), /"id": "GATE-EXEC-FINDINGS-LOG-QUARANTINE"/);
 });
+
+test("GATE-EXEC-OPERATOR-FOCUS is owned by the gate review sub-loop contract and registered (#2635)", () => {
+  assertRuleOwned("GATE-EXEC-OPERATOR-FOCUS", "skills/docs/gate-review-sub-loop-contract.md");
+  assert.match(readFileSync(new URL("../../skills/docs/required-rules.json", import.meta.url), "utf8"), /"id": "GATE-EXEC-OPERATOR-FOCUS"/);
+});

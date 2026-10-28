@@ -11,6 +11,7 @@ import { test } from "bun:test";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
 import { startDeltaSequence, toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
+import { renderOperatorFocusSection } from "../../scripts/loop/_operator-focus.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../../scripts/github/_fixer-emission-evidence.mjs";
 import { decideFixerWriteGuard } from "../../.claude/hooks/_hook-decisions.mjs";
@@ -19,7 +20,7 @@ import { classifyValidationCommand } from "@dev-loops/core/loop/validation-class
 import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
-import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
+import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverageSkeleton, defaultFetchVerdictMarkers, emitFixerWorkOrder, locateFixerUnit, main as fixerMain, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
@@ -2381,5 +2382,84 @@ test("ADR 0197: a PR-own change after the cap round keeps the round_cap_reached 
   await withFixture(async (fx) => {
     const { over } = await capRoundThenBaseMerge(fx, { ownChangeAfterMerge: true });
     await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
+  });
+});
+
+// GATE-EXEC-OPERATOR-FOCUS (ADR 0205, issue 2635)
+test("operator focus: round and a per-item decision render next to the act item and are pinned by the digest", async () => {
+  await withFixture(async ({ root, files, emit }) => {
+    const focusFile = path.join(root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ round: "Round 8: keep the churn rule", items: [{ fingerprint: ACT_REF, decision: "Use remedy B: guard the deref in the caller" }] }));
+    const plain = await emit({ deltaResult: files.delta });
+    const plan = await emit({ deltaResult: files.delta, operatorFocusFile: focusFile });
+    const text = await readFile(plan.promptPath, "utf8");
+    assert.ok(text.indexOf("## Operator focus") > 0 && text.indexOf("## Operator focus") < text.indexOf("## Required reads"));
+    assert.match(text, new RegExp(`Act item ${ACT_REF}: operator decision: Use remedy B: guard the deref in the caller\\n`));
+    assert.match(text, new RegExp(`Act-list text for ${ACT_REF} \\(reviewer-authored, not an operator decision\\): "null deref"`));
+    assert.match(text, /Round: Round 8: keep the churn rule/);
+    assert.match(text, /never changes its disposition/);
+    // Each emit draws a new execution identity, so a digest inequality is vacuous; assert the pinned content.
+    assert.deepEqual(plan.workOrder.operatorFocus, { round: "Round 8: keep the churn rule", items: [{ fingerprint: ACT_REF, decision: "Use remedy B: guard the deref in the caller", summary: "null deref" }] });
+    const absent = await readFile(plain.promptPath, "utf8");
+    assert.ok(!absent.includes("Operator focus") && !("operatorFocus" in plain.workOrder));
+    assert.equal(absent, renderWorkOrder(plain.workOrder));
+    assert.match(absent, /\n\n## Required reads\n/);
+    assert.ok(!absent.includes("\n\n\n## Required reads"));
+    assert.equal(renderOperatorFocusSection(null), "");
+  });
+});
+
+test("operator focus: an unknown fingerprint, a threads source with items and bad strings refuse and emit nothing", async () => {
+  await withFixture(async ({ root, files, emit }) => {
+    const focusFile = path.join(root, "tmp", "focus.json");
+    const refuses = async (focus, over = {}) => {
+      await writeFile(focusFile, JSON.stringify(focus));
+      await assert.rejects(() => emit({ deltaResult: files.delta, operatorFocusFile: focusFile, ...over }), /operator focus/);
+    };
+    await refuses({ items: [{ fingerprint: "nope", decision: "x" }] });
+    await refuses({ items: [{ fingerprint: ACT_REF, decision: "x" }] }, { actListFile: undefined, gate: undefined, threadsFile: files.threads });
+    await refuses({ items: [{ fingerprint: ACT_REF, decision: "x".repeat(501) }] });
+    await refuses({ items: [{ fingerprint: ACT_REF, decision: "<``>" }] });
+    await refuses({ round: "ok", extra: 1 });
+    assert.ok(!existsSync(path.join(root, "tmp", "gate-fixer", "o-r", `pr-${PR}`, "fixer-emit-plan.json")), "no plan is written");
+  });
+});
+
+// Drive the fixer CLI main() with captured stdout and stderr.
+async function runFixerMain(argv, opts) {
+  const out = [];
+  const err = [];
+  const writeOut = process.stdout.write;
+  const writeErr = process.stderr.write;
+  process.stdout.write = (chunk) => (out.push(String(chunk)), true);
+  process.stderr.write = (chunk) => (err.push(String(chunk)), true);
+  try {
+    const code = await fixerMain(argv, opts);
+    return { code, stdout: out.join(""), stderr: err.join("") };
+  } finally {
+    process.stdout.write = writeOut;
+    process.stderr.write = writeErr;
+  }
+}
+
+test("operator focus CLI: an empty --operator-focus-file is a usage error (exit 2, stderr USAGE)", async () => {
+  await withFixture(async ({ wt, head, files }) => {
+    const { code, stdout, stderr } = await runFixerMain(["--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "commit_only", "--act-list-file", files.actList, "--gate", "draft_gate", "--harness", "claude", "--operator-focus-file", ""], { cwd: wt });
+    assert.equal(code, 2);
+    assert.equal(stdout, "");
+    assert.match(stderr, /--operator-focus-file must not be an empty value/);
+    assert.match(stderr, /Usage/);
+  });
+});
+
+test("operator focus CLI: a refusing focus file exits 1 with ok false and a GATE-EXEC-OPERATOR-FOCUS error", async () => {
+  await withFixture(async ({ root, wt, head, files }) => {
+    const focusFile = path.join(root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "nope", decision: "x" }] }));
+    const { code, stdout } = await runFixerMain(["--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "commit_only", "--act-list-file", files.actList, "--gate", "draft_gate", "--delta-result", files.delta, "--harness", "claude", "--operator-focus-file", focusFile], { cwd: wt, fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
+    const body = JSON.parse(stdout);
+    assert.equal(code, 1);
+    assert.equal(body.ok, false);
+    assert.match(body.error, /^GATE-EXEC-OPERATOR-FOCUS:/);
   });
 });

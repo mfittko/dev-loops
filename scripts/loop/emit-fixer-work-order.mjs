@@ -22,6 +22,7 @@ import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
+import { OperatorFocusRefusal, bindOperatorFocusItems, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
@@ -37,7 +38,7 @@ import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilo
 import { selectActThreadBinding } from "../github/_fixer-act-thread-bindings.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 
-const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path>) [--delta-result <path>] [--allowed-path <repo-relative path>]... [--tmp-root <path>]
+const USAGE = `Usage: emit-fixer-work-order.mjs --harness <claude|pi|codex> --repo <owner/name> --pr <n> --head-sha <sha> --phase <commit_only|full> (--act-list-file <path> --gate <draft_gate|pre_approval_gate> | --threads-file <path>) [--delta-result <path>] [--allowed-path <repo-relative path>]... [--operator-focus-file <path>] [--tmp-root <path>]
 Derives the fixer's work order from typed sources: the gate act list (judge-pass --out)
 or the unresolved review threads (list-review-threads.mjs --unresolved-only), plus the
 optional pre-push delta result (dev-loops loop pre-push-delta). --phase full needs a clearing
@@ -53,7 +54,11 @@ It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N
 { ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath }.
 Each run supersedes the previous emission for this PR. Dispatch the printed
 dispatchPayload (the --harness adapter call carrying only dispatchPrompt) unchanged; an
-unsupported harness refuses. It accepts no brief, payload or summary input.
+unsupported harness refuses. The only operator input is --operator-focus-file, a JSON file { round?: string, items?: [{ fingerprint, decision }] }
+that renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
+An item decision picks among remedies its act item offers and never changes the disposition; items need an
+--act-list-file source and a fingerprint from that list, or the emit refuses and writes nothing.
+It accepts no other brief, payload or summary input.
 Exit codes: 0 emitted, 1 refused (missing or conflicting source or authority), 2 usage/IO error.`;
 
 // ref = fixer:<owner/repo>#<pr>:<headSha>:<executionIdentity>; executionIdentity = f<emit ms>-<8 hex>.
@@ -173,7 +178,7 @@ A permission or classifier denial stops this actor immediately: no subsequent re
 ${task}
 The output is immutable evidence: never clobber it or replay an earlier execution's report. A receipt alone is not completion.
 
-## Required reads
+${renderOperatorFocusSection(workOrder.operatorFocus)}## Required reads
 
 ${workOrder.requiredReads.map((read) => renderRequiredReadLine(read, "/")).join("\n")}
 
@@ -201,7 +206,7 @@ Read every \`required\` entry below IN FULL before any change. If one is missing
 Mutation authority: branch ${JSON.stringify(branch)}, paths ${allowedPaths.map((p) => JSON.stringify(p)).join(", ")}. ${workOrder.executionRules.mutation}.
 Validation: ${workOrder.executionRules.validation}.${workOrder.executionRules.regenerate ? `\nRegenerate: ${workOrder.executionRules.regenerate}.` : ""}
 
-## Required reads
+${renderOperatorFocusSection(workOrder.operatorFocus)}## Required reads
 
 ${workOrder.requiredReads.map((read) => renderRequiredReadLine(read, "/")).join("\n")}
 
@@ -265,7 +270,7 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidat
  * and `fetchPr` are injectable for tests.
  */
 export async function emitFixerWorkOrder({
-  repo, pr, headSha, phase, actListFile, gate, threadsFile, deltaResult, allowedPaths = [], cwd = process.cwd(), tmpRoot,
+  repo, pr, headSha, phase, actListFile, gate, threadsFile, deltaResult, allowedPaths = [], operatorFocusFile, cwd = process.cwd(), tmpRoot,
   fetchPr = defaultFetchPr, fetchVerdictMarkers = defaultFetchVerdictMarkers, executionIdentity = `f${Date.now()}-${randomBytes(4).toString("hex")}`,
   env = process.env, ghCommand = "gh", runChild,
 }) {
@@ -342,6 +347,9 @@ export async function emitFixerWorkOrder({
   if (badFingerprint) {
     throw new Refusal(`act list ${actListFile} has an act item (${JSON.stringify(badFingerprint.summary)}) whose fingerprint is ${badFingerprint.fingerprint === undefined ? "missing" : "not the canonical fingerprintFinding value"}; re-run judge-pass to regenerate it`);
   }
+  const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
+  if (operatorFocusRaw?.items && !actListFile) throw new OperatorFocusRefusal("GATE-EXEC-OPERATOR-FOCUS: operator focus items need an --act-list-file source; a threads source accepts a round only");
+  const operatorFocus = actListFile ? bindOperatorFocusItems(operatorFocusRaw, source.parsed) : operatorFocusRaw;
   if (threadsFile && (source.parsed?.ok !== true || !Array.isArray(source.parsed.threads) || source.parsed.repo !== repo || Number(source.parsed.pr) !== Number(pr)
     || !source.parsed.threads.every((thread) => thread?.isResolved === false))) {
     throw new Refusal(`threads file ${threadsFile} is not successful list-review-threads --unresolved-only output for ${repo}#${pr}`);
@@ -439,6 +447,7 @@ export async function emitFixerWorkOrder({
     phase,
     source: source.read.kind,
     gate: actListFile ? gate : undefined,
+    ...(operatorFocus ? { operatorFocus, ...operatorFocusDigestEntry(operatorFocus) } : {}),
     configSha256: sha256(JSON.stringify(config ?? {})),
     authority: { sourceDigest: jsonContentDigest(source.parsed), deltaResultDigest: delta ? jsonContentDigest(delta.parsed) : undefined,
       ...(completion ? { reviewBaselineHead: headSha, completionInputDigest: jsonContentDigest(completion), completionInputBytesDigest: completionRead.sha256 } : {}) },
@@ -654,7 +663,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   const { values } = parseArgs({ args: argv, options: {
     repo: { type: "string" }, pr: { type: "string" }, "head-sha": { type: "string" }, phase: { type: "string" },
     "act-list-file": { type: "string" }, gate: { type: "string" }, "threads-file": { type: "string" },
-    "delta-result": { type: "string" }, "allowed-path": { type: "string", multiple: true },
+    "delta-result": { type: "string" }, "operator-focus-file": { type: "string" }, "allowed-path": { type: "string", multiple: true },
     "tmp-root": { type: "string" }, harness: { type: "string" }, help: { type: "boolean", short: "h" },
     ...JQ_OUTPUT_PARSE_OPTIONS,
   } });
@@ -671,12 +680,16 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   if (jqSyntaxError !== undefined) return jqSyntaxError;
   if (values["tmp-root"]) assertTmpRootOutsideLinkedWorktree(path.resolve(cwd, values["tmp-root"]), resolveRepoRoot(cwd));
   const emit = (payload) => emitResult(payload, { jq: values.jq, silent: values.silent, fields: values.fields });
+  if (values["operator-focus-file"] === "") {
+    process.stderr.write(`--operator-focus-file must not be an empty value; pass a path or omit the flag\n${USAGE}\n`);
+    return 2;
+  }
   try {
     fixerDispatchAdapter(values.harness); // refuse an unknown harness before emitting
     const plan = await emitFixerWorkOrder({
       repo: values.repo, pr: values.pr, headSha: values["head-sha"].toLowerCase(), phase: values.phase,
       actListFile: values["act-list-file"], gate: values.gate, threadsFile: values["threads-file"],
-      deltaResult: values["delta-result"], allowedPaths: values["allowed-path"] ?? [], cwd,
+      deltaResult: values["delta-result"], ...(values["operator-focus-file"] ? { operatorFocusFile: values["operator-focus-file"] } : {}), allowedPaths: values["allowed-path"] ?? [], cwd,
       ...(values["tmp-root"] ? { tmpRoot: path.resolve(cwd, values["tmp-root"]) } : {}),
       ...(fetchPr ? { fetchPr } : {}),
     });
@@ -684,7 +697,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     const dispatchPayload = buildFixerDispatchPayload({ harness: values.harness, plan, cwd });
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, dispatchPayload, planPath });
   } catch (err) {
-    if (!(err instanceof Refusal || err instanceof WorkOrderRefusal)) throw err;
+    if (!(err instanceof Refusal || err instanceof WorkOrderRefusal || err instanceof OperatorFocusRefusal)) throw err;
     return emit({ ok: false, ...(err.refusal ? { refusal: err.refusal } : {}), error: err.message });
   }
 }
