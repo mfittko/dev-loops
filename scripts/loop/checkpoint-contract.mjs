@@ -36,7 +36,9 @@ Optional:
   --record-source <path>   Required when --state is complete (non-blank): path
                            of the agent/subagent tool-call record (transcript
                            or journal artifact) the fresh-context retro was
-                           seeded with.
+                           seeded with. The file must exist, be non-empty and
+                           contain the --merge-commit oid, otherwise the CLI
+                           refuses with retro_artifact_missing.
   --repo <owner/name>      Cycle identity. MUST be provided together (with
   --pr <number>            --pr and --merge-commit) when --state is complete
   --merge-commit <sha>     or skipped, so a later reader can tell WHICH cycle
