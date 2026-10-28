@@ -1024,7 +1024,8 @@ export async function judgePassCli(
     const payload = await resolvePayload(options, resolvedRoot);
     await verifySkipRound(options, resolvedRoot);
     // GATE-EXEC-COPILOT-BODY-TO-JUDGE: pending Copilot body feedback is a finding only the judge adjudicates.
-    const bodyFile = copilotBodyJudgePath({ tmpRoot: historyRoot(options, resolvedRoot), repo: options.repo, pr: options.pr, headSha: options.headSha });
+    // The detector writes the body file under the canonical tmp root whatever --tmp-root says.
+    const bodyFile = copilotBodyJudgePath({ tmpRoot: resolveGateArtifactTmpRoot(resolvedRoot), repo: options.repo, pr: options.pr, headSha: options.headSha });
     if (await stat_(bodyFile)) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: --judge-skip refused (fail closed): pending Copilot body feedback at ${bodyFile}; run the judge pass`);
     const spec = await readJsonArtifact(path.resolve(resolvedRoot, options.specFile), "--spec-file", parseError);
     if (spec?.specKind === PR_SCOPE_SPEC_KIND && options.gate !== "review") {

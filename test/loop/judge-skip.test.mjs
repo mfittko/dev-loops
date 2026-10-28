@@ -143,10 +143,12 @@ test("a blocked zero-finding round still requires the judge through judgePassCli
 
 test("pending Copilot body feedback for the head still requires the judge", async () => {
   const { root, options } = await setup([]);
+  // The body file lives under the canonical tmp root; the fixture's --tmp-root override is a different directory.
+  await cp(path.join(root, "tmp"), path.join(root, "override"), { recursive: true });
   const file = path.join(root, copilotBodyJudgePath({ tmpRoot: "tmp", repo: "o/r", pr: 1, headSha: HEAD }));
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, "{}");
-  await assert.rejects(judgePassCli(options, { repoRoot: root }), /pending Copilot body feedback/);
+  await assert.rejects(judgePassCli({ ...options, tmpRoot: "override" }, { repoRoot: root }), /pending Copilot body feedback/);
 });
 
 test("a blocked zero-finding round still requires the judge", () => {
