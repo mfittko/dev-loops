@@ -296,6 +296,9 @@ test("emit refuses a fresh all-carried context whose carry proof names the quara
         preflight: { carriedAngles: ["coverage"] },
       },
     }), "utf8");
+    // Pin the mtime clearly after the cutoff so a fast filesystem tie cannot fire the mtime check first.
+    const later = new Date(Date.now() + 5000);
+    await utimes(path.join(ctx, `${GATE}-${HEAD}.json`), later, later);
     const proof = JSON.stringify({ prevHead: PRIOR, carried: [{ angle: "coverage", carriedFromHead: PRIOR, reviewer: "r", model: "m", dispatchId: "d" }] });
     const emitted = spawnSync("node", [emitCli, "--repo", REPO, "--pr", String(PR), "--gate", GATE, "--head-sha", HEAD, "--pending", "--carry-forward-plan", proof], { encoding: "utf8", cwd: dir });
     assert.equal(emitted.status, 1);
