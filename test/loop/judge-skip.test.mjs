@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
 import { judgePassCli, parseJudgePassCliArgs } from "../../scripts/loop/judge-pass.mjs";
+import { buildGateFaninLedgerPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { judgeSkipRefusal } from "../../scripts/loop/judge-skip.mjs";
 
 const HEAD = "0123456789abcdef".padEnd(40, "0");
@@ -12,7 +13,11 @@ const SPEC = { acceptanceCriteria: ["a"], definitionOfDone: ["d"], nonGoals: ["n
 
 async function setup(findings) {
   const root = await mkdtemp(path.join(os.tmpdir(), "judge-skip-"));
-  await writeFile(path.join(root, "findings.json"), JSON.stringify({ overallVerdict: "clean", findings }));
+  const body = JSON.stringify({ overallVerdict: "clean", findings });
+  await writeFile(path.join(root, "findings.json"), body);
+  const keyed = path.join(root, buildGateFaninLedgerPath({ repo: "o/r", pr: 1, gate: "draft_gate", headSha: HEAD, tmpRoot: "tmp" }));
+  await mkdir(path.dirname(keyed), { recursive: true });
+  await writeFile(keyed, body);
   await writeFile(path.join(root, "spec.json"), JSON.stringify(SPEC));
   const options = parseJudgePassCliArgs([
     "--repo", "o/r", "--pr", "1", "--gate", "draft_gate", "--head-sha", HEAD, "--judge-skip",
@@ -40,6 +45,32 @@ test("GATE-EXEC-JUDGE-SKIP-EMPTY: a zero-finding round skips the judge and recor
 test("a round with a finding still requires the judge", async () => {
   const { root, options } = await setup([{ severity: "low", angle: "x", summary: "s", disposition: "unjudged" }]);
   await assert.rejects(judgePassCli(options, { repoRoot: root }), /judge-skip refused.*1 consolidated finding/);
+});
+
+test("a findings file that is not the head's fan-in ledger refuses", async () => {
+  const { root, options } = await setup([]);
+  await writeFile(path.join(root, "findings.json"), JSON.stringify({ overallVerdict: "clean", findings: [], stale: true }));
+  await assert.rejects(judgePassCli(options, { repoRoot: root }), /not the fan-in ledger/);
+});
+
+test("a round with no head-keyed fan-in ledger refuses", async () => {
+  const { root, options } = await setup([]);
+  await rm(path.join(root, "tmp"), { recursive: true });
+  await assert.rejects(judgePassCli(options, { repoRoot: root }), /no fan-in ledger exists/);
+});
+
+test("a round retired after its fan-in ledger was written refuses", async () => {
+  const { root, options } = await setup([]);
+  const dir = path.join(root, "tmp", "retired-gate-rounds", HEAD, "r1");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: new Date(Date.now() + 60_000).toISOString() }));
+  await assert.rejects(judgePassCli(options, { repoRoot: root }), /retired as r1/);
+});
+
+test("a pr_scope spec on a lifecycle gate refuses", async () => {
+  const { root, options } = await setup([]);
+  await writeFile(path.join(root, "spec.json"), JSON.stringify({ ...SPEC, specKind: "pr_scope" }));
+  await assert.rejects(judgePassCli(options, { repoRoot: root }), /only the review gate accepts/);
 });
 
 test("a carried act item still requires the judge", () => {

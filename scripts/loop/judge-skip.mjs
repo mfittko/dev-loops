@@ -17,18 +17,15 @@ export function judgeSkipRefusal({ findings, priorActItems, overallVerdict }) {
 export async function runJudgeSkip(options, resolvedRoot, { findings, overallVerdict, spec, priorActItems }) {
   const refusal = judgeSkipRefusal({ findings, priorActItems, overallVerdict });
   if (refusal) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: --judge-skip refused (fail closed): ${refusal}; run the judge pass`);
-  const identity = spec ? buildRevisionIdentity({ spec, headSha: options.headSha, contentDigest: options.contentDigest }) : null;
+  const identity = buildRevisionIdentity({ spec, headSha: options.headSha, contentDigest: options.contentDigest });
   const reason = "the round has no consolidated findings and no carried act items, so there is nothing for the judge to dispose";
-  const judgeSkipped = { reason, ...(identity ? { specDigest: identity.specDigest } : {}) };
+  const judgeSkipped = { reason, specDigest: identity.specDigest };
   const scopeDrift = {
     verdict: "within_scope",
-    rationale: `Judge skipped: ${reason}. Derived from ${identity ? `the recorded spec identity ${identity.specDigest}` : "the round with no spec identity"}.`,
+    rationale: `Judge skipped: ${reason}. Derived from the recorded spec identity ${identity.specDigest}.`,
     driftedAreas: [],
   };
-  const record = { overallVerdict, findings: [], scopeDrift, judgeSkipped };
-  const stamped = identity
-    ? stampSpecAuthorityIdentity(record, { specDigest: identity.specDigest, headSha: identity.headSha, contentDigest: identity.contentDigest, checkedCriteria: specCriterionIds(spec) })
-    : record;
+  const stamped = stampSpecAuthorityIdentity({ overallVerdict, findings: [], scopeDrift, judgeSkipped }, { specDigest: identity.specDigest, headSha: identity.headSha, contentDigest: identity.contentDigest, checkedCriteria: specCriterionIds(spec) });
   for (const [file, body] of [[options.ledgerOut, stamped], [options.out, []]]) {
     if (!file) continue;
     const target = path.resolve(resolvedRoot, file);

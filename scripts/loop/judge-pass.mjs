@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, stat as statFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -35,7 +35,7 @@ import { findEscalations, recurrenceFiles } from "@dev-loops/core/loop/gate-recu
 import { commentDeferredFindings, fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
 import { listPriorActItems, readClosedPriorRoundLogs, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
-import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
+import { buildGateFaninLedgerPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
@@ -977,6 +977,25 @@ export function gitShowSource(cwd, sha, file) {
 // The ledger root of the round history: the writer's --tmp-root, else the canonical root.
 const historyRoot = (options, resolvedRoot) => (options.tmpRoot ? path.resolve(resolvedRoot, options.tmpRoot) : resolveGateArtifactTmpRoot(resolvedRoot));
 
+/**
+ * GATE-EXEC-JUDGE-SKIP-EMPTY: a skipped round has no judge work order to pin the ledger, so bind --findings-file to the round here.
+ * It must equal the head-keyed fan-in ledger (consolidate-fanin --emit-plan writes it per head), and a round retired after that ledger was written refuses.
+ */
+async function verifySkipRound(options, resolvedRoot) {
+  const tmpRoot = historyRoot(options, resolvedRoot);
+  const keyed = path.resolve(resolvedRoot, buildGateFaninLedgerPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot }));
+  const stat = await stat_(keyed);
+  if (!stat) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: no fan-in ledger exists for ${options.gate} at ${options.headSha} (${keyed}); run consolidate-fanin with --emit-plan for this head`);
+  const [given, expected] = await Promise.all([options.findingsFile, keyed].map((file) => readJsonArtifact(path.resolve(resolvedRoot, file), "--findings-file", parseError)));
+  if (sha256Hex(given) !== sha256Hex(expected)) {
+    throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: --findings-file ${options.findingsFile} is not the fan-in ledger for ${options.gate} at ${options.headSha}; pass the ledger consolidate-fanin wrote for this head`);
+  }
+  const retired = await findRetirementAfter(tmpRoot, options.gate, options.headSha, stat.mtimeMs);
+  if (retired) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: the ${options.gate} round was retired as ${retired} after its fan-in ledger was written; re-run the round`);
+}
+
+const stat_ = (file) => statFile(file).catch((err) => (err?.code === "ENOENT" ? null : Promise.reject(err)));
+
 export async function judgePassCli(
   options,
   { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot, readPriorLogs = readClosedPriorRoundLogs, hasCommit = hasCommitInRepo, readSource = gitShowSource } = {},
@@ -984,7 +1003,11 @@ export async function judgePassCli(
   const resolvedRoot = options.repoRoot ? path.resolve(repoRoot, options.repoRoot) : repoRoot;
   if (options.judgeSkip) {
     const payload = await resolvePayload(options, resolvedRoot);
-    const spec = options.specFile ? await readJsonArtifact(path.resolve(resolvedRoot, options.specFile), "--spec-file", parseError) : undefined;
+    await verifySkipRound(options, resolvedRoot);
+    const spec = await readJsonArtifact(path.resolve(resolvedRoot, options.specFile), "--spec-file", parseError);
+    if (spec?.specKind === PR_SCOPE_SPEC_KIND && options.gate !== "review") {
+      throw parseError(`--spec-file has specKind "${PR_SCOPE_SPEC_KIND}", which only the review gate accepts; ${options.gate} requires a formal spec with acceptance criteria`);
+    }
     const priorActItems = await listPriorActItems({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
     return runJudgeSkip(options, resolvedRoot, { ...payload, spec, priorActItems });
   }
