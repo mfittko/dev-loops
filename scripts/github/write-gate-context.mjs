@@ -1940,9 +1940,9 @@ export async function resolveDraftRoundCap(options, { repoRoot }) {
 }
 
 /** Act items of the closed prior rounds as `{ fingerprint, file, line, title }`, one per fingerprint. */
-export async function listPriorActItems(options, { repoRoot }) {
+export async function listPriorActItems(options, { repoRoot, onUnreadable }) {
   const items = new Map();
-  for (const log of await readClosedPriorRoundLogs(options, { repoRoot })) {
+  for (const log of await readClosedPriorRoundLogs(options, { repoRoot, onUnreadable })) {
     for (const f of listOpenActItems(log.findings)) {
       const fingerprint = fingerprintFinding(f);
       if (!items.has(fingerprint)) items.set(fingerprint, { fingerprint, file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary });

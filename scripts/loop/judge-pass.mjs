@@ -84,7 +84,10 @@ Inputs:
                                compared only when --spec-file is passed; without it
                                the pass checks no spec pin.
   --judge-skip                 GATE-EXEC-JUDGE-SKIP-EMPTY: skip the judge for a round with zero
-                               findings and no carried act item. Takes no --judge-verdict,
+                               findings, no carried act item and a non-blocked verdict.
+                               Emits judgeSkipped.reason and findingsSummary (the
+                               conductor passes findingsSummary as --findings-summary);
+                               the ledger also records judgeSkipped. Takes no --judge-verdict,
                                --judge-plan or --spec-authority-verdict; fails closed otherwise.
                                Requires --spec-file and --content-digest, and refuses
                                --approvals-out, --prior-approvals, --changed-paths,
@@ -390,7 +393,7 @@ export function validateCliArgs(options) {
   if (!/^[0-9a-fA-F]{7,64}$/.test(sha)) {
     throw parseError("--head-sha must be a 7-64 char hex SHA");
   }
-  options.headSha = sha;
+  options.headSha = sha.toLowerCase();
   if (gate === "review" && options.out !== undefined) {
     throw parseError("--out is not accepted with --gate review: the review gate never feeds a fixer, so no act list is written");
   }
@@ -990,17 +993,19 @@ async function verifySkipRound(options, resolvedRoot) {
   const candidates = options.tmpRoot
     ? [historyRoot(options, resolvedRoot)]
     : [...new Set([historyRoot(options, resolvedRoot), ...resolveLedgerCheckouts(resolvedRoot).map((root) => path.join(root, "tmp"))])];
-  let tmpRoot, keyed, stat;
+  let keyed, stat;
   for (const candidate of candidates) {
     keyed = path.resolve(resolvedRoot, buildGateFaninLedgerPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: candidate }));
-    if ((stat = await stat_(keyed))) { tmpRoot = candidate; break; }
+    if ((stat = await stat_(keyed))) break;
   }
   if (!stat) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: no fan-in ledger exists for ${options.gate} at ${options.headSha} (checked ${candidates.join(", ")}); run consolidate-fanin with --emit-plan for this head`);
   const [given, expected] = await Promise.all([options.findingsFile, keyed].map((file) => readJsonArtifact(path.resolve(resolvedRoot, file), "--findings-file", parseError)));
   if (sha256Hex(given) !== sha256Hex(expected)) {
     throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: --findings-file ${options.findingsFile} is not the fan-in ledger for ${options.gate} at ${options.headSha}; pass the ledger consolidate-fanin wrote for this head`);
   }
-  const retired = await findRetirementAfter(tmpRoot, options.gate, options.headSha, stat.mtimeMs);
+  // retire-gate-round records under the checkout it ran in, so scan every candidate root with the matched ledger's mtime.
+  let retired = null;
+  for (const candidate of candidates) retired ??= await findRetirementAfter(candidate, options.gate, options.headSha, stat.mtimeMs);
   if (retired) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: the ${options.gate} round was retired as ${retired} after its fan-in ledger was written; re-run the round`);
 }
 
@@ -1018,7 +1023,10 @@ export async function judgePassCli(
     if (spec?.specKind === PR_SCOPE_SPEC_KIND && options.gate !== "review") {
       throw parseError(`--spec-file has specKind "${PR_SCOPE_SPEC_KIND}", which only the review gate accepts; ${options.gate} requires a formal spec with acceptance criteria`);
     }
-    const priorActItems = await listPriorActItems({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
+    // An unreadable prior ledger hides its act items, so the skip fails closed on it.
+    const unreadable = [];
+    const priorActItems = await listPriorActItems({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot, onUnreadable: (name) => unreadable.push(name) });
+    if (unreadable.length > 0) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: --judge-skip refused (fail closed): prior findings log(s) unreadable (${unreadable.join(", ")}); run the judge pass`);
     return runJudgeSkip(options, resolvedRoot, { ...payload, spec, priorActItems });
   }
   const pinned = await verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot ?? resolveGateArtifactTmpRoot(resolvedRoot));

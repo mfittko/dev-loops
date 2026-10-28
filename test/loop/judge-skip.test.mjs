@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "bun:test";
 
 import { judgePassCli, parseJudgePassCliArgs } from "../../scripts/loop/judge-pass.mjs";
-import { buildGateFaninLedgerPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { buildGateFaninLedgerPath, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { judgeSkipRefusal } from "../../scripts/loop/judge-skip.mjs";
 
 const HEAD = "0123456789abcdef".padEnd(40, "0");
@@ -79,9 +79,39 @@ test("a carried act item still requires the judge", () => {
   assert.equal(judgeSkipRefusal({ findings: [], priorActItems: [] }), null);
 });
 
-test("an escalation needs a finding, so it still requires the judge", () => {
-  const escalating = { severity: "medium", summary: "recurs", judgeDisposition: "act" };
-  assert.match(judgeSkipRefusal({ findings: [escalating], priorActItems: [{ fingerprint: "f" }] }), /consolidated finding/);
+const PRIOR = "f".repeat(40);
+
+async function seedPriorLog(root, body) {
+  const file = path.join(root, buildLogPath({ repo: "o/r", pr: 1, gate: "draft_gate", headSha: PRIOR, tmpRoot: "tmp" }));
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, body);
+}
+
+test("a closed prior round with an open act item still requires the judge through judgePassCli", async () => {
+  const { root, options } = await setup([]);
+  const finding = { severity: "low", angle: "x", summary: "s", judgeDisposition: "act", judgeTitle: "t", file: "a.mjs", line: 1 };
+  await seedPriorLog(root, JSON.stringify({ headSha: PRIOR, repo: "o/r", gate: "draft_gate", pr: 1, verdict: "findings_present", findings: [finding] }));
+  await assert.rejects(judgePassCli(options, { repoRoot: root }), /carried act item/);
+});
+
+test("an unreadable prior findings log fails the skip closed", async () => {
+  const { root, options } = await setup([]);
+  await seedPriorLog(root, '{"headSha": "truncated');
+  await assert.rejects(judgePassCli(options, { repoRoot: root }), /prior findings log\(s\) unreadable/);
+});
+
+test("an uppercase --head-sha with surrounding whitespace is normalized to lowercase", async () => {
+  const { root, options } = await setup([]);
+  const opts = parseJudgePassCliArgs(["--repo", "o/r", "--pr", "1", "--gate", "draft_gate", "--head-sha", ` ${HEAD.toUpperCase()} `, "--judge-skip", "--findings-file", "findings.json", "--spec-file", "spec.json", "--content-digest", `sha256:${"a".repeat(64)}`, "--tmp-root", "tmp"]);
+  assert.equal(opts.headSha, HEAD);
+  const result = await judgePassCli(opts, { repoRoot: root });
+  assert.equal(result.headSha, HEAD);
+});
+
+test("a non-hex or empty --head-sha is rejected", () => {
+  for (const sha of ["not-a-sha!", ""]) {
+    assert.throws(() => parseJudgePassCliArgs(["--repo", "o/r", "--pr", "1", "--gate", "draft_gate", "--head-sha", sha, "--judge-skip", "--findings-file", "f.json", "--spec-file", "s.json", "--content-digest", `sha256:${"a".repeat(64)}`]), /--head-sha/);
+  }
 });
 
 test("--judge-skip refuses judge artifact flags", () => {
@@ -119,4 +149,21 @@ test("without --tmp-root a worktree finds the ledger consolidate-fanin wrote und
   const { tmpRoot, ...rest } = options;
   const result = await judgePassCli(rest, { repoRoot: worktree });
   assert.equal(result.ok, true);
+});
+
+test("a retirement recorded under a different checkout's tmp than the fan-in ledger refuses", async () => {
+  const { root, options } = await setup([]);
+  const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { stdio: "pipe" });
+  const main = path.join(root, "main");
+  const worktree = path.join(root, "wt");
+  await mkdir(main);
+  git(main, "init", "-q");
+  git(main, "commit", "-q", "--allow-empty", "-m", "i");
+  git(main, "worktree", "add", "-q", worktree, "-b", "wt");
+  for (const file of ["findings.json", "spec.json", "tmp"]) await cp(path.join(root, file), path.join(worktree, file), { recursive: true });
+  const dir = path.join(main, "tmp", "retired-gate-rounds", HEAD, "r1");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "retirement.json"), JSON.stringify({ gate: "draft_gate", retiredAt: new Date(Date.now() + 60_000).toISOString() }));
+  const { tmpRoot, ...rest } = options;
+  await assert.rejects(judgePassCli(rest, { repoRoot: worktree }), /retired as r1/);
 });
