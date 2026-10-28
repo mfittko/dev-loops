@@ -171,7 +171,7 @@ never hand-derives them:
 ```sh
 content_digest=$(dev-loops-run scripts/loop/spec-context.mjs --repo <owner/name> --issue <linked_issue_number> \
   --content-file <reviewed-content-path> --head-sha <current_head_sha> \
-  --spec-out <spec-path> --identity-out <identity-path> --jq '.contentDigest')
+  --spec-out <spec-path> --identity-out <identity-path> [--pr-body-file <pr-body-path>] --jq '.contentDigest')
 ```
 
 On a fixer-push re-entry round (a prior clean round's `--approvals-out` record exists), also derive
