@@ -4,7 +4,7 @@ import { buildRevisionIdentity, specCriterionIds, stampSpecAuthorityIdentity } f
 
 /**
  * GATE-EXEC-JUDGE-SKIP-EMPTY: why a round must still run the judge, or null when it may skip.
- * A finding, a carried act item (prior-round unresolved act) and a recurrence escalation (which needs a finding) all require a judge.
+ * A finding, a carried act item (any prior-round act item, because the judge verifies the fix) and a recurrence escalation (which needs a finding) all require a judge.
  */
 export function judgeSkipRefusal({ findings, priorActItems, overallVerdict }) {
   if (overallVerdict === "blocked") return "the consolidated verdict is blocked, so the round cannot skip the judge";

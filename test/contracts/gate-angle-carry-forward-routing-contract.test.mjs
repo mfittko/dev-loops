@@ -146,8 +146,8 @@ test("Phase 3 writer-flag matcher accepts sanctioned forms and rejects --provena
 
 function assertJudgeBridge(step) {
   const commands = [...step.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
-  const writer = commands.find((command) => command.startsWith("write-gate-findings-log.mjs ") && command.includes("--judge-verdict"));
-  const bridge = commands.find((command) => command.startsWith("node <dev-loops-package-root>/cli/index.mjs gate judge-pass ") && !command.includes("--judge-skip"));
+  const writer = commands.find((command) => command.startsWith("write-gate-findings-log.mjs "));
+  const bridge = commands.find((command) => command.startsWith("node <dev-loops-package-root>/cli/index.mjs gate judge-pass "));
   assert.ok(writer && bridge, "fan-in must write judged findings and run the judge bridge");
   assert.match(writer, /--judge-verdict\s+<judge-verdict-path>/);
   for (const [flag, value] of [
@@ -166,7 +166,7 @@ test("fan-in routes judged findings through the spec-bound act-list bridge", asy
   assertRuleOwned("GATE-EXEC-JUDGE-AUTHORITY-SPLIT", SUB_LOOP_CONTRACT);
   assertJudgeBridge(step.replace("Before the durable write", "Before persisting findings").replace(/\. /g, ".\n   "));
   for (const changed of [
-    step.replaceAll("--out <act-list-path>", "--out <ledger-path>"),
+    step.replace("--out <act-list-path>", "--out <ledger-path>"),
     step.replaceAll("--judge-verdict <judge-verdict-path>", ""),
     step.replace("--spec-authority-verdict <spec-authority-verdict-path>", "") + "\n`other-command --spec-authority-verdict <spec-authority-verdict-path>`",
   ]) assert.throws(() => assertJudgeBridge(changed));
@@ -179,6 +179,7 @@ test("the judge-skip paragraph names the judge-free ledger write and forbids --f
   const commands = [...skip.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
   const writer = commands.find((command) => command.startsWith("write-gate-findings-log.mjs "));
   assert.ok(writer && !writer.includes("--judge-verdict"), "skip path uses the judge-free writer call");
+  assert.ok(!writer.includes("--ledger-out"), "write-gate-findings-log.mjs accepts no --ledger-out");
   assert.match(skip, /never `--findings-json`/);
 });
 
