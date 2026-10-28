@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { carryGateMarker, parseCarriedHeads, renderCarriedHeadsBody } from "../../scripts/github/_carried-verdict.mjs";
+import { carryFromPostedVerdict, carryGateMarker, parseCarriedHeads, renderCarriedHeadsBody } from "../../scripts/github/_carried-verdict.mjs";
 import { fetchDraftGateEvidence } from "../../scripts/github/_gate-finding-surface.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-evidence.mjs";
@@ -87,6 +87,23 @@ test("two consecutive base merges are both recorded with their classification an
   assert.equal((await carry(s, marker(origin), second, { recorded: record })).carriedFrom, origin);
 });
 
+test("the posted record stays bounded: digest only, pruned to the current origin head, capped", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  s.git("update-ref", "refs/remotes/origin/main", "main");
+  const stored = [];
+  const runJson = async (args) => { stored.push(args.find((a) => String(a).startsWith("body="))); return { id: 9 }; };
+  const stale = Array.from({ length: 30 }, (_, i) => ({ gate: GATE, originHead: "b".repeat(40), headSha: String(i).padStart(40, "0"), decision: "carry_verdict", evidenceDigest: "d" }));
+  const comments = [{ id: 9, body: renderCarriedHeadsBody(stale) }];
+  const out = await carryFromPostedVerdict(marker(origin), { gate: GATE, repo: REPO, pr: 7, currentHeadSha: cur, repoRoot: s.dir, env: {}, comments, record: true, runJson: async (args) => (args[0] === "pr" ? { baseRefName: "main" } : runJson(args)) });
+  assert.equal(out.carriedFrom, origin);
+  const entries = parseCarriedHeads(comments);
+  assert.deepEqual(entries.map((e) => e.headSha), [cur]);
+  assert.match(entries[0].evidenceDigest, /^[0-9a-f]{64}$/);
+  assert.equal("evidence" in entries[0], false);
+});
+
 test("the posted record round-trips evidence text containing a comment terminator", () => {
   const entries = [{ gate: GATE, originHead: "a", headSha: "b", decision: "carry_verdict", evidence: { note: "--> <!--" } }];
   const body = renderCarriedHeadsBody(entries);
@@ -111,7 +128,7 @@ test("buildPreMergeGateCheck rejects a recorded entry whose evidence differs fro
   const cur = s.mergeBase("docs/a.md");
   const written = [];
   await carry(s, marker(origin), cur, { written });
-  const tampered = [{ ...written[0], evidence: { ...written[0].evidence, newHead: "f".repeat(40) } }];
+  const tampered = [{ ...written[0], evidenceDigest: "f".repeat(64) }];
   const m = marker(origin);
   const result = await carry(s, m, cur, { recorded: tampered });
   assert.deepEqual(result, m);

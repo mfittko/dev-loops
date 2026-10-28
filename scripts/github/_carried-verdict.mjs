@@ -7,12 +7,17 @@
  * The coordination path records (`record: true`); every other reader only reads, so it never
  * accepts a carry nobody recorded. The record holds heads, decisions and classifier evidence only.
  */
+import { createHash } from "node:crypto";
+
 import { validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-verdict-carry";
 
 import { isGhBinaryMissing, restFetchPrView } from "./_gh-rest-fallback.mjs";
 import { computeBaseMergeCarry } from "./classify-base-merge-carry.mjs";
 
 const FULL_SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+const MAX_ENTRIES = 20;
+// The record stores a digest of the classifier evidence, never the raw blob and path lists.
+export const evidenceDigest = (evidence) => createHash("sha256").update(JSON.stringify(evidence)).digest("hex");
 const RECORD_RE = /<!-- dev-loops:carried-heads:v1 (\{.*\}) -->/s;
 
 export function renderCarriedHeadsBody(entries) {
@@ -36,7 +41,10 @@ export const parseCarriedHeads = (comments) => recordComment(comments).entries;
 
 async function upsertCarriedHead({ repo, pr, comments, entry }, runJson) {
   const { comment, entries } = recordComment(comments);
-  const body = renderCarriedHeadsBody([...entries.filter((e) => !(e.gate === entry.gate && e.headSha === entry.headSha)), entry]);
+  // Bounded record: only entries for the current origin head survive, capped at MAX_ENTRIES, so the
+  // comment stays far below the GitHub body limit. A pruned head is simply re-recorded on its next carry.
+  const kept = entries.filter((e) => e.originHead === entry.originHead && !(e.gate === entry.gate && e.headSha === entry.headSha));
+  const body = renderCarriedHeadsBody([...kept, entry].slice(-MAX_ENTRIES));
   const saved = comment?.id
     ? await runJson(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${comment.id}`, "-f", `body=${body}`])
     : await runJson(["api", "-X", "POST", `repos/${repo}/issues/${pr}/comments`, "-f", `body=${body}`]);
@@ -64,10 +72,11 @@ export async function carryGateMarker(marker, { gate, currentHeadSha, baseRef, r
   if (!valid) return marker;
   const carried = { ...marker, headSha: currentHeadSha, carriedFrom: origin };
   const entry = recorded.find((e) => e.gate === gate && e.originHead === origin && e.headSha === currentHeadSha);
-  if (entry) return JSON.stringify(entry.evidence) === JSON.stringify(evidence) ? carried : marker;
+  const digest = evidenceDigest(evidence);
+  if (entry) return entry.evidenceDigest === digest ? carried : marker;
   if (!record) return marker;
   try {
-    await record({ gate, originHead: origin, headSha: currentHeadSha, decision: evidence.decision, evidence });
+    await record({ gate, originHead: origin, headSha: currentHeadSha, decision: evidence.decision, evidenceDigest: digest });
   } catch {
     return marker; // fail closed: an unwritable record costs one gate round, never a crashed detector
   }

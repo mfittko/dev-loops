@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { renderCarriedHeadsBody } from "../../scripts/github/_carried-verdict.mjs";
+import { evidenceDigest, renderCarriedHeadsBody } from "../../scripts/github/_carried-verdict.mjs";
 import { computeBaseMergeCarry } from "../../scripts/github/classify-base-merge-carry.mjs";
 import { readyForReview } from "../../scripts/github/ready-for-review.mjs";
 import { restoreReady } from "../../scripts/github/restore-ready.mjs";
@@ -34,7 +34,7 @@ async function setup({ carried }) {
   }
   // The coordination-recorded carried-heads comment (ADR 0186); a ready-path reader only reads it.
   const evidence = carried ? await computeBaseMergeCarry({ prevHead: origin, headSha: cur, baseRef: "origin/main", repoRoot: dir }) : null;
-  const record = evidence && { id: 2, body: renderCarriedHeadsBody([{ gate: "draft_gate", originHead: origin, headSha: cur, decision: evidence.decision, evidence }]) };
+  const record = evidence && { id: 2, body: renderCarriedHeadsBody([{ gate: "draft_gate", originHead: origin, headSha: cur, decision: evidence.decision, evidenceDigest: evidenceDigest(evidence) }]) };
   return { dir, origin, cur, record };
 }
 
