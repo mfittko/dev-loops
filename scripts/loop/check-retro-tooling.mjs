@@ -110,6 +110,11 @@ function splitSegments(line) {
  * @returns {{ kind: "violation"|"allowedWriteOp"|"clean", tool?: string }}
  */
 function classifySegment(rawSegment) {
+  // The shared matcher runs first, so an allowed head (`gh pr ready 5 $(node -e 1)`) never hides a substitution from it.
+  if (commandContainsInlineInterpreter(rawSegment)) {
+    const py = /\bpython(3?)\b/.exec(rawSegment);
+    return { kind: "violation", tool: py ? `python${py[1]}` : "node inline" };
+  }
   const segment = stripLeadingWrappers(rawSegment);
   // `node scripts/....mjs` (or any script path) is allowed tooling; only inline
   // eval forms are violations. Check node first so script invocations pass.
@@ -125,10 +130,7 @@ function classifySegment(rawSegment) {
   if (/^python3?\b/.test(segment)) {
     return { kind: "violation", tool: /^python3\b/.test(segment) ? "python3" : "python" };
   }
-  // A substitution (`X=$(node -e 1)`) hides the interpreter from the head dispatch: ask the shared matcher on the raw segment.
-  if (!commandContainsInlineInterpreter(rawSegment)) return { kind: "clean" };
-  const py = /\bpython(3?)\b/.exec(rawSegment);
-  return { kind: "violation", tool: py ? `python${py[1]}` : "node inline" };
+  return { kind: "clean" };
 }
 
 /**

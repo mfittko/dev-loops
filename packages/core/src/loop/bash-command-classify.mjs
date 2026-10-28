@@ -1214,8 +1214,8 @@ export function commandContainsInlineInterpreter(command) {
   // ponytail: ceiling: nested quote context inside `$(...)`, process substitution `<(...)` and subshell `(...)` are not covered; wrapper options (`sudo -u x`, `nice -n 5`, `xargs -I{}`) are not skipped by stripLeadingWrappers (pre-existing).
   // An unquoted-delimiter heredoc body keeps `$(` live but its quotes and `#` are literal: blank them so apostrophes never pair.
   const noHeredoc = command
-    .replace(/(<<-?\s*(['"])(\w+)\2[^\n]*\n)[\s\S]*?\n[ \t]*\3(?=\n|$)/g, "$1")
-    .replace(/(<<-?\s*(\w+)[^\n]*\n)([\s\S]*?)(?=\n[ \t]*\2(?:\n|$))/g, (_, head, _d, body) => head + body.replace(/['"#]/g, " "));
+    .replace(/(<<-?\s*(['"])(\w+)\2[^\n]*\n)[\s\S]*?\n[ \t]*\3(?=\)|\n|$)/g, "$1")
+    .replace(/(<<-?\s*(\w+)[^\n]*\n)([\s\S]*?)(?=\n[ \t]*\2(?:\)|\n|$))/g, (_, head, _d, body) => head + body.replace(/['"#]/g, " "));
   let unquoted = "";
   let quote = "";
   for (let i = 0; i < noHeredoc.length; i++) {
