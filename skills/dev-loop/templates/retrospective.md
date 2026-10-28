@@ -7,7 +7,7 @@
      --record-source <path to the seeded tool-call record> -->
 
 - context: fresh (independent dispatch, no inherited session context)
-- seeded record: {{record-source}}
+- seeded record: {{record-source}} (must contain this cycle's merge commit {{merge-commit}})
 - size waivers and size merge approvals this milestone: {{count}} (target at most 1 per milestone after v1.0.7; v1.0.6 baseline 10 = 1 waiver + 9 size-class approvals; RETRO-SIZE-WAIVER-COUNT)
 
 ## What worked well

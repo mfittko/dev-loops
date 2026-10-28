@@ -898,3 +898,43 @@ test("routed subcommands reject an unknown flag exactly like the direct script",
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("CLI wrapper reports child_output_too_large and emits no partial output when the child overflows the buffer", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dl-overflow-"));
+  try {
+    const transcript = path.join(dir, "session.jsonl");
+    await writeFile(transcript, [
+      JSON.stringify({ type: "session", parentSession: null, timestamp: "2026-01-01T00:00:00.000Z" }),
+      JSON.stringify({ type: "message", message: { role: "assistant", model: "model-a", usage: { input: 100, output: 50, cacheRead: 200, cacheWrite: 0, cost: 0.02 } } }),
+    ].join("\n") + "\n");
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli({
+      argv: ["loop", "audit-session", transcript, "--json"],
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      spawnMaxBuffer: 10,
+    });
+    assert.equal(exitCode, 1);
+    assert.equal(stdout.read(), "");
+    assert.match(stderr.read(), /child_output_too_large.*10-byte wrapper buffer.*one transcript at a time/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI wrapper reports a non-ENOBUFS spawn failure as subcommand_spawn_failed, not child_output_too_large", async () => {
+  const stdout = createBufferStream();
+  const stderr = createBufferStream();
+  const exitCode = await runCli({
+    argv: ["loop", "audit-session", "x.jsonl"],
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+    cwd: "/nonexistent-dir-for-spawn-failure",
+  });
+  assert.equal(exitCode, 1);
+  assert.equal(stdout.read(), "");
+  const err = stderr.read();
+  assert.match(err, /subcommand_spawn_failed: ENOENT/);
+  assert.doesNotMatch(err, /child_output_too_large/);
+});
