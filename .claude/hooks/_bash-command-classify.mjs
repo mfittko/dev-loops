@@ -1226,11 +1226,7 @@ export function commandContainsInlineInterpreter(command) {
         if (skip) { if (skip === 2 && tokens[i + 1]?.includes("<<")) return true; i += skip - 1; continue; }
         if (!t.startsWith("-")) {
           const prev = tokens[i - 1];
-          if (t === "run") { // `bun run -` / `bun run - <<EOF` runs stdin
-            let j = i + 1;
-            for (let k = redirectionSkip(tokens[j] ?? ""); k; k = redirectionSkip(tokens[j] ?? "")) j += k;
-            return isStdinScriptToken(tokens[j] ?? "");
-          }
+          if (t === "run") continue; // `bun run` takes the same flags: keep scanning so `-e`/`-p`/`--bun -` after it are caught
           // ponytail: unlisted `--flag value` fails closed like node: skip the value token unless it is a script or path-like.
           if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !SCRIPT_EXT_RE.test(stripSurroundingQuotes(t.split("<<")[0])) && !/^\.|^[^/]+\//.test(t)) { if (t.includes("<<")) return true; continue; }
           break; // subcommand or script path reached (`bun run x`, `bun test`)

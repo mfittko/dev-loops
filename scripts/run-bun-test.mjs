@@ -8,10 +8,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Pre-import copy of `checkCoreResolution` from packages/core/src/loop/worktree-guard.mjs (the exported
-// implementation). In a worktree without node_modules, `@dev-loops/core` resolves to the main checkout's
+// Pre-import core resolution guard (the only implementation). In a worktree without node_modules,
+// `@dev-loops/core` resolves to the main checkout's
 // copy or fails with ERR_MODULE_NOT_FOUND before the guard could run, so this script must check using
-// only node builtins before its first `@dev-loops/core` import. Keep in sync with the original.
+// only node builtins before its first `@dev-loops/core` import.
 export function checkCoreResolutionBeforeImport(root) {
   const real = (p) => { try { return realpathSync(p); } catch { return null; } };
   const own = real(path.join(root, "packages", "core"));
@@ -32,7 +32,7 @@ const DEFAULT_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)))
 {
   const core = checkCoreResolutionBeforeImport(DEFAULT_ROOT);
   if (!core.ok) {
-    if (import.meta.main) { process.stderr.write(`${core.message}\n`); process.exit(1); }
+    if (import.meta.main) { process.stderr.write(`${core.code}: ${core.message}\n`); process.exit(1); }
     throw Object.assign(new Error(core.message), { code: core.code });
   }
 }

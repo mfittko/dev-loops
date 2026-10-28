@@ -198,40 +198,6 @@ export function isWorktreeCoreIsolated(cwd, worktreePaths) {
 }
 
 /**
- * Mimic node resolution of `@dev-loops/core` from `root` (WORKTREE-DEPS-ISOLATED):
- * walk up for `node_modules/@dev-loops/core` and realpath-compare it with
- * `root/packages/core`. Unlike `isWorktreeCoreIsolated`, an absent link is a
- * refusal, because it resolves up the tree to the main checkout's copy.
- * Vacuously ok when `root` has no `packages/core`.
- *
- * @param {string} root - Repository or worktree root.
- * @returns {{ ok: true } | { ok: false, code: "worktree_core_unresolved" | "worktree_core_escapes", message: string }}
- */
-export function checkCoreResolution(root) {
-  const real = (p) => { try { return realpathSync(p); } catch { return null; } };
-  const own = real(path.join(root, "packages", "core"));
-  if (own === null) return { ok: true };
-  const fix = "Run `bun install --frozen-lockfile` inside the worktree (or re-provision it with ensure-worktree).";
-  for (let dir = path.resolve(root); ; dir = path.dirname(dir)) {
-    const found = real(path.join(dir, "node_modules", "@dev-loops", "core"));
-    if (found !== null) {
-      if (found === own) return { ok: true };
-      return {
-        ok: false,
-        code: "worktree_core_escapes",
-        message: `@dev-loops/core resolves to ${found}, outside this checkout's packages/core (WORKTREE-DEPS-ISOLATED). ${fix}`,
-      };
-    }
-    if (path.dirname(dir) === dir) break;
-  }
-  return {
-    ok: false,
-    code: "worktree_core_unresolved",
-    message: `node_modules/@dev-loops/core does not resolve to this checkout's packages/core (WORKTREE-DEPS-ISOLATED). ${fix}`,
-  };
-}
-
-/**
  * Shared admit/reject decision for local-implementation worktree isolation.
  *
  * The single source of truth both enforcement sites route through
