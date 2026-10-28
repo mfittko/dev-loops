@@ -54,7 +54,7 @@ import {
 } from "./_gate-finding-surface.mjs";
 import { fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { mergeSameDefectFindings, normalizeFindingSummary } from "./_gate-finding-text.mjs";
-import { extractSpecFromBody, normalizeCriterionText, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
+import { computeSpecDigest, extractSpecFromBody, normalizeCriterionText, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
@@ -2338,9 +2338,10 @@ function anglesPassCoverage(entries, config, gate) {
 // against the live body. namedCriteria (open act item criterion texts) are never
 // ticked: a verified label that a criterion contains is skipped, and an `ac:<n>` /
 // `dod:<n>` id skips the PR-body row whose label equals that criterion in the pinned
-// spec (the PR body's spec). Only an id the spec cannot resolve, or whose text matches
-// no unchecked PR row, skips every PR-body row of its category.
-async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified, coordinationContext, dryRun = false, pendingWrites = [], namedCriteria = [] }, { env, ghCommand, runChild }) {
+// spec, resolved only when the PR body's spec digest equals the pinned specDigest.
+// Only an id the pinned spec cannot resolve (no pin, a different pinned spec, no such
+// row), or whose text matches no unchecked PR row, skips every PR-body row of its category.
+async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified, coordinationContext, dryRun = false, pendingWrites = [], namedCriteria = [], pinnedSpecDigest }, { env, ghCommand, runChild }) {
   const verifiedItems = allVerified.filter((label) => {
     const text = String(label).trim();
     return !text || !namedCriteria.some((c) => c.includes(text));
@@ -2368,8 +2369,11 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
     const allowed = new Set(Array.isArray(list) ? list : []);
     return verifiedItems.filter((label) => allowed.has(String(label).trim()));
   };
-  // ponytail: the pinned spec is the PR body's own spec; a spec that lives only in a linked issue resolves no id and falls back to the category skip.
-  const pinnedSpec = extractSpecFromBody(prData.body);
+  // The PR body's spec stands in for the pinned spec only when its digest equals the pinned specDigest; otherwise (no pin, or the pin is another body such as the linked issue) no id resolves and the category skip applies.
+  const bodySpec = extractSpecFromBody(prData.body);
+  const pinnedSpec = pinnedSpecDigest !== undefined && computeSpecDigest(bodySpec) === pinnedSpecDigest
+    ? bodySpec
+    : { acceptanceCriteria: [], definitionOfDone: [] };
   const categories = {
     ac: { spec: pinnedSpec.acceptanceCriteria, unchecked: artifact?.prBodyUncheckedAcItems ?? [] },
     dod: { spec: pinnedSpec.definitionOfDone, unchecked: artifact?.prBodyUncheckedDodItems ?? [] },
@@ -3086,6 +3090,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       dryRun: true,
       pendingWrites: pendingTickWrites,
       namedCriteria,
+      pinnedSpecDigest: specAuthorityIdentity?.specDigest,
     }, gh);
   }
   // Set only when the posted checkpoint verdict differs from the ledger's review

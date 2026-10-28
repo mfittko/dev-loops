@@ -29,6 +29,7 @@ import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../../scripts/g
 import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
+import { computeSpecDigest, extractSpecFromBody } from "@dev-loops/core/loop/spec-authority";
 
 // The legacy input shapes in this file predate the round cap. A fixture repo root that does not set the cap gets
 // maxReviewRounds: 0 (the cap has its own tests in upsert-checkpoint-verdict-round-cap.test.mjs).
@@ -12361,27 +12362,43 @@ test("tick (#2898): a row an open act item names by label stays unticked; a crit
   });
 });
 
+// A --spec-authority file pinning `specDigest`, in a scratch dir the OS cleans up.
+async function writeTickPin(name, specDigest) {
+  const file = path.join(await mkdtemp(path.join(os.tmpdir(), "dev-loops-tick-pin-")), name);
+  await writeFile(file, JSON.stringify({ specDigest, headSha: "b".repeat(40), contentDigest: `sha256:${"c".repeat(64)}`, checkedCriteria: [] }));
+  return file;
+}
+
 test("tick (#2898): a spec id (dod:<n> / ac:<n>) resolves against the pinned spec and skips only its row, whatever order the PR body lists them", async () => {
   const unticked = (body, item) => assert.match(body, new RegExp(`^- \\[ \\] ${item}$`, "m"));
   const ticked = (body, item) => assert.match(body, new RegExp(`^- \\[x\\] ${item}$`, "m"));
+  const pin = await writeTickPin("pinned.json", computeSpecDigest(extractSpecFromBody(TICK_PR_BODY)));
+  // The pinned spec is not the PR body's spec (the linked issue): the id resolves nothing, so every DoD row stays unticked.
+  // With no pin at all the same category skip applies.
+  for (const specAuthority of [await writeTickPin("other.json", `sha256:${"d".repeat(64)}`), undefined]) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion: "dod:1" })] }, async ({ post, editedBodies }) => {
+      await post({ specAuthority });
+      for (const item of TICK_ITEMS) (TICK_ITEMS.slice(12).includes(item) ? unticked : ticked)(editedBodies[0].body, item);
+    });
+  }
   // DoD row 1 is "criterion number 14": only that row stays unticked.
   for (const judgeCriterion of ["dod:1", "(dod:1)", "dod:1 The tick never flips a row that an open act item names."]) {
     await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
-      await post();
+      await post({ specAuthority: pin });
       unticked(editedBodies[0].body, TICK_ITEMS[13]);
       for (const item of TICK_ITEMS.filter((_, i) => i !== 13)) ticked(editedBodies[0].body, item);
     });
   }
   // AC row 0 is "criterion number 1".
   await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion: "ac:0" })] }, async ({ post, editedBodies }) => {
-    await post();
+    await post({ specAuthority: pin });
     unticked(editedBodies[0].body, TICK_ITEMS[0]);
     for (const item of TICK_ITEMS.slice(1)) ticked(editedBodies[0].body, item);
   });
   // Two ids across categories skip their two rows.
   for (const judgeCriterion of ["ac:0/dod:1", "ac:0,dod:1", "(ac:0) (dod:1)"]) {
     await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
-      await post();
+      await post({ specAuthority: pin });
       unticked(editedBodies[0].body, TICK_ITEMS[0]);
       unticked(editedBodies[0].body, TICK_ITEMS[13]);
       for (const item of TICK_ITEMS.filter((_, i) => i !== 0 && i !== 13)) ticked(editedBodies[0].body, item);
@@ -12390,21 +12407,21 @@ test("tick (#2898): a spec id (dod:<n> / ac:<n>) resolves against the pinned spe
   // An id the pinned spec cannot resolve (no such row) skips every PR row of its category.
   for (const [judgeCriterion, skipped] of [["dod:99", TICK_ITEMS.slice(12)], ["ac:99", TICK_ITEMS.slice(0, 12)]]) {
     await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
-      await post();
+      await post({ specAuthority: pin });
       for (const item of TICK_ITEMS) (skipped.includes(item) ? unticked : ticked)(editedBodies[0].body, item);
     });
   }
   // The pinned spec resolves the id, but no unchecked PR row carries that text (the row is already checked): the whole category is skipped.
   const preChecked = TICK_PR_BODY.replace(`- [ ] ${TICK_ITEMS[12]}`, `- [x] ${TICK_ITEMS[12]}`);
   await withCompositionRound({ overallVerdict: "findings_present", prBody: preChecked, verifiedItems: TICK_ITEMS.slice(13), findings: [openAct({ judgeCriterion: "dod:0" })] }, async ({ post, editedBodies }) => {
-    await post();
+    await post({ specAuthority: pin });
     for (const item of TICK_ITEMS.slice(13)) unticked(editedBodies[0]?.body ?? `- [ ] ${item}`, item);
   });
 });
 
 test("tick (#2898): an open act item carrying checkedCriteria and no judgeCriterion keeps the named category unticked", async () => {
   await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ checkedCriteria: ["dod:1"] })] }, async ({ post, editedBodies }) => {
-    await post();
+    await post({ specAuthority: await writeTickPin("pinned.json", computeSpecDigest(extractSpecFromBody(TICK_PR_BODY))) });
     assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${TICK_ITEMS[13]}$`, "m"));
     assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[0]}$`, "m"));
     assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[12]}$`, "m"));
