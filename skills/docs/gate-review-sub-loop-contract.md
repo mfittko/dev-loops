@@ -880,9 +880,10 @@ fan-in it runs the deterministic producer over the round's sources:
 dev-loops-run scripts/loop/emit-judge-work-order.mjs --repo <owner/name> --pr <N> --gate <gate> \
   --head-sha <current_head_sha> --findings-file <ledger-path> --spec-file <spec-path> \
   --identity-file <identity-path> [--prior-verdict <prior-judge-verdict-path> ...] \
-  [--round <n>] [--operator-focus-file <path>] [--tmp-root <checkout>/tmp]
+  [--round <n>] [--operator-focus-file <path>] [--pr-body-file <pr-body-path>] [--tmp-root <checkout>/tmp]
 ```
 
+Pass `--pr-body-file` (the PR body text) on this command and on `judge-pass` whenever the PR body exists: a slice PR's reopen line lives in the PR body Non-goals when the spec comes from the linked issue (`SPEC-SLICE-PR-KEEPS-CLOSING-REF`).
 Write the `--operator-focus-file` JSON only when the operator supplied round context for the judge (`GATE-EXEC-OPERATOR-FOCUS`).
 
 A prior head's verdict path is not derivable from the head alone, because each emission's
@@ -1018,7 +1019,7 @@ node <dev-loops-package-root>/cli/index.mjs gate judge-pass --repo <owner/name> 
   --out <act-list-path> --ledger-out <enriched-ledger-path> \
   --spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict <spec-authority-verdict-path> \
   [--prior-approvals <prior-approvals-path> --approvals-out <approvals-out-path>] \
-  [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>]
+  [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>] [--pr-body-file <pr-body-path>]
 ```
 
 The conductor hands the act list — never the full unfiltered ledger —

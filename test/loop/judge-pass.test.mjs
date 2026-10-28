@@ -2162,7 +2162,7 @@ test("hasReopenLine accepts every reopen inflection with an issue number and rej
     "#10 is reopened after the merge",
     "Reopen [#10](https://github.com/o/r/issues/10) after the merge",
   ]) assert.equal(hasReopenLine([line]), true, line);
-  for (const line of ["Do not reopen the old design decision.", "no build changes", "Reopen the discussion in a later slice"]) assert.equal(hasReopenLine([line]), false, line);
+  for (const line of ["Do not reopen the old design decision.", "no build changes", "Reopen the discussion in a later slice", "Do not reopen the ADR 0123 decision.", "Do not reopen #500.", "Reopen ADR 0123 later"]) assert.equal(hasReopenLine([line]), false, line);
   assert.equal(hasReopenLine(undefined), false);
 });
 
@@ -2185,6 +2185,8 @@ test("removesClosingRef accepts every Closes-to-Refs phrasing and rejects the re
     "Fixes 10 by adding a guard; refs 11 for context",
     "Move the Closes 10 check into the helper",
     "Guard the null branch.",
+    "Keep Closes #10; do not change it to Refs #10.",
+    "Tick AC3; do not remove the Closes #10 line.",
   ]) assert.equal(coercedBy(fix), false, fix);
   assert.equal(coercedBy("Replace `Refs #10` with `Closes #10`.", ["Reopen #10 after the merge."]), false);
   assert.equal(coercedBy("Replace `Closes #10` with `Refs #10`.", ["Do not reopen the old design decision."]), false);
