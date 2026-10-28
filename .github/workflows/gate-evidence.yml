@@ -8,7 +8,7 @@ name: Gate evidence
 #   docs/decisions/0076-gate-evidence-reporter-split-always-settles-required-status.md
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review]
+    types: [opened, reopened, ready_for_review, synchronize]
   pull_request_review:
     types: [submitted, edited]
   pull_request_review_comment:

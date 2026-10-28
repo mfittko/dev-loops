@@ -4637,7 +4637,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES a ledger built from
   }
 });
 
-test("detectCheckpointEvidence carries clean gate markers from an earlier head across a base-only merge only when the carry is recorded (#2752)", async () => {
+test("detectCheckpointEvidence carries clean gate markers from an earlier head across a base-only merge (#2752)", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-carry-"));
   try {
     const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_DIR: undefined, GIT_WORK_TREE: undefined };
@@ -4668,11 +4668,7 @@ test("detectCheckpointEvidence carries clean gate markers from an earlier head a
     };
     const run = (extra) => detectCheckpointEvidence({ repo: "owner/repo", pr: 2819 }, { env: { GH_TOKEN: "t" }, ghCommand: "gh", runChild, cwd: dir, ...extra });
 
-    const uncarried = await run({});
-    assert.equal(uncarried.preApprovalGateMarker.carriedFrom, undefined);
-    assert.equal(uncarried.preApprovalGateMarker.visible, false);
-
-    const carried = await run({ recordCarry: true });
+    const carried = await run({});
     for (const marker of [carried.preApprovalGateMarker, carried.draftGateMarker]) {
       assert.equal(marker.carriedFrom, headA);
       assert.equal(marker.headSha, headB);

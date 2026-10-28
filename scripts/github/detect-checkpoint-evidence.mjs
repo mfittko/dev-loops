@@ -1033,7 +1033,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
 // wrapper below strips them so no OTHER caller (e.g.
 // detect-pr-gate-coordination-state.mjs, which durably stores the whole
 // returned object) can re-expose them.
-async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd(), recordCarry = false } = {}) {
+async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd() } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({
     repo: options.repo,
     pr: options.pr,
@@ -1131,12 +1131,12 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     ).then((payload) => (typeof payload?.baseRefName === "string" && payload.baseRefName.trim() ? `origin/${payload.baseRefName.trim()}` : null), () => null);
     return baseRefPromise;
   };
-  const carryCtx = (gate, baseRef) => ({ gate, repo: options.repo, pr: options.pr, currentHeadSha, baseRef, repoRoot: resolveRepoRoot(cwd), record: recordCarry });
+  const carryCtx = (baseRef) => ({ currentHeadSha, baseRef, repoRoot: resolveRepoRoot(cwd) });
   const resolveGateMarker = async (gate) => {
     const filtered = normalizeGateMarkerSummary(markerSummary[gate]);
     if (filtered.visible) return { marker: filtered, fanoutMarker: filtered };
     const candidate = normalizeGateMarkerSummary(anyHeadSummary[gate]);
-    const carried = await carryGateMarker(candidate, carryCtx(gate, isCarryCandidate(candidate, currentHeadSha) ? await fetchBaseRef() : null));
+    const carried = await carryGateMarker(candidate, carryCtx(isCarryCandidate(candidate, currentHeadSha) ? await fetchBaseRef() : null));
     // Fan-out keeps the origin-head marker for a carried gate so the ledger path stays at the origin head.
     return carried.carriedFrom ? { marker: carried, fanoutMarker: { ...candidate, carriedFrom: carried.carriedFrom } } : { marker: filtered, fanoutMarker: filtered };
   };

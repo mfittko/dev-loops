@@ -1004,7 +1004,6 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     ...runtime,
     cwd: runtime.cwd ?? runtime.repoRoot,
     unresolvedGateThreadCount,
-    recordCarry: true,
   });
   // When draft gate was re-passed on a different head, use its timestamp
   // to reset the Copilot round count — only reviews after the re-pass count.

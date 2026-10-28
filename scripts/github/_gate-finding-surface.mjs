@@ -1084,8 +1084,8 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
   let draftGateMarker = marker
     ? { ...marker, visible: true, contractComplete: marker.contractComplete === true }
     : { visible: false, contractComplete: false };
-  // A clean marker at an earlier head may carry across a base-only merge (ADR 0186). Read-only:
-  // only a carry the coordination path already recorded counts. CI and thread checks stay with the callers.
+  // A clean marker at an earlier head may carry across a base-only merge (ADR 0186), recomputed from git facts.
+  // CI and thread checks stay with the callers.
   if (!(marker && headSha?.startsWith(marker.headSha ?? "\0"))) {
     const anyHead = summarizeGateReviewCommentMarkers(comments).draft_gate;
     const candidate = anyHead ? { ...anyHead, visible: true, contractComplete: anyHead.contractComplete === true } : null;
@@ -1094,7 +1094,7 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
         ["pr", "view", String(pr), "--repo", repo, "--json", "baseRefName"],
         { env: gh.env, ghCommand: gh.ghCommand, runChild: gh.runChild },
       ).then((p) => (typeof p?.baseRefName === "string" && p.baseRefName.trim() ? `origin/${p.baseRefName.trim()}` : null), () => null);
-      draftGateMarker = await carryGateMarker(candidate, { gate: "draft_gate", repo, pr, currentHeadSha: headSha, baseRef, repoRoot: gh.repoRoot ?? resolveRepoRoot(process.cwd()) });
+      draftGateMarker = await carryGateMarker(candidate, { currentHeadSha: headSha, baseRef, repoRoot: gh.repoRoot ?? resolveRepoRoot(process.cwd()) });
     }
   }
   // The verdict-clean flags below stay VERDICT-ONLY so a verdict/head mismatch

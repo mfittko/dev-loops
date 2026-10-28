@@ -1,4 +1,4 @@
-# 0186. Consume a carried gate verdict only from a recorded, revalidated carry
+# 0186. Consume a carried gate verdict only after recomputing it from GitHub-visible state
 
 ## Status
 
@@ -14,13 +14,13 @@ ADR 0156 shipped the classifier `computeBaseMergeCarry` and the evidence record 
 
 Gate evidence consumes a carried verdict under these rules:
 
-- `detect-checkpoint-evidence` presents the latest cross-head clean marker at the current head, with the field `carriedFrom` set to the origin head, only when two conditions hold. First, `computeBaseMergeCarry` for origin head to current head returns `carry_verdict`. Second, the durable carried-heads record has an entry for the current head whose evidence passes `validateBaseMergeCarryEvidence` and equals the recomputed evidence. The record lives at `tmp/carried-heads/<repo>/pr-N/<gate>-<originHead>.carried-heads.json`, anchored at the main checkout.
-- The coordination path records the carried-heads entry. `merge-pr` reads the record and never writes it. `merge-pr` therefore never accepts an unrecorded carry.
+- `detect-checkpoint-evidence` presents the latest cross-head clean marker at the current head, with the field `carriedFrom` set to the origin head, only when two conditions hold. First, `computeBaseMergeCarry` for origin head to current head returns `carry_verdict`. Second, the evidence passes `validateBaseMergeCarryEvidence` bound to both heads. The check reads the posted verdict and git facts from a full-history checkout. It reads no local `tmp/` record.
+- The same recomputation runs in gate coordination, `merge-pr` and the server-side `gate-evidence` workflow, which also triggers on `synchronize`. The posted verdict plus the recomputable merge facts are the durable record. The PR body is not edited.
 - Fan-out ledger evidence stays keyed at the origin head. The carry does not rewrite ledger entries.
 - CI green at the current head stays a merge precondition.
 
-Rejected: letting `merge-pr` record the carry itself. The merge step would then both create and accept its own evidence, so a carry that the coordination path never validated could pass the merge gate.
+Rejected: a local carried-heads record under `tmp/`. A fresh CI runner never has it, so a server-side check could not verify a carry from it.
 
 ## Consequences
 
-A base-only merge that keeps the PR blobs unchanged dispatches no gate round. A stale, forged or unrecorded carry fails validation or recomputation and falls back to a full re-gate. The coordination path owns the carried-heads record, so a missing record costs one gate round and never a false pass. Fixer-disposition completion on a carried head is out of this record and moves to issue 2787; a carried head keeps the advisory unverified_active_fixer behavior (ADR 0155).
+A base-only merge that keeps the PR blobs unchanged dispatches no gate round. A carry with a PR-own change or malformed evidence fails recomputation and falls back to a full re-gate. Fixer-disposition completion on a carried head is out of this record and moves to issue 2787; a carried head keeps the advisory unverified_active_fixer behavior (ADR 0155).

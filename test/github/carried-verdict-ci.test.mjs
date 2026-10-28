@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { carryGateMarker } from "../../scripts/github/_carried-verdict.mjs";
 import { readyForReview } from "../../scripts/github/ready-for-review.mjs";
 import { restoreReady } from "../../scripts/github/restore-ready.mjs";
 import { renderGateReviewCommentBody, summarizeExistingComment } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
@@ -14,7 +13,7 @@ import { prePrReadyGate } from "../../scripts/loop/pre-pr-ready-gate.mjs";
 const ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_DIR: undefined, GIT_WORK_TREE: undefined };
 const REPO = "owner/repo";
 
-// A PR whose clean draft_gate was posted at `origin` and carried (recorded) across a base-only merge to `cur`.
+// A PR whose clean draft_gate was posted at `origin` and carried across a base-only merge to `cur`.
 async function setup({ carried }) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "carried-ci-"));
   const git = (...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd: dir, env: ENV, encoding: "utf8" }).trim();
@@ -30,7 +29,6 @@ async function setup({ carried }) {
     git("checkout", "-q", "pr"); git("merge", "-q", "--no-edit", "main");
     cur = git("rev-parse", "HEAD");
     git("update-ref", "refs/remotes/origin/main", "main");
-    await carryGateMarker({ visible: true, verdict: "clean", contractComplete: true, headSha: origin }, { gate: "draft_gate", repo: REPO, pr: 7, currentHeadSha: cur, baseRef: "origin/main", repoRoot: dir, record: true });
   }
   return { dir, origin, cur };
 }
