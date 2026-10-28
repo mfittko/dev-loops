@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, stat as statFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -33,14 +33,16 @@ import {
 } from "@dev-loops/core/loop/spec-authority";
 import { findEscalations, recurrenceFiles } from "@dev-loops/core/loop/gate-recurrence";
 import { commentDeferredFindings, fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
-import { readClosedPriorRoundLogs, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
+import { listPriorActItems, readClosedPriorRoundLogs, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
-import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
+import { buildGateFaninLedgerPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { locateJudgeUnit, renderWorkOrder } from "./emit-judge-work-order.mjs";
+import { runJudgeSkip } from "./judge-skip.mjs";
+import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
@@ -50,6 +52,7 @@ import {
 } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>] [--tmp-root <path>]
+       judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-skip --spec-file <path> --content-digest <digest> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>] [--tmp-root <path>]
 
 Bridge the judge pass between gate fan-in (Phase 3) and the fixer pass (Phase 4).
 Reads the judge agent's verdict artifact, enforces current-head freshness, applies
@@ -81,6 +84,16 @@ Inputs:
                                and --findings-file is the ledger the work order pinned. The pinned spec and content digests are
                                compared only when --spec-file is passed; without it
                                the pass checks no spec pin.
+  --judge-skip                 GATE-EXEC-JUDGE-SKIP-EMPTY: skip the judge for a round with zero
+                               findings, no carried act item and a non-blocked verdict.
+                               Emits judgeSkipped.reason and findingsSummary (the
+                               conductor passes findingsSummary as --findings-summary);
+                               the ledger also records judgeSkipped. Takes no --judge-verdict,
+                               --judge-plan or --spec-authority-verdict; fails closed otherwise
+                               (including pending Copilot body feedback for the head).
+                               Requires --spec-file and --content-digest, and refuses
+                               --approvals-out, --prior-approvals, --changed-paths,
+                               --coverage-map and --carry-forward-proof.
   --head-sha <sha>             The round's current head. The verdict's headSha must
                                equal this (trim+lowercase compare) or the pass fails
                                closed.
@@ -127,7 +140,8 @@ Immutable spec-authority enforcement (opt-in; enabled by --spec-file):
                                definitionOfDone, nonGoals } (arrays of strings) —
                                the canonical tracker AC/DoD/Non-goals. When
                                supplied, the judge must additionally provide a
-                               whole-spec authority verdict (--spec-authority-verdict)
+                               whole-spec authority verdict (--spec-authority-verdict,
+                               except with --judge-skip)
                                that pins the run's specDigest, head, and content
                                digest and disposes every finding with one of the
                                four named outcomes. specDigest is computed here
@@ -135,7 +149,8 @@ Immutable spec-authority enforcement (opt-in; enabled by --spec-file):
   --content-digest <digest>    The reviewed content identity ("sha256:<hex>").
                                Required with --spec-file. Distinct from --head-sha.
   --spec-authority-verdict <p> The judge's whole-spec authority verdict artifact.
-                               Required with --spec-file. Validated against the
+                               Required with --spec-file, except with --judge-skip.
+                               Validated against the
                                computed specDigest, --head-sha, --content-digest,
                                and the finding count. A spec_cannot_decide outcome
                                FAILS CLOSED (exit 1) with humanDecisionRequired so
@@ -196,6 +211,7 @@ export function parseJudgePassCliArgs(argv) {
     findingsFile: undefined,
     judgeVerdict: undefined,
     judgePlan: undefined,
+    judgeSkip: false,
     out: undefined,
     ledgerOut: undefined,
     repoRoot: undefined,
@@ -220,6 +236,7 @@ export function parseJudgePassCliArgs(argv) {
       "findings-file": { type: "string" },
       "judge-verdict": { type: "string" },
       "judge-plan": { type: "string" },
+      "judge-skip": { type: "boolean" },
       out: { type: "string" },
       "ledger-out": { type: "string" },
       "repo-root": { type: "string" },
@@ -273,6 +290,10 @@ export function parseJudgePassCliArgs(argv) {
     }
     if (token.name === "judge-verdict") {
       options.judgeVerdict = token.value;
+      continue;
+    }
+    if (token.name === "judge-skip") {
+      options.judgeSkip = true;
       continue;
     }
     if (token.name === "judge-plan") {
@@ -341,7 +362,19 @@ function requireValue(value, flag, parseErr) {
 
 export function validateCliArgs(options) {
   const missing = [];
-  for (const key of ["repo", "pr", "gate", "headSha", "findingsFile", "judgeVerdict"]) {
+  if (options.judgeSkip) {
+    // GATE-EXEC-JUDGE-SKIP-EMPTY: a skipped round has no judge artifact to name, never reads the approval/coverage flags, and derives scope drift from a real spec identity.
+    for (const key of ["approvalsOut", "priorApprovals", "changedPaths", "coverageMap", "carryForwardProof"]) {
+      if (options[key] !== undefined) throw parseError(`--judge-skip ignores --${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}; remove it`);
+    }
+    for (const key of ["specFile", "contentDigest"]) {
+      if (options[key] === undefined) throw parseError(`--${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)} is required with --judge-skip`);
+    }
+    for (const key of ["judgeVerdict", "judgePlan", "specAuthorityVerdict"]) {
+      if (options[key] !== undefined) throw parseError(`--judge-skip takes no --${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`);
+    }
+  }
+  for (const key of ["repo", "pr", "gate", "headSha", "findingsFile", ...(options.judgeSkip ? [] : ["judgeVerdict"])]) {
     if (options[key] === undefined) missing.push(`--${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`);
   }
   if (missing.length > 0) {
@@ -364,12 +397,12 @@ export function validateCliArgs(options) {
   if (!/^[0-9a-fA-F]{7,64}$/.test(sha)) {
     throw parseError("--head-sha must be a 7-64 char hex SHA");
   }
-  options.headSha = sha;
+  options.headSha = sha.toLowerCase();
   if (gate === "review" && options.out !== undefined) {
     throw parseError("--out is not accepted with --gate review: the review gate never feeds a fixer, so no act list is written");
   }
   options.findingsFile = requireValue(options.findingsFile, "--findings-file", parseError);
-  options.judgeVerdict = requireValue(options.judgeVerdict, "--judge-verdict", parseError);
+  if (!options.judgeSkip) options.judgeVerdict = requireValue(options.judgeVerdict, "--judge-verdict", parseError);
   // --judge-plan is enforced by judgePassCli (verifyJudgeDelivery), so an omitted flag still fails closed.
   if (options.judgePlan !== undefined) options.judgePlan = requireValue(options.judgePlan, "--judge-plan", parseError);
   // Every configured path flag must be pairwise distinct: inputs must never be
@@ -379,7 +412,7 @@ export function validateCliArgs(options) {
   // content-digest identity and the whole-spec verdict are BOTH mandatory — a
   // half-configured authority gate must fail closed, not silently skip.
   if (options.specFile !== undefined) {
-    for (const [key, flag] of [["contentDigest", "--content-digest"], ["specAuthorityVerdict", "--spec-authority-verdict"]]) {
+    for (const [key, flag] of [["contentDigest", "--content-digest"], ...(options.judgeSkip ? [] : [["specAuthorityVerdict", "--spec-authority-verdict"]])]) {
       if (options[key] === undefined) {
         throw parseError(`${flag} is required when --spec-file is supplied (spec-authority enforcement)`);
       }
@@ -955,11 +988,55 @@ export function gitShowSource(cwd, sha, file) {
 // The ledger root of the round history: the writer's --tmp-root, else the canonical root.
 const historyRoot = (options, resolvedRoot) => (options.tmpRoot ? path.resolve(resolvedRoot, options.tmpRoot) : resolveGateArtifactTmpRoot(resolvedRoot));
 
+/**
+ * GATE-EXEC-JUDGE-SKIP-EMPTY: a skipped round has no judge work order to pin the ledger, so bind --findings-file to the round here.
+ * It must equal the head-keyed fan-in ledger (consolidate-fanin --emit-plan writes it per head), and a round retired after that ledger was written refuses.
+ */
+async function verifySkipRound(options, resolvedRoot) {
+  // consolidate-fanin writes under the cwd's tmp/ by default, so without --tmp-root check every checkout's tmp too (as the judged path does).
+  const candidates = options.tmpRoot
+    ? [historyRoot(options, resolvedRoot)]
+    : [...new Set([historyRoot(options, resolvedRoot), ...resolveLedgerCheckouts(resolvedRoot).map((root) => path.join(root, "tmp"))])];
+  let keyed, stat;
+  for (const candidate of candidates) {
+    keyed = path.resolve(resolvedRoot, buildGateFaninLedgerPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: candidate }));
+    if ((stat = await stat_(keyed))) break;
+  }
+  if (!stat) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: no fan-in ledger exists for ${options.gate} at ${options.headSha} (checked ${candidates.join(", ")}); run consolidate-fanin with --emit-plan for this head`);
+  const [given, expected] = await Promise.all([options.findingsFile, keyed].map((file) => readJsonArtifact(path.resolve(resolvedRoot, file), "--findings-file", parseError)));
+  if (sha256Hex(given) !== sha256Hex(expected)) {
+    throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: --findings-file ${options.findingsFile} is not the fan-in ledger for ${options.gate} at ${options.headSha}; pass the ledger consolidate-fanin wrote for this head`);
+  }
+  // retire-gate-round records under the checkout it ran in, so scan every candidate root with the matched ledger's mtime.
+  let retired = null;
+  for (const candidate of candidates) retired ??= await findRetirementAfter(candidate, options.gate, options.headSha, stat.mtimeMs);
+  if (retired) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: the ${options.gate} round was retired as ${retired} after its fan-in ledger was written; re-run the round`);
+}
+
+const stat_ = (file) => statFile(file).catch((err) => (err?.code === "ENOENT" ? null : Promise.reject(err)));
+
 export async function judgePassCli(
   options,
   { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, commentIssue, receiptTmpRoot, readPriorLogs = readClosedPriorRoundLogs, hasCommit = hasCommitInRepo, readSource = gitShowSource } = {},
 ) {
   const resolvedRoot = options.repoRoot ? path.resolve(repoRoot, options.repoRoot) : repoRoot;
+  if (options.judgeSkip) {
+    const payload = await resolvePayload(options, resolvedRoot);
+    await verifySkipRound(options, resolvedRoot);
+    // GATE-EXEC-COPILOT-BODY-TO-JUDGE: pending Copilot body feedback is a finding only the judge adjudicates.
+    // The detector writes the body file under the canonical tmp root whatever --tmp-root says.
+    const bodyFile = copilotBodyJudgePath({ tmpRoot: resolveGateArtifactTmpRoot(resolvedRoot), repo: options.repo, pr: options.pr, headSha: options.headSha });
+    if (await stat_(bodyFile)) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: --judge-skip refused (fail closed): pending Copilot body feedback at ${bodyFile}; run the judge pass`);
+    const spec = await readJsonArtifact(path.resolve(resolvedRoot, options.specFile), "--spec-file", parseError);
+    if (spec?.specKind === PR_SCOPE_SPEC_KIND && options.gate !== "review") {
+      throw parseError(`--spec-file has specKind "${PR_SCOPE_SPEC_KIND}", which only the review gate accepts; ${options.gate} requires a formal spec with acceptance criteria`);
+    }
+    // An unreadable prior ledger hides its act items, so the skip fails closed on it.
+    const unreadable = [];
+    const priorActItems = await listPriorActItems({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot, onUnreadable: (name) => unreadable.push(name) });
+    if (unreadable.length > 0) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: --judge-skip refused (fail closed): prior findings log(s) unreadable (${unreadable.join(", ")}); run the judge pass`);
+    return runJudgeSkip(options, resolvedRoot, { ...payload, spec, priorActItems });
+  }
   const pinned = await verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot ?? resolveGateArtifactTmpRoot(resolvedRoot));
   const { findings, overallVerdict } = await resolvePayload(options, resolvedRoot);
   const judgeVerdict = await readJsonArtifact(

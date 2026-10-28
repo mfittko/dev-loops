@@ -172,6 +172,17 @@ test("fan-in routes judged findings through the spec-bound act-list bridge", asy
   ]) assert.throws(() => assertJudgeBridge(changed));
 });
 
+test("the judge-skip paragraph names the judge-free ledger write and forbids --findings-json", async () => {
+  const step = extractStep(await readRepo(SKILL), "3", SKILL);
+  const skip = step.split("\n").find((line) => line.includes("--judge-skip"));
+  assert.ok(skip, "skip paragraph present");
+  const commands = [...skip.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+  const writer = commands.find((command) => command.startsWith("write-gate-findings-log.mjs "));
+  assert.ok(writer && !writer.includes("--judge-verdict"), "skip path uses the judge-free writer call");
+  assert.ok(!writer.includes("--ledger-out"), "write-gate-findings-log.mjs accepts no --ledger-out");
+  assert.match(skip, /never `--findings-json`/);
+});
+
 test("the fixer persona derives no disposition from severity without a judge verdict", async () => {
   const persona = (await readRepo("agents/fixer.agent.md")).replace(/\s+/g, " ");
   assert.match(persona, /When no judge verdict is present, the findings stay unjudged\. You derive no disposition from severity/);
