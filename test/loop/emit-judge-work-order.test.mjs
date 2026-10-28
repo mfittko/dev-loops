@@ -466,3 +466,22 @@ test("a closure round's gate context (scope.closureRound) adds closureRound: tru
     assert.deepEqual((await emitJudgeWorkOrder(sources)).workOrder.priorActItems, items);
   });
 });
+
+test("operator focus: the round renders before the required reads and is pinned; absent focus leaves the order unchanged (GATE-EXEC-OPERATOR-FOCUS)", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const focusFile = path.join(root, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ round: "Round 8: no churn on docs lows" }));
+    const roundId = "j1790000000000-aaaaaaaa";
+    const plain = await emitJudgeWorkOrder({ ...sources, roundId });
+    const plainText = await readFile(plain.promptPath, "utf8");
+    assert.ok(!plainText.includes("Operator focus") && !("operatorFocus" in plain.workOrder));
+    const plan = await emitJudgeWorkOrder({ ...sources, operatorFocusFile: focusFile, roundId: "j1790000000001-bbbbbbbb" });
+    const text = await readFile(plan.promptPath, "utf8");
+    assert.ok(text.indexOf("## Operator focus") > 0 && text.indexOf("## Operator focus") < text.indexOf("## Required reads"));
+    assert.match(text, /Round: Round 8: no churn on docs lows/);
+    assert.notEqual(plan.workOrderDigest, plain.workOrderDigest);
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "f", decision: "d" }] }));
+    await assert.rejects(() => emitJudgeWorkOrder({ ...sources, operatorFocusFile: focusFile, roundId: "j1790000000002-cccccccc" }), /fixer only/);
+  });
+});

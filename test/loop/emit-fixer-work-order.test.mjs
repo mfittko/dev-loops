@@ -2383,3 +2383,39 @@ test("ADR 0197: a PR-own change after the cap round keeps the round_cap_reached 
     await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
   });
 });
+
+// GATE-EXEC-OPERATOR-FOCUS (ADR 0205, issue 2635)
+test("operator focus: round and a per-item decision render next to the act item and are pinned by the digest", async () => {
+  await withFixture(async ({ root, files, emit }) => {
+    const focusFile = path.join(root, "tmp", "focus.json");
+    await writeFile(focusFile, JSON.stringify({ round: "Round 8: keep the churn rule", items: [{ fingerprint: ACT_REF, decision: "Use remedy B: guard the deref in the caller" }] }));
+    const plain = await emit({ deltaResult: files.delta });
+    const plan = await emit({ deltaResult: files.delta, operatorFocusFile: focusFile });
+    const text = await readFile(plan.promptPath, "utf8");
+    assert.ok(text.indexOf("## Operator focus") > 0 && text.indexOf("## Operator focus") < text.indexOf("## Required reads"));
+    assert.match(text, new RegExp(`Act item ${ACT_REF} \\(null deref\\): operator decision: Use remedy B: guard the deref in the caller`));
+    assert.match(text, /Round: Round 8: keep the churn rule/);
+    assert.match(text, /never changes its disposition/);
+    assert.notEqual(plan.workOrderDigest, plain.workOrderDigest);
+    assert.equal(plan.workOrder.operatorFocus.items[0].summary, "null deref");
+    const absent = await readFile(plain.promptPath, "utf8");
+    assert.ok(!absent.includes("Operator focus") && !("operatorFocus" in plain.workOrder));
+    assert.equal(absent, renderWorkOrder(plain.workOrder));
+  });
+});
+
+test("operator focus: an unknown fingerprint, a threads source with items and bad strings refuse and emit nothing", async () => {
+  await withFixture(async ({ root, files, emit }) => {
+    const focusFile = path.join(root, "tmp", "focus.json");
+    const refuses = async (focus, over = {}) => {
+      await writeFile(focusFile, JSON.stringify(focus));
+      await assert.rejects(() => emit({ deltaResult: files.delta, operatorFocusFile: focusFile, ...over }), /operator focus/);
+    };
+    await refuses({ items: [{ fingerprint: "nope", decision: "x" }] });
+    await refuses({ items: [{ fingerprint: ACT_REF, decision: "x" }] }, { actListFile: undefined, gate: undefined, threadsFile: files.threads });
+    await refuses({ items: [{ fingerprint: ACT_REF, decision: "x".repeat(501) }] });
+    await refuses({ items: [{ fingerprint: ACT_REF, decision: "<``>" }] });
+    await refuses({ round: "ok", extra: 1 });
+    assert.ok(!existsSync(path.join(root, "tmp", "gate-fixer", "o-r", `pr-${PR}`, "fixer-emit-plan.json")), "no plan is written");
+  });
+});
