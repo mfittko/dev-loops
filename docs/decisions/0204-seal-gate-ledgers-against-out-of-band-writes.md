@@ -21,4 +21,4 @@ A hand edit of a sealed artifact fails at the next read. A writer that also rewr
 
 ## Known unconverted readers
 
-These readers still read the findings log with a plain `readFile` and do not verify the seal. They are slice 2 of issue 2971: `detect-checkpoint-evidence.mjs`, `waive-adr-tripwire.mjs`, `write-gate-context.mjs`, `_gate-finding-surface.mjs` and `upsert-checkpoint-verdict.mjs`.
+These readers still read the findings log with a plain `readFile` and do not verify the seal. They are slice 2 of issue 2971: `detect-checkpoint-evidence.mjs`, `waive-adr-tripwire.mjs`, `upsert-checkpoint-verdict.mjs` and `_gate-finding-surface.mjs` `collectLocalJudgeDispositionMatches`.

@@ -2143,3 +2143,21 @@ test("--pending emits a mixed unit's work order without the carried angle (issue
     assert.doesNotMatch(suffix, /\bdry\b/);
   });
 });
+
+test("listPriorFindingsLogHeads names the lexically first file when several sealed prior logs are hand-edited (AC2)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(findingsDir, { recursive: true });
+    for (const ch of ["c", "b"]) {
+      const sha = ch.repeat(40);
+      const file = path.join(findingsDir, `${GATE}-${sha}.json`);
+      const log = { headSha: sha, gate: GATE, repo: REPO, pr: Number(PR), verdict: "clean" };
+      await writeSealed(file, JSON.stringify(log));
+      await writeFile(file, JSON.stringify({ ...log, verdict: "findings_present" }), "utf8");
+    }
+    await assert.rejects(
+      () => listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") }),
+      (err) => err.code === OUT_OF_BAND_WRITE && err.file.endsWith(`${GATE}-${"b".repeat(40)}.json`),
+    );
+  });
+});

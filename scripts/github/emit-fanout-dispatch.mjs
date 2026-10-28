@@ -290,7 +290,7 @@ export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRo
   const cutoff = await latestQuarantineMs({ repo, pr, gate, tmpRoot });
   let entries;
   try {
-    entries = await readdir(dir);
+    entries = (await readdir(dir)).sort();
   } catch (err) {
     if (err?.code === "ENOENT") return heads;
     throw err;
