@@ -2146,3 +2146,10 @@ test("a judge act that swaps Closes for Refs on a slice PR is coerced to reject 
   assert.equal(rejectClosingRefRemoval([noReopen], ["no build changes"]), 0);
   assert.equal(noReopen.judgeDisposition, "act");
 });
+
+test("slice-linkage heuristics skip a Refs-to-Closes remedy and a reopen mention without an issue number", () => {
+  const refsToCloses = { ...finding(), judgeDisposition: "act", judgeFix: "Replace `Refs #10` with `Closes #10`." };
+  assert.equal(rejectClosingRefRemoval([refsToCloses], ["Reopen #10 after the merge."]), 0);
+  const closesToRefs = { ...finding(), judgeDisposition: "act", judgeFix: "Replace `Closes #10` with `Refs #10`." };
+  assert.equal(rejectClosingRefRemoval([closesToRefs], ["Do not reopen the old design decision."]), 0);
+});
