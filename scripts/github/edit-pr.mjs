@@ -310,7 +310,9 @@ async function buildEditArgs(options) {
 // Labels of `[x]` rows in currentBody that nextBody no longer carries as `[x]`:
 // unticked, deleted or reworded rows, across every checkbox in the body. Counts
 // per label, so one lost occurrence of a duplicated label is reported.
-const CHECKBOX_ROW = /^\s*[-*]\s+\[([ xX])\]\s+(.+?)\s*$/u;
+// The row grammar matches CHECKBOX_RE in tick-verified-checkboxes.mjs and the gate's checklist parser:
+// an optional blockquote prefix, then a [-*+] or N. or N) marker.
+const CHECKBOX_ROW = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[([ xX])\]\s+(.+?)\s*$/u;
 function untickedRows(currentBody, nextBody) {
   const checked = (body) => body.split(/\r?\n/u).map((l) => CHECKBOX_ROW.exec(l)).filter((m) => m && m[1] !== " ").map((m) => m[2]);
   const remaining = new Map();

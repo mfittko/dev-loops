@@ -54,7 +54,7 @@ import {
 } from "./_gate-finding-surface.mjs";
 import { fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { mergeSameDefectFindings, normalizeFindingSummary } from "./_gate-finding-text.mjs";
-import { stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
+import { extractSpecFromBody, normalizeCriterionText, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
@@ -2337,8 +2337,9 @@ function anglesPassCoverage(entries, config, gate) {
 // tick to it, so a concurrent body edit is kept and the edit guards compare
 // against the live body. namedCriteria (open act item criterion texts) are never
 // ticked: a verified label that a criterion contains is skipped, and an `ac:<n>` /
-// `dod:<n>` id skips every PR-body row of that category (the ids number the pinned
-// spec, which this tick cannot map to a PR row).
+// `dod:<n>` id skips the PR-body row whose label equals that criterion in the pinned
+// spec (the PR body's spec). Only an id the spec cannot resolve, or whose text matches
+// no unchecked PR row, skips every PR-body row of its category.
 async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified, coordinationContext, dryRun = false, pendingWrites = [], namedCriteria = [] }, { env, ghCommand, runChild }) {
   const verifiedItems = allVerified.filter((label) => {
     const text = String(label).trim();
@@ -2367,11 +2368,21 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
     const allowed = new Set(Array.isArray(list) ? list : []);
     return verifiedItems.filter((label) => allowed.has(String(label).trim()));
   };
-  const namedCategories = new Set(namedCriteria.flatMap((c) => [...c.matchAll(/\b(ac|dod):\d+\b/giu)].map((m) => m[1].toLowerCase())));
-  const prSkipped = new Set([
-    ...(namedCategories.has("ac") ? artifact?.prBodyUncheckedAcItems ?? [] : []),
-    ...(namedCategories.has("dod") ? artifact?.prBodyUncheckedDodItems ?? [] : []),
-  ].map((label) => String(label).trim()));
+  // ponytail: the pinned spec is the PR body's own spec; a spec that lives only in a linked issue resolves no id and falls back to the category skip.
+  const pinnedSpec = extractSpecFromBody(prData.body);
+  const categories = {
+    ac: { spec: pinnedSpec.acceptanceCriteria, unchecked: artifact?.prBodyUncheckedAcItems ?? [] },
+    dod: { spec: pinnedSpec.definitionOfDone, unchecked: artifact?.prBodyUncheckedDodItems ?? [] },
+  };
+  const prSkipped = new Set();
+  for (const c of namedCriteria) {
+    for (const [, kind, index] of c.matchAll(/\b(ac|dod):(\d+)\b/giu)) {
+      const { spec, unchecked } = categories[kind.toLowerCase()];
+      const text = spec[Number(index)] === undefined ? "" : normalizeCriterionText(spec[Number(index)]);
+      const row = unchecked.find((label) => normalizeCriterionText(label) === text);
+      for (const label of text && row !== undefined ? [row] : unchecked) prSkipped.add(String(label).trim());
+    }
+  }
   const prLabels = inList([...(artifact?.prBodyUncheckedAcItems ?? []), ...(artifact?.prBodyUncheckedDodItems ?? [])])
     .filter((label) => !prSkipped.has(String(label).trim()));
   const prTick = await tick(prData.body, prLabels, (bodyFile) =>
@@ -3477,9 +3488,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const findingsLedgerWarning = ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin" && options.findingsJson && !options.findingsLedger)
     ? "WARNING: --findings-json without --findings-ledger files zero inline comments — the --findings-ledger (consolidate-fanin --ledger-out → write-gate-findings-log) is the only inline-comment source. Pass --findings-ledger to file inline findings."
     : null;
-  // Every refusal has passed: apply the queued reviewer-verified ticks now, so a refused post leaves no ticked box.
-  // A failed write throws before any post; a rerun re-ticks only the rows still unticked.
-  for (const write of pendingTickWrites) await write();
   // PENDING-REVIEW RESOLUTION: GitHub allows only ONE pending review
   // per user per PR (PR-scoped, NOT head-scoped), so a --gate review --submit
   // re-run must RESOLVE the caller's own pending review rather than POST a
@@ -3583,6 +3591,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // gate review) and the legacy issue-comment surface (updateComment below) are
   // covered, in addition to the low-level guards in the write helpers.
   guardCommentBodyNoIssuePrIds(desiredBody, { ref: "gate verdict comment body", allowedRefs: options.allowedRefs });
+  // The last refusal has passed: apply the queued reviewer-verified ticks now, before the first review or comment write, so a refused post leaves no ticked box.
+  // A failed write throws before any post; a rerun re-ticks only the rows still unticked.
+  for (const write of pendingTickWrites) await write();
   const findingSurfaceFields = findingSurface
     ? {
         round: findingSurface.round,

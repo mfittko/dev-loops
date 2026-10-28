@@ -12337,6 +12337,14 @@ test("tick (#2898): a refused verdict post changes no PR body and no issue body"
   });
 });
 
+test("tick (#2898): a refusal raised after the deferred tick point (the desiredBody issue/PR id guard) changes no PR body and no issue body", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, issueBody: UNTICKED_TICK_ISSUE_BODY, verifiedItems: TICK_ITEMS }, async ({ post, calls, editedBodies }) => {
+    await assert.rejects(() => post({ findingsSeverityCounts: CLEAN_COUNTS, findingsSummary: "tracked as 1234 and #1234" }), /comment-id-guard/);
+    assert.equal(editedBodies.length, 0);
+    assert.equal(bodyEdits(calls).length, 0);
+  });
+});
+
 test("tick (#2898): a row an open act item names by label stays unticked; a criterion with a prefix or a surrounding clause names it too", async () => {
   for (const judgeCriterion of [TICK_ITEMS[12], `DoD: ${TICK_ITEMS[12]}`, `the row ${TICK_ITEMS[12]} has no evidence`]) {
     await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
@@ -12353,34 +12361,53 @@ test("tick (#2898): a row an open act item names by label stays unticked; a crit
   });
 });
 
-test("tick (#2898): a spec id (dod:<n> / ac:<n>) skips every PR row of its category, whatever order the PR body lists them", async () => {
-  const dod = ["dod:1", "(dod:1)", "dod:0 The tick never flips a row that an open act item names."];
-  for (const judgeCriterion of dod) {
+test("tick (#2898): a spec id (dod:<n> / ac:<n>) resolves against the pinned spec and skips only its row, whatever order the PR body lists them", async () => {
+  const unticked = (body, item) => assert.match(body, new RegExp(`^- \\[ \\] ${item}$`, "m"));
+  const ticked = (body, item) => assert.match(body, new RegExp(`^- \\[x\\] ${item}$`, "m"));
+  // DoD row 1 is "criterion number 14": only that row stays unticked.
+  for (const judgeCriterion of ["dod:1", "(dod:1)", "dod:1 The tick never flips a row that an open act item names."]) {
     await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
       await post();
-      for (const item of TICK_ITEMS.slice(12)) assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${item}$`, "m"));
-      for (const item of TICK_ITEMS.slice(0, 12)) assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${item}$`, "m"));
+      unticked(editedBodies[0].body, TICK_ITEMS[13]);
+      for (const item of TICK_ITEMS.filter((_, i) => i !== 13)) ticked(editedBodies[0].body, item);
     });
   }
+  // AC row 0 is "criterion number 1".
   await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion: "ac:0" })] }, async ({ post, editedBodies }) => {
     await post();
-    for (const item of TICK_ITEMS.slice(0, 12)) assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${item}$`, "m"));
-    for (const item of TICK_ITEMS.slice(12)) assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${item}$`, "m"));
+    unticked(editedBodies[0].body, TICK_ITEMS[0]);
+    for (const item of TICK_ITEMS.slice(1)) ticked(editedBodies[0].body, item);
   });
-  // ponytail: a second id after a slash or comma names its category too; with both named nothing is ticked.
+  // Two ids across categories skip their two rows.
   for (const judgeCriterion of ["ac:0/dod:1", "ac:0,dod:1", "(ac:0) (dod:1)"]) {
     await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
       await post();
-      for (const item of TICK_ITEMS) assert.doesNotMatch(editedBodies[0]?.body ?? "", new RegExp(`^- \\[x\\] ${item}$`, "m"));
+      unticked(editedBodies[0].body, TICK_ITEMS[0]);
+      unticked(editedBodies[0].body, TICK_ITEMS[13]);
+      for (const item of TICK_ITEMS.filter((_, i) => i !== 0 && i !== 13)) ticked(editedBodies[0].body, item);
     });
   }
+  // An id the pinned spec cannot resolve (no such row) skips every PR row of its category.
+  for (const [judgeCriterion, skipped] of [["dod:99", TICK_ITEMS.slice(12)], ["ac:99", TICK_ITEMS.slice(0, 12)]]) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
+      await post();
+      for (const item of TICK_ITEMS) (skipped.includes(item) ? unticked : ticked)(editedBodies[0].body, item);
+    });
+  }
+  // The pinned spec resolves the id, but no unchecked PR row carries that text (the row is already checked): the whole category is skipped.
+  const preChecked = TICK_PR_BODY.replace(`- [ ] ${TICK_ITEMS[12]}`, `- [x] ${TICK_ITEMS[12]}`);
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: preChecked, verifiedItems: TICK_ITEMS.slice(13), findings: [openAct({ judgeCriterion: "dod:0" })] }, async ({ post, editedBodies }) => {
+    await post();
+    for (const item of TICK_ITEMS.slice(13)) unticked(editedBodies[0]?.body ?? `- [ ] ${item}`, item);
+  });
 });
 
 test("tick (#2898): an open act item carrying checkedCriteria and no judgeCriterion keeps the named category unticked", async () => {
   await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ checkedCriteria: ["dod:1"] })] }, async ({ post, editedBodies }) => {
     await post();
-    for (const item of TICK_ITEMS.slice(12)) assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${item}$`, "m"));
+    assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${TICK_ITEMS[13]}$`, "m"));
     assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[0]}$`, "m"));
+    assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[12]}$`, "m"));
   });
 });
 
