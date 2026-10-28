@@ -38,6 +38,8 @@
  *     `&&`, `||`, `|`, `;`) that is not in the write-op allowlist.
  *   - `python` / `python3` at the start of a command segment.
  *   - `node` inline interpreter (`-e`/`--eval`/`-p`, stdin `-`, heredoc; the OPS-NO-INLINE-INTERPRETER forms) at the start of a command segment.
+ *   - a `node` or `python`/`python3` inline form inside `$(...)` or backticks anywhere in a segment
+ *     (`X=$(node -e 1)`), reported with the `node inline`, `python3` or `python` label.
  *
  * Head normalization (before classifying a segment, fail-closed):
  *   - strips leading `NAME=value ` env-assignment prefixes (`GH_TOKEN=x gh api`)
@@ -51,8 +53,7 @@
  *     does NOT fully parse shell quoting/substitution. A `;`/`|` inside a quoted
  *     argument can over-report (flags a harmless inner token). It catches the
  *     common raw-call forms (incl. the env/wrapper/path-prefixed ones above), but
- *     deeply obfuscated calls — command substitution `$(...)`, aliases, `eval` —
- *     may evade it. Prefer single-line, single-purpose commands in transcripts.
+ *     deeply obfuscated calls — aliases, `eval` — may evade it. Prefer single-line, single-purpose commands in transcripts.
  */
 import { readFileSync } from "node:fs";
 import process from "node:process";
@@ -125,7 +126,9 @@ function classifySegment(rawSegment) {
     return { kind: "violation", tool: /^python3\b/.test(segment) ? "python3" : "python" };
   }
   // A substitution (`X=$(node -e 1)`) hides the interpreter from the head dispatch: ask the shared matcher on the raw segment.
-  return commandContainsInlineInterpreter(rawSegment) ? { kind: "violation", tool: "inline interpreter" } : { kind: "clean" };
+  if (!commandContainsInlineInterpreter(rawSegment)) return { kind: "clean" };
+  const py = /\bpython(3?)\b/.exec(rawSegment);
+  return { kind: "violation", tool: py ? `python${py[1]}` : "node inline" };
 }
 
 /**

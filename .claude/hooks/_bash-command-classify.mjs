@@ -1213,11 +1213,16 @@ export function commandContainsInlineInterpreter(command) {
   // Token-level, not a shell parser: text after each `$(` and inside backtick pairs is checked as a command too.
   // Literal text is blanked for this scan only (the per-segment check below keeps the raw text): quoted-delimiter heredoc bodies, single-quoted spans outside double quotes, and backslash-escaped characters.
   // ponytail: ceiling: nested quote context inside `$(...)`, process substitution `<(...)` and subshell `(...)` are not covered; wrapper options (`sudo -u x`, `nice -n 5`, `xargs -I{}`) are not skipped by stripLeadingWrappers (pre-existing).
-  const noHeredoc = command.replace(/(<<-?\s*(['"])(\w+)\2[^\n]*\n)[\s\S]*?\n[ \t]*\3(?=\n|$)/g, "$1");
+  // An unquoted-delimiter heredoc body keeps `$(` live but its quotes and `#` are literal: blank them so apostrophes never pair.
+  const noHeredoc = command
+    .replace(/(<<-?\s*(['"])(\w+)\2[^\n]*\n)[\s\S]*?\n[ \t]*\3(?=\n|$)/g, "$1")
+    .replace(/(<<-?\s*(\w+)[^\n]*\n)([\s\S]*?)(?=\n[ \t]*\2(?:\n|$))/g, (_, head, _d, body) => head + body.replace(/['"#]/g, " "));
   let unquoted = "";
   let quote = "";
   for (let i = 0; i < noHeredoc.length; i++) {
     const c = noHeredoc[i];
+    // An unquoted `#` at word start is a comment up to the end of the line: its apostrophes are literal.
+    if (c === "#" && quote === "" && (i === 0 || /[\s;&|(]/.test(noHeredoc[i - 1]))) { while (i + 1 < noHeredoc.length && noHeredoc[i + 1] !== "\n") i++; continue; }
     if (c === "\\" && quote !== "'") { unquoted += "  "; i++; continue; }
     if (quote === "'") { if (c === "'") { quote = ""; unquoted += "'"; } continue; }
     if (c === "'" && quote === "") { quote = "'"; unquoted += "'"; continue; }
