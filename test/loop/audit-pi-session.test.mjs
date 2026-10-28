@@ -958,6 +958,12 @@ describe("audit-pi-session unit & integration", () => {
     assert.match(stderr.value, /audit_json_too_large/);
     assert.match(stderr.value, /10-byte limit/);
     assert.match(stderr.value, /one transcript at a time/);
+
+    // --jq is exempt from the cap: the documented workaround must keep working.
+    const jqOut = captureStream();
+    const jqErr = captureStream();
+    assert.equal(await runAuditCli([sessionFile, "--json", "--jq", ".sessions | length"], { stdout: jqOut, stderr: jqErr, maxJsonBytes: 10 }), 0);
+    assert.notEqual(jqOut.value, "");
   });
 
   it("covers structured output, explicit latest, and CLI errors", async () => {

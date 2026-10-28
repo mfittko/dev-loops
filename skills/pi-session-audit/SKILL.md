@@ -43,7 +43,7 @@ node scripts/loop/audit-pi-session.mjs --harness claude path/to/claude-transcrip
 
 ## Granularity and output limit
 
-Audit one transcript at a time. A whole-directory `--json` record that exceeds 1,000,000 bytes is refused with `audit_json_too_large` (exit 1, message on stderr naming the limit and the audited path); the tool never emits a truncated document. On that error, audit each transcript file separately, or narrow the output with `--jq` or `--fields`.
+Audit one transcript at a time. Any whole-document `--json` record that exceeds 1,000,000 bytes is refused with `audit_json_too_large` (exit 1, message on stderr naming the limit and the audited path); the tool never emits a truncated document. On that error, narrow the output with `--jq` or `--fields`. For a directory input, you can also audit each transcript file separately. The `dev-loops` wrapper reports `child_output_too_large` (exit 1, no partial stdout) when a routed subcommand exceeds the wrapper buffer, and `subcommand_spawn_failed` with the error code for any other spawn failure.
 
 ## Pi vs Claude Code
 

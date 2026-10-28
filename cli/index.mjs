@@ -835,10 +835,14 @@ export async function runCli({
       });
       // A killed child (ENOBUFS) leaves a truncated stdout: emit nothing partial, fail with a typed message.
       if (result.error) {
+        if (result.error.code !== "ENOBUFS") {
+          writeLines(stderr, [`subcommand_spawn_failed: ${result.error.code ?? result.error.message}`]);
+          return 1;
+        }
         const hint = fromTop.scriptPath.endsWith("audit-pi-session.mjs")
           ? " Audit one transcript at a time (pass a single transcript file) or narrow the output with --jq/--fields."
           : "";
-        writeLines(stderr, [`child_output_too_large: the subcommand failed (${result.error.code ?? result.error.message}); its output may exceed the ${spawnMaxBuffer}-byte wrapper buffer.${hint}`]);
+        writeLines(stderr, [`child_output_too_large: the subcommand output exceeded the ${spawnMaxBuffer}-byte wrapper buffer.${hint}`]);
         return 1;
       }
       if (result.stdout) stdout.write(result.stdout);
