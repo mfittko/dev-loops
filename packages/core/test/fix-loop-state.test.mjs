@@ -59,3 +59,13 @@ test("normalizer rejects non-objects and canonicalizes enums", () => {
   const n = normalizeFixLoopSnapshot({ ciStatus: "bogus", deltaVerdict: "x", reportStatus: "y" });
   assert.deepEqual([n.ciStatus, n.deltaVerdict, n.reportStatus], ["pending", null, "none"]);
 });
+
+test("contradictory snapshots resolve by the documented precedence", () => {
+  const state = (snapshot) => interpretFixLoopState(snapshot).state;
+  assert.equal(state({ fullGateStarted: true, headMoved: true }), S.FULL_GATE_ROUND);
+  assert.equal(state({ headMoved: true, dispositionCarried: true }), S.DISPOSITION_COMPLETE);
+  assert.equal(state({ noCommit: true, pushed: true, ciStatus: "green", reportStatus: "complete" }), S.NO_COMMIT);
+  assert.equal(state({ pushGranted: true, candidateCommitted: true, deltaVerdict: "residue" }), S.FULL_EMITTED);
+  assert.equal(state({ dispositionCarried: true, pushed: true }), S.PUSHED);
+  assert.equal(state({ dispositionCarried: true }), S.FULL_GATE_ROUND);
+});

@@ -1085,7 +1085,7 @@ const FIX_LOOP_TO_FIXTURE = new Map([
   [FIX_LOOP_STATE.FULL_GATE_ROUND, () => ({ fullGateStarted: true })],
 ]);
 
-const FIX_LOOP_KNOWN_GAPS = new Map([
+export const FIX_LOOP_KNOWN_GAPS = new Map([
   ["head_moved->full_gate_round", "slice 3 (C10): close the sequence, remove the marker and route the head"],
   ["head_moved->disposition_complete", "slice 3 (C7): descendant-head carry of the checkpoint"],
   ["no_commit->full_gate_round", "slice 3 (C9): a no-commit pass closes its sequence and removes its marker"],
@@ -1093,6 +1093,15 @@ const FIX_LOOP_KNOWN_GAPS = new Map([
   ["delta_review->commit_only_emitted", "slice 4 (C12): delta residue and new findings re-emit commit_only"],
   ["delivery_incomplete->disposition_complete", "slice 5 (C14): --completion-only delivery re-entry"],
 ]);
+
+{
+  // The doc table must list each edge once, and every known gap must be a real doc edge.
+  const keys = FIX_LOOP_DOC_TRANSITIONS.map(([a, b]) => `${a}->${b}`);
+  if (keys.length !== new Set(keys).size) throw new Error("fix-loop-state: doc Required transitions lists a duplicate edge");
+  for (const gapKey of FIX_LOOP_KNOWN_GAPS.keys()) {
+    if (!keys.includes(gapKey)) throw new Error(`fix-loop-state: known gap ${gapKey} is not an edge of the doc table`);
+  }
+}
 
 const FIX_LOOP_TRANSITION_CHECKS = new Map();
 for (const [from, to] of realEdges(FIX_LOOP_DOC_TRANSITIONS)) {
@@ -1104,13 +1113,19 @@ for (const [from, to] of realEdges(FIX_LOOP_DOC_TRANSITIONS)) {
   }
   const buildFixture = FIX_LOOP_TO_FIXTURE.get(to);
   if (!buildFixture) throw new Error(`fix-loop-state: no fixture registered for reachable state "${to}"`);
+  // The same state->fixture map doubles as the from-state map, so a from fixture that does not
+  // interpret to `from` fails the edge instead of passing on the to fixture alone.
+  const buildFromFixture = FIX_LOOP_TO_FIXTURE.get(from);
+  if (!buildFromFixture) throw new Error(`fix-loop-state: no fixture registered for source state "${from}"`);
   FIX_LOOP_TRANSITION_CHECKS.set(key, {
     status: "verified",
     verify: () => {
       const fixture = buildFixture();
       const i = interpretFixLoopState(fixture);
       return {
-        ok: i.state === to && (FIX_LOOP_TRANSITIONS[from] || []).includes(to),
+        ok: i.state === to
+          && interpretFixLoopState(buildFromFixture()).state === from
+          && (FIX_LOOP_TRANSITIONS[from] || []).includes(to),
         detail: i,
         result: { state: i.state, headMoved: Boolean(fixture.headMoved) },
       };
@@ -1129,7 +1144,7 @@ registerMachine({
     {
       // A foreign commit never leaves the sequence in a push or delivery state for the old candidate.
       name: "fix-loop-head-moved-never-delivers",
-      check: (o) => !o.headMoved || [FIX_LOOP_STATE.HEAD_MOVED, FIX_LOOP_STATE.FULL_GATE_ROUND, FIX_LOOP_STATE.DISPOSITION_COMPLETE].includes(o.state),
+      check: (o) => !o.headMoved || [FIX_LOOP_STATE.HEAD_MOVED, FIX_LOOP_STATE.FULL_GATE_ROUND, FIX_LOOP_STATE.DISPOSITION_COMPLETE, FIX_LOOP_STATE.STOPPED].includes(o.state),
     },
   ],
 });

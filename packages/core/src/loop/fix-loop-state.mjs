@@ -8,8 +8,6 @@
  * that made the commit: a foreign commit is the `head_moved` state, not a deadlock.
  */
 
-import { trimmedOrNull } from "./normalize.mjs";
-
 export const FIX_LOOP_STATE = Object.freeze({
   ACT_PENDING: "act_pending",
   COMMIT_ONLY_EMITTED: "commit_only_emitted",
@@ -76,8 +74,6 @@ export function normalizeFixLoopSnapshot(raw) {
     throw new Error("Snapshot must be a non-null object");
   }
   return {
-    headSha: trimmedOrNull(raw.headSha),
-    candidateSha: trimmedOrNull(raw.candidateSha),
     stopped: Boolean(raw.stopped),
     // a commit the active order did not make landed (developer, CI fix, base merge, amend)
     headMoved: Boolean(raw.headMoved),

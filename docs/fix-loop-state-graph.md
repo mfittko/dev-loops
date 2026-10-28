@@ -67,10 +67,17 @@ Terminal states with no outgoing transitions: `full_gate_round`, `stopped`.
 
 `normalizeFixLoopSnapshot` canonicalizes booleans and enums:
 
-- heads: `headSha`, `candidateSha`
 - exits: `stopped`, `headMoved`, `sequenceClosed`, `dispositionCarried`, `fullGateStarted`
 - sequence: `actPending`, `markerWritten`, `noCommit`, `candidateCommitted`
 - delta: `deltaReviewStarted`, `deltaVerdict` (`clear`|`bounded_out`|`residue`|null)
 - delivery: `pushGranted`, `pushed`, `ciStatus` (`pending`|`green`|`red`), `reportStatus` (`none`|`complete`|`stale`|`superseded`)
 
 `interpretFixLoopState` returns `{ state, allowedTransitions, nextAction, reason }`. Precedence: `stopped`, then a started full gate round, then `headMoved`, then `noCommit`, then the pushed branch (CI and report), then `pushGranted`, then `candidateCommitted`, then the marker, then `actPending`. With no open sequence and no act items the head goes to `full_gate_round`, the fallback authority. A closed sequence after `head_moved` or `no_commit` resolves to `full_gate_round`.
+
+Contradictory snapshots resolve by that order. These winners are pinned by tests:
+
+- `fullGateStarted` wins over `headMoved`: the state is `full_gate_round`.
+- `headMoved` with `dispositionCarried` gives `disposition_complete` (reason `descendant_carry`).
+- `dispositionCarried` without `headMoved` is ignored.
+- `noCommit` wins over `pushed`: the state is `no_commit`.
+- `pushGranted` wins over `candidateCommitted` residue: the state is `full_emitted`.
