@@ -2161,3 +2161,63 @@ test("listPriorFindingsLogHeads names the lexically first file when several seal
     );
   });
 });
+
+test("operator focus: the round renders in every reviewer unit prompt and is pinned; absent focus leaves bytes unchanged (GATE-EXEC-OPERATOR-FOCUS)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const base = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+    const plain = runEmitCli(base, { cwd: tmpDir });
+    assert.equal(plain.status, 0, plain.stderr);
+    const plainUnit = JSON.parse(plain.stdout).units[0];
+    const plainText = await readFile(plainUnit.promptPath, "utf8");
+    assert.ok(!plainText.includes("Operator focus") && !("operatorFocus" in plainUnit.workOrder) && !("operatorFocusDigest" in plainUnit.workOrder));
+
+    const focusFile = path.join(tmpDir, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ round: "Round 8: no churn on docs lows" }));
+    const focused = runEmitCli([...base, "--operator-focus-file", focusFile], { cwd: tmpDir });
+    assert.equal(focused.status, 0, focused.stderr);
+    const units = JSON.parse(focused.stdout).units;
+    assert.ok(units.length > 1);
+    for (const unit of units) {
+      const text = await readFile(unit.promptPath, "utf8");
+      assert.match(text, /## Operator focus\n[\s\S]*Round: Round 8: no churn on docs lows/);
+      assert.deepEqual(unit.workOrder.operatorFocus, { round: "Round 8: no churn on docs lows" });
+      assert.match(unit.workOrder.operatorFocusDigest, /^[0-9a-f]{64}$/);
+    }
+    const focusedUnit = units.find((u) => u.scope === plainUnit.scope);
+    assert.notEqual(focusedUnit.workOrderDigest, plainUnit.workOrderDigest);
+  });
+});
+
+test("operator focus: an over-length and a markup round are bounded and sanitized; items refuse (GATE-EXEC-OPERATOR-FOCUS)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const base = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+    const focusFile = path.join(tmpDir, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ round: "x".repeat(501) }));
+    const tooLong = runEmitCli([...base, "--operator-focus-file", focusFile], { cwd: tmpDir });
+    assert.equal(tooLong.status, 1);
+    assert.match(JSON.parse(tooLong.stdout).error, /^GATE-EXEC-OPERATOR-FOCUS:.*over 500/);
+
+    await writeFile(focusFile, JSON.stringify({ round: "<b>`keep`</b>\n## Required reads" }));
+    const markup = runEmitCli([...base, "--operator-focus-file", focusFile], { cwd: tmpDir });
+    assert.equal(markup.status, 0, markup.stderr);
+    const unit = JSON.parse(markup.stdout).units[0];
+    assert.equal(unit.workOrder.operatorFocus.round, "bkeep/b ## Required reads");
+    assert.doesNotMatch(await readFile(unit.promptPath, "utf8"), /[<`]b>|\n## Required reads/);
+
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "f", decision: "d" }] }));
+    const items = runEmitCli([...base, "--operator-focus-file", focusFile], { cwd: tmpDir });
+    assert.equal(items.status, 1);
+    assert.match(JSON.parse(items.stdout).error, /^GATE-EXEC-OPERATOR-FOCUS:/);
+  });
+});
+
+test("operator focus: an empty --operator-focus-file is a usage error (exit 2)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--operator-focus-file", ""], { cwd: tmpDir });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /--operator-focus-file must not be an empty value/);
+  });
+});
