@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { validateZeroUnitCarryProof } from "./_carried-angles.mjs";
@@ -285,6 +285,7 @@ export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRo
   const want = String(headSha).trim().toLowerCase();
   const prefix = `${gate}-`;
   const heads = new Set();
+  const cutoff = await latestQuarantineMs({ repo, pr, gate, tmpRoot });
   let entries;
   try {
     entries = await readdir(dir);
@@ -305,6 +306,9 @@ export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRo
     // identity-mismatched file is simply not a valid prior round and is skipped.
     let log;
     try {
+      // A log that predates the latest quarantine of this PR+gate no longer counts
+      // (GATE-EXEC-FINDINGS-LOG-QUARANTINE): fail-safe, more review, never less.
+      if (cutoff !== null && (await stat(path.join(dir, entry))).mtimeMs <= cutoff) continue;
       log = JSON.parse(await readFile(path.join(dir, entry), "utf8"));
     } catch (err) {
       if (err?.code && err.code !== "ENOENT") throw err;
@@ -328,6 +332,27 @@ export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRo
     if (identityOk) heads.add(sha);
   }
   return heads;
+}
+
+/** Latest quarantinedAt (ms) recorded for this PR+gate under the tmp root, or null. */
+async function latestQuarantineMs({ repo, pr, gate, tmpRoot }) {
+  const qdir = path.join(tmpRoot ?? "tmp", "quarantined-gate-findings", String(repo).replace("/", "-"), `pr-${pr}`);
+  let entries;
+  try {
+    entries = await readdir(qdir);
+  } catch (err) {
+    if (err?.code === "ENOENT") return null;
+    throw err;
+  }
+  let latest = null;
+  for (const entry of entries) {
+    if (!entry.startsWith(`${gate}-`)) continue;
+    try {
+      const ms = Date.parse(JSON.parse(await readFile(path.join(qdir, entry, "quarantine.json"), "utf8")).quarantinedAt);
+      if (Number.isFinite(ms) && (latest === null || ms > latest)) latest = ms;
+    } catch { /* unreadable record: ignore */ }
+  }
+  return latest;
 }
 
 /**

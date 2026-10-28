@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { quarantineGateFindingsLog } from "../../scripts/github/quarantine-gate-findings-log.mjs";
+import { listPriorFindingsLogHeads } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildGateFaninLedgerPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 
@@ -26,9 +27,9 @@ async function withRepo(fn) {
 
 // Prior log with a finding whose angle matches no provenance.perAngle entry
 // (the PR 2838 shape), plus its keyed fan-in ledger.
-async function seed(dir, { valid = false } = {}) {
+async function seed(dir, { valid = false, ledgerRoot = "ctx-tmp", withLedger = true } = {}) {
   const logPath = path.join(dir, buildLogPath({ repo: REPO, pr: PR, gate: GATE, headSha: PRIOR, tmpRoot: "tmp" }));
-  const ledgerPath = path.join(dir, buildGateFaninLedgerPath({ repo: REPO, pr: PR, gate: GATE, headSha: PRIOR, tmpRoot: "tmp" }));
+  const ledgerPath = path.join(dir, buildGateFaninLedgerPath({ repo: REPO, pr: PR, gate: GATE, headSha: PRIOR, tmpRoot: ledgerRoot }));
   await mkdir(path.dirname(logPath), { recursive: true });
   await mkdir(path.dirname(ledgerPath), { recursive: true });
   await writeFile(logPath, JSON.stringify({
@@ -37,11 +38,11 @@ async function seed(dir, { valid = false } = {}) {
     findings: [{ angle: valid ? "contradiction-lens" : "operator-residue", severity: "low", summary: "x" }],
     provenance: { perAngle: [{ angle: "contradiction-lens", reviewer: "r" }] },
   }), "utf8");
-  await writeFile(ledgerPath, "{}\n", "utf8");
+  if (withLedger) await writeFile(ledgerPath, "{}\n", "utf8");
   return { logPath, ledgerPath };
 }
 
-const run = (dir) => quarantineGateFindingsLog({ repo: REPO, pr: PR, gate: GATE, prevHead: PRIOR, tmpRoot: "tmp", repoRoot: dir });
+const run = (dir) => quarantineGateFindingsLog({ repo: REPO, pr: PR, gate: GATE, prevHead: PRIOR, tmpRoot: "tmp", contextTmpRoot: "ctx-tmp", repoRoot: dir });
 
 test("quarantine moves an integrity-failing log and ledger to the audit dir with the reason", async () => {
   await withRepo(async (dir) => {
@@ -54,6 +55,8 @@ test("quarantine moves an integrity-failing log and ledger to the audit dir with
     assert.deepEqual(files.sort(), [path.basename(ledgerPath), path.basename(logPath), "quarantine.json"].sort());
     const record = JSON.parse(await readFile(path.join(result.auditDir, "quarantine.json"), "utf8"));
     assert.equal(record.reason, "findings_log_integrity_failure");
+    assert.equal(record.status, "complete");
+    assert.equal(record.ledgerAbsent, false);
     assert.match(record.integrityFailure, /operator-residue.*matches no provenance\.perAngle entry/);
   });
 });
@@ -90,5 +93,32 @@ test("quarantine refuses a log that passes integrity and moves nothing", async (
     await readFile(logPath, "utf8");
     await readFile(ledgerPath, "utf8");
     await assert.rejects(readdir(path.join(dir, "tmp", "quarantined-gate-findings")));
+  });
+});
+
+test("a missing ledger is recorded in quarantine.json", async () => {
+  await withRepo(async (dir) => {
+    await seed(dir, { withLedger: false });
+    const result = await run(dir);
+    const record = JSON.parse(await readFile(path.join(result.auditDir, "quarantine.json"), "utf8"));
+    assert.equal(record.ledgerAbsent, true);
+  });
+});
+
+test("listPriorFindingsLogHeads ignores logs older than the quarantine but counts newer ones", async () => {
+  await withRepo(async (dir) => {
+    await seed(dir);
+    const old = path.join(dir, buildLogPath({ repo: REPO, pr: PR, gate: GATE, headSha: "e".repeat(40), tmpRoot: "tmp" }));
+    const doc = (h) => JSON.stringify({ headSha: h, gate: GATE, repo: REPO, pr: PR });
+    await writeFile(old, doc("e".repeat(40)), "utf8");
+    await utimes(old, new Date(Date.now() - 60000), new Date(Date.now() - 60000));
+    const query = () => listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD, tmpRoot: path.join(dir, "tmp") });
+    assert.equal((await query()).has("e".repeat(40)), true);
+    await run(dir);
+    assert.equal((await query()).size, 0);
+    const fresh = path.join(dir, buildLogPath({ repo: REPO, pr: PR, gate: GATE, headSha: "f".repeat(40), tmpRoot: "tmp" }));
+    await new Promise((r) => setTimeout(r, 20));
+    await writeFile(fresh, doc("f".repeat(40)), "utf8");
+    assert.deepEqual([...(await query())], ["f".repeat(40)]);
   });
 });

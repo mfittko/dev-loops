@@ -16,17 +16,19 @@ import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { emitResult } from "../lib/jq-output.mjs";
-import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { buildGateFaninLedgerPath } from "./_gate-artifact-paths.mjs";
-import { normalizeGate, normalizeHeadSha } from "./_gate-names.mjs";
+import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
+import { normalizeGate } from "./_gate-names.mjs";
 import { buildCarryForwardPlan } from "./resolve-angle-carry-forward.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 
-const USAGE = `Usage: quarantine-gate-findings-log.mjs --repo <owner/name> --pr <N> --gate <draft_gate|pre_approval_gate> --prev-head <full-sha> [--tmp-root <dir>]
+const USAGE = `Usage: quarantine-gate-findings-log.mjs --repo <owner/name> --pr <N> --gate <draft_gate|pre_approval_gate> --prev-head <full-sha> [--tmp-root <dir>] [--context-tmp-root <dir>]
 Move a prior-head gate findings-log that FAILS carry-forward integrity, and its
 keyed fan-in ledger, into tmp/quarantined-gate-findings/ (never deleted), with
 quarantine.json recording the reason and the exact integrity failure. The next
 round at a later head then has no prior log: every angle runs fresh.
+--context-tmp-root locates the keyed fan-in ledger (default: tmp under the cwd, like the writer).
 A log that passes integrity is refused (code quarantine_refused_log_valid) and
 nothing moves. See GATE-EXEC-FINDINGS-LOG-QUARANTINE in
 skills/docs/gate-review-sub-loop-contract.md.
@@ -50,6 +52,7 @@ export function parseQuarantineArgs(argv) {
       gate: { type: "string" },
       "prev-head": { type: "string" },
       "tmp-root": { type: "string" },
+      "context-tmp-root": { type: "string" },
     },
     allowPositionals: true,
     strict: false,
@@ -66,9 +69,10 @@ export function parseQuarantineArgs(argv) {
       options.gate = normalizeGate(requireTokenValue(token, parseError));
       if (!options.gate) throw parseError("--gate must be draft_gate or pre_approval_gate");
     } else if (token.name === "prev-head") {
-      options.prevHead = normalizeHeadSha(requireTokenValue(token, parseError));
-      if (!options.prevHead) throw parseError("--prev-head must be a hex head SHA");
+      options.prevHead = normalizeFullHeadSha(requireTokenValue(token, parseError));
+      if (!options.prevHead) throw parseError("--prev-head must be the FULL head commit SHA (40 or 64 hex chars)");
     } else if (token.name === "tmp-root") options.tmpRoot = requireTokenValue(token, parseError).trim();
+    else if (token.name === "context-tmp-root") options.contextTmpRoot = requireTokenValue(token, parseError).trim();
   }
   for (const key of ["repo", "pr", "gate", "prevHead"]) {
     if (options[key] === undefined) throw parseError(`Missing required argument: ${key}`);
@@ -102,7 +106,8 @@ async function exists(file) {
   });
 }
 
-export async function quarantineGateFindingsLog({ repo, pr, gate, prevHead, tmpRoot, repoRoot = process.cwd() }) {
+export async function quarantineGateFindingsLog({ repo, pr, gate, prevHead, tmpRoot, contextTmpRoot, repoRoot = process.cwd() }) {
+  if (tmpRoot) assertTmpRootOutsideLinkedWorktree(path.resolve(repoRoot, tmpRoot), repoRoot);
   const root = tmpRoot ?? resolveGateArtifactTmpRoot(repoRoot);
   const logPath = path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha: prevHead, tmpRoot: root }));
   let log;
@@ -118,20 +123,46 @@ export async function quarantineGateFindingsLog({ repo, pr, gate, prevHead, tmpR
   if (failure === null) {
     throw typedError("quarantine_refused_log_valid", `prior gate findings-log at ${logPath} passes integrity; quarantine refuses to discard valid evidence`);
   }
-  const ledgerPath = path.resolve(repoRoot, buildGateFaninLedgerPath({ repo, pr, gate, headSha: prevHead, tmpRoot: root }));
+  const ledgerPath = path.resolve(repoRoot, buildGateFaninLedgerPath({ repo, pr, gate, headSha: prevHead, tmpRoot: contextTmpRoot || "tmp" }));
   const auditDir = path.resolve(
     repoRoot, root, "quarantined-gate-findings", repo.replace("/", "-"), `pr-${pr}`,
     `${gate}-${prevHead}-${new Date().toISOString().replace(/[^0-9]/g, "")}`,
   );
   await mkdir(auditDir, { recursive: true });
-  const moved = [];
+  const planned = [];
+  const ledgerAbsent = !(await exists(ledgerPath));
   for (const file of [logPath, ledgerPath]) {
-    if (!(await exists(file))) continue;
-    await rename(file, path.join(auditDir, path.basename(file)));
-    moved.push(path.basename(file));
+    if (await exists(file)) planned.push({ from: file, to: path.join(auditDir, path.basename(file)) });
   }
-  const record = { repo, pr, gate, prevHead, reason: "findings_log_integrity_failure", integrityFailure: failure, quarantinedAt: new Date().toISOString(), moved };
-  await writeFile(path.join(auditDir, "quarantine.json"), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  // Record intent BEFORE any rename: the emitter's quarantine cutoff reads quarantinedAt,
+  // and a crash mid-move leaves a record a re-run can finish.
+  const recordPath = path.join(auditDir, "quarantine.json");
+  const record = {
+    repo, pr, gate, prevHead, reason: "findings_log_integrity_failure", integrityFailure: failure,
+    quarantinedAt: new Date().toISOString(), ledgerAbsent, plannedMoves: planned.map((m) => path.basename(m.from)), status: "pending",
+  };
+  const save = () => writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await save();
+  const done = [];
+  try {
+    for (const m of planned) {
+      await rename(m.from, m.to);
+      done.push(m);
+    }
+  } catch (err) {
+    const stuck = [];
+    for (const m of done.reverse()) {
+      try { await rename(m.to, m.from); } catch { stuck.push(path.basename(m.to)); }
+    }
+    record.status = stuck.length ? "partial" : "rolled_back";
+    record.stillInAuditDir = stuck;
+    record.error = err instanceof Error ? err.message : String(err);
+    await save();
+    throw err;
+  }
+  record.status = "complete";
+  record.moved = done.map((m) => path.basename(m.to));
+  await save();
   return { ok: true, ...record, auditDir };
 }
 
