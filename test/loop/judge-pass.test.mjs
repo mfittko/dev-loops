@@ -2203,6 +2203,8 @@ test("removesClosingRef accepts every Closes-to-Refs phrasing and rejects the re
     "Use Closes 10 rather than Refs 10.",
     "Remove the stale refs 10 line and keep Closes 10.",
     "Removed the unused import; Closes 10 stays.",
+    "The previous fix removed Closes #10; restore it.",
+    "Removing Closes #10 would orphan the issue, so keep it.",
     "Never change Closes 10 to Refs 10.",
     "Do not change Closes to Refs.",
     "Replace Closes owner/repo#10 with Refs owner/repo#11",
