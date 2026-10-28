@@ -1192,7 +1192,7 @@ function interpreterRegex(bin) {
 }
 
 // Bare `-` stdin script, or a heredoc token (`<<EOF`, `-<<EOF`, or one attached to a flag: `-I<<EOF`).
-const isStdinScriptToken = (t) => t === "-" || t.startsWith("<<") || (t.startsWith("-") && t.includes("<<")) || (REDIRECTION_RE.test(t) && t.includes("<<"));
+const isStdinScriptToken = (t) => /^-[)`"]*$/.test(t) || t.startsWith("<<") || (t.startsWith("-") && t.includes("<<")) || (REDIRECTION_RE.test(t) && t.includes("<<"));
 // A redirection token (`2>&1`, `2>/dev/null`, `>out`, `&>x`) between flags and the heredoc is not the script path. Returns how many tokens to skip: 0 (not a redirection), 1, or 2 (operator alone, its target is the next token).
 const REDIRECTION_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)/;
 const REDIRECTION_OPERATOR_ONLY_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)$/;
@@ -1213,9 +1213,12 @@ export function commandContainsInlineInterpreter(command) {
   // Literal text is blanked for this scan only (the per-segment check below keeps the raw text): quoted-delimiter heredoc bodies, single-quoted spans outside double quotes, and backslash-escaped characters.
   // ponytail: ceiling: nested quote context inside `$(...)`, process substitution `<(...)` and subshell `(...)` are not covered; wrapper options (`sudo -u x`, `nice -n 5`, `xargs -I{}`) are not skipped by stripLeadingWrappers (pre-existing).
   // An unquoted-delimiter heredoc body keeps `$(` live but its quotes and `#` are literal: blank them so apostrophes never pair.
+  // The delimiter is any unquoted shell word. A heredoc operator these regexes do not consume (a second heredoc on one line, an unusual delimiter) fails closed below.
+  let consumed = 0;
   const noHeredoc = command
-    .replace(/(<<-?\s*(['"])(\w+)\2[^\n]*\n)[\s\S]*?\n[ \t]*\3(?=\)|\n|$)/g, "$1")
-    .replace(/(<<-?\s*(\w+)[^\n]*\n)([\s\S]*?)(?=\n[ \t]*\2(?:\)|\n|$))/g, (_, head, _d, body) => head + body.replace(/['"#]/g, " "));
+    .replace(/(<<-?\s*(['"])([^\s'"<>|;&()\\]+)\2[^\n]*\n)[\s\S]*?\n[ \t]*\3(?=\)|\n|$)/g, (_, head) => (consumed++, head))
+    .replace(/(<<-?\s*([^\s'"<>|;&()\\]+)[^\n]*\n)([\s\S]*?)(?=\n[ \t]*\2(?:\)|\n|$))/g, (_, head, _d, body) => (consumed++, head + body.replace(/['"#]/g, " ")));
+  const heredocOperators = (command.match(/(?<!<)<<(?!<)/g) ?? []).length;
   let unquoted = "";
   let quote = "";
   for (let i = 0; i < noHeredoc.length; i++) {
@@ -1228,7 +1231,7 @@ export function commandContainsInlineInterpreter(command) {
     if (c === '"') quote = quote === '"' ? "" : '"';
     unquoted += c;
   }
-  if (quote === "'") unquoted = noHeredoc; // unclosed single quote (nested quote context): fail closed, scan the unblanked text
+  if (quote === "'" || heredocOperators > consumed) unquoted = noHeredoc; // unclosed single quote (nested quote context): fail closed, scan the unblanked text
   const subs = [...unquoted.split("$(").slice(1), ...unquoted.split("`").filter((_, i) => i % 2)];
   if (subs.some((sub) => commandContainsInlineInterpreter(sub))) return true;
   // The raw head keeps the env-option forms; the stripped head adds sudo/xargs/timeout.

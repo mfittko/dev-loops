@@ -259,6 +259,10 @@ test("wrapper and substitution forms get one verdict from hook and retro paths; 
     ["gh pr ready 5", false], ["gh pr ready 5 $(node -e 1)", true], ["gh pr ready 1 `node -e 1`", true], ["X=$(cat <<EOF\ndon't\n$(python3 -c x)\nit's\nEOF)", true], ["X=$(cat <<EOF\ndon't\n$(python3 -c x)\nit's\nEOF\n)", true], ["gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\"", false],
     ["gh pr comment 1 --body \"$(cat <<'EOF'\nthe hook missed `node -e 1`\nEOF\n)\"", false],
     ["gh pr comment 1 --body \"the hook missed \\`node -e 1\\`\"", false], ["echo \"\\$(python3 -c x)\"", false], ["X=$(node -e 1)", true], ["echo \"$(echo \"it's\")\" ; X=$(python3 -c x)", true],
+    ["X=$(echo x | node scripts/x.mjs)", false], ["X=$(echo x | node -)", true], ["X=\"$(echo x | node -)\"", true], ["X=`echo x | node -`", true],
+    ["cat <<'END-X'\ndon't\nEND-X\nX=$(python3 -c x)\n# it's", true], ["cat <<END-X\ndon't\nEND-X\nX=$(python3 -c x)\n# it's", true],
+    ["cat <<'END-X'\nuse `node -e 1`\nEND-X", false], ["cat <<'EOF'\nuse `node -e 1`\nEOF", false], ["cat <<EOF\nplain text\nEOF", false],
+    ["cat <<EOF-X\n# $(python3 -c y)\nEOF-X", true], ["cat <<A <<B\nx\nA\ndon't\n$(python3 -c y)\nit's\nB", true],
   ];
   for (const [cmd, bad] of cases) {
     assert.equal(commandContainsInlineInterpreter(cmd), bad, `hook ${cmd}`);
