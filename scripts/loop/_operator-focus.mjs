@@ -13,7 +13,7 @@ const MAX_ITEMS = 20;
 function clean(value, label) {
   if (typeof value !== "string") throw new OperatorFocusRefusal(`operator focus ${label} must be a string`);
   if (value.length > MAX_CHARS) throw new OperatorFocusRefusal(`operator focus ${label} is over ${MAX_CHARS} characters`);
-  const out = value.replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, " ").replace(/[<>`]/g, "").replace(/ +/g, " ").trim();
+  const out = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/[<>`]/g, "").replace(/ +/g, " ").trim();
   if (out === "") throw new OperatorFocusRefusal(`operator focus ${label} is empty after sanitizing`);
   return out;
 }
@@ -30,7 +30,7 @@ export function normalizeOperatorFocus(raw, { allowItems = false } = {}) {
     if (!allowItems) throw new OperatorFocusRefusal("operator focus items are accepted for the fixer only");
     if (!Array.isArray(raw.items) || raw.items.length > MAX_ITEMS) throw new OperatorFocusRefusal(`operator focus items must be an array of at most ${MAX_ITEMS} entries`);
     const seen = new Set();
-    focus.items = raw.items.map((item, index) => {
+    const items = raw.items.map((item, index) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw new OperatorFocusRefusal(`operator focus items[${index}] must be an object`);
       const extra = Object.keys(item).filter((key) => key !== "fingerprint" && key !== "decision");
       if (extra.length > 0) throw new OperatorFocusRefusal(`operator focus items[${index}] has unknown field(s) ${extra.join(", ")}`);
@@ -39,6 +39,7 @@ export function normalizeOperatorFocus(raw, { allowItems = false } = {}) {
       seen.add(fingerprint);
       return { fingerprint, decision: clean(item.decision, `items[${index}].decision`) };
     });
+    if (items.length > 0) focus.items = items;
   }
   return Object.keys(focus).length > 0 ? focus : null;
 }
@@ -61,7 +62,11 @@ export function bindOperatorFocusItems(focus, actList) {
     items: focus.items.map((item) => {
       const act = byFingerprint.get(item.fingerprint);
       if (!act) throw new OperatorFocusRefusal(`operator focus item ${item.fingerprint} is not in the act list`);
-      return { ...item, summary: act.summary };
+      // A summary that sanitizes to nothing is dropped; the bound summary never forges a heading.
+      const summary = typeof act.summary === "string" ? act.summary.slice(0, MAX_CHARS) : "";
+      let cleaned = "";
+      try { cleaned = clean(summary, "summary"); } catch { /* empty after sanitizing: omit */ }
+      return { ...item, summary: cleaned };
     }),
   };
 }

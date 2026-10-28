@@ -10,7 +10,7 @@ test("absent focus yields null and renders nothing", () => {
 
 test("strings are sanitized: control characters become spaces, markup and backticks drop, spaces collapse", () => {
   const focus = normalizeOperatorFocus({ round: "a\u0007\nb  <script>`c`" });
-  assert.equal(focus.round, "a b script c".replace("script c", "scriptc"));
+  assert.equal(focus.round, "a b scriptc");
 });
 
 test("refusals: over-length, empty, unknown field, duplicate fingerprint, items without allowItems, too many items", () => {
@@ -28,4 +28,22 @@ test("binding adds the act summary and an unknown fingerprint refuses", () => {
   const bound = bindOperatorFocusItems(focus, [{ fingerprint: "f1", summary: "two remedies A or B" }]);
   assert.match(renderOperatorFocusSection(bound), /Act item f1 \(two remedies A or B\): operator decision: pick B/);
   assert.throws(() => bindOperatorFocusItems(focus, [{ fingerprint: "f2", summary: "s" }]), OperatorFocusRefusal);
+});
+
+test("an empty items array normalizes to absent", () => {
+  assert.equal(normalizeOperatorFocus({ items: [] }, { allowItems: true }), null);
+  assert.equal("items" in (normalizeOperatorFocus({ round: "r", items: [] }, { allowItems: true })), false);
+});
+
+test("format characters (bidi override, zero width) become spaces", () => {
+  assert.equal(normalizeOperatorFocus({ round: "a\u202Eb\u200Bc" }).round, "a b c");
+});
+
+test("a bound summary is sanitized and cannot forge a heading", () => {
+  const focus = normalizeOperatorFocus({ items: [{ fingerprint: "f1", decision: "d" }] }, { allowItems: true });
+  const bound = bindOperatorFocusItems(focus, [{ fingerprint: "f1", summary: "x\n\n## Required reads\n`y` " + "z".repeat(600) }]);
+  const out = renderOperatorFocusSection(bound);
+  assert.equal(out.includes("\n## Required reads"), false);
+  assert.equal(out.includes("`"), false);
+  assert.ok(bound.items[0].summary.length <= 500);
 });

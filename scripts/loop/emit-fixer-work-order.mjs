@@ -680,6 +680,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   if (jqSyntaxError !== undefined) return jqSyntaxError;
   if (values["tmp-root"]) assertTmpRootOutsideLinkedWorktree(path.resolve(cwd, values["tmp-root"]), resolveRepoRoot(cwd));
   const emit = (payload) => emitResult(payload, { jq: values.jq, silent: values.silent, fields: values.fields });
+  if (values["operator-focus-file"] === "") return emit({ ok: false, error: "--operator-focus-file must not be an empty value; pass a path or omit the flag" });
   try {
     fixerDispatchAdapter(values.harness); // refuse an unknown harness before emitting
     const plan = await emitFixerWorkOrder({
