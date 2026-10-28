@@ -13,6 +13,7 @@ import {
   validateCliArgs,
 } from "../../scripts/loop/judge-pass.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { resolveDraftRoundCap } from "../../scripts/github/write-gate-context.mjs";
 import { dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
@@ -699,13 +700,15 @@ function stubDeferralDeps({ closing = [], listed = [] } = {}) {
   return { deps: { run, commentIssue }, runCalls, commentCalls };
 }
 
-async function runDeferRound({ findings, dispositions, deps, config, pr = "1658", gate = "draft_gate", durable }) {
+async function runDeferRound({ findings, dispositions, deps, config, pr = "1658", gate = "draft_gate", durable, seal = false, tamper = false }) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-defer-"));
   // A durable findings log written before the pass (write-gate-findings-log --judge-verdict never records a defer target).
   const durablePath = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", `pr-${pr}`, `${gate}-${HEAD}.json`);
   if (durable) {
     await mkdir(path.dirname(durablePath), { recursive: true });
     await writeFile(durablePath, JSON.stringify(Array.isArray(durable) ? { repo: "mfittko/dev-loops", pr: Number(pr), gate, headSha: HEAD, verdict: "findings_present", findings: durable } : durable));
+    if (seal) await writeSealed(durablePath, await readFile(durablePath, "utf8"));
+    if (tamper) await writeFile(durablePath, `${await readFile(durablePath, "utf8")}\n`);
   }
   if (config) await writeFile(path.join(tmpDir, ".devloops.json"), JSON.stringify(config));
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
@@ -728,6 +731,26 @@ test("judgePassCli: the defer target reaches the durable findings log the cap-ro
   });
   assert.equal(durableLog.findings[1].followUpIssueNumber, 2425);
   assert.equal(durableLog.findings[0].followUpIssueNumber, undefined, "an act item gets no target");
+});
+
+test("judgePassCli: a stamped sealed durable findings log still passes readSealed (AC2)", async () => {
+  const { deps } = stubDeferralDeps({ closing: [2425] });
+  const { tmpDir } = await runDeferRound({
+    findings: [finding({ summary: "defer this", severity: "medium" })],
+    dispositions: [{ index: 0, ...DEFER }],
+    deps, durable: [finding({ summary: "defer this", severity: "medium", judgeDisposition: "defer" })], seal: true,
+  });
+  const logPath = path.join(tmpDir, "tmp", "gate-findings", "mfittko-dev-loops", "pr-1658", `draft_gate-${HEAD}.json`);
+  assert.equal(JSON.parse(await readSealed(logPath)).findings[0].followUpIssueNumber, 2425);
+});
+
+test("judgePassCli: a sealed then hand-edited durable findings log fails the defer stamp with the out-of-band code (AC2)", async () => {
+  const { deps } = stubDeferralDeps({ closing: [2425] });
+  await assert.rejects(runDeferRound({
+    findings: [finding({ summary: "defer this", severity: "medium" })],
+    dispositions: [{ index: 0, ...DEFER }],
+    deps, durable: [finding({ summary: "defer this", severity: "medium", judgeDisposition: "defer" })], seal: true, tamper: true,
+  }), /gate_artifact_out_of_band_write/);
 });
 
 for (const [label, durable] of [
