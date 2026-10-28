@@ -64,6 +64,7 @@ import { DISPOSITION, interpretLoopState, STATE, TRANSITIONS } from "@dev-loops/
 import { evaluateConductorRouting, getAllowedOuterTransitions, OUTER_STATE, OUTER_TERMINAL_STATES } from "@dev-loops/core/loop/conductor-routing";
 import { interpretReviewerLoopState, REVIEWER_STATE, REVIEWER_TRANSITIONS } from "@dev-loops/core/loop/reviewer-loop-state";
 import { interpretRefinementGrillState, GRILL_STATE, GRILL_TRANSITIONS } from "@dev-loops/core/loop/refinement-grill-state";
+import { interpretFixLoopState, FIX_LOOP_STATE, FIX_LOOP_TRANSITIONS } from "@dev-loops/core/loop/fix-loop-state";
 import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TERMINAL_STATES, PR_LIFECYCLE_TRANSITIONS } from "@dev-loops/core/loop/pr-lifecycle";
 import { DEV_LOOP_GATE, DEV_LOOP_ROUTE_KIND, PUBLIC_DEV_LOOP_GATE_CONTRACT, DEV_LOOP_PUBLIC_INTENT, DEV_LOOP_TARGET_KIND, DEV_LOOP_ACTOR, DEV_LOOP_STATUS, DEV_LOOP_AUTHORIZATION, DEV_LOOP_TARGET_PREFERENCE, INTERNAL_DEV_LOOP_STRATEGY, evaluatePublicDevLoopRouting } from "@dev-loops/core/loop/public-dev-loop-routing";
 
@@ -1052,6 +1053,86 @@ const REFINEMENT_GRILL_STATE_MACHINE = {
 };
 
 registerMachine(REFINEMENT_GRILL_STATE_MACHINE);
+
+// ---------------------------------------------------------------------------
+// Seventh machine: fix-loop-state (issue 2787, ADR 0166).
+//
+// Doc side: docs/fix-loop-state-graph.md's "## Required transitions" bullets, bound 1:1 to
+// FIX_LOOP_TRANSITIONS. Each edge is `verified` when an interpreter fixture reaches `to` and
+// the table lists the edge. An edge whose real tooling lands in slices 3 to 5 is `known_gap`
+// with issue "#2787"; slice 6 requires zero known_gap rows.
+// ---------------------------------------------------------------------------
+
+const FIX_LOOP_DOC_TRANSITIONS = parseRequiredTransitions(
+  readFileSync(path.join(REPO_ROOT, "docs", "fix-loop-state-graph.md"), "utf8"),
+);
+
+bindDocToCodeTable("fix-loop-state", FIX_LOOP_DOC_TRANSITIONS, tableEdges(FIX_LOOP_TRANSITIONS));
+
+const FIX_LOOP_TO_FIXTURE = new Map([
+  [FIX_LOOP_STATE.ACT_PENDING, () => ({ actPending: true })],
+  [FIX_LOOP_STATE.COMMIT_ONLY_EMITTED, () => ({ markerWritten: true })],
+  [FIX_LOOP_STATE.NO_COMMIT, () => ({ markerWritten: true, noCommit: true })],
+  [FIX_LOOP_STATE.CANDIDATE_COMMITTED, () => ({ candidateCommitted: true })],
+  [FIX_LOOP_STATE.DELTA_REVIEW, () => ({ candidateCommitted: true, deltaReviewStarted: true, deltaVerdict: "clear" })],
+  [FIX_LOOP_STATE.FULL_EMITTED, () => ({ pushGranted: true })],
+  [FIX_LOOP_STATE.PUSHED, () => ({ pushed: true })],
+  [FIX_LOOP_STATE.CI_RED, () => ({ pushed: true, ciStatus: "red" })],
+  [FIX_LOOP_STATE.CI_GREEN, () => ({ pushed: true, ciStatus: "green" })],
+  [FIX_LOOP_STATE.DELIVERY_INCOMPLETE, () => ({ pushed: true, ciStatus: "green", reportStatus: "stale" })],
+  [FIX_LOOP_STATE.DISPOSITION_COMPLETE, () => ({ pushed: true, ciStatus: "green", reportStatus: "complete" })],
+  [FIX_LOOP_STATE.HEAD_MOVED, () => ({ headMoved: true })],
+  [FIX_LOOP_STATE.FULL_GATE_ROUND, () => ({ fullGateStarted: true })],
+]);
+
+const FIX_LOOP_KNOWN_GAPS = new Map([
+  ["head_moved->full_gate_round", "slice 3 (C10): close the sequence, remove the marker and route the head"],
+  ["head_moved->disposition_complete", "slice 3 (C7): descendant-head carry of the checkpoint"],
+  ["no_commit->full_gate_round", "slice 3 (C9): a no-commit pass closes its sequence and removes its marker"],
+  ["ci_red->act_pending", "slice 4 (C11): a CI-failure source enters a fixer order"],
+  ["delta_review->commit_only_emitted", "slice 4 (C12): delta residue and new findings re-emit commit_only"],
+  ["delivery_incomplete->disposition_complete", "slice 5 (C14): --completion-only delivery re-entry"],
+]);
+
+const FIX_LOOP_TRANSITION_CHECKS = new Map();
+for (const [from, to] of realEdges(FIX_LOOP_DOC_TRANSITIONS)) {
+  const key = `${from}->${to}`;
+  const gapNote = FIX_LOOP_KNOWN_GAPS.get(key);
+  if (gapNote) {
+    FIX_LOOP_TRANSITION_CHECKS.set(key, { status: "known_gap", issue: "#2787", note: gapNote });
+    continue;
+  }
+  const buildFixture = FIX_LOOP_TO_FIXTURE.get(to);
+  if (!buildFixture) throw new Error(`fix-loop-state: no fixture registered for reachable state "${to}"`);
+  FIX_LOOP_TRANSITION_CHECKS.set(key, {
+    status: "verified",
+    verify: () => {
+      const fixture = buildFixture();
+      const i = interpretFixLoopState(fixture);
+      return {
+        ok: i.state === to && (FIX_LOOP_TRANSITIONS[from] || []).includes(to),
+        detail: i,
+        result: { state: i.state, headMoved: Boolean(fixture.headMoved) },
+      };
+    },
+  });
+}
+
+registerMachine({
+  name: "fix-loop-state",
+  states: Object.values(FIX_LOOP_STATE),
+  terminalStates: tableTerminalStates(FIX_LOOP_TRANSITIONS),
+  transitions: tableEdges(FIX_LOOP_TRANSITIONS),
+  docTransitions: FIX_LOOP_DOC_TRANSITIONS,
+  transitionChecks: FIX_LOOP_TRANSITION_CHECKS,
+  safetyRules: [
+    {
+      // A foreign commit never leaves the sequence in a push or delivery state for the old candidate.
+      name: "fix-loop-head-moved-never-delivers",
+      check: (o) => !o.headMoved || [FIX_LOOP_STATE.HEAD_MOVED, FIX_LOOP_STATE.FULL_GATE_ROUND, FIX_LOOP_STATE.DISPOSITION_COMPLETE].includes(o.state),
+    },
+  ],
+});
 
 // ---------------------------------------------------------------------------
 // Sixth machine: public-dev-loop-routing.
