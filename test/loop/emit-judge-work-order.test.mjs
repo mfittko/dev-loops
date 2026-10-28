@@ -543,3 +543,18 @@ test("J1b: a sealed findings ledger edited out of band refuses judge emission (v
     }
   });
 });
+
+test("a PR body Non-goals reopen line puts the slice-linkage sentence into the work order and its rendering", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const plain = await emitJudgeWorkOrder(sources);
+    assert.equal(plain.workOrder.sliceLinkage, undefined);
+    await writeFile(path.join(root, "pr-body.md"), "Closes #2883\n\n## Non-goals\n\n- Reopen #2883 on merge: slices 2+ remain.\n");
+    const plan = await emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" });
+    assert.match(plan.workOrder.sliceLinkage, /^SPEC-SLICE-PR-KEEPS-CLOSING-REF: a slice PR keeps its closing reference/);
+    assert.ok(plan.workOrder.requiredReads.some((read) => read.kind === "pr-body"));
+    assert.match(await readFile(plan.promptPath, "utf8"), /## Slice linkage\n\nSPEC-SLICE-PR-KEEPS-CLOSING-REF/);
+    await writeFile(path.join(root, "pr-body.md"), "Closes #2883\n\n## Non-goals\n\n- no build changes\n");
+    assert.equal((await emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" })).workOrder.sliceLinkage, undefined);
+  });
+});

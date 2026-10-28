@@ -1,26 +1,40 @@
-// SPEC-SLICE-PR-KEEPS-CLOSING-REF: the slice-PR linkage rule, shared by the spec context and the judge pass.
+// SPEC-SLICE-PR-KEEPS-CLOSING-REF: the slice-PR linkage rule, shared by the spec context, the judge work order and the judge pass.
+import { resolvePrDescriptionSpec } from "@dev-loops/core/loop/spec-authority";
+
 export const SLICE_LINKAGE_RULE_ID = "SPEC-SLICE-PR-KEEPS-CLOSING-REF";
-export const SLICE_LINKAGE_SENTENCE = `${SLICE_LINKAGE_RULE_ID}: a slice PR keeps its closing reference (Closes #N) and its Non-goals reopen line; changing Closes to Refs is never a remedy, because a Refs-only slice PR has no spec authority.`;
+export const SLICE_LINKAGE_SENTENCE = `${SLICE_LINKAGE_RULE_ID}: a slice PR keeps its closing reference (Closes #N) and its Non-goals reopen line; changing Closes to Refs is never a remedy, because a Refs-only slice PR has no spec authority today. This rule is interim until Refs-only pr_body authority ships in a later slice of issue 2883, and the Refs plus verbatim slice body shape (dod:3) stays open.`;
 
-// A Non-goals entry that says the issue is reopened marks a slice PR.
-export const hasReopenLine = (nonGoals) => Array.isArray(nonGoals) && nonGoals.some((line) => /\breopen\s+#\d+/i.test(String(line)));
+// A Non-goals entry that says an issue is reopened marks a slice PR: a reopen inflection and an issue number (#N, issue N or a bare number of 3+ digits) on one line.
+export const hasReopenLine = (nonGoals) => Array.isArray(nonGoals)
+  && nonGoals.some((line) => /\breopen(?:s|ed|ing)?\b/i.test(String(line)) && /#\d+|\bissues?\s+\d+|\b\d{3,}\b/i.test(String(line)));
 
-const CLOSING_THEN_REFS = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#\d+[^\n]*?\b(?:with|to|by|instead|->|→)\W[^\n]*?\brefs?\s+#\d+/i;
+// The Non-goals of a PR body; the reopen line lives there when the spec comes from the linked issue.
+export const prBodyNonGoals = (body) => resolvePrDescriptionSpec(String(body ?? "")).spec?.nonGoals;
 
-// True when a finding's judged remedy swaps a closing reference for a Refs reference.
+const CLOSING = String.raw`(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#?(\d+)\b`;
+// Closes N, then a swap connector, then Refs for the same N.
+const CLOSING_THEN_REFS = new RegExp(String.raw`\b${CLOSING}[^\n]*?(?:\bwith\b|\bto\b|\bby\b|\bfor\b|->|→)[^\n]*?\brefs?\s+#?\1\b`, "i");
+// Refs N instead of Closes N.
+const REFS_INSTEAD_OF_CLOSING = new RegExp(String.raw`\brefs?\s+#?(\d+)\b[^\n]*?\binstead\s+of\b[^\n]*?\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#?\1\b`, "i");
+// A removal verb on a closing reference.
+const REMOVES_CLOSING = new RegExp(String.raw`\b(?:remove|drop|delete|strip)\s+(?:the\s+)?${CLOSING}`, "i");
+
+// True when the judged remedy (judgeFix only, never the reviewer recommendation) removes a closing reference.
 export const removesClosingRef = (finding) => {
-  const text = [finding?.judgeFix, finding?.judgeDetail, finding?.recommendation].filter((t) => typeof t === "string").join("\n");
-  return CLOSING_THEN_REFS.test(text);
+  if (typeof finding?.judgeFix !== "string") return false;
+  const text = finding.judgeFix.replace(/[`*]/g, "");
+  return CLOSING_THEN_REFS.test(text) || REFS_INSTEAD_OF_CLOSING.test(text) || REMOVES_CLOSING.test(text);
 };
 
-// Coerce an act finding that removes the PR's closing reference to reject; returns the number coerced.
-export function rejectClosingRefRemoval(enriched, nonGoals) {
-  if (!hasReopenLine(nonGoals)) return 0;
+// Coerce an act finding whose judged remedy removes a closing reference to reject; returns the number coerced.
+// The caller passes the Non-goals of the --spec-file and of the PR body.
+export function rejectClosingRefRemoval(enriched, ...nonGoalLists) {
+  if (!nonGoalLists.some(hasReopenLine)) return 0;
   let coerced = 0;
   for (const f of enriched) {
     if (f.judgeDisposition !== "act" || !removesClosingRef(f)) continue;
     f.judgeDisposition = "reject";
-    f.judgeReason = [`SPEC-SLICE-PR-KEEPS-CLOSING-REF: refused, the remedy removes the PR's closing reference while a Non-goals reopen line is present.`, f.judgeReason].filter(Boolean).join(" ");
+    f.judgeReason = [`SPEC-SLICE-PR-KEEPS-CLOSING-REF: refused, the remedy removes a closing reference while a Non-goals reopen line is present.`, f.judgeReason].filter(Boolean).join(" ");
     coerced += 1;
   }
   return coerced;

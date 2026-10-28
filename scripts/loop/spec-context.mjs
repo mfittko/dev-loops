@@ -50,6 +50,10 @@ also carries specKind "pr_scope" and a scope list), echo specSource ("issue" or
 compute specDigest (from the spec) + contentDigest (from --content-file) +
 the complete criterionIds set — feeds judge-pass.mjs's --spec-file/
 --content-digest directly, so the skill never hand-derives them.
+When the spec Non-goals hold a reopen line (a slice PR), the result also carries sliceLinkage,
+the SPEC-SLICE-PR-KEEPS-CLOSING-REF sentence. It is stdout-only: the --spec-out spec is the
+specDigest input and stays unchanged. The judge sees the sentence through
+emit-judge-work-order.mjs, which renders it from the spec or the PR body Non-goals.
 Required (extract mode):
   --repo <owner/name>        Repository slug
   --issue <number>           Canonical tracker issue number; exactly one of --issue/--pr/--body-file
