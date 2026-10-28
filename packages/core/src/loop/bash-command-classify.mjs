@@ -1150,6 +1150,42 @@ export function commandContainsTimeoutWrappedSanctionedTool(command) {
   });
 }
 
+/** Wrapper binaries whose first argument is the real command to classify. */
+const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command"]);
+
+/**
+ * Strip prefixes that hide the real command head, fail-closed (over-report is
+ * fine, under-report is the bug):
+ *   - leading `NAME=value ` env-assignment tokens (any number)
+ *   - leading wrapper binaries (`sudo`, `env`, `xargs`, ...) — recurse on the rest
+ *   - a path-prefixed binary (`./x/gh`, `/usr/bin/python3`) → reduce head to its basename
+ * Returns the segment with a bare, classifiable command head.
+ */
+export function stripLeadingWrappers(segment) {
+  let s = segment.trim();
+  // (a) strip leading env-assignment tokens: NAME=value. The value may be
+  //   unquoted (`X=1`) or a single/double-quoted string that itself contains
+  //   spaces (`X="a b"`); match the quoted form first so the space inside the
+  //   quotes is not mistaken for the token separator (would under-report).
+  const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+(?=\S)/;
+  while (ENV_ASSIGN.test(s)) {
+    s = s.replace(ENV_ASSIGN, "");
+  }
+  // (c) reduce a path-prefixed head to its basename so `.../gh` → `gh`
+  s = s.replace(/^(\S*\/)([^/\s]+)/, "$2");
+  // (d) strip `timeout [options] <duration>` (e.g. `timeout -k 5 60 gh ...`), then re-normalize
+  const DURATION = String.raw`(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?`;
+  const TIMEOUT_PREFIX = new RegExp(String.raw`^g?timeout\s+(?:-{1,2}[\w-]+(?:=\S+|\s+(?:${DURATION}|[A-Z]+))?\s+)*${DURATION}\s+(?=\S)`, "i");
+  if (TIMEOUT_PREFIX.test(s)) return stripLeadingWrappers(s.replace(TIMEOUT_PREFIX, ""));
+  // (b) strip a leading wrapper binary, then re-normalize the remainder
+  const head = s.split(/\s+/, 1)[0];
+  if (WRAPPER_BINARIES.has(head)) {
+    const rest = s.slice(head.length).trim();
+    if (rest.length > 0) return stripLeadingWrappers(rest);
+  }
+  return s;
+}
+
 /** Build a `node`/`python`/`python3` command-head matcher (env/wrapper/path prefix tolerated). */
 function interpreterRegex(bin) {
   return new RegExp(`^${SHELL_EXEC_PREFIX}${bin}(?:\\s|$)`, "i");
@@ -1173,8 +1209,11 @@ const NODE_BOOLEAN_FLAGS = new Set(["--no-warnings", "--no-deprecation", "--trac
  * @param {string} command @returns {boolean}
  */
 export function commandContainsInlineInterpreter(command) {
-  return shellSegments(command).some((segment) => {
-    const s = segment.trim();
+  // Token-level, not a shell parser: text after each `$(` and inside backtick pairs is checked as a command too.
+  const subs = [...command.split("$(").slice(1), ...command.split("`").filter((_, i) => i % 2)];
+  if (subs.some((sub) => commandContainsInlineInterpreter(sub))) return true;
+  // The raw head keeps the env-option forms; the stripped head adds sudo/xargs/timeout.
+  return shellSegments(command).flatMap((segment) => [segment, stripLeadingWrappers(segment)]).some((s) => {
     if (interpreterRegex("node").test(s)) {
       const code = s.replace(interpreterRegex("node"), "").trim();
       const tokens = code.split(/\s+/).filter(Boolean);
@@ -1207,7 +1246,7 @@ export function commandContainsInlineInterpreter(command) {
       for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
         if (isStdinScriptToken(t)) return true;
-        if (t === "-c" || t.startsWith("-c")) return true;
+        if (t === "-c" || t.startsWith("-c") || /^-[BEIOPRSUVbdhiqsuvx]+c/.test(t)) return true; // boolean-flag cluster ending in c (-Ic, -IEc); -W/-X value flags are not in the set
         const skip = redirectionSkip(t);
         if (skip) { if (skip === 2 && tokens[i + 1]?.includes("<<")) return true; i += skip - 1; continue; }
         if (!t.startsWith("-")) break; // script path reached — a later `-c` is a script argument

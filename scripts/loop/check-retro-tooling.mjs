@@ -58,7 +58,7 @@ import { readFileSync } from "node:fs";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
-import { commandContainsInlineInterpreter } from "@dev-loops/core/loop/bash-command-classify";
+import { commandContainsInlineInterpreter, stripLeadingWrappers } from "@dev-loops/core/loop/bash-command-classify";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]
@@ -104,48 +104,12 @@ function splitSegments(line) {
     .filter((s) => s.length > 0);
 }
 
-/** Wrapper binaries whose first argument is the real command to classify. */
-const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command"]);
-
-/**
- * Strip prefixes that hide the real command head, fail-closed (over-report is
- * fine, under-report is the bug):
- *   - leading `NAME=value ` env-assignment tokens (any number)
- *   - leading wrapper binaries (`sudo`, `env`, `xargs`, ...) — recurse on the rest
- *   - a path-prefixed binary (`./x/gh`, `/usr/bin/python3`) → reduce head to its basename
- * Returns the segment with a bare, classifiable command head.
- */
-function normalizeSegmentHead(segment) {
-  let s = segment.trim();
-  // (a) strip leading env-assignment tokens: NAME=value. The value may be
-  //   unquoted (`X=1`) or a single/double-quoted string that itself contains
-  //   spaces (`X="a b"`); match the quoted form first so the space inside the
-  //   quotes is not mistaken for the token separator (would under-report).
-  const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+(?=\S)/;
-  while (ENV_ASSIGN.test(s)) {
-    s = s.replace(ENV_ASSIGN, "");
-  }
-  // (c) reduce a path-prefixed head to its basename so `.../gh` → `gh`
-  s = s.replace(/^(\S*\/)([^/\s]+)/, "$2");
-  // (d) strip `timeout [options] <duration>` (e.g. `timeout -k 5 60 gh ...`), then re-normalize
-  const DURATION = String.raw`(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?`;
-  const TIMEOUT_PREFIX = new RegExp(String.raw`^g?timeout\s+(?:-{1,2}[\w-]+(?:=\S+|\s+(?:${DURATION}|[A-Z]+))?\s+)*${DURATION}\s+(?=\S)`, "i");
-  if (TIMEOUT_PREFIX.test(s)) return normalizeSegmentHead(s.replace(TIMEOUT_PREFIX, ""));
-  // (b) strip a leading wrapper binary, then re-normalize the remainder
-  const head = s.split(/\s+/, 1)[0];
-  if (WRAPPER_BINARIES.has(head)) {
-    const rest = s.slice(head.length).trim();
-    if (rest.length > 0) return normalizeSegmentHead(rest);
-  }
-  return s;
-}
-
 /**
  * Classify a single command segment.
  * @returns {{ kind: "violation"|"allowedWriteOp"|"clean", tool?: string }}
  */
 function classifySegment(rawSegment) {
-  const segment = normalizeSegmentHead(rawSegment);
+  const segment = stripLeadingWrappers(rawSegment);
   // `node scripts/....mjs` (or any script path) is allowed tooling; only inline
   // eval forms are violations. Check node first so script invocations pass.
   if (/^node\b/.test(segment)) {

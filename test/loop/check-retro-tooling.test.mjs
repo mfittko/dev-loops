@@ -245,3 +245,18 @@ test("comment-only transcript is analyzed normally", async () => {
   assert.equal(r.status, 0);
   assert.equal(JSON.parse(r.stdout).internalToolingOnly, true);
 });
+
+test("wrapper, substitution and python cluster forms get one verdict from hook and retro paths (#2943)", () => {
+  const cases = [
+    ["sudo node - <<EOF", true], ["xargs node - <<EOF", true], ["timeout 5 node - <<EOF", true], ["env X=1 nice node -p 1", true],
+    ["X=$(python3 -c \"print(1)\")", true], ["X=`node -e 1`", true], ["python3 -Ic \"print(1)\"", true], ["python3 -IEc \"x\"", true], ["python -Sc \"x\"", true],
+    ["sudo node scripts/x.mjs", false], ["X=$(node scripts/x.mjs)", false], ["python3 -I script.py", false], ["python3 -W error script.py", false], ["python3 -Wc script.py", false], ["node scripts/x.mjs -e", false],
+  ];
+  for (const [cmd, bad] of cases) {
+    assert.equal(commandContainsInlineInterpreter(cmd), bad, `hook ${cmd}`);
+    if (!/[$`]/.test(cmd) && !/^python/.test(cmd)) assert.equal(analyzeTranscript(cmd).violations.length > 0, bad, `retro ${cmd}`);
+  }
+  const src = readFileSync(fileURLToPath(new URL("../../scripts/loop/check-retro-tooling.mjs", import.meta.url)), "utf8");
+  assert.match(src, /stripLeadingWrappers \} from "@dev-loops\/core\/loop\/bash-command-classify"/);
+  assert.doesNotMatch(src, /function stripLeadingWrappers|WRAPPER_BINARIES/);
+});
