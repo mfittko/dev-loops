@@ -269,7 +269,8 @@ test("wrapper and substitution forms get one verdict from hook and retro paths; 
     ["cat <<'A'\n\"\nA\necho \"<<'EOF'\"\n$(python3 -c x)\nEOF", true],
     ["cat <<A\n\"\nA\necho \"<<'EOF'\"\n$(python3 -c x)\nEOF", true],
     ["X=$'a\\'b' node scripts/x.mjs", false], ["X=$'\\'' $(python3 -c x) $'\\'''", true],
-    ["cat <<EOF-X\n# $(python3 -c y)\nEOF-X", true], ["cat <<A <<B\nx\nA\ndon't\n$(python3 -c y)\nit's\nB", true],
+    ["cat <<EOF-X\n# $(python3 -c y)\nEOF-X", true], ["cat <<<'x'\necho $(python3 -c y)\nx", true], ["cat <<<\"x\"\necho $(python3 -c y)\nx", true], ["cat <<<'x'\necho `node -e 1`\nx", true], ["cat <<<'x'", false], ["X=$(node scripts/x.mjs)", false],
+    ["cat <<A <<B\nx\nA\ndon't\n$(python3 -c y)\nit's\nB", true],
   ];
   for (const [cmd, bad] of cases) {
     assert.equal(commandContainsInlineInterpreter(cmd), bad, `hook ${cmd}`);
