@@ -229,9 +229,11 @@ manually. Local pre-flight (optional but recommended before pushing the tag):
 <!-- rule: RELEASE-POST-RELEASE-RECURRING-STEPS -->
 `RELEASE-POST-RELEASE-RECURRING-STEPS`: After every stable release, the operator MUST run these steps in this order before any other work in the next milestone:
 
-1. Contract and codebase audit. Each audit step files its own issue in the next milestone.
+1. Contract and codebase audit.
 2. Memory cleanup.
 3. Prose cleanup.
+
+Each of the three steps files its own issue in the next milestone.
 
 <!-- rule: RELEASE-COMBINED-RETRO -->
 `RELEASE-COMBINED-RETRO`: A combined release retro runs once after a stable release, before the steps above. Its inputs are the per-merge retros, the round data and the findings logs of the release. It MUST report these metrics: active minutes, gate rounds, parks by cause and size-class approvals. Each per-merge retro checkpoint recorded as `skipped` for that release MUST name the combined retro (issue or PR link) in its `--reason`, so the skip links back to the retro that folded it.

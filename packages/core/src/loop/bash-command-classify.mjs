@@ -1216,14 +1216,24 @@ export function commandContainsInlineInterpreter(command) {
     }
     if (interpreterRegex("bun").test(s)) {
       const tokens = s.replace(interpreterRegex("bun"), "").trim().split(/\s+/).filter(Boolean);
-      const BUN_VALUE_FLAGS = new Set(["--cwd", "--env-file", "-r", "--preload", "--require", "--import", "-c", "--config", "--tsconfig-override", "--define", "-d", "--loader", "-l", "--port", "--conditions", "--inspect-wait"]);
+      const BUN_VALUE_FLAGS = new Set(["--cwd", "--env-file", "-r", "--preload", "--require", "--import", "-c", "--config", "--tsconfig-override", "--define", "-d", "--loader", "-l", "--port", "--conditions"]);
       for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
         if (isStdinScriptToken(t)) return true;
         if (/^(?:-e|-p|--eval|--print)(?:=|$)/.test(t) || /^-[ep]./.test(t)) return true;
         const skip = redirectionSkip(t);
         if (skip) { if (skip === 2 && tokens[i + 1]?.includes("<<")) return true; i += skip - 1; continue; }
-        if (!t.startsWith("-")) break; // subcommand or script path reached (`bun run x`, `bun test`)
+        if (!t.startsWith("-")) {
+          const prev = tokens[i - 1];
+          if (t === "run") { // `bun run -` / `bun run - <<EOF` runs stdin
+            let j = i + 1;
+            for (let k = redirectionSkip(tokens[j] ?? ""); k; k = redirectionSkip(tokens[j] ?? "")) j += k;
+            return isStdinScriptToken(tokens[j] ?? "");
+          }
+          // ponytail: unlisted `--flag value` fails closed like node: skip the value token unless it is a script or path-like.
+          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !SCRIPT_EXT_RE.test(stripSurroundingQuotes(t.split("<<")[0])) && !/^\.|^[^/]+\//.test(t)) { if (t.includes("<<")) return true; continue; }
+          break; // subcommand or script path reached (`bun run x`, `bun test`)
+        }
         if (BUN_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; }
       }
     }

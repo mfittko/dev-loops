@@ -943,3 +943,17 @@ test("runBunTest refuses a worktree whose @dev-loops/core is unresolved or escap
     assert.ok(spawned);
   } finally { await rm(main, { recursive: true, force: true }); }
 });
+
+test("the CLI refuses an unresolved worktree core before any @dev-loops/core import (typed message, not ERR_MODULE_NOT_FOUND)", async () => {
+  const fx = await mkdtemp(path.join(tmpdir(), "core-cli-"));
+  try {
+    await mkdir(path.join(fx, "scripts"), { recursive: true });
+    await mkdir(path.join(fx, "packages", "core"), { recursive: true });
+    await writeFile(path.join(fx, "scripts", "run-bun-test.mjs"), await readFile(new URL("../../scripts/run-bun-test.mjs", import.meta.url), "utf8"));
+    const proc = Bun.spawn([process.execPath, path.join(fx, "scripts", "run-bun-test.mjs"), "x.test.mjs"], { cwd: fx, stdout: "pipe", stderr: "pipe" });
+    const [stderr, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    assert.equal(code, 1);
+    assert.match(stderr, /WORKTREE-DEPS-ISOLATED/);
+    assert.doesNotMatch(stderr, /ERR_MODULE_NOT_FOUND|Cannot find/);
+  } finally { await rm(fx, { recursive: true, force: true }); }
+});
