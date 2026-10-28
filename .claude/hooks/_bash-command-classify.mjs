@@ -1207,6 +1207,39 @@ const SCRIPT_EXT_RE = /\.(?:[cm]?js|[cm]?ts)$/;
 const NODE_BOOLEAN_FLAGS = new Set(["--no-warnings", "--no-deprecation", "--trace-warnings", "--trace-deprecation", "--trace-uncaught", "--enable-source-maps", "--experimental-vm-modules", "--experimental-strip-types", "--experimental-transform-types", "--experimental-detect-module", "--experimental-require-module", "--experimental-websocket", "--experimental-sqlite", "--experimental-permission", "--permission", "--watch", "--expose-gc", "--abort-on-uncaught-exception", "--pending-deprecation", "--throw-deprecation", "--no-experimental-fetch"]);
 
 /**
+ * Blank literal shell text with same-length spaces so offsets in `out` index the input: comments,
+ * backslash-escaped characters and single-quoted/ANSI-C (`$'...'`, where a backslash escapes the
+ * next character) spans. `quoted[i]` is true when char i sits in a quote or comment outside any `$(...)` (a literal context); `open` is
+ * true when a single quote is left unclosed.
+ * @param {string} text @returns {{ out: string, quoted: boolean[], open: boolean }}
+ */
+function scanShellText(text) {
+  const out = [];
+  const quoted = [];
+  let quote = "";
+  let subDepth = 0; // open `$(` count inside the current double quotes: a live command context
+  const emit = (ch, q) => { out.push(ch); quoted.push(q); };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote === "'" || quote === "$'") {
+      if (c === "\\" && quote === "$'") { emit(" ", true); if (i + 1 < text.length) emit(" ", true); i++; }
+      else if (c === "'") { quote = ""; emit("'", true); }
+      else emit(" ", true);
+    } else if (c === "#" && quote === "" && (i === 0 || /[\s;&|(]/.test(text[i - 1]))) { // an unquoted `#` at word start is a comment up to the end of the line
+      for (; i < text.length && text[i] !== "\n"; i++) emit(" ", true);
+      i--;
+    } else if (c === "\\") { emit(" ", true); if (i + 1 < text.length) emit(" ", true); i++; }
+    else if (c === "'" && quote === "") { quote = out[out.length - 1] === "$" ? "$'" : "'"; emit("'", true); }
+    else {
+      if (c === '"') { quote = quote === '"' ? "" : '"'; subDepth = 0; }
+      else if (quote === '"') subDepth += c === "(" && text[i - 1] === "$" ? 1 : c === ")" && subDepth > 0 ? -1 : 0;
+      emit(c, c === '"' || (quote === '"' && subDepth === 0));
+    }
+  }
+  return { out: out.join(""), quoted, open: quote === "'" || quote === "$'" };
+}
+
+/**
  * OPS-NO-INLINE-INTERPRETER: an inline interpreter — `node -e`/`--eval`/`-p`, `python3 -c`, or a
  * heredoc fed to node/python (`node - <<EOF`, `python3 - <<EOF`). Sanctioned output parsing uses
  * `--jq`/`--silent`, never an inline interpreter. Actor-independent (bars both coordinator and
@@ -1219,27 +1252,37 @@ export function commandContainsInlineInterpreter(command) {
   // ponytail: ceiling: nested quote context inside `$(...)`, process substitution `<(...)` and subshell `(...)` are not covered; wrapper options (`sudo -u x`, `nice -n 5`, `xargs -I{}`) are not skipped by stripLeadingWrappers (pre-existing).
   // An unquoted-delimiter heredoc body keeps `$(` live but its quotes and `#` are literal: blank them so apostrophes never pair.
   // The delimiter is any unquoted shell word. A heredoc operator these regexes do not consume (a second heredoc on one line, an unusual delimiter) fails closed below.
+  // A heredoc operator counts as consumed only when it is unquoted and outside a comment (`echo "<<'EOF'"` and `# <<'EOF'` are literal text): any other `<<` fails closed below.
+  // Quote state is scanned over the text already emitted (earlier heredoc bodies removed), so a quote character inside an earlier body never desynchronizes a later operator.
+  const replaceUnquoted = (text, re, onMatch) => {
+    let out = "";
+    let last = 0;
+    for (const m of text.matchAll(re)) {
+      out += text.slice(last, m.index);
+      out += scanShellText(`${out}<`).quoted[out.length] ? m[0] : (consumed++, onMatch(m));
+      last = m.index + m[0].length;
+    }
+    return out + text.slice(last);
+  };
   let consumed = 0;
-  const noHeredoc = command
-    .replace(/(<<-?\s*(['"])([^\s'"<>|;&()\\]+)\2[^\n]*\n)[\s\S]*?\n[ \t]*\3(?=\)|\n|$)/g, (_, head) => (consumed++, head))
-    .replace(/(<<-?\s*([^\s'"<>|;&()\\]+)[^\n]*\n)([\s\S]*?)(?=\n[ \t]*\2(?:\)|\n|$))/g, (_, head, _d, body) => (consumed++, head + body.replace(/['"#]/g, " ")));
+  const afterQuoted = replaceUnquoted(command, /(<<-?\s*(['"])([^\s'"<>|;&()\\]+)\2[^\n]*\n)(?:[\s\S]*?\n)??[ \t]*\3(?=\)|\n|$)/g, (m) => m[1]); // body optional: an empty body closes on the first terminator line
+  const noHeredoc = replaceUnquoted(afterQuoted, /(<<-?\s*([^\s'"<>|;&()\\]+)[^\n]*\n)([\s\S]*?)(?=(?:(?<=\n)|\n)[ \t]*\2(?:\)|\n|$))/g, (m) => m[1] + m[3].replace(/['"#]/g, " "));
   // An operator with no later newline has no body to hide, so a single-line mention (quoted text, arithmetic) keeps the blanked scan. ponytail: a multi-line command that quotes `<<` still fails closed.
   const heredocOperators = (noHeredoc.match(/(?<!<)<<(?!<)(?=[^\n]*\n)/g) ?? []).length;
-  let unquoted = "";
-  let quote = "";
-  for (let i = 0; i < noHeredoc.length; i++) {
-    const c = noHeredoc[i];
-    // An unquoted `#` at word start is a comment up to the end of the line: its apostrophes are literal.
-    if (c === "#" && quote === "" && (i === 0 || /[\s;&|(]/.test(noHeredoc[i - 1]))) { while (i + 1 < noHeredoc.length && noHeredoc[i + 1] !== "\n") i++; continue; }
-    if (c === "\\" && quote !== "'") { unquoted += "  "; i++; continue; }
-    if (quote === "'") { if (c === "'") { quote = ""; unquoted += "'"; } continue; }
-    if (c === "'" && quote === "") { quote = "'"; unquoted += "'"; continue; }
-    if (c === '"') quote = quote === '"' ? "" : '"';
-    unquoted += c;
-  }
-  if (heredocOperators > consumed) unquoted = command; // an unconsumed heredoc operator (nested/second heredoc): fail closed, scan the raw text
-  else if (quote === "'") unquoted = noHeredoc; // unclosed single quote (nested quote context): fail closed, scan the unblanked text
-  const subs = [...unquoted.split("$(").slice(1), ...unquoted.split("`").filter((_, i) => i % 2)];
+  // `unquoted` has the same length as `base`, so offsets found in it slice `base` (the text with quotes intact).
+  let base = noHeredoc;
+  const scanned = scanShellText(noHeredoc);
+  let unquoted = scanned.out;
+  if (heredocOperators > consumed) base = unquoted = command; // an unconsumed heredoc operator (nested/second heredoc): fail closed, scan the raw text
+  else if (scanned.open) unquoted = noHeredoc; // unclosed single quote (nested quote context): fail closed, scan the unblanked text
+  const starts = [];
+  for (let i = unquoted.indexOf("$("); i !== -1; i = unquoted.indexOf("$(", i + 2)) starts.push(i + 2);
+  const ticks = [];
+  for (let i = unquoted.indexOf("`"); i !== -1; i = unquoted.indexOf("`", i + 1)) ticks.push(i);
+  const subs = [
+    ...starts.map((s, k) => base.slice(s, k + 1 < starts.length ? starts[k + 1] - 2 : undefined)),
+    ...ticks.filter((_, k) => k % 2 === 0).map((t, k) => base.slice(t + 1, ticks[2 * k + 1])),
+  ];
   if (subs.some((sub) => commandContainsInlineInterpreter(sub))) return true;
   // The raw head keeps the env-option forms; the stripped head adds sudo/xargs/timeout.
   return shellSegments(command).flatMap((segment) => [segment, stripLeadingWrappers(segment)]).some((s) => {

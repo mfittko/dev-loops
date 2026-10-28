@@ -113,8 +113,10 @@ function classifySegment(rawSegment) {
   // The shared matcher runs first, so an allowed head (`gh pr ready 5 $(node -e 1)`) never hides a substitution from it.
   if (commandContainsInlineInterpreter(rawSegment)) {
     // The label names the matched form: a python head (plain, wrapped, or at the head of a substitution), else node inline.
-    const py = /^python(3?)\b/.exec(stripLeadingWrappers(rawSegment)) ?? /(?:\$\(|`)\s*(?:\S*\/)?python(3?)\b/.exec(rawSegment);
-    return { kind: "violation", tool: py ? `python${py[1]}` : "node inline" };
+    // Each candidate (the head up to its first substitution, and each substitution body) must itself hit the matcher, so a python script call beside a node hit never labels python.
+    const candidates = [rawSegment.split(/\$\(|`/)[0], ...[...rawSegment.matchAll(/(?:\$\(|`)([^)`]*)/g)].map((m) => m[1])];
+    const py = candidates.map((c) => /^(?:\S*\/)?python(3?)\b/.exec(stripLeadingWrappers(c.trim())) && commandContainsInlineInterpreter(c) ? /python(3?)\b/.exec(c)[1] : null).find((d) => d !== null);
+    return { kind: "violation", tool: py === undefined ? "node inline" : `python${py}` };
   }
   const segment = stripLeadingWrappers(rawSegment);
   // `node scripts/....mjs` (or any script path) is allowed tooling; only inline
