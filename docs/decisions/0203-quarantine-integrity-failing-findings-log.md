@@ -16,7 +16,7 @@ The change adds a rule to [Gate review sub-loop contract](../../skills/docs/gate
 
 - `scripts/github/quarantine-gate-findings-log.mjs` re-runs the carry-forward integrity check on the prior-head log. On failure it moves the log and its fan-in ledger into an audit directory (never deletes) and records the reason and the exact failure.
 - The command refuses with `quarantine_refused_log_valid` when the log passes integrity. Valid evidence is never discarded.
-- Rounds after a quarantine ignore logs older than the quarantine record and dispatch every angle fresh.
+- Rounds after a quarantine ignore findings logs written at or before the latest quarantinedAt and dispatch every angle fresh.
 - The command is registered as `gate-findings-log-quarantine` in the sanctioned-commands map. The rule ID is `GATE-EXEC-FINDINGS-LOG-QUARANTINE`.
 
 ## Consequences

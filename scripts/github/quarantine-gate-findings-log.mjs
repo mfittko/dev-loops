@@ -71,8 +71,11 @@ export function parseQuarantineArgs(argv) {
     } else if (token.name === "prev-head") {
       options.prevHead = normalizeFullHeadSha(requireTokenValue(token, parseError));
       if (!options.prevHead) throw parseError("--prev-head must be the FULL head commit SHA (40 or 64 hex chars)");
-    } else if (token.name === "tmp-root") options.tmpRoot = requireTokenValue(token, parseError).trim();
-    else if (token.name === "context-tmp-root") options.contextTmpRoot = requireTokenValue(token, parseError).trim();
+    } else if (token.name === "tmp-root" || token.name === "context-tmp-root") {
+      const value = requireTokenValue(token, parseError).trim();
+      if (value === "") throw parseError(`--${token.name} must be non-empty`);
+      options[token.name === "tmp-root" ? "tmpRoot" : "contextTmpRoot"] = value;
+    }
   }
   for (const key of ["repo", "pr", "gate", "prevHead"]) {
     if (options[key] === undefined) throw parseError(`Missing required argument: ${key}`);
@@ -135,7 +138,9 @@ export async function quarantineGateFindingsLog({ repo, pr, gate, prevHead, tmpR
     if (await exists(file)) planned.push({ from: file, to: path.join(auditDir, path.basename(file)) });
   }
   // Record intent BEFORE any rename: the emitter's quarantine cutoff reads quarantinedAt,
-  // and a crash mid-move leaves a record a re-run can finish.
+  // and a crash mid-move leaves a record. A re-run does not resume it: once the log has moved, the
+  // re-run finds no log. A partial record names the files left in the audit dir in stillInAuditDir
+  // for manual review.
   const recordPath = path.join(auditDir, "quarantine.json");
   const record = {
     repo, pr, gate, prevHead, reason: "findings_log_integrity_failure", integrityFailure: failure,

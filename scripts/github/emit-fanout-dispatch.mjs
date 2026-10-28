@@ -13,6 +13,7 @@ import { WorkOrderRefusal, buildDispatchPointer, materializationHash, workOrderD
 import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseDiffFileBlocks, renderRequiredReadLine } from "./write-gate-context.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
@@ -306,10 +307,10 @@ export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRo
     // identity-mismatched file is simply not a valid prior round and is skipped.
     let log;
     try {
-      // A log that predates the latest quarantine of this PR+gate no longer counts
-      // (GATE-EXEC-FINDINGS-LOG-QUARANTINE): fail-safe, more review, never less.
-      if (cutoff !== null && (await stat(path.join(dir, entry))).mtimeMs <= cutoff) continue;
       log = JSON.parse(await readFile(path.join(dir, entry), "utf8"));
+      // A log written at or before the latest quarantine of this PR+gate no longer counts
+      // (GATE-EXEC-FINDINGS-LOG-QUARANTINE): fail-safe, more review, never less.
+      if (cutoff !== null && logWrittenMs(log, (await stat(path.join(dir, entry))).mtimeMs) <= cutoff) continue;
     } catch (err) {
       if (err?.code && err.code !== "ENOENT") throw err;
       continue;
@@ -332,27 +333,6 @@ export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRo
     if (identityOk) heads.add(sha);
   }
   return heads;
-}
-
-/** Latest quarantinedAt (ms) recorded for this PR+gate under the tmp root, or null. */
-async function latestQuarantineMs({ repo, pr, gate, tmpRoot }) {
-  const qdir = path.join(tmpRoot ?? "tmp", "quarantined-gate-findings", String(repo).replace("/", "-"), `pr-${pr}`);
-  let entries;
-  try {
-    entries = await readdir(qdir);
-  } catch (err) {
-    if (err?.code === "ENOENT") return null;
-    throw err;
-  }
-  let latest = null;
-  for (const entry of entries) {
-    if (!entry.startsWith(`${gate}-`)) continue;
-    try {
-      const ms = Date.parse(JSON.parse(await readFile(path.join(qdir, entry, "quarantine.json"), "utf8")).quarantinedAt);
-      if (Number.isFinite(ms) && (latest === null || ms > latest)) latest = ms;
-    } catch { /* unreadable record: ignore */ }
-  }
-  return latest;
 }
 
 /**
