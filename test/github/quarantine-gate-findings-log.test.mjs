@@ -7,6 +7,7 @@ import { test } from "bun:test";
 import { parseQuarantineArgs, quarantineGateFindingsLog } from "../../scripts/github/quarantine-gate-findings-log.mjs";
 import { listPriorFindingsLogHeads } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { main as resolveMain } from "../../scripts/github/resolve-angle-carry-forward.mjs";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildGateFaninLedgerPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { buildCarryForwardPlanPath } from "../../scripts/github/write-gate-context.mjs";
@@ -303,5 +304,39 @@ test("emit refuses a fresh all-carried context whose carry proof names the quara
     const emitted = spawnSync("node", [emitCli, "--repo", REPO, "--pr", String(PR), "--gate", GATE, "--head-sha", HEAD, "--pending", "--carry-forward-plan", proof], { encoding: "utf8", cwd: dir });
     assert.equal(emitted.status, 1);
     assert.match(emitted.stdout, /carry proof names quarantined head/);
+  });
+});
+
+test("quarantine accepts a seal-mismatched log as an integrity failure and moves the seal with it", async () => {
+  await withRepo(async (dir) => {
+    const { logPath, ledgerPath } = await seed(dir, { valid: true });
+    await writeSealed(logPath, await readFile(logPath, "utf8"));
+    await writeSealed(ledgerPath, "{}\n");
+    await writeFile(logPath, (await readFile(logPath, "utf8")).replace("low", "high"), "utf8");
+    const result = await run(dir);
+    assert.match(result.integrityFailure, /gate_artifact_out_of_band_write/);
+    await assert.rejects(readFile(`${logPath}.seal`, "utf8"));
+    await assert.rejects(readFile(`${ledgerPath}.seal`, "utf8"));
+    const files = (await readdir(result.auditDir)).sort();
+    assert.deepEqual(files, [path.basename(ledgerPath), `${path.basename(ledgerPath)}.seal`, path.basename(logPath), `${path.basename(logPath)}.seal`, "quarantine.json"].sort());
+  });
+});
+
+test("resolve-angle-carry-forward surfaces the typed code for a seal-mismatched prior log", async () => {
+  await withRepo(async (dir) => {
+    const { logPath } = await seed(dir, { valid: true });
+    await writeSealed(logPath, await readFile(logPath, "utf8"));
+    await writeFile(logPath, "{}\n", "utf8");
+    const errs = [];
+    const origErr = process.stderr.write;
+    const prior = process.exitCode;
+    process.stderr.write = (chunk) => { errs.push(String(chunk)); return true; };
+    try {
+      await resolveMain(["--repo", REPO, "--pr", String(PR), "--gate", GATE, "--prev-head", PRIOR, "--head-sha", HEAD, "--tmp-root", "tmp"], { repoRoot: dir, runGit: () => { throw new Error("git must not run"); } });
+    } finally {
+      process.stderr.write = origErr;
+      process.exitCode = prior;
+    }
+    assert.equal(JSON.parse(errs.join("").trim().split("\n").pop()).code, "gate_artifact_out_of_band_write");
   });
 });

@@ -35,3 +35,9 @@ test("pure formatCliError matches the canonical export when a usage string is pa
   assert.equal(pure(err, { usage: "USAGE: ..." }), canonical(err, { usage: "USAGE: ..." }));
   assert.equal(pure(err), canonical(err));
 });
+
+test("both formatters carry the typed code for gate_artifact_out_of_band_write", () => {
+  const err = Object.assign(new Error("gate_artifact_out_of_band_write: f"), { code: "gate_artifact_out_of_band_write" });
+  assert.equal(JSON.parse(pure(err)).code, "gate_artifact_out_of_band_write");
+  assert.equal(pure(err), canonical(err));
+});

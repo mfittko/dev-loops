@@ -7,6 +7,7 @@ import { test } from "bun:test";
 import { REVIEWER_VERIFIED_ITEMS_INSTRUCTION, REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, listPriorFindingsLogHeads, main, unitBudgetBasis } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { expandDispatchUnits, packDispatchUnits, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/_dispatch-units.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
@@ -30,7 +31,7 @@ async function writeGateFindingsLog(options, ctx) {
   const ledgerPath = path.resolve(ctx.repoRoot, buildGateFaninLedgerPath({ repo: rest.repo, pr: rest.pr, gate: rest.gate, headSha: rest.headSha, tmpRoot: "tmp" }));
   const ledger = JSON.parse(await readFile(ledgerPath, "utf8").catch(() => "{}"));
   await mkdir(path.dirname(ledgerPath), { recursive: true });
-  await writeFile(ledgerPath, JSON.stringify({ ...ledger, overallVerdict: rest.verdict, provenance: JSON.parse(provenance) }), "utf8");
+  await writeSealed(ledgerPath, JSON.stringify({ ...ledger, overallVerdict: rest.verdict, provenance: JSON.parse(provenance) }));
   return writeGateFindingsLogRaw(rest, ctx);
 }
 
@@ -155,6 +156,22 @@ test("listPriorFindingsLogHeads returns the empty set on ENOENT (genuine first r
   await withTmpDir(async (repoRoot) => {
     const heads = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
     assert.equal(heads.size, 0);
+  });
+});
+
+test("listPriorFindingsLogHeads fails closed with gate_artifact_out_of_band_write on a hand-edited sealed prior log (AC2)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(findingsDir, { recursive: true });
+    const sha = "a".repeat(40);
+    const file = path.join(findingsDir, `${GATE}-${sha}.json`);
+    const log = { headSha: sha, gate: GATE, repo: REPO, pr: Number(PR), verdict: "clean" };
+    await writeSealed(file, JSON.stringify(log));
+    await writeFile(file, JSON.stringify({ ...log, verdict: "findings_present" }), "utf8");
+    await assert.rejects(
+      () => listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") }),
+      (err) => err.code === OUT_OF_BAND_WRITE,
+    );
   });
 });
 
@@ -2124,5 +2141,23 @@ test("--pending emits a mixed unit's work order without the carried angle (issue
     const suffix = await readFile(path.join(tmpDir, "tmp", "gate-context", "o-r", "pr-7", `${GATE}-${HEAD_SHA}.angle-suffix-${units[0].scope}.txt`), "utf8");
     assert.match(suffix, /kiss/);
     assert.doesNotMatch(suffix, /\bdry\b/);
+  });
+});
+
+test("listPriorFindingsLogHeads names the lexically first file when several sealed prior logs are hand-edited (AC2)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(findingsDir, { recursive: true });
+    for (const ch of ["c", "b"]) {
+      const sha = ch.repeat(40);
+      const file = path.join(findingsDir, `${GATE}-${sha}.json`);
+      const log = { headSha: sha, gate: GATE, repo: REPO, pr: Number(PR), verdict: "clean" };
+      await writeSealed(file, JSON.stringify(log));
+      await writeFile(file, JSON.stringify({ ...log, verdict: "findings_present" }), "utf8");
+    }
+    await assert.rejects(
+      () => listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") }),
+      (err) => err.code === OUT_OF_BAND_WRITE && err.file.endsWith(`${GATE}-${"b".repeat(40)}.json`),
+    );
   });
 });

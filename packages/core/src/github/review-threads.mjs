@@ -354,6 +354,8 @@ export function formatCliError(error, { usage } = {}) {
   if (error instanceof Error && error.code === "config_load_failed") {
     payload.code = error.code;
     payload.configError = error.configError;
+  } else if (error instanceof Error && error.code === "gate_artifact_out_of_band_write") {
+    payload.code = error.code;
   }
   const hasUsage = (error instanceof Error && typeof error.usage === "string") || typeof usage === "string";
   if (hasUsage) {

@@ -9,6 +9,7 @@ import { DISPATCH_POINTER_MAX_BYTES, buildDispatchPointer, executionIndexPath, p
 import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
+import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import { seedJudgeSources } from "./_judge-delivery-fixture.mjs";
 
@@ -464,5 +465,18 @@ test("a closure round's gate context (scope.closureRound) adds closureRound: tru
     const items = [{ fingerprint: "abcd", file: "a.mjs", line: 3, title: "t" }];
     await writeFile(contextPath, JSON.stringify({ ...context, scope: { closureRound: { fromHead: "c".repeat(40), priorActItems: items } } }));
     assert.deepEqual((await emitJudgeWorkOrder(sources)).workOrder.priorActItems, items);
+  });
+});
+
+test("J1b: a sealed findings ledger edited out of band refuses judge emission (valid and malformed JSON)", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const file = path.join(root, sources.findingsFile);
+    await writeSealed(file, await readFile(file, "utf8"));
+    await emitJudgeWorkOrder(sources);
+    for (const edit of [JSON.stringify({ findings: [{ severity: "low", summary: "edited" }] }), "{not json"]) {
+      await writeFile(file, edit);
+      await assert.rejects(emitJudgeWorkOrder(sources), /gate_artifact_out_of_band_write/);
+    }
   });
 });
