@@ -19,9 +19,10 @@ import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES, computeReviewerUnitBudget } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "../loop/_operator-focus.mjs";
 import { expandDispatchUnits, isPackedUnitName, normalizeUnitAngles, sanitizeScopeSegment, unitScopeSegment } from "./_dispatch-units.mjs";
 
-const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--tmp-root <path>] [--help]
+const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--operator-focus-file <path>] [--tmp-root <path>] [--help]
 The SANCTIONED one-shot gate fan-out dispatch step: given a gate +
 head whose write-gate-context.mjs bundle is already on disk, it reads the resolved
 fan-out plan (the artifact's fanout.groups / fanout.pendingGroups, resolveFanoutGroups
@@ -87,6 +88,9 @@ Optional:
   --carry-forward-plan <json>  Resolver output (or its carried array). Required
                                for a zero-unit pending round; persisted with the
                                keyed plan for fan-in and provenance verification.
+  --operator-focus-file <path> A JSON file { round?: string } rendered as a bounded, sanitized
+                               "Operator focus" section in every unit's prompt and pinned by the
+                               unit work-order digest (GATE-EXEC-OPERATOR-FOCUS). Items are refused.
   --tmp-root <path>            The tmp/ directory the round's gate-context
                                artifacts live under (default: process.cwd()/tmp;
                                must match the write-gate-context.mjs call).
@@ -230,7 +234,7 @@ export const REVIEWER_VERIFIED_ITEMS_INSTRUCTION = "Verified items: in the findi
  *   computed budget (computeReviewerUnitBudget); the floor when absent
  * @returns {string}
  */
-export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET) {
+export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = [], budget = REVIEWER_UNIT_BUDGET, operatorFocus = null) {
   if (typeof scope !== "string" || scope.length === 0) {
     throw new TypeError(`buildAngleNamingSuffix requires a non-empty scope string, got ${JSON.stringify(scope)}`);
   }
@@ -263,7 +267,7 @@ Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is
 Prohibited: ${prohibited}.
 Widening: ${REVIEWER_WIDENING_RULE}.
 ${verifiedItemsLine}If you exceed this budget (more than ${budget.maxModelTurns} model turns or ${budget.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --max-model-turns ${budget.maxModelTurns} --max-tool-calls ${budget.maxToolCalls} --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
-  return `${header}\n\n${scopeLine}\n\n${reads}${body}\n\n${instructions}\n\n${contract}\n`;
+  return `${header}\n\n${scopeLine}\n\n${renderOperatorFocusSection(operatorFocus)}${reads}${body}\n\n${instructions}\n\n${contract}\n`;
 }
 
 /**
@@ -431,6 +435,11 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // reading the real process cwd's checkout.
   const ledgerTmpRoot = tmpRootArg ?? ledgerTmpRootDefault;
   const pendingOnly = argv.includes("--pending");
+  const operatorFocusArg = resolveFlagValue(argv, "--operator-focus-file");
+  if (operatorFocusArg === "") {
+    process.stderr.write(`${formatCliError(parseError("--operator-focus-file must not be an empty value; pass a path or omit the flag"))}\n`);
+    return 2;
+  }
 
   let contextPath;
   try {
@@ -696,6 +705,13 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // absolute per-angle findings directory.
   const sharedReads = Array.isArray(artifact.requiredReads) ? artifact.requiredReads.filter((read) => read?.kind !== "scoped-evidence") : [];
   const configSha256 = createHash("sha256").update(JSON.stringify(config ?? {})).digest("hex");
+  let operatorFocus = null;
+  try {
+    operatorFocus = await readOperatorFocusFile(operatorFocusArg ? path.resolve(process.cwd(), operatorFocusArg) : undefined);
+  } catch (err) {
+    if (!(err instanceof OperatorFocusRefusal)) throw err;
+    return finish({ ok: false, error: err.message }, false);
+  }
   const findingsDir = path.resolve(buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot }));
   // This emission's round identity. Its ms timestamp lets the pull tool tell a
   // round retired after it (GATE-EXEC-ROUND-RETIREMENT record) from a typo.
@@ -742,7 +758,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
-      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget), "utf8");
+      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads, budget, operatorFocus), "utf8");
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;
@@ -785,6 +801,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       requiredReads: unitReads.length > 0 ? [...sharedReads.filter((read) => read.kind !== "evidence"), ...unitReads] : sharedReads,
       outputRefs: angles.map((angle) => path.join(findingsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`)),
       executionRules: { budget, prohibited: PROHIBITED_REVIEWER_OPERATIONS, widening: REVIEWER_WIDENING_RULE },
+      ...(operatorFocus ? { operatorFocus, ...operatorFocusDigestEntry(operatorFocus) } : {}),
     };
     // Pull transport (ADR 0106): the coordinator relays only this compact
     // envelope; the reviewer pulls and verifies its work order itself.

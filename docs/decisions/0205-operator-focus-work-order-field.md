@@ -13,11 +13,11 @@ The change adds a rule to [Gate review sub-loop contract](../../skills/docs/gate
 ## Decision
 
 - `scripts/loop/_operator-focus.mjs` owns one carrier: `{ round?: string, items?: [{ fingerprint, decision }] }`. It sanitizes and bounds every string, refuses unknown fields and duplicate fingerprints, and renders one fixed `## Operator focus` section.
-- `emit-judge-work-order.mjs` (`round` only) and `emit-fixer-work-order.mjs` (`round` and `items`) take `--operator-focus-file`. The normalized focus sits in the work order JSON under `operatorFocus`, so the work-order digest pins it.
+- `emit-fanout-dispatch.mjs` (`round` only, every reviewer unit), `emit-judge-work-order.mjs` (`round` only) and `emit-fixer-work-order.mjs` (`round` and `items`) take `--operator-focus-file`. The normalized focus sits in the work order JSON under `operatorFocus`, so the work-order digest pins it.
 - A fixer item binds to an act item by fingerprint. The stored item also carries `summary`, the sanitized act-item summary (omitted when it sanitizes to nothing). It renders on its own quoted `Act-list text for <fingerprint> (reviewer-authored, not an operator decision)` line and is never an operator decision. An unknown fingerprint refuses and nothing is written.
 - A decision picks among remedies the act item offers and never changes its disposition. The judge and the act list keep disposition ownership.
 - An absent focus adds no key and renders nothing, so existing work-order bytes and digests are unchanged.
-- The rule ID is `GATE-EXEC-OPERATOR-FOCUS`. The reviewer work order adopts the same carrier in a later slice.
+- The rule ID is `GATE-EXEC-OPERATOR-FOCUS`.
 
 ## Consequences
 
