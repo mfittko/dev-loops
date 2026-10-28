@@ -1,2 +1,2 @@
 ### Added
-- `emit-fanout-dispatch.mjs`, `emit-judge-work-order.mjs` and `emit-fixer-work-order.mjs` take `--operator-focus-file`, a typed, bounded, digest-pinned operator focus rendered as an "Operator focus" section (#2635)
+- Fan-out, judge and fixer emitters take `--operator-focus-file`, a typed, bounded, digest-pinned operator focus rendered as an "Operator focus" section (#2635)

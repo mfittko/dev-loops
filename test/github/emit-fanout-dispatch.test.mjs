@@ -2184,8 +2184,8 @@ test("operator focus: the round renders in every reviewer unit prompt and is pin
       assert.deepEqual(unit.workOrder.operatorFocus, { round: "Round 8: no churn on docs lows" });
       assert.match(unit.workOrder.operatorFocusDigest, /^[0-9a-f]{64}$/);
     }
-    const unfocused = units.find((u) => u.scope === plainUnit.scope);
-    assert.notEqual(unfocused.workOrderDigest, plainUnit.workOrderDigest);
+    const focusedUnit = units.find((u) => u.scope === plainUnit.scope);
+    assert.notEqual(focusedUnit.workOrderDigest, plainUnit.workOrderDigest);
   });
 });
 

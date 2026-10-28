@@ -1,6 +1,6 @@
 /**
  * Operator focus (GATE-EXEC-OPERATOR-FOCUS, ADR 0205): a typed, bounded, sanitized
- * carrier for operator context on a judge or fixer work order. The focus guides the
+ * carrier for operator context on a reviewer, judge or fixer work order (fan-out, judge and fixer emitters). The focus guides the
  * work and never changes a disposition. Absent focus adds no key and renders nothing.
  */
 import { createHash } from "node:crypto";
