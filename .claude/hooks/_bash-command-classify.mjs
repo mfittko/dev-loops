@@ -1266,7 +1266,10 @@ export function commandContainsInlineInterpreter(command) {
   };
   let consumed = 0;
   // One left-to-right pass handles both forms, so a quote character in an earlier unquoted-delimiter body never desynchronizes the quote state of a later operator.
-  const noHeredoc = replaceUnquoted(command, /((?<!<)<<-?\s*(['"])([^\s'"<>|;&()\\]+)\2[^\n]*\n)(?:[\s\S]*?\n)??[ \t]*\3(?=\)|\n|$)|((?<!<)<<-?\s*([^\s'"<>|;&()\\]+)[^\n]*\n)([\s\S]*?)(?=(?:(?<=\n)|\n)[ \t]*\5(?:\)|\n|$))/g, (m) => m[1] ?? m[4] + m[6].replace(/['"#]/g, " ")); // quoted: body optional, an empty body closes on the first terminator line
+  // Bash closes `<<` on an unindented delimiter line; `<<-` strips leading tabs only. Each form has its own alternatives (groups 1-6 for `<<-`, 7-12 for `<<`; quoted head/quote/delimiter, then unquoted head/delimiter/body).
+  const heredocForm = (g, op, ind) => `((?<!<)<<${op}\\s*(['"])([^\\s'"<>|;&()\\\\]+)\\${g + 2}[^\\n]*\\n)(?:[\\s\\S]*?\\n)??${ind}\\${g + 3}(?=\\)|\\n|$)|((?<!<)<<${op}\\s*([^\\s'"<>|;&()\\\\]+)[^\\n]*\\n)([\\s\\S]*?)(?=(?:(?<=\\n)|\\n)${ind}\\${g + 5}(?:\\)|\\n|$))`;
+  const blank = (s) => s.replace(/['"#]/g, " ");
+  const noHeredoc = replaceUnquoted(command, new RegExp(`${heredocForm(0, "-", "\\t*")}|${heredocForm(6, "(?!-)", "")}`, "g"), (m) => m[1] ?? (m[4] === undefined ? m[7] ?? m[10] + blank(m[12]) : m[4] + blank(m[6]))); // quoted: body optional, an empty body closes on the first terminator line
   // An operator with no later newline has no body to hide, so a single-line mention (quoted text, arithmetic) keeps the blanked scan. ponytail: a multi-line command that quotes `<<` still fails closed.
   const heredocOperators = (noHeredoc.match(/(?<!<)<<(?!<)(?=[^\n]*\n)/g) ?? []).length;
   // `unquoted` has the same length as `base`, so offsets found in it slice `base` (the text with quotes intact).

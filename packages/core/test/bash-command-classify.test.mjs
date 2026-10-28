@@ -1460,3 +1460,12 @@ test("escaped quotes never open or close a quoted span (#2964)", () => {
     assert.equal(commandContainsInlineInterpreter(c), false, c);
   }
 });
+
+test("a plain heredoc closes only on an unindented delimiter, `<<-` on tab-indented (#2967)", () => {
+  for (const c of ["cat <<EOF\n EOF\n'$(node -e 1)'\nEOF", "cat <<EOF\n\tEOF\n$(node -e 1)\nEOF", "cat <<'EOF'\n EOF\nEOF\n$(node -e 1)", "cat <<-EOF\n  EOF\n$(node -e 1)\nEOF"]) {
+    assert.equal(commandContainsInlineInterpreter(c), true, c);
+  }
+  for (const c of ["cat <<-EOF\n\ttext\n\tEOF\necho ok", "cat <<EOF\n$(echo hi)\nEOF\necho ok", "cat <<'EOF'\n $(node -e 1)\nEOF"]) {
+    assert.equal(commandContainsInlineInterpreter(c), false, c);
+  }
+});
