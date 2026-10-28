@@ -59,7 +59,7 @@ Before merge, ALL of the following MUST hold:
    identically to a real CI failure at the pre-approval and final-approval boundaries
    (#552). It only extends the draft-gate wait until CI actually settles green.
 3. ✅ Draft gate satisfied — clean `draft_gate` verdict per `GATE-COMMENT-VERDICT-VALUES` ([Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md))
-4. ✅ Pre-approval gate satisfied — clean `pre_approval_gate` verdict on the current head, same rule
+4. ✅ Pre-approval gate satisfied — clean `pre_approval_gate` verdict on the current head, same rule. `merge-pr` accepts a carried verdict only when the posted carried-heads record holds an entry for the current head and re-classifying the bound heads reproduces that entry's evidence ([`GATE-EXEC-BASE-MERGE-VERDICT-CARRY`](./gate-review-sub-loop-contract.md))
 5. ✅ All review threads resolved
 6. ✅ Merge authorization from the operator — explicit for the active scope, or a recorded standing authorization (see [Merge authorization](#merge-authorization))
 7. ✅ Closing-reference state matches artifact backing, each arm owned by a different contract: tracker-backed work — PR body contains `Closes #N` or `Fixes #N` (owned by the PR description contract in [copilot-loop-operations.md](copilot-loop-operations.md)); issue-less lightweight (PR-body-as-spec, no backing issue) — the closing reference is absent by design and `node scripts/loop/validate-pr-body-spec.mjs --repo <owner/name> --pr <number> --no-issue` passes clean (owned by `ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS` in [Artifact Authority Contract](artifact-authority-contract.md)); plan-file promotion (P4) — the PR body carries the committed plan-doc path as the spec-of-record and, being issue-less by design (`buildPromotionPrBody` neutralizes closing keywords), the closing reference MUST NOT be present
@@ -133,10 +133,11 @@ practice:
   re-runs the same verdict check with GitHub's own token for every non-draft PR. It always
   evaluates the DEFAULT BRANCH's detector (trusted code); the resolved PR head SHA is only
   the status target.
-  - It is **pre-merge-only** (#1702): `synchronize` is NOT a trigger. Triggers: PR
-    opened/reopened, `ready_for_review`, a submitted or edited review, a standalone review
+  - It is **pre-merge-only** (#1702). Triggers: PR
+    opened/reopened, `ready_for_review`, `synchronize` on a ready PR (draft pushes stay
+    skipped by the draft guard, ADR 0186), a submitted or edited review, a standalone review
     comment, and a created/edited PR issue comment that starts with the gate-comment marker
-    (`### Gate review:`) from a trusted author (`OWNER`/`MEMBER`/`COLLABORATOR`). A new
+    (`### Gate review:`) or the carried-heads record marker (`<!-- dev-loops:carried-heads:v1`) from a trusted author (`OWNER`/`MEMBER`/`COLLABORATOR`). A new
     round's verdict review (`GATE-COMMENT-SINGLE-SURFACE`) fires
     `pull_request_review [submitted]`; a same-head in-place correction fires
     `pull_request_review [edited]`. The issue-comment arm covers only legacy verdicts and the zero-dep fallback poster.
