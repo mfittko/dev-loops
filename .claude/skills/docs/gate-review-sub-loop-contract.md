@@ -667,8 +667,8 @@ finding's angle matches no `provenance.perAngle` entry), run the sanctioned exit
 node scripts/github/quarantine-gate-findings-log.mjs --repo <owner/name> --pr <N> --gate <gate> --prev-head <full-sha>
 ```
 
-The command re-runs the resolver's integrity check on that log. On a failure it moves the log and its keyed
-fan-in ledger into `tmp/quarantined-gate-findings/<slug>/pr-<N>/<gate>-<head>-<timestamp>/` with
+The command re-runs the resolver's integrity check on that log. A seal mismatch (typed reason `gate_artifact_out_of_band_write`, ADR 0204) counts as an integrity failure. On a failure it moves the log, its keyed
+fan-in ledger and their `<artifact>.seal` sidecars into `tmp/quarantined-gate-findings/<slug>/pr-<N>/<gate>-<head>-<timestamp>/` with
 `quarantine.json` recording the reason and the exact integrity failure, and never deletes evidence. `quarantine.json` is written before any move
 (status `pending`), records whether the ledger was absent and the resolved `ledgerPath` it checked, and ends `complete`; a failed move is rolled back or
 recorded as `partial` with the files left in the audit dir listed in `stillInAuditDir` for manual review (a re-run does not resume it). The ledger is read from `--context-tmp-root` (default: `tmp` under the cwd), so run the command from the worktree where fan-in ran or pass `--context-tmp-root`. The next

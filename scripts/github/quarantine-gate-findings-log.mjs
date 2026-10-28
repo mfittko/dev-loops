@@ -5,7 +5,8 @@
  *
  * Re-runs the exact integrity check resolve-angle-carry-forward.mjs applies
  * (buildCarryForwardPlan plus its path/recorded-head identity check). On an
- * integrity FAILURE it moves the log and its keyed fan-in ledger into an audit
+ * integrity FAILURE (a seal mismatch, gate_artifact_out_of_band_write, counts)
+ * it moves the log, its keyed fan-in ledger and their .seal sidecars into an audit
  * directory (never deletes) and records the reason and the failure message, so
  * the next round at a later head sees no prior log. On a log that PASSES
  * integrity it refuses (quarantine_refused_log_valid) and moves nothing.

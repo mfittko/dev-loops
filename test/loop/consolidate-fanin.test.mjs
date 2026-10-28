@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
+import { createHash } from "node:crypto";
+import { readSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 
 import {
   consolidateGateFanin,
@@ -4759,8 +4761,20 @@ test("#2526: --emit-plan without --ledger-out still writes the keyed fan-in ledg
     await consolidateGateFanin(base);
     const keyed = buildGateFaninLedgerPath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, tmpRoot: root });
     assert.equal(JSON.parse(await readFile(keyed, "utf8")).provenance.perAngle[0].dispatchId, "r1-u0");
+    // AC2: the keyed ledger carries a seal equal to the sha256 of its bytes.
+    assert.equal((await readFile(`${keyed}.seal`, "utf8")).trim(), createHash("sha256").update(await readFile(keyed, "utf8")).digest("hex"));
     await consolidateGateFanin({ findingsDir: base.findingsDir, ledgerOut });
     assert.equal("provenance" in JSON.parse(await readFile(ledgerOut, "utf8")), false);
+  });
+});
+
+test("a plain --ledger-out rewrite of the keyed ledger path leaves a seal that still verifies (AC2)", async () => {
+  const units = [unitOf(["scope"], null, "r1-u0")];
+  await withProvenanceRound({ units, fanout: "    mode: per-angle" }, async ({ root, base }) => {
+    await consolidateGateFanin(base);
+    const keyed = buildGateFaninLedgerPath({ repo: "owner/repo", pr: 42, gate: "draft_gate", headSha: PROV_HEAD, tmpRoot: root });
+    await consolidateGateFanin({ findingsDir: base.findingsDir, ledgerOut: keyed });
+    assert.equal("provenance" in JSON.parse(await readSealed(keyed)), false);
   });
 });
 

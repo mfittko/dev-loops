@@ -827,7 +827,9 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     try {
       faninLedger = JSON.parse(await readSealed(faninLedgerPath));
     } catch (error) {
-      throw Object.assign(parseError(`fan-in ledger ${faninLedgerPath} could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`), error?.code === OUT_OF_BAND_WRITE ? { code: OUT_OF_BAND_WRITE } : {});
+      throw error?.code === OUT_OF_BAND_WRITE
+        ? Object.assign(new Error(`fan-in ledger ${faninLedgerPath} could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`), { code: OUT_OF_BAND_WRITE })
+        : parseError(`fan-in ledger ${faninLedgerPath} could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (faninLedger === null || typeof faninLedger !== "object" || Array.isArray(faninLedger)) {
       throw parseError(`fan-in ledger ${faninLedgerPath} could not be read/parsed: expected a JSON object`);
@@ -1114,7 +1116,11 @@ async function main() {
     }
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
-    process.stderr.write(`${formatCliError(error)}\n`);
+    // The shared formatter drops the typed code; keep it for a seal mismatch (AC2).
+    const rendered = error?.code === OUT_OF_BAND_WRITE
+      ? JSON.stringify({ ...JSON.parse(formatCliError(error)), code: error.code })
+      : formatCliError(error);
+    process.stderr.write(`${rendered}\n`);
     process.exitCode = 1;
   }
 }

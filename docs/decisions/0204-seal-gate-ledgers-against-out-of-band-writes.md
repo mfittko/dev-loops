@@ -10,7 +10,7 @@ Issue [2971](https://github.com/mfittko/dev-loops/issues/2971) reports that no w
 
 ## Decision
 
-- The sanctioned writers (`consolidate-fanin.mjs` for the keyed ledger, `write-gate-findings-log.mjs` for the findings log) write a sha256 seal file `<artifact>.seal` beside the artifact.
+- The sanctioned writers (`consolidate-fanin.mjs` for the keyed ledger, `write-gate-findings-log.mjs` and the `judge-pass.mjs` defer stamp for the findings log) write a sha256 seal file `<artifact>.seal` beside the artifact.
 - The sanctioned readers (the findings-log writer reading the ledger, `resolve-angle-carry-forward.mjs` and `emit-fanout-dispatch.mjs` reading the prior findings log) verify the seal.
 - A seal mismatch fails with the typed reason `gate_artifact_out_of_band_write`, which names the file.
 - An artifact with no seal reads as a legacy artifact and is accepted. Refusing a missing seal and the routed-residue input remain open under the issue.

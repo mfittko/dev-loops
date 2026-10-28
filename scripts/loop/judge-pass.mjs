@@ -36,6 +36,7 @@ import { commentDeferredFindings, fingerprintFinding, readGateFindingsLedger } f
 import { readClosedPriorRoundLogs, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
+import { writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
@@ -601,7 +602,7 @@ async function stampDurableDeferTargets(enriched, options, resolvedRoot) {
     if (target !== undefined) { f.followUpIssueNumber = target; changed = true; }
     else if (rejects.has(fp)) { f.judgeDisposition = "reject"; delete f.followUpDraft; changed = true; }
   }
-  if (changed) await writeFile(logPath, JSON.stringify(log, null, 2) + "\n");
+  if (changed) await writeSealed(logPath, JSON.stringify(log, null, 2) + "\n");
 }
 
 /**

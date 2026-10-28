@@ -1610,9 +1610,7 @@ export async function consolidateGateFanin(options) {
     }
     for (const target of ledgerTargets) {
       await mkdir(path.dirname(target), { recursive: true });
-      // The keyed ledger is always sealed, even when --ledger-out names the same file.
-      if (keyedLedger !== undefined && path.resolve(target) === path.resolve(keyedLedger)) await writeSealed(target, ledgerText);
-      else await writeFile(target, ledgerText, "utf8");
+      await writeSealed(target, ledgerText);
     }
   }
 
