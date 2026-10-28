@@ -2177,6 +2177,8 @@ test("removesClosingRef accepts every Closes-to-Refs phrasing and rejects the re
     "Drop `Closes 10`; the body should say `Refs 10`.",
     "Use `Refs 2883` instead of `Closes 2883`",
     "Change `Closes 10` to `Refs 10`",
+    "Replace Closes #10 with Refs #10 to keep the parent issue open.",
+    "Remove the Closes 10 line, because a slice PR must not close its parent.",
   ]) assert.equal(coercedBy(fix), true, fix);
   for (const fix of [
     "Replace `Refs #10` with `Closes #10`.",

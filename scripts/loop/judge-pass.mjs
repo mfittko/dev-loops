@@ -130,7 +130,7 @@ Immutable spec-authority enforcement (opt-in; enabled by --spec-file):
                                when the judge pass coerces a closing-reference removal to
                                reject; it never changes the spec. Needed when the spec comes
                                from the linked issue. Requires --spec-file.
-  --spec-file <path>          JSON structured spec { acceptanceCriteria,
+  --spec-file <path>           JSON structured spec { acceptanceCriteria,
                                definitionOfDone, nonGoals } (arrays of strings) —
                                the canonical tracker AC/DoD/Non-goals. When
                                supplied, the judge must additionally provide a

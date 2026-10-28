@@ -28,9 +28,12 @@ const KEEPS_CLOSING = /\b(?:do\s+not|don't|never|must\s+not|keep)\b/i;
 // True when the judged remedy (judgeFix only, never the reviewer recommendation) removes a closing reference.
 export const removesClosingRef = (finding) => {
   if (typeof finding?.judgeFix !== "string") return false;
-  // A clause that keeps or negates ("Keep Closes #10; do not change it to Refs #10") restates the rule and is skipped.
-  return finding.judgeFix.replace(/[`*]/g, "").split(/[;\n]|\.(?:\s|$)/).some((clause) => !KEEPS_CLOSING.test(clause)
-    && (CLOSING_THEN_REFS.test(clause) || REFS_INSTEAD_OF_CLOSING.test(clause) || REMOVES_CLOSING.test(clause)));
+  // A clause whose remedy is preceded by a keep or negation ("Do not remove the Closes #10 line") restates the rule and is skipped.
+  // A keep or negation after the remedy is its reason ("Replace Closes #10 with Refs #10 to keep the parent open") and does not skip it.
+  return finding.judgeFix.replace(/[`*]/g, "").split(/[;\n]|\.(?:\s|$)/).some((clause) => {
+    const at = [CLOSING_THEN_REFS, REFS_INSTEAD_OF_CLOSING, REMOVES_CLOSING].map((re) => re.exec(clause)?.index).filter((i) => i !== undefined);
+    return at.length > 0 && !KEEPS_CLOSING.test(clause.slice(0, Math.min(...at)));
+  });
 };
 
 // Coerce an act finding whose judged remedy removes a closing reference to reject; returns the number coerced.
