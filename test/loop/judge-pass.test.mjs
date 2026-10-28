@@ -2181,6 +2181,7 @@ test("removesClosingRef accepts every Closes-to-Refs phrasing and rejects the re
     "Change `Closes 10` to `Refs 10`",
     "Replace Closes #10 with Refs #10 to keep the parent issue open.",
     "Remove the Closes 10 line, because a slice PR must not close its parent.",
+    "Remove the closes #10 line",
     "Keep the AC table and replace `Closes 10` with `Refs 10`.",
     "Never mind the nit, change Closes 10 to Refs 10",
     "Closes 10 becomes Refs 10",

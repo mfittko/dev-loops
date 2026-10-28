@@ -980,7 +980,7 @@ For the existing PR-body authority, use the same command with `--pr` instead:
 ```sh
 content_digest=$(node scripts/loop/spec-context.mjs --repo <owner/name> --pr <pr_number> \
   --content-file <reviewed-content-path> --head-sha <current_full_head_sha> \
-  --spec-out <spec-path> --identity-out <identity-path> [--pr-body-file <pr-body-path>] --jq '.contentDigest')
+  --spec-out <spec-path> --identity-out <identity-path> --jq '.contentDigest')
 ```
 
 On a fixer-push re-entry round (a prior clean round's `--approvals-out` record exists), it also

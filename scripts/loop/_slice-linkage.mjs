@@ -25,7 +25,7 @@ const CLOSING_THEN_REFS = new RegExp(String.raw`${CLOSING}[^\n]*?(?:\bwith\b|\bt
 // Refs [N] instead of Closes [N]: group 1 is the Refs number, group 2 the Closes number.
 const REFS_INSTEAD_OF_CLOSING = new RegExp(String.raw`\brefs?\b${OPT_REF}[^\n]*?\binstead\s+of\b[^\n]*?${CLOSING}`, "gi");
 // A removal verb on a closing reference.
-const REMOVES_CLOSING = new RegExp(String.raw`\b(?:remove|drop|delete|strip)\s+(?:the\s+)?${KW}\b`, "gi");
+const REMOVES_CLOSING = new RegExp(String.raw`\b(?:remove|drop|delete|strip)\s+(?:the\s+)?${KW}\b${OPT_REF}`, "gi");
 // A number-less swap counts only in the PR reference forms (Closes/Fixes/Resolves and Refs, capitalized); "Resolve the path relative to the base ref" is a code fix.
 const PR_KEYWORD = /\b(?:Closes|Fixes|Resolves)\b/;
 const SAME_NUMBER = (m) => m[1] === m[2] && (m[1] !== undefined || (PR_KEYWORD.test(m[0]) && /\bRefs\b/.test(m[0])));
@@ -41,7 +41,7 @@ export const removesClosingRef = (finding) => {
   // A clause whose remedy is directly negated ("Do not remove the Closes #10 line") restates the rule and is skipped.
   // A keep or negation after the remedy is its reason ("Replace Closes #10 with Refs #10 to keep the parent open") and does not skip it.
   return finding.judgeFix.replace(/[`*]/g, "").split(/[;\n]|\.(?:\s|$)/).some((clause) => [
-    [CLOSING_THEN_REFS, SAME_NUMBER], [REFS_INSTEAD_OF_CLOSING, SAME_NUMBER], [REMOVES_CLOSING, (m) => PR_KEYWORD.test(m[0])],
+    [CLOSING_THEN_REFS, SAME_NUMBER], [REFS_INSTEAD_OF_CLOSING, SAME_NUMBER], [REMOVES_CLOSING, (m) => m[1] !== undefined || PR_KEYWORD.test(m[0])],
   ].some(([re, accepts]) => [...clause.matchAll(re)].some((m) => accepts(m) && !GOVERNED.test(clause.slice(0, m.index)))));
 };
 
