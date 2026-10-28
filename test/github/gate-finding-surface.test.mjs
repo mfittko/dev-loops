@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 
+import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { containsBareCopilotSummon } from "../../scripts/_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import {
@@ -1409,4 +1410,12 @@ test("renderVerdictDetailsBlock: a Deferred entry carries issue=<pr> in its mark
   const markers = block.split("\n").filter((line) => line.startsWith("<!-- dev-loops:finding "));
   assert.equal(parseFindingMarker(markers[0]).issue, 17);
   assert.equal(parseFindingMarker(markers[1]).issue, null);
+});
+
+test("readGateFindingsLedger rejects a sealed findings log edited outside the writer with gate_artifact_out_of_band_write naming the file (AC2)", async () => {
+  await withLedgerFile("{}", async (ledgerPath) => {
+    await writeSealed(ledgerPath, JSON.stringify(VALID_LEDGER));
+    await writeFile(ledgerPath, JSON.stringify({ ...VALID_LEDGER, verdict: "clean" }), "utf8");
+    await assert.rejects(() => readGateFindingsLedger(ledgerPath), (err) => err.code === OUT_OF_BAND_WRITE && err.file === ledgerPath);
+  });
 });

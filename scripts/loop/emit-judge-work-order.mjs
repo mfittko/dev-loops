@@ -22,6 +22,7 @@ import { buildGateArtifactPath, buildGateContextPath, buildLogPath } from "../gi
 import { listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
+import { OUT_OF_BAND_WRITE, readSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { OperatorFocusRefusal, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
 import { isFindingsLogName, resolveGateRound } from "../github/_gate-finding-surface.mjs";
@@ -54,7 +55,12 @@ const judgeDir = ({ repo, pr, gate, headSha, tmpRoot }) => buildGateArtifactPath
 class Refusal extends Error {}
 
 async function readSource(kind, filePath) {
-  const bytes = await readFile(filePath).catch(() => null);
+  // The findings ledger is a sealed artifact: verify its bytes before pinning them.
+  const reader = kind === "findings" ? async () => Buffer.from(await readSealed(filePath), "utf8") : () => readFile(filePath);
+  const bytes = await reader().catch((error) => {
+    if (error?.code === OUT_OF_BAND_WRITE) throw new Refusal(error.message);
+    return null;
+  });
   const copilotBodyKind = kind === "copilot-body-feedback";
   if (bytes === null && copilotBodyKind) throw new Refusal(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: required judge source ${kind} is missing or unreadable: ${filePath}`);
   if (bytes === null) throw new Refusal(`required judge source ${kind} is missing or unreadable: ${filePath}`);

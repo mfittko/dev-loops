@@ -47,6 +47,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { GATE_NAMES, gateScopePrefix } from "../github/_gate-names.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../github/write-gate-context.mjs";
+import { writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { lintFillerPhrases } from "../github/_gate-finding-text.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, validateCarryForwardPlanEntries, validateCarryForwardPlanShape, validateZeroUnitCarryProof } from "../github/_carried-angles.mjs";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -1602,12 +1603,14 @@ export async function consolidateGateFanin(options) {
     const ledgerText = `${JSON.stringify(ledgerRecord, null, 2)}\n`;
     if (options.ledgerOut !== undefined) ledgerTargets.push(options.ledgerOut);
     // The keyed fan-in ledger: byte-identical to --ledger-out, at the plan's round key.
+    let keyedLedger;
     if (emitPlan !== undefined) {
-      ledgerTargets.push(buildGateFaninLedgerPath({ repo: emitPlan.repo, pr: emitPlan.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot ?? path.join(process.cwd(), "tmp") }));
+      keyedLedger = buildGateFaninLedgerPath({ repo: emitPlan.repo, pr: emitPlan.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot ?? path.join(process.cwd(), "tmp") });
+      ledgerTargets.push(keyedLedger);
     }
     for (const target of ledgerTargets) {
       await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, ledgerText, "utf8");
+      await writeSealed(target, ledgerText);
     }
   }
 
