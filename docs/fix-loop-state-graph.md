@@ -4,7 +4,7 @@ Canonical owner for the gate fix-loop state machine ([ADR 0166](decisions/0166-l
 
 ## Overview
 
-One fix sequence for PR head H is one state machine. Every fail-closed state has a sanctioned exit, and the conformance harness (`scripts/docs/validate-state-machine-conformance.mjs`) proves that every state reaches a terminal state. Evidence follows the head, not the role that made the commit: a developer commit, a CI fix, a base merge or an amend is the `head_moved` state with a defined exit.
+One fix sequence for PR head H is one state machine. Every fail-closed state has a sanctioned exit, and the conformance harness (`scripts/docs/validate-state-machine-conformance.mjs`) proves that every state reaches a terminal state. Evidence binds to the live head whichever role made the commit: a developer commit, a CI fix, a base merge or an amend is the `head_moved` state with a defined exit.
 
 A transition that a later slice of issue 2787 implements is registered as `known_gap` in the harness until that slice lands. Slice 6 re-arms the fail-closed boundary only when no `known_gap` is left.
 
@@ -72,7 +72,7 @@ Terminal states with no outgoing transitions: `full_gate_round`, `stopped`.
 - delta: `deltaReviewStarted`, `deltaVerdict` (`clear`|`bounded_out`|`residue`|null)
 - delivery: `pushGranted`, `pushed`, `ciStatus` (`pending`|`green`|`red`), `reportStatus` (`none`|`complete`|`stale`|`superseded`)
 
-`interpretFixLoopState` returns `{ state, allowedTransitions, nextAction, reason }`. Precedence: `stopped`, then a started full gate round, then `headMoved`, then `noCommit`, then the pushed branch (CI and report), then `pushGranted`, then `candidateCommitted`, then the marker, then `actPending`. With no open sequence and no act items the head goes to `full_gate_round`, the fallback authority. A closed sequence after `head_moved` or `no_commit` resolves to `full_gate_round`.
+`interpretFixLoopState` returns `{ state, allowedTransitions, nextAction, reason }`. `reason` is `descendant_carry`, `delta_residue` or null. A `residue` delta verdict with a committed candidate and no push grant resolves to `commit_only_emitted`. At green CI, `reportStatus` `none` is `ci_green` because the report is not yet constructed. Only `stale` or `superseded` reach `delivery_incomplete`. The missing-after-stop case (E11) gets its snapshot field in slice 5. Precedence: `stopped`, then a started full gate round, then `headMoved`, then `noCommit`, then the pushed branch (CI and report), then `pushGranted`, then `candidateCommitted`, then the marker, then `actPending`. With no open sequence and no act items the head goes to `full_gate_round`, the fallback authority. A closed sequence after `head_moved` or `no_commit` resolves to `full_gate_round`.
 
 Contradictory snapshots resolve by that order. These winners are pinned by tests:
 

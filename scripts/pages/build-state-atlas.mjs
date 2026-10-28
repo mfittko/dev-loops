@@ -239,7 +239,7 @@ const SECTIONS = [
     title: 'Gate fix loop',
     source: 'packages/core/src/loop/fix-loop-state.mjs — FIX_LOOP_STATE + FIX_LOOP_TRANSITIONS',
     prose: [
-      'One fix sequence for a PR head is one state machine: the fixer commits a candidate unpushed, a delta review clears the push, CI settles on the pushed candidate, and a tool-built disposition closes the sequence. Every fail-closed state has a sanctioned exit, so a foreign commit (developer, CI fix, base merge) is the <code>head_moved</code> state rather than a deadlock.',
+      'One fix sequence for a PR head is one state machine: the fixer commits a candidate unpushed, a delta review clears the push, CI settles on the pushed candidate, and a tool-built disposition closes the sequence. Every fail-closed state has a sanctioned exit, and a foreign commit (developer, CI fix, base merge) enters the <code>head_moved</code> state, which exits to a full gate round.',
       'A full gate round on the live head is the fallback authority and always terminal. Transitions that later slices of issue 2787 implement are tracked as known gaps in the conformance harness.',
     ],
     diagram: fixLoopDiagram,

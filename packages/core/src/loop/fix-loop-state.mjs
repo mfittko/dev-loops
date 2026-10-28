@@ -4,8 +4,9 @@
  * Shape mirrors `refinement-grill-state.mjs`: a frozen state vocabulary, a frozen
  * transition table, a snapshot normalizer and a pure interpreter. Every fail-closed
  * state has a sanctioned exit, and the conformance harness proves each state reaches
- * a terminal (`full_gate_round` or `stopped`). Evidence follows the head, not the role
- * that made the commit: a foreign commit is the `head_moved` state, not a deadlock.
+ * a terminal (`full_gate_round` or `stopped`). Evidence binds to the live head whichever
+ * role made the commit: a foreign commit enters the `head_moved` state, which exits to a
+ * full gate round.
  */
 
 export const FIX_LOOP_STATE = Object.freeze({
@@ -98,6 +99,8 @@ export function normalizeFixLoopSnapshot(raw) {
 
 /**
  * Interpret one fix-sequence snapshot as exactly one state plus its sanctioned exits.
+ * `reason` is `descendant_carry`, `delta_residue` or null. A `residue` delta verdict with a
+ * committed candidate and no push grant resolves to `commit_only_emitted`.
  *
  * @param {object} snapshot
  * @returns {{state: string, allowedTransitions: string[], nextAction: string, reason: string|null}}
