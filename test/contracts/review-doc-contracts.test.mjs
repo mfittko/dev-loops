@@ -54,6 +54,10 @@ test("behavioral pin: review proceeds on a foreign-owned PR while the write/merg
           closingIssuesReferences: [],
         }),
       },
+      {
+        assertArgs: ["pr", "view", String(PR), "--json", "baseRefName"],
+        stdout: JSON.stringify({ baseRefName: "main" }),
+      },
     ]);
 
     const savedExitCode = process.exitCode;
@@ -64,7 +68,7 @@ test("behavioral pin: review proceeds on a foreign-owned PR while the write/merg
         "--gate", "review",
         "--head-sha", HEAD_SHA,
         "--silent",
-      ], { repoRoot: reviewHalfRoot, run: gh.runChild });
+      ], { repoRoot: reviewHalfRoot, run: gh.runChild, checkBaseFreshness: async ({ base }) => ({ ok: true, status: "base_current", base }) });
     } finally {
       process.exitCode = savedExitCode;
     }

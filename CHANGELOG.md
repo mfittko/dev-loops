@@ -2,18 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
-## 1.0.8-pre.2
+## 1.0.8
 
 ### Added
 
+- Runner coordination `handoff` atomically releases the verified owner's claim and records its exit signal; older signals cannot displace a later claim (#2893)
+- Runner-coordination supersede takeover reports typed recovery evidence (`exit_signal` or `stale_max_age` with the displaced run id and stale window); explicit `takeover` reports none (#2893)
+- `gates.draft.maxReviewRounds` (default 4, `0` disables) caps `draft_gate` rounds and limits the verdict post to the judged ledger (#2462)
+- Map changeset fragments to docs checks and run literal referencing tests for skill contracts (#2508)
+- Handoff envelopes carry `unitBoundaries`, the target- and strategy-derived points where a unit coordinator hands back and a fresh successor resumes (ADR 0181) (#2532)
+- `dev-loops loop implementation-brief` prints a spec body's review expectations offline (#2588)
+- `loop implementation-brief` lists a helper inventory and importers of each touched source module; when `git ls-files` fails, `importers` is `null` with an `importers_unavailable` finding (#2588)
+- Claude Code coordinators make one `SubagentHandback` per run and pause in plain text; the orchestrator reads the coordinator output file (#2611)
+- On Claude Code the dev-loop coordinator never calls `SubagentHandback` while a child is in flight; it pauses in plain text and names each child (#2611)
+- Add opt-in Codex conductor model and reasoning settings to initial and resumed native coordinator dispatch (#2913)
+- Capture authenticated supplemental residual assessments as unqualified snapshots; delivery, CI, full-gate acceptance and thread closure remain dependent work (#2918)
 - The standalone `review` gate runs the judge between fan-in and the post; `upsert-checkpoint-verdict.mjs --gate review` takes `--judge-spec-source` (#2540)
 - Base-merge verdict carry classifier and evidence CLI (`classify-base-merge-carry.mjs`); carry takes effect once merge-pr and gate coordination consume it (#2752)
 - Grilled issues and slices need a `## Simplest design` section; spec-lint flags a missing one, and the judge caps doc-lag and coverage findings on correct code at low (#2839)
 - `loop validation-record` runs the validation profile at a clean head and writes a head-pinned validation record (#2866)
 - `resolve-angle-carry-forward.mjs --rerun-angle <angle>` forces a named angle to re-review at the current head (reason `operator_rerun`) (#2895)
+- `emit-coordinator-work-order --input <resolver-output.json> --harness <claude or pi> --entry <queue or direct>` prints a compact pull-pointer dispatch payload (#2483)
+- The `c` coordinator execution identity prefix is recorded in ADR 0164, which amends ADR 0115 (#2483)
+- The `subagent dev-loop` contract row emits the coordinator work order for resumed queue and direct entries (#2483)
 
 ### Changed
 
+- Copilot body-only feedback no longer blocks gate entry; the judge adjudicates it, and a numeric-id marker is refused as `review_id_mismatch` (#2937)
+- dev-loops states its purpose in one owning rule, `PURPOSE-HIGHEST-SAFE-AUTONOMY`; the README hero line and the package description carry it, and the #2937 rules cite it as their parent (#2937)
+- The draft round cap counts only rounds whose ledger was written after the cap landed, so in-flight pull requests get a fresh budget (#2462)
+- Past the draft round cap, a medium the judge rejects with a reason or defers to an issue is final and raises no blocker (#2462)
+- The findings-log writer derives a fan-out round's mode, provenance, `verifiedItems` and verdict from the keyed emit plan and fan-in ledger (#2526)
+- At `pre_approval_gate`, a round of only low and nit findings composes clean in every round, and the fixer refuses a low-only act list with `low_fix_until_cap` (#2724)
+- Fold prerelease CHANGELOG sections into one section on a stable version bump and use annotated tags in the release runbook (#2804)
+- A validation block that differs from the base only in `paths` no longer blocks the gate; mode and fullCommand differences still refuse (#2852)
+- A stale PR base now fails fast with `base_stale_integrate_first`; every gate-context run checks the PR base, with or without `--base` (#2885)
+- The judge owns every finding disposition, the review verdict and the next action; fan-in leaves findings `unjudged` (#2903)
+- The standalone `review` gate never resolves the `gate-evidence` angle, and the judge rejects template-only findings (#2903)
+- `@dev-loops/core/loop/gate-fanin` no longer exports `deriveDisposition` or `isDefaultDeferrableSeverity`; fan-in leaves findings unjudged (#2903)
+- The fixer fixes lows until the draft-gate round cap; a nit is fixed in draft round 1 and rejected from round 2 on, and at or past the cap lows defer and a low/nit-only round composes clean (#2937)
+- The autonomy principles are contract rules with one owner each, and the low/nit refusal at the cap carries the typed code `low_fix_until_cap` (#2937)
+- At the draft round cap, judge-acted findings with a specified remedy are fixed and one closure round verifies the fix delta; a later act item blocks (#2937)
 - Validate changelog fragments before PR creation and fragment-touching fix pushes; refresh the PR base and anchor local diff bases to origin (#2335)
 - Show the comparison base SHA when decision-record validation passes (#2335)
 - Reject empty or nonliteral PR bases before fetching; use effective head and base flags in preflights (#2335)
@@ -27,6 +56,18 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A read-only adapter reports verified terminal execution evidence from an owned Codex journal, so an execution that finished after its worker stopped reports `completed` (#2886)
+- An encoded path separator in a recorded `file:` cwd URI is rejected instead of decoded into a real separator, so it can no longer bind an expected cwd and clear the cleanup blocker (#2886)
+- Terminal records are counted across the journal, so a second contradictory terminal under another thread reports `conflicting_terminal_records` (#2886)
+- `gate judge-pass` expands a cluster-keyed spec-authority decision to its member findings, so one defect from two angles no longer refuses (#2903)
+- A base-only merge after the draft gate cap round no longer blocks the closure fixer order; the closure diff holds only PR-own changes, else `closure_delta_no_pr_own_change` (#2937)
+- A PR-side revert or delete toward the base now counts as a PR-own change in `captureMainRelativeChangedFilesSince`, so angle carry-forward lists it in its delta (#2937)
+- The inline-interpreter guard now refuses a heredoc or stdin script after interpreter flags (`python3 -I - <<EOF`), and the retro check uses the same matcher (#2943)
+- The shared segment separator keeps the `&` of a redirection (`2>&1`, `&>f`) in its segment so a redirection before a heredoc reaches the scan; every segment-splitting gate shares it (#2943)
+- Unit coordinators hand back only on routes that own a phase, and a phase-only target resumes by phase (#2532)
+- A handoff envelope keeps a Windows drive or network-share worktree root, and one root has one `cwd` spelling (#2532)
+- A resume identity rejects a non-string branch or phase instead of accepting malformed authoritative state (#2532)
+- Run threat-model on a SECURITY_SENSITIVE_SEAM diff in a draft_gate round, or in a pre_approval_gate round at a head where no draft round ran it, even when config disables it (#2899)
 - Combine targeted validation checks across fully mapped change sets while preserving full validation for unmapped or unsafe paths (#2508)
 - Verify native Codex child context and stable run identity; keep MAIN joining children to mitigate idle-parent wake limits, with shared artifact and protected-Git guidance (#2836)
 - Tracker-backed local handoffs use the sanctioned issue worktree path while preserving explicit phase and branch identities (#2845)
@@ -44,17 +85,6 @@ All notable changes to this project will be documented in this file.
 - A fresh dev-loops clone gets `.pi/agents` rendered at the first Pi session start (#2865)
 - PR coordinator handoffs bind verified existing isolated worktrees, preserve validated PR-body authority, and refuse missing or conflicting associations before dispatch (#2878)
 - Fixer construction removes its own marker after a failed publish, so a retry succeeds; a foreign or replaced marker is never removed (#2880)
-
-## 1.0.8-pre.1
-
-### Added
-
-- `emit-coordinator-work-order --input <resolver-output.json> --harness <claude or pi> --entry <queue or direct>` prints a compact pull-pointer dispatch payload (#2483)
-- The `c` coordinator execution identity prefix is recorded in ADR 0164, which amends ADR 0115 (#2483)
-- The `subagent dev-loop` contract row emits the coordinator work order for resumed queue and direct entries (#2483)
-
-### Fixed
-
 - resolve-pr-conflicts commits with the ambient git identity and falls back to the bot only when user.email is empty (#2832)
 
 ## 1.0.7

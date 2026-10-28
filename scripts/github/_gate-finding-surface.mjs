@@ -25,9 +25,9 @@ import {
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { escapeProse, flattenPaginatedSlurp, listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { PROBLEM_CAP, RECOMMENDATION_CAP, cutAtSentence, normalizeFindingSummary } from "./_gate-finding-text.mjs";
-import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { carryGateMarker, isCarryCandidate } from "./_carried-verdict.mjs";
+import { buildLogPath } from "./_gate-artifact-paths.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -374,12 +374,23 @@ export async function commentDeferredFindings(
 // sanitizeInline. normalizeSeverity alone does not neutralize hostile
 // characters, so it is applied in addition to, never instead of,
 // sanitizeInline.
-export function renderFindingLine({ severity, angle, summary, judgeDisposition }) {
+// The defer target and judge reason that follow a rendered disposition: ` (follow-up N) - <reason>` (no `#`: the issue-id guard refuses a bare id in a posted body).
+// The reason loses every `judge:` token, so the last ` judge: <word>` on a line stays the genuine disposition
+// (the inline-header parser reads the greedy last match; the legacy suffix parser never matches a detail-bearing line).
+export function renderJudgeDetail({ judgeReason, followUpIssueNumber }) {
+  const target = Number.isInteger(followUpIssueNumber) && followUpIssueNumber > 0 ? ` (follow-up ${followUpIssueNumber})` : "";
+  const reason = typeof judgeReason === "string" && judgeReason.trim().length > 0
+    ? ` - ${sanitizeInline(neutralizeBareIssuePrIds(judgeReason)).replace(/judge:/gi, "judge -")}`
+    : "";
+  return `${target}${reason}`;
+}
+
+export function renderFindingLine({ severity, angle, summary, judgeDisposition, judgeReason, followUpIssueNumber }) {
   const safeSeverity = sanitizeInline(normalizeSeverity(severity));
   const judgeSuffix = typeof judgeDisposition === "string" && judgeDisposition.trim().length > 0
-    ? ` — judge: ${sanitizeInline(judgeDisposition)}`
+    ? ` — judge: ${sanitizeInline(judgeDisposition)}${renderJudgeDetail({ judgeReason, followUpIssueNumber })}`
     : "";
-  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary)}${judgeSuffix}`;
+  return `**${safeSeverity}** (\`${sanitizeCodeSpan(angle)}\`): ${sanitizeInline(summary).replace(/judge:/gi, "judge -")}${judgeSuffix}`;
 }
 
 function renderRecommendationLine(recommendation) {
@@ -497,7 +508,7 @@ export function renderInlineCommentBody(finding, { round }) {
   }
   const angles = [...new Set(members.map((member) => neutralizeHeaderSeparator(escapeProse(member.angle))))].join(", ");
   const judge = typeof finding.judgeDisposition === "string" && finding.judgeDisposition.trim().length > 0
-    ? ` · judge: ${sanitizeInline(finding.judgeDisposition)}`
+    ? ` · judge: ${sanitizeInline(finding.judgeDisposition)}${renderJudgeDetail(finding)}`
     : "";
   const lines = [...markers, `**${sanitizeInline(severity)}** · ${angles}${judge}`];
   // File and line references render as inline code right under the header.
@@ -1400,6 +1411,12 @@ async function listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, rep
   return { dir, filenames: entries.filter((name) => name.startsWith(prefix) && name.endsWith(".json")).sort() };
 }
 
+// A findings log is exactly `<gate>-<full sha>.json`. Sidecars (`.act-list.json`, `.judged-ledger.json`, ...)
+// share the prefix and suffix and never count as a round.
+export function isFindingsLogName(gate, name) {
+  return name.startsWith(`${gate}-`) && /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.json$/i.test(name.slice(gate.length + 1));
+}
+
 async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot }) {
   // The round-number fallback count must never throw: unlike the
   // judge-disposition lookup below, an unreadable directory here just means
@@ -1407,7 +1424,7 @@ async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, re
   // fail-closed obligation to preserve.
   try {
     const { filenames } = await listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });
-    return filenames.length;
+    return filenames.filter((name) => isFindingsLogName(gate, name)).length;
   } catch {
     return 0;
   }
@@ -1547,9 +1564,10 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
 //
 // The suffix shape is matched EXACTLY as renderFindingLine emits it — a
 // single space, then a literal EM DASH, then a single space, "judge:", a
-// single space, the disposition token, then end-of-line (no trailing
-// whitespace: the suffix is the line's last content, never followed by
-// anything renderFindingLine adds). A looser `\s*` on either side would also
+// single space, the disposition token, then end-of-line (a suffix with
+// renderJudgeDetail's ` (follow-up N)` or ` - <reason>` never matches). renderFindingLine also neutralizes `judge:` in the
+// reviewer summary, so the last ` — judge: <word>` on a line is always the
+// genuine suffix. A looser `\s*` on either side would also
 // match an unrelated (e.g. LLM-authored) summary that merely CONTAINS the
 // same words with different spacing — this is a best-effort narrowing, not a
 // full fix: a summary whose text happens to end with this BYTE-IDENTICAL
@@ -1558,9 +1576,10 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
 // need a render-time change (e.g. a distinguishing token) in
 // renderFindingLine itself, out of scope here.
 const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\*\s+\(`[^`\n]+`\):.* — judge: ([a-z][a-z0-9_-]*)$/mu;
+// A detail-bearing legacy line (` (follow-up N)` or ` - <reason>`) is never disposition evidence: an already-posted, unjudged summary can end in the same bytes. The inline header is unambiguous (its angles neutralize the separator), so it keeps the detail tail.
 // Header of the fixed inline layout (legacy bodies keep the suffix form above): `**<severity>** · <angles> · judge: <disposition>`.
 // The severity token is lowercase, so a `**Problem:**` line never matches.
-const RENDERED_HEADER_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\* · [^\n]* · judge: ([a-z][a-z0-9_-]*)$/mu;
+const RENDERED_HEADER_JUDGE_DISPOSITION_RE = /^\*\*[a-z][a-z0-9_-]*\*\* · [^\n]* · judge: ([a-z][a-z0-9_-]*)(?: \(follow-up \d+\))?(?: - [^\n]*)?$/mu;
 
 export function parseRenderedJudgeDisposition(body) {
   const match = typeof body === "string"

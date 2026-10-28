@@ -2,7 +2,7 @@
   "name": "dev-loops",
   "license": "MIT",
   "type": "module",
-  "description": "Agent-harness-agnostic dev-loop infrastructure (Pi and Claude Code) for reusable local and remote development loops",
+  "description": "dev-loops ships reviewed, tested PRs with the highest autonomy that is still safe. Deterministic gates and a judge decide; humans decide only what tooling cannot, or what the repo requires.",
   "keywords": [
     "dev-loop",
     "workflow",
@@ -88,7 +88,7 @@
   },
   "dependencies": {
     "@dagrejs/dagre": "1.1.8",
-    "@dev-loops/core": "^1.0.8-pre.2",
+    "@dev-loops/core": "^1.0.8",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
@@ -100,7 +100,7 @@
     "url": "https://github.com/mfittko/dev-loops/issues"
   },
   "homepage": "https://github.com/mfittko/dev-loops#readme",
-  "version": "1.0.8-pre.2",
+  "version": "1.0.8",
   "files": [
     "cli/",
     "lib/",

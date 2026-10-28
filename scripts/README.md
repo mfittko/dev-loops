@@ -515,9 +515,30 @@ Durable one-runner-per-PR coordination helper.
 Subcommands:
 - `status` — inspect current ownership record for one PR
 - `claim` — claim ownership when no active runner exists; otherwise fail closed with machine-readable conflict details
-- `takeover` — explicit replacement path that records prior/new run ids
+- `takeover` — explicit replacement path that records prior/new run ids; it reads no detector verdict, so its `taken_over` result carries no `recovery` field
 - `assert` — verify the current run still owns the PR; `--require-existing` fails closed when async pre-merge ownership proof is missing
 - `release` — clear ownership when the active run is done
+- `handoff` — atomically record the verified owner's exit signal and clear its claim
+
+Explicit completion handoff:
+- `handoff --repo <owner/name> --pr <number> [--run-id <id>]` requires the existing
+  runtime identity: Pi/Claude run context or a verified native Codex child session. An
+  explicit `--run-id` only asserts that identity; it cannot substitute for missing evidence.
+- Returns `handoff_recorded`, or `handoff_noop` without a state write when no active owner
+  remains. Both exit 0 with JSON stdout containing `repo`, `pr`, `runId`, `activeRun: null`,
+  `previousRun`, `exitSignals` and `filePath`. Unverified identity (`run_id_required`) or
+  mismatched/foreign ownership (`ownership_lost`) exits 1 with JSON stderr and no state write.
+  Existing `--jq`/`--silent` output filtering applies.
+- This command is explicit; existing automatic release paths do not write new exit signals.
+  A coordinator that owns a PR but will not reach a terminal stop runs it before returning its
+  handback and records the returned status there. The coordinator must verify required children are
+  joined using native evidence before calling it. Native Codex producer-to-consumer operation remains
+  an operator-pending trial; this command does not establish production Codex support.
+- Exit-signal recovery ignores signals older than the active claim, so a later claim by
+  the same run is not displaced by its earlier handoff. A new claim or takeover also
+  removes prior signals for the incoming run under the state lock, independent of clock
+  ordering; same-owner refresh preserves current-claim signals. Typed recovery reporting is
+  part of the consumer surface below.
 
 State path:
 - `.pi/runner-coordination/<owner>/<repo>/pr-<number>.json`
@@ -538,6 +559,40 @@ Release-on-death & dead-claim supersession (#1706):
   stale-max-age window, so pre-flight handoff proceeds instead of returning a blocking stop against a
   leaked lock. A genuinely live owner still stands the handoff down (one-runner-per-PR preserved);
   only confirmed-dead or stale claims are superseded.
+- A successful takeover reports which evidence authorized it when it comes from the `supersedeStale`
+  path: `ensureAsyncRunnerOwnership({ supersedeStale: true })`, and the `runnerOwnership` result that
+  `copilot-pr-handoff` forwards, return `recovery: { evidence: "exit_signal" | "stale_max_age",
+  displacedRunId, maxAgeMs }`, where `displacedRunId` is the displaced owner recorded as
+  `previousRun.runId` and `maxAgeMs` is the effective stale window.
+- The normal `handoff` flow yields no `recovery` field: `handoff` appends the exit signal and clears
+  the claim in one locked write, so the successor's pre-flight finds no owner to displace, claims
+  fresh (`claimed_new`), names the handed-off owner in `previousRun` and reports no recovery. A
+  `recovery` field is reachable only when a competing claim survives to be displaced: `stale_max_age`
+  for an abandoned claim whose `claimedAt`/`updatedAt` are both past the stale window, and
+  `exit_signal` for a claim whose run recorded an exit signal while still holding it — the verdict
+  order `detectStaleRunner` applies, and the state `recordExitSignalForRunner` leaves and the shipped
+  handoff never does.
+- The explicit `takeover` subcommand reports no `recovery` field: it takes over on the caller's
+  instruction without reading the detector verdict that names the evidence.
+- A result that displaced nobody — a fresh claim, a same-owner refresh or a fail-closed conflict —
+  carries no `recovery` field either, so a consumer can tell a recovery from ordinary ownership.
+- A detector verdict that is neither a recorded exit signal nor an expired claim takes over
+  nothing: the handoff stays fail-closed on the ownership conflict and writes no state. A claim
+  whose `claimedAt`/`updatedAt` do not parse is corruption rather than an expired claim, so it
+  refuses the same way instead of reporting a `stale_max_age` recovery.
+- The takeover guard pins the claim the detection read observed, not only its owner: the claim
+  helper accepts `expectPreviousRunId` (the observed run id) plus `expectPreviousClaim`
+  (`{ claimedAt, updatedAt }`) and refuses with `active_run_exists`, writing no state, when the
+  locked claim's run id, `claimedAt` or `updatedAt` differ from what the detector saw. A same-run
+  heartbeat, or a same-run release and re-claim, between the detection read and the lock therefore
+  refuses instead of displacing a live owner. A supplied expectation that is malformed rather than
+  inactive refuses with `run_id_required` before the lock, writing no state: a
+  `expectPreviousRunId` that is not a non-empty string, and an `expectPreviousClaim` that is not a
+  plain object carrying `claimedAt`/`updatedAt` strings (an array, a `Date`, a missing or numeric
+  member; `null` and absent stay inactive).
+- `ensureAsyncRunnerOwnership` also accepts an injectable `detectStale` detector: it is a test-only
+  seam for exercising the production supersede wiring without a live stale claim, and production
+  callers never pass it.
 - Anti-trap: a fresh heartbeat on a runner-coordination claim/lock is not proof of a live driver. The
   claim may be held by a completed/control run that claimed at takeover then ended without releasing,
   yet the heartbeat still reads fresh — which this rc.6 drive saw as repeated false "live owner /

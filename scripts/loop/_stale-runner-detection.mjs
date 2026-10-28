@@ -27,14 +27,9 @@ export function resolveStaleRunnerMaxAgeMs(options = {}, env = process.env) {
 function normalizeRunIdForSignal(runId) {
   return typeof runId === "string" && runId.trim().length > 0 ? runId.trim() : null;
 }
-function isExitSignalForRun(state, runId) {
-  if (!state || !Array.isArray(state.exitSignals) || runId === null) {
-    return false;
-  }
-  return state.exitSignals.some((entry) => {
-    if (!entry || typeof entry !== "object") return false;
-    return normalizeRunIdForSignal(entry.runId) === runId;
-  });
+function isExitSignalForClaim(entry, active) {
+  return active?.runId && normalizeRunIdForSignal(entry?.runId) === active.runId
+    && Date.parse(entry.at) >= Date.parse(active.claimedAt);
 }
 function findStaleRunnerMatch(state, { now, maxAgeMs }) {
   if (!state || !state.activeRun) return null;
@@ -94,11 +89,11 @@ export async function detectStaleRunner({ repo, pr, now = Date.now(), maxAgeMs, 
   const state = loaded.state;
   const active = state.activeRun;
   const staleMatch = findStaleRunnerMatch(state, { now, maxAgeMs: effectiveMaxAgeMs });
-  const exitSignal = isExitSignalForRun(state, active?.runId ?? null)
+  const signals = (state.exitSignals || []).filter((entry) => isExitSignalForClaim(entry, active));
+  const exitSignal = signals.length > 0
     ? {
         runId: active.runId,
-        signals: (state.exitSignals || []).filter((entry) =>
-          normalizeRunIdForSignal(entry?.runId) === active.runId),
+        signals,
       }
     : null;
   if (exitSignal !== null) {

@@ -9,6 +9,7 @@ import { initGitFixture, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, wri
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
 import { detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
@@ -322,6 +323,9 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
       carriedConvergence: null,
       copilotBodyDisposition: null,
       copilotBodyDispositionRequired: null,
+      copilotBodyJudgeFinding: null,
+      copilotBodyJudgeFile: null,
+      copilotBodyJudgeFileError: null,
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1051,7 +1055,7 @@ test("detect-pr-gate-coordination-state output equals a direct evaluatePrGateCoo
     assert.equal(parsed.carriedConvergence, null);
     assert.equal(parsed.copilotBodyDisposition, null);
     assert.equal(parsed.copilotBodyDispositionRequired, null);
-    const { carriedConvergence: _carried, copilotBodyDisposition: _bodyDisposition, copilotBodyDispositionRequired: _dispositionRequired, ...evaluatorOwned } = parsed;
+    const { carriedConvergence: _carried, copilotBodyDisposition: _bodyDisposition, copilotBodyDispositionRequired: _dispositionRequired, copilotBodyJudgeFinding: _judgeFinding, copilotBodyJudgeFile: _judgeFile, copilotBodyJudgeFileError: _judgeFileError, ...evaluatorOwned } = parsed;
     assert.deepEqual({ ...evaluatorOwned, copilotReviewRoundCount: directResult.copilotReviewRoundCount }, directResult);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -1393,11 +1397,22 @@ test("detect-pr-gate-coordination-state allows pre_approval_gate (not an impossi
 // evaluateCopilotConvergence fails. The current head carries the latest
 // Copilot review, so no post-convergence compare fires (last-reviewed head
 // === current head).
-function pathAGhEntries({ reviewBody, threadNodes = [], atCap = true }) {
-  const currentHead = "def56789abcdef";
+function pathAGhEntries({ reviewBody, threadNodes = [], atCap = true, bodyOnEarlierHead = false, cleanCurrentThenEarlierBody = false }) {
+  const currentHead = "def56789abcdef".padEnd(40, "0");
   // At the round cap (default) two submitted rounds are present (cap = 2 in the
   // fixture .devloops); below the cap only the single current-head review exists.
-  const reviews = atCap
+  // bodyOnEarlierHead puts the latest (body-bearing) review on an earlier head.
+  const reviews = cleanCurrentThenEarlierBody
+    ? [
+        { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: currentHead }, submittedAt: "2026-05-31T20:00:00Z" },
+        { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "1111111111111111111111111111111111111111" }, body: reviewBody, submittedAt: "2026-05-31T20:10:00Z" },
+      ]
+    : bodyOnEarlierHead
+    ? [
+        { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "0000000000000000000000000000000000000001" }, submittedAt: "2026-05-31T20:00:00Z" },
+        { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "1111111111111111111111111111111111111111" }, body: reviewBody, submittedAt: "2026-05-31T20:10:00Z" },
+      ]
+    : atCap
     ? [
         { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "1111111111111111111111111111111111111111" }, submittedAt: "2026-05-31T20:00:00Z" },
         { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: currentHead }, body: reviewBody, submittedAt: "2026-05-31T20:10:00Z" },
@@ -1450,15 +1465,16 @@ test("detect-pr-gate-coordination-state ENTERS pre_approval for a thread-clean c
   assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
 });
 
-test("gate entry preserves the shared loop body-feedback signal for a current-head 🔵 (#2345)", async () => {
+test("gate entry routes a current-head 🔵 body finding to the judge instead of the loop body-feedback signal (#2345, #2937)", async () => {
   const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🔵 Needs a closer look\n\nA soft, conductor-overridable non-approval.", atCap: false }));
   const context = await loadPrGateCoordinationContext(
     { repo: "owner/repo", pr: 266 },
     buildMockRuntime(env, { repoRoot: capFixtureRepoRoot }),
   );
-  assert.equal(context.snapshot.copilotBodyFeedbackUnresolved, true);
-  assert.equal(context.interpretation.state, "unresolved_feedback_present");
+  assert.equal(context.snapshot.copilotBodyFeedbackUnresolved, false);
   assert.equal(context.copilotBodyConvergence.ok, true);
+  assert.equal(context.copilotBodyJudgeFinding.angle, "copilot-body");
+  assert.match(context.copilotBodyDispositionRequired.reason, /current-head Copilot review/);
 });
 
 test("detect-pr-gate-coordination-state ENTERS pre_approval for a thread-clean current-head 🔵 BELOW the round cap (round 1, non-terminal) (#2345)", async () => {
@@ -1482,26 +1498,48 @@ test("detect-pr-gate-coordination-state ENTERS pre_approval for a thread-clean c
   assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
 });
 
-test("detect-pr-gate-coordination-state still BLOCKS pre_approval for a below-cap current-head 🟡 (#2345 no regression)", async () => {
-  // Below the cap a 🟡 "Changes recommended" body finding is unresolved feedback,
-  // so gate entry is refused — the fix must not open this path (only the 🔵 does).
+test("detect-pr-gate-coordination-state ALLOWS pre_approval for a below-cap current-head 🟡 and routes it to the judge (#2937)", async () => {
+  // GATE-EXEC-COPILOT-BODY-TO-JUDGE: no operator marker is required.
   const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body.", atCap: false }));
   const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
   assert.equal(result.code, 0);
   assert.equal(result.stderr, "");
   const parsed = JSON.parse(result.stdout);
-  assert.notEqual(parsed.lifecycleState, "round_cap_clean_fallback");
-  assert.ok(parsed.forbiddenActions.includes("run_pre_approval_gate"));
-  assert.ok(!parsed.allowedNextActions.includes("run_pre_approval_gate"));
+  assert.ok(parsed.allowedNextActions.includes("run_pre_approval_gate"));
+  assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
+  assert.match(parsed.copilotBodyDispositionRequired.reason, /current-head Copilot review/);
+  assert.equal(parsed.copilotBodyJudgeFinding.angle, "copilot-body");
+  assert.equal(parsed.copilotBodyJudgeFinding.findings[0].summary, "Actionable feedback in the body.");
+  assert.equal(parsed.copilotBodyJudgeFinding.findings[0].severity, "medium");
+  assert.match(parsed.copilotBodyJudgeFinding.findings[0].recommendation, /Actionable feedback in the body\./);
 });
 
-test("detect-pr-gate-coordination-state still BLOCKS pre_approval for an at-cap current-head 🟡 (#2345 no regression)", async () => {
+test("detect-pr-gate-coordination-state ALLOWS pre_approval for an at-cap current-head 🟡 and routes it to the judge (#2937)", async () => {
   const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body." }));
   const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
   assert.equal(result.code, 0);
   const parsed = JSON.parse(result.stdout);
-  assert.ok(parsed.forbiddenActions.includes("run_pre_approval_gate"));
-  assert.ok(!parsed.allowedNextActions.includes("run_pre_approval_gate"));
+  assert.ok(parsed.allowedNextActions.includes("run_pre_approval_gate"));
+  assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
+  assert.notEqual(parsed.copilotBodyJudgeFinding, null);
+});
+
+test("detect-pr-gate-coordination-state ALLOWS pre_approval for an at-cap earlier-head 🟡 when the judge file is written (#2937)", async () => {
+  const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body.", bodyOnEarlierHead: true }));
+  const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+  assert.equal(result.code, 0);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.copilotBodyJudgeFileError, null);
+  assert.ok(parsed.allowedNextActions.includes("run_pre_approval_gate"));
+});
+
+test("detect-pr-gate-coordination-state ALLOWS pre_approval for a clean current-head review plus a later earlier-head 🟡 at the cap when the judge file is written (#2937)", async () => {
+  const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body.", cleanCurrentThenEarlierBody: true }));
+  const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+  assert.equal(result.code, 0);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.copilotBodyJudgeFileError, null);
+  assert.ok(parsed.allowedNextActions.includes("run_pre_approval_gate"));
 });
 
 test("detect-pr-gate-coordination-state still BLOCKS pre_approval for a 🔵 with an unresolved thread (#2345 no regression)", async () => {
@@ -1527,17 +1565,18 @@ test("detect-pr-gate-coordination-state still BLOCKS pre_approval for a 🔵 wit
   assert.ok(!parsed.allowedNextActions.includes("run_pre_approval_gate"));
 });
 
-test("the production gate-entry and merge call sites agree on 🔵 and 🟡 dispositions (#2345 AC3)", async () => {
+test("the production gate-entry and merge call sites agree on 🔵 and diverge on 🟡 until S3b (#2345 AC3)", async () => {
   const currentHeadSha = "def56789abcdef";
-  for (const { body, disposition, allowed } of [
-    { body: "### 🔵 Needs a closer look", disposition: "needs_closer_look", allowed: true },
-    { body: "### 🟡 Changes recommended", disposition: "changes_recommended", allowed: false },
+  for (const { body, disposition, allowed, gateAllowed } of [
+    { body: "### 🔵 Needs a closer look", disposition: "needs_closer_look", allowed: true, gateAllowed: true },
+    // Gate entry routes a 🟡 body to the judge (#2937); the merge path keeps the marker prerequisite.
+    { body: "### 🟡 Changes recommended", disposition: "changes_recommended", allowed: false, gateAllowed: true },
   ]) {
     const env = writeGhStub(null, pathAGhEntries({ reviewBody: body, atCap: false }));
     const gateResult = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
     assert.equal(gateResult.code, 0);
     const gate = JSON.parse(gateResult.stdout);
-    assert.equal(gate.allowedNextActions.includes("run_pre_approval_gate"), allowed);
+    assert.equal(gate.allowedNextActions.includes("run_pre_approval_gate"), gateAllowed);
 
     const reviews = [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: currentHeadSha }, body, submittedAt: "2026-05-31T20:10:00Z" }];
     const merge = evaluateMergePreconditions({
@@ -4131,3 +4170,75 @@ for (const [ci, expected] of [["PENDING", PR_CHECKPOINT_ACTION.WAIT_FOR_CI], ["F
     assert.ok(!GATE_RUN_ACTIONS.includes(result.nextAction));
   });
 }
+test("a failed derived judge file write keeps the finding and keeps gate entry blocked (#2937)", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-body-judge-fail-"));
+  try {
+    await writeFile(path.join(root, ".devloops"), await readFile(path.join(capFixtureRepoRoot, ".devloops"), "utf8"), "utf8");
+    await writeFile(path.join(root, "tmp"), "not a directory", "utf8");
+    const found = await loadPrGateCoordinationContext(
+      { repo: "owner/repo", pr: 266 },
+      buildMockRuntime(writeGhStub(null, pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body.", atCap: false })), { repoRoot: root }),
+    );
+    assert.equal(typeof found.copilotBodyJudgeFileError, "string");
+    assert.equal(found.copilotBodyJudgeFile, null);
+    assert.notEqual(found.copilotBodyJudgeFinding, null);
+    assert.equal(found.copilotBodyConvergence.ok, false);
+    const detected = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 266 },
+      buildMockRuntime(writeGhStub(null, pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body.", atCap: false })), { repoRoot: root }),
+    );
+    assert.ok(detected.forbiddenActions.includes("run_pre_approval_gate"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed derived judge file write keeps gate entry blocked for an earlier-head body finding at the round cap (#2937)", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-body-judge-fail-prior-"));
+  try {
+    await writeFile(path.join(root, ".devloops"), await readFile(path.join(capFixtureRepoRoot, ".devloops"), "utf8"), "utf8");
+    await writeFile(path.join(root, "tmp"), "not a directory", "utf8");
+    const entries = pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body.", bodyOnEarlierHead: true });
+    const found = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 266 }, buildMockRuntime(writeGhStub(null, entries), { repoRoot: root }));
+    assert.equal(typeof found.copilotBodyJudgeFileError, "string");
+    assert.ok(found.forbiddenActions.includes("run_pre_approval_gate"));
+    assert.notEqual(found.nextAction, "run_pre_approval_gate");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed derived judge file write keeps gate entry blocked for a clean current-head review plus a later earlier-head body finding at the cap (#2937)", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-body-judge-fail-converged-"));
+  try {
+    await writeFile(path.join(root, ".devloops"), await readFile(path.join(capFixtureRepoRoot, ".devloops"), "utf8"), "utf8");
+    await writeFile(path.join(root, "tmp"), "not a directory", "utf8");
+    const entries = pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body.", cleanCurrentThenEarlierBody: true });
+    const found = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 266 }, buildMockRuntime(writeGhStub(null, entries), { repoRoot: root }));
+    assert.equal(typeof found.copilotBodyJudgeFileError, "string");
+    assert.ok(found.forbiddenActions.includes("run_pre_approval_gate"));
+    assert.notEqual(found.nextAction, "run_pre_approval_gate");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the detector writes the body finding to the derived judge file and removes it when the finding clears (#2937)", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dev-loops-body-judge-"));
+  try {
+    await writeFile(path.join(root, ".devloops"), await readFile(path.join(capFixtureRepoRoot, ".devloops"), "utf8"), "utf8");
+    const load = (reviewBody) => loadPrGateCoordinationContext(
+      { repo: "owner/repo", pr: 266 },
+      buildMockRuntime(writeGhStub(null, pathAGhEntries({ reviewBody, atCap: false })), { repoRoot: root }),
+    );
+    const found = await load("### 🟡 Changes recommended\n\nActionable feedback in the body.");
+    assert.equal(found.copilotBodyJudgeFile, copilotBodyJudgePath({ tmpRoot: path.join(root, "tmp"), repo: "owner/repo", pr: 266, headSha: found.currentHeadSha }));
+    assert.deepEqual(JSON.parse(await readFile(found.copilotBodyJudgeFile, "utf8")), found.copilotBodyJudgeFinding);
+    const cleared = await load("### 🟢 Approval recommended\n\nFindings: None");
+    assert.equal(cleared.copilotBodyJudgeFinding, null);
+    assert.equal(cleared.copilotBodyJudgeFile, null);
+    await assert.rejects(readFile(found.copilotBodyJudgeFile, "utf8"), { code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

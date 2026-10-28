@@ -9,13 +9,15 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { resolveFindingsInput } from "./_findings-input.mjs";
-import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, neverDeferredSeverity, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
+import { DEFECT_KEY_RE, GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositions, assertNoProjectedForbiddenDefer, neverDeferredSeverity, UNJUDGED_DISPOSITION, checkFanoutAngleCoverage, fanoutReviewerPairingError, ledgerAngleNames, isValidDefectKey, normalizeSeverity, provenanceConsistencyError, resolveFindingFile, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { capClosedFor } from "@dev-loops/core/loop/gate-fanin";
+import { listPriorActItems, resolveDraftRoundCap } from "./write-gate-context.mjs";
 import { clusterFindings, clustersFromStampedIds, projectClusterDisposition } from "@dev-loops/core/loop/finding-cluster";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
@@ -229,6 +231,9 @@ function validateFindingsArray(parsed, flagLabel) {
       entry.judgeDisposition = jd;
     }
     if (f.remedyKind === "evidence_only") entry.remedyKind = "evidence_only";
+    if (f.failOpen === true) entry.failOpen = true;
+    // Kept in the ledger only when it names a closed prior round's act fingerprint (writeGateFindingsLog checks).
+    if (typeof f.resurfaces === "string" && /^[0-9a-f]{16}$/.test(f.resurfaces.trim())) entry.resurfaces = f.resurfaces.trim();
     if (typeof f.judgeRationale === "string" && f.judgeRationale.trim().length > 0) {
       entry.judgeRationale = f.judgeRationale.trim();
     }
@@ -716,10 +721,11 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
   try {
     validated = validateSpecAuthorityVerdict(JSON.parse(raw), {
       findingsCount: findings.length,
+      clusterIds: findings.map((f) => f?.clusterId),
       criterionIds: identity?.checkedCriteria,
     });
   } catch (error) {
-    throw parseError(`spec-authority verdict ${verdictPath} failed validation: ${error instanceof Error ? error.message : String(error)}`);
+    throw parseError(`spec-authority verdict ${verdictPath} failed validation${error?.code ? ` [${error.code}]` : ""}: ${error instanceof Error ? error.message : String(error)}`);
   }
   for (const key of ["specDigest", "headSha", "contentDigest"]) {
     if (validated[key] !== identity[key]) {
@@ -857,6 +863,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     options.specAuthority !== undefined ? path.resolve(repoRoot, options.specAuthority) : undefined,
     parseError,
   );
+  // `priorOptions` and the round-cap state are shared by the judge coercion and the cap-closed record below.
+  const priorOptions = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot };
+  let roundCap;
+  const roundCapState = async () => (roundCap ??= await resolveDraftRoundCap({ ...priorOptions, tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot) }, { repoRoot }));
   if (options.judgeVerdict) {
     const judgePath = path.resolve(repoRoot, options.judgeVerdict);
     let judgeVerdict;
@@ -865,7 +875,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     } catch (error) {
       throw parseError(`--judge-verdict could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const enriched = applyJudgeDispositions(rawFindings, judgeVerdict);
+    const { lowFixCapped, round } = await roundCapState();
+    const enriched = applyJudgeDispositions(rawFindings, judgeVerdict, { pastCap: lowFixCapped, round });
     // Same cluster projection judge-pass applies: one judge decision per root cause, so the durable ledger
     // matches judge-pass's --ledger-out instead of dropping the cluster-normalized dispositions.
     const stamped = enriched.findings.every((f) => Number.isInteger(f?.clusterId));
@@ -877,6 +888,23 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     scopeDrift = enriched.scopeDrift;
     if (specAuthorityIdentity !== undefined) {
       findings = await applySiblingSpecAuthorityVerdict(findings, judgePath, specAuthorityIdentity);
+    }
+  }
+  // `resurfaces` stays only when it names a closed prior round's act item in the same file; every other act item is new.
+  if (findings.some((f) => f.resurfaces !== undefined)) {
+    const priorFiles = new Map((await listPriorActItems(priorOptions, { repoRoot })).map((item) => [item.fingerprint, item.file]));
+    for (const f of findings) {
+      if (f.resurfaces !== undefined && !(priorFiles.has(f.resurfaces) && priorFiles.get(f.resurfaces) === (resolveFindingFile(f) ?? null))) delete f.resurfaces;
+    }
+  }
+  // Past the round cap, a judge defer or reject is recorded as cap-closed (GATE-EXEC-ROUND-CAP).
+  if (options.gate === "draft_gate" && findings.some((f) => f.judgeDisposition === "defer" || f.judgeDisposition === "reject")) {
+    const { pastCap, round, cap } = await roundCapState();
+    if (pastCap) {
+      for (const f of findings) {
+        const capClosed = capClosedFor(f, { round, cap });
+        if (capClosed) f.capClosed = capClosed;
+      }
     }
   }
   // The consolidator's own computed verdict (consolidate-fanin.mjs's
@@ -1031,6 +1059,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // `verdict` above is always the canonical normalized caller value (GATE-COMMENT-VERDICT-VALUES).
   if (normalizedOverallVerdict !== undefined) {
     log.overallVerdict = normalizedOverallVerdict;
+  } else if (options.gate === "draft_gate" && executionMode === "inline_single_agent") {
+    // A light-mode inline round has no consolidator: the caller's verdict is its round verdict, and the
+    // GATE-EXEC-ROUND-CAP choke point requires the ledger it posts with to carry overallVerdict.
+    log.overallVerdict = persistedVerdict;
   }
   // Provenance is optional and additive: absent keeps the ledger byte-
   // identical to before; present records fan-out provenance for

@@ -2090,9 +2090,10 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // No current-head Copilot review at the cap IS the round-cap clean
     // fallback, so the convergence evaluator's absent-review refusal must not
     // block this grant; a current-head review with findings still does. An
-    // unknown head never opens the absent-review branch. Nor does an
-    // earlier-head body-only finding without a disposition record: the caller
-    // must state it absent (fail closed when the fact is missing).
+    // unknown head never opens the absent-review branch. The caller must state
+    // earlier-head body feedback absent (fail closed when the fact is
+    // missing); the gate detector states it absent because
+    // GATE-EXEC-COPILOT-BODY-TO-JUDGE routes that finding to the judge.
     const absentReviewFallback = currentHeadSha !== null && input.copilotReviewOnCurrentHead === false
       && input.copilotPriorHeadBodyFeedbackUnresolved === false;
     if (unresolvedThreadCount === 0 && ciConfirmedGreen && (copilotConvergenceOk || absentReviewFallback)) {

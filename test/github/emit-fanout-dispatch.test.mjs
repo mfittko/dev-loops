@@ -554,6 +554,27 @@ test("contradiction-lens's emitted unit leads with the invariant prefix and carr
   });
 });
 
+// A seam-added threat-model angle is resolved past `enabled: false`; the
+// emitter must still find its prompt instead of refusing the round.
+test("emits a unit for a resolved angle the config disables (SECURITY_SENSITIVE_SEAM override)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      "version: 1\ngates:\n  draft:\n    angles:\n      - name: threat-model\n        enabled: false\n",
+      "utf8",
+    );
+    const fanout = { groups: [{ name: "threat-model", angles: ["threat-model"] }], pendingGroups: [{ name: "threat-model", angles: ["threat-model"] }] };
+    await seedBundle(tmpDir, { fanout });
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const unit = JSON.parse(result.stdout).units.find((u) => u.scope === "pre-approval-gate-threat-model");
+    assert.ok(unit, "threat-model unit must be emitted");
+    const [instruction] = unit.workOrder.angleInstructions;
+    assert.equal(instruction.angle, "threat-model");
+    assert.match(instruction.prompt, /trust-boundary CHECKLIST/);
+  });
+});
+
 // End-to-end split-path regression (#2155 wiring slice a, Copilot follow-up):
 // a CONFIGURED group of 6 angles (over REVIEWER_UNIT_MAX_ANGLES) must come out
 // of the REAL emitter (main(), not just expandDispatchUnits in isolation) as

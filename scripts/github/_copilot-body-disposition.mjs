@@ -23,7 +23,16 @@ import {
   isCopilotLogin,
   stripMarkdownCodeForScan,
 } from "@dev-loops/core/github/copilot-helpers";
+import path from "node:path";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
+import { repoSlugFor } from "./_gate-artifact-paths.mjs";
+
+// File the gate detector writes the body finding to and the judge emit pins.
+export const copilotBodyJudgePath = ({ tmpRoot, repo, pr, headSha }) => {
+  if (!/^[1-9][0-9]*$/.test(String(pr))) throw new Error(`copilotBodyJudgePath: pr must be a positive integer, got ${pr}`);
+  if (typeof headSha !== "string" || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Error(`copilotBodyJudgePath: headSha must be 40 or 64 lowercase hex chars, got ${headSha}`);
+  return path.join(tmpRoot, "gate-judge", repoSlugFor(repo), `pr-${Number(pr)}`, `copilot-body-${headSha}.json`);
+};
 
 const MARKER_RE = /<!--\s*dev-loops:copilot-body-disposition\s+review=(\S+)\s+head=([0-9a-fA-F]{40})\s+(?:fix=([0-9a-fA-F]{40})|operator)\s*-->/;
 
@@ -98,7 +107,7 @@ async function isFixAfterReviewAndInHead({ repo, fixSha, reviewCommitSha, headSh
  * is the commit the review was submitted on; a `fix` record clears only when
  * its commit is strictly after that commit and contained in the head.
  *
- * @returns {Promise<{ cleared: boolean, disposition: object|null, reason: string }>}
+ * @returns {Promise<{ cleared: boolean, disposition: object|null, reason: string, reasonCode?: string }>}
  */
 export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewId, reviewCommitSha }, runtime = {}) {
   const notCleared = (reason) => ({ cleared: false, disposition: null, reason });
@@ -112,7 +121,11 @@ export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewI
   } catch (error) {
     return notCleared(`disposition records unreadable: ${error instanceof Error ? error.message : String(error)}`);
   }
+  let numericIdMarker = null;
   for (const marker of markers) {
+    if (marker.headSha === normalizedHead && /^\d+$/.test(marker.reviewId) && String(reviewId).startsWith("PRR_")) {
+      numericIdMarker ??= marker;
+    }
     if (marker.headSha !== normalizedHead || marker.reviewId !== String(reviewId)) continue;
     if (marker.operator) {
       return { cleared: true, disposition: marker, reason: `operator disposition recorded for review ${marker.reviewId} at head ${normalizedHead}` };
@@ -121,7 +134,24 @@ export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewI
       return { cleared: true, disposition: marker, reason: `fix commit ${marker.fixSha} disposes review ${marker.reviewId} at head ${normalizedHead}` };
     }
   }
+  if (numericIdMarker) {
+    return {
+      ...notCleared(`the marker names numeric review id ${numericIdMarker.reviewId} but the review id is the node id ${reviewId}; re-post the marker with review=${reviewId}`),
+      reasonCode: "review_id_mismatch",
+    };
+  }
   return notCleared("no trusted disposition record names this review for the current head; the body finding stays blocked (COPILOT-STATE-BODY-DISPOSITION-RECORD)");
+}
+
+// The exact operator marker line for a review, and the angle-result-shaped
+// finding the judge adjudicates for a body-only Copilot review.
+const markerLineFor = (reviewId, headSha) => `<!-- dev-loops:copilot-body-disposition review=${reviewId} head=${headSha} operator -->`;
+export function buildJudgeFinding(review) {
+  const text = typeof review?.body === "string" ? review.body.trim() : "";
+  const firstLine = text.split("\n").map((line) => line.trim()).find((line) => line && !line.startsWith("#"));
+  const severity = classifyCopilotReviewBodyDisposition(review?.state, review?.body) === COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK ? "low" : "medium";
+  // The full body is preserved; only the summary is bounded.
+  return { angle: "copilot-body", findings: [{ severity, summary: (firstLine ?? "Copilot review body feedback").slice(0, 300), recommendation: text }] };
 }
 
 const BODY_ONLY_BLOCKING_DISPOSITIONS = new Set([
@@ -154,7 +184,7 @@ function reviewSubmittedAt(review) {
  * two or more tied latest reviews are body-blocking: no single review owns
  * the finding, so no disposition record can clear it.
  *
- * @returns {{ review: object|null, ambiguousBlockingTie: boolean }}
+ * @returns {{ review: object|null, ambiguousBlockingTie: boolean, blockingReviews?: object[] }}
  */
 export function resolveLatestCopilotReview(prData) {
   const reviews = Array.isArray(prData?.reviews) ? prData.reviews : [];
@@ -172,6 +202,7 @@ export function resolveLatestCopilotReview(prData) {
   return {
     review: blocking[0] ?? tied[0],
     ambiguousBlockingTie: blocking.length > 1,
+    blockingReviews: blocking,
   };
 }
 
@@ -203,33 +234,51 @@ export function reviewHasOwnThread(reviewThreads, reviewId) {
  *
  * The comment stream is read only when one of those two findings exists.
  *
- * `dispositionRequired` names the exit when either flag blocks: the review a
+ * `dispositionRequired` names the exit when either flag is set: the review a
  * copilot-body-disposition record must name (`reviewId`, null for an
- * ambiguous tie that no record can clear), its commit, and the reason. It is
- * null when neither flag blocks.
+ * ambiguous tie that no record can clear), its commit, the reason, an optional
+ * `reasonCode` and the nullable `markerLine`. It is null when neither flag is
+ * set. Gate coordination reads it as a non-blocking advisory per
+ * GATE-EXEC-COPILOT-BODY-TO-JUDGE; the loop detector, request tool and merge
+ * path still block on the flags. `judgeFinding` is the finding routed to the
+ * judge, or null.
  *
- * @returns {Promise<{ copilotBodyFeedbackUnresolved: boolean, copilotPriorHeadBodyFeedbackUnresolved: boolean, bodyDisposition: object|null, dispositionRequired: { reviewId: string|null, reviewCommitSha: string|null, reason: string }|null }>}
+ * @returns {Promise<{ copilotBodyFeedbackUnresolved: boolean, copilotPriorHeadBodyFeedbackUnresolved: boolean, bodyDisposition: object|null, dispositionRequired: { reviewId: string|null, reviewCommitSha: string|null, reason: string, reasonCode?: string, markerLine: string|null }|null, judgeFinding: object|null }>}
  */
 export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, reviewSummary, reviewThreads }, runtime = {}) {
-  const settled = { copilotBodyFeedbackUnresolved: false, copilotPriorHeadBodyFeedbackUnresolved: false, bodyDisposition: null, dispositionRequired: null };
+  const settled = { copilotBodyFeedbackUnresolved: false, copilotPriorHeadBodyFeedbackUnresolved: false, bodyDisposition: null, dispositionRequired: null, judgeFinding: null };
   if (reviewSummary?.hasBodyFindingOnCurrentHead === true) {
+    const currentReviewId = reviewSummary.bodyFindingReviewId;
     const record = await resolveCopilotBodyDisposition(
-      { repo, pr, headSha, reviewId: reviewSummary.bodyFindingReviewId, reviewCommitSha: headSha },
+      { repo, pr, headSha, reviewId: currentReviewId, reviewCommitSha: headSha },
       runtime,
     );
+    const effective = reviewSummary.effectiveCopilotReviews ?? [];
+    let currentReviews = effective.filter((r) => currentReviewId != null && String(r?.id) === String(currentReviewId));
+    if (currentReviews.length === 0) {
+      // A null bodyFindingReviewId means tied current-head reviews: forward the signaling bodies tied at the latest submittedAt.
+      const signaling = effective.filter((r) => r?.state !== "PENDING" && (r?.commit?.oid ?? r?.commit_id) === headSha
+        && (isBodyOnlyBlockingReview(r) || classifyCopilotReviewBodyDisposition(r?.state, r?.body) === COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK));
+      const latest = signaling.reduce((max, r) => ((reviewSubmittedAt(r) ?? "") > max ? reviewSubmittedAt(r) : max), "");
+      currentReviews = signaling.filter((r) => (reviewSubmittedAt(r) ?? "") === latest);
+    }
+    if (currentReviews.length === 0) currentReviews = [resolveLatestCopilotReview({ reviews: effective }).review];
     return record.cleared
       ? { ...settled, bodyDisposition: record.disposition }
       : {
         ...settled,
         copilotBodyFeedbackUnresolved: true,
         dispositionRequired: {
-          reviewId: reviewSummary.bodyFindingReviewId ?? null,
+          reviewId: currentReviewId ?? null,
           reviewCommitSha: headSha,
           reason: "the current-head Copilot review carries body feedback with no trusted operator copilot-body-disposition record",
+          ...(record.reasonCode ? { reasonCode: record.reasonCode, reason: record.reason } : {}),
+          markerLine: currentReviewId ? markerLineFor(currentReviewId, headSha) : null,
         },
+        judgeFinding: { angle: "copilot-body", findings: currentReviews.flatMap((r) => buildJudgeFinding(r).findings) },
       };
   }
-  const { review, ambiguousBlockingTie } = resolveLatestCopilotReview({ reviews: reviewSummary?.effectiveCopilotReviews });
+  const { review, ambiguousBlockingTie, blockingReviews } = resolveLatestCopilotReview({ reviews: reviewSummary?.effectiveCopilotReviews });
   const reviewCommitSha = review?.commit?.oid ?? review?.commit_id ?? null;
   if (!review || typeof headSha !== "string" || reviewCommitSha === headSha || !isBodyOnlyBlockingReview(review)) {
     return settled;
@@ -242,7 +291,10 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
         reviewId: null,
         reviewCommitSha,
         reason: "two or more tied latest Copilot reviews carry body-only feedback, so no single copilot-body-disposition record can clear it",
+        markerLine: null,
       },
+      // Every tied blocking body reaches the judge: no marker can clear a tie.
+      judgeFinding: { angle: "copilot-body", findings: blockingReviews.flatMap((r) => buildJudgeFinding(r).findings) },
     };
   }
   const reviewId = review.id !== null && review.id !== undefined ? String(review.id) : null;
@@ -259,6 +311,9 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
         reviewId,
         reviewCommitSha,
         reason: "the latest Copilot review, on an earlier head, carries body-only feedback with no trusted copilot-body-disposition record",
+        ...(record.reasonCode ? { reasonCode: record.reasonCode, reason: record.reason } : {}),
+        markerLine: reviewId ? markerLineFor(reviewId, headSha) : null,
       },
+      judgeFinding: buildJudgeFinding(review),
     };
 }

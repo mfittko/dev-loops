@@ -321,6 +321,19 @@ describe("projectClusterDisposition", () => {
     assert.equal("followUpDraft" in projected[1], false);
   });
 
+  test("projects a failOpen representative's flag onto every member and clears it when the representative has none (ADR 0191)", () => {
+    const make = (failOpen) => [
+      disposedFinding(locatedFinding({ angle: "correctness" }), "reject", { failOpen }),
+      disposedFinding(locatedFinding({ angle: "security" }), "reject", { failOpen: !failOpen }),
+    ];
+    const withFlag = make(true);
+    const projected = projectClusterDisposition(withFlag, clusterFindings(withFlag, { headSha: HEAD }).clusters);
+    assert.deepEqual(projected.map((f) => f.failOpen), [true, true]);
+    const without = make(false);
+    const cleared = projectClusterDisposition(without, clusterFindings(without, { headSha: HEAD }).clusters);
+    assert.deepEqual(cleared.map((f) => f.failOpen), [undefined, undefined]);
+  });
+
   test("a singleton cluster is left unchanged", () => {
     const enriched = [disposedFinding(locatedFinding(), "act")];
     const { clusters } = clusterFindings(enriched, { headSha: HEAD });
@@ -497,5 +510,22 @@ describe("assertCleanImpliesNoBlockingAct", () => {
   test("throws TypeError when actFindings is not an array", () => {
     assert.throws(() => assertCleanImpliesNoBlockingAct("clean", 1, ["high"]), TypeError);
     assert.throws(() => assertCleanImpliesNoBlockingAct("clean", null, ["high"]), TypeError);
+  });
+});
+
+describe("projectClusterDisposition resurfaces", () => {
+  test("projects the representative's resurfaces onto members and clears it when the representative has none", () => {
+    const withResurfaces = [
+      disposedFinding(locatedFinding({ angle: "correctness" }), "act", { resurfaces: "abcd" }),
+      disposedFinding(locatedFinding({ angle: "security" }), "act"),
+    ];
+    let { clusters } = clusterFindings(withResurfaces, { headSha: HEAD });
+    assert.equal(projectClusterDisposition(withResurfaces, clusters)[1].resurfaces, "abcd");
+    const without = [
+      disposedFinding(locatedFinding({ angle: "correctness" }), "act"),
+      disposedFinding(locatedFinding({ angle: "security" }), "act", { resurfaces: "abcd" }),
+    ];
+    ({ clusters } = clusterFindings(without, { headSha: HEAD }));
+    assert.equal("resurfaces" in projectClusterDisposition(without, clusters)[1], false);
   });
 });

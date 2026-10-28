@@ -6,7 +6,7 @@
  * reader and receipt stay in _work-order-protocol.mjs.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -19,10 +19,11 @@ import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "..
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
-import { renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
-import { resolveGateRound } from "../github/_gate-finding-surface.mjs";
+import { isFindingsLogName, resolveGateRound } from "../github/_gate-finding-surface.mjs";
 
 const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--tmp-root <path>]
 Derives the judge's work order from the round's authoritative inputs: the consolidated
@@ -51,6 +52,8 @@ class Refusal extends Error {}
 
 async function readSource(kind, filePath) {
   const bytes = await readFile(filePath).catch(() => null);
+  const copilotBodyKind = kind === "copilot-body-feedback";
+  if (bytes === null && copilotBodyKind) throw new Refusal(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: required judge source ${kind} is missing or unreadable: ${filePath}`);
   if (bytes === null) throw new Refusal(`required judge source ${kind} is missing or unreadable: ${filePath}`);
   return { read: { kind, path: filePath, sha256: sha256(bytes), bytes: bytes.length, required: true }, bytes };
 }
@@ -72,8 +75,8 @@ This permits only pinned reads and concrete dependency widening already authoriz
 
 Adjudicate every finding in the \`findings\` read per agents/judge.agent.md, against the COMPLETE spec in the \`spec\` read.
 Dispose each cluster once, never each raw finding: \`dispositions[].index\` is the cluster's \`clusterId\`, and one \`act\`, \`defer\` or \`reject\` with one rationale applies to every member. Severity, the \`round\` and the \`mediumFixWindow\` in the work order are inputs to your decision. No rule defers a finding from severity or round alone, so decide \`act\`, \`defer\` or \`reject\` for every cluster in every round. One exception holds: a cluster that contains a \`high\` or a \`question\`, and an all-\`nit\` cluster, is never deferred, so only \`act\` or \`reject\` is valid for it and a \`defer\` fails the judge pass closed.
-Each disposition carries \`title\` (the one-line defect), \`detail\` (the concrete path through the code and why it breaks), \`fix\` (the remedy and the test to add) and, for \`defer\` and \`reject\`, \`reason\` (one sentence). A disposition missing any required field fails closed. Write plain sentences with no em dashes and no arrows.
-Read every \`required\` entry below IN FULL before any judgment. If one is missing, unreadable, or its sha256 differs, stop and report which read failed; never write a verdict.
+Each disposition carries \`title\` (the one-line defect), \`detail\` (the concrete path through the code and why it breaks), \`fix\` (the remedy and the test to add) and, for \`defer\` and \`reject\`, \`reason\` (one sentence). A disposition missing any required field fails closed. When a cluster repeats an entry of \`priorActItems\` (another instance at the same file and guard counts), set \`resurfaces\` on its disposition to that entry's \`fingerprint\`. Write plain sentences with no em dashes and no arrows.
+${workOrder.requiredReads.some((read) => read.kind === "copilot-body-feedback") ? "A `copilot-body-feedback` read holds a Copilot review body that raised a finding with no inline thread (GATE-EXEC-COPILOT-BODY-TO-JUDGE). Adjudicate it like an inline finding. Cite it in the rationale of a cluster that covers the same defect, otherwise note it in the scopeDrift rationale; its own ledger disposition lands with S3b (issue 2937 AC18). It never blocks by itself, and an operator marker overrides it.\n" : ""}Read every \`required\` entry below IN FULL before any judgment. If one is missing, unreadable, or its sha256 differs, stop and report which read failed; never write a verdict.
 Write exactly two artifacts: the relevance verdict to \`${verdictPath}\` and the spec-authority verdict to \`${specVerdictPath}\`.
 Widening: ${JUDGE_WIDENING_RULE}.
 
@@ -107,7 +110,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     const ledgerTmpRoot = resolveGateArtifactTmpRoot(checkoutRoot);
     const resolved = await resolveGateRound({ repo, pr, gate, headSha, reviews: [], issueComments: [], tmpRoot: ledgerTmpRoot, repoRoot: checkoutRoot });
     const currentLedger = path.resolve(checkoutRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot }));
-    const prior = (await readdir(path.dirname(currentLedger)).catch(() => [])).filter((name) => name.startsWith(`${gate}-`) && name.endsWith(".json") && `${gate}-${headSha}.json` !== name).length;
+    const prior = (await readdir(path.dirname(currentLedger)).catch(() => [])).filter((name) => isFindingsLogName(gate, name) && `${gate}-${headSha}.json` !== name).length;
     round = Math.max(resolved, prior + 1);
   }
   tmpRoot ??= path.join(checkoutRoot, "tmp");
@@ -133,6 +136,15 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   if (evidence.read.sha256 !== evidenceRead.sha256) throw new Refusal(`gate-context evidence ${evidenceRead.path} changed since the round was built; rebuild the round context`);
   const priors = [];
   for (const prior of priorVerdicts) priors.push(await readSource("prior-judge-verdict", abs(prior)));
+  // The detector's derived file is pinned when it exists.
+  const derivedBodyFile = copilotBodyJudgePath({ tmpRoot: resolveGateArtifactTmpRoot(checkoutRoot), repo, pr, headSha });
+  const bodyFile = existsSync(derivedBodyFile) ? derivedBodyFile : null;
+  const copilotBody = bodyFile ? await readSource("copilot-body-feedback", bodyFile) : null;
+  if (copilotBody) {
+    let parsedBody = null;
+    try { parsedBody = JSON.parse(copilotBody.bytes.toString("utf8")); } catch { /* refused below */ }
+    if (typeof parsedBody?.angle !== "string" || !Array.isArray(parsedBody?.findings)) throw new Refusal(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${bodyFile} is not JSON with an angle and a findings array`);
+  }
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
   const workOrder = {
     role: "judge",
@@ -143,6 +155,13 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     // Judge inputs, never a deferral rule: the gate round and the medium fix window. The judge decides act, defer or reject for every cluster in every round.
     round,
     mediumFixWindow: resolveGateConfig(config, GATE_CONFIG_KEY[gate] ?? "preApproval").mediumFixWindow,
+    // Act items of the closed prior rounds. A cluster that repeats one sets `resurfaces` to its fingerprint; every other act item is new.
+    // A closure round carries its own list in the context (it may come from another --tmp-root); copy it rather than re-reading this checkout's history.
+    priorActItems: Array.isArray(context?.scope?.closureRound?.priorActItems)
+      ? context.scope.closureRound.priorActItems
+      : await listPriorActItems({ repo, pr, gate, headSha, tmpRoot: resolveGateArtifactTmpRoot(checkoutRoot) }, { repoRoot: checkoutRoot }),
+    // GATE-EXEC-ROUND-CAP: the one past-cap closure round (the gate context records scope.closureRound).
+    ...(context?.scope?.closureRound ? { closureRound: true } : {}),
     configSha256: sha256(JSON.stringify(config ?? {})),
     authority: {
       specDigest,
@@ -152,7 +171,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
       priorVerdictDigests: priors.map((prior) => sha256Hex(parseSource(prior))),
     },
     contracts,
-    requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read)],
+    requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read), ...(copilotBody ? [copilotBody.read] : [])],
     // Per-round paths: a superseded round's late verdict never lands where this round's is read.
     outputRefs: [path.join(dir, roundId, "judge-verdict.json"), path.join(dir, roundId, "spec-authority-verdict.json")],
     executionRules: { widening: JUDGE_WIDENING_RULE, contract: fileURLToPath(new URL("agents/judge.agent.md", PACKAGE_ROOT)) },

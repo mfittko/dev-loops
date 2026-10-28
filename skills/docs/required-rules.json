@@ -9,6 +9,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "ADR-OVER-WAIVER",
+      "enforcement": "doc"
+    },
+    {
       "id": "ADR-PATH-NUMBERING",
       "enforcement": "doc"
     },
@@ -87,6 +91,11 @@
       "id": "CONFIRM-CORE-EXPLICIT",
       "enforcement": "agent",
       "enforcementNote": "Seeking explicit confirmation is agent judgment; no script can require it."
+    },
+    {
+      "id": "COORDINATOR-HANDBACK-ONE-REPORT",
+      "enforcement": "agent",
+      "enforcementNote": "Whether a turn end is a pause is coordinator judgment; no hook classifies it."
     },
     {
       "id": "COORDINATOR-VERIFY-BOUNDARY",
@@ -323,6 +332,11 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-EXEC-COPILOT-BODY-TO-JUDGE",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by detect-pr-gate-coordination-state.mjs (copilotBodyJudgeFinding, no gate-entry block) and emit-judge-work-order.mjs (derived copilotBodyJudgeFile pinned read)"
+    },
+    {
       "id": "GATE-EXEC-DEFERRAL-RECORD",
       "enforcement": "runtime"
     },
@@ -373,6 +387,10 @@
       "enforcementNote": "the gate coordinator releases the first emitted wave with no primer or lead-reviewer step; emit-fanout-dispatch.mjs emits no primer unit and its dispatch-sequence tests pin one-wave release under the Claude and Pi bounds"
     },
     {
+      "id": "GATE-EXEC-FIXER-CYCLE-BOUND",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-EXEC-FIXER-DISPOSITION-BOUNDARY",
       "enforcement": "runtime",
       "enforcementNote": "resolveFixerDispositionInput in scripts/loop/detect-pr-gate-coordination-state.mjs is the advisory seam (ADR 0155): an incomplete claimed-tackled thread yields a warning (fixerDispositionWarning) with nextAction null and no forbiddenActions; evaluateFixerDisposition (packages/core/src/loop/fixer-disposition.mjs) and the optional scripts/github/verify-fixer-disposition.mjs keep their own nextAction output"
@@ -388,6 +406,10 @@
       "id": "GATE-EXEC-JUDGE-NOT-FRESH"
     },
     {
+      "id": "GATE-EXEC-JUDGE-PRIME-AUTHORITY",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-EXEC-JUDGE-PHASE"
     },
     {
@@ -398,6 +420,19 @@
       "id": "GATE-EXEC-LOW-NIT-CONVERGENCE",
       "enforcement": "runtime",
       "enforcementNote": "Enforced by composeConvergedDraftGate (packages/core/src/loop/pre-push-delta-review.mjs) and upsert-checkpoint-verdict.mjs --converged-json; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+    },
+    {
+      "id": "GATE-EXEC-LOW-FIX-UNTIL-CAP",
+      "enforcement": "runtime",
+      "enforcementNote": "applyJudgeDispositions coerces the disposition (lowFixCapped and round from resolveDraftRoundCap) and emit-fixer-work-order.mjs refuses a low/nit-only act list at or past the draft_gate cap or at pre_approval_gate, or a nit-only list outside draft round 1, with code low_fix_until_cap"
+    },
+    {
+      "id": "GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE",
+      "enforcement": "doc"
+    },
+    {
+      "id": "GATE-EXEC-OPERATOR-LINE-RELEASE-PUBLISH",
+      "enforcement": "doc"
     },
     {
       "id": "GATE-EXEC-NO-CWD-DEPENDENCE"
@@ -448,6 +483,11 @@
     },
     {
       "id": "GATE-EXEC-REVIEWER-BUDGET-PREFLIGHT"
+    },
+    {
+      "id": "GATE-EXEC-ROUND-CAP",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by upsert-checkpoint-verdict.mjs (choke point, count, past-cap composition via pastCapBlockers in packages/core/src/loop/gate-fanin.mjs) and countCompletedRounds and resolveClosureRound in write-gate-context.mjs, and capClosedFor at write-gate-findings-log.mjs, and emit-fixer-work-order.mjs (refuses round_cap_reached after the cap round and at a blocked cap round); the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-ROUND-RETIREMENT",
@@ -619,6 +659,11 @@
       "id": "LOCAL-TRACKER-NO-DIRECT-MERGE"
     },
     {
+      "id": "MAIN-AGENT-COORDINATOR-REPORT-READ",
+      "enforcement": "agent",
+      "enforcementNote": "Reading the coordinator output file is an orchestrator step; no script observes it."
+    },
+    {
       "id": "MAIN-AGENT-FILING-BLOCKER-ONLY",
       "enforcement": "agent",
       "enforcementNote": "Judging whether a runner finding is a blocker is orchestrator judgment; no script can classify it."
@@ -727,6 +772,10 @@
     },
     {
       "id": "PRE-PUSH-DELTA-TRIGGER",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PURPOSE-HIGHEST-SAFE-AUTONOMY",
       "enforcement": "doc"
     },
     {
@@ -842,6 +891,10 @@
     {
       "id": "SILENT-STDERR-PROBE",
       "enforcement": "doc"
+    },
+    {
+      "id": "SPEC-AUTHORITY-CLUSTER-EXPANSION",
+      "enforcement": "runtime"
     },
     {
       "id": "SPEC-AUTHORITY-CONFLICT-EVIDENCE",
@@ -1068,6 +1121,10 @@
     },
     {
       "id": "WORKTREE-SCRIPT-LAUNCHER-CWD",
+      "enforcement": "doc"
+    },
+    {
+      "id": "WORKTREE-STALE-BASE-REMEDY",
       "enforcement": "doc"
     },
     {

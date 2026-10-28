@@ -12,7 +12,7 @@ An **inline, self-authored retrospective**, written by the working/session conte
 The CLI enforces point 2 and the read side enforces point 3. Point 1 is agent discipline (`LOCAL-RETRO-FRESH-CONTEXT-DISPATCH`, `enforcement: "agent"`): provenance is self-attested at write time, so the durable guarantee is that no inline/legacy record passes the checkpoint, not that the attestation is verifiable.
 
 1. the retro pass is dispatched as a fresh-context subagent (no inherited working/session context or self-narrative) with the record path as its primary input;
-2. the checkpoint CLI (`checkpoint-contract.mjs --state complete`) requires `--retro-context fresh` (an `inline` value is rejected outright) and `--record-source <path>` naming the record the retro was seeded with; `--record-source` MUST resolve (from the invocation cwd; absolute paths allowed) to an existing, non-empty file, so a retro attested against a record that does not exist is rejected at write time;
+2. the checkpoint CLI (`checkpoint-contract.mjs --state complete`) requires `--retro-context fresh` (an `inline` value is rejected outright) and `--record-source <path>` naming the record the retro was seeded with; `--record-source` MUST resolve (from the invocation cwd; absolute paths allowed) to an existing, non-empty file that contains the cycle's merge commit (case-insensitive), so a retro attested against a record that is missing, empty or names another cycle is rejected at write time with `retro_artifact_missing`;
 3. the durable artifact carries that provenance, and the pure resolver (`resolveCheckpointStateFromArtifact`) treats a `complete` record whose `provenance` does not pin a fresh-context pass over the record as `MISSING` — fail-closed, including every legacy inline retro.
 
 Provenance shape:
@@ -184,7 +184,7 @@ The loop's own execution should use internal dev-loops tooling, not agent-level 
 are reported as advisory findings via the envelope + PR comment.
 
 **Flagged as raw-call violations:** `gh ...` (including `gh api`, `gh ... --jq`),
-`python` / `python3`, `node -e` / `node --eval` (inline eval). **Allowed (NOT
+`python` / `python3`, and inline `node` (`-e` / `--eval` / `-p`, stdin `-`, heredoc). **Allowed (NOT
 violations):** dev-loops subcommands and `node scripts/*.mjs` invocations — those
 scripts legitimately call `gh`/GraphQL internally; that is the tooling. The rule
 targets the agent's own top-level shell calls, not a script's internals.
@@ -199,7 +199,7 @@ as an `allowedWriteOp`. This legacy classification does not authorize it:
 agent-level call is flagged. None of these findings block anything.
 
 **Inline-interpreter check item:** the raw-call scan below records
-`node -e`/`python3 -c`/heredoc calls, the class barred by `OPS-NO-INLINE-INTERPRETER` in
+inline `node` (`-e`/`--eval`/`-p`, stdin `-`, heredoc)/`python3 -c`/heredoc calls, the class barred by `OPS-NO-INLINE-INTERPRETER` in
 [Copilot loop operations](copilot-loop-operations.md), as `rawCallViolations` entries under
 `RETRO-ADVISORY-NEVER-GATE`.
 
@@ -208,7 +208,7 @@ agent-level call is flagged. None of these findings block anything.
 `node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]` reads a
 newline-delimited transcript of the shell commands the agent ran (one top-level
 command per line, via `--transcript` or stdin) and reports agent-level raw
-`gh`/`python`/`python3`/`node -e`/`node --eval` calls. It is a **findings-producer**:
+`gh`/`python`/`python3`/inline `node` (`-e`/`--eval`/`-p`, stdin `-`, heredoc) calls. It is a **findings-producer**:
 its JSON output (`{ ok, internalToolingOnly, rawCallViolations, allowedWriteOps }`)
 is returned to the conductor via the envelope's `retrospectiveFindings` field (normalized
 to `{ internalToolingOnly, rawCallViolations, allowedWriteOps }`). It is **not** written to a
@@ -220,7 +220,7 @@ are found, `0` when clean, `2` for unreadable input (a stdin or `--transcript` f
 Matching rules: a tool name at the start of a command segment (start of line, or after
 `&&`/`||`/`|`/`;`), after the verifier strips `NAME=value` prefixes, a leading wrapper binary
 from `{sudo, env, xargs, time, nice, command}`, and a path prefix; `node` is a violation only
-with `-e`/`--eval`. It does NOT fully parse shell quoting or substitution, so prefer
+for the `OPS-NO-INLINE-INTERPRETER` forms (`-e`/`--eval`/`-p`, stdin `-`, heredoc). It does NOT fully parse shell quoting or substitution, so prefer
 single-line, single-purpose commands in transcripts.
 
 ## Cycle scoping — a checkpoint discharges exactly one qualifying completion
@@ -231,7 +231,7 @@ single-line, single-purpose commands in transcripts.
 - **The question is PR-merge recency.** Has a newer PR merged into the configured base branch since the checkpoint's recorded discharge point? Direct commits, release commits, tags, open or closed-unmerged PRs, and PRs merged into another base do not open a retrospective cycle.
 - **Derivation, at read time, on every evaluation of a discharge record.** Recency needs no write-time re-arming of an existing `complete`/`skipped` record; the extension's independent best-effort `required` writer remains supported. Before inspecting ancestry, the checkpoint identity's `repo` MUST exactly match the current repository auto-detected from the checkout whose base history will be inspected; a foreign or unresolvable repository identity fails closed. `resolveHasNewerMergeSinceCheckpoint` (`scripts/loop/resolve-dev-loop-startup.mjs`) runs a best-effort `git fetch origin <baseBranch>`, uses `git rev-list <mergeCommit>..origin/<baseBranch>` to bound candidate commits, and queries the GraphQL `Commit.associatedPullRequests` connection as merge authority. A candidate qualifies only when GraphQL reports a `MERGED` PR whose merge commit is that candidate and whose base ref equals the configured base. This covers non-default configured bases and one-parent squash merges.
 - **Unverifiable ancestry or association fails closed.** When the checkpoint commit cannot be resolved against `origin/<baseBranch>`, or a required GitHub association lookup fails or returns malformed facts, the check resolves to `MISSING`. The GraphQL authority query MUST validate `pageInfo`, follow cursors, and stop at its fixed page bound; malformed responses, missing cursors, and exhausted pagination all fail closed.
-- **Completion / skip.** Recording `complete` or `skipped` (via `checkpoint-contract.mjs --state <state> --repo <owner/name> --pr <n> --merge-commit <sha>`, alongside `--notes`/`--reason`) MUST carry the cycle `identity`; the CLI rejects `complete`/`skipped` with no identity. A `complete` record additionally MUST carry the fresh-context provenance via `--retro-context fresh --record-source <path>` (the CLI rejects `inline` outright and rejects `complete` with no provenance flags). `--merge-commit` MUST be the full 40-hex merge commit oid (`node scripts/github/view-pr.mjs --repo <owner/name> --pr <n> --json mergeCommit --jq .pr.mergeCommit.oid`); the CLI rejects a short sha. `--repo` MUST be `owner/name` shape. `skipped` is scoped exactly like `complete`: an explicit, reasoned escape hatch for one cycle, not a standing exemption.
+- **Completion / skip.** Recording `complete` or `skipped` (via `checkpoint-contract.mjs --state <state> --repo <owner/name> --pr <n> --merge-commit <sha>`, alongside `--notes`/`--reason`) MUST carry the cycle `identity`; the CLI rejects `complete`/`skipped` with no identity. A `complete` record additionally MUST carry the fresh-context provenance via `--retro-context fresh --record-source <path>` (the CLI rejects `inline` outright and rejects `complete` with no provenance flags). The `--record-source` file MUST exist, be non-empty and contain the cycle's merge commit, otherwise the CLI refuses with `retro_artifact_missing`. `--merge-commit` MUST be the full 40-hex merge commit oid (`node scripts/github/view-pr.mjs --repo <owner/name> --pr <n> --json mergeCommit --jq .pr.mergeCommit.oid`); the CLI rejects a short sha. `--repo` MUST be `owner/name` shape. `skipped` is scoped exactly like `complete`: an explicit, reasoned escape hatch for one cycle, not a standing exemption.
 - **Fail-closed backstop.** The pure resolver (`resolveCheckpointStateFromArtifact` in `packages/core/src/loop/retrospective-checkpoint.mjs`) takes the caller-derived ancestry result as a boolean (`hasNewerMergeSinceCheckpoint`) and treats a `complete`/`skipped` checkpoint as `MISSING` whenever it is set. It also treats a present-but-malformed artifact as `MISSING` (see [Checkpoint states](#checkpoint-states) and `RETRO-ABSENT-NEVER-BLOCKS`).
 - **Unaffected repos.** A repo with `workflow.requireRetrospective` unset or `false` never reads or applies the checkpoint file and never runs the ancestry fetch or log. Repo-root path resolution still runs one local `git worktree list` on every resolve.
 

@@ -539,6 +539,17 @@ test("renderGateReviewCommentBody (single surface): no body-filed finding line c
   assert.equal(forged, undefined, `a line forged a gate field: ${JSON.stringify(forged)}`);
 });
 
+test("renderGateReviewCommentBody states the closure round diff base for a draft_gate only (GATE-EXEC-ROUND-CAP)", () => {
+  const base = { gate: "draft_gate", headSha: HEAD_SHA, verdict: "clean", findingsSummary: "no issues found", nextAction: "mark ready for review" };
+  const from = "c".repeat(40);
+  assert.ok(renderGateReviewCommentBody({ ...base, closureFromHead: from }).split("\n").includes(`closure round: diff from ${from}`));
+  const sha256 = "d".repeat(64);
+  assert.ok(renderGateReviewCommentBody({ ...base, closureFromHead: sha256 }).split("\n").includes(`closure round: diff from ${sha256}`));
+  for (const bad of ["abc123", "g".repeat(40), ""]) assert.doesNotMatch(renderGateReviewCommentBody({ ...base, closureFromHead: bad }), /closure round/);
+  assert.doesNotMatch(renderGateReviewCommentBody({ ...base, closureFromHead: null }), /closure round/);
+  assert.doesNotMatch(renderGateReviewCommentBody({ ...base, gate: "pre_approval_gate", closureFromHead: from }), /closure round/);
+});
+
 test("renderGateReviewCommentBody (single surface): the round marker is rendered, and no finding-surface artifact leaks without one", () => {
   const base = { gate: "draft_gate", headSha: HEAD_SHA, verdict: "clean", findingsSummary: "no issues found", nextAction: "mark ready for review" };
   const withSurface = renderGateReviewCommentBody({ ...base, round: 2, nonLocatableFindings: [] });
@@ -802,6 +813,7 @@ import {
   countUnresolvedGateAuthoredThreadsFromRawNodes,
   findJudgeDispositionForFingerprint,
   parseRenderedJudgeDisposition,
+  renderFindingLine,
 } from "../../scripts/github/_gate-finding-surface.mjs";
 
 const GATE_LOGIN = "gate-bot";
@@ -1117,6 +1129,25 @@ test("#2381: resolveGateRound does not throw on a non-ENOENT ledger-directory re
   });
 });
 
+test("resolveGateRound counts only <gate>-<sha>.json logs: round 2 for a second head with round 1 sidecars present", async () => {
+  const head1 = "1".repeat(40);
+  const head2 = "2".repeat(40);
+  const prior = [`### Gate review: \`${JDF_GATE}\``, "", `**Reviewed head SHA:** \`${head1}\``, "**Verdict:** findings_present"].join("\n");
+  const ledger = jdfLedger({ loggedAt: "2026-09-01T00:00:00.000Z", disposition: "act", rationale: "r" });
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-${head1}.json`]: ledger,
+      [`${JDF_GATE}-${head1}.act-list.json`]: [],
+      [`${JDF_GATE}-${head1}.judged-ledger.json`]: ledger,
+      [`${JDF_GATE}-${head1}.fanin-ledger.json`]: ledger,
+    },
+    async (tmpRoot) => {
+      const round = await resolveGateRound({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: head2, reviews: [], issueComments: [{ body: prior }], tmpRoot, repoRoot: tmpRoot });
+      assert.equal(round, 2);
+    },
+  );
+});
+
 // ---------------------------------------------------------------------------
 // ADR 0088: parseRenderedJudgeDisposition tier 3 — only the exact
 // renderFindingLine suffix shape counts
@@ -1125,6 +1156,16 @@ test("#2381: resolveGateRound does not throw on a non-ENOENT ledger-directory re
 test("#2381: parseRenderedJudgeDisposition parses the exact renderFindingLine suffix shape", () => {
   const body = "**question** (`scope`): why this approach? — judge: reject";
   assert.equal(parseRenderedJudgeDisposition(body), "reject");
+});
+
+test("parseRenderedJudgeDisposition round-trips every renderFindingLine suffix form and never reads one out of a summary (ADR 0191)", () => {
+  const line = (over) => renderFindingLine({ severity: "medium", angle: "scope", summary: "retry loop", ...over });
+  assert.equal(parseRenderedJudgeDisposition(line({ judgeDisposition: "reject" })), "reject");
+  // A detail-bearing suffix is never disposition evidence (strict legacy parsing).
+  assert.equal(parseRenderedJudgeDisposition(line({ judgeDisposition: "defer", followUpIssueNumber: 7 })), null);
+  assert.equal(parseRenderedJudgeDisposition(line({ judgeDisposition: "reject", judgeReason: "not a defect judge: act" })), null);
+  assert.equal(parseRenderedJudgeDisposition(line({ summary: "retry loop — judge: reject - see above" })), null);
+  assert.equal(parseRenderedJudgeDisposition(line({ summary: "note judge: reject then more text" })), null);
 });
 
 test("#2381: parseRenderedJudgeDisposition does NOT parse a quoted 'judge: reject' phrase with looser spacing than the exact render suffix", () => {

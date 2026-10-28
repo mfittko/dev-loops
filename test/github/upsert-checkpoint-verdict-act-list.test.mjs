@@ -25,7 +25,7 @@ before(async () => {
   // only the verdict composition.
   repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-act-list-repo-"));
   const real = await readFile(path.resolve(".devloops"), "utf8");
-  const patched = real.replace("requireFanoutEvidence: true", "requireFanoutEvidence: false");
+  const patched = real.replace("requireFanoutEvidence: true", "requireFanoutEvidence: false").replace("\n  draft:\n", "\n  draft:\n    maxReviewRounds: 0\n");
   assert.notEqual(patched, real);
   await writeFile(path.join(repoRoot, ".devloops"), patched, "utf8");
 });
@@ -121,6 +121,16 @@ test("medium and low findings all rejected or deferred derive clean", async () =
     assert.match(derived.body, /\*\*Verdict:\*\* clean/);
     assert.equal((await post(ledgerPath, "clean")).error, undefined);
   }, { prefix: "dev-loops-act-list-clean-" });
+});
+
+test("3 low findings deferred and 1 nit rejected derive clean (ADR 0188)", async () => {
+  await withTempDir(async (tempDir) => {
+    const findings = [finding("low", "defer"), finding("low", "defer"), finding("low", "defer"), finding("nit", "reject")];
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: "findings_present", findings });
+    const derived = await post(ledgerPath);
+    assert.equal(derived.error, undefined);
+    assert.match(derived.body, /\*\*Verdict:\*\* clean/);
+  }, { prefix: "dev-loops-act-list-lownit-" });
 });
 
 test("a ledger without overallVerdict refuses an explicit clean over an open act item", async () => {

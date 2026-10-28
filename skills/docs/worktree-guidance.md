@@ -395,6 +395,20 @@ repo — including behind an env-assignment, a `command`/`env`/`exec` wrapper, a
 binary, or leading git global options (`-C`, `-c`, `--git-dir=`, `--work-tree=`) between `git` and
 `stash`.
 
+## Stale base remedy
+
+<!-- rule: WORKTREE-STALE-BASE-REMEDY -->
+`WORKTREE-STALE-BASE-REMEDY`: When `origin/<base>` has commits the PR branch lacks, the remedy is
+merge and re-check. Never rebase a pushed branch and never force-push it: merge `origin/<base>`,
+push the merge and re-check at the new head. The merge procedure is owned by `GATE-EXEC-BASE-REFRESH` in
+[Gate review sub-loop contract](gate-review-sub-loop-contract.md#base-refresh-before-a-gate-round).
+Run `cd <worktree> && dev-loops-run scripts/loop/pre-write-remote-freshness-guard.mjs --base <base>`
+before validation, before push and before every gate dispatch. It exits nonzero with
+`base_stale_integrate_first`, the newer commits and any `foreignFiles` (files that differ from
+`origin/<base>` only because the base moved), with `base_fetch_failed` when the fetch fails or times
+out, or with `base_not_origin_branch` for a SHA, revision expression or non-origin remote ref.
+Every `write-gate-context.mjs` run, with or without `--base`, checks the reviewed PR head against `origin/<PR base>`. A `draft_gate` or `pre_approval_gate` run refuses with `base_stale_integrate_first`, `base_fetch_failed` or `base_head_unresolved`, writing no artifact. A `review` run records the non-current status in `baseFreshness` and continues. An unreadable PR base (`base_unresolved`) refuses on every gate.
+
 ## Fallback when worktrees are unavailable
 
 <!-- rule: WORKTREE-FALLBACK -->

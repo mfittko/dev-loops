@@ -28,11 +28,12 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { baseAngleName, orderAnglesByCatalog, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
-import { anchorBaseRef } from "../lib/anchor-base-ref.mjs";
+import { baseAngleName, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { anchorBaseRef, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
+import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 import { expandDispatchUnits, packDispatchUnits } from "./_dispatch-units.mjs";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -54,8 +55,9 @@ import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_c
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
-import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
+import { captureMainRelativeChangedFilesSince } from "../lib/git-delta.mjs";
 
 /**
  * Up-front gate-ORDERING tripwire (pure). Given the target gate and the raw
@@ -204,7 +206,7 @@ export function rationaleFromResolver(resolverResult) {
 
   const rationale = [];
   for (const angle of recommended) {
-    if (added.has(angle) && dynamicActive) {
+    if (added.has(angle)) {
       rationale.push({
         angle,
         action: "added",
@@ -237,18 +239,19 @@ Required:
   --head-sha <sha>
 Optional:
   --harness <pi|claude|codex> Active reviewer harness (default: active CLI harness).
-  --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is a verbatim explicit override only when no proportionality floor fires; a fired floor refuses it and continues with tier-or-best-effort selection. An empty list (\`[]\`) is refused (exit 1, no artifact written) at every entry point — the CLI dynamic path, this flag, and the exported buildGateContext/writeGateContext API — because a gate-context bundle must carry at least one review angle; the non-empty verbatim/floor behavior is unchanged.
+  --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is a verbatim explicit override only when no proportionality floor fires, and a SECURITY_SENSITIVE_SEAM diff adds threat-model to the explicit set (draft round, or pre_approval round at a head where no draft round ran threat-model); a fired floor refuses it and continues with tier-or-best-effort selection. An empty list (\`[]\`) is refused (exit 1, no artifact written) at every entry point — the CLI dynamic path, this flag, and the exported buildGateContext/writeGateContext API — because a gate-context bundle must carry at least one review angle; the non-empty verbatim/floor behavior is unchanged.
   --rationale <json>             JSON array of {angle, action, reason} entries
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
-  --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); a bare branch uses origin/<branch> when that commit resolves. Explicit remote refs and revision expressions stay unchanged. Populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see skills/docs/gate-review-sub-loop-contract.md.
+  --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); a --base naming the PR base branch diffs against the fetched origin/<base>; any other bare branch uses origin/<branch> when that commit resolves. Explicit remote refs and revision expressions stay unchanged for the diff.  Populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see skills/docs/gate-review-sub-loop-contract.md.
+  Base freshness (every run, with or without --base): the PR's base branch (baseRefName) is fetched from origin (bounded, no prompt) and the PR head must contain it. A stale head refuses with base_stale_integrate_first, a failed fetch with base_fetch_failed, a --head-sha that is not a local commit with base_head_unresolved; each writes no artifact for draft_gate and pre_approval_gate. An unreadable PR base (base_unresolved) refuses on every gate, review included. The review gate records the non-current status in baseFreshness and continues. The artifact records baseFreshness {status, base} on every path.
   --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing evidence file. OPTIONAL: when omitted, every of the PR's closing issue references is resolved, comma-joined and cross-repo-qualified (e.g. #1496, #1511 or owner/other#12) — an umbrella PR resolves all of them. The linked issues' bodies are fetched only when --issue-body is also omitted (see below). An unreadable PR or linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering absence. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
   --validation-posture <text>    Short description of the validation posture. Refused (fails closed, never truncated) past 500 chars; keep details in --validation-results.
   --pr-body <text>               PR description text, inlined into the rendered briefing evidence file. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content).
   --issue-body <text>            Linked-issue body text, inlined into the briefing evidence file under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the evidence file should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the evidence file entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
-  --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
+  --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and skips the label read too; the only GitHub read left in this mode is the PR base branch for the base freshness check (which also runs the base freshness git fetch origin and records baseFreshness; see Base freshness). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-RESOLUTION) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing evidence file, bound by sha256 as an optional read (read field by field with jq; the sentinel still verifies its hash) (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
-  --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
+  --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the label read is skipped (only the PR base branch read for the base freshness check remains), so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, and a carried angle in a mixed group is stripped from it (recorded membership stays whole), so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). Omit for today's full-count behavior (nothing excluded).
   --known-findings <path>        Default \`capture-review-threads.mjs --repo --pr\` output (every open or resolved thread, full bodies). Rendered to the round-bound <gate>-<headSha>.known-findings.json and hash-bound as a required \`known-findings\` read (volatile tail and every work order; never the prefix) when at least one thread exists. Fails closed (exit 1) if unreadable or not that shape.
@@ -1835,19 +1838,20 @@ export function resolvePriorDispositions({ logs, rerunningAngles }) {
  * by SHA) for {@link resolvePriorDispositions}'s latest-wins fold.
  *
  * Filename SHAs match case-insensitively. FAIL OPEN on a path-resolution
- * error (no prior rounds). Per ledger: FAIL OPEN on an unreadable or
- * malformed file (it contributes nothing). FAIL CLOSED on identity: a ledger whose recorded headSha differs
+ * error (no prior rounds). Per ledger: an unparseable or non-object file is
+ * dropped and reported through `onUnreadable`. FAIL CLOSED on identity: a ledger whose recorded headSha differs
  * from its filename SHA, or whose recorded repo/pr/gate is absent or differs
  * from this invocation, is dropped (mirrors resolve-angle-carry-forward.mjs's own
  * recordedHead guard). FAIL CLOSED on verdict eligibility: only a `clean` or
  * `findings_present` verdict is a CLOSED round whose reject/defer
- * dispositions are settled memory; a `blocked`/other/missing verdict (a
- * truncated write, an aborted round, a hand-edited ledger) is dropped. A
+ * dispositions are settled memory; a `blocked` verdict is skipped silently,
+ * and a missing or unknown verdict (a truncated write, a hand-edited ledger)
+ * is dropped and reported through `onUnreadable` when its identity matches. A
  * missing directory (first round) yields `[]`.
  *
  * @returns {Promise<object[]>}
  */
-export async function readClosedPriorRoundLogs(options, { repoRoot }) {
+export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable }) {
   let ledgerDir;
   try {
     const sampleLogPath = buildLogPath({
@@ -1872,9 +1876,13 @@ export async function readClosedPriorRoundLogs(options, { repoRoot }) {
     try {
       log = JSON.parse(await readFile(path.join(ledgerDir, name), "utf8"));
     } catch {
+      onUnreadable?.(name);
       continue;
     }
-    if (!log || typeof log !== "object") continue;
+    if (!log || typeof log !== "object") {
+      onUnreadable?.(name);
+      continue;
+    }
     const recordedHead = typeof log.headSha === "string" ? log.headSha.trim().toLowerCase() : null;
     const recordedRepo = typeof log.repo === "string" ? log.repo.trim().toLowerCase() : null;
     const recordedGate = typeof log.gate === "string" ? log.gate.trim().toLowerCase() : null;
@@ -1886,11 +1894,79 @@ export async function readClosedPriorRoundLogs(options, { repoRoot }) {
       || log.pr === undefined || log.pr === null || Number(log.pr) !== Number(options.pr);
     if (identityMismatch) continue;
     const verdict = typeof log.verdict === "string" ? log.verdict.trim() : "";
-    if (verdict !== "clean" && verdict !== "findings_present") continue;
+    // A readable `blocked` ledger is a well-formed unclosed round: neither completed nor unreadable.
+    if (verdict === "blocked") continue;
+    if (verdict !== "clean" && verdict !== "findings_present") {
+      onUnreadable?.(name);
+      continue;
+    }
     rounds.push({ sha, loggedAt: typeof log.loggedAt === "string" ? log.loggedAt : "", log });
   }
   rounds.sort((a, b) => (a.loggedAt < b.loggedAt ? -1 : a.loggedAt > b.loggedAt ? 1 : a.sha < b.sha ? -1 : 1));
   return rounds.map((round) => round.log);
+}
+
+/** Merge time of the round cap (PR 2932); a closed prior ledger never counts only when its `loggedAt` is a toISOString-form UTC timestamp earlier than it; every other closed ledger counts (ADR 0189). */
+export const DRAFT_ROUND_CAP_EFFECTIVE_AT = "2026-10-26T08:51:13Z";
+
+/**
+ * Completed-round count for the round cap: the closed prior rounds logged at or after
+ * DRAFT_ROUND_CAP_EFFECTIVE_AT (a closed ledger is skipped only when its `loggedAt` is a UTC timestamp in toISOString form earlier than the cutoff; every other value counts), plus an unreadable ledger at an
+ * in-range head (counted regardless of date, since it has no readable `loggedAt`), plus the round being posted. Foreign, mismatched and unclosed ledgers never count.
+ */
+export async function countCompletedRounds(options, { repoRoot }) {
+  let unreadable = 0;
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot, onUnreadable: () => { unreadable += 1; } });
+  const cutoff = Date.parse(DRAFT_ROUND_CAP_EFFECTIVE_AT);
+  // Only a strict toISOString-form UTC timestamp earlier than the cutoff is skipped; any other value counts (fails toward the cap).
+  // The calendar round trip rejects values Date.parse normalizes (2026-02-30, T24:00:00); at most 3 fraction digits.
+  const preCap = (loggedAt) => typeof loggedAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(loggedAt) && Number.isFinite(Date.parse(loggedAt)) && new Date(loggedAt).toISOString().slice(0, 19) === loggedAt.slice(0, 19) && Date.parse(loggedAt) < cutoff;
+  return closed.filter((log) => !preCap(log.loggedAt)).length + unreadable + 1;
+}
+
+/**
+ * Round-cap state of the round being posted (GATE-EXEC-ROUND-CAP). The cap exists only for draft_gate, so any
+ * other gate is never past it. One resolver for the judge pass, the ledger writer and the fixer emitter.
+ * @returns {Promise<{ pastCap: boolean, round: number, cap: number, lowFixCapped: boolean }>}
+ */
+export async function resolveDraftRoundCap(options, { repoRoot }) {
+  // GATE-EXEC-LOW-FIX-UNTIL-CAP: pre_approval_gate has no round count and applies the past-cap low/nit coercion in every round.
+  if (options.gate !== "draft_gate") return { pastCap: false, round: 0, cap: 0, lowFixCapped: options.gate === "pre_approval_gate" };
+  const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
+  const cap = resolveGateConfig(config, "draft").maxReviewRounds;
+  const round = await countCompletedRounds(options, { repoRoot });
+  const pastCap = isPastRoundCap(round, cap);
+  return { pastCap, round, cap, lowFixCapped: pastCap };
+}
+
+/** Act items of the closed prior rounds as `{ fingerprint, file, line, title }`, one per fingerprint. */
+export async function listPriorActItems(options, { repoRoot }) {
+  const items = new Map();
+  for (const log of await readClosedPriorRoundLogs(options, { repoRoot })) {
+    for (const f of listOpenActItems(log.findings)) {
+      const fingerprint = fingerprintFinding(f);
+      if (!items.has(fingerprint)) items.set(fingerprint, { fingerprint, file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary });
+    }
+  }
+  return [...items.values()];
+}
+
+/** The one closure-round fromHead derivation: the head of the latest closed ledger; throws when it is not a non-blank string. */
+export function closureFromHeadOf(closed) {
+  const last = closed.at(-1)?.headSha;
+  if (typeof last !== "string" || last.trim().length === 0) throw new Error("closure round reached but the latest closed prior round's head cannot be recovered (its ledgers are unreadable)");
+  return last.trim().toLowerCase();
+}
+
+/**
+ * The one past-cap closure round (GATE-EXEC-ROUND-CAP): a draft_gate round whose completed-round count is cap+1.
+ * Returns null for any other round; otherwise the head of the latest closed prior round (the fix delta starts there) and the prior act items to verify.
+ */
+export async function resolveClosureRound(options, { repoRoot, cap }) {
+  if (options.gate !== "draft_gate" || !(cap > 0)) return null;
+  if (await countCompletedRounds(options, { repoRoot }) !== cap + 1) return null;
+  const closed = await readClosedPriorRoundLogs(options, { repoRoot });
+  return { fromHead: closureFromHeadOf(closed), priorActItems: await listPriorActItems(options, { repoRoot }) };
 }
 
 /**
@@ -2232,6 +2308,9 @@ export function buildGateContextArtifact(options) {
   if (typeof options.diffSource === "string" && options.diffSource.length > 0) {
     artifact.scope.diffSource = options.diffSource;
   }
+  if (options.closureRound && typeof options.closureRound === "object") {
+    artifact.scope.closureRound = options.closureRound;
+  }
   // The deterministic, neutral adjacent-code bundle. Only present
   // when the context-builder computed it — keeps the artifact shape backward
   // compatible for callers that build the artifact without an adjacency pass.
@@ -2257,6 +2336,8 @@ export function buildGateContextArtifact(options) {
   if (options.fanoutDispatch && typeof options.fanoutDispatch === "object") {
     artifact.fanout = options.fanoutDispatch;
   }
+  // Stale-base preflight result (issue 2885); the CLI sets it on every run.
+  if (options.baseFreshness) artifact.baseFreshness = options.baseFreshness;
   return artifact;
 }
 
@@ -2364,9 +2445,10 @@ export const DIFF_ISOLATION_FLAGS = [
   "-c", "core.abbrev=12",
   "-c", "core.autocrlf=false",
 ];
-export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 1024 }) {
+export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 1024, paths = [] }) {
+  const pathspec = paths.length > 0 ? ["--", ...paths] : []; // closure round (ADR 0197): only the PR-own files
   const range = `${base}...HEAD`;
-  const isolation = DIFF_ISOLATION_FLAGS;
+  const isolation = paths.length > 0 ? ["--literal-pathspecs", ...DIFF_ISOLATION_FLAGS] : DIFF_ISOLATION_FLAGS;
   const runGit = (args) => execFileSync("git", [...isolation, ...args], {
     cwd: repoRoot,
     encoding: "utf8",
@@ -2379,7 +2461,7 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
   // FAIL-CLOSED: --name-status feeds changedFiles + adjacentCode (the bundle's core).
   let nameStatusOutput;
   try {
-    nameStatusOutput = runGit(["diff", "--no-ext-diff", "--name-status", range]);
+    nameStatusOutput = runGit(["diff", "--no-ext-diff", "--name-status", range, ...pathspec]);
   } catch (err) {
     throw new Error(`git diff against --base ${JSON.stringify(base)} failed: ${err?.message ?? err}`);
   }
@@ -2387,7 +2469,7 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
   // failure degrade to an empty diffOutput (diffPath becomes null downstream).
   let diffOutput = "";
   try {
-    diffOutput = runGit(["diff", "--no-ext-diff", range]);
+    diffOutput = runGit(["diff", "--no-ext-diff", range, ...pathspec]);
   } catch (err) {
     process.stderr.write(`[gate-context] full-diff capture against --base ${JSON.stringify(base)} failed (continuing without scope.diffPath): ${err?.message ?? err}\n`);
     diffOutput = "";
@@ -3074,6 +3156,21 @@ function detectRefinementHasAcChecklist(prBody) {
   return artifact.acItems.length > 0;
 }
 
+// SECURITY_SENSITIVE_SEAM override scope: a draft round, or a pre_approval round
+// at a head where no draft_gate round ran threat-model (its gate-context
+// artifact is missing, unreadable, or does not list threat-model).
+export async function seamFirstRoundFor({ gate, repo, pr, headSha, tmpRoot }, repoRoot) {
+  if (gate === "draft_gate") return true;
+  if (gate !== "pre_approval_gate") return false;
+  try {
+    const draftPath = buildGateContextPath({ repo, pr, gate: "draft_gate", headSha, tmpRoot: tmpRoot || "tmp" });
+    const { resolvedAngles } = JSON.parse(await readFile(path.resolve(repoRoot, draftPath), "utf8"));
+    return !(Array.isArray(resolvedAngles) && resolvedAngles.includes("threat-model"));
+  } catch {
+    return true;
+  }
+}
+
 export async function buildGateContext(input, { repoRoot = process.cwd() } = {}) {
   const isReviewGate = input.gate === "review";
   // review has no config key of its own (resolveGateAnglesDynamic only
@@ -3115,6 +3212,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
         // before.
         checkFloors: input.checkFloors === true,
         sizeOutcome: input.sizeOutcome,
+        seamFirstRound: await seamFirstRoundFor(input, repoRoot),
       });
   const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
 
@@ -3464,6 +3562,7 @@ export async function main(
     // post. Consuming only the raw ordering facts is what keeps this check
     // impossible-to-false-block.
     loadCoordination = (opts) => loadPrGateCoordinationContext(opts, { runChild: run, repoRoot, cwd: repoRoot }),
+    checkBaseFreshness = checkBaseFreshnessDefault,
   } = {},
 ) {
   let options;
@@ -3491,7 +3590,7 @@ export async function main(
     // internal-only / lightweight) stays at the verdict post
     // (upsert-checkpoint-verdict.mjs, the authoritative fail-closed backstop).
     // review carries no ordering obligation, so it triggers no lookup. Skipped
-    // under --prefix-file (never touches GitHub, same invariant that skips spec-of-
+    // under --prefix-file (skips the spec reads, same invariant that skips spec-of-
     // record resolution). A coordination-load FAILURE proceeds silently: an unread
     // state is not an ordering violation, a genuine read problem surfaces right
     // after at resolvePrSpecContext (fail-closed for every non-prefix-file mode),
@@ -3528,7 +3627,7 @@ export async function main(
     // file's EXACT bytes (writeGateContext never renders prBody/issueBody into
     // them in that mode), so a GitHub read here would be spent resolving text
     // that can never reach the record — an orchestrator that already rendered
-    // its own prefix must not gain a new hard GitHub dependency for that.
+    // its own prefix must not gain a new hard GitHub dependency for the spec (the baseRefName read still runs).
     if (!options.prefixFile) {
       await resolvePrSpecContext(options, { run });
     }
@@ -3542,6 +3641,50 @@ export async function main(
     // full bundle. A run WITH --base that then fails to resolve (bad ref, not a
     // git repo, etc.) DOES fail closed: the caller opted into the full bundle,
     // so a silent thin degrade there would be a worse surprise than an error.
+    // Load the dev-loop config once, before the diff (the closure round needs the cap): used for the closure round, for dynamic angle resolution
+    // (when --angles is omitted) and, regardless of --angles, to resolve each
+    // angle's concrete review model for the dispatch-plan artifact
+    // (resolveRoleModel(kind:"angle"), inside writeGateContext). A config load
+    // error throws config_load_failed: the angle set, mandatory list and tiers
+    // never fall back to defaults.
+    const { config } = await loadDevLoopConfigStrict({ repoRoot });
+    options.config = config;
+    // GATE-EXEC-ROUND-CAP (ADR 0191): the one closure round diffs from the cap round's head.
+    // The findings ledger is main-anchored: read it from its own root, not the (possibly relocated) context --tmp-root.
+    const closureRound = await resolveClosureRound({ ...options, tmpRoot: undefined }, { repoRoot, cap: resolveGateConfig(config, "draft").maxReviewRounds ?? 0 });
+    if (closureRound) {
+      // The closure round diffs from fromHead whatever --base the caller passes (coordinators pass origin/main) and records the ignored --base.
+      options.closureRound = { ...closureRound, ignoredBase: options.base ?? null };
+      options.base = closureRound.fromHead;
+    }
+    // AC6 (issue 2885): every dispatch runs the freshness check against the PR's own base branch (baseRefName),
+    // whatever --base is (absent, SHA, revision, remote ref). draft_gate and pre_approval_gate refuse (no artifact) on anything but base_current; the review gate records the status and continues; base_unresolved refuses on every gate.
+    let prBase;
+    try {
+      ({ pr: { baseRefName: prBase } } = await viewPr({ repo: options.repo, pr: options.pr, fields: "baseRefName" }, { env, run }));
+    } catch (error) {
+      throw new Error(`base_unresolved: could not read the base branch of PR #${options.pr} in ${options.repo} (${error?.message ?? error}); refusing to dispatch without a base freshness check.`);
+    }
+    if (typeof prBase !== "string" || !prBase) throw new Error(`base_unresolved: PR #${options.pr} in ${options.repo} reports no baseRefName; refusing to dispatch without a base freshness check.`);
+    const freshness = await checkBaseFreshness({ base: prBase, head: options.headSha, cwd: repoRoot, env, trusted: true });
+    // GATE-EXEC-BASE-REFRESH scopes the refusal to draft_gate and pre_approval_gate: a review run records the non-current result and continues.
+    const refuses = options.gate === "draft_gate" || options.gate === "pre_approval_gate";
+    if (refuses && !freshness.ok) {
+      // A same-head retry that finds the base advanced must not leave the earlier base_current context or emit plan for emit-fanout-dispatch to consume.
+      const key = { repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" };
+      await Promise.all([buildGateContextPath(key), buildGateEmitPlanPath(key)].map((p) => rm(path.resolve(repoRoot, p), { force: true })));
+    }
+    if (freshness.ok) {
+      options.baseFreshness = { status: freshness.status, base: freshness.base };
+    } else if (!refuses) {
+      options.baseFreshness = { status: freshness.error, base: freshness.base };
+    } else if (freshness.error !== "base_stale_integrate_first") {
+      throw new Error(`${freshness.error}: ${freshness.message}`);
+    } else {
+      const shown = freshness.newerCommits.slice(0, 5).join("; ");
+      const more = freshness.newerCommits.length > 5 ? ` (+${freshness.newerCommits.length - 5} more)` : "";
+      throw new Error(`${freshness.error}: origin/${freshness.base} has ${freshness.newerCommits.length} commit(s) the PR head lacks (${shown}${more}); files differing only because of the stale base: ${freshness.foreignFiles.join(", ") || "none"}. ${freshness.remedy}`);
+    }
     let diff = null;
     if (options.base) {
       // Fail-closed precondition: the diff is resolved FROM the CWD worktree, so
@@ -3549,8 +3692,19 @@ export async function main(
       // Otherwise a stale CWD silently yields the wrong diff (caught only after
       // fan-out today). Throws → caught below → exit 1, no artifact written.
       assertWorktreeAtHead(options.headSha, { repoRoot });
-      options.base = anchorBaseRef(options.base, { repoRoot });
-      diff = captureDiffFromBase(options.base, { repoRoot });
+      // A fetched origin/<prBase> (base_current or stale) makes a --base naming that branch diff against that ref, never a possibly stale local one.
+      const baseFetched = ["base_current", "base_stale_integrate_first"].includes(options.baseFreshness.status);
+      options.base = baseFetched && normalizeBaseBranch(options.base) === options.baseFreshness.base ? `origin/${options.baseFreshness.base}` : anchorBaseRef(options.base, { repoRoot });
+      // ADR 0197: the closure bundle holds the PR-own changes since fromHead; the content of a merged-in base is excluded. No PR-own change refuses (never clean).
+      let closurePaths;
+      if (options.closureRound) {
+        const own = await captureMainRelativeChangedFilesSince({ base: options.closureRound.fromHead, mainRef: `origin/${prBase}`, repoRoot });
+        if (!own.reduced || own.changedFiles.length === 0) {
+          throw new Error(`closure_delta_no_pr_own_change: the closure round's PR-own delta since ${options.closureRound.fromHead} is ${own.reduced ? "empty (the commits since then only merged the base)" : `unproven (origin/${prBase} does not resolve)`}; refusing a bundle without the PR's own changes (GATE-EXEC-ROUND-CAP).`);
+        }
+        closurePaths = own.changedFiles;
+      }
+      diff = captureDiffFromBase(options.base, { repoRoot, paths: closurePaths });
       const scope = await resolveDiffScope(
         { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" },
         { repoRoot },
@@ -3589,19 +3743,12 @@ export async function main(
         sizeOutcome = null; // fails CLOSED — checkFloors treats null as ambiguous
       }
     }
-    // Load the dev-loop config once: used both for dynamic angle resolution
-    // (when --angles is omitted) and, regardless of --angles, to resolve each
-    // angle's concrete review model for the dispatch-plan artifact
-    // (resolveRoleModel(kind:"angle"), inside writeGateContext). A config load
-    // error throws config_load_failed: the angle set, mandatory list and tiers
-    // never fall back to defaults.
-    const { config } = await loadDevLoopConfigStrict({ repoRoot });
-    options.config = config;
 
     // Angle resolution: when --angles is omitted, resolve dynamically from the
     // loaded config (.devloops) + the captured --base diff — the SAME path the
     // programmatic buildGateContext API uses (resolveGateAnglesDynamic). When
-    // --angles IS supplied, it is used as an explicit selector, BUT the
+    // --angles IS supplied, it is used as an explicit selector (a
+    // SECURITY_SENSITIVE_SEAM diff adds threat-model to it), BUT the
     // GATE-EXEC-PROPORTIONALITY floors are non-overridable: draft/preApproval
     // always run explicit angles through resolveGateAnglesDynamic's handling
     // below. With no floor the override is verbatim; a fired floor refuses it
@@ -3613,7 +3760,7 @@ export async function main(
       // The gate:full label must not depend on the operator remembering
       // --full-label: derive it from the live PR when the flag is absent, and
       // fail CLOSED (treat as labelled → untriered set) when the read fails.
-      // --prefix-file mode never touches GitHub, so the label CANNOT be
+      // --prefix-file mode never reads the label from GitHub, so it CANNOT be
       // derived there — an omitted flag in that mode also fails closed to the
       // untriered set rather than silently tier-reducing a labelled PR.
       // review never diff-class-tiers (no gate:full label lookup needed) — its
@@ -3658,6 +3805,7 @@ export async function main(
           checkFloors: Boolean(options.base),
           sizeOutcome,
           explicitAngles: Array.isArray(options.angles) ? options.angles : undefined,
+          seamFirstRound: await seamFirstRoundFor(options, repoRoot),
         });
       }
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
