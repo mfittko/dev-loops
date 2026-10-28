@@ -14,6 +14,7 @@
 import { STATE, TRANSITIONS } from '@dev-loops/core/loop/copilot-loop-state';
 import { REVIEWER_STATE, REVIEWER_TRANSITIONS } from '@dev-loops/core/loop/reviewer-loop-state';
 import { GRILL_STATE, GRILL_TRANSITIONS } from '@dev-loops/core/loop/refinement-grill-state';
+import { FIX_LOOP_STATE, FIX_LOOP_TRANSITIONS } from '@dev-loops/core/loop/fix-loop-state';
 import { OUTER_STATE, OUTER_TRANSITIONS } from '@dev-loops/core/loop/conductor-routing';
 import { PUBLIC_DEV_LOOP_GATE_CONTRACT } from '@dev-loops/core/loop/public-dev-loop-routing-contract';
 import { PR_LIFECYCLE_STATES, PR_LIFECYCLE_TRANSITIONS } from '@dev-loops/core/loop/pr-lifecycle';
@@ -104,6 +105,10 @@ const reviewerDiagram = renderStateDiagram(
 const refinementGrillDiagram = renderStateDiagram(
   edgesFromTransitions(Object.values(GRILL_STATE), GRILL_TRANSITIONS),
   Object.values(GRILL_STATE),
+);
+const fixLoopDiagram = renderStateDiagram(
+  edgesFromTransitions(Object.values(FIX_LOOP_STATE), FIX_LOOP_TRANSITIONS),
+  Object.values(FIX_LOOP_STATE),
 );
 const outerDiagram = renderStateDiagram(
   edgesFromTransitions(Object.values(OUTER_STATE), OUTER_TRANSITIONS),
@@ -228,6 +233,16 @@ const SECTIONS = [
       'Write-back synthesizes only sharpened Acceptance criteria, Definition of done, and Non-goals into the body — the raw Q&A transcript never lands in the artifact. An uncitable gap stops honestly at needs_human_handoff naming the question rather than fabricating an answer to force convergence, and any load or parse failure fails closed to blocked_needs_user_decision.',
     ],
     diagram: refinementGrillDiagram,
+  },
+  {
+    id: 'fix-loop',
+    title: 'Gate fix loop',
+    source: 'packages/core/src/loop/fix-loop-state.mjs — FIX_LOOP_STATE + FIX_LOOP_TRANSITIONS',
+    prose: [
+      'One fix sequence for a PR head is one state machine: the fixer commits a candidate unpushed, a delta review clears the push, CI settles on the pushed candidate, and a tool-built disposition closes the sequence. Every fail-closed state has a sanctioned exit, and a foreign commit (developer, CI fix, base merge) enters the <code>head_moved</code> state, which exits to a full gate round.',
+      'A full gate round on the live head is the fallback authority and always terminal. Transitions that later slices of issue 2787 implement are tracked as known gaps in the conformance harness.',
+    ],
+    diagram: fixLoopDiagram,
   },
   {
     id: 'release-pipeline',
