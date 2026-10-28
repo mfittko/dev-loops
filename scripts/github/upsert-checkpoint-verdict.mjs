@@ -2342,9 +2342,14 @@ function anglesPassCoverage(entries, config, gate) {
 // Only an id the pinned spec cannot resolve (no pin, a different pinned spec, no such
 // row), or whose text matches no unchecked PR row, skips every PR-body row of its category.
 async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified, coordinationContext, dryRun = false, pendingWrites = [], namedCriteria = [], pinnedSpecDigest }, { env, ghCommand, runChild }) {
+  // A label is skipped when a normalized criterion equals it or contains it bounded by non-word characters or the string edge.
+  const flat = (t) => normalizeCriterionText(String(t).replaceAll("`", "")).toLowerCase().replace(/\.+$/u, "");
+  const normalizedCriteria = namedCriteria.map(flat);
   const verifiedItems = allVerified.filter((label) => {
-    const text = String(label).trim();
-    return !text || !namedCriteria.some((c) => c.includes(text));
+    const text = flat(label);
+    if (!text) return true;
+    const bounded = new RegExp(`(?<![\\p{L}\\p{N}_])${text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}(?![\\p{L}\\p{N}_])`, "u");
+    return !normalizedCriteria.some((c) => bounded.test(c));
   });
   const inSections = (body, options) => {
     const indices = checklistSectionLineIndices(body, options);
@@ -2371,7 +2376,9 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
   };
   // The PR body's spec stands in for the pinned spec only when its digest equals the pinned specDigest; otherwise (no pin, or the pin is another body such as the linked issue) no id resolves and the category skip applies.
   const bodySpec = extractSpecFromBody(prData.body);
-  const pinnedSpec = pinnedSpecDigest !== undefined && computeSpecDigest(bodySpec) === pinnedSpecDigest
+  // computeSpecDigest throws on a body with no acceptance criteria; that body cannot match the pin.
+  const bodyDigest = pinnedSpecDigest === undefined ? undefined : (() => { try { return computeSpecDigest(bodySpec); } catch { return undefined; } })();
+  const pinnedSpec = pinnedSpecDigest !== undefined && bodyDigest === pinnedSpecDigest
     ? bodySpec
     : { acceptanceCriteria: [], definitionOfDone: [] };
   const categories = {
@@ -3596,6 +3603,31 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // gate review) and the legacy issue-comment surface (updateComment below) are
   // covered, in addition to the low-level guards in the write helpers.
   guardCommentBodyNoIssuePrIds(desiredBody, { ref: "gate verdict comment body", allowedRefs: options.allowedRefs });
+  // SUBMITTED-REVIEW RESOLUTION (review gate): a same-head own SUBMITTED review
+  // is this round's existing surface. Without this, a same-head rerun POSTs a
+  // duplicate submitted review (findOwnPendingReview above only sees the
+  // author-only PENDING draft, never a submitted one). --new-round is the
+  // deliberate escape hatch that bypasses this dedup to force a fresh review.
+  // Runs AFTER resolveFindingSurface so findingSurface.locatable already tells
+  // us whether a correction needs a new inline comment GitHub cannot add to an
+  // already-submitted review. The lookup and its refusal run before the queued ticks.
+  const ownSubmitted = isReviewGate && !options.newRound
+    ? await findOwnSubmittedReview(
+      { repo: options.repo, pr: options.pr, headSha: canonicalHeadSha },
+      gh,
+    )
+    : null;
+  // A still-unposted locatable finding would need an inline comment, and
+  // GitHub exposes no endpoint to add one to an already-submitted review.
+  // Fail closed rather than silently drop it to body text; --new-round
+  // posts a fresh review that CAN carry the inline comment.
+  if (ownSubmitted && findingSurface && findingSurface.locatable.length > 0) {
+    throw new Error(
+      `Cannot correct the already-submitted review ${ownSubmitted.id} on ${options.repo}#${options.pr}: `
+      + `this round adds ${findingSurface.locatable.length} inline finding(s), and GitHub has no endpoint to add inline `
+      + `comments to a submitted review. Re-run with --new-round to post a fresh review round that carries the new inline comment(s).`,
+    );
+  }
   // The last refusal has passed: apply the queued reviewer-verified ticks now, before the first review or comment write, so a refused post leaves no ticked box.
   // A failed write throws before any post; a rerun re-ticks only the rows still unticked.
   for (const write of pendingTickWrites) await write();
@@ -3608,20 +3640,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         suppressed: findingSurface.suppressedCount,
       }
     : {};
-  // SUBMITTED-REVIEW RESOLUTION (review gate): a same-head own SUBMITTED review
-  // is this round's existing surface. Without this, a same-head rerun POSTs a
-  // duplicate submitted review (findOwnPendingReview above only sees the
-  // author-only PENDING draft, never a submitted one). --new-round is the
-  // deliberate escape hatch that bypasses this dedup to force a fresh review.
-  // Runs AFTER resolveFindingSurface so findingSurface.locatable already tells
-  // us whether a correction needs a new inline comment GitHub cannot add to an
-  // already-submitted review.
-  if (isReviewGate && !options.newRound) {
-    const ownSubmitted = await findOwnSubmittedReview(
-      { repo: options.repo, pr: options.pr, headSha: canonicalHeadSha },
-      gh,
-    );
-    if (ownSubmitted) {
+  if (ownSubmitted) {
+    {
       const reviewBaseResult = {
         ok: true,
         repo: options.repo,
@@ -3637,17 +3657,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
         ...(specAuthority ? { specAuthority } : {}),
       };
-      // A still-unposted locatable finding would need an inline comment, and
-      // GitHub exposes no endpoint to add one to an already-submitted review.
-      // Fail closed rather than silently drop it to body text; --new-round
-      // posts a fresh review that CAN carry the inline comment.
-      if (findingSurface && findingSurface.locatable.length > 0) {
-        throw new Error(
-          `Cannot correct the already-submitted review ${ownSubmitted.id} on ${options.repo}#${options.pr}: `
-          + `this round adds ${findingSurface.locatable.length} inline finding(s), and GitHub has no endpoint to add inline `
-          + `comments to a submitted review. Re-run with --new-round to post a fresh review round that carries the new inline comment(s).`,
-        );
-      }
       // Byte-identical body: nothing to correct, suppress the duplicate repost.
       if (desiredBody === ownSubmitted.body) {
         return {

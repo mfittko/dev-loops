@@ -12353,6 +12353,25 @@ test("tick (#2898): a row an open act item names by label stays unticked; a crit
       assert.equal(editedBodies.length, 1);
       assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${TICK_ITEMS[12]}$`, "m"));
       assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[1]}$`, "m"));
+      // "criterion number 1" is a prefix of the named "criterion number 13" but names a different row.
+      assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[0]}$`, "m"));
+    });
+  }
+  // Accepted forms: case, internal whitespace and dropped backticks still name the row; a quoted label followed by a period too.
+  const tickedRow = "The `edit-pr.mjs` USAGE text documents `--allow-untick`.";
+  const rowBody = ["## Acceptance criteria", "", `- [ ] ${tickedRow}`, "- [ ] Tests pass", "", "## Definition of done", "", "- [x] done", ""].join("\n");
+  for (const judgeCriterion of ["the EDIT-PR.MJS usage text   documents --allow-untick", "The edit-pr.mjs USAGE text documents --allow-untick", `"${tickedRow}"`]) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: rowBody, verifiedItems: [tickedRow, "Tests pass"], findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
+      await post();
+      assert.match(editedBodies[0].body, /^- \[ \] The `edit-pr\.mjs` USAGE/m);
+      assert.match(editedBodies[0].body, /^- \[x\] Tests pass$/m);
+    });
+  }
+  // Rejected forms: a label only inside a longer word, and a criterion naming a different row, name nothing.
+  for (const judgeCriterion of ["Tests passed", "an unrelated row"]) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: rowBody, verifiedItems: ["Tests pass"], findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
+      await post();
+      assert.match(editedBodies[0].body, /^- \[x\] Tests pass$/m);
     });
   }
   // A criterion that does not contain the label names nothing: every verified row is ticked.
@@ -12417,6 +12436,42 @@ test("tick (#2898): a spec id (dod:<n> / ac:<n>) resolves against the pinned spe
     await post({ specAuthority: pin });
     for (const item of TICK_ITEMS.slice(13)) unticked(editedBodies[0]?.body ?? `- [ ] ${item}`, item);
   });
+});
+
+test("tick (#2898): a pinned spec and a PR body without an AC checklist still tick the verified issue rows", async () => {
+  const issueBody = ["## Acceptance criteria", "", "- [ ] criterion number 1", "- [ ] criterion number 2", ""].join("\n");
+  const pin = await writeTickPin("pinned.json", `sha256:${"d".repeat(64)}`);
+  await withCompositionRound({ overallVerdict: "clean", prBody: "## Scope\n\nNo checklist here.\n", verifiedItems: TICK_ITEMS, issueBody }, async ({ post, editedBodies }) => {
+    await post({ specAuthority: pin, findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(editedBodies.length, 1);
+    assert.match(editedBodies[0].body, /^- \[x\] criterion number 1$/m);
+    assert.match(editedBodies[0].body, /^- \[x\] criterion number 2$/m);
+  });
+});
+
+test("tick (#2898): a review-gate rerun refused for the already-submitted review changes no PR body and no issue body", async () => {
+  await withTempDir(async (tempDir) => {
+    const { body } = await createReviewGateAndCaptureBody(tempDir, { nextAction: "none — informational review, no re-gate required" });
+    const submitted = seededSubmittedReview({ id: 982, body });
+    const ledgerPath = await writeReviewGateLedger(tempDir, [LOCATABLE_FINDING], { overallVerdict: "findings_present", verifiedItems: TICK_ITEMS });
+    const { runChild, calls } = makeGhMock(
+      reviewGateFindingSurfaceEntries({
+        files: [{ filename: "src/db.mjs", patch: SINGLE_SURFACE_PATCH }],
+        pendingReviews: [submitted],
+        reviews: [submitted],
+        submittedReviews: [submitted],
+      }),
+    );
+    await assert.rejects(
+      upsertCheckpointVerdict({
+        repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD, verdict: "findings_present",
+        findingsSummary: "one locatable finding", nextAction: "stay draft and fix",
+        findingsLedger: ledgerPath, judgeSpecSource: "none", executionMode: "fanout_fanin", submit: "comment",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }),
+      /already-submitted review 982/,
+    );
+    assert.equal(bodyEdits(calls).length, 0);
+  }, { prefix: "dev-loops-upsert-review-refused-no-tick-" });
 });
 
 test("tick (#2898): an open act item carrying checkedCriteria and no judgeCriterion keeps the named category unticked", async () => {
