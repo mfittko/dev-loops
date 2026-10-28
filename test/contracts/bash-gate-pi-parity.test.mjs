@@ -16,6 +16,7 @@ import { decidePiToolCall } from "../../extension/readonly-role-gate.ts";
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const SLUG = "mfittko/dev-loops";
 const CONTRACT = path.join(repoRoot, "skills/docs/cross-harness-regression-contract.md");
+const REQUIRED_RULES = path.join(repoRoot, "skills/docs/required-rules.json");
 
 const MANAGED = Object.freeze({
   inManagedContext: true,
@@ -127,12 +128,25 @@ test("the Claude and Pi adapters agree on every Bash-gate fixture (AC3, #1086)",
   assert.equal(piBlocks("gh pr ready 5", null, passed), false);
 });
 
+test("every Bash-gate rule ID is a registered rule in required-rules.json (the pin cannot shrink)", () => {
+  // Without an independent anchor the list is circular: deleting a rule from BASH_GATE_RULES, the
+  // fixtures AND the contract matrix in one commit would still pass every other assertion here.
+  const registered = new Set(JSON.parse(fs.readFileSync(REQUIRED_RULES, "utf8")).requiredRules.map((rule) => (typeof rule === "string" ? rule : rule.id)));
+  for (const rule of BASH_GATE_RULES) {
+    assert.ok(registered.has(rule.id), `${rule.id}: must stay registered in skills/docs/required-rules.json`);
+  }
+});
+
 test("the Bash-gate rule list pins each rule's Pi verdict against the cross-harness contract (AC2)", () => {
+  const contractIds = [];
   const rows = new Map();
   for (const [, id, claude, pi, reason] of fs.readFileSync(CONTRACT, "utf8").matchAll(/^\| `([A-Z0-9-]+)` \| ([^|]*) \| ([a-z-]+) \| ([^|]*) \|$/gm)) {
+    contractIds.push(id);
     rows.set(id, { claude: claude.trim(), pi: pi.trim(), reason: reason.trim() });
   }
-  assert.deepEqual([...rows.keys()].sort(), BASH_GATE_RULES.map((rule) => rule.id).sort(), "the contract matrix must list exactly the Bash-gate rules");
+  // Order-sensitive: the contract states this matrix lists the rules in evaluation order, so the
+  // row order must be BASH_GATE_RULES' order, not merely the same set.
+  assert.deepEqual(contractIds, BASH_GATE_RULES.map((rule) => rule.id), "the contract matrix must list exactly the Bash-gate rules in BASH_GATE_RULES order");
   for (const rule of BASH_GATE_RULES) {
     const row = rows.get(rule.id);
     assert.equal(row.pi, rule.pi, `${rule.id}: contract Pi verdict must match BASH_GATE_RULES`);

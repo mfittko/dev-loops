@@ -46,6 +46,7 @@ import {
   commandContainsCopilotRequestBypass,
   commandContainsCopilotSummonComment,
   commandContainsDetachedWaitTool,
+  commandContainsTimeoutWrappedSanctionedTool,
   commandContainsCodeVerificationEntrypoint,
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
@@ -114,6 +115,10 @@ const isReplyResolve =
 const isRequestApi = typeof command === "string" && commandContainsCopilotRequestBypass(command, managedRepoSlug);
 const isCopilotSummon = typeof command === "string" && commandContainsCopilotSummonComment(command);
 const isWaitTool = typeof command === "string" && commandContainsDetachedWaitTool(command);
+// The `timeout N <sanctioned tool>` deny (issue 2755) is decided in the shared module; the
+// pre-check only detects the shape. Listed here, or the hook would short-circuit to allow before the
+// decider ever runs — allowing on Claude what the Pi `tool_call` gate now denies (#2965).
+const isTimeoutWrapped = typeof command === "string" && commandContainsTimeoutWrappedSanctionedTool(command);
 // COORDINATOR-VERIFY-BOUNDARY (#2082) — actor-scoped inside decideBashGate (agentType is
 // "dev-loop" or "gate-coordinator"), so the quick pre-check here only detects the command shape; the hook must not
 // short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
@@ -125,7 +130,7 @@ const isFixerPull = isFixer && isFixerPullAttempt(command);
 if (
   !isReady && !isMerge && !isCreate && !isExternalWrite && !isStash &&
   !isInline && !isSubIssue && !isReplyResolve && !isRequestApi && !isCopilotSummon && !isWaitTool &&
-  !isVerifyEntrypoint && !isJudge && !isFixerPull
+  !isTimeoutWrapped && !isVerifyEntrypoint && !isJudge && !isFixerPull
 ) {
   emitAllow();
 }

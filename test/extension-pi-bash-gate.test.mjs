@@ -26,27 +26,30 @@ function managedRepoRoot({ humanMergeOnly = true } = {}) {
 
 /**
  * Register the real extension on a Pi double whose `exec` answers the repo-identity, config and
- * draft-gate probes. Returns the `tool_call` handler plus the recorded exec calls.
+ * draft-gate probes. Returns the `tool_call` handler, the recorded exec calls, and a mutable `state`
+ * (flip `state.unmanaged` to make the same cwd become a repo between calls).
  */
-function register({ repoRoot, slug = SLUG, unmanaged = false, readyGateCode = 1 } = {}) {
+function register({ repoRoot, slug = SLUG, unmanaged = false, readyGate = { code: 1, stderr: '{"error":"no clean draft_gate record"}' }, probeThrows = false } = {}) {
   const events = new Map();
   const execCalls = [];
+  const state = { unmanaged: Boolean(unmanaged) };
   const exec = async (tool, args, opts) => {
     const command = args[args.length - 1];
     execCalls.push({ command, cwd: opts?.cwd });
     if (command === "git rev-parse --show-toplevel") {
-      return unmanaged ? { code: 128, stdout: "", stderr: "not a git repository" } : { code: 0, stdout: `${repoRoot}\n`, stderr: "" };
+      return state.unmanaged ? { code: 128, stdout: "", stderr: "not a git repository" } : { code: 0, stdout: `${repoRoot}\n`, stderr: "" };
     }
     if (command === "git config --get remote.origin.url") {
       return { code: 0, stdout: `https://github.com/${slug}.git\n`, stderr: "" };
     }
     if (command.includes("pre-pr-ready-gate.mjs")) {
-      return { code: readyGateCode, stdout: "", stderr: '{"error":"no clean draft_gate record"}' };
+      if (probeThrows) throw new Error("spawn node ENOENT");
+      return { code: readyGate.code, stdout: "", stderr: readyGate.stderr ?? "" };
     }
     return { code: 0, stdout: "", stderr: "" };
   };
   extension({ on: (event, handler) => events.set(event, handler), registerCommand() {}, exec });
-  return { toolCall: events.get("tool_call"), execCalls, cwd: repoRoot };
+  return { toolCall: events.get("tool_call"), execCalls, cwd: repoRoot, state };
 }
 
 const tag = (name) => `<active_agent name="${name}"/>`;
@@ -66,8 +69,15 @@ const ALL_ROLES = [...DEV_LOOPS_ROLES, undefined, ""];
 const MERGE = "gh pr merge 7 --squash";
 const WAIVER_WRITE = "gh pr edit 7 --body 'adr-tripwire:allow standing waiver'";
 
+// Captured at module load: the coordinator flag may be ambient (a coordinator-driven validation run),
+// so clearing it for a test must restore it, never drop it for the rest of the process.
+const ambientCoordinatorFlag = process.env.DEVLOOPS_COORDINATOR_READONLY;
 function clearCoordinatorFlag() {
   delete process.env.DEVLOOPS_COORDINATOR_READONLY;
+}
+function restoreCoordinatorFlag() {
+  if (ambientCoordinatorFlag === undefined) delete process.env.DEVLOOPS_COORDINATOR_READONLY;
+  else process.env.DEVLOOPS_COORDINATOR_READONLY = ambientCoordinatorFlag;
 }
 
 test("Pi tool_call blocks a raw gh pr merge under humanMergeOnly for every role (STOP-HUMAN-MERGE-001)", async () => {
@@ -113,18 +123,50 @@ test("Pi tool_call leaves the same commands alone outside a managed repo (the fa
   assert.deepEqual(await callAs(managed, "developer", "gh pr merge --repo other/repo 7"), { block: false });
 });
 
-test("Pi tool_call runs the gh pr ready draft-gate probe and denies without clean evidence", async () => {
+test("Pi tool_call surfaces the draft-gate probe's own error instead of \"no clean record\"", async () => {
   clearCoordinatorFlag();
-  const failing = register({ repoRoot: managedRepoRoot(), readyGateCode: 1 });
+  const failing = register({ repoRoot: managedRepoRoot() });
   const denied = await callAs(failing, undefined, "gh pr ready 7");
   assert.equal(denied.block, true);
-  assert.match(denied.reason, /no visible clean draft_gate/);
+  // The tool reported a reason on stderr: surface it, do not claim the evidence was absent.
+  assert.match(denied.reason, /draft-gate evidence check failed \(no clean draft_gate record\)/);
   const probe = failing.execCalls.find((call) => call.command.includes("pre-pr-ready-gate.mjs"));
   assert.ok(probe, "the draft-gate probe must run for a managed-repo gh pr ready");
   assert.match(probe.command, new RegExp(`--repo ${SLUG} --pr 7$`));
 
-  const passing = register({ repoRoot: managedRepoRoot(), readyGateCode: 0 });
+  const passing = register({ repoRoot: managedRepoRoot(), readyGate: { code: 0 } });
   assert.deepEqual(await callAs(passing, undefined, "gh pr ready 7"), { block: false });
+});
+
+test("Pi tool_call still reports absent evidence when the probe exits non-zero with no reported error", async () => {
+  clearCoordinatorFlag();
+  const gate = register({ repoRoot: managedRepoRoot(), readyGate: { code: 1, stderr: "" } });
+  assert.match((await callAs(gate, undefined, "gh pr ready 7")).reason, /no visible clean draft_gate/);
+});
+
+test("Pi tool_call reports \"could not run\" when the draft-gate probe cannot start", async () => {
+  clearCoordinatorFlag();
+  const gate = register({ repoRoot: managedRepoRoot(), probeThrows: true });
+  const denied = await callAs(gate, undefined, "gh pr ready 7");
+  assert.equal(denied.block, true);
+  assert.match(denied.reason, /could not run scripts\/loop\/pre-pr-ready-gate\.mjs/);
+});
+
+test("Pi tool_call probes with the dev-loops package's own script, not the consumer repo's", async () => {
+  clearCoordinatorFlag();
+  const root = managedRepoRoot();
+  assert.equal(fs.existsSync(path.join(root, "scripts")), false, "the fixture consumer repo ships no scripts/");
+  const gate = register({ repoRoot: root, readyGate: { code: 0 } });
+  assert.deepEqual(await callAs(gate, undefined, "gh pr ready 7"), { block: false });
+  const probe = gate.execCalls.find((call) => call.command.includes("pre-pr-ready-gate.mjs"));
+  assert.ok(probe, "the draft-gate probe must run for a managed-repo gh pr ready");
+  const [bin, quotedPath] = probe.command.split(" ");
+  const scriptPath = quotedPath.replace(/^"/, "").replace(/"$/, "");
+  assert.equal(bin, "node", "the probe runs the script with node");
+  assert.ok(path.isAbsolute(scriptPath), `probe script must be absolute, got ${scriptPath}`);
+  assert.equal(fs.existsSync(scriptPath), true, "the probed script must exist in the dev-loops package");
+  assert.equal(scriptPath.startsWith(root + path.sep), false, "the probe must not resolve inside the consumer repo");
+  assert.equal(probe.cwd, root, "the probe still runs with the consumer repo as cwd");
 });
 
 test("Pi tool_call runs the draft-gate probe only for a gated gh pr ready", async () => {
@@ -141,6 +183,31 @@ test("Pi tool_call caches the repo facts per cwd", async () => {
   await callAs(gate, "developer", MERGE);
   const repoToplevel = gate.execCalls.filter((call) => call.command === "git rev-parse --show-toplevel");
   assert.equal(repoToplevel.length, 1, "repo identity must resolve once per cwd, not once per tool call");
+});
+
+test("Pi tool_call re-probes a cwd that was not a repo when it becomes one", async () => {
+  clearCoordinatorFlag();
+  const gate = register({ repoRoot: managedRepoRoot({ humanMergeOnly: true }), unmanaged: true });
+  // Not a repo yet: the facts stay permissive, and an unresolved cwd must NOT be cached as such.
+  assert.deepEqual(await callAs(gate, "developer", MERGE), { block: false });
+  gate.state.unmanaged = false;
+  assert.match((await callAs(gate, "developer", MERGE)).reason, /STOP-HUMAN-MERGE-001/);
+});
+
+test("Pi tool_call keeps STOP-HUMAN-MERGE-001 when the repo config layer is schema-rejected", async () => {
+  clearCoordinatorFlag();
+  const root = managedRepoRoot();
+  // An unknown key makes the strict file schema reject the WHOLE `.devloops` layer, so the layer's
+  // `humanMergeOnly: false` never applies and the packaged `autonomy.humanMergeOnly: true` default
+  // still binds — the Claude edge's resolve-human-merge-only helper resolves true here too. Gating
+  // the invariant on `errors.length === 0` would silently fail OPEN on exactly this case.
+  fs.writeFileSync(path.join(root, ".devloops"), "version: 1\nautonomy:\n  humanMergeOnly: false\nunknownKnob: true\n", "utf8");
+  const gate = register({ repoRoot: root });
+  for (const role of ALL_ROLES) {
+    const decision = await callAs(gate, role, MERGE);
+    assert.equal(decision.block, true, `role ${String(role)}`);
+    assert.match(decision.reason, /STOP-HUMAN-MERGE-001/, `role ${String(role)}: a rejected repo layer must not drop the packaged default`);
+  }
 });
 
 test("Pi tool_call revalidates the cached repo facts when the repo config changes (no stale facts)", async () => {
@@ -165,7 +232,7 @@ test("Pi tool_call blocks the coordinator's inline verification under DEVLOOPS_C
     // A worker subagent may still run targeted checks inline.
     assert.deepEqual(await callAs(gate, "developer", "bun run verify"), { block: false });
   } finally {
-    clearCoordinatorFlag();
+    restoreCoordinatorFlag();
   }
 });
 

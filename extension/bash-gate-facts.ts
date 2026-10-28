@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadDevLoopConfig, resolveHumanMergeOnly } from '@dev-loops/core/config';
 import {
   commandContainsGhPrReady,
@@ -8,7 +9,7 @@ import {
   isCleanRepoSlug,
 } from '@dev-loops/core/loop/bash-command-classify';
 import type { ExtensionHarnessAdapter } from './harness-types.ts';
-import { PRE_PR_READY_GATE_SCRIPT, PR_READY_GATE_TIMEOUT_MS, defaultResolveRepoContext } from './post-merge-update.ts';
+import { PR_READY_GATE_TIMEOUT_MS, defaultResolveRepoContext } from './post-merge-update.ts';
 import type { PiBashGateFacts } from './readonly-role-gate.ts';
 
 /**
@@ -23,14 +24,20 @@ import type { PiBashGateFacts } from './readonly-role-gate.ts';
  *     the coordinator write boundary read;
  *   - the `gh pr ready` draft-gate probe, run only when that verb appears in a managed repo.
  *
- * A repo that cannot be resolved, a config that cannot be loaded and a probe that cannot run fail
- * the way the Claude hook fails: the repo facts stay permissive (no managed context, no
- * human-merge invariant), while a resolved managed repo with an unreadable PR number or a failed
- * probe stays fail-closed (deny). Repo and config facts are cached per cwd, so a session pays for
- * the git/config reads once per working directory — and the cache is revalidated on every call
- * against the repo config sources' `stat` signature, so a config that changed under the same cwd
- * is never served from the cache (a stale `humanMergeOnly: false` would fail OPEN on
- * STOP-HUMAN-MERGE-001, the rule this module exists to enforce).
+ * A repo that cannot be resolved and a probe that cannot run fail the way the Claude hook fails:
+ * the repo facts stay permissive (no managed context, no human-merge invariant), while a resolved
+ * managed repo with an unreadable PR number or a failed probe stays fail-closed (deny). The
+ * human-merge invariant is read from the merged config the loader returns, errors included: a
+ * schema-rejected repo layer is dropped while every merged layer underneath it stays in effect, so
+ * the packaged `autonomy.humanMergeOnly: true` default still binds (mirrors the Claude edge's
+ * `scripts/loop/resolve-human-merge-only.mjs`). Repo and config facts are cached per resolved cwd,
+ * so a session pays for the git/config reads once per working directory — and the cache is
+ * revalidated on every call against a `stat` signature of that repo's own `.devloops` and
+ * `.pi/dev-loop/defaults` variants, so an edit to one of those files is never served from the cache
+ * (a stale `humanMergeOnly: false` would fail OPEN on STOP-HUMAN-MERGE-001, the rule this module
+ * exists to enforce). That signature does not cover the packaged extension-defaults layer the
+ * loader always merges, nor the git remote the slug derives from; an unresolved (non-repo) cwd is
+ * not cached at all, so a directory that becomes a repo later is re-probed on the next call.
  */
 
 type RepoFacts = Pick<PiBashGateFacts, 'inManagedContext' | 'managedRepoSlug' | 'repoSlug' | 'humanMergeOnly'>;
@@ -45,10 +52,44 @@ const EMPTY_REPO_FACTS: RepoFacts = Object.freeze({
 const NO_READY_GATE: { passed: false; error: null } = Object.freeze({ passed: false, error: null });
 
 /**
+ * The draft-gate evidence script, resolved from THIS module's own location — the dev-loops package
+ * the extension runs from — never from the cwd repo. The Claude edge resolves its own launcher the
+ * same way (`<plugin>/bin/dev-loops-run`) and runs it with `cwd: repoRoot`; a repo-relative path
+ * would deny every `gh pr ready` in a managed consumer repo that ships no `scripts/loop/` of its
+ * own, where the identical command is allowed on Claude Code. Quoted at the call site so an install
+ * path containing spaces still reaches the script.
+ */
+const READY_GATE_SCRIPT = fileURLToPath(new URL('../scripts/loop/pre-pr-ready-gate.mjs', import.meta.url));
+/** The script's package-relative name — stable across install roots for the deny message. */
+const READY_GATE_SCRIPT_LABEL = 'scripts/loop/pre-pr-ready-gate.mjs';
+/**
+ * Node's own startup diagnostics (missing module, unknown extension, permission error): the probe
+ * never reached the gate script, so "could not run" must not be reported as "no clean record".
+ * Mirrors the Claude hook's `startupFailure` discrimination in `pre-tool-use-bash-gate.mjs`.
+ */
+const READY_GATE_STARTUP_FAILURE_RE =
+  /^(?:Error(?: \[ERR_MODULE_NOT_FOUND\])?: Cannot find (?:module|package)|TypeError \[ERR_UNKNOWN_FILE_EXTENSION\]|Error \[ERR_UNSUPPORTED_DIR_IMPORT\]|Error: (?:EACCES: permission denied|EPERM: operation not permitted), open |SyntaxError:)/m;
+
+/** The gate tool's JSON `{ "error": ... }` on stderr, or null when stderr carries none. */
+function reportedGateError(stderr: string): string | null {
+  try {
+    const parsed = JSON.parse(stderr);
+    return typeof parsed?.error === 'string' && parsed.error.trim() !== '' ? parsed.error : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The probe could not run at all (spawn, timeout, or node startup failure). */
+const couldNotRunReadyGate = (): { passed: false; error: string } =>
+  ({ passed: false, error: `could not run ${READY_GATE_SCRIPT_LABEL}` });
+
+/**
  * The repo-level config sources a cached fact entry depends on: the `.devloops` variants the
  * `inManagedContext` probe reads, and the `.pi/dev-loop/defaults` variants the config loader layers
  * underneath them. Their `stat` signature is a cheap, spawn-free fingerprint that changes whenever
- * the repo's config content does, so the cache can be revalidated per call without a git read.
+ * one of those repo files does, so the cache can be revalidated per call without a git read. The
+ * packaged extension-defaults layer and the git remote are outside this signature.
  */
 const CONFIG_SOURCE_BASES = Object.freeze(['.devloops', path.join('.pi', 'dev-loop', 'defaults')]);
 const CONFIG_SOURCE_EXTS = Object.freeze(['', '.yaml', '.yml', '.json']);
@@ -70,7 +111,7 @@ function configSourceSignature(repoRoot: string): string {
   return parts.join('|');
 }
 
-type CachedRepoFacts = { facts: RepoFacts & { repoRoot: string | null }; configSignature: string };
+type CachedRepoFacts = { facts: RepoFacts & { repoRoot: string }; configSignature: string };
 
 async function resolveRepoFacts(exec: ExtensionHarnessAdapter['exec'], cwd: string): Promise<RepoFacts & { repoRoot: string | null }> {
   let repo;
@@ -80,12 +121,15 @@ async function resolveRepoFacts(exec: ExtensionHarnessAdapter['exec'], cwd: stri
     return { ...EMPTY_REPO_FACTS, repoRoot: null };
   }
   if (!repo.repoRoot) return { ...EMPTY_REPO_FACTS, repoRoot: null };
-  // A config that fails to load or validate leaves the invariant unresolved — the same fail-open
-  // the Claude hook's `resolve-human-merge-only` helper takes; every other guard still applies.
+  // Resolve the invariant from the merged config exactly as the Claude edge's
+  // `scripts/loop/resolve-human-merge-only.mjs` does — it ignores `errors` too. A schema-rejected
+  // `.devloops` drops only its own layer; every layer merged underneath it (including the packaged
+  // `autonomy.humanMergeOnly: true` default) stays in effect, so gating on `errors.length === 0`
+  // would silently fail OPEN on STOP-HUMAN-MERGE-001, the rule this module exists to enforce.
   let humanMergeOnly = false;
   try {
-    const { config, errors } = await loadDevLoopConfig({ repoRoot: repo.repoRoot });
-    humanMergeOnly = (errors?.length ?? 0) === 0 && resolveHumanMergeOnly(config);
+    const { config } = await loadDevLoopConfig({ repoRoot: repo.repoRoot });
+    humanMergeOnly = resolveHumanMergeOnly(config);
   } catch {
     humanMergeOnly = false;
   }
@@ -118,13 +162,22 @@ async function resolveReadyGate(
   });
   if (!inManagedRepo) return null;
   try {
-    const result = await exec(`${PRE_PR_READY_GATE_SCRIPT} --repo ${facts.repoSlug} --pr ${prNumber}`, {
+    const result = await exec(`node "${READY_GATE_SCRIPT}" --repo ${facts.repoSlug} --pr ${prNumber}`, {
       cwd: facts.repoRoot ?? undefined,
       timeout: PR_READY_GATE_TIMEOUT_MS,
     });
-    return result.code === 0 ? { passed: true, error: null } : NO_READY_GATE;
+    if (result.code !== 0 || result.killed) {
+      // Keep the probe's own verdict: "could not run" (spawn/timeout/startup), the tool's reported
+      // evidence error, and "ran, found no clean record" are three different denials.
+      if (result.killed) return couldNotRunReadyGate();
+      const reported = reportedGateError(`${result.stderr ?? ''}`.trim());
+      if (reported) return { passed: false, error: reported };
+      if (READY_GATE_STARTUP_FAILURE_RE.test(`${result.stderr ?? ''}`)) return couldNotRunReadyGate();
+      return NO_READY_GATE;
+    }
+    return { passed: true, error: null };
   } catch {
-    return { passed: false, error: 'could not run scripts/loop/pre-pr-ready-gate.mjs' };
+    return couldNotRunReadyGate();
   }
 }
 
@@ -142,14 +195,14 @@ export function createPiBashGateFactsResolver({
   async function cachedRepoFacts(cwd: string): Promise<RepoFacts & { repoRoot: string | null }> {
     const cached = cache.get(cwd);
     // Revalidate a resolved repo against its config sources: the same cwd may hold a different
-    // `.devloops` than the one the cached facts were resolved from (a moved checkout, a branch
-    // switch, a config edit in a live session). An unresolved cwd has no config source to compare
-    // (there is no repo root), so it stays cached rather than re-running git on every call.
-    if (cached && (!cached.facts.repoRoot || cached.configSignature === configSourceSignature(cached.facts.repoRoot))) {
+    // `.devloops` than the one the cached facts were resolved from (a branch switch, a config edit
+    // in a live session). An unresolved cwd has no config source to compare and is NOT cached, so a
+    // directory that becomes a repo later is re-probed instead of serving permissive facts forever.
+    if (cached && cached.configSignature === configSourceSignature(cached.facts.repoRoot)) {
       return cached.facts;
     }
     const facts = await resolveRepoFacts(exec, cwd);
-    cache.set(cwd, { facts, configSignature: facts.repoRoot ? configSourceSignature(facts.repoRoot) : '' });
+    if (facts.repoRoot) cache.set(cwd, { facts, configSignature: configSourceSignature(facts.repoRoot) });
     return facts;
   }
   return async function resolveBashGateFacts({ cwd, command }) {
