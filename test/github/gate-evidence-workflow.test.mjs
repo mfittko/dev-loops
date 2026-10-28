@@ -27,15 +27,12 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   const workflow = parseYaml(content);
   const triggers = workflow.on;
 
-  // #1702: `synchronize` (development push) is deliberately NOT a trigger — the
-  // check is pre-merge-only. Development pushes must not start/leave a blocking
-  // gate-evidence run; the check materializes only at ready_for_review / a
-  // verdict-post / a verdict-shaped issue comment.
-  assert.deepEqual(triggers.pull_request.types, ["opened", "reopened", "ready_for_review"]);
-  assert.ok(
-    !Array.isArray(triggers.pull_request.types) || !triggers.pull_request.types.includes("synchronize"),
-    "synchronize must not be a trigger — the check is pre-merge-only",
-  );
+  // #2752 (ADR 0186): `synchronize` is a trigger so a base-merge push recomputes a verdict carry
+  // without a new review event. The draft guard still skips draft pushes, so development
+  // pushes on a draft PR start no run (#1702); the check materializes at ready_for_review,
+  // a verdict-post, a verdict-shaped issue comment or a push to a ready PR.
+  assert.deepEqual(triggers.pull_request.types, ["opened", "reopened", "ready_for_review", "synchronize"]);
+  assert.match(content, /github\.event\.pull_request\.draft == false/, "the draft guard still skips draft pushes");
   // The verdict surface is a PR review: `submitted` fires for each verdict on a
   // NEW head, `edited` for the same-head in-place correction (PUT
   // pulls/{pr}/reviews/{id}) and for the manual lost-run recovery. BOTH types
@@ -102,6 +99,7 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
       "(github.event_name == 'issue_comment' && github.event.issue.pull_request && " +
       "(startsWith(github.event.comment.body, '### Gate review:') || " +
       "startsWith(github.event.comment.body, 'approve merge ') || " +
+      "startsWith(github.event.comment.body, '<!-- dev-loops:carried-heads:v1') || " +
       "startsWith(github.event.changes.body.from, 'approve merge ')) && " +
       "contains(fromJSON('[\"OWNER\", \"MEMBER\", \"COLLABORATOR\"]'), github.event.comment.author_association))",
   );
@@ -119,6 +117,13 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   assert.ok(
     collapsedIf.includes("startsWith(github.event.changes.body.from, 'approve merge ')"),
     "edit-away retraction of an approve-merge marker must re-fire gate-evidence (fail-closed)",
+  );
+  // Carried-heads record comment re-fires the check (ADR 0186); the exact-composition
+  // pin above keeps it under the author_association guard and anchored with startsWith
+  // (no leading-space match).
+  assert.ok(
+    collapsedIf.includes("startsWith(github.event.comment.body, '<!-- dev-loops:carried-heads:v1')"),
+    "carried-heads record comment must re-fire gate-evidence",
   );
   assert.equal(workflow.permissions.statuses, "write");
 });

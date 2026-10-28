@@ -100,15 +100,15 @@ test("restGraphqlJson fails closed on a 200 response with no data", async () => 
 test("restFetchPrView maps head/base sha and labels (string or object shape)", async () => {
   const fetchImpl = async () => jsonResponse({
     head: { sha: "abc1234" },
-    base: { sha: "def5678" },
+    base: { sha: "def5678", ref: "main" },
     labels: [{ name: "gate:full" }],
   });
   const result = await restFetchPrView("o/r", 17, { GH_TOKEN: "tok" }, { fetchImpl });
-  assert.deepEqual(result, { headRefOid: "abc1234", baseRefOid: "def5678", labels: ["gate:full"] });
+  assert.deepEqual(result, { headRefOid: "abc1234", baseRefOid: "def5678", baseRefName: "main", labels: ["gate:full"] });
 });
 
 test("restFetchPrView tolerates a missing head/base/labels shape", async () => {
   const fetchImpl = async () => jsonResponse({});
   const result = await restFetchPrView("o/r", 17, { GH_TOKEN: "tok" }, { fetchImpl });
-  assert.deepEqual(result, { headRefOid: null, baseRefOid: null, labels: [] });
+  assert.deepEqual(result, { headRefOid: null, baseRefOid: null, baseRefName: null, labels: [] });
 });

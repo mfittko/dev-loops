@@ -175,6 +175,8 @@ function detectorEntries({ reviews, shared }, { extra = [], files, formallyReque
     },
     { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: line({ users: [], teams: [] }) },
     { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--json", "headRefOid"], stdout: line({ headRefOid: HEAD }) },
+    // Lazy base-ref fetch for the clean cross-head gate-marker carry candidate (#2752).
+    { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--json", "baseRefName"], stdout: line({ baseRefName: "main" }) },
     gateEvidenceEntry(),
     REVIEWS_ENTRY,
     { matchByClaims: true, assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: formallyRequested ? `${COPILOT}\n` : "" },

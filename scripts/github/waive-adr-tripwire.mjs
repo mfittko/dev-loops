@@ -125,7 +125,7 @@ export async function waiveAdrTripwire(options, {
   editPr = realEditPr,
 } = {}) {
   const { repo, pr } = options;
-  const gh = { env, ghCommand, runChild };
+  const gh = { env, ghCommand, runChild, repoRoot };
 
   // The record and the tripwire are read from the local checkout: it must be --repo.
   const originSlug = detectOriginSlug(repoRoot);

@@ -20,6 +20,7 @@ import {
   renderGateReviewCommentBody,
   renderStructuredFindings,
   summarizeCheckpointVerdictText,
+  summarizeExistingComment,
   upsertCheckpointVerdict as upsertWithCap,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
@@ -292,6 +293,16 @@ function buildGateComment({
 // `coordinationContext.snapshot?.unresolvedThreadCount ?? null` with a
 // hardcoded `null` in that function fails this assertion, unlike a test that
 // reproduces the object literal independently.
+test("summarizeExistingComment: a carried marker at the posting head is not the existing verdict, so upsert posts a new surface and leaves the origin comment alone", () => {
+  const origin = "a".repeat(40);
+  const head = "b".repeat(40);
+  const base = { visible: true, verdict: "clean", contractComplete: true, commentId: 11, surface: "comment" };
+  const plain = summarizeExistingComment({ strict: null, marker: { ...base, headSha: head }, headSha: head });
+  assert.equal(plain?.commentId, 11, "an uncarried same-head marker still matches");
+  const carried = summarizeExistingComment({ strict: null, marker: { ...base, headSha: head, carriedFrom: origin }, headSha: head });
+  assert.equal(carried, null, "no existing surface: the origin comment is neither edited nor noop-ed");
+});
+
 test("buildCoordinationEvaluatorInput threads unresolvedThreadCount from coordinationContext.snapshot (#1472)", () => {
   const coordinationContext = {
     repo: "owner/repo",
