@@ -17,6 +17,7 @@ const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)))
 const SLUG = "mfittko/dev-loops";
 const CONTRACT = path.join(repoRoot, "skills/docs/cross-harness-regression-contract.md");
 const REQUIRED_RULES = path.join(repoRoot, "skills/docs/required-rules.json");
+const DECIDER_SOURCE = path.join(repoRoot, "packages/core/src/loop/bash-gate-decisions.mjs");
 
 const MANAGED = Object.freeze({
   inManagedContext: true,
@@ -135,6 +136,27 @@ test("every Bash-gate rule ID is a registered rule in required-rules.json (the p
   for (const rule of BASH_GATE_RULES) {
     assert.ok(registered.has(rule.id), `${rule.id}: must stay registered in skills/docs/required-rules.json`);
   }
+});
+
+test("every rule ID the shared decider returns is a listed rule with a stated Pi verdict (AC2)", () => {
+  // BASH_GATE_RULES, FIXTURES and the contract table are three hand-maintained lists that the other
+  // assertions compare only to EACH OTHER, so a brand-new deny rule added to the decider alone would
+  // pass them all. Read the decider's own source instead: every `ruleId: "<ID>"` literal it can
+  // return must appear in BASH_GATE_RULES (and therefore in the contract matrix one test down), so a
+  // new rule cannot land without stating its Pi verdict there.
+  const returned = new Set();
+  for (const line of fs.readFileSync(DECIDER_SOURCE, "utf8").split("\n")) {
+    const at = line.indexOf("ruleId:");
+    if (at === -1) continue;
+    // Only the literals in `ruleId` position: `ruleId: "ID"` and the `ruleId: cond ? "A" : "B"` form.
+    for (const [, id] of line.slice(at).matchAll(/"([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)"/g)) returned.add(id);
+  }
+  assert.ok(returned.size > 0, "the decider source must return at least one registered rule ID");
+  assert.deepEqual(
+    [...returned].sort(),
+    BASH_GATE_RULES.map((rule) => rule.id).sort(),
+    "a deny rule returned by packages/core/src/loop/bash-gate-decisions.mjs must be added to BASH_GATE_RULES and state its Pi verdict in the cross-harness contract matrix (skills/docs/cross-harness-regression-contract.md)",
+  );
 });
 
 test("the Bash-gate rule list pins each rule's Pi verdict against the cross-harness contract (AC2)", () => {

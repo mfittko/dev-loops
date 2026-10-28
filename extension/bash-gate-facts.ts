@@ -127,11 +127,16 @@ async function resolveRepoFacts(exec: ExtensionHarnessAdapter['exec'], cwd: stri
   // `autonomy.humanMergeOnly: true` default) stays in effect, so gating on `errors.length === 0`
   // would silently fail OPEN on STOP-HUMAN-MERGE-001, the rule this module exists to enforce.
   let humanMergeOnly = false;
-  try {
-    const { config } = await loadDevLoopConfig({ repoRoot: repo.repoRoot });
-    humanMergeOnly = resolveHumanMergeOnly(config);
-  } catch {
-    humanMergeOnly = false;
+  // Only read inside a managed context: STOP-HUMAN-MERGE-001 is the sole consumer and it also
+  // requires a managed repo, so this skips the parse without changing any decision (fail-closed
+  // semantics unchanged — the catch below leaves the same `false`).
+  if (repo.inManagedContext) {
+    try {
+      const { config } = await loadDevLoopConfig({ repoRoot: repo.repoRoot });
+      humanMergeOnly = resolveHumanMergeOnly(config);
+    } catch {
+      humanMergeOnly = false;
+    }
   }
   return {
     inManagedContext: repo.inManagedContext,
