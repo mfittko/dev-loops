@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -103,4 +104,19 @@ test("--judge-skip refuses the silently ignored flags", () => {
 
 test("a blocked zero-finding round still requires the judge", () => {
   assert.match(judgeSkipRefusal({ findings: [], priorActItems: [], overallVerdict: "blocked" }), /blocked/);
+});
+
+test("without --tmp-root a worktree finds the ledger consolidate-fanin wrote under its own tmp/", async () => {
+  const { root, options } = await setup([]);
+  const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { stdio: "pipe" });
+  const main = path.join(root, "main");
+  const worktree = path.join(root, "wt");
+  await mkdir(main);
+  git(main, "init", "-q");
+  git(main, "commit", "-q", "--allow-empty", "-m", "i");
+  git(main, "worktree", "add", "-q", worktree, "-b", "wt");
+  for (const file of ["findings.json", "spec.json", "tmp"]) await cp(path.join(root, file), path.join(worktree, file), { recursive: true });
+  const { tmpRoot, ...rest } = options;
+  const result = await judgePassCli(rest, { repoRoot: worktree });
+  assert.equal(result.ok, true);
 });

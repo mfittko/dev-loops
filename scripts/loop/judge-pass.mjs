@@ -982,10 +982,16 @@ const historyRoot = (options, resolvedRoot) => (options.tmpRoot ? path.resolve(r
  * It must equal the head-keyed fan-in ledger (consolidate-fanin --emit-plan writes it per head), and a round retired after that ledger was written refuses.
  */
 async function verifySkipRound(options, resolvedRoot) {
-  const tmpRoot = historyRoot(options, resolvedRoot);
-  const keyed = path.resolve(resolvedRoot, buildGateFaninLedgerPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot }));
-  const stat = await stat_(keyed);
-  if (!stat) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: no fan-in ledger exists for ${options.gate} at ${options.headSha} (${keyed}); run consolidate-fanin with --emit-plan for this head`);
+  // consolidate-fanin writes under the cwd's tmp/ by default, so without --tmp-root check every checkout's tmp too (as the judged path does).
+  const candidates = options.tmpRoot
+    ? [historyRoot(options, resolvedRoot)]
+    : [...new Set([historyRoot(options, resolvedRoot), ...resolveLedgerCheckouts(resolvedRoot).map((root) => path.join(root, "tmp"))])];
+  let tmpRoot, keyed, stat;
+  for (const candidate of candidates) {
+    keyed = path.resolve(resolvedRoot, buildGateFaninLedgerPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: candidate }));
+    if ((stat = await stat_(keyed))) { tmpRoot = candidate; break; }
+  }
+  if (!stat) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: no fan-in ledger exists for ${options.gate} at ${options.headSha} (checked ${candidates.join(", ")}); run consolidate-fanin with --emit-plan for this head`);
   const [given, expected] = await Promise.all([options.findingsFile, keyed].map((file) => readJsonArtifact(path.resolve(resolvedRoot, file), "--findings-file", parseError)));
   if (sha256Hex(given) !== sha256Hex(expected)) {
     throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: --findings-file ${options.findingsFile} is not the fan-in ledger for ${options.gate} at ${options.headSha}; pass the ledger consolidate-fanin wrote for this head`);
