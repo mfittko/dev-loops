@@ -16,7 +16,7 @@ export function checkCoreResolutionBeforeImport(root) {
   const real = (p) => { try { return realpathSync(p); } catch { return null; } };
   const own = real(path.join(root, "packages", "core"));
   if (own === null) return { ok: true };
-  const fix = "Run `bun install --frozen-lockfile` inside the worktree (or re-provision it with ensure-worktree).";
+  const fix = "Run `bun install --frozen-lockfile` inside the worktree.";
   for (let dir = path.resolve(root); ; dir = path.dirname(dir)) {
     const found = real(path.join(dir, "node_modules", "@dev-loops", "core"));
     if (found !== null) {
