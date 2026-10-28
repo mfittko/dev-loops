@@ -898,3 +898,17 @@ test("routed subcommands reject an unknown flag exactly like the direct script",
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("CLI wrapper reports child_output_too_large and emits no partial output when the child overflows the buffer", async () => {
+  const stdout = createBufferStream();
+  const stderr = createBufferStream();
+  const exitCode = await runCli({
+    argv: ["loop", "audit-session", "/nonexistent/transcript.jsonl"],
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+    spawnMaxBuffer: 10,
+  });
+  assert.equal(exitCode, 1);
+  assert.equal(stdout.read(), "");
+  assert.match(stderr.read(), /child_output_too_large.*10-byte wrapper buffer.*one transcript at a time/);
+});

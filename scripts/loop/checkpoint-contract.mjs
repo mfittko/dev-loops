@@ -229,7 +229,7 @@ function parseCliArgs(argv) {
       throw parseError(`retro_artifact_missing: --record-source must resolve to an existing, non-empty file (the agent/subagent tool-call record the fresh-context retro was seeded with): ${recordPath}`);
     }
     // The record must name this cycle: a present-but-unrelated file is hollow evidence.
-    if (!readFileSync(recordPath, "utf8").includes(mergeCommit.trim())) {
+    if (!readFileSync(recordPath, "utf8").toLowerCase().includes(mergeCommit.trim().toLowerCase())) {
       throw parseError(`retro_artifact_missing: --record-source ${recordPath} does not contain the cycle's merge commit ${mergeCommit.trim()}`);
     }
     // Delegate shape ownership to the core normalizer — the CLI validates the

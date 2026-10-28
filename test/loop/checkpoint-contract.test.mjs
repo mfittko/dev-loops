@@ -540,3 +540,18 @@ test("checkpoint-contract CLI writes to the MAIN checkout when invoked from a li
     await rm(worktreeParent, { recursive: true, force: true });
   }
 });
+
+test("checkpoint-contract CLI matches the merge commit in the record case-insensitively", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "checkpoint-contract-case-"));
+  try {
+    await mkdir(path.join(cwd, "tmp", "retro"), { recursive: true });
+    await writeFile(path.join(cwd, "tmp", "retro", "record.md"), `merge ${VALID_SHA}\n`, "utf8");
+    const { code, stderr } = await runNode(
+      ["--state", "complete", "--notes", "ok", "--retro-context", "fresh", "--record-source", "tmp/retro/record.md", "--repo", "mfittko/dev-loops", "--pr", "5", "--merge-commit", VALID_SHA.toUpperCase()],
+      { cwd },
+    );
+    assert.equal(code, 0, stderr);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});

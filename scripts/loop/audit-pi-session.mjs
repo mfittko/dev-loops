@@ -49,6 +49,7 @@ Options:
 ${JQ_OUTPUT_USAGE}`;
 
 // Whole-document --json above this size has been observed cut mid-object on a pipe.
+// Coupling: this cap must stay below SPAWN_MAX_BUFFER in cli/index.mjs, or the wrapper kills the child first.
 export const MAX_JSON_BYTES = 1_000_000;
 const VALID_HARNESS_VALUES =["auto", "pi", "claude"];
 
@@ -144,7 +145,8 @@ export async function runAuditCli(
 
   if (options.json || options.jq !== undefined || options.silent || options.fields !== undefined) {
     // Refuse oversized whole-document output: a piped stdout can be cut
-    // mid-object with no message. --jq/--fields/--silent emit small output.
+    // mid-object with no message. --jq/--fields/--silent are exempt from this cap
+    // (their output size is not bounded here; the wrapper buffer is the backstop).
     if (options.jq === undefined && !options.silent && options.fields === undefined) {
       const bytes = Buffer.byteLength(JSON.stringify(result));
       if (bytes > maxJsonBytes) {

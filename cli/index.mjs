@@ -617,6 +617,7 @@ export function createCliRuntime({
 
 // ── Subcommand routing dispatch ────────────────────────────────────
 
+const SPAWN_MAX_BUFFER = 64 * 1024 * 1024;
 const INHERIT_STDIO_SCRIPTS = new Set([path.resolve(REPO_ROOT, "scripts/loop/claude-launch.mjs")]);
 
 function resolveSubcommandRoute(args) {
@@ -721,6 +722,8 @@ export async function runCli({
   // Test-only injection seam for the `doctor` registry freshness check;
   // production callers always take the real `fetchLatestPublishedVersion`.
   fetchLatestVersion,
+  // Child-output buffer for routed subcommands; the audit-session per-script cap must stay below it.
+  spawnMaxBuffer = SPAWN_MAX_BUFFER,
 } = {}) {
   const fromTop = parseTopLevelCommand(argv);
 
@@ -828,8 +831,16 @@ export async function runCli({
         return inherited.status ?? 1;
       }
       const result = spawnSync("node", [fromTop.scriptPath, ...scriptArgs], {
-        cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+        cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: spawnMaxBuffer,
       });
+      // A killed child (ENOBUFS) leaves a truncated stdout: emit nothing partial, fail with a typed message.
+      if (result.error) {
+        const hint = fromTop.scriptPath.endsWith("audit-pi-session.mjs")
+          ? " Audit one transcript at a time (pass a single transcript file) or narrow the output with --jq/--fields."
+          : "";
+        writeLines(stderr, [`child_output_too_large: the subcommand failed (${result.error.code ?? result.error.message}); its output may exceed the ${spawnMaxBuffer}-byte wrapper buffer.${hint}`]);
+        return 1;
+      }
       if (result.stdout) stdout.write(result.stdout);
       if (result.stderr) stderr.write(result.stderr);
       return result.status ?? (result.signal ? 1 : result.error ? 1 : 0);
