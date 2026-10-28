@@ -14,9 +14,10 @@ current-head draft_gate evidence, zero unresolved gate-authored review
 threads, size budget, ADR tripwire, comment discipline, and the PR-body spec
 — EXCEPT the CI precondition, which this script disables through an internal
 runtime seam (no CLI flag exists on this script or on ready-for-review.mjs to
-skip CI). The CI precondition is redundant here: the clean current-head
-draft_gate verdict already carried the gates.draft.requireCi precondition
-when it was posted.
+skip CI). The skip is redundant for a verdict posted at the current head: it
+already carried the gates.draft.requireCi precondition when it was posted. A
+carried verdict (ADR 0186) was posted at an earlier head, so green current-head
+CI is required for it.
 This script accepts NO size-budget waiver flags: a PR over the size budget
 restores via \`dev-loops pr ready-for-review --waive-size-budget --reason
 <text> [--approved-by <human>]\` once CI is green, not through restore-ready.

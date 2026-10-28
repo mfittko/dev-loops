@@ -4517,3 +4517,34 @@ test("early surface: size escalate combined with ADR block or unknown keeps the 
   const unknown = draftAt({ clean: true, adrTripwire: { outcome: "unknown", satisfiedBy: null, triggers: [], reasons: [], remedies: [] }, sizeBudget: SIZE_ESCALATE });
   assert.equal(unknown.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
 });
+
+// A carried draft_gate marker (ADR 0186): headSha is the current head, carriedFrom names the origin head.
+function carriedDraftAt(ciStatus) {
+  const head = "abc123456789";
+  return evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: head,
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.PENDING,
+    ciStatus,
+    draftGateRequireCi: true,
+    draftGate: gate({ visible: true, headSha: head, verdict: "clean" }),
+    draftGateMarker: { ...gate({ visible: true, headSha: head, verdict: "clean", contractComplete: true }), carriedFrom: "def123456789" },
+  });
+}
+
+test("carried draft_gate marker with pending CI waits for CI and forbids mark-ready", () => {
+  const result = carriedDraftAt("pending");
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_CI);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert.match(result.reason, /carried from an earlier head/u);
+  assert.match(result.reason, /mark-ready/u);
+});
+
+test("carried draft_gate marker with failing CI reports blocked and forbids mark-ready", () => {
+  const result = carriedDraftAt("failure");
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert.match(result.reason, /mark-ready/u);
+});

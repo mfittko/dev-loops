@@ -95,6 +95,7 @@ export async function restFetchPrView(repo, pr, env, { fetchImpl = fetch } = {})
   return {
     headRefOid: typeof data?.head?.sha === "string" ? data.head.sha : null,
     baseRefOid: typeof data?.base?.sha === "string" ? data.base.sha : null,
+    baseRefName: typeof data?.base?.ref === "string" ? data.base.ref : null,
     labels: Array.isArray(data?.labels)
       ? data.labels.map((label) => (typeof label?.name === "string" ? label.name : label))
       : [],
