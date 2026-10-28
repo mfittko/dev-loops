@@ -58,9 +58,9 @@ export const PRE_PR_READY_GATE_SCRIPT = 'node scripts/loop/pre-pr-ready-gate.mjs
 const MERGE_COMMAND_TIMEOUT_MS = 15 * 60 * 1000;
 const POST_MERGE_UPDATE_TIMEOUT_MS = 10 * 60 * 1000;
 const REPO_RESOLUTION_TIMEOUT_MS = 5_000;
-const PR_READY_GATE_TIMEOUT_MS = 30_000;
+export const PR_READY_GATE_TIMEOUT_MS = 30_000;
 
-type RepoContext = {
+export type RepoContext = {
   repoRoot: string | null;
   repoSlug: string | null;
   inManagedContext: boolean;
@@ -123,7 +123,15 @@ function notify(ctx: Pick<HarnessContext, 'hasUI' | 'ui'>, message: string, leve
   }
 }
 
-async function defaultResolveRepoContext(exec: ExtensionHarnessAdapter['exec'], cwd: string): Promise<RepoContext> {
+/**
+ * Resolve the cwd repo's identity from git plumbing plus the `.devloops` presence probe. A repo is
+ * dev-loops-managed when any `.devloops` config variant exists at its root; the slug is null when
+ * the remote cannot be resolved (fail closed for callers that gate on it).
+ *
+ * Shared with the Pi Bash-gate facts resolver (`extension/bash-gate-facts.ts`), which needs the
+ * same three fields the post-merge hooks use.
+ */
+export async function defaultResolveRepoContext(exec: ExtensionHarnessAdapter['exec'], cwd: string): Promise<RepoContext> {
   const rootResult = await exec('git rev-parse --show-toplevel', {
     cwd,
     timeout: REPO_RESOLUTION_TIMEOUT_MS,

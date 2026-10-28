@@ -1,5 +1,6 @@
 import { EXECUTION_IDENTITY_RE } from '@dev-loops/core/loop/work-order-digest';
 import { NATIVE_PI_PARENT_SESSION_MARKER, isNativePiAsyncContext } from '@dev-loops/core/loop/run-context';
+import { decideBashGateDeny } from '@dev-loops/core/loop/bash-gate-decisions';
 
 /**
  * Pi enforcement of the read-only role boundary
@@ -8,6 +9,10 @@ import { NATIVE_PI_PARENT_SESSION_MARKER, isNativePiAsyncContext } from '@dev-lo
  * system prompt: pi-subagents writes `<active_agent name="<agent>"/>` into every named child. The Pi surface
  * must not import the Claude hook seam, so the sanctioned pull line is rebuilt from the shared identity
  * regex; a test pins parity with the Claude gate's `parseSanctionedPullLine`.
+ *
+ * The Bash-gate deny rules themselves are NOT rebuilt here: they live in the harness-neutral
+ * `@dev-loops/core/loop/bash-gate-decisions` module the Claude PreToolUse hook also calls, so a deny
+ * decision cannot hold on one harness and fail open on the other (decision record 0206).
  */
 const PULL_VALUE = '[A-Za-z0-9][\\w.:/#-]*';
 const SANCTIONED_PULL_RE = new RegExp(
@@ -117,6 +122,24 @@ function isReadSearchCommand(rawCommand: string): boolean {
 }
 export type PiToolCallDecision = { block: false } | { block: true; reason: string };
 
+/**
+ * The facts the shared Bash-gate deny decision needs, resolved by `extension/bash-gate-facts.ts` and
+ * injected here so this module stays pure (no IO).
+ *
+ * `facts` is REQUIRED on `decidePiToolCall` and has no empty default: a default switched every deny
+ * rule off (no managed context, no human-merge invariant, no coordinator enforcement, no ready-gate
+ * probe) and the omission was invisible at the call site — the fail-open this module closes, kept as
+ * the default.
+ */
+export type PiBashGateFacts = {
+  inManagedContext: boolean;
+  managedRepoSlug: string | null;
+  repoSlug: string | null;
+  humanMergeOnly: boolean;
+  enforceCoordinator: boolean;
+  readyGate: { passed: boolean; error: string | null } | null;
+};
+
 /** Every dev-loops agent role: the `name` frontmatter of `agents/*.agent.md`. */
 export const DEV_LOOPS_ROLES = Object.freeze([
   'review', 'judge', 'fixer', 'developer', 'refiner', 'docs', 'quality', 'dev-loop', 'gate-coordinator',
@@ -167,22 +190,59 @@ export function resolvePiRole({ systemPrompt, env = process.env, sessionId }: {
   return name;
 }
 /**
- * Decide a Pi `tool_call`. A restricted role runs only the sanctioned pull line (plus
- * read and search commands for the reviewer; the judge also runs its decision check). An unresolved role ('' from a blank tag, an
- * unknown dev-loops: name, conflicting tags or an untagged native async child session) fails
- * closed: it is treated as a restricted role that may pull only.
+ * Decide a Pi `tool_call`.
+ *
+ * The harness-neutral Bash-gate deny rules run for EVERY role including the untagged main agent: raw
+ * `gh pr merge`, raw waiver body writes and the other guard rules deny exactly as the Claude
+ * PreToolUse hook denies them (decision record 0206). A restricted role then
+ * runs only the sanctioned pull line (plus read and search commands for the reviewer; the judge
+ * also runs its decision check). An unresolved role ('' from a blank tag, an unknown `dev-loops:`
+ * name, conflicting tags or an untagged native async child session) fails closed: it is treated as
+ * a restricted role that may pull only.
+ *
+ * The reviewer's shell-inert read/search form is decided BEFORE the shared deny: the deny
+ * classifiers split shell segments without quote awareness, so a quoted search text that happens to
+ * spell a gated verb (`grep '; gh pr merge 42 ;' README.md`, the reviewer form the cross-harness
+ * contract names) would otherwise be misread as that verb and deny a read the role gate allows.
+ * `isReadSearchCommand` admits no unquoted shell-active character, so such a command can only read
+ * or search — it cannot execute the text it matches.
  */
-export function decidePiToolCall({ toolName, input, agentType }: {
+export function decidePiToolCall({ toolName, input, agentType, facts }: {
   toolName?: string;
   input?: { command?: unknown };
   agentType: string | null;
+  facts: PiBashGateFacts;
 }): PiToolCallDecision {
-  if (agentType === null || toolName !== 'bash') return { block: false };
-  if (agentType !== '' && !BASH_RESTRICTED_ROLES.includes(agentType)) return { block: false };
+  if (toolName !== 'bash') return { block: false };
   const command = typeof input?.command === 'string' ? input.command : '';
+  if (agentType !== null && READ_SEARCH_ROLES.has(agentType) && isReadSearchCommand(command)) return { block: false };
+  // Fail closed on a missing injection: without facts every shared deny rule would be switched off
+  // and only the read-only role restriction would remain (`facts` is required above, so this guards
+  // an untyped caller at runtime rather than a legitimate call shape).
+  if (!facts) {
+    return {
+      block: true,
+      reason:
+        'Bash gate blocked: the Pi tool_call handler resolved no repo facts for this command, so the shared ' +
+        'deny decision (raw `gh pr merge`/`gh pr create`, the ADR tripwire body writes, the coordinator verify ' +
+        'boundary) cannot run. Inject the facts from extension/bash-gate-facts.ts instead of omitting them.',
+    };
+  }
+  const deny = decideBashGateDeny({
+    command,
+    role: agentType,
+    repoSlug: facts.repoSlug,
+    managedRepoSlug: facts.managedRepoSlug,
+    inManagedContext: facts.inManagedContext,
+    humanMergeOnly: facts.humanMergeOnly,
+    enforceCoordinator: facts.enforceCoordinator,
+    readyGate: facts.readyGate,
+  });
+  if (deny) return { block: true, reason: deny.reason };
+  if (agentType === null) return { block: false };
+  if (agentType !== '' && !BASH_RESTRICTED_ROLES.includes(agentType)) return { block: false };
   if (parseSanctionedPullLine(command)) return { block: false };
   if (agentType === 'judge' && JUDGE_DECISION_CHECK_RE.test(command.trim()) && !command.includes('..')) return { block: false };
-  if (READ_SEARCH_ROLES.has(agentType) && isReadSearchCommand(command)) return { block: false };
   return {
     block: true,
     reason:

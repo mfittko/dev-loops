@@ -32,6 +32,7 @@
     "./loop/async-start-contract": "./src/loop/async-start-contract.mjs",
     "./loop/agent-stall": "./src/loop/agent-stall.mjs",
     "./loop/bash-command-classify": "./src/loop/bash-command-classify.mjs",
+    "./loop/bash-gate-decisions": "./src/loop/bash-gate-decisions.mjs",
     "./loop/child-launch-bound": "./src/loop/child-launch-bound.mjs",
     "./loop/reviewer-unit-bound": "./src/loop/reviewer-unit-bound.mjs",
     "./loop/conductor-routing": "./src/loop/conductor-routing.mjs",

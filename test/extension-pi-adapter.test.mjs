@@ -102,33 +102,41 @@ test("pi adapter registerCommand forwards name/description and wraps the handler
 });
 
 // ---------------------------------------------------------------------------
-// Cross-harness non-regression (#1086): the Claude-only coordinator→worker delegation guard seam
-// (#2082 — decideCoordinatorWriteGuard, the coordinator-verify branch of decideBashGate,
-// commandContainsCodeVerificationEntrypoint, normalizeAgentType) must be inert/absent on the Pi
-// path. Asserted by SOURCE INSPECTION (not "did not throw"): none of the extension/*.ts files that
-// make up the Pi harness surface import from ../loop/hook-decisions.mjs or reference the
-// coordinator-guard exports, so a Pi-side `bun test:extension` run can never invoke them.
+// Cross-harness non-regression (#1086, #2965). The Bash-gate deny rules are ONE shared decision
+// (`packages/core/src/loop/bash-gate-decisions.mjs`, decision record 0206), so the Pi surface MUST
+// reach it — that is what enforces COORDINATOR-VERIFY-BOUNDARY, the merge invariant and the rest of
+// the guard set on Pi (the `COORDINATOR-VERIFY-BOUNDARY` row of the cross-harness contract matrix).
+//
+// What stays Claude-only is the edge AROUND that seam: `decideBashGate`'s Claude extras and
+// `decideCoordinatorWriteGuard` in `packages/core/src/claude/hook-decisions.mjs`, which key on
+// Claude role machinery with no Pi equivalent. Asserted by SOURCE INSPECTION (not "did not throw"):
+// no extension/*.ts file imports that Claude module or references the coordinator WRITE guard, and
+// the shared deny seam is reached, not re-implemented per harness.
 // ---------------------------------------------------------------------------
-test("Pi extension surface (extension/*.ts) does not import or reference the Claude-only coordinator delegation guard seam (#2082, #1086)", () => {
+test("Pi extension surface (extension/*.ts) reaches the shared Bash-gate seam and not the Claude-only hook seam (#1086, #2082, #2965)", () => {
   const extensionDir = path.resolve(fileURLToPath(new URL("../extension", import.meta.url)));
   const files = fs.readdirSync(extensionDir).filter((f) => f.endsWith(".ts"));
   assert.ok(files.length > 0, "expected at least one extension/*.ts file to inspect");
 
   const forbiddenPatterns = [
-    /hook-decisions/, // decideCoordinatorWriteGuard / decideBashGate's coordinator-verify branch live here
+    /claude\/hook-decisions/, // decideBashGate's Claude-only extras and decideCoordinatorWriteGuard live here
     /decideCoordinatorWriteGuard/,
-    /normalizeAgentType/,
-    /commandContainsCodeVerificationEntrypoint/,
   ];
 
   const offenders = [];
+  const seamReachers = [];
   for (const file of files) {
     const source = fs.readFileSync(path.join(extensionDir, file), "utf8");
     for (const pattern of forbiddenPatterns) {
       if (pattern.test(source)) offenders.push(`${file} matches ${pattern}`);
     }
+    if (/@dev-loops\/core\/loop\/bash-gate-decisions/.test(source) && /decideBashGateDeny/.test(source)) seamReachers.push(file);
   }
-  assert.deepEqual(offenders, [], `Pi extension surface must not reference the Claude-only coordinator guard seam:\n${offenders.join("\n")}`);
+  assert.deepEqual(offenders, [], `Pi extension surface must not import the Claude-only hook seam or the coordinator write guard:\n${offenders.join("\n")}`);
+  assert.ok(
+    seamReachers.includes("readonly-role-gate.ts"),
+    `the Pi tool_call handler must reach the shared deny seam (decideBashGateDeny) instead of deciding Bash gating per harness, got ${JSON.stringify(seamReachers)}`,
+  );
 });
 
 test("toHarnessContext tolerates a missing ui/cwd and never throws", () => {

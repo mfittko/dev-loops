@@ -12,6 +12,10 @@
  *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
+ *   - raw PR/issue body writes (`gh pr edit --body`/`--body-file`, a `gh api` body-field write to
+ *     pulls/<n> or issues/<n>) — blocked actor-independently (ADR-TRIPWIRE-STANDING-WAIVER): the
+ *     sanctioned launcher writers are the only body route because they refuse a hand-written
+ *     `adr-tripwire:allow` line.
  *   - `git stash` — blocked outright: `refs/stash` is shared across every worktree over this
  *     repo's one `.git` directory (skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout).
  *   - `bun run verify` / `bun test` / `vitest` / `npm test` / `npm run test` / `bun run build` /
@@ -46,6 +50,9 @@ import {
   commandContainsCopilotRequestBypass,
   commandContainsCopilotSummonComment,
   commandContainsDetachedWaitTool,
+  commandContainsTimeoutWrappedSanctionedTool,
+  commandContainsRawPrBodyEdit,
+  commandContainsRawPrBodyApiWrite,
   commandContainsCodeVerificationEntrypoint,
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
@@ -114,6 +121,16 @@ const isReplyResolve =
 const isRequestApi = typeof command === "string" && commandContainsCopilotRequestBypass(command, managedRepoSlug);
 const isCopilotSummon = typeof command === "string" && commandContainsCopilotSummonComment(command);
 const isWaitTool = typeof command === "string" && commandContainsDetachedWaitTool(command);
+// The `timeout N <sanctioned tool>` deny (issue 2755) is decided in the shared module; the
+// pre-check only detects the shape. Listed here, or the hook would short-circuit to allow before the
+// decider ever runs — allowing on Claude what the Pi `tool_call` gate now denies (#2965).
+const isTimeoutWrapped = typeof command === "string" && commandContainsTimeoutWrappedSanctionedTool(command);
+// ADR-TRIPWIRE-STANDING-WAIVER (#2965): the raw PR/issue body write shapes are decided in the
+// shared module and already denied on Pi. Naming them here is what makes them REACHABLE on Claude —
+// the pre-check's non-match path calls emitAllow() and exits, so an unnamed deny shape fails open.
+const isBodyWrite =
+  typeof command === "string" &&
+  (commandContainsRawPrBodyEdit(command, managedRepoSlug) || commandContainsRawPrBodyApiWrite(command, managedRepoSlug));
 // COORDINATOR-VERIFY-BOUNDARY (#2082) — actor-scoped inside decideBashGate (agentType is
 // "dev-loop" or "gate-coordinator"), so the quick pre-check here only detects the command shape; the hook must not
 // short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
@@ -125,7 +142,7 @@ const isFixerPull = isFixer && isFixerPullAttempt(command);
 if (
   !isReady && !isMerge && !isCreate && !isExternalWrite && !isStash &&
   !isInline && !isSubIssue && !isReplyResolve && !isRequestApi && !isCopilotSummon && !isWaitTool &&
-  !isVerifyEntrypoint && !isJudge && !isFixerPull
+  !isTimeoutWrapped && !isBodyWrite && !isVerifyEntrypoint && !isJudge && !isFixerPull
 ) {
   emitAllow();
 }

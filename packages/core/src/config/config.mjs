@@ -1656,6 +1656,15 @@ async function readConfigFile(filePath) {
 }
 
 /**
+ * The filename variants this loader probes for EVERY config base, in probe order: the bare path
+ * first, then YAML (`.yaml`, then `.yml`) before JSON. Exported as the one canonical list so a
+ * consumer that must see the same set of config source files (the Pi fact cache signature in
+ * `extension/bash-gate-facts.ts`) derives from it instead of hand-copying it: a variant added here
+ * is then probed by the loader AND noticed by every derived consumer, with no second edit.
+ */
+export const CONFIG_FILE_VARIANTS = Object.freeze(["", ".yaml", ".yml", ".json"]);
+
+/**
  * Find a config file by trying one or more base names in order.
  * Each base name prefers YAML (.yaml, then .yml) before JSON.
  * @param {string|string[]} basePaths - Path(s) without extension (e.g. .../defaults)
@@ -1677,7 +1686,8 @@ async function findConfigFile(basePaths) {
     }
     if (bareData !== null) return { path: basePath, data: bareData };
 
-    for (const ext of [".yaml", ".yml", ".json"]) {
+    for (const ext of CONFIG_FILE_VARIANTS) {
+      if (ext === "") continue; // the bare path was read above
       const filePath = basePath + ext;
       const data = await readConfigFile(filePath);
       if (data !== null) return { path: filePath, data };
@@ -1905,7 +1915,7 @@ export async function loadDevLoopConfig(options = {}) {
     // Any other error (EACCES/EISDIR) means it exists but is unreadable, so
     // select the .devloops path and let applyLayer record the structured error.
     let primaryExists = false;
-    for (const ext of ["", ".yaml", ".yml", ".json"]) {
+    for (const ext of CONFIG_FILE_VARIANTS) {
       try {
         await readFile(devloopsPath + ext, "utf8");
         primaryExists = true;
