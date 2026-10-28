@@ -63,6 +63,7 @@
     "./loop/pr-title-markers": "./src/loop/pr-title-markers.mjs",
     "./loop/public-dev-loop-routing": "./src/loop/public-dev-loop-routing.mjs",
     "./loop/public-dev-loop-routing-contract": "./src/loop/public-dev-loop-routing-contract.mjs",
+    "./loop/fix-loop-state": "./src/loop/fix-loop-state.mjs",
     "./loop/refinement-grill-state": "./src/loop/refinement-grill-state.mjs",
     "./loop/queue-board-ordering": "./src/loop/queue-board-ordering.mjs",
     "./loop/default-branch-guard": "./src/loop/default-branch-guard.mjs",
