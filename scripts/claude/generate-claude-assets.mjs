@@ -123,7 +123,7 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
  */
 const HOOK_BUNDLE = [
   { source: "packages/core/src/loop/bash-command-classify.mjs", target: ".claude/hooks/_bash-command-classify.mjs", rewrites: [] },
-  // The harness-neutral Bash-gate deny rules (issue #2965, decision record 0206) — shared with the
+  // The harness-neutral Bash-gate deny rules (decision record 0206) — shared with the
   // Pi `tool_call` handler, vendored here so the Claude PreToolUse hook can reach them.
   {
     source: "packages/core/src/loop/bash-gate-decisions.mjs",

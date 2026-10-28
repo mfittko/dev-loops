@@ -13,7 +13,8 @@ import { PR_READY_GATE_TIMEOUT_MS, defaultResolveRepoContext } from './post-merg
 import type { PiBashGateFacts } from './readonly-role-gate.ts';
 
 /**
- * Fact resolution for the Pi `tool_call` gate (issue #2965, decision record 0206).
+ * Fact resolution for the Pi `tool_call` gate (Bash-gate deny rules:
+ * `packages/core/src/loop/bash-gate-decisions.mjs`, decision record 0206).
  *
  * `extension/readonly-role-gate.ts` stays pure: it feeds these facts into the shared
  * `decideBashGateDeny` the Claude PreToolUse hook also calls. The facts mirror exactly what the

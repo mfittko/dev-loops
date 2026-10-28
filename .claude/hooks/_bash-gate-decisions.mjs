@@ -1,12 +1,12 @@
 // GENERATED from packages/core/src/loop/bash-gate-decisions.mjs by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate.
 /**
- * Harness-neutral Bash-gate deny decisions (issue #2965, decision record 0206).
+ * Harness-neutral Bash-gate deny decisions (decision record 0206).
  *
  * The Claude Code PreToolUse Bash gate (`packages/core/src/claude/hook-decisions.mjs`,
  * `decideBashGate`) and the Pi `tool_call` handler (`extension/readonly-role-gate.ts`) both call
  * `decideBashGateDeny`, so a deny rule can no longer hold on one harness and fail open on the
- * other (#1086). The rule bodies moved here verbatim from the Claude seam: same evaluation order,
- * same reason texts — existing tests pin those strings.
+ * other (`skills/docs/cross-harness-regression-contract.md`). The rule bodies moved here verbatim
+ * from the Claude seam: same evaluation order, same reason texts — existing tests pin those strings.
  *
  * Each adapter gathers its own facts and injects them, so this module stays pure:
  *   - `role` — the Claude `agent_type` or the Pi role resolved from the calling session's
@@ -101,7 +101,7 @@ function commandContainsEvidenceWrite(command) {
  * because the Pi adapter injects the same facts; a rule that cannot be must say so here, and state
  * why in skills/docs/cross-harness-regression-contract.md. `test/contracts/bash-gate-pi-parity.test.mjs`
  * pins this list against the contract matrix, so a new deny rule cannot be added without deciding
- * its Pi verdict (issue #2965 AC2).
+ * its Pi verdict.
  *
  * Two denies below are inline denials with no registered rule ID — the `timeout`-wrapped sanctioned
  * command deny and the subagent ad-hoc external-write deny — so they return `ruleId: null` and stay

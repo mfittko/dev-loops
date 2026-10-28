@@ -22,8 +22,8 @@ import {
 } from "./_bash-gate-decisions.mjs";
 
 // The harness-neutral Bash-gate deny rules and the agent-name helpers live in
-// ../loop/bash-gate-decisions.mjs so the Pi `tool_call` handler enforces the same list (issue
-// #2965, decision record 0206). Re-exported here so this module's public surface is unchanged.
+// ../loop/bash-gate-decisions.mjs so the Pi `tool_call` handler enforces the same list
+// (decision record 0206). Re-exported here so this module's public surface is unchanged.
 export { BASH_GATE_RULES, COORDINATOR_AGENT_TYPES, DEV_LOOP_AGENT_TYPE, GATE_COORDINATOR_AGENT_TYPE, decideBashGateDeny, normalizeAgentType } from "./_bash-gate-decisions.mjs";
 
 /**
@@ -151,7 +151,7 @@ export function decideBashGate({
   // The harness-neutral deny rules (COORDINATOR-VERIFY-BOUNDARY, the actor-independent guard
   // rules, the human-merge invariant and the raw `gh pr create`/`merge`/`ready` refusals) live
   // in ../loop/bash-gate-decisions.mjs so the Pi `tool_call` handler applies the identical
-  // decision (issue #2965, decision record 0206). The judge and fixer checks above stay here:
+  // decision (decision record 0206). The judge and fixer checks above stay here:
   // they key on Claude role machinery with no Pi equivalent.
   const deny = decideBashGateDeny({
     command,

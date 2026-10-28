@@ -12,7 +12,7 @@ import { decideBashGateDeny } from '@dev-loops/core/loop/bash-gate-decisions';
  *
  * The Bash-gate deny rules themselves are NOT rebuilt here: they live in the harness-neutral
  * `@dev-loops/core/loop/bash-gate-decisions` module the Claude PreToolUse hook also calls, so a deny
- * decision cannot hold on one harness and fail open on the other (issue #2965, decision record 0206).
+ * decision cannot hold on one harness and fail open on the other (decision record 0206).
  */
 const PULL_VALUE = '[A-Za-z0-9][\\w.:/#-]*';
 const SANCTIONED_PULL_RE = new RegExp(
@@ -199,7 +199,7 @@ export function resolvePiRole({ systemPrompt, env = process.env, sessionId }: {
  *
  * The harness-neutral Bash-gate deny rules run first, for EVERY role including the untagged main
  * agent: raw `gh pr merge`, raw waiver body writes and the other guard rules deny exactly as the
- * Claude PreToolUse hook denies them (issue #2965, decision record 0206). A restricted role then
+ * Claude PreToolUse hook denies them (decision record 0206). A restricted role then
  * runs only the sanctioned pull line (plus read and search commands for the reviewer; the judge
  * also runs its decision check). An unresolved role ('' from a blank tag, an unknown `dev-loops:`
  * name, conflicting tags or an untagged native async child session) fails closed: it is treated as

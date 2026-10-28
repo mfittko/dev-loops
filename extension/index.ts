@@ -61,9 +61,9 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
     extensionPath: fileURLToPath(import.meta.url),
     load: runtimeOverrides.loadRegisterRequiredChildExtensions ?? loadRegisterRequiredChildExtensions,
   });
-  // Facts for the shared Bash-gate deny decision (issue #2965): repo identity, the repo's
-  // `humanMergeOnly` invariant, the coordinator flag and the `gh pr ready` draft-gate probe,
-  // resolved once per cwd and reused for every `bash` call.
+  // Facts for the shared Bash-gate deny decision (`@dev-loops/core/loop/bash-gate-decisions`):
+  // repo identity, the repo's `humanMergeOnly` invariant, the coordinator flag and the
+  // `gh pr ready` draft-gate probe, resolved once per cwd and reused for every `bash` call.
   const resolveBashGateFacts = createPiBashGateFactsResolver({ exec: adapter.exec });
 
   adapter.on('session_start', async (_event, ctx) => {
