@@ -7,14 +7,15 @@ import { test } from "bun:test";
 
 import { judgePassCli, parseJudgePassCliArgs } from "../../scripts/loop/judge-pass.mjs";
 import { buildGateFaninLedgerPath, buildLogPath } from "../../scripts/github/_gate-artifact-paths.mjs";
+import { copilotBodyJudgePath } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { judgeSkipRefusal } from "../../scripts/loop/judge-skip.mjs";
 
 const HEAD = "0123456789abcdef".padEnd(40, "0");
 const SPEC = { acceptanceCriteria: ["a"], definitionOfDone: ["d"], nonGoals: ["n"] };
 
-async function setup(findings) {
+async function setup(findings, overallVerdict = "clean") {
   const root = await mkdtemp(path.join(os.tmpdir(), "judge-skip-"));
-  const body = JSON.stringify({ overallVerdict: "clean", findings });
+  const body = JSON.stringify({ overallVerdict, findings });
   await writeFile(path.join(root, "findings.json"), body);
   const keyed = path.join(root, buildGateFaninLedgerPath({ repo: "o/r", pr: 1, gate: "draft_gate", headSha: HEAD, tmpRoot: "tmp" }));
   await mkdir(path.dirname(keyed), { recursive: true });
@@ -132,13 +133,29 @@ test("--judge-skip refuses the silently ignored flags", () => {
   }
 });
 
+const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+const hermeticGit = (cwd, ...args) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { stdio: "pipe", env: GIT_ENV });
+
+test("a blocked zero-finding round still requires the judge through judgePassCli", async () => {
+  const { root, options } = await setup([], "blocked");
+  await assert.rejects(judgePassCli(options, { repoRoot: root }), /blocked/);
+});
+
+test("pending Copilot body feedback for the head still requires the judge", async () => {
+  const { root, options } = await setup([]);
+  const file = path.join(root, copilotBodyJudgePath({ tmpRoot: "tmp", repo: "o/r", pr: 1, headSha: HEAD }));
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, "{}");
+  await assert.rejects(judgePassCli(options, { repoRoot: root }), /pending Copilot body feedback/);
+});
+
 test("a blocked zero-finding round still requires the judge", () => {
   assert.match(judgeSkipRefusal({ findings: [], priorActItems: [], overallVerdict: "blocked" }), /blocked/);
 });
 
 test("without --tmp-root a worktree finds the ledger consolidate-fanin wrote under its own tmp/", async () => {
   const { root, options } = await setup([]);
-  const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { stdio: "pipe" });
+  const git = hermeticGit;
   const main = path.join(root, "main");
   const worktree = path.join(root, "wt");
   await mkdir(main);
@@ -153,7 +170,7 @@ test("without --tmp-root a worktree finds the ledger consolidate-fanin wrote und
 
 test("a retirement recorded under a different checkout's tmp than the fan-in ledger refuses", async () => {
   const { root, options } = await setup([]);
-  const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { stdio: "pipe" });
+  const git = hermeticGit;
   const main = path.join(root, "main");
   const worktree = path.join(root, "wt");
   await mkdir(main);

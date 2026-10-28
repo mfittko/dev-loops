@@ -42,6 +42,7 @@ import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { locateJudgeUnit, renderWorkOrder } from "./emit-judge-work-order.mjs";
 import { runJudgeSkip } from "./judge-skip.mjs";
+import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
@@ -88,7 +89,8 @@ Inputs:
                                Emits judgeSkipped.reason and findingsSummary (the
                                conductor passes findingsSummary as --findings-summary);
                                the ledger also records judgeSkipped. Takes no --judge-verdict,
-                               --judge-plan or --spec-authority-verdict; fails closed otherwise.
+                               --judge-plan or --spec-authority-verdict; fails closed otherwise
+                               (including pending Copilot body feedback for the head).
                                Requires --spec-file and --content-digest, and refuses
                                --approvals-out, --prior-approvals, --changed-paths,
                                --coverage-map and --carry-forward-proof.
@@ -138,7 +140,8 @@ Immutable spec-authority enforcement (opt-in; enabled by --spec-file):
                                definitionOfDone, nonGoals } (arrays of strings) —
                                the canonical tracker AC/DoD/Non-goals. When
                                supplied, the judge must additionally provide a
-                               whole-spec authority verdict (--spec-authority-verdict)
+                               whole-spec authority verdict (--spec-authority-verdict,
+                               except with --judge-skip)
                                that pins the run's specDigest, head, and content
                                digest and disposes every finding with one of the
                                four named outcomes. specDigest is computed here
@@ -146,7 +149,8 @@ Immutable spec-authority enforcement (opt-in; enabled by --spec-file):
   --content-digest <digest>    The reviewed content identity ("sha256:<hex>").
                                Required with --spec-file. Distinct from --head-sha.
   --spec-authority-verdict <p> The judge's whole-spec authority verdict artifact.
-                               Required with --spec-file. Validated against the
+                               Required with --spec-file, except with --judge-skip.
+                               Validated against the
                                computed specDigest, --head-sha, --content-digest,
                                and the finding count. A spec_cannot_decide outcome
                                FAILS CLOSED (exit 1) with humanDecisionRequired so
@@ -1019,6 +1023,9 @@ export async function judgePassCli(
   if (options.judgeSkip) {
     const payload = await resolvePayload(options, resolvedRoot);
     await verifySkipRound(options, resolvedRoot);
+    // GATE-EXEC-COPILOT-BODY-TO-JUDGE: pending Copilot body feedback is a finding only the judge adjudicates.
+    const bodyFile = copilotBodyJudgePath({ tmpRoot: historyRoot(options, resolvedRoot), repo: options.repo, pr: options.pr, headSha: options.headSha });
+    if (await stat_(bodyFile)) throw new Error(`GATE-EXEC-JUDGE-SKIP-EMPTY: --judge-skip refused (fail closed): pending Copilot body feedback at ${bodyFile}; run the judge pass`);
     const spec = await readJsonArtifact(path.resolve(resolvedRoot, options.specFile), "--spec-file", parseError);
     if (spec?.specKind === PR_SCOPE_SPEC_KIND && options.gate !== "review") {
       throw parseError(`--spec-file has specKind "${PR_SCOPE_SPEC_KIND}", which only the review gate accepts; ${options.gate} requires a formal spec with acceptance criteria`);
