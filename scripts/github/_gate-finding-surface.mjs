@@ -1090,10 +1090,13 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
     const anyHead = summarizeGateReviewCommentMarkers(comments).draft_gate;
     const candidate = anyHead ? { ...anyHead, visible: true, contractComplete: anyHead.contractComplete === true } : null;
     if (candidate) {
-      draftGateMarker = await carryFromPostedVerdict(candidate, {
+      // Only an actual carry replaces the marker: a non-carry candidate (e.g. an abbreviated-head legacy marker) must not
+      // become the strict current-head marker.
+      const carried = await carryFromPostedVerdict(candidate, {
         gate: "draft_gate", repo, pr, currentHeadSha: headSha, repoRoot: gh.repoRoot ?? resolveRepoRoot(process.cwd()), env: gh.env,
         runJson: (args) => runGhJson(args, { env: gh.env, ghCommand: gh.ghCommand, runChild: gh.runChild }), comments: [...comments],
       });
+      if (carried.carriedFrom) draftGateMarker = carried;
     }
   }
   // The verdict-clean flags below stay VERDICT-ONLY so a verdict/head mismatch

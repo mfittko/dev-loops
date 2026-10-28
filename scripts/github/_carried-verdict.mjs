@@ -13,8 +13,8 @@ import { validateBaseMergeCarryEvidence } from "@dev-loops/core/loop/base-merge-
 
 import { isGhBinaryMissing, restFetchPrView } from "./_gh-rest-fallback.mjs";
 import { computeBaseMergeCarry } from "./classify-base-merge-carry.mjs";
+import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 
-const FULL_SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 const MAX_ENTRIES = 20;
 // The record stores a digest of the classifier evidence, never the raw blob and path lists.
 export const evidenceDigest = (evidence) => createHash("sha256").update(JSON.stringify(evidence)).digest("hex");
@@ -57,7 +57,7 @@ async function upsertCarriedHead({ repo, pr, comments, entry }, runJson) {
 export function isCarryCandidate(marker, currentHeadSha) {
   const origin = marker?.headSha;
   return Boolean(marker?.visible) && marker.verdict === "clean" && marker.contractComplete === true
-    && FULL_SHA_RE.test(origin ?? "") && FULL_SHA_RE.test(currentHeadSha ?? "") && origin !== currentHeadSha;
+    && normalizeFullHeadSha(origin ?? "") !== null && normalizeFullHeadSha(currentHeadSha ?? "") !== null && origin !== currentHeadSha;
 }
 
 /**
