@@ -36,6 +36,7 @@ const WIDGET_KEY = 'dev-loops.setup';
 import { checkAgentSetRendered, findProjectRoot, isDevLoopsAgentsCheckout, renderProjectAgents, syncPackagedAgents } from './sync-packaged-agents.ts';
 export { syncPackagedAgents };
 import { decidePiToolCall, isReadOnlyPiRole, resolvePiRole } from './readonly-role-gate.ts';
+import { createPiBashGateFactsResolver } from './bash-gate-facts.ts';
 
 // The calling session's own role for one handler call: resolved from its system prompt, with the
 // session id scoping the untagged native-async-child fail-closed row (readonly-role-gate.ts).
@@ -60,6 +61,10 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
     extensionPath: fileURLToPath(import.meta.url),
     load: runtimeOverrides.loadRegisterRequiredChildExtensions ?? loadRegisterRequiredChildExtensions,
   });
+  // Facts for the shared Bash-gate deny decision (issue #2965): repo identity, the repo's
+  // `humanMergeOnly` invariant, the coordinator flag and the `gh pr ready` draft-gate probe,
+  // resolved once per cwd and reused for every `bash` call.
+  const resolveBashGateFacts = createPiBashGateFactsResolver({ exec: adapter.exec });
 
   adapter.on('session_start', async (_event, ctx) => {
     postMergeUpdateHook.onSessionStart();
@@ -90,9 +95,10 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
     childRoleGate.disposeAll();
   });
 
-  // Read-only role enforcement on Pi (cross-harness-regression-contract.md): block shell for
-  // read-only roles; Pi honours `{ block, reason }` from `tool_call`.
-  adapter.on('tool_call', (event, ctx) => {
+  // Bash gate on Pi (cross-harness-regression-contract.md): the shared harness-neutral deny decision
+  // the Claude PreToolUse hook also applies, then the read-only role restriction. Pi honours
+  // `{ block, reason }` from `tool_call`.
+  adapter.on('tool_call', async (event, ctx) => {
     const { toolName, input } = event as { toolName?: string; input?: { command?: unknown } };
     if (toolName === 'subagent' && ctx.cwd) {
       // refuse a child launch when a rendered dev-loops agent file carries raw non-Pi tools;
@@ -103,7 +109,10 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
       const reason = checkAgentSetRendered(launchCwd ? path.resolve(ctx.cwd, launchCwd) : ctx.cwd);
       if (reason) return { block: true, reason };
     }
-    return decidePiToolCall({ toolName, input, agentType: resolveSessionRole(ctx) });
+    const facts = toolName === 'bash'
+      ? await resolveBashGateFacts({ cwd: ctx.cwd, command: typeof input?.command === 'string' ? input.command : '' })
+      : undefined;
+    return decidePiToolCall({ toolName, input, agentType: resolveSessionRole(ctx), facts });
   });
 
   // A read-only child must never run the mutation-capable post-merge hooks: `isMergeCapableCommand`

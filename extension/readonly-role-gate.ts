@@ -1,5 +1,6 @@
 import { EXECUTION_IDENTITY_RE } from '@dev-loops/core/loop/work-order-digest';
 import { NATIVE_PI_PARENT_SESSION_MARKER, isNativePiAsyncContext } from '@dev-loops/core/loop/run-context';
+import { decideBashGateDeny } from '@dev-loops/core/loop/bash-gate-decisions';
 
 /**
  * Pi enforcement of the read-only role boundary
@@ -8,6 +9,10 @@ import { NATIVE_PI_PARENT_SESSION_MARKER, isNativePiAsyncContext } from '@dev-lo
  * system prompt: pi-subagents writes `<active_agent name="<agent>"/>` into every named child. The Pi surface
  * must not import the Claude hook seam, so the sanctioned pull line is rebuilt from the shared identity
  * regex; a test pins parity with the Claude gate's `parseSanctionedPullLine`.
+ *
+ * The Bash-gate deny rules themselves are NOT rebuilt here: they live in the harness-neutral
+ * `@dev-loops/core/loop/bash-gate-decisions` module the Claude PreToolUse hook also calls, so a deny
+ * decision cannot hold on one harness and fail open on the other (issue #2965, decision record 0206).
  */
 const PULL_VALUE = '[A-Za-z0-9][\\w.:/#-]*';
 const SANCTIONED_PULL_RE = new RegExp(
@@ -117,6 +122,29 @@ function isReadSearchCommand(rawCommand: string): boolean {
 }
 export type PiToolCallDecision = { block: false } | { block: true; reason: string };
 
+/**
+ * The facts the shared Bash-gate deny decision needs, resolved by `extension/bash-gate-facts.ts` and
+ * injected here so this module stays pure (no IO). The defaults are all-empty: a caller that injects
+ * nothing gets no managed context and no human-merge invariant, i.e. only the read-only role gate.
+ */
+export type PiBashGateFacts = {
+  inManagedContext: boolean;
+  managedRepoSlug: string | null;
+  repoSlug: string | null;
+  humanMergeOnly: boolean;
+  enforceCoordinator: boolean;
+  readyGate: { passed: boolean; error: string | null } | null;
+};
+
+const EMPTY_BASH_GATE_FACTS: PiBashGateFacts = Object.freeze({
+  inManagedContext: false,
+  managedRepoSlug: null,
+  repoSlug: null,
+  humanMergeOnly: false,
+  enforceCoordinator: false,
+  readyGate: null,
+});
+
 /** Every dev-loops agent role: the `name` frontmatter of `agents/*.agent.md`. */
 export const DEV_LOOPS_ROLES = Object.freeze([
   'review', 'judge', 'fixer', 'developer', 'refiner', 'docs', 'quality', 'dev-loop', 'gate-coordinator',
@@ -167,19 +195,37 @@ export function resolvePiRole({ systemPrompt, env = process.env, sessionId }: {
   return name;
 }
 /**
- * Decide a Pi `tool_call`. A restricted role runs only the sanctioned pull line (plus
- * read and search commands for the reviewer; the judge also runs its decision check). An unresolved role ('' from a blank tag, an
- * unknown dev-loops: name, conflicting tags or an untagged native async child session) fails
- * closed: it is treated as a restricted role that may pull only.
+ * Decide a Pi `tool_call`.
+ *
+ * The harness-neutral Bash-gate deny rules run first, for EVERY role including the untagged main
+ * agent: raw `gh pr merge`, raw waiver body writes and the other guard rules deny exactly as the
+ * Claude PreToolUse hook denies them (issue #2965, decision record 0206). A restricted role then
+ * runs only the sanctioned pull line (plus read and search commands for the reviewer; the judge
+ * also runs its decision check). An unresolved role ('' from a blank tag, an unknown `dev-loops:`
+ * name, conflicting tags or an untagged native async child session) fails closed: it is treated as
+ * a restricted role that may pull only.
  */
-export function decidePiToolCall({ toolName, input, agentType }: {
+export function decidePiToolCall({ toolName, input, agentType, facts = EMPTY_BASH_GATE_FACTS }: {
   toolName?: string;
   input?: { command?: unknown };
   agentType: string | null;
+  facts?: PiBashGateFacts;
 }): PiToolCallDecision {
-  if (agentType === null || toolName !== 'bash') return { block: false };
-  if (agentType !== '' && !BASH_RESTRICTED_ROLES.includes(agentType)) return { block: false };
+  if (toolName !== 'bash') return { block: false };
   const command = typeof input?.command === 'string' ? input.command : '';
+  const deny = decideBashGateDeny({
+    command,
+    role: agentType,
+    repoSlug: facts.repoSlug,
+    managedRepoSlug: facts.managedRepoSlug,
+    inManagedContext: facts.inManagedContext,
+    humanMergeOnly: facts.humanMergeOnly,
+    enforceCoordinator: facts.enforceCoordinator,
+    readyGate: facts.readyGate,
+  });
+  if (deny) return { block: true, reason: deny.reason };
+  if (agentType === null) return { block: false };
+  if (agentType !== '' && !BASH_RESTRICTED_ROLES.includes(agentType)) return { block: false };
   if (parseSanctionedPullLine(command)) return { block: false };
   if (agentType === 'judge' && JUDGE_DECISION_CHECK_RE.test(command.trim()) && !command.includes('..')) return { block: false };
   if (READ_SEARCH_ROLES.has(agentType) && isReadSearchCommand(command)) return { block: false };

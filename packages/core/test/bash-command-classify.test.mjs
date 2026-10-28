@@ -1161,14 +1161,19 @@ test("explicitRepoProvenForeign truth table", () => {
   assert.equal(explicitRepoProvenForeign("other/repo", "acme/widgets;id"), false);
 });
 
-test("decideBashGate (hook-decisions.mjs) resolves inManagedRepo via the shared deriveInManagedRepo predicate", () => {
+test("decideBashGate resolves inManagedRepo via the shared deriveInManagedRepo predicate", () => {
   // Parity guard: the Claude Bash-hook guard and this Pi-harness helper must agree on the same
   // managed-repo-identity resolution rather than drifting into two divergent implementations.
-  const hookDecisionsSource = fs.readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/claude/hook-decisions.mjs"),
-    "utf8",
+  // The gate's rule bodies (and so this composition) live in the harness-neutral
+  // loop/bash-gate-decisions.mjs since issue #2965; the Claude seam delegates to them.
+  const coreSrc = path.join(path.dirname(fileURLToPath(import.meta.url)), "../src");
+  const decisionSource = fs.readFileSync(path.join(coreSrc, "loop/bash-gate-decisions.mjs"), "utf8");
+  assert.match(decisionSource, /deriveInManagedRepo/, "bash-gate-decisions.mjs must import/use deriveInManagedRepo from the shared module");
+  assert.match(
+    fs.readFileSync(path.join(coreSrc, "claude/hook-decisions.mjs"), "utf8"),
+    /decideBashGateDeny/,
+    "decideBashGate must delegate to the shared Bash-gate deny decision",
   );
-  assert.match(hookDecisionsSource, /deriveInManagedRepo/, "hook-decisions.mjs must import/use deriveInManagedRepo from the shared module");
 
   // Same input table, both call sites: `decideBashGate` composes `deriveInManagedRepo` the same
   // way the Pi harness does (verified indirectly — decideBashGate's own gate behavior when
