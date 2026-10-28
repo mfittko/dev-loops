@@ -12316,6 +12316,15 @@ test("deriveEffectiveNextAction derives from the act list on review, draft_gate 
   assert.equal(deriveEffectiveNextAction("clean", "pre_approval_gate", []), null);
 });
 
+test("tick (#2898): the dry-run artifact keeps a label a reload-only issue carries unticked even when another issue's row is flipped", async () => {
+  const extraIssueBodies = { 901: ["## Acceptance criteria", "", "- [ ] criterion number 1", ""].join("\n") };
+  const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: UNTICKED_TICK_ISSUE_BODY, closingIssues: [900, 901], extraIssueBodies, failIssueViewAfter: 1, failIssueViewCount: 1 };
+  await withCompositionRound(round, async ({ post }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.deepEqual(result.gateBlockers, [{ kind: "unticked spec-of-record Acceptance criteria", item: "criterion number 1" }]);
+  });
+});
+
 const bodyEdits = (calls) => calls.filter((c) => c.args[1] === "edit" && (c.args.includes("--body") || c.args.includes("--body-file")));
 const openAct = (extra) => ({ angle: "acceptance-criteria", severity: "medium", summary: "no evidence for that row", judgeDisposition: "act", ...extra });
 const UNTICKED_TICK_ISSUE_BODY = ["## Acceptance criteria", "", "- [ ] criterion number 1", "- [ ] criterion number 2", ""].join("\n");

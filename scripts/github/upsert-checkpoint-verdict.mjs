@@ -2402,7 +2402,19 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
   // Union with the reload's list so the result is never smaller than either source.
   const local = tickedIssueBodies.flatMap((body) => detectIssueRefinementArtifact({ body }).uncheckedAcItems);
   // A dry run edited nothing, so the reload's issue rows still carry the labels this tick would flip: drop those, keep the rest.
-  const reloadedItems = (reloaded.uncheckedAcItems ?? []).filter((label) => !(dryRun && flippedIssueLabels.has(String(label).trim())));
+  // A linked issue only the reload read keeps its own unticked rows, even when they share a label this tick flips elsewhere.
+  const reloadOnlyLabels = new Set();
+  if (dryRun) {
+    const fetchedIssues = new Set(artifact.uncheckedAcIssues ?? []);
+    for (const issue of (reloaded.uncheckedAcIssues ?? []).filter((n) => !fetchedIssues.has(n))) {
+      const body = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
+      detectIssueRefinementArtifact({ body }).uncheckedAcItems.forEach((label) => reloadOnlyLabels.add(String(label).trim()));
+    }
+  }
+  const reloadedItems = (reloaded.uncheckedAcItems ?? []).filter((label) => {
+    const text = String(label).trim();
+    return !(dryRun && flippedIssueLabels.has(text) && !reloadOnlyLabels.has(text));
+  });
   const uncheckedAcItems = [...new Set([...reloadedItems, ...local])];
   return { ...reloaded, uncheckedAcItems };
 }
