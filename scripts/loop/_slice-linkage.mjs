@@ -20,7 +20,7 @@ export function rejectClosingRefRemoval(enriched, nonGoals) {
   for (const f of enriched) {
     if (f.judgeDisposition !== "act" || !removesClosingRef(f)) continue;
     f.judgeDisposition = "reject";
-    f.judgeReason = `${SLICE_LINKAGE_RULE_ID}: the remedy removes the PR's closing reference while a Non-goals reopen line is present. ${f.judgeReason ?? ""}`.trim();
+    f.judgeReason = [`SPEC-SLICE-PR-KEEPS-CLOSING-REF: refused, the remedy removes the PR's closing reference while a Non-goals reopen line is present.`, f.judgeReason].filter(Boolean).join(" ");
     coerced += 1;
   }
   return coerced;
