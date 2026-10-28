@@ -133,10 +133,11 @@ practice:
   re-runs the same verdict check with GitHub's own token for every non-draft PR. It always
   evaluates the DEFAULT BRANCH's detector (trusted code); the resolved PR head SHA is only
   the status target.
-  - It is **pre-merge-only** (#1702): `synchronize` is NOT a trigger. Triggers: PR
-    opened/reopened, `ready_for_review`, a submitted or edited review, a standalone review
+  - It is **pre-merge-only** (#1702). Triggers: PR
+    opened/reopened, `ready_for_review`, `synchronize` on a ready PR (draft pushes stay
+    skipped by the draft guard, ADR 0186), a submitted or edited review, a standalone review
     comment, and a created/edited PR issue comment that starts with the gate-comment marker
-    (`### Gate review:`) from a trusted author (`OWNER`/`MEMBER`/`COLLABORATOR`). A new
+    (`### Gate review:`) or the carried-heads record marker (`<!-- dev-loops:carried-heads:v1`) from a trusted author (`OWNER`/`MEMBER`/`COLLABORATOR`). A new
     round's verdict review (`GATE-COMMENT-SINGLE-SURFACE`) fires
     `pull_request_review [submitted]`; a same-head in-place correction fires
     `pull_request_review [edited]`. The issue-comment arm covers only legacy verdicts and the zero-dep fallback poster.

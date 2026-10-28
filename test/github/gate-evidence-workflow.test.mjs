@@ -99,6 +99,7 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
       "(github.event_name == 'issue_comment' && github.event.issue.pull_request && " +
       "(startsWith(github.event.comment.body, '### Gate review:') || " +
       "startsWith(github.event.comment.body, 'approve merge ') || " +
+      "startsWith(github.event.comment.body, '<!-- dev-loops:carried-heads:v1') || " +
       "startsWith(github.event.changes.body.from, 'approve merge ')) && " +
       "contains(fromJSON('[\"OWNER\", \"MEMBER\", \"COLLABORATOR\"]'), github.event.comment.author_association))",
   );
@@ -116,6 +117,13 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   assert.ok(
     collapsedIf.includes("startsWith(github.event.changes.body.from, 'approve merge ')"),
     "edit-away retraction of an approve-merge marker must re-fire gate-evidence (fail-closed)",
+  );
+  // Carried-heads record comment re-fires the check (ADR 0186); the exact-composition
+  // pin above keeps it under the author_association guard and anchored with startsWith
+  // (no leading-space match).
+  assert.ok(
+    collapsedIf.includes("startsWith(github.event.comment.body, '<!-- dev-loops:carried-heads:v1')"),
+    "carried-heads record comment must re-fire gate-evidence",
   );
   assert.equal(workflow.permissions.statuses, "write");
 });
