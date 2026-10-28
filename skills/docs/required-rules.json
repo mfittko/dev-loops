@@ -431,6 +431,10 @@
       "enforcementNote": "applyJudgeDispositions coerces the disposition (lowFixCapped and round from resolveDraftRoundCap) and emit-fixer-work-order.mjs refuses a low/nit-only act list at or past the draft_gate cap or at pre_approval_gate, or a nit-only list outside draft round 1, with code low_fix_until_cap"
     },
     {
+      "id": "GATE-EXEC-OPERATOR-FOCUS",
+      "enforcement": "runtime"
+    },
+    {
       "id": "GATE-EXEC-OPERATOR-LINE-APPROVE-MERGE",
       "enforcement": "doc"
     },
