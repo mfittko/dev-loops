@@ -454,3 +454,46 @@ test("editPr: the closing-reference refusal still fails closed when currentBody 
     /CLOSING-REF-BRANCH-MISMATCH.*fail closed/s,
   );
 });
+
+test("editPr (#2898): refuses a body that unticks checked rows, naming them; --allow-untick lets it through", async () => {
+  const rows = Array.from({ length: 15 }, (_, i) => `row ${i + 1}`);
+  const live = rows.map((r) => `- [x] ${r}`).join("\n");
+  const next = rows.map((r) => `- [ ] ${r}`).join("\n");
+  const fetchPrContext = async () => ({ headRefName: "x", closingIssuesReferences: [], body: live });
+  const refused = stubGh();
+  await assert.rejects(
+    () => editPr({ repo: "o/n", pr: 5, body: next, addAssignees: [], removeAssignees: [] }, { run: refused.run, fetchPrContext }),
+    /untick or remove 15 checked row.*"row 1".*"row 15"/s,
+  );
+  assert.equal(refused.calls.length, 0);
+  const allowed = stubGh();
+  await editPr({ repo: "o/n", pr: 5, body: next, addAssignees: [], removeAssignees: [], allowUntick: true }, { run: allowed.run, fetchPrContext });
+  assert.equal(allowed.calls.length, 1);
+  assert.equal(parseEditPrCliArgs(["--repo", "o/n", "--pr", "5", "--body", "x", "--allow-untick"]).allowUntick, true);
+});
+
+test("editPr (#2898): the untick guard counts duplicate labels and reports a removed or reworded checked row", async () => {
+  const live = ["## AC", "- [x] Tests pass", "## DoD", "- [x] Tests pass", "- [x] Docs updated"].join("\n");
+  const fetchPrContext = async () => ({ headRefName: "x", closingIssuesReferences: [], body: live });
+  const attempt = (body) => editPr({ repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] }, { run: stubGh().run, fetchPrContext });
+  // both duplicates kept checked: accepted
+  await attempt(live);
+  // one of two identical checked labels unticked: refused
+  await assert.rejects(() => attempt(live.replace("## DoD\n- [x] Tests pass", "## DoD\n- [ ] Tests pass")), /untick or remove 1 checked row.*"Tests pass"/s);
+  // a checked label removed: refused
+  await assert.rejects(() => attempt(live.replace("\n- [x] Docs updated", "")), /untick or remove 1 checked row.*"Docs updated"/s);
+});
+
+test("editPr (#2898): the untick guard sees every checkbox row form the gate parser reads", async () => {
+  const attempt = (live, body) => editPr(
+    { repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] },
+    { run: stubGh().run, fetchPrContext: async () => ({ headRefName: "x", closingIssuesReferences: [], body: live }) },
+  );
+  for (const marker of ["-", "*", "+", "1.", "1)", "> -", "> 1."]) {
+    await assert.rejects(() => attempt(`${marker} [x] Docs updated`, `${marker} [ ] Docs updated`), /untick or remove 1 checked row.*"Docs updated"/s, marker);
+  }
+  // Not checkbox rows: unticking them is no refusal.
+  for (const line of ["plain text line without a checkbox", "[x] Docs updated"]) {
+    await attempt(line, line.replace("[x]", "[ ]"));
+  }
+});

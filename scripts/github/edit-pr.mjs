@@ -37,6 +37,10 @@ At least one edit:
   --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
                                 refuse a body that embeds grill
                                 transcript/synthesis/Q&A headings.
+  --allow-untick                Allow a body that unticks or removes a checked
+                                \`[x]\` checkbox row (a flip to \`[ ]\`, a delete
+                                or a reworded label; refused by default, naming
+                                the rows).
   --allow-cross-issue           Waive the branch-derived closing-reference
                                 mismatch guard for a deliberate cross-issue
                                 reference. By default a new body whose closing
@@ -78,6 +82,7 @@ export function parseEditPrCliArgs(argv) {
       base: { type: "string" },
       "enforce-grill": { type: "boolean" },
       "allow-cross-issue": { type: "boolean" },
+      "allow-untick": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -97,6 +102,7 @@ export function parseEditPrCliArgs(argv) {
     base: undefined,
     enforceGrill: false,
     allowCrossIssue: false,
+    allowUntick: false,
     jq: undefined,
     silent: false,
   };
@@ -183,6 +189,10 @@ export function parseEditPrCliArgs(argv) {
     }
     if (token.name === "enforce-grill") {
       options.enforceGrill = true;
+      continue;
+    }
+    if (token.name === "allow-untick") {
+      options.allowUntick = token.value === undefined || token.value === true || /^(?:true|1)$/iu.test(String(token.value));
       continue;
     }
     if (token.name === "allow-cross-issue") {
@@ -297,6 +307,23 @@ async function buildEditArgs(options) {
   return { args, edited };
 }
 
+// Labels of `[x]` rows in currentBody that nextBody no longer carries as `[x]`:
+// unticked, deleted or reworded rows, across every checkbox in the body. Counts
+// per label, so one lost occurrence of a duplicated label is reported.
+// The row grammar matches CHECKBOX_RE in tick-verified-checkboxes.mjs and the gate's checklist parser:
+// an optional blockquote prefix, then a [-*+] or N. or N) marker.
+const CHECKBOX_ROW = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[([ xX])\]\s+(.+?)\s*$/u;
+function untickedRows(currentBody, nextBody) {
+  const checked = (body) => body.split(/\r?\n/u).map((l) => CHECKBOX_ROW.exec(l)).filter((m) => m && m[1] !== " ").map((m) => m[2]);
+  const remaining = new Map();
+  for (const label of checked(nextBody)) remaining.set(label, (remaining.get(label) ?? 0) + 1);
+  return checked(currentBody).filter((label) => {
+    const left = remaining.get(label) ?? 0;
+    if (left > 0) remaining.set(label, left - 1);
+    return left === 0;
+  });
+}
+
 export async function editPr(
   options,
   { env = process.env, ghCommand = "gh", run = runChild, fetchPrContext = defaultFetchPrContext, waiverWriter = false, currentBody } = {},
@@ -330,6 +357,10 @@ export async function editPr(
       }
       const waiverRefusal = waiverLineChangeRefusal({ currentBody: baseline, nextBody: guardBody, action: "write" });
       if (waiverRefusal) throw new Error(waiverRefusal);
+      const unticked = untickedRows(baseline, guardBody);
+      if (unticked.length > 0 && !options.allowUntick) {
+        throw new Error(`Refusing to untick or remove ${unticked.length} checked row(s) on PR #${options.pr} (unticked, deleted or reworded): ${unticked.map((l) => JSON.stringify(l)).join("; ")}. Edit from the current body, or pass --allow-untick for a deliberate change.`);
+      }
     }
     if (!options.allowCrossIssue && detectClosingKeyword(guardBody)) {
       const ctx = await readPrContext();
