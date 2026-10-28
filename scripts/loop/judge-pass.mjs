@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { access, mkdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -41,7 +41,7 @@ import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
-import { prBodyNonGoals, rejectClosingRefRemoval } from "./_slice-linkage.mjs";
+import { rejectClosingRefRemoval } from "./_slice-linkage.mjs";
 import { locateJudgeUnit, renderWorkOrder } from "./emit-judge-work-order.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import {
@@ -125,11 +125,6 @@ Inputs:
                                (default: process.cwd()).
 
 Immutable spec-authority enforcement (opt-in; enabled by --spec-file):
-  --pr-body-file <path>        Optional PR body text. Its Non-goals reopen line (a slice PR,
-                               SPEC-SLICE-PR-KEEPS-CLOSING-REF) joins the --spec-file Non-goals
-                               when the judge pass coerces a closing-reference removal to
-                               reject; it never changes the spec. Needed when the spec comes
-                               from the linked issue. Requires --spec-file.
   --spec-file <path>           JSON structured spec { acceptanceCriteria,
                                definitionOfDone, nonGoals } (arrays of strings) —
                                the canonical tracker AC/DoD/Non-goals. When
@@ -207,7 +202,6 @@ export function parseJudgePassCliArgs(argv) {
     ledgerOut: undefined,
     repoRoot: undefined,
     specFile: undefined,
-    prBodyFile: undefined,
     contentDigest: undefined,
     specAuthorityVerdict: undefined,
     priorApprovals: undefined,
@@ -233,7 +227,6 @@ export function parseJudgePassCliArgs(argv) {
       "repo-root": { type: "string" },
       "tmp-root": { type: "string" },
       "spec-file": { type: "string" },
-      "pr-body-file": { type: "string" },
       "content-digest": { type: "string" },
       "spec-authority-verdict": { type: "string" },
       "prior-approvals": { type: "string" },
@@ -306,10 +299,6 @@ export function parseJudgePassCliArgs(argv) {
     }
     if (token.name === "spec-file") {
       options.specFile = token.value;
-      continue;
-    }
-    if (token.name === "pr-body-file") {
-      options.prBodyFile = token.value;
       continue;
     }
     if (token.name === "content-digest") {
@@ -423,7 +412,6 @@ export function validateCliArgs(options) {
     // early-returns null when --spec-file is absent).
     for (const [key, flag] of [
       ["contentDigest", "--content-digest"],
-      ["prBodyFile", "--pr-body-file"],
       ["specAuthorityVerdict", "--spec-authority-verdict"],
       ["priorApprovals", "--prior-approvals"],
       ["approvalsOut", "--approvals-out"],
@@ -925,7 +913,7 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   if (!current || current.stale || current.workOrderDigest !== plan.workOrderDigest || current.executionIdentity !== plan.executionIdentity) {
     throw new Error(`judge execution ${plan.executionIdentity} is not the current emission for ${options.gate} at ${options.headSha} (${current?.stale ?? "no checkout holds its plan"}); re-emit the judge work order and re-run the judge`);
   }
-  return order.authority;
+  return { ...order.authority, sliceLinkage: typeof order.sliceLinkage === "string" };
 }
 
 /**
@@ -986,16 +974,11 @@ export async function judgePassCli(
   const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
   const result = runJudgePass(findings, judgeVerdict, options.headSha, { pastCap: lowFixCapped, round });
 
-  if (options.specFile !== undefined) {
-    const spec = await readJsonArtifact(path.resolve(resolvedRoot, options.specFile), "--spec-file", parseError);
-    // The issue-derived spec never carries the PR's own reopen line, so the PR body Non-goals are a separate input.
-    const prBody = options.prBodyFile === undefined ? undefined : await readFile(path.resolve(resolvedRoot, options.prBodyFile), "utf8").catch((error) => {
-      throw parseError(`Cannot read --pr-body-file "${options.prBodyFile}": ${error instanceof Error ? error.message : String(error)}`);
-    });
-    if (rejectClosingRefRemoval(result.enriched, spec?.nonGoals, prBody === undefined ? undefined : prBodyNonGoals(prBody)) > 0) {
-      result.act = result.enriched.filter(isOpenActItem);
-      result.counts = countByDisposition(result.enriched);
-    }
+  // The pinned work order's sliceLinkage (spec or PR body reopen line) arms the coercion; the --spec-file Non-goals are a second trigger.
+  const spec = options.specFile === undefined ? undefined : await readJsonArtifact(path.resolve(resolvedRoot, options.specFile), "--spec-file", parseError);
+  if (rejectClosingRefRemoval(result.enriched, pinned.sliceLinkage === true, spec?.nonGoals) > 0) {
+    result.act = result.enriched.filter(isOpenActItem);
+    result.counts = countByDisposition(result.enriched);
   }
 
   // Immutable spec-authority gate (opt-in via --spec-file). A spec_cannot_decide

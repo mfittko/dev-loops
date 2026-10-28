@@ -558,3 +558,10 @@ test("a PR body Non-goals reopen line puts the slice-linkage sentence into the w
     assert.equal((await emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" })).workOrder.sliceLinkage, undefined);
   });
 });
+
+test("a missing --pr-body-file refuses judge emission instead of skipping the slice-linkage arming", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    await assert.rejects(emitJudgeWorkOrder({ ...sources, prBodyFile: "missing-pr-body.md" }), /pr-body/);
+  });
+});

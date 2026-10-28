@@ -691,3 +691,24 @@ test("--body-file states the slice-linkage rule only when a Non-goals reopen lin
   const plain = await extractBodyFile("Closes #7\n## Acceptance criteria\n- [ ] a\n## Definition of done\n- [ ] d\n## Non-goals\n- no build changes\n");
   assert.equal(plain.sliceLinkage, undefined);
 });
+
+test("--issue with --pr-body-file states the slice-linkage rule from the PR body Non-goals and leaves the spec unchanged", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "spec-context-pr-body-file-"));
+  try {
+    await writeFile(path.join(tmpDir, "content.txt"), "reviewed", "utf8");
+    const run = (prBodyFile) => specContextExtract({ repo: "mfittko/dev-loops", issue: 7, contentFile: "./content.txt", ...(prBodyFile ? { prBodyFile } : {}) }, { repoRoot: tmpDir, tracker: stubTracker() });
+    const plain = await run();
+    assert.equal(plain.sliceLinkage, undefined);
+    await writeFile(path.join(tmpDir, "body.md"), "Closes #7\n## Non-goals\n- Reopen #7 on merge: slices 2+ remain.\n", "utf8");
+    const slice = await run("./body.md");
+    assert.match(slice.sliceLinkage, /^SPEC-SLICE-PR-KEEPS-CLOSING-REF/);
+    assert.deepEqual(slice.spec, plain.spec);
+    assert.equal(slice.specDigest, plain.specDigest);
+    await assert.rejects(run("./missing.md"), /Cannot read --pr-body-file/);
+    const base = ["--repo", "o/r", "--content-file", "c.txt"];
+    assert.equal(parseSpecContextCliArgs([...base, "--issue", "7", "--pr-body-file", "b.md"]).prBodyFile, "b.md");
+    assert.throws(() => parseSpecContextCliArgs([...base, "--pr", "7", "--pr-body-file", "b.md"]), /--pr-body-file requires --issue/);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});

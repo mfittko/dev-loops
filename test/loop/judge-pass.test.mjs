@@ -33,7 +33,7 @@ async function judgePassCli(options, { pinned = {}, ...deps } = {}) {
     repo: options.repo, pr: Number(options.pr), gate: options.gate, headSha: options.headSha,
     findingsFile: options.findingsFile, specFile: pinned.specFile ?? options.specFile, contentDigest: pinned.contentDigest ?? options.contentDigest,
   });
-  const { plan, receiptTmpRoot } = await deliverJudge(root, sources);
+  const { plan, receiptTmpRoot } = await deliverJudge(root, { ...sources, ...(pinned.prBodyFile ? { prBodyFile: pinned.prBodyFile } : {}) });
   const delivered = { judgePlan: plan.planPath, ...options };
   for (const [key, ref] of [["judgeVerdict", plan.workOrder.outputRefs[0]], ["specAuthorityVerdict", plan.workOrder.outputRefs[1]]]) {
     if (options[key] === undefined) continue;
@@ -2161,8 +2161,10 @@ test("hasReopenLine accepts every reopen inflection with an issue number and rej
     "Reopens #10 after the merge",
     "#10 is reopened after the merge",
     "Reopen [#10](https://github.com/o/r/issues/10) after the merge",
+    "Re-open 2883 after the merge",
   ]) assert.equal(hasReopenLine([line]), true, line);
-  for (const line of ["Do not reopen the old design decision.", "no build changes", "Reopen the discussion in a later slice", "Do not reopen the ADR 0123 decision.", "Do not reopen #500.", "Reopen ADR 0123 later"]) assert.equal(hasReopenLine([line]), false, line);
+  for (const line of [
+    "Cannot reopen 10","Do not reopen the old design decision.", "no build changes", "Reopen the discussion in a later slice", "Do not reopen the ADR 0123 decision.", "Do not reopen #500.", "Reopen ADR 0123 later"]) assert.equal(hasReopenLine([line]), false, line);
   assert.equal(hasReopenLine(undefined), false);
 });
 
@@ -2179,8 +2181,20 @@ test("removesClosingRef accepts every Closes-to-Refs phrasing and rejects the re
     "Change `Closes 10` to `Refs 10`",
     "Replace Closes #10 with Refs #10 to keep the parent issue open.",
     "Remove the Closes 10 line, because a slice PR must not close its parent.",
+    "Keep the AC table and replace `Closes 10` with `Refs 10`.",
+    "Never mind the nit, change Closes 10 to Refs 10",
+    "Closes 10 becomes Refs 10",
+    "To keep the parent open, replace Closes 10 with Refs 10",
+    "Change `Closes` to `Refs` in the PR body.",
+    "Replace Closes owner/repo#10 with Refs owner/repo#10",
+    "Replace Closes https://github.com/o/r/issues/10 with Refs https://github.com/o/r/issues/10",
   ]) assert.equal(coercedBy(fix), true, fix);
   for (const fix of [
+    "Do not remove the Closes #10 line.",
+    "Never change Closes 10 to Refs 10.",
+    "Do not change Closes to Refs.",
+    "Replace Closes owner/repo#10 with Refs owner/repo#11",
+    "Change `Refs` to `Closes` in the PR body.",
     "Replace `Refs #10` with `Closes #10`.",
     "Keep Closes 10; add a pointer to the parent via Refs 5",
     "This fixes 2905 by adding the null guard; refs 2883 for context.",
@@ -2217,7 +2231,8 @@ async function sliceRound(tmpDir, { specNonGoals, prBody, specText }) {
   await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [{ index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x", defectClass: "c", siteQuery: "q" }] }));
   if (prBody !== undefined) await writeFile(path.join(tmpDir, "pr-body.md"), prBody);
   const [options, deps] = specAuthorityArgs(tmpDir, contentDigest);
-  return judgePassCli({ ...options, ...(prBody !== undefined ? { prBodyFile: "./pr-body.md" } : {}) }, deps);
+  // The PR body is pinned in the judge work order; judge-pass takes no --pr-body-file.
+  return judgePassCli(options, { ...deps, ...(prBody !== undefined ? { pinned: { prBodyFile: "./pr-body.md" } } : {}) });
 }
 
 test("judgePassCli coerces a Closes-to-Refs act to reject from the --spec-file Non-goals and recounts", async () => {
@@ -2227,7 +2242,7 @@ test("judgePassCli coerces a Closes-to-Refs act to reject from the --spec-file N
   assert.equal(payload.counts.reject, 1);
 });
 
-test("judgePassCli reads the reopen line from the PR body when an issue-derived spec has none", async () => {
+test("judgePassCli arms the coercion from the pinned work order sliceLinkage when an issue-derived spec has none and no PR body flag is passed", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-slice-body-"));
   const body = "Closes #10\n\n## Non-goals\n\n- Reopen #10 on merge: slices 2+ remain.\n";
   const payload = await sliceRound(dir, { specNonGoals: ["Do not flatten the decks' voice"], prBody: body });

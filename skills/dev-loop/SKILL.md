@@ -245,7 +245,7 @@ node <dev-loops-package-root>/cli/index.mjs gate judge-pass --repo <owner/name> 
   --out <act-list-path> --ledger-out <enriched-ledger-path> \
   --spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict <spec-authority-verdict-path> \
   [--prior-approvals <prior-approvals-path> --approvals-out <approvals-out-path>] \
-  [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>] [--pr-body-file <pr-body-path>]
+  [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>]
 ```
 
 `--judge-plan` is the emitter's printed `planPath`. `--prior-approvals`/`--approvals-out` thread across re-entry rounds (the first round on a fresh
