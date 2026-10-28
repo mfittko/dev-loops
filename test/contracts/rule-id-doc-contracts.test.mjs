@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "bun:test";
 
 import { assertNotRestated, assertRuleOwned, assertRulePresent, extractOwnedText } from "./_rule-helpers.mjs";
@@ -32,4 +33,9 @@ test("extractOwnedText falls back to the next line when the marker sits alone", 
     extractOwnedText(content, "TEST-RULE-001"),
     "The agent MUST stop before merge and report the reconcile gate.",
   );
+});
+
+test("GATE-EXEC-FINDINGS-LOG-QUARANTINE is owned by the gate review sub-loop contract and registered (#2969)", () => {
+  assertRuleOwned("GATE-EXEC-FINDINGS-LOG-QUARANTINE", "skills/docs/gate-review-sub-loop-contract.md");
+  assert.match(readFileSync(new URL("../../skills/docs/required-rules.json", import.meta.url), "utf8"), /"id": "GATE-EXEC-FINDINGS-LOG-QUARANTINE"/);
 });

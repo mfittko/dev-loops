@@ -655,7 +655,24 @@ The carry resolver also refuses equal prior/current heads, so retirement cannot
 re-seed its own verdict through carry-forward. Retired sentinels and dispatch records
 sit outside the verifiers' flat live scans; divergent prefix hashes and invalid
 live dispatch bindings still fail closed. Retirement does not weaken verification
-or authorize reuse of retired reviewer evidence.
+or authorize reuse of retired reviewer evidence. Retirement also leaves the prior-head findings log in place; when that log fails integrity, `GATE-EXEC-FINDINGS-LOG-QUARANTINE` is the sanctioned exit.
+
+<!-- rule: GATE-EXEC-FINDINGS-LOG-QUARANTINE -->
+`GATE-EXEC-FINDINGS-LOG-QUARANTINE`: Retirement leaves `tmp/gate-findings/<repo>/pr-<N>/<gate>-<head>.json`
+in place. When a prior-head findings log fails the carry-forward integrity check
+(`GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED` refuses the re-gate, for example because a
+finding's angle matches no `provenance.perAngle` entry), run the sanctioned exit:
+
+```sh
+node scripts/github/quarantine-gate-findings-log.mjs --repo <owner/name> --pr <N> --gate <gate> --prev-head <full-sha>
+```
+
+The command re-runs the resolver's integrity check on that log. On a failure it moves the log and its keyed
+fan-in ledger into `tmp/quarantined-gate-findings/<slug>/pr-<N>/<gate>-<head>-<timestamp>/` with
+`quarantine.json` recording the reason and the exact integrity failure, and never deletes evidence. The next
+round at a later head then has no prior log: every angle runs fresh and nothing carries. A log that passes
+integrity is refused with the typed code `quarantine_refused_log_valid` and nothing moves, so quarantine
+cannot discard valid evidence or force a re-gate. Quarantine does not weaken any carry-forward check.
 
 After a retirement that archived dispatch records for a gate and full head, `consolidate-fanin.mjs` for that gate and head requires `--emit-plan` and at least one fresh dispatch record. It refuses plan units whose execution identity appears in the archived records. It looks up the archive by the full head and filters by gate from the file names before parsing any record. A short head fails closed when a retirement audit exists for a head it prefixes. The requirement keys on the presence of an archived dispatch record file for the gate, parseable or not, and counts fresh records for that gate only. A fan-in without `--gate` at a head with archived dispatch records is refused.
 
