@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -36,7 +36,9 @@ Optional:
   --record-source <path>   Required when --state is complete (non-blank): path
                            of the agent/subagent tool-call record (transcript
                            or journal artifact) the fresh-context retro was
-                           seeded with.
+                           seeded with. The file must exist, be non-empty and
+                           contain the --merge-commit oid, otherwise the CLI
+                           refuses with retro_artifact_missing.
   --repo <owner/name>      Cycle identity. MUST be provided together (with
   --pr <number>            --pr and --merge-commit) when --state is complete
   --merge-commit <sha>     or skipped, so a later reader can tell WHICH cycle
@@ -226,7 +228,11 @@ function parseCliArgs(argv) {
       recordStat = null;
     }
     if (!recordStat?.isFile() || recordStat.size === 0) {
-      throw parseError(`--record-source must resolve to an existing, non-empty file (the agent/subagent tool-call record the fresh-context retro was seeded with): ${recordSource}`);
+      throw parseError(`retro_artifact_missing: --record-source must resolve to an existing, non-empty file (the agent/subagent tool-call record the fresh-context retro was seeded with): ${recordPath}`);
+    }
+    // The record must name this cycle: a present-but-unrelated file is hollow evidence.
+    if (!readFileSync(recordPath, "utf8").toLowerCase().includes(mergeCommit.trim().toLowerCase())) {
+      throw parseError(`retro_artifact_missing: --record-source ${recordPath} does not contain the cycle's merge commit ${mergeCommit.trim()}`);
     }
     // Delegate shape ownership to the core normalizer — the CLI validates the
     // two flag values above, but never hand-builds the canonical provenance

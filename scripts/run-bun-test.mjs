@@ -2,14 +2,41 @@
 
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { closeSync, createReadStream } from "node:fs";
+import { closeSync, createReadStream, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, open, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER } from "@dev-loops/core/loop/run-context";
+
+// Pre-import core resolution guard (the only implementation). In a worktree without node_modules,
+// `@dev-loops/core` resolves to the main checkout's
+// copy or fails with ERR_MODULE_NOT_FOUND before the guard could run, so this script must check using
+// only node builtins before its first `@dev-loops/core` import.
+export function checkCoreResolutionBeforeImport(root) {
+  const real = (p) => { try { return realpathSync(p); } catch { return null; } };
+  const own = real(path.join(root, "packages", "core"));
+  if (own === null) return { ok: true };
+  const fix = "Run `bun install --frozen-lockfile` inside the worktree.";
+  for (let dir = path.resolve(root); ; dir = path.dirname(dir)) {
+    const found = real(path.join(dir, "node_modules", "@dev-loops", "core"));
+    if (found !== null) {
+      if (found === own) return { ok: true };
+      return { ok: false, code: "worktree_core_escapes", message: `@dev-loops/core resolves to ${found}, outside this checkout's packages/core (WORKTREE-DEPS-ISOLATED). ${fix}` };
+    }
+    if (path.dirname(dir) === dir) break;
+  }
+  return { ok: false, code: "worktree_core_unresolved", message: `node_modules/@dev-loops/core does not resolve to this checkout's packages/core (WORKTREE-DEPS-ISOLATED). ${fix}` };
+}
 
 const DEFAULT_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+{
+  const core = checkCoreResolutionBeforeImport(DEFAULT_ROOT);
+  if (!core.ok) {
+    if (import.meta.main) { process.stderr.write(`${core.code}: ${core.message}\n`); process.exit(1); }
+    throw Object.assign(new Error(core.message), { code: core.code });
+  }
+}
+const { ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER } = await import("@dev-loops/core/loop/run-context");
 const FAILURE_ONLY_FLAG = "--only-failures";
 const DOTS_FLAG = "--dots";
 // Directories under the repo root that hold test files Bun would otherwise
@@ -513,8 +540,10 @@ async function finalizeCaptureOutcome(capture, { failed, stderr }) {
 export async function runBunTest(args, {
   env = process.env, command = env.BUN_BIN || process.execPath, spawnImpl = spawn,
   stdout = process.stdout, stderr = process.stderr, captureFactory = createOutputCapture,
-  progressFactory = createTestProgress,
+  progressFactory = createTestProgress, repoRoot = DEFAULT_ROOT,
 } = {}) {
+  const core = checkCoreResolutionBeforeImport(repoRoot);
+  if (!core.ok) throw Object.assign(new Error(core.message), { code: core.code });
   const files = await resolveBunTestFiles(args);
   if (args.includes("--referencing") && files.length === 0) {
     stdout.write(`No tests reference ${args[args.indexOf("--referencing") + 1]}\n`);

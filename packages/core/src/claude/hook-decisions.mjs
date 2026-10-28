@@ -233,15 +233,15 @@ export function decideBashGate({
   const inManagedRepo = deriveInManagedRepo({ inManagedContext, managedRepoSlug, repoSlug });
 
   // OPS-NO-INLINE-INTERPRETER: inline interpreters (`node -e`/`--eval`/`-p`, `python3 -c`,
-  // heredocs fed to node/python) are barred actor-independently on the target repo — the rule bars
+  // `bun -e`/`--eval`/`-p`/`--print`/`bun -`, heredocs fed to node/python/bun) are barred actor-independently on the target repo — the rule bars
   // "Coordinator and agent flows"; sanctioned output parsing uses `--jq`/`--silent`, never an
   // inline interpreter.
   if (inManagedRepo && commandContainsInlineInterpreter(command)) {
     return {
       decision: "deny",
       reason:
-        "OPS-NO-INLINE-INTERPRETER: inline interpreters (node -e/--eval/-p, python3 -c, heredoc to " +
-        "node/python) are barred in the dev-loop flow. Parse tool output via --jq/--silent and mutate " +
+        "OPS-NO-INLINE-INTERPRETER: inline interpreters (node -e/--eval/-p, python3 -c, bun -e/--eval/-p/--print, bun -, " +
+        "heredoc to node/python/bun) are barred in the dev-loop flow. Parse tool output via --jq/--silent and mutate " +
         "files via the editor/patch tools or a --jq-composed --body-file, never an inline interpreter.",
     };
   }
