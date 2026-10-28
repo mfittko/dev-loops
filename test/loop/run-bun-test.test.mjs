@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { writeSync } from "node:fs";
-import { access, mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, open, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { checkCoreResolution } from "@dev-loops/core/loop/worktree-guard";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -891,4 +892,54 @@ test("shared child result settles when a spawn error has no close event", async 
   const result = childResult(child);
   child.emit("error", error);
   assert.deepEqual(await result, { code: 1, error, signal: undefined });
+});
+
+test("runBunTest refuses a worktree whose @dev-loops/core is unresolved or escapes to main (WORKTREE-DEPS-ISOLATED)", async () => {
+  const main = await mkdtemp(path.join(tmpdir(), "core-res-"));
+  try {
+    const wt = path.join(main, "tmp", "worktrees", "wt");
+    await mkdir(path.join(main, "packages", "core"), { recursive: true });
+    await mkdir(path.join(main, "node_modules", "@dev-loops"), { recursive: true });
+    await symlink(path.join(main, "packages", "core"), path.join(main, "node_modules", "@dev-loops", "core"));
+    await mkdir(path.join(wt, "packages", "core"), { recursive: true });
+    const opts = { repoRoot: wt, spawnImpl: () => assert.fail("must not spawn") };
+
+    // Missing worktree node_modules: resolves up the tree to main's copy.
+    assert.equal(checkCoreResolution(wt).code, "worktree_core_escapes");
+    await assert.rejects(runBunTest(["example.test.mjs"], opts), (error) => {
+      assert.equal(error.code, "worktree_core_escapes");
+      assert.match(error.message, /WORKTREE-DEPS-ISOLATED/);
+      assert.match(error.message, /bun install --frozen-lockfile/);
+      return true;
+    });
+
+    // Link to main's core from inside the worktree.
+    await mkdir(path.join(wt, "node_modules", "@dev-loops"), { recursive: true });
+    await symlink(path.join(main, "packages", "core"), path.join(wt, "node_modules", "@dev-loops", "core"));
+    assert.equal(checkCoreResolution(wt).code, "worktree_core_escapes");
+
+    // No main copy anywhere above and no link: unresolved.
+    const lone = await mkdtemp(path.join(tmpdir(), "core-lone-"));
+    try {
+      await mkdir(path.join(lone, "packages", "core"), { recursive: true });
+      assert.equal(checkCoreResolution(lone).code, "worktree_core_unresolved");
+      assert.equal(checkCoreResolution(path.join(lone, "none")).ok, true, "no packages/core is vacuously ok");
+    } finally { await rm(lone, { recursive: true, force: true }); }
+
+    // Link to its own packages/core: ok, and runBunTest proceeds.
+    await rm(path.join(wt, "node_modules"), { recursive: true, force: true });
+    await mkdir(path.join(wt, "node_modules", "@dev-loops"), { recursive: true });
+    await symlink(path.join(wt, "packages", "core"), path.join(wt, "node_modules", "@dev-loops", "core"));
+    assert.equal(checkCoreResolution(wt).ok, true);
+    let spawned = false;
+    const content = "1 pass\n 0 fail\nRan 1 test across 1 file. [4.00ms]\n";
+    const code = await runBunTest(["example.test.mjs"], {
+      repoRoot: wt,
+      captureFactory: async () => memoryCapture(content, []),
+      spawnImpl: (...a) => { spawned = true; return fakeChild(() => {})(...a); },
+      stdout: { write() {} }, stderr: { write() {} },
+    });
+    assert.equal(code, 0);
+    assert.ok(spawned);
+  } finally { await rm(main, { recursive: true, force: true }); }
 });

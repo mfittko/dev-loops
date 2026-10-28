@@ -361,6 +361,12 @@ or valid from the main checkout's `node_modules`; run the repository-pinned
 Bun 1.4.1 command `bun install --frozen-lockfile` inside the worktree whenever
 it needs dependencies (`ensure-worktree` does this for a newly created worktree, fail-soft and reported as `deps`; a reused worktree is not touched). If the frozen install reports manifest/`bun.lock` drift,
 fix and commit the lockfile deliberately rather than weakening the frozen mode.
+`scripts/run-bun-test.mjs` refuses to start a test run (before spawning) when
+`@dev-loops/core` does not resolve, walking up from the checkout root like node,
+to that checkout's own `packages/core`: `worktree_core_unresolved` when nothing
+resolves and `worktree_core_escapes` when it resolves elsewhere, typically the
+main checkout's copy through a missing worktree `node_modules`. Fix with
+`bun install --frozen-lockfile` in the worktree.
 
 ## Coordination and collision checks
 

@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ASYNC_CONTEXT_ENV_MARKERS, CLAUDE_HARNESS_MARKER } from "@dev-loops/core/loop/run-context";
+import { checkCoreResolution } from "@dev-loops/core/loop/worktree-guard";
 
 const DEFAULT_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const FAILURE_ONLY_FLAG = "--only-failures";
@@ -513,8 +514,10 @@ async function finalizeCaptureOutcome(capture, { failed, stderr }) {
 export async function runBunTest(args, {
   env = process.env, command = env.BUN_BIN || process.execPath, spawnImpl = spawn,
   stdout = process.stdout, stderr = process.stderr, captureFactory = createOutputCapture,
-  progressFactory = createTestProgress,
+  progressFactory = createTestProgress, repoRoot = DEFAULT_ROOT,
 } = {}) {
+  const core = checkCoreResolution(repoRoot);
+  if (!core.ok) throw Object.assign(new Error(core.message), { code: core.code });
   const files = await resolveBunTestFiles(args);
   if (args.includes("--referencing") && files.length === 0) {
     stdout.write(`No tests reference ${args[args.indexOf("--referencing") + 1]}\n`);

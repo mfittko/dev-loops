@@ -1214,6 +1214,19 @@ export function commandContainsInlineInterpreter(command) {
         if (PYTHON_VALUE_FLAGS.has(t) || /^-[A-Za-z]*[WX]$/.test(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; } // skip the flag's value token
       }
     }
+    if (interpreterRegex("bun").test(s)) {
+      const tokens = s.replace(interpreterRegex("bun"), "").trim().split(/\s+/).filter(Boolean);
+      const BUN_VALUE_FLAGS = new Set(["--cwd", "--env-file", "-r", "--preload", "--require", "--import", "-c", "--config", "--tsconfig-override", "--define", "-d", "--loader", "-l", "--port", "--conditions", "--inspect-wait"]);
+      for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        if (isStdinScriptToken(t)) return true;
+        if (/^(?:-e|-p|--eval|--print)(?:=|$)/.test(t) || /^-[ep]./.test(t)) return true;
+        const skip = redirectionSkip(t);
+        if (skip) { if (skip === 2 && tokens[i + 1]?.includes("<<")) return true; i += skip - 1; continue; }
+        if (!t.startsWith("-")) break; // subcommand or script path reached (`bun run x`, `bun test`)
+        if (BUN_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; }
+      }
+    }
     return false;
   });
 }
