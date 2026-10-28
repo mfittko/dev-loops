@@ -1218,7 +1218,8 @@ export function commandContainsInlineInterpreter(command) {
   const noHeredoc = command
     .replace(/(<<-?\s*(['"])([^\s'"<>|;&()\\]+)\2[^\n]*\n)[\s\S]*?\n[ \t]*\3(?=\)|\n|$)/g, (_, head) => (consumed++, head))
     .replace(/(<<-?\s*([^\s'"<>|;&()\\]+)[^\n]*\n)([\s\S]*?)(?=\n[ \t]*\2(?:\)|\n|$))/g, (_, head, _d, body) => (consumed++, head + body.replace(/['"#]/g, " ")));
-  const heredocOperators = (command.match(/(?<!<)<<(?!<)/g) ?? []).length;
+  // An operator with no later newline has no body to hide, so a single-line mention (quoted text, arithmetic) keeps the blanked scan. ponytail: a multi-line command that quotes `<<` still fails closed.
+  const heredocOperators = (command.match(/(?<!<)<<(?!<)(?=[^\n]*\n)/g) ?? []).length;
   let unquoted = "";
   let quote = "";
   for (let i = 0; i < noHeredoc.length; i++) {

@@ -262,6 +262,7 @@ test("wrapper and substitution forms get one verdict from hook and retro paths; 
     ["X=$(echo x | node scripts/x.mjs)", false], ["X=$(echo x | node -)", true], ["X=\"$(echo x | node -)\"", true], ["X=`echo x | node -`", true],
     ["cat <<'END-X'\ndon't\nEND-X\nX=$(python3 -c x)\n# it's", true], ["cat <<END-X\ndon't\nEND-X\nX=$(python3 -c x)\n# it's", true],
     ["cat <<'END-X'\nuse `node -e 1`\nEND-X", false], ["cat <<'EOF'\nuse `node -e 1`\nEOF", false], ["cat <<EOF\nplain text\nEOF", false],
+    ["gh pr comment 1 --body \"the hook refuses \\`node - <<EOF\\`\"", false], ["git commit -m 'refuse `python3 - <<EOF`'", false],
     ["cat <<EOF-X\n# $(python3 -c y)\nEOF-X", true], ["cat <<A <<B\nx\nA\ndon't\n$(python3 -c y)\nit's\nB", true],
   ];
   for (const [cmd, bad] of cases) {
