@@ -37,6 +37,11 @@ test("post-release rule is the standing explicit operator instruction", () => {
   assert.ok(doc.includes("This rule is the standing explicit operator instruction for these three issues"));
 });
 
+test("AGENTS.md cites the post-release rule as a standing instruction", () => {
+  const agents = fs.readFileSync(path.join(repoRoot, "AGENTS.md"), "utf8");
+  assert.ok(agents.includes("`RELEASE-POST-RELEASE-RECURRING-STEPS`"));
+});
+
 test("combined release retro names inputs, required metrics and the skipped link-back", () => {
   const body = doc.slice(doc.indexOf("`RELEASE-COMBINED-RETRO`:"));
   for (const term of ["per-merge retros", "round data", "findings logs", "active minutes", "gate rounds", "parks by cause", "size-class approvals", "skipped"]) {
