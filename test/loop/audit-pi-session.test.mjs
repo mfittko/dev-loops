@@ -964,6 +964,12 @@ describe("audit-pi-session unit & integration", () => {
     const jqErr = captureStream();
     assert.equal(await runAuditCli([sessionFile, "--json", "--jq", ".sessions | length"], { stdout: jqOut, stderr: jqErr, maxJsonBytes: 10 }), 0);
     assert.notEqual(jqOut.value, "");
+
+    // --fields is exempt from the cap too: it is the other documented workaround.
+    const fieldsOut = captureStream();
+    const fieldsErr = captureStream();
+    assert.equal(await runAuditCli([sessionFile, "--json", "--fields", "ok,totalFilesExamined"], { stdout: fieldsOut, stderr: fieldsErr, maxJsonBytes: 10 }), 0);
+    assert.notEqual(fieldsOut.value, "");
   });
 
   it("covers structured output, explicit latest, and CLI errors", async () => {

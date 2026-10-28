@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-28 ([PR 2966](https://github.com/mfittko/dev-loops/pull/2966))
 
+Amends the record-source ceiling of [0053](./0053-fresh-context-retrospective-provenance.md): `--record-source` must now also contain the `--merge-commit` oid, not only be an existing non-empty file.
+
 ## Context
 
 Issue [2887](https://github.com/mfittko/dev-loops/issues/2887) reported two paths that accepted hollow evidence without an error.
