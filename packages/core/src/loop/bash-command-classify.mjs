@@ -1215,8 +1215,9 @@ export function commandContainsInlineInterpreter(command) {
       }
     }
     if (interpreterRegex("bun").test(s)) {
-      const tokens = s.replace(interpreterRegex("bun"), "").trim().split(/\s+/).filter(Boolean);
+      const tokens = s.replace(interpreterRegex("bun"), "").trim().match(/(?:[^\s'"]|'[^']*'|"[^"]*")+/g) ?? []; // quote-aware: a quoted option value with spaces stays one token
       const BUN_VALUE_FLAGS = new Set(["--cwd", "--env-file", "-r", "--preload", "--require", "--import", "-c", "--config", "--tsconfig-override", "--define", "-d", "--loader", "-l", "--port", "--conditions"]);
+      const BUN_BOOLEAN_FLAGS = new Set(["--silent", "--bun", "--watch", "--hot", "--smol", "--no-install", "--if-present", "--no-clear-screen"]); // the token after one is the script/subcommand, not a value
       for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
         if (isStdinScriptToken(t)) return true;
@@ -1227,7 +1228,7 @@ export function commandContainsInlineInterpreter(command) {
           const prev = tokens[i - 1];
           if (t === "run") continue; // `bun run` takes the same flags: keep scanning so `-e`/`-p`/`--bun -` after it are caught
           // ponytail: unlisted `--flag value` fails closed like node: skip the value token unless it is a script or path-like.
-          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !SCRIPT_EXT_RE.test(stripSurroundingQuotes(t.split("<<")[0])) && !/^\.|^[^/]+\//.test(t)) { if (t.includes("<<")) return true; continue; }
+          if (prev?.startsWith("--") && prev !== "--" && !prev.includes("=") && !BUN_BOOLEAN_FLAGS.has(prev) && !SCRIPT_EXT_RE.test(stripSurroundingQuotes(t.split("<<")[0])) && !/^\.|^[^/]+\//.test(t)) { if (t.includes("<<")) return true; continue; }
           break; // subcommand or script path reached (`bun run x`, `bun test`)
         }
         if (BUN_VALUE_FLAGS.has(t)) { if (tokens[i + 1]?.includes("<<")) return true; i += 1; continue; }
