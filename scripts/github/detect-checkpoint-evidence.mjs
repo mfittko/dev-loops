@@ -35,7 +35,7 @@ import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from ".
 import { flattenPaginatedSlurp, resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
-import { carryGateMarker, isCarryCandidate } from "./_carried-verdict.mjs";
+import { carryFromPostedVerdict } from "./_carried-verdict.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
@@ -1033,7 +1033,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
 // wrapper below strips them so no OTHER caller (e.g.
 // detect-pr-gate-coordination-state.mjs, which durably stores the whole
 // returned object) can re-expose them.
-async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd() } = {}) {
+async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd(), recordCarry = false } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({
     repo: options.repo,
     pr: options.pr,
@@ -1121,22 +1121,18 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
   // The head-filtered summary hides markers at other heads, so the carry candidate is the latest
   // marker per gate from an unfiltered summary. Only an actual carry replaces the output marker.
   const anyHeadSummary = summarizeGateReviewCommentMarkers(allComments);
-  // baseRefName is fetched lazily, only for a clean contract-complete cross-head candidate,
-  // so non-carry flows make no extra gh call. A fetch failure means no carry (fail closed).
-  let baseRefPromise = null;
-  const fetchBaseRef = () => {
-    baseRefPromise ??= runGhJson(
-      ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "baseRefName"],
-      { env, ghCommand, runChild, restFallback: () => restFetchPrView(options.repo, options.pr, env) },
-    ).then((payload) => (typeof payload?.baseRefName === "string" && payload.baseRefName.trim() ? `origin/${payload.baseRefName.trim()}` : null), () => null);
-    return baseRefPromise;
-  };
-  const carryCtx = (baseRef) => ({ currentHeadSha, baseRef, repoRoot: resolveRepoRoot(cwd) });
+  // The carry seam (baseRefName fetch with REST fallback, posted carried-heads record) runs only for a
+  // clean contract-complete cross-head candidate, so non-carry flows make no extra gh call. Only the
+  // coordination path passes recordCarry; a fetch or record failure means no carry (fail closed).
+  const carryComments = [...commentsPayload];
   const resolveGateMarker = async (gate) => {
     const filtered = normalizeGateMarkerSummary(markerSummary[gate]);
     if (filtered.visible) return { marker: filtered, fanoutMarker: filtered };
     const candidate = normalizeGateMarkerSummary(anyHeadSummary[gate]);
-    const carried = await carryGateMarker(candidate, carryCtx(isCarryCandidate(candidate, currentHeadSha) ? await fetchBaseRef() : null));
+    const carried = await carryFromPostedVerdict(candidate, {
+      gate, repo: options.repo, pr: options.pr, currentHeadSha, repoRoot: resolveRepoRoot(cwd), env,
+      runJson: (args) => runGhJson(args, { env, ghCommand, runChild }), comments: carryComments, record: recordCarry,
+    });
     // Fan-out keeps the origin-head marker for a carried gate so the ledger path stays at the origin head.
     return carried.carriedFrom ? { marker: carried, fanoutMarker: { ...candidate, carriedFrom: carried.carriedFrom } } : { marker: filtered, fanoutMarker: filtered };
   };

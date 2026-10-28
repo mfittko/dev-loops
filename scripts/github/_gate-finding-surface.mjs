@@ -26,7 +26,7 @@ import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { escapeProse, flattenPaginatedSlurp, listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { PROBLEM_CAP, RECOMMENDATION_CAP, cutAtSentence, normalizeFindingSummary } from "./_gate-finding-text.mjs";
 import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
-import { carryGateMarker, isCarryCandidate } from "./_carried-verdict.mjs";
+import { carryFromPostedVerdict } from "./_carried-verdict.mjs";
 import { buildLogPath } from "./_gate-artifact-paths.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
@@ -1089,12 +1089,11 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
   if (!(marker && headSha?.startsWith(marker.headSha ?? "\0"))) {
     const anyHead = summarizeGateReviewCommentMarkers(comments).draft_gate;
     const candidate = anyHead ? { ...anyHead, visible: true, contractComplete: anyHead.contractComplete === true } : null;
-    if (isCarryCandidate(candidate, headSha)) {
-      const baseRef = await runGhJson(
-        ["pr", "view", String(pr), "--repo", repo, "--json", "baseRefName"],
-        { env: gh.env, ghCommand: gh.ghCommand, runChild: gh.runChild },
-      ).then((p) => (typeof p?.baseRefName === "string" && p.baseRefName.trim() ? `origin/${p.baseRefName.trim()}` : null), () => null);
-      draftGateMarker = await carryGateMarker(candidate, { currentHeadSha: headSha, baseRef, repoRoot: gh.repoRoot ?? resolveRepoRoot(process.cwd()) });
+    if (candidate) {
+      draftGateMarker = await carryFromPostedVerdict(candidate, {
+        gate: "draft_gate", repo, pr, currentHeadSha: headSha, repoRoot: gh.repoRoot ?? resolveRepoRoot(process.cwd()), env: gh.env,
+        runJson: (args) => runGhJson(args, { env: gh.env, ghCommand: gh.ghCommand, runChild: gh.runChild }), comments: [...comments],
+      });
     }
   }
   // The verdict-clean flags below stay VERDICT-ONLY so a verdict/head mismatch

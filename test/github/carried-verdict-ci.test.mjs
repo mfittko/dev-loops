@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
+import { renderCarriedHeadsBody } from "../../scripts/github/_carried-verdict.mjs";
+import { computeBaseMergeCarry } from "../../scripts/github/classify-base-merge-carry.mjs";
 import { readyForReview } from "../../scripts/github/ready-for-review.mjs";
 import { restoreReady } from "../../scripts/github/restore-ready.mjs";
 import { renderGateReviewCommentBody, summarizeExistingComment } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
@@ -30,10 +32,13 @@ async function setup({ carried }) {
     cur = git("rev-parse", "HEAD");
     git("update-ref", "refs/remotes/origin/main", "main");
   }
-  return { dir, origin, cur };
+  // The coordination-recorded carried-heads comment (ADR 0186); a ready-path reader only reads it.
+  const evidence = carried ? await computeBaseMergeCarry({ prevHead: origin, headSha: cur, baseRef: "origin/main", repoRoot: dir }) : null;
+  const record = evidence && { id: 2, body: renderCarriedHeadsBody([{ gate: "draft_gate", originHead: origin, headSha: cur, decision: evidence.decision, evidence }]) };
+  return { dir, origin, cur, record };
 }
 
-function router({ origin, cur }, ciBucket) {
+function router({ origin, cur, record }, ciBucket) {
   const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha: origin, repo: REPO, verdict: "clean", findingsSummary: "none", nextAction: "mark ready for review" });
   const calls = [];
   const runChild = async (_cmd, args) => {
@@ -41,7 +46,7 @@ function router({ origin, cur }, ciBucket) {
     const text = args.join(" ");
     if (args[0] === "pr" && args[1] === "checks") return { code: ciBucket === "fail" ? 1 : 0, stdout: JSON.stringify([{ bucket: ciBucket, name: "ci" }]), stderr: "" };
     if (args.includes("baseRefName") && args[1] === "view") return { code: 0, stdout: JSON.stringify({ baseRefName: "main" }), stderr: "" };
-    if (text.includes("issues/7/comments")) return { code: 0, stdout: JSON.stringify([[{ id: 1, body, created_at: "2026-01-01T00:00:00Z" }]]), stderr: "" };
+    if (text.includes("issues/7/comments")) return { code: 0, stdout: JSON.stringify([[{ id: 1, body, created_at: "2026-01-01T00:00:00Z" }, ...(record ? [{ ...record, created_at: "2026-01-01T00:00:01Z" }] : [])]]), stderr: "" };
     if (args[0] === "api" && args[1] === "user") return { code: 0, stdout: JSON.stringify({ login: "bot" }), stderr: "" };
     if (text.includes("reviewThreads")) {
       return { code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } }), stderr: "" };

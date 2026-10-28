@@ -149,8 +149,8 @@ head. On a ready PR, the `pre_approval_gate` re-runs on the new head per
 `GATE-EXEC-BASE-MERGE-VERDICT-CARRY`: A head advance that only integrated the base branch keeps
 the verdict posted at the origin head (the head of the latest clean verdict) when `scripts/github/classify-base-merge-carry.mjs`
 records `carry_verdict`. `merge-pr`, gate coordination and the server-side `gate-evidence` check
-recompute the carry from GitHub-visible state: the posted clean verdict at the origin head (same author and marker checks as any verdict) plus git facts from a full-history checkout. No local `tmp/` record is read or trusted;
-the posted verdict plus the recomputable merge facts are the durable record. A carried verdict is current only while CI is green at the new head. A
+recompute the carry from GitHub-visible state: the posted clean verdict at the origin head (same author and marker checks as any verdict) plus git facts from a full-history checkout. No local `tmp/` record is read or trusted.
+The durable record is a hidden-marker PR comment (`dev-loops:carried-heads:v1`) that lists, per gate, the origin head and each carried head with its classification evidence and holds no credential. Gate coordination upserts the entry when it carries; every other reader carries only when the entry for the current head exists and equals the recomputed evidence. A missing or differing entry is a full re-gate. A carried verdict is current only while CI is green at the new head. A
 scope change (any commit after the clean verdict that changes the mode or blob of a PR path, or adds or removes a PR path) still invalidates the carry and
 runs the full gate round. The carry needs the same mode and
 blob object id for every PR path at both heads (raw `git diff-tree` tree entries, no rendered diff),

@@ -15,11 +15,12 @@ ADR 0156 shipped the classifier `computeBaseMergeCarry` and the evidence record 
 Gate evidence consumes a carried verdict under these rules:
 
 - `detect-checkpoint-evidence` presents the latest cross-head clean marker at the current head, with the field `carriedFrom` set to the origin head, only when two conditions hold. First, `computeBaseMergeCarry` for origin head to current head returns `carry_verdict`. Second, the evidence passes `validateBaseMergeCarryEvidence` bound to both heads. The check reads the posted verdict and git facts from a full-history checkout. It reads no local `tmp/` record.
-- The same recomputation runs in gate coordination, `merge-pr` and the server-side `gate-evidence` workflow, which also triggers on `synchronize`. The posted verdict plus the recomputable merge facts are the durable record. The PR body is not edited.
+- The same recomputation runs in gate coordination, `merge-pr`, the ready-transition guards and the server-side `gate-evidence` workflow, which also triggers on `synchronize`. One helper resolves the base ref (gh, then the REST fallback) for every reader.
+- The durable record is a hidden-marker PR comment, `dev-loops:carried-heads:v1`, that lists per gate the origin head and each carried head with its classification evidence. It holds no credential. Gate coordination upserts the entry when it carries. Every other reader carries only when the entry for the current head exists and equals the recomputed evidence. A missing or differing entry falls back to a full re-gate. The PR body is not edited.
 - Fan-out ledger evidence stays keyed at the origin head. The carry does not rewrite ledger entries.
 - CI green at the current head stays a merge precondition.
 
-Rejected: a local carried-heads record under `tmp/`. A fresh CI runner never has it, so a server-side check could not verify a carry from it.
+Rejected: a local carried-heads record under `tmp/`. A fresh CI runner never has it, so a server-side check could not verify a carry from it. The GitHub-visible comment replaces it.
 
 ## Consequences
 

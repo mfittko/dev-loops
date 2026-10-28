@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { carryGateMarker } from "../../scripts/github/_carried-verdict.mjs";
+import { carryGateMarker, parseCarriedHeads, renderCarriedHeadsBody } from "../../scripts/github/_carried-verdict.mjs";
 import { fetchDraftGateEvidence } from "../../scripts/github/_gate-finding-surface.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { buildPreMergeGateCheck } from "../../scripts/github/detect-checkpoint-evidence.mjs";
@@ -32,17 +32,31 @@ function setup() {
   return { dir, git, put, head, mergeBase };
 }
 const marker = (headSha) => ({ visible: true, verdict: "clean", contractComplete: true, headSha });
-const carry = (s, m, currentHeadSha) => carryGateMarker(m, { currentHeadSha, baseRef: "main", repoRoot: s.dir });
+const GATE = "draft_gate";
+// `recorded` is the parsed carried-heads record; `record` (coordination only) appends to `written`.
+const carry = (s, m, currentHeadSha, { recorded = [], written = null } = {}) => carryGateMarker(m, {
+  gate: GATE, currentHeadSha, baseRef: "main", repoRoot: s.dir, recorded, record: written ? async (e) => { written.push(e); } : null,
+});
 
 // Fresh-runner path (#2752 decision 4): setup() builds a bare checkout with no tmp/ state, so
-// every case below recomputes the carry from the posted marker and git facts alone.
-test("a base-only merge carries from a checkout with no tmp state", async () => {
+// every case below needs only the posted marker, the posted carried-heads record and git facts.
+test("a recorded base-only merge carries from a checkout with no tmp state", async () => {
   const s = setup();
   const origin = s.head();
   const cur = s.mergeBase("docs/a.md");
-  const carried = await carry(s, marker(origin), cur);
+  const written = [];
+  const carried = await carry(s, marker(origin), cur, { written });
   assert.equal(carried.headSha, cur);
   assert.equal(carried.carriedFrom, origin);
+  assert.equal((await carry(s, marker(origin), cur, { recorded: written })).carriedFrom, origin);
+});
+
+test("a reader never carries a head the coordination path did not record", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  const m = marker(origin);
+  assert.deepEqual(await carry(s, m, cur), m);
 });
 
 test("a head with a PR-own change after the clean verdict does not carry", async () => {
@@ -51,17 +65,33 @@ test("a head with a PR-own change after the clean verdict does not carry", async
   s.put("src/x.mjs", "changed pr blob\n"); s.git("add", "-A"); s.git("commit", "-qm", "pr edit");
   const cur = s.mergeBase("docs/a.md");
   const m = marker(origin);
-  assert.deepEqual(await carry(s, m, cur), m);
+  const written = [];
+  assert.deepEqual(await carry(s, m, cur, { written }), m);
+  assert.deepEqual(written, []);
 });
 
-
-test("two consecutive base merges both carry from the same origin head", async () => {
+// Artifact test: both consecutive carried heads end up in the posted record with their classification.
+test("two consecutive base merges are both recorded with their classification and both carry", async () => {
   const s = setup();
   const origin = s.head();
   const first = s.mergeBase("docs/a.md");
   const second = s.mergeBase("docs/b.md");
-  assert.equal((await carry(s, marker(origin), first)).carriedFrom, origin);
-  assert.equal((await carry(s, marker(origin), second)).carriedFrom, origin);
+  const written = [];
+  assert.equal((await carry(s, marker(origin), first, { written })).carriedFrom, origin);
+  assert.equal((await carry(s, marker(origin), second, { written })).carriedFrom, origin);
+  const record = parseCarriedHeads([{ id: 1, body: renderCarriedHeadsBody(written) }]);
+  assert.deepEqual(record.map((e) => [e.gate, e.originHead, e.headSha, e.decision]), [
+    [GATE, origin, first, "carry_verdict"], [GATE, origin, second, "carry_verdict"],
+  ]);
+  assert.equal((await carry(s, marker(origin), first, { recorded: record })).carriedFrom, origin);
+  assert.equal((await carry(s, marker(origin), second, { recorded: record })).carriedFrom, origin);
+});
+
+test("the posted record round-trips evidence text containing a comment terminator", () => {
+  const entries = [{ gate: GATE, originHead: "a", headSha: "b", decision: "carry_verdict", evidence: { note: "--> <!--" } }];
+  const body = renderCarriedHeadsBody(entries);
+  assert.equal(body.match(/-->/g).length, 1);
+  assert.deepEqual(parseCarriedHeads([{ body }]), entries);
 });
 
 test("buildPreMergeGateCheck passes with a carried marker and fails with an uncarried stale-head marker", async () => {
@@ -69,24 +99,72 @@ test("buildPreMergeGateCheck passes with a carried marker and fails with an unca
   const origin = s.head();
   const cur = s.mergeBase("docs/a.md");
   const evidence = (pre) => ({ currentHeadSha: cur, draftGate: { visible: true, verdict: "clean" }, preApprovalGateMarker: { ...pre, sizeOutcome: "pass", sizeTouchesT1: false } });
-  const carried = await carry(s, marker(origin), cur);
+  const carried = await carry(s, marker(origin), cur, { written: [] });
   assert.equal(buildPreMergeGateCheck(evidence(carried), 0).ok, true);
   assert.equal(buildPreMergeGateCheck(evidence(marker(origin)), 0).ok, false);
 });
 
-test("fetchDraftGateEvidence reads a base-only carry as current-head clean and a PR-own change as not clean", async () => {
+// Tampered evidence at the merge-precondition seam: each case falls back to a full re-gate.
+test("buildPreMergeGateCheck rejects a recorded entry whose evidence differs from the recomputation", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  const written = [];
+  await carry(s, marker(origin), cur, { written });
+  const tampered = [{ ...written[0], evidence: { ...written[0].evidence, newHead: "f".repeat(40) } }];
+  const m = marker(origin);
+  const result = await carry(s, m, cur, { recorded: tampered });
+  assert.deepEqual(result, m);
+  const pre = { ...result, sizeOutcome: "pass", sizeTouchesT1: false };
+  assert.equal(buildPreMergeGateCheck({ currentHeadSha: cur, draftGate: { visible: true, verdict: "clean" }, preApprovalGateMarker: pre }, 0).ok, false);
+});
+
+test("buildPreMergeGateCheck rejects a candidate with contractComplete false", async () => {
+  const s = setup();
+  const origin = s.head();
+  const cur = s.mergeBase("docs/a.md");
+  const written = [];
+  const m = { ...marker(origin), contractComplete: false };
+  const result = await carry(s, m, cur, { written });
+  assert.deepEqual(result, m);
+  assert.deepEqual(written, []);
+  const pre = { ...result, sizeOutcome: "pass", sizeTouchesT1: false };
+  assert.equal(buildPreMergeGateCheck({ currentHeadSha: cur, draftGate: { visible: true, verdict: "clean" }, preApprovalGateMarker: pre }, 0).ok, false);
+});
+
+test("fetchDraftGateEvidence reads a recorded base-only carry as current-head clean and a PR-own change as not clean", async () => {
   const s = setup();
   const origin = s.head();
   const cur = s.mergeBase("docs/a.md");
   s.git("update-ref", "refs/remotes/origin/main", "main");
+  const written = [];
+  await carryGateMarker(marker(origin), { gate: GATE, currentHeadSha: cur, baseRef: "origin/main", repoRoot: s.dir, record: async (e) => { written.push(e); } });
   const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha: origin, repo: REPO, verdict: "clean", findingsSummary: "none", nextAction: "mark ready for review" });
+  const recordBody = renderCarriedHeadsBody(written);
+  const baseRefReply = { current: () => ({ code: 0, stdout: JSON.stringify({ baseRefName: "main" }), stderr: "" }) };
   const runChild = async (_cmd, args) => {
-    if (args.some((a) => String(a).includes("issues/7/comments"))) return { code: 0, stdout: JSON.stringify([[{ id: 1, body, created_at: "2026-01-01T00:00:00Z" }]]), stderr: "" };
-    if (args.includes("baseRefName")) return { code: 0, stdout: JSON.stringify({ baseRefName: "main" }), stderr: "" };
+    if (args.some((a) => String(a).includes("issues/7/comments"))) {
+      return { code: 0, stdout: JSON.stringify([[{ id: 1, body, created_at: "2026-01-01T00:00:00Z" }, { id: 2, body: recordBody, created_at: "2026-01-01T00:00:01Z" }]]), stderr: "" };
+    }
+    if (args.includes("baseRefName")) return baseRefReply.current();
     return { code: 1, stdout: "", stderr: "unavailable" };
   };
-  const read = (headSha) => fetchDraftGateEvidence({ repo: REPO, pr: 7, headSha }, { env: {}, ghCommand: "gh", runChild, repoRoot: s.dir });
+  const read = (headSha) => fetchDraftGateEvidence({ repo: REPO, pr: 7, headSha }, { env: { GH_TOKEN: "t" }, ghCommand: "gh", runChild, repoRoot: s.dir });
   assert.equal((await read(cur)).currentHeadClean, true);
+
+  // The gh binary is missing: the REST fallback supplies baseRefName, same as the detector.
+  baseRefReply.current = () => { throw Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }); };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    assert.match(String(url), /\/pulls\/7$/);
+    return { ok: true, status: 200, statusText: "OK", headers: { get: () => null }, json: async () => ({ base: { ref: "main" }, head: { sha: cur } }) };
+  };
+  try {
+    assert.equal((await read(cur)).currentHeadClean, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
   s.put("src/x.mjs", "changed pr blob\n"); s.git("add", "-A"); s.git("commit", "-qm", "pr edit");
   assert.equal((await read(s.head())).currentHeadClean, false);
 });

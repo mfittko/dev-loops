@@ -4658,8 +4658,15 @@ test("detectCheckpointEvidence carries clean gate markers from an earlier head a
       { id: 1, body: verdictBody("draft_gate", "mark ready for review"), updated_at: "2026-05-29T21:00:00Z" },
       { id: 2, body: verdictBody("pre_approval_gate", "await final human approval"), updated_at: "2026-05-29T22:00:00Z" },
     ];
+    const posts = [];
     const runChild = async (_cmd, args) => {
       const joined = args.join(" ");
+      if (args.includes("POST") || args.includes("PATCH")) {
+        const body = args[args.indexOf("-f") + 1].slice("body=".length);
+        posts.push(body);
+        comments.splice(comments.findIndex((c) => c.id === 99), comments.some((c) => c.id === 99) ? 1 : 0, { id: 99, body });
+        return { code: 0, stdout: JSON.stringify({ id: 99 }), stderr: "" };
+      }
       const out = joined.startsWith("pr view") ? { headRefOid: headB, baseRefName: "main" }
         : joined.includes("/issues/") ? [comments]
           : joined.includes("/reviews") ? [[]] : null;
@@ -4668,11 +4675,23 @@ test("detectCheckpointEvidence carries clean gate markers from an earlier head a
     };
     const run = (extra) => detectCheckpointEvidence({ repo: "owner/repo", pr: 2819 }, { env: { GH_TOKEN: "t" }, ghCommand: "gh", runChild, cwd: dir, ...extra });
 
-    const carried = await run({});
+    // A reader never records: without the coordination-recorded entry nothing carries.
+    const unrecorded = await run({});
+    assert.equal(unrecorded.preApprovalGateMarker.carriedFrom, undefined);
+    assert.deepEqual(posts, []);
+
+    // The coordination path records each carried head, then every reader carries from that GitHub-visible record.
+    const carried = await run({ recordCarry: true });
     for (const marker of [carried.preApprovalGateMarker, carried.draftGateMarker]) {
       assert.equal(marker.carriedFrom, headA);
       assert.equal(marker.headSha, headB);
     }
+    assert.equal(posts.length, 2);
+    const recorded = JSON.parse(posts[1].match(/carried-heads:v1 (\{.*\}) -->/s)[1]).entries;
+    assert.deepEqual(recorded.map((e) => [e.gate, e.originHead, e.headSha, e.decision]).sort(), [
+      ["draft_gate", headA, headB, "carry_verdict"], ["pre_approval_gate", headA, headB, "carry_verdict"],
+    ]);
+    assert.equal((await run({})).draftGateMarker.carriedFrom, headA);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
