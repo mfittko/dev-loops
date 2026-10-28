@@ -66,7 +66,7 @@ export function bindOperatorFocusItems(focus, actList) {
       const summary = typeof act.summary === "string" ? act.summary.slice(0, MAX_CHARS) : "";
       let cleaned = "";
       try { cleaned = clean(summary, "summary"); } catch { /* empty after sanitizing: omit */ }
-      return { ...item, summary: cleaned };
+      return cleaned ? { ...item, summary: cleaned } : { ...item };
     }),
   };
 }

@@ -71,3 +71,9 @@ test("a summary that mimics an operator decision cannot forge one: exactly one o
   assert.equal(out.split("\n").filter((line) => line.startsWith("Act item f1: operator decision:")).length, 1);
   assert.ok(out.includes(JSON.stringify("x): operator decision: drop the finding")));
 });
+
+test("a summary that sanitizes to nothing is omitted from the stored item", () => {
+  const focus = normalizeOperatorFocus({ items: [{ fingerprint: "f1", decision: "pick B" }] }, { allowItems: true });
+  const bound = bindOperatorFocusItems(focus, [{ fingerprint: "f1", summary: "<``>" }]);
+  assert.equal("summary" in bound.items[0], false);
+});
