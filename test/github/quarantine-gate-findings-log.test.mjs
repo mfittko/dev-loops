@@ -16,7 +16,8 @@ const PR = 7;
 const GATE = "pre_approval_gate";
 const HEAD = "c".repeat(40);
 const PRIOR = "d".repeat(40);
-const emitCli = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
+const quarantineCli = path.resolve("scripts/github/quarantine-gate-findings-log.mjs");
+const emitCli =path.resolve("scripts/github/emit-fanout-dispatch.mjs");
 
 async function withRepo(fn) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "quarantine-findings-log-"));
@@ -92,6 +93,9 @@ test("quarantine refuses a log that passes integrity and moves nothing", async (
   await withRepo(async (dir) => {
     const { logPath, ledgerPath } = await seed(dir, { valid: true });
     await assert.rejects(run(dir), (err) => err.code === "quarantine_refused_log_valid");
+    const cli = spawnSync("node", [quarantineCli, "--repo", REPO, "--pr", String(PR), "--gate", GATE, "--prev-head", PRIOR, "--tmp-root", "tmp", "--context-tmp-root", "ctx-tmp"], { encoding: "utf8", cwd: dir });
+    assert.equal(cli.status, 1);
+    assert.equal(JSON.parse(cli.stderr).code, "quarantine_refused_log_valid");
     await readFile(logPath, "utf8");
     await readFile(ledgerPath, "utf8");
     await assert.rejects(readdir(path.join(dir, "tmp", "quarantined-gate-findings")));
@@ -104,6 +108,7 @@ test("a missing ledger is recorded in quarantine.json", async () => {
     const result = await run(dir);
     const record = JSON.parse(await readFile(path.join(result.auditDir, "quarantine.json"), "utf8"));
     assert.equal(record.ledgerAbsent, true);
+    assert.equal(record.ledgerPath, path.join(dir, buildGateFaninLedgerPath({ repo: REPO, pr: PR, gate: GATE, headSha: PRIOR, tmpRoot: "ctx-tmp" })));
   });
 });
 

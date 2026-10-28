@@ -144,7 +144,7 @@ export async function quarantineGateFindingsLog({ repo, pr, gate, prevHead, tmpR
   const recordPath = path.join(auditDir, "quarantine.json");
   const record = {
     repo, pr, gate, prevHead, reason: "findings_log_integrity_failure", integrityFailure: failure,
-    quarantinedAt: new Date().toISOString(), ledgerAbsent, plannedMoves: planned.map((m) => path.basename(m.from)), status: "pending",
+    quarantinedAt: new Date().toISOString(), ledgerAbsent, ledgerPath, plannedMoves: planned.map((m) => path.basename(m.from)), status: "pending",
   };
   const save = () => writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
   await save();

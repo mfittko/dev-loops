@@ -670,8 +670,8 @@ node scripts/github/quarantine-gate-findings-log.mjs --repo <owner/name> --pr <N
 The command re-runs the resolver's integrity check on that log. On a failure it moves the log and its keyed
 fan-in ledger into `tmp/quarantined-gate-findings/<slug>/pr-<N>/<gate>-<head>-<timestamp>/` with
 `quarantine.json` recording the reason and the exact integrity failure, and never deletes evidence. `quarantine.json` is written before any move
-(status `pending`), records whether the ledger was absent, and ends `complete`; a failed move is rolled back or
-recorded as `partial` with the files left in the audit dir listed in `stillInAuditDir` for manual review (a re-run does not resume it). The ledger is read from `--context-tmp-root` (default: `tmp` under the cwd). The next
+(status `pending`), records whether the ledger was absent and the resolved `ledgerPath` it checked, and ends `complete`; a failed move is rolled back or
+recorded as `partial` with the files left in the audit dir listed in `stillInAuditDir` for manual review (a re-run does not resume it). The ledger is read from `--context-tmp-root` (default: `tmp` under the cwd), so run the command from the worktree where fan-in ran or pass `--context-tmp-root`. The next
 round at a later head then has no prior log: `emit-fanout-dispatch.mjs` ignores every valid findings log for that PR and gate
 whose recorded `loggedAt` (file mtime when absent) is at or before the latest non-`rolled_back` `quarantinedAt` there, and `resolve-angle-carry-forward.mjs` refuses a `--prev-head` log that old with a fresh fallback plan, so every angle dispatches fresh and nothing carries; a log
 written after the quarantine counts normally. A log that passes
