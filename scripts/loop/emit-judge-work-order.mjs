@@ -316,6 +316,10 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     process.stderr.write(`--operator-focus-file must not be an empty value; pass a path or omit the flag\n${USAGE}\n`);
     return 2;
   }
+  if (values["pr-body-file"] !== undefined && values["pr-body-file"].trim().length === 0) {
+    process.stderr.write(`--pr-body-file requires a non-empty path\n${USAGE}\n`);
+    return 2;
+  }
   const jqSyntaxError = preflightJqFilter(values.jq);
   if (jqSyntaxError !== undefined) return jqSyntaxError;
   const tmpRoot = values["tmp-root"] ? path.resolve(cwd, values["tmp-root"]) : undefined;
@@ -332,7 +336,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     const plan = await emitJudgeWorkOrder({
       repo: values.repo, pr: values.pr, gate: values.gate, headSha: values["head-sha"].toLowerCase(),
       findingsFile: values["findings-file"], specFile: values["spec-file"], identityFile: values["identity-file"],
-      priorVerdicts: values["prior-verdict"] ?? [], ...(values["operator-focus-file"] ? { operatorFocusFile: values["operator-focus-file"] } : {}), ...(values["pr-body-file"] ? { prBodyFile: values["pr-body-file"] } : {}), ...(values.round !== undefined ? { round: /^[1-9][0-9]*$/.test(values.round) ? Number(values.round) : values.round } : {}), cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}),
+      priorVerdicts: values["prior-verdict"] ?? [], ...(values["operator-focus-file"] ? { operatorFocusFile: values["operator-focus-file"] } : {}), ...(values["pr-body-file"] !== undefined ? { prBodyFile: values["pr-body-file"].trim() } : {}), ...(values.round !== undefined ? { round: /^[1-9][0-9]*$/.test(values.round) ? Number(values.round) : values.round } : {}), cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}),
     });
     const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath });

@@ -565,3 +565,26 @@ test("a missing --pr-body-file refuses judge emission instead of skipping the sl
     await assert.rejects(emitJudgeWorkOrder({ ...sources, prBodyFile: "missing-pr-body.md" }), /pr-body/);
   });
 });
+
+test("a spec Non-goals reopen line arms sliceLinkage without --pr-body-file", async () => {
+  await withDir(async (root) => {
+    const base = await seed(root);
+    const spec = JSON.parse(await readFile(path.join(root, base.specFile), "utf8"));
+    await writeFile(path.join(root, "judge-fixture/reopen-spec.json"), JSON.stringify({ ...spec, nonGoals: ["Reopen #2883 on merge: slices 2+ remain."] }));
+    const sources = await seed(root, { specFile: "judge-fixture/reopen-spec.json" });
+    const plan = await emitJudgeWorkOrder(sources);
+    assert.match(plan.workOrder.sliceLinkage, /^SPEC-SLICE-PR-KEEPS-CLOSING-REF: a slice PR keeps its closing reference/);
+    assert.match(await readFile(plan.promptPath, "utf8"), /## Slice linkage\n\nSPEC-SLICE-PR-KEEPS-CLOSING-REF/);
+  });
+});
+
+test("an empty or whitespace-only --pr-body-file is a usage error (exit 2)", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    for (const value of ["", "   "]) {
+      const { code, stderr } = await runJudgeMain(root, sources, ["--pr-body-file", value]);
+      assert.equal(code, 2);
+      assert.match(stderr, /--pr-body-file requires a non-empty path/);
+    }
+  });
+});

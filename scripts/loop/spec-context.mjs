@@ -82,6 +82,8 @@ Optional (extract mode):
                               <path> flag reads (issue 2008 / ADR 0061 AC1).
                               Requires --head-sha (fail-closed: the identity
                               is incomplete without it).
+  --pr-body-file <path>       PR body text; requires --issue. Only arms sliceLinkage
+                              (the spec and its digests stay unchanged)
 
 changed-paths mode: emit the JSON string array of repo-relative paths changed
 between --base and --head (two-dot delta, reusing the same git isolation seam
