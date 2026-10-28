@@ -1,13 +1,17 @@
 // The writer derives execution mode, provenance, verifiedItems and the verdict
 // from the keyed emit plan and fan-in ledger of the round.
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
 import { provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
+import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
+import { runNode } from "../_helpers.mjs";
+import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir } from "../../scripts/github/_gate-artifact-paths.mjs";
 
 const HEAD = "a1".repeat(20);
@@ -169,5 +173,44 @@ test("an explicit --emit-plan cannot replace validation of a conflicting keyed p
     await putJson(repoRoot, buildGateEmitPlanPath(KEY), PLAN);
     const { log } = await write({ emitPlan: "explicit-plan.json" });
     assert.equal(log.executionMode, "fanout_fanin");
+  });
+});
+
+test("a hand-edited sealed keyed fan-in ledger is refused with the typed code, naming the ledger path (AC2)", async () => {
+  await withRound({ plan: true }, async (write, repoRoot) => {
+    const ledgerPath = path.resolve(repoRoot, buildGateFaninLedgerPath(KEY));
+    await mkdir(path.dirname(ledgerPath), { recursive: true });
+    await writeSealed(ledgerPath, JSON.stringify(LEDGER));
+    await writeFile(ledgerPath, JSON.stringify({ ...LEDGER, verifiedItems: ["forged"] }), "utf8");
+    await assert.rejects(
+      () => write(),
+      (err) => err.code === OUT_OF_BAND_WRITE && err.message.includes(ledgerPath) && err.usage === undefined,
+    );
+  });
+});
+
+test("the CLI renders code gate_artifact_out_of_band_write and no usage hint for a hand-edited sealed ledger", async () => {
+  await withRound({ plan: true }, async (_write, repoRoot) => {
+    const ledgerPath = path.resolve(repoRoot, buildGateFaninLedgerPath(KEY));
+    await mkdir(path.dirname(ledgerPath), { recursive: true });
+    await writeSealed(ledgerPath, JSON.stringify(LEDGER));
+    await writeFile(ledgerPath, JSON.stringify({ ...LEDGER, verifiedItems: ["forged"] }), "utf8");
+    const result = await runNode(path.resolve("scripts/github/write-gate-findings-log.mjs"), [
+      "--repo", KEY.repo, "--pr", String(KEY.pr), "--gate", KEY.gate, "--head-sha", HEAD,
+      "--execution-mode", "fanout_fanin", "--findings", "[]", "--tmp-root", path.join(repoRoot, "tmp"),
+    ], { cwd: repoRoot });
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.code, OUT_OF_BAND_WRITE);
+    assert.equal(payload.hint, undefined);
+  });
+});
+
+test("the findings-log writer emits a seal equal to the sha256 of the written bytes (AC2)", async () => {
+  await withRound({}, async (write, repoRoot) => {
+    await write({ verdict: "clean" });
+    const logPath = path.resolve(repoRoot, buildLogPath(KEY));
+    const sealed = createHash("sha256").update(await readFile(logPath, "utf8")).digest("hex");
+    assert.equal((await readFile(`${logPath}.seal`, "utf8")).trim(), sealed);
   });
 });

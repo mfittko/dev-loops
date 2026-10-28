@@ -28,6 +28,7 @@ import { PROBLEM_CAP, RECOMMENDATION_CAP, cutAtSentence, normalizeFindingSummary
 import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { carryFromPostedVerdict } from "./_carried-verdict.mjs";
 import { buildLogPath } from "./_gate-artifact-paths.mjs";
+import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -743,8 +744,9 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
   const fail = (message) => errorFactory(message);
   let raw;
   try {
-    raw = await readFile(ledgerPath, "utf8");
+    raw = await readSealed(ledgerPath);
   } catch (err) {
+    if (err?.code === OUT_OF_BAND_WRITE) throw err;
     throw fail(`Cannot read gate findings ledger "${ledgerPath}": ${err instanceof Error ? err.message : String(err)}`);
   }
   let parsed;

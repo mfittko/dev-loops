@@ -5,7 +5,7 @@
 // is shared here — each tool keeps its own `validate(parsed, flagLabel)`
 // callback since their per-element validation intentionally differs (e.g.
 // disposition enforcement).
-import { readFile } from "node:fs/promises";
+import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 
 // The consolidate-fanin CLI's `--ledger-out` writes a wrapper object
 // `{ overallVerdict, findings }` (the consolidator's computed verdict carried
@@ -56,8 +56,9 @@ export async function resolveFindingsInput(options, { parseError, validate }) {
   if (options.findingsFile !== undefined) {
     let raw;
     try {
-      raw = await readFile(options.findingsFile, "utf8");
+      raw = await readSealed(options.findingsFile);
     } catch (err) {
+      if (err?.code === OUT_OF_BAND_WRITE) throw err;
       throw parseError(`Cannot read --findings-file "${options.findingsFile}": ${err instanceof Error ? err.message : String(err)}`);
     }
     try {
