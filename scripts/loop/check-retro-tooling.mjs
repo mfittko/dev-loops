@@ -38,6 +38,8 @@
  *     `&&`, `||`, `|`, `;`) that is not in the write-op allowlist.
  *   - `python` / `python3` at the start of a command segment.
  *   - `node` inline interpreter (`-e`/`--eval`/`-p`, stdin `-`, heredoc; the OPS-NO-INLINE-INTERPRETER forms) at the start of a command segment.
+ *   - a `node` or `python`/`python3` inline form inside `$(...)` or backticks anywhere in a segment
+ *     (`X=$(node -e 1)`), reported with the `node inline`, `python3` or `python` label.
  *
  * Head normalization (before classifying a segment, fail-closed):
  *   - strips leading `NAME=value ` env-assignment prefixes (`GH_TOKEN=x gh api`)
@@ -51,14 +53,13 @@
  *     does NOT fully parse shell quoting/substitution. A `;`/`|` inside a quoted
  *     argument can over-report (flags a harmless inner token). It catches the
  *     common raw-call forms (incl. the env/wrapper/path-prefixed ones above), but
- *     deeply obfuscated calls — command substitution `$(...)`, aliases, `eval` —
- *     may evade it. Prefer single-line, single-purpose commands in transcripts.
+ *     deeply obfuscated calls — aliases, `eval` — may evade it. Prefer single-line, single-purpose commands in transcripts.
  */
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectCliRun } from "@dev-loops/core/cli/helpers";
-import { commandContainsInlineInterpreter } from "@dev-loops/core/loop/bash-command-classify";
+import { commandContainsInlineInterpreter, stripLeadingWrappers } from "@dev-loops/core/loop/bash-command-classify";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: node scripts/loop/check-retro-tooling.mjs [--transcript <path>] [--json]
@@ -104,48 +105,21 @@ function splitSegments(line) {
     .filter((s) => s.length > 0);
 }
 
-/** Wrapper binaries whose first argument is the real command to classify. */
-const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command"]);
-
-/**
- * Strip prefixes that hide the real command head, fail-closed (over-report is
- * fine, under-report is the bug):
- *   - leading `NAME=value ` env-assignment tokens (any number)
- *   - leading wrapper binaries (`sudo`, `env`, `xargs`, ...) — recurse on the rest
- *   - a path-prefixed binary (`./x/gh`, `/usr/bin/python3`) → reduce head to its basename
- * Returns the segment with a bare, classifiable command head.
- */
-function normalizeSegmentHead(segment) {
-  let s = segment.trim();
-  // (a) strip leading env-assignment tokens: NAME=value. The value may be
-  //   unquoted (`X=1`) or a single/double-quoted string that itself contains
-  //   spaces (`X="a b"`); match the quoted form first so the space inside the
-  //   quotes is not mistaken for the token separator (would under-report).
-  const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+(?=\S)/;
-  while (ENV_ASSIGN.test(s)) {
-    s = s.replace(ENV_ASSIGN, "");
-  }
-  // (c) reduce a path-prefixed head to its basename so `.../gh` → `gh`
-  s = s.replace(/^(\S*\/)([^/\s]+)/, "$2");
-  // (d) strip `timeout [options] <duration>` (e.g. `timeout -k 5 60 gh ...`), then re-normalize
-  const DURATION = String.raw`(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?`;
-  const TIMEOUT_PREFIX = new RegExp(String.raw`^g?timeout\s+(?:-{1,2}[\w-]+(?:=\S+|\s+(?:${DURATION}|[A-Z]+))?\s+)*${DURATION}\s+(?=\S)`, "i");
-  if (TIMEOUT_PREFIX.test(s)) return normalizeSegmentHead(s.replace(TIMEOUT_PREFIX, ""));
-  // (b) strip a leading wrapper binary, then re-normalize the remainder
-  const head = s.split(/\s+/, 1)[0];
-  if (WRAPPER_BINARIES.has(head)) {
-    const rest = s.slice(head.length).trim();
-    if (rest.length > 0) return normalizeSegmentHead(rest);
-  }
-  return s;
-}
-
 /**
  * Classify a single command segment.
  * @returns {{ kind: "violation"|"allowedWriteOp"|"clean", tool?: string }}
  */
 function classifySegment(rawSegment) {
-  const segment = normalizeSegmentHead(rawSegment);
+  // The shared matcher runs first, so an allowed head (`gh pr ready 5 $(node -e 1)`) never hides a substitution from it.
+  if (commandContainsInlineInterpreter(rawSegment)) {
+    // The label names the matched form: a python head (plain, wrapped, or at the head of a substitution), else node inline.
+    // Each candidate (the head up to its first substitution, and each substitution body) must itself hit the matcher, so a python script call beside a node hit never labels python.
+    const candidates = [rawSegment.split(/\$\(|`/)[0], ...[...rawSegment.matchAll(/(?:\$\(|`)([^)`]*)/g)].map((m) => m[1])];
+    // The digit comes from the stripped head that matched, never from a python path earlier in the raw text.
+    const py = candidates.map((c) => (/^(?:\S*\/)?python(3?)\b/.exec(stripLeadingWrappers(c.trim())) ?? [])[1]).find((d, i) => d !== undefined && commandContainsInlineInterpreter(candidates[i]));
+    return { kind: "violation", tool: py === undefined ? "node inline" : `python${py}` };
+  }
+  const segment = stripLeadingWrappers(rawSegment);
   // `node scripts/....mjs` (or any script path) is allowed tooling; only inline
   // eval forms are violations. Check node first so script invocations pass.
   if (/^node\b/.test(segment)) {
