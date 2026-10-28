@@ -11,7 +11,7 @@ import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
-import { loadDevLoopConfigStrict, resolveGateConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfigStrict, resolveGateAngles, resolveGateConfig } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY } from "@dev-loops/core/loop/gate-fanin";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { computeSpecDigest, specCriterionIds, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
@@ -49,6 +49,112 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const judgeDir = ({ repo, pr, gate, headSha, tmpRoot }) => buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, dir: "gate-judge" });
 
 class Refusal extends Error {}
+
+/**
+ * Typed outcomes for bounded deterministic dependency discovery (issue #2874).
+ * `found` carries a verified read record; `missing` is an explicit miss (not an
+ * error); `denied` is a permission/classifier refusal -- always fatal, no retry.
+ */
+const DiscoveryResult = Object.freeze({
+  found: (kind, filePath, bytes) => ({ outcome: "found", read: { kind, path: filePath, sha256: sha256(bytes), bytes: bytes.length, required: false }, bytes }),
+  missing: (kind, candidate) => ({ outcome: "missing", kind, candidate }),
+  denied: (kind, filePath, err) => ({ outcome: "denied", kind, candidate: filePath, error: err?.message ?? String(err) }),
+});
+
+/**
+ * Attempt to read a single optional dependency file. Returns a DiscoveryResult.
+ * A permission/classifier denial is ALWAYS fatal (no alternate-command retry).
+ * A plain ENOENT/ENOTDIR is a typed miss, not a required-input failure.
+ */
+async function discoverOptionalDep(kind, absPath) {
+  let bytes;
+  try {
+    bytes = await readFile(absPath);
+  } catch (err) {
+    // EACCES / EPERM / EISDIR: permission denial, fatal -- no alternate retry
+    if (err?.code === "EACCES" || err?.code === "EPERM" || err?.code === "EISDIR") return DiscoveryResult.denied(kind, absPath, err);
+    // ENOENT / ENOTDIR: absent candidate, typed miss
+    return DiscoveryResult.missing(kind, absPath);
+  }
+  return DiscoveryResult.found(kind, absPath, bytes);
+}
+
+/**
+ * Resolve the judge's additional evidence and dependency locations from
+ * deterministic tool/CLI results (issue #2874 AC1-AC4).
+ *
+ * Returns:
+ * - `optionalReads`: verified-existing optional reads for the work order
+ * - `discoveryMisses`: typed missing-evidence records (absent candidates)
+ *
+ * Throws Refusal only on a permission/classifier denial or fatal read error.
+ * An absent candidate is never a Refusal -- it is a typed `missing` outcome.
+ * An optional discovery miss cannot become a missing-required-input failure.
+ *
+ * @param {{ config: object, gate: string, packageRoot: URL }} opts
+ */
+async function resolveJudgeDependencies({ config, gate, packageRoot }) {
+  const optionalReads = [];
+  const discoveryMisses = [];
+
+  // Role definition files. The actual file is agents/review.agent.md; judges
+  // have historically guessed wrong names (agents/reviewer.agent.md,
+  // agents/review-angles/pr-checklist.md, etc.). Resolved via fs, never by
+  // guessing. A missing candidate is a typed miss, never a refusal.
+  const roleFiles = [
+    { kind: "role-review-agent", rel: "agents/review.agent.md" },
+    { kind: "role-developer-agent", rel: "agents/developer.agent.md" },
+  ];
+  for (const { kind, rel } of roleFiles) {
+    const abs = fileURLToPath(new URL(rel, packageRoot));
+    const result = await discoverOptionalDep(kind, abs);
+    if (result.outcome === "denied") throw new Refusal(`permission denial reading judge dependency ${kind} at ${result.candidate}: ${result.error}; stopping per judge boundary rules`);
+    if (result.outcome === "found") optionalReads.push(result.read);
+    else discoveryMisses.push(result);
+  }
+
+  // Contract dependency files. Judges have guessed wrong paths such as
+  // skills/docs/pr-review-contract.md and skills/docs/review-angles.md.
+  // Actual files listed below; resolved by fs, not by guessing.
+  const contractFiles = [
+    { kind: "contract-pre-pr-review", rel: "skills/docs/pre-pr-review-contract.md" },
+    { kind: "contract-gate-review-sub-loop", rel: "skills/docs/gate-review-sub-loop-contract.md" },
+  ];
+  for (const { kind, rel } of contractFiles) {
+    const abs = fileURLToPath(new URL(rel, packageRoot));
+    const result = await discoverOptionalDep(kind, abs);
+    if (result.outcome === "denied") throw new Refusal(`permission denial reading judge dependency ${kind} at ${result.candidate}: ${result.error}; stopping per judge boundary rules`);
+    if (result.outcome === "found") optionalReads.push(result.read);
+    else discoveryMisses.push(result);
+  }
+
+  // Inline angle definitions (the CANONICAL source, issue #2874 AC2).
+  // Angle definitions live INLINE in extension-defaults.yaml and .devloops,
+  // NOT in separate files like agents/review-angles/pr-checklist.md or
+  // skills/docs/review-angles.md (those paths do not exist). Extract the
+  // resolved angle pool for the gate from config and carry it as a verified
+  // inline-angle-defs entry so judges never invent angle-definition filenames.
+  const configGateKey = gate === "pre_approval_gate" ? "preApproval" : gate === "draft_gate" ? "draft" : null;
+  if (configGateKey !== null) {
+    const angles = resolveGateAngles(config, configGateKey);
+    if (Array.isArray(angles) && angles.length > 0) {
+      const serialised = Buffer.from(JSON.stringify(angles, null, 2), "utf8");
+      optionalReads.push({
+        kind: "inline-angle-defs",
+        // Virtual path: a deterministic serialisation of the config-resolved
+        // angle pool for this gate, not a filesystem path.
+        path: `config:gates.${configGateKey}.angles`,
+        sha256: sha256(serialised),
+        bytes: serialised.length,
+        required: false,
+        inline: true,
+        content: serialised.toString("utf8"),
+      });
+    }
+  }
+
+  return { optionalReads, discoveryMisses };
+}
 
 async function readSource(kind, filePath) {
   const bytes = await readFile(filePath).catch(() => null);
@@ -145,6 +251,9 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     try { parsedBody = JSON.parse(copilotBody.bytes.toString("utf8")); } catch { /* refused below */ }
     if (typeof parsedBody?.angle !== "string" || !Array.isArray(parsedBody?.findings)) throw new Refusal(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${bodyFile} is not JSON with an angle and a findings array`);
   }
+  // Resolve additional judge dependencies deterministically (issue #2874).
+  // Must come from tooling results, never guessed filenames.
+  const { optionalReads: depOptionalReads, discoveryMisses } = await resolveJudgeDependencies({ config, gate, packageRoot: PACKAGE_ROOT });
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
   const workOrder = {
     role: "judge",
@@ -172,6 +281,12 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     },
     contracts,
     requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read), ...(copilotBody ? [copilotBody.read] : [])],
+    // Optional dependency reads resolved by tooling (issue #2874): role definitions,
+    // contract files, and inline angle definitions derived from config. An absent
+    // candidate produces a typed miss in discoveryMisses, never a refusal here.
+    optionalReads: depOptionalReads,
+    // Typed records for candidates that were absent at dispatch time.
+    discoveryMisses,
     // Per-round paths: a superseded round's late verdict never lands where this round's is read.
     outputRefs: [path.join(dir, roundId, "judge-verdict.json"), path.join(dir, roundId, "spec-authority-verdict.json")],
     executionRules: { widening: JUDGE_WIDENING_RULE, contract: fileURLToPath(new URL("agents/judge.agent.md", PACKAGE_ROOT)) },

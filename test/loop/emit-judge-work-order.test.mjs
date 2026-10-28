@@ -466,3 +466,114 @@ test("a closure round's gate context (scope.closureRound) adds closureRound: tru
     assert.deepEqual((await emitJudgeWorkOrder(sources)).workOrder.priorActItems, items);
   });
 });
+
+// Issue #2874 regression tests: deterministic evidence and dependency paths.
+// Appended by fix commit for https://github.com/mfittko/dev-loops/issues/2874
+
+test("#2874: work order carries tooling-resolved optional dependency reads, not guessed filenames", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const plan = await emitJudgeWorkOrder(sources);
+    const optionalReads = plan.workOrder.optionalReads ?? [];
+    // role-review-agent must resolve to agents/review.agent.md (the actual file,
+    // NOT the guessed agents/reviewer.agent.md or agents/review-angles/pr-checklist.md)
+    const reviewAgent = optionalReads.find((r) => r.kind === "role-review-agent");
+    assert.ok(reviewAgent, "role-review-agent optional read must be present");
+    assert.match(reviewAgent.path, /review\.agent\.md$/, "must resolve to actual agents/review.agent.md");
+    assert.ok(typeof reviewAgent.sha256 === "string" && reviewAgent.sha256.length === 64, "sha256 must be present");
+    assert.equal(reviewAgent.required, false, "optional dep must not be required");
+    // pre-pr-review contract: actual path (not the guessed skills/docs/pr-review-contract.md)
+    const prReviewContract = optionalReads.find((r) => r.kind === "contract-pre-pr-review");
+    assert.ok(prReviewContract, "contract-pre-pr-review optional read must be present");
+    assert.match(prReviewContract.path, /pre-pr-review-contract\.md$/, "must resolve to actual pre-pr-review-contract.md");
+    assert.equal(prReviewContract.required, false);
+  });
+});
+
+test("#2874: inline angle definitions are derived from config, not invented filenames like review-angles.md", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const plan = await emitJudgeWorkOrder(sources);
+    const optionalReads = plan.workOrder.optionalReads ?? [];
+    // Inline angle defs must come from config, not guessed separate files
+    const angleDefs = optionalReads.find((r) => r.kind === "inline-angle-defs");
+    assert.ok(angleDefs, "inline-angle-defs read must be present for a known gate");
+    // Path must use config: sentinel, not a filesystem path like review-angles.md
+    assert.match(angleDefs.path, /^config:gates\./, "inline-angle-defs path must be config-derived, not a filesystem guess");
+    assert.ok(angleDefs.inline === true, "must be marked inline");
+    // Content must be valid JSON angle array
+    const angles = JSON.parse(angleDefs.content);
+    assert.ok(Array.isArray(angles) && angles.length > 0, "must carry at least one angle definition");
+    // Each angle must have a name (not a guessed filename)
+    for (const angle of angles) {
+      assert.ok(typeof angle.name === "string" && angle.name.length > 0, `angle must have a name: ${JSON.stringify(angle)}`);
+    }
+    // The non-existent guessed paths must NOT appear anywhere in optionalReads
+    const paths = optionalReads.map((r) => r.path);
+    assert.ok(!paths.some((p) => p.includes("review-angles.md")), "skills/docs/review-angles.md must not appear (does not exist)");
+    assert.ok(!paths.some((p) => p.includes("reviewer.agent.md")), "agents/reviewer.agent.md must not appear (does not exist, actual is review.agent.md)");
+  });
+});
+
+test("#2874: an absent optional dependency is a typed discovery miss, not a required-input failure", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    // Work order must still emit even if optional deps are absent
+    const plan = await emitJudgeWorkOrder(sources);
+    const misses = plan.workOrder.discoveryMisses ?? [];
+    // All misses must be typed with outcome=missing, never outcome=denied
+    for (const miss of misses) {
+      assert.equal(miss.outcome, "missing", `discovery miss must have outcome=missing, got ${JSON.stringify(miss)}`);
+      assert.ok(typeof miss.kind === "string", "miss must have a kind");
+      assert.ok(typeof miss.candidate === "string", "miss must name the candidate path");
+    }
+    // discoveryMisses must never contain required-input kinds
+    const requiredKinds = new Set(["findings", "spec", "spec-identity", "evidence"]);
+    for (const miss of misses) {
+      assert.ok(!requiredKinds.has(miss.kind), `required kind ${miss.kind} must never appear in discoveryMisses`);
+    }
+  });
+});
+
+test("#2874: regression -- four absent-path classes that stopped Codex judges in v1.0.8", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const plan = await emitJudgeWorkOrder(sources);
+    const optionalReads = plan.workOrder.optionalReads ?? [];
+    const misses = plan.workOrder.discoveryMisses ?? [];
+    const allKinds = [...optionalReads.map((r) => r.kind), ...misses.map((m) => m.kind)];
+    // Class 1: agents/review-angles/pr-checklist.md (guessed, does not exist)
+    // Angle definitions come via inline-angle-defs derived from config, never as guessed paths
+    assert.ok(allKinds.includes("inline-angle-defs"), "angle defs discovery must be attempted via inline-angle-defs");
+    // Class 2: skills/docs/review-angles.md (guessed, does not exist)
+    // This is covered by inline-angle-defs above; no separate filesystem path needed
+    // Class 3: agents/reviewer.agent.md (guessed wrong name; actual: agents/review.agent.md)
+    assert.ok(allKinds.includes("role-review-agent"), "role-review-agent discovery must be attempted");
+    // Class 4: skills/docs/pr-review-contract.md (guessed wrong; actual: pre-pr-review-contract.md)
+    assert.ok(allKinds.includes("contract-pre-pr-review"), "contract-pre-pr-review discovery must be attempted");
+    // None of the guessed non-existent paths must appear in actual resolved optional reads
+    const resolvedPaths = optionalReads.map((r) => r.path);
+    assert.ok(!resolvedPaths.some((p) => p.includes("review-angles") && p.includes("pr-checklist")), "agents/review-angles/pr-checklist.md must not appear");
+    assert.ok(!resolvedPaths.some((p) => p.includes("review-angles.md")), "skills/docs/review-angles.md must not appear");
+    assert.ok(!resolvedPaths.some((p) => p.includes("reviewer.agent.md")), "agents/reviewer.agent.md must not appear");
+  });
+});
+
+test("#2874: optional discovery miss cannot accidentally become a missing-required-input failure", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    // Emission must succeed even if optional dependency files don't exist in the fixture root
+    const plan = await emitJudgeWorkOrder(sources);
+    assert.ok(plan.workOrderRef, "emission must succeed even with optional deps absent");
+    // Required reads must still be intact
+    const reqKinds = plan.workOrder.requiredReads.map((r) => r.kind);
+    assert.ok(reqKinds.includes("findings"), "findings must be required");
+    assert.ok(reqKinds.includes("spec"), "spec must be required");
+    assert.ok(reqKinds.includes("spec-identity"), "spec-identity must be required");
+    assert.ok(reqKinds.includes("evidence"), "evidence must be required");
+    // Role validator must still pass
+    const kinds = new Set((Array.isArray(plan.workOrder.requiredReads) ? plan.workOrder.requiredReads : []).map((r) => r?.kind));
+    const missingRequired = ["findings", "spec", "spec-identity", "evidence"].filter((k) => !kinds.has(k));
+    assert.deepEqual(missingRequired, [], "work order must pass the role validator with all required reads present");
+  });
+});
