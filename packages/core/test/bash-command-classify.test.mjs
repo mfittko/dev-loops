@@ -832,6 +832,8 @@ test("commandContainsInlineInterpreter unescapes nested escaped backticks in a b
   assert.equal(commandContainsInlineInterpreter("echo `echo \\`node scripts/x.mjs\\``"), false);
   assert.equal(commandContainsInlineInterpreter("X=`node scripts/x.mjs`"), false);
   assert.equal(commandContainsInlineInterpreter("echo \\`node -e 1\\`"), false);
+  assert.equal(commandContainsInlineInterpreter("X=`echo \\$(node -e 1)`"), true);
+  assert.equal(commandContainsInlineInterpreter("X=`echo \\$(node scripts/x.mjs)`"), false);
 });
 
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {
