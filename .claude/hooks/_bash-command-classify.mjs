@@ -1162,7 +1162,7 @@ const isStdinScriptToken = (t) => t === "-" || t.startsWith("<<") || (t.startsWi
 const REDIRECTION_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)/;
 const REDIRECTION_OPERATOR_ONLY_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)$/;
 const redirectionSkip = (t) => (!t.includes("<<") && REDIRECTION_RE.test(t) ? (REDIRECTION_OPERATOR_ONLY_RE.test(t) ? 2 : 1) : 0);
-const QUOTE_AWARE_TOKEN_RE = /(?:[^\s'"]|'[^']*'|"[^"]*")+/g;
+const QUOTE_AWARE_TOKEN_RE = /(?:\\.|[^\s'"\\]|'[^']*'|"(?:\\.|[^"\\])*")+/g; // `\\.` first: an escaped character never opens or closes a quoted span
 const SCRIPT_EXT_RE = /\.(?:[cm]?js|[cm]?ts)$/;
 // Closed allow-list of known boolean node flags: the token after one is the script, not a value. Any unlisted `--flag` is treated as value-taking (the refusing direction), so a new value-taking flag can never slip through as boolean.
 const NODE_BOOLEAN_FLAGS = new Set(["--no-warnings", "--no-deprecation", "--trace-warnings", "--trace-deprecation", "--trace-uncaught", "--enable-source-maps", "--experimental-vm-modules", "--experimental-strip-types", "--experimental-transform-types", "--experimental-detect-module", "--experimental-require-module", "--experimental-websocket", "--experimental-sqlite", "--experimental-permission", "--permission", "--watch", "--expose-gc", "--abort-on-uncaught-exception", "--pending-deprecation", "--throw-deprecation", "--no-experimental-fetch"]);
