@@ -95,13 +95,15 @@ test("the posted record stays bounded: digest only, pruned to the current origin
   const stored = [];
   const runJson = async (args) => { stored.push(args.find((a) => String(a).startsWith("body="))); return { id: 9 }; };
   const stale = Array.from({ length: 30 }, (_, i) => ({ gate: GATE, originHead: "b".repeat(40), headSha: String(i).padStart(40, "0"), decision: "carry_verdict", evidenceDigest: "d" }));
-  const comments = [{ id: 9, body: renderCarriedHeadsBody(stale) }];
+  const otherGate = { gate: "other_gate", originHead: "c".repeat(40), headSha: "e".repeat(40), decision: "carry_verdict", evidenceDigest: "d" };
+  const comments = [{ id: 9, body: renderCarriedHeadsBody([...stale, otherGate]) }];
   const out = await carryFromPostedVerdict(marker(origin), { gate: GATE, repo: REPO, pr: 7, currentHeadSha: cur, repoRoot: s.dir, env: {}, comments, record: true, runJson: async (args) => (args[0] === "pr" ? { baseRefName: "main" } : runJson(args)) });
   assert.equal(out.carriedFrom, origin);
   const entries = parseCarriedHeads(comments);
-  assert.deepEqual(entries.map((e) => e.headSha), [cur]);
-  assert.match(entries[0].evidenceDigest, /^[0-9a-f]{64}$/);
-  assert.equal("evidence" in entries[0], false);
+  // The other gate's entry (different origin head) survives; this gate's stale entries are pruned.
+  assert.deepEqual(entries.map((e) => e.headSha), [otherGate.headSha, cur]);
+  assert.match(entries[1].evidenceDigest, /^[0-9a-f]{64}$/);
+  assert.equal("evidence" in entries[1], false);
 });
 
 test("the posted record round-trips evidence text containing a comment terminator", () => {

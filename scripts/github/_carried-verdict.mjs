@@ -41,9 +41,10 @@ export const parseCarriedHeads = (comments) => recordComment(comments).entries;
 
 async function upsertCarriedHead({ repo, pr, comments, entry }, runJson) {
   const { comment, entries } = recordComment(comments);
-  // Bounded record: only entries for the current origin head survive, capped at MAX_ENTRIES, so the
-  // comment stays far below the GitHub body limit. A pruned head is simply re-recorded on its next carry.
-  const kept = entries.filter((e) => e.originHead === entry.originHead && !(e.gate === entry.gate && e.headSha === entry.headSha));
+  // Bounded record: per gate, only entries for the current origin head survive (another gate's entries are
+  // untouched), capped at MAX_ENTRIES, so the comment stays far below the GitHub body limit. A pruned head
+  // is simply re-recorded on its next carry.
+  const kept = entries.filter((e) => (e.gate !== entry.gate || e.originHead === entry.originHead) && !(e.gate === entry.gate && e.headSha === entry.headSha));
   const body = renderCarriedHeadsBody([...kept, entry].slice(-MAX_ENTRIES));
   const saved = comment?.id
     ? await runJson(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${comment.id}`, "-f", `body=${body}`])
