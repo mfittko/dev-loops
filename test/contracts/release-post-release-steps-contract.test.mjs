@@ -33,6 +33,10 @@ test("post-release steps run audit, then memory cleanup, then prose cleanup", ()
   assert.ok(doc.indexOf("`RELEASE-COMBINED-RETRO`: A combined release retro runs once after a stable release, before the steps above.") > 0, "combined retro runs before the steps");
 });
 
+test("post-release rule is the standing explicit operator instruction", () => {
+  assert.ok(doc.includes("This rule is the standing explicit operator instruction for these three issues"));
+});
+
 test("combined release retro names inputs, required metrics and the skipped link-back", () => {
   const body = doc.slice(doc.indexOf("`RELEASE-COMBINED-RETRO`:"));
   for (const term of ["per-merge retros", "round data", "findings logs", "active minutes", "gate rounds", "parks by cause", "size-class approvals", "skipped"]) {
