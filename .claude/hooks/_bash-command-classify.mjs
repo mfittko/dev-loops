@@ -1224,6 +1224,7 @@ export function commandContainsInlineInterpreter(command) {
     if (c === '"') quote = quote === '"' ? "" : '"';
     unquoted += c;
   }
+  if (quote === "'") unquoted = noHeredoc; // unclosed single quote (nested quote context): fail closed, scan the unblanked text
   const subs = [...unquoted.split("$(").slice(1), ...unquoted.split("`").filter((_, i) => i % 2)];
   if (subs.some((sub) => commandContainsInlineInterpreter(sub))) return true;
   // The raw head keeps the env-option forms; the stripped head adds sudo/xargs/timeout.

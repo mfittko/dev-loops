@@ -255,7 +255,7 @@ test("wrapper and substitution forms get one verdict from hook and retro paths; 
     ["echo \"$(python3 -c x)\"", true], ["echo $(echo $(python3 -c x))", true], ["time node -", true], ["nice node -e 1", true],
     ["echo \"don't\" ; X=$(python3 -c x) ; echo \"it's\"", true], ["gh pr comment 1 --body \"Here's the result: $(python3 -c 'print(1)')\"", true], ["echo \"don't\" `node -e 'x'`", true],
     ["gh pr comment 1 --body \"$(cat <<'EOF'\nthe hook missed `node -e 1`\nEOF\n)\"", false],
-    ["gh pr comment 1 --body \"the hook missed \\`node -e 1\\`\"", false], ["echo \"\\$(python3 -c x)\"", false], ["X=$(node -e 1)", true],
+    ["gh pr comment 1 --body \"the hook missed \\`node -e 1\\`\"", false], ["echo \"\\$(python3 -c x)\"", false], ["X=$(node -e 1)", true], ["echo \"$(echo \"it's\")\" ; X=$(python3 -c x)", true],
   ];
   for (const [cmd, bad] of cases) {
     assert.equal(commandContainsInlineInterpreter(cmd), bad, `hook ${cmd}`);
