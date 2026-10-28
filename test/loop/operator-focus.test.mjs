@@ -4,7 +4,8 @@ import { test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { OperatorFocusRefusal, bindOperatorFocusItems, normalizeOperatorFocus, readOperatorFocusFile, renderOperatorFocusSection } from "../../scripts/loop/_operator-focus.mjs";
+import { workOrderDigest } from "@dev-loops/core/loop/work-order-digest";
+import { OperatorFocusRefusal, bindOperatorFocusItems, normalizeOperatorFocus, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "../../scripts/loop/_operator-focus.mjs";
 
 test("absent focus yields null and renders nothing", () => {
   assert.equal(normalizeOperatorFocus(undefined), null);
@@ -76,4 +77,13 @@ test("a summary that sanitizes to nothing is omitted from the stored item", () =
   const focus = normalizeOperatorFocus({ items: [{ fingerprint: "f1", decision: "pick B" }] }, { allowItems: true });
   const bound = bindOperatorFocusItems(focus, [{ fingerprint: "f1", summary: "<``>" }]);
   assert.equal("summary" in bound.items[0], false);
+});
+
+test("path-leading focus text changes the work-order digest (shared canonicalizer drops absolute-path strings)", () => {
+  const order = (round) => {
+    const focus = normalizeOperatorFocus({ round });
+    return { role: "judge", operatorFocus: focus, ...operatorFocusDigestEntry(focus) };
+  };
+  assert.notEqual(workOrderDigest(order("/src/a: check resolution")), workOrderDigest(order("/src/b: check resolution")));
+  assert.deepEqual(operatorFocusDigestEntry(null), {});
 });

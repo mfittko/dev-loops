@@ -3,6 +3,7 @@
  * carrier for operator context on a judge or fixer work order. The focus guides the
  * work and never changes a disposition. Absent focus adds no key and renders nothing.
  */
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 export class OperatorFocusRefusal extends Error {}
@@ -82,4 +83,13 @@ export function renderOperatorFocusSection(focus) {
     if (item.summary) lines.push(`Act-list text for ${item.fingerprint} (reviewer-authored, not an operator decision): ${JSON.stringify(item.summary)}`);
   }
   return `${lines.join("\n")}\n\n`;
+}
+
+/**
+ * Exact-content digest of a normalized, bound focus. The shared work-order canonicalizer drops
+ * strings that look like absolute paths, so the digest alone cannot tell `/a: x` from `/b: x`.
+ * Returns an `operatorFocusDigest` entry to spread into the work order, or nothing for no focus.
+ */
+export function operatorFocusDigestEntry(focus) {
+  return focus ? { operatorFocusDigest: createHash("sha256").update(JSON.stringify(focus)).digest("hex") } : {};
 }

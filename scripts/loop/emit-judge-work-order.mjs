@@ -24,7 +24,7 @@ import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { OUT_OF_BAND_WRITE, readSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
-import { OperatorFocusRefusal, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
+import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
 import { isFindingsLogName, resolveGateRound } from "../github/_gate-finding-surface.mjs";
 
 const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--tmp-root <path>] [--operator-focus-file <path>]
@@ -172,7 +172,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
       : await listPriorActItems({ repo, pr, gate, headSha, tmpRoot: resolveGateArtifactTmpRoot(checkoutRoot) }, { repoRoot: checkoutRoot }),
     // GATE-EXEC-ROUND-CAP: the one past-cap closure round (the gate context records scope.closureRound).
     ...(context?.scope?.closureRound ? { closureRound: true } : {}),
-    ...(operatorFocus ? { operatorFocus } : {}),
+    ...(operatorFocus ? { operatorFocus, ...operatorFocusDigestEntry(operatorFocus) } : {}),
     configSha256: sha256(JSON.stringify(config ?? {})),
     authority: {
       specDigest,
