@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
@@ -23,5 +23,32 @@ describe("gate artifact seal", () => {
     await writeFile(f, "{}\n", "utf8");
     expect(await readSealed(f)).toBe("{}\n");
     expect(await readFile(f, "utf8")).toBe("{}\n");
+  });
+});
+
+describe("gate artifact seal edge cases", () => {
+  const tmp = async () => path.join(await mkdtemp(path.join(os.tmpdir(), "seal-")), "a.json");
+  it("an orphan seal with missing data fails with ENOENT", async () => {
+    const f = await tmp();
+    await writeFile(`${f}.seal`, "abc\n", "utf8");
+    expect((await readSealed(f).catch((e) => e)).code).toBe("ENOENT");
+  });
+  it("an empty seal is a mismatch", async () => {
+    const f = await tmp();
+    await writeFile(f, "{}\n", "utf8");
+    await writeFile(`${f}.seal`, "", "utf8");
+    expect((await readSealed(f).catch((e) => e)).code).toBe(OUT_OF_BAND_WRITE);
+  });
+  it("rethrows a non-ENOENT seal read error", async () => {
+    const f = await tmp();
+    await writeFile(f, "{}\n", "utf8");
+    await mkdir(`${f}.seal`);
+    expect((await readSealed(f).catch((e) => e)).code).toBe("EISDIR");
+  });
+  it("accepts an uppercase seal", async () => {
+    const f = await tmp();
+    await writeSealed(f, "x\n");
+    await writeFile(`${f}.seal`, (await readFile(`${f}.seal`, "utf8")).toUpperCase(), "utf8");
+    expect(await readSealed(f)).toBe("x\n");
   });
 });

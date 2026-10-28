@@ -21,6 +21,7 @@ import { buildGateFaninLedgerPath } from "./_gate-artifact-paths.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { normalizeGate } from "./_gate-names.mjs";
 import { buildCarryForwardPlan } from "./resolve-angle-carry-forward.mjs";
+import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 
 const USAGE = `Usage: quarantine-gate-findings-log.mjs --repo <owner/name> --pr <N> --gate <draft_gate|pre_approval_gate> --prev-head <full-sha> [--tmp-root <dir>] [--context-tmp-root <dir>]
@@ -116,12 +117,13 @@ export async function quarantineGateFindingsLog({ repo, pr, gate, prevHead, tmpR
   let log;
   let failure;
   try {
-    log = JSON.parse(await readFile(logPath, "utf8"));
+    log = JSON.parse(await readSealed(logPath));
     failure = integrityFailure(log, prevHead);
   } catch (err) {
     if (err?.code === "ENOENT") throw typedError("quarantine_log_not_found", `no prior gate findings-log at ${logPath}`);
-    if (!(err instanceof SyntaxError)) throw err;
-    failure = `prior gate findings-log is not valid JSON: ${err.message}`;
+    if (err?.code === OUT_OF_BAND_WRITE) failure = err.message;
+    else if (err instanceof SyntaxError) failure = `prior gate findings-log is not valid JSON: ${err.message}`;
+    else throw err;
   }
   if (failure === null) {
     throw typedError("quarantine_refused_log_valid", `GATE-EXEC-FINDINGS-LOG-QUARANTINE: prior gate findings-log at ${logPath} passes integrity; quarantine refuses to discard valid evidence`);
@@ -143,7 +145,9 @@ export async function quarantineGateFindingsLog({ repo, pr, gate, prevHead, tmpR
   const planned = [];
   const ledgerAbsent = !(await exists(ledgerPath));
   for (const file of [logPath, ledgerPath]) {
-    if (await exists(file)) planned.push({ from: file, to: path.join(auditDir, path.basename(file)) });
+    for (const f of [file, `${file}.seal`]) {
+      if (await exists(f)) planned.push({ from: f, to: path.join(auditDir, path.basename(f)) });
+    }
   }
   // Record intent BEFORE any rename: the emitter's quarantine cutoff reads quarantinedAt,
   // and a crash mid-move leaves a record. A re-run does not resume it: once the log has moved, the

@@ -1603,13 +1603,16 @@ export async function consolidateGateFanin(options) {
     const ledgerText = `${JSON.stringify(ledgerRecord, null, 2)}\n`;
     if (options.ledgerOut !== undefined) ledgerTargets.push(options.ledgerOut);
     // The keyed fan-in ledger: byte-identical to --ledger-out, at the plan's round key.
+    let keyedLedger;
     if (emitPlan !== undefined) {
-      ledgerTargets.push(buildGateFaninLedgerPath({ repo: emitPlan.repo, pr: emitPlan.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot ?? path.join(process.cwd(), "tmp") }));
+      keyedLedger = buildGateFaninLedgerPath({ repo: emitPlan.repo, pr: emitPlan.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot ?? path.join(process.cwd(), "tmp") });
+      ledgerTargets.push(keyedLedger);
     }
     for (const target of ledgerTargets) {
       await mkdir(path.dirname(target), { recursive: true });
-      if (target === options.ledgerOut) await writeFile(target, ledgerText, "utf8");
-      else await writeSealed(target, ledgerText);
+      // The keyed ledger is always sealed, even when --ledger-out names the same file.
+      if (keyedLedger !== undefined && path.resolve(target) === path.resolve(keyedLedger)) await writeSealed(target, ledgerText);
+      else await writeFile(target, ledgerText, "utf8");
     }
   }
 

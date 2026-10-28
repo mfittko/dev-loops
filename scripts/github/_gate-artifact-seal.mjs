@@ -8,13 +8,15 @@
  * once all writers have shipped.
  */
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 
 export const OUT_OF_BAND_WRITE = "gate_artifact_out_of_band_write";
 const sealPath = (file) => `${file}.seal`;
 const digest = (text) => createHash("sha256").update(text).digest("hex");
 
 export async function writeSealed(file, text) {
+  // Delete the seal first and write it last: a crash between the writes leaves an unsealed (legacy) pair, never a stale seal.
+  await rm(sealPath(file), { force: true });
   await writeFile(file, text, "utf8");
   await writeFile(sealPath(file), `${digest(text)}\n`, "utf8");
 }
@@ -22,7 +24,7 @@ export async function writeSealed(file, text) {
 export async function readSealed(file) {
   const text = await readFile(file, "utf8");
   let seal;
-  try { seal = (await readFile(sealPath(file), "utf8")).trim(); } catch (error) {
+  try { seal = (await readFile(sealPath(file), "utf8")).trim().toLowerCase(); } catch (error) {
     if (error?.code === "ENOENT") return text;
     throw error;
   }
