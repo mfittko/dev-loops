@@ -379,6 +379,10 @@
       "id": "GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK"
     },
     {
+      "id": "GATE-EXEC-FINDINGS-LOG-QUARANTINE",
+      "enforcement": "runtime"
+    },
+    {
       "id": "GATE-EXEC-FINDING-THREADS"
     },
     {

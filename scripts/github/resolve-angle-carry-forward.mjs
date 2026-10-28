@@ -24,7 +24,7 @@
  * post-convergence head bump is a pure doc/prose bump, so it need not force a
  * fresh blocking Copilot round.
  */
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -48,6 +48,7 @@ import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/sp
 import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
 import {
   buildCarryForwardPlanPath,
   mapGateToConfigKey,
@@ -461,18 +462,27 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     //; resolve the read there too so a re-gate running inside a linked
     // worktree still finds the prior round's ledger to carry forward from
     // (a miss would hard-fail below). An explicit --tmp-root still overrides.
+    const tmpRootForLog = options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot);
     const logPath = buildLogPath({
       repo: options.repo,
       pr: options.pr,
       gate: options.gate,
       headSha: options.prevHead,
-      tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot),
+      tmpRoot: tmpRootForLog,
     });
     let log = null;
     try {
       log = JSON.parse(await readFile(path.resolve(repoRoot, logPath), "utf8"));
     } catch (err) {
       if (err && err.code === "ENOENT") {
+        // A matching quarantine audit means the log was moved on purpose: record the fresh fallback
+        // plan (GATE-EXEC-FINDINGS-LOG-QUARANTINE). An unaudited missing log stays an operational failure.
+        if (await isQuarantinedHead({ repo: options.repo, pr: options.pr, gate: options.gate, tmpRoot: path.resolve(repoRoot, tmpRootForLog), prevHead: options.prevHead })) {
+          throw Object.assign(
+            new Error(`prior gate findings-log at ${logPath} was quarantined — nothing to carry forward (fail-closed)`),
+            { carryForwardRefusal: true },
+          );
+        }
         throw new Error(`prior gate findings-log not found at ${logPath} — cannot carry forward (fail-closed)`);
       }
       throw err;
@@ -484,6 +494,16 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     const recordedHead = typeof log?.headSha === "string" ? log.headSha.trim().toLowerCase() : null;
     if (recordedHead !== options.prevHead) {
       throw new Error(`prior gate findings-log at ${logPath} records headSha ${JSON.stringify(log?.headSha ?? null)}, which is not --prev-head ${options.prevHead} — cannot carry forward (fail-closed)`);
+    }
+    // A log written at or before the latest quarantine of this PR+gate is not a prior round
+    // (GATE-EXEC-FINDINGS-LOG-QUARANTINE): refuse as an eligibility refusal, so the full fresh
+    // fallback plan is recorded and nothing carries.
+    const cutoff = await latestQuarantineMs({ repo: options.repo, pr: options.pr, gate: options.gate, tmpRoot: path.resolve(repoRoot, tmpRootForLog) });
+    if (cutoff !== null && logWrittenMs(log, (await stat(path.resolve(repoRoot, logPath))).mtimeMs) <= cutoff) {
+      throw Object.assign(
+        new Error(`prior gate findings-log at ${logPath} was written at or before the latest quarantine of this PR and gate — nothing to carry forward (fail-closed)`),
+        { carryForwardRefusal: true },
+      );
     }
     // FAIL-CLOSED: the delta is computed against the CWD worktree HEAD, but the
     // plan is LABELED with --head-sha. A worktree checked out at a different
