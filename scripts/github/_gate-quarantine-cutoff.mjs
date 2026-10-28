@@ -13,25 +13,37 @@ import path from "node:path";
  * partial and complete count, because a crash mid-move must still hold.
  */
 export async function latestQuarantineMs({ repo, pr, gate, tmpRoot }) {
+  let latest = null;
+  for (const record of await readQuarantineRecords({ repo, pr, gate, tmpRoot })) {
+    const ms = Date.parse(record.quarantinedAt);
+    if (Number.isFinite(ms) && (latest === null || ms > latest)) latest = ms;
+  }
+  return latest;
+}
+
+/** True when a non-rolled_back quarantine record names this exact prior head (its log moved, so a missing log there is audited). */
+export async function isQuarantinedHead({ repo, pr, gate, tmpRoot, prevHead }) {
+  return (await readQuarantineRecords({ repo, pr, gate, tmpRoot })).some((record) => record.prevHead === prevHead);
+}
+
+async function readQuarantineRecords({ repo, pr, gate, tmpRoot }) {
   const qdir = path.join(tmpRoot ?? "tmp", "quarantined-gate-findings", String(repo).replace("/", "-"), `pr-${pr}`);
   let entries;
   try {
     entries = await readdir(qdir);
   } catch (err) {
-    if (err?.code === "ENOENT") return null;
+    if (err?.code === "ENOENT") return [];
     throw err;
   }
-  let latest = null;
+  const records = [];
   for (const entry of entries) {
     if (!entry.startsWith(`${gate}-`)) continue;
     try {
       const record = JSON.parse(await readFile(path.join(qdir, entry, "quarantine.json"), "utf8"));
-      if (record.status === "rolled_back") continue;
-      const ms = Date.parse(record.quarantinedAt);
-      if (Number.isFinite(ms) && (latest === null || ms > latest)) latest = ms;
+      if (record.status !== "rolled_back") records.push(record);
     } catch { /* unreadable record: ignore */ }
   }
-  return latest;
+  return records;
 }
 
 /** When a log was written: its recorded loggedAt, else the file mtime (a log without loggedAt). */

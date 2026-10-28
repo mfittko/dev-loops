@@ -573,6 +573,14 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // fan-in independently verifies the carry proof before accepting findings.
   const carried = new Set(Array.isArray(fanout.preflight?.carriedAngles)
     ? fanout.preflight.carriedAngles.filter((angle) => typeof angle === "string").map((angle) => angle.trim().toLowerCase()) : []);
+  // A context built at or before the latest quarantine may carry angles from a log that no longer counts
+  // (GATE-EXEC-FINDINGS-LOG-QUARANTINE): refuse so it is rebuilt with every angle fresh.
+  if (LIFECYCLE_GATES.includes(gate) && carried.size > 0) {
+    const cutoff = await latestQuarantineMs({ repo, pr, gate, tmpRoot: ledgerTmpRoot });
+    if (cutoff !== null && (await stat(contextPath)).mtimeMs <= cutoff) {
+      return finish({ ok: false, error: `GATE-EXEC-FINDINGS-LOG-QUARANTINE: refusing — the gate-context artifact at ${JSON.stringify(contextPath)} carries angles but was built at or before the latest quarantine of this PR and gate; re-run resolve-angle-carry-forward.mjs, then rebuild the context without stale carried angles` }, false);
+    }
+  }
   const allCarried = pendingOnly && Array.isArray(fanout.groups) && fanout.groups.length > 0
     && fanout.groups.every((unit) => normalizeUnitAngles(unit).length > 0
       && normalizeUnitAngles(unit).every((angle) => carried.has(angle.trim().toLowerCase())));

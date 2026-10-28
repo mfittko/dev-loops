@@ -131,7 +131,10 @@ export async function quarantineGateFindingsLog({ repo, pr, gate, prevHead, tmpR
     repoRoot, root, "quarantined-gate-findings", repo.replace("/", "-"), `pr-${pr}`,
     `${gate}-${prevHead}-${new Date().toISOString().replace(/[^0-9]/g, "")}`,
   );
-  await mkdir(auditDir, { recursive: true });
+  // Reserve the audit dir exclusively: a concurrent invocation in the same millisecond gets EEXIST
+  // and cannot overwrite this run's record.
+  await mkdir(path.dirname(auditDir), { recursive: true });
+  await mkdir(auditDir);
   const planned = [];
   const ledgerAbsent = !(await exists(ledgerPath));
   for (const file of [logPath, ledgerPath]) {
@@ -146,7 +149,12 @@ export async function quarantineGateFindingsLog({ repo, pr, gate, prevHead, tmpR
     repo, pr, gate, prevHead, reason: "findings_log_integrity_failure", integrityFailure: failure,
     quarantinedAt: new Date().toISOString(), ledgerAbsent, ledgerPath, plannedMoves: planned.map((m) => path.basename(m.from)), status: "pending",
   };
-  const save = () => writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  // Write a temp sibling then rename over the record: an interrupted update keeps the readable prior record.
+  const save = async () => {
+    const tmpPath = `${recordPath}.tmp`;
+    await writeFile(tmpPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    await rename(tmpPath, recordPath);
+  };
   await save();
   const done = [];
   try {

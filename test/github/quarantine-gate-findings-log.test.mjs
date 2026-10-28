@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -202,4 +202,80 @@ test("parseQuarantineArgs rejects misspelled and unknown flags and accepts every
   }
   assert.doesNotThrow(() => parseQuarantineArgs([...base, "--tmp-root", "tmp", "--context-tmp-root", "tmp"]));
   for (const help of ["--help", "-h"]) assert.deepEqual(parseQuarantineArgs([help]), { help: true });
+});
+
+test("a second quarantine in the same millisecond cannot overwrite the first audit record", async () => {
+  await withRepo(async (dir) => {
+    await seed(dir);
+    const realIso = Date.prototype.toISOString;
+    Date.prototype.toISOString = () => "2026-10-28T00:00:00.000Z";
+    try {
+      const first = await run(dir);
+      await seed(dir);
+      await assert.rejects(run(dir), (err) => err.code === "EEXIST");
+      const record = JSON.parse(await readFile(path.join(first.auditDir, "quarantine.json"), "utf8"));
+      assert.equal(record.status, "complete");
+    } finally {
+      Date.prototype.toISOString = realIso;
+    }
+  });
+});
+
+test("the audit record is replaced atomically and leaves no temp file", async () => {
+  await withRepo(async (dir) => {
+    await seed(dir);
+    const result = await run(dir);
+    assert.ok(!(await readdir(result.auditDir)).some((name) => name.endsWith(".tmp")));
+    JSON.parse(await readFile(path.join(result.auditDir, "quarantine.json"), "utf8"));
+  });
+});
+
+test("resolve-angle-carry-forward records a fallback plan when --prev-head is the quarantined head", async () => {
+  await withRepo(async (dir) => {
+    await writeFile(path.join(dir, ".devloops"), `version: 1\ngates:\n  preApproval:\n    angles:\n      - name: "contradiction-lens"\n        persona: review\n        prompt: Review the angle.\n`, "utf8");
+    await seed(dir);
+    await run(dir);
+    const prior = process.exitCode;
+    await resolveMain(["--repo", REPO, "--pr", String(PR), "--gate", GATE, "--prev-head", PRIOR, "--head-sha", HEAD, "--tmp-root", "tmp"], { repoRoot: dir, runGit: () => { throw new Error("git must not run"); } });
+    assert.equal(process.exitCode, 1);
+    process.exitCode = prior;
+    const plan = JSON.parse(await readFile(path.join(dir, buildCarryForwardPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD, tmpRoot: "tmp" })), "utf8"));
+    assert.equal(plan.fallback, true);
+    assert.deepEqual(plan.carried, []);
+  });
+});
+
+test("an unaudited missing --prev-head log stays an operational failure with no plan", async () => {
+  await withRepo(async (dir) => {
+    await writeFile(path.join(dir, ".devloops"), `version: 1\ngates:\n  preApproval:\n    angles:\n      - name: "contradiction-lens"\n        persona: review\n        prompt: Review the angle.\n`, "utf8");
+    const prior = process.exitCode;
+    await resolveMain(["--repo", REPO, "--pr", String(PR), "--gate", GATE, "--prev-head", PRIOR, "--head-sha", HEAD, "--tmp-root", "tmp"], { repoRoot: dir, runGit: () => { throw new Error("git must not run"); } });
+    assert.equal(process.exitCode, 1);
+    process.exitCode = prior;
+    await assert.rejects(readFile(path.join(dir, buildCarryForwardPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD, tmpRoot: "tmp" })), "utf8"));
+  });
+});
+
+test("emit refuses an already-materialized carry-filtered context built before the quarantine", async () => {
+  await withRepo(async (dir) => {
+    const ctx = path.join(dir, "tmp", "gate-context", "o-r", "pr-7");
+    await mkdir(ctx, { recursive: true });
+    await writeFile(path.join(ctx, `${GATE}-${HEAD}.briefing-prefix.txt`), "## prefix\n", "utf8");
+    await writeFile(path.join(ctx, `${GATE}-${HEAD}.briefing-volatile.txt`), "# volatile\n", "utf8");
+    const contextFile = path.join(ctx, `${GATE}-${HEAD}.json`);
+    await writeFile(contextFile, JSON.stringify({
+      fanout: {
+        groups: [{ name: "contradiction-lens", angles: ["contradiction-lens"] }], pendingGroups: [],
+        preflight: { carriedAngles: ["contradiction-lens"] },
+      },
+    }), "utf8");
+    const past = new Date(Date.now() - 60000);
+    await utimes(contextFile, past, past);
+    await writeFile(path.join(dir, ".devloops"), `version: 1\ngates:\n  preApproval:\n    angles:\n      - name: "contradiction-lens"\n        persona: review\n        prompt: Review the angle.\n`, "utf8");
+    await seed(dir);
+    await run(dir);
+    const emitted = spawnSync("node", [emitCli, "--repo", REPO, "--pr", String(PR), "--gate", GATE, "--head-sha", HEAD, "--pending"], { encoding: "utf8", cwd: dir });
+    assert.equal(emitted.status, 1);
+    assert.match(emitted.stdout, /GATE-EXEC-FINDINGS-LOG-QUARANTINE: refusing/);
+  });
 });

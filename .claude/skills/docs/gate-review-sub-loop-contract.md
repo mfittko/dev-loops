@@ -674,7 +674,7 @@ fan-in ledger into `tmp/quarantined-gate-findings/<slug>/pr-<N>/<gate>-<head>-<t
 recorded as `partial` with the files left in the audit dir listed in `stillInAuditDir` for manual review (a re-run does not resume it). The ledger is read from `--context-tmp-root` (default: `tmp` under the cwd), so run the command from the worktree where fan-in ran or pass `--context-tmp-root`. The next
 round at a later head then has no prior log: `emit-fanout-dispatch.mjs` ignores every valid findings log for that PR and gate
 whose recorded `loggedAt` (file mtime when absent) is at or before the latest non-`rolled_back` `quarantinedAt` there, and `resolve-angle-carry-forward.mjs` refuses a `--prev-head` log that old with a fresh fallback plan, so every angle dispatches fresh and nothing carries; a log
-written after the quarantine counts normally. A log that passes
+written after the quarantine counts normally. The audit directory is reserved exclusively (a concurrent same-millisecond run fails with `EEXIST`) and each `quarantine.json` update is a temp-file rename, so an interrupted write keeps the readable prior record. `resolve-angle-carry-forward.mjs` with a `--prev-head` whose log a matching quarantine record moved records the same fresh fallback plan; an unaudited missing log stays an operational failure. `emit-fanout-dispatch.mjs` refuses a gate-context that carries angles but was built at or before the latest quarantine, so the context is rebuilt with every angle fresh. A log that passes
 integrity is refused with the typed code `quarantine_refused_log_valid` and nothing moves, so quarantine
 cannot discard valid evidence or force a re-gate. Quarantine does not weaken any carry-forward check.
 

@@ -48,7 +48,7 @@ import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/sp
 import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
+import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
 import {
   buildCarryForwardPlanPath,
   mapGateToConfigKey,
@@ -475,6 +475,14 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       log = JSON.parse(await readFile(path.resolve(repoRoot, logPath), "utf8"));
     } catch (err) {
       if (err && err.code === "ENOENT") {
+        // A matching quarantine audit means the log was moved on purpose: record the fresh fallback
+        // plan (GATE-EXEC-FINDINGS-LOG-QUARANTINE). An unaudited missing log stays an operational failure.
+        if (await isQuarantinedHead({ repo: options.repo, pr: options.pr, gate: options.gate, tmpRoot: path.resolve(repoRoot, tmpRootForLog), prevHead: options.prevHead })) {
+          throw Object.assign(
+            new Error(`prior gate findings-log at ${logPath} was quarantined — nothing to carry forward (fail-closed)`),
+            { carryForwardRefusal: true },
+          );
+        }
         throw new Error(`prior gate findings-log not found at ${logPath} — cannot carry forward (fail-closed)`);
       }
       throw err;
