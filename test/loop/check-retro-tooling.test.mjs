@@ -251,6 +251,8 @@ test("wrapper, substitution and python cluster forms get one verdict from hook a
     ["sudo node - <<EOF", true], ["xargs node - <<EOF", true], ["timeout 5 node - <<EOF", true], ["env X=1 nice node -p 1", true],
     ["X=$(python3 -c \"print(1)\")", true], ["X=`node -e 1`", true], ["python3 -Ic \"print(1)\"", true], ["python3 -IEc \"x\"", true], ["python -Sc \"x\"", true],
     ["sudo node scripts/x.mjs", false], ["X=$(node scripts/x.mjs)", false], ["python3 -I script.py", false], ["python3 -W error script.py", false], ["python3 -Wc script.py", false], ["node scripts/x.mjs -e", false],
+    ["gh pr comment --body 'the hook missed `node -e 1`'", false], ["git commit -m 'mention $(python3 -c x)'", false], ["echo \"$(date)\"", false],
+    ["echo \"$(python3 -c x)\"", true], ["echo $(echo $(python3 -c x))", true], ["time node -", true], ["nice node -e 1", true],
   ];
   for (const [cmd, bad] of cases) {
     assert.equal(commandContainsInlineInterpreter(cmd), bad, `hook ${cmd}`);
