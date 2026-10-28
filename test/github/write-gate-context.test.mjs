@@ -8762,11 +8762,15 @@ test("readClosedPriorRoundLogs rejects with gate_artifact_out_of_band_write on a
       () => readClosedPriorRoundLogs(options, { repoRoot }),
       (err) => err.code === OUT_OF_BAND_WRITE && err.file === file,
     );
-    // Two tampered logs written in reverse order: the refusal names the lexically first.
+    // Two tampered logs: tamper "c" (lexically later) after "a" is already tampered, then drop and
+    // recreate "a" last so creation order is c then a; the refusal still names the lexically first.
     const sha2 = "c".repeat(40);
     const file2 = path.resolve(repoRoot, buildLogPath({ ...options, headSha: sha2 }));
     await writeSealed(file2, JSON.stringify({ ...log, headSha: sha2 }));
     await writeFile(file2, JSON.stringify({ ...log, headSha: sha2, verdict: "findings_present" }), "utf8");
+    await rm(file);
+    await writeSealed(file, JSON.stringify(log));
+    await writeFile(file, JSON.stringify({ ...log, verdict: "findings_present" }), "utf8");
     await assert.rejects(
       () => readClosedPriorRoundLogs(options, { repoRoot }),
       (err) => err.code === OUT_OF_BAND_WRITE && err.file === file,
