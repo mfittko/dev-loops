@@ -75,7 +75,7 @@ export function parseQuarantineArgs(argv) {
       const value = requireTokenValue(token, parseError).trim();
       if (value === "") throw parseError(`--${token.name} must be non-empty`);
       options[token.name === "tmp-root" ? "tmpRoot" : "contextTmpRoot"] = value;
-    }
+    } else throw parseError(`Unknown argument: ${token.rawName}`);
   }
   for (const key of ["repo", "pr", "gate", "prevHead"]) {
     if (options[key] === undefined) throw parseError(`Missing required argument: ${key}`);

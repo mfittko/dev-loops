@@ -194,3 +194,12 @@ test("parseQuarantineArgs rejects an empty --tmp-root and --context-tmp-root and
     }
   }
 });
+
+test("parseQuarantineArgs rejects misspelled and unknown flags and accepts every real flag", () => {
+  const base = ["--repo", REPO, "--pr", String(PR), "--gate", GATE, "--prev-head", PRIOR];
+  for (const bad of ["--context-tmproot", "--tmproot", "--prevhead", "--unknown"]) {
+    assert.throws(() => parseQuarantineArgs([...base, bad, "x"]), /Unknown argument/);
+  }
+  assert.doesNotThrow(() => parseQuarantineArgs([...base, "--tmp-root", "tmp", "--context-tmp-root", "tmp"]));
+  for (const help of ["--help", "-h"]) assert.deepEqual(parseQuarantineArgs([help]), { help: true });
+});
