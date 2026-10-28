@@ -1150,24 +1150,93 @@ export function commandContainsTimeoutWrappedSanctionedTool(command) {
   });
 }
 
+/** Wrapper binaries whose first argument is the real command to classify. */
+const WRAPPER_BINARIES = new Set(["sudo", "env", "xargs", "time", "nice", "command"]);
+
+/**
+ * Strip prefixes that hide the real command head, fail-closed (over-report is
+ * fine, under-report is the bug):
+ *   - leading `NAME=value ` env-assignment tokens (any number)
+ *   - leading wrapper binaries (`sudo`, `env`, `xargs`, ...) — recurse on the rest
+ *   - a path-prefixed binary (`./x/gh`, `/usr/bin/python3`) → reduce head to its basename
+ * Returns the segment with a bare, classifiable command head.
+ */
+export function stripLeadingWrappers(segment) {
+  let s = segment.trim();
+  // (a) strip leading env-assignment tokens: NAME=value. The value may be
+  //   unquoted (`X=1`) or a single/double-quoted string that itself contains
+  //   spaces (`X="a b"`); match the quoted form first so the space inside the
+  //   quotes is not mistaken for the token separator (would under-report).
+  const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+(?=\S)/;
+  while (ENV_ASSIGN.test(s)) {
+    s = s.replace(ENV_ASSIGN, "");
+  }
+  // (c) reduce a path-prefixed head to its basename so `.../gh` → `gh`
+  s = s.replace(/^(\S*\/)([^/\s]+)/, "$2");
+  // (d) strip `timeout [options] <duration>` (e.g. `timeout -k 5 60 gh ...`), then re-normalize
+  const DURATION = String.raw`(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?`;
+  const TIMEOUT_PREFIX = new RegExp(String.raw`^g?timeout\s+(?:-{1,2}[\w-]+(?:=\S+|\s+(?:${DURATION}|[A-Z]+))?\s+)*${DURATION}\s+(?=\S)`, "i");
+  if (TIMEOUT_PREFIX.test(s)) return stripLeadingWrappers(s.replace(TIMEOUT_PREFIX, ""));
+  // (b) strip a leading wrapper binary, then re-normalize the remainder
+  const head = s.split(/\s+/, 1)[0];
+  if (WRAPPER_BINARIES.has(head)) {
+    const rest = s.slice(head.length).trim();
+    if (rest.length > 0) return stripLeadingWrappers(rest);
+  }
+  return s;
+}
+
 /** Build a `node`/`python`/`python3` command-head matcher (env/wrapper/path prefix tolerated). */
 function interpreterRegex(bin) {
   return new RegExp(`^${SHELL_EXEC_PREFIX}${bin}(?:\\s|$)`, "i");
 }
 
 // Bare `-` stdin script, or a heredoc token (`<<EOF`, `-<<EOF`, or one attached to a flag: `-I<<EOF`).
-const isStdinScriptToken = (t) => t === "-" || t.startsWith("<<") || (t.startsWith("-") && t.includes("<<")) || (REDIRECTION_RE.test(t) && t.includes("<<"));
+const isStdinScriptToken = (t) => /^-[)`"]*$/.test(t) || t.startsWith("<<") || (t.startsWith("-") && t.includes("<<")) || (REDIRECTION_RE.test(t) && t.includes("<<"));
 // A redirection token (`2>&1`, `2>/dev/null`, `>out`, `&>x`) between flags and the heredoc is not the script path. Returns how many tokens to skip: 0 (not a redirection), 1, or 2 (operator alone, its target is the next token).
 const REDIRECTION_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)/;
 const REDIRECTION_OPERATOR_ONLY_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)$/;
 const redirectionSkip = (t) => (!t.includes("<<") && REDIRECTION_RE.test(t) ? (REDIRECTION_OPERATOR_ONLY_RE.test(t) ? 2 : 1) : 0);
-const QUOTE_AWARE_TOKEN_RE = /(?:\\.|[^\s'"\\]|'[^']*'|"(?:\\.|[^"\\])*")+/g; // `\\.` first: an escaped character never opens or closes a quoted span
+const QUOTE_AWARE_TOKEN_RE = /(?:\\.|\$'(?:\\.|[^'\\])*'|[^\s'"\\]|'[^']*'|"(?:\\.|[^"\\])*")+/g; // `\\.` first: an escaped character never opens or closes a quoted span
 // The shell removes quotes and backslash escapes before the interpreter sees an argument, so `'-e'`, `"--eval"` and `\-e` are the flags `-e`/`--eval`. Normalize each token the same way before any flag or stdin check.
-const unshellToken = (t) => t.replace(/\\(.)|'([^']*)'|"((?:\\.|[^"\\])*)"/g, (_m, a, b, c) => a ?? b ?? c.replace(/\\(.)/g, "$1"));
+const unshellToken = (t) => t.replace(/\\(.)|\$'((?:\\.|[^'\\])*)'|'([^']*)'|"((?:\\.|[^"\\])*)"/g, (_m, a, d, b, c) => a ?? d?.replace(/\\(.)/g, "$1") ?? b ?? c.replace(/\\(.)/g, "$1")); // `$'...'` is ANSI-C quoting: one word, backslash escapes unescaped
 const unshellTokens = (code) => (code.match(QUOTE_AWARE_TOKEN_RE) ?? []).map(unshellToken);
 const SCRIPT_EXT_RE = /\.(?:[cm]?js|[cm]?ts)$/;
 // Closed allow-list of known boolean node flags: the token after one is the script, not a value. Any unlisted `--flag` is treated as value-taking (the refusing direction), so a new value-taking flag can never slip through as boolean.
 const NODE_BOOLEAN_FLAGS = new Set(["--no-warnings", "--no-deprecation", "--trace-warnings", "--trace-deprecation", "--trace-uncaught", "--enable-source-maps", "--experimental-vm-modules", "--experimental-strip-types", "--experimental-transform-types", "--experimental-detect-module", "--experimental-require-module", "--experimental-websocket", "--experimental-sqlite", "--experimental-permission", "--permission", "--watch", "--expose-gc", "--abort-on-uncaught-exception", "--pending-deprecation", "--throw-deprecation", "--no-experimental-fetch"]);
+
+/**
+ * Blank literal shell text with same-length spaces so offsets in `out` index the input: comments,
+ * backslash-escaped characters and single-quoted/ANSI-C (`$'...'`, where a backslash escapes the
+ * next character) spans. `quoted[i]` is true when char i sits in a quote or comment outside any `$(...)` (a literal context); `open` is
+ * true when a single quote is left unclosed.
+ * @param {string} text @returns {{ out: string, quoted: boolean[], open: boolean }}
+ */
+function scanShellText(text) {
+  const out = [];
+  const quoted = [];
+  let quote = "";
+  let subDepth = 0; // open `$(` count inside the current double quotes: a live command context
+  const emit = (ch, q) => { out.push(ch); quoted.push(q); };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote === "'" || quote === "$'") {
+      if (c === "\\" && quote === "$'") { emit(" ", true); if (i + 1 < text.length) emit(" ", true); i++; }
+      else if (c === "'") { quote = ""; emit("'", true); }
+      else emit(" ", true);
+    } else if (c === "#" && quote === "" && (i === 0 || /[\s;&|(]/.test(text[i - 1]))) { // an unquoted `#` at word start is a comment up to the end of the line
+      for (; i < text.length && text[i] !== "\n"; i++) emit(" ", true);
+      i--;
+    } else if (c === "\\") { emit(" ", true); if (i + 1 < text.length) emit(" ", true); i++; }
+    else if (c === "'" && quote === "") { quote = out[out.length - 1] === "$" ? "$'" : "'"; emit("'", true); }
+    else {
+      if (c === '"') { quote = quote === '"' ? "" : '"'; subDepth = 0; }
+      else if (quote === '"') subDepth += c === "(" && text[i - 1] === "$" ? 1 : c === ")" && subDepth > 0 ? -1 : 0;
+      emit(c, c === '"' || (quote === '"' && subDepth === 0));
+    }
+  }
+  return { out: out.join(""), quoted, open: quote === "'" || quote === "$'" };
+}
 
 /**
  * OPS-NO-INLINE-INTERPRETER: an inline interpreter — `node -e`/`--eval`/`-p`, `python3 -c`, or a
@@ -1177,8 +1246,48 @@ const NODE_BOOLEAN_FLAGS = new Set(["--no-warnings", "--no-deprecation", "--trac
  * @param {string} command @returns {boolean}
  */
 export function commandContainsInlineInterpreter(command) {
-  return shellSegments(command).some((segment) => {
-    const s = segment.trim();
+  // Token-level, not a shell parser: text after each `$(` and inside backtick pairs is checked as a command too.
+  // Literal text is blanked for this scan only (the per-segment check below keeps the raw text): quoted-delimiter heredoc bodies, single-quoted spans outside double quotes, and backslash-escaped characters.
+  // ponytail: ceiling: nested quote context inside `$(...)`, process substitution `<(...)` and subshell `(...)` are not covered; wrapper options (`sudo -u x`, `nice -n 5`, `xargs -I{}`) are not skipped by stripLeadingWrappers (pre-existing).
+  // An unquoted-delimiter heredoc body keeps `$(` live but its quotes and `#` are literal: blank them so apostrophes never pair.
+  // The delimiter is any unquoted shell word. A heredoc operator these regexes do not consume (a second heredoc on one line, an unusual delimiter) fails closed below.
+  // A heredoc operator counts as consumed only when it is unquoted and outside a comment (`echo "<<'EOF'"` and `# <<'EOF'` are literal text): any other `<<` fails closed below.
+  // Quote state is scanned over the text already emitted (earlier heredoc bodies removed), so a quote character inside an earlier body never desynchronizes a later operator.
+  const replaceUnquoted = (text, re, onMatch) => {
+    let out = "";
+    let last = 0;
+    for (const m of text.matchAll(re)) {
+      out += text.slice(last, m.index);
+      out += scanShellText(`${out}<`).quoted[out.length] ? m[0] : (consumed++, onMatch(m));
+      last = m.index + m[0].length;
+    }
+    return out + text.slice(last);
+  };
+  let consumed = 0;
+  // One left-to-right pass handles both forms, so a quote character in an earlier unquoted-delimiter body never desynchronizes the quote state of a later operator.
+  // Bash closes `<<` on an unindented delimiter line; `<<-` strips leading tabs only. Each form has its own alternatives (groups 1-6 for `<<-`, 7-12 for `<<`; quoted head/quote/delimiter, then unquoted head/delimiter/body).
+  const heredocForm = (g, op, ind) => `((?<!<)<<${op}\\s*(['"])([^\\s'"<>|;&()\\\\]+)\\${g + 2}[^\\n]*\\n)(?:[\\s\\S]*?\\n)??${ind}\\${g + 3}(?=\\)|\\n|$)|((?<!<)<<${op}\\s*([^\\s'"<>|;&()\\\\]+)[^\\n]*\\n)([\\s\\S]*?)(?=(?:(?<=\\n)|\\n)${ind}\\${g + 5}(?:\\)|\\n|$))`;
+  const blank = (s) => s.replace(/['"#]/g, " ");
+  const noHeredoc = replaceUnquoted(command, new RegExp(`${heredocForm(0, "-", "\\t*")}|${heredocForm(6, "(?!-)", "")}`, "g"), (m) => m[1] ?? (m[4] === undefined ? m[7] ?? m[10] + blank(m[12]) : m[4] + blank(m[6]))); // quoted: body optional, an empty body closes on the first terminator line
+  // An operator with no later newline has no body to hide, so a single-line mention (quoted text, arithmetic) keeps the blanked scan. ponytail: a multi-line command that quotes `<<` still fails closed.
+  const heredocOperators = (noHeredoc.match(/(?<!<)<<(?!<)(?=[^\n]*\n)/g) ?? []).length;
+  // `unquoted` has the same length as `base`, so offsets found in it slice `base` (the text with quotes intact).
+  let base = noHeredoc;
+  const scanned = scanShellText(noHeredoc);
+  let unquoted = scanned.out;
+  if (heredocOperators > consumed) base = unquoted = command; // an unconsumed heredoc operator (nested/second heredoc): fail closed, scan the raw text
+  else if (scanned.open) unquoted = noHeredoc; // unclosed single quote (nested quote context): fail closed, scan the unblanked text
+  const starts = [];
+  for (let i = unquoted.indexOf("$("); i !== -1; i = unquoted.indexOf("$(", i + 2)) starts.push(i + 2);
+  const ticks = [];
+  for (let i = unquoted.indexOf("`"); i !== -1; i = unquoted.indexOf("`", i + 1)) ticks.push(i);
+  const subs = [
+    ...starts.map((s, k) => base.slice(s, k + 1 < starts.length ? starts[k + 1] - 2 : undefined)),
+    ...ticks.filter((_, k) => k % 2 === 0).map((t, k) => base.slice(t + 1, ticks[2 * k + 1]).replace(/\\([`$\\])/g, "$1")), // bash unescapes \` \$ \\ in a backtick body
+  ];
+  if (subs.some((sub) => commandContainsInlineInterpreter(sub))) return true;
+  // The raw head keeps the env-option forms; the stripped head adds sudo/xargs/timeout.
+  return shellSegments(command).flatMap((segment) => [segment, stripLeadingWrappers(segment)]).some((s) => {
     if (interpreterRegex("node").test(s)) {
       const code = s.replace(interpreterRegex("node"), "").trim();
       const tokens = unshellTokens(code); // quote-aware: a quoted option value with spaces stays one token
@@ -1211,7 +1320,7 @@ export function commandContainsInlineInterpreter(command) {
       for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
         if (isStdinScriptToken(t)) return true;
-        if (t === "-c" || t.startsWith("-c")) return true;
+        if (t === "-c" || t.startsWith("-c") || /^-[BEIOPRSUVbdhiqsuvx]+c/.test(t)) return true; // boolean-flag cluster ending in c (-Ic, -IEc); -W/-X value flags are not in the set
         const skip = redirectionSkip(t);
         if (skip) { if (skip === 2 && tokens[i + 1]?.includes("<<")) return true; i += skip - 1; continue; }
         if (!t.startsWith("-")) break; // script path reached — a later `-c` is a script argument
