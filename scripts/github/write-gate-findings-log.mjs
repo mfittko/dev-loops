@@ -1116,11 +1116,7 @@ async function main() {
     }
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
-    // The shared formatter drops the typed code; keep it for a seal mismatch (AC2).
-    const rendered = error?.code === OUT_OF_BAND_WRITE
-      ? JSON.stringify({ ...JSON.parse(formatCliError(error)), code: error.code })
-      : formatCliError(error);
-    process.stderr.write(`${rendered}\n`);
+    process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;
   }
 }

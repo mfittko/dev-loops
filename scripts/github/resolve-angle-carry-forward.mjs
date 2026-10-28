@@ -25,7 +25,7 @@
  * fresh blocking Copilot round.
  */
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
+import { readSealed } from "./_gate-artifact-seal.mjs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -594,7 +594,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       }
     }
     // The shared formatter drops the typed code; keep it for the unknown-angle refusal (GATE-EXEC-RERUN-ANGLE).
-    const rendered = error instanceof Error && (error.code === "unknown_rerun_angle" || error.code === OUT_OF_BAND_WRITE)
+    const rendered = error instanceof Error && error.code === "unknown_rerun_angle"
       ? JSON.stringify({ ...JSON.parse(formatCliError(error)), code: error.code })
       : formatCliError(error);
     process.stderr.write(`${rendered}\n`);
