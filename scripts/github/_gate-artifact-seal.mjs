@@ -8,17 +8,39 @@
  * once all writers have shipped.
  */
 import { createHash } from "node:crypto";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 
 export const OUT_OF_BAND_WRITE = "gate_artifact_out_of_band_write";
 const sealPath = (file) => `${file}.seal`;
 const digest = (text) => createHash("sha256").update(text).digest("hex");
 
+const LOCK_STALE_MS = 30_000;
+const LOCK_WAIT_MS = 60_000;
+
+// Serialize publication per artifact across processes: an exclusive mkdir lock beside the file.
+// ponytail: a lock older than LOCK_STALE_MS (crashed writer) is stolen; use a pid-liveness check if writers ever run that long.
+async function withLock(file, fn) {
+  const lock = `${file}.lock`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try { await mkdir(lock); break; } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const age = Date.now() - (await stat(lock).then((s) => s.mtimeMs, () => Date.now()));
+      if (age > LOCK_STALE_MS) { await rm(lock, { recursive: true, force: true }); continue; }
+      if (Date.now() > deadline) throw new Error(`timed out waiting for the write lock ${lock}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  try { return await fn(); } finally { await rm(lock, { recursive: true, force: true }); }
+}
+
 export async function writeSealed(file, text) {
-  // Delete the seal first and write it last: a crash between the writes leaves an unsealed (legacy) pair, never a stale seal.
-  await rm(sealPath(file), { force: true });
-  await writeFile(file, text, "utf8");
-  await writeFile(sealPath(file), `${digest(text)}\n`, "utf8");
+  await withLock(file, async () => {
+    // Delete the seal first and write it last: a crash between the writes leaves an unsealed (legacy) pair, never a stale seal.
+    await rm(sealPath(file), { force: true });
+    await writeFile(file, text, "utf8");
+    await writeFile(sealPath(file), `${digest(text)}\n`, "utf8");
+  });
 }
 
 export async function readSealed(file) {

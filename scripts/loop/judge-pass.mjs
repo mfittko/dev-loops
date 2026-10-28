@@ -36,7 +36,7 @@ import { commentDeferredFindings, fingerprintFinding, readGateFindingsLedger } f
 import { readClosedPriorRoundLogs, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
-import { readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
+import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
@@ -613,8 +613,9 @@ async function stampDurableDeferTargets(enriched, options, resolvedRoot) {
 async function readJsonArtifact(artifactPath, label, parseErr) {
   let raw;
   try {
-    raw = await readFile(artifactPath, "utf8");
+    raw = await readSealed(artifactPath);
   } catch (error) {
+    if (error?.code === OUT_OF_BAND_WRITE) throw error;
     throw parseErr(`Cannot read ${label} "${artifactPath}": ${error instanceof Error ? error.message : String(error)}`);
   }
   try {

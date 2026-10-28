@@ -52,3 +52,24 @@ describe("gate artifact seal edge cases", () => {
     expect(await readSealed(f)).toBe("x\n");
   });
 });
+
+describe("gate artifact seal concurrency and shared reader", () => {
+  const tmp = async () => path.join(await mkdtemp(path.join(os.tmpdir(), "seal-")), "a.json");
+  it("overlapping sanctioned writes always leave a coherent pair", async () => {
+    const f = await tmp();
+    const texts = Array.from({ length: 20 }, (_, i) => `{"w":${i}}\n`);
+    await Promise.all(texts.map((t) => writeSealed(f, t)));
+    expect(texts).toContain(await readSealed(f));
+  });
+  it("resolveFindingsInput refuses valid-JSON and malformed-JSON tampering with the typed reason", async () => {
+    const { resolveFindingsInput } = await import("../../scripts/github/_findings-input.mjs");
+    const f = await tmp();
+    await writeSealed(f, "[]\n");
+    const deps = { parseError: (m) => new Error(m), validate: (v) => v };
+    expect(await resolveFindingsInput({ findingsFile: f }, deps)).toMatchObject({ findings: [] });
+    for (const edit of ["[{\"severity\":\"low\"}]\n", "{not json"]) {
+      await writeFile(f, edit, "utf8");
+      expect((await resolveFindingsInput({ findingsFile: f }, deps).catch((e) => e)).code).toBe(OUT_OF_BAND_WRITE);
+    }
+  });
+});
