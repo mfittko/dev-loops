@@ -1442,3 +1442,21 @@ test("review fixes (#2943): escaped redirect operator, spaced redirection heredo
     assert.equal(commandContainsInlineInterpreter(c), false, c);
   }
 });
+
+test("quoted option values with spaces stay one token for node and python (#2964)", () => {
+  for (const c of ["node --require '/tmp/a b.js' -e x", "python3 -W 'a b' -c x"]) {
+    assert.equal(commandContainsInlineInterpreter(c), true, c);
+  }
+  for (const c of ["node --require '/tmp/a b.js' script.mjs -e x", "python3 -W 'a b' script.py -c x"]) {
+    assert.equal(commandContainsInlineInterpreter(c), false, c);
+  }
+});
+
+test("escaped quotes never open or close a quoted span (#2964)", () => {
+  for (const c of ["node --title a\\' -e 'console.log(1)'", "python3 -W a\\' -c 'print(1)'", "bun --cwd a\\' -e 'console.log(1)'", "node --title \"a\\\" b\" -e x"]) {
+    assert.equal(commandContainsInlineInterpreter(c), true, c);
+  }
+  for (const c of ["node --title 'a b' script.mjs -e x", "node --title a\\ b script.mjs -e x", "python3 -W \"a b\" script.py -c x"]) {
+    assert.equal(commandContainsInlineInterpreter(c), false, c);
+  }
+});
