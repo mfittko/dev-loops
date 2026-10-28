@@ -1198,9 +1198,9 @@ const isStdinScriptToken = (t) => /^-[)`"]*$/.test(t) || t.startsWith("<<") || (
 const REDIRECTION_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)/;
 const REDIRECTION_OPERATOR_ONLY_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)$/;
 const redirectionSkip = (t) => (!t.includes("<<") && REDIRECTION_RE.test(t) ? (REDIRECTION_OPERATOR_ONLY_RE.test(t) ? 2 : 1) : 0);
-const QUOTE_AWARE_TOKEN_RE = /(?:\\.|[^\s'"\\]|'[^']*'|"(?:\\.|[^"\\])*")+/g; // `\\.` first: an escaped character never opens or closes a quoted span
+const QUOTE_AWARE_TOKEN_RE = /(?:\\.|\$'(?:\\.|[^'\\])*'|[^\s'"\\]|'[^']*'|"(?:\\.|[^"\\])*")+/g; // `\\.` first: an escaped character never opens or closes a quoted span
 // The shell removes quotes and backslash escapes before the interpreter sees an argument, so `'-e'`, `"--eval"` and `\-e` are the flags `-e`/`--eval`. Normalize each token the same way before any flag or stdin check.
-const unshellToken = (t) => t.replace(/\\(.)|'([^']*)'|"((?:\\.|[^"\\])*)"/g, (_m, a, b, c) => a ?? b ?? c.replace(/\\(.)/g, "$1"));
+const unshellToken = (t) => t.replace(/\\(.)|\$'((?:\\.|[^'\\])*)'|'([^']*)'|"((?:\\.|[^"\\])*)"/g, (_m, a, d, b, c) => a ?? d?.replace(/\\(.)/g, "$1") ?? b ?? c.replace(/\\(.)/g, "$1")); // `$'...'` is ANSI-C quoting: one word, backslash escapes unescaped
 const unshellTokens = (code) => (code.match(QUOTE_AWARE_TOKEN_RE) ?? []).map(unshellToken);
 const SCRIPT_EXT_RE = /\.(?:[cm]?js|[cm]?ts)$/;
 // Closed allow-list of known boolean node flags: the token after one is the script, not a value. Any unlisted `--flag` is treated as value-taking (the refusing direction), so a new value-taking flag can never slip through as boolean.
@@ -1237,7 +1237,8 @@ export function commandContainsInlineInterpreter(command) {
     if (c === '"') quote = quote === '"' ? "" : '"';
     unquoted += c;
   }
-  if (quote === "'" || heredocOperators > consumed) unquoted = noHeredoc; // unclosed single quote (nested quote context): fail closed, scan the unblanked text
+  if (heredocOperators > consumed) unquoted = command; // an unconsumed heredoc operator (nested/second heredoc): fail closed, scan the raw text
+  else if (quote === "'") unquoted = noHeredoc; // unclosed single quote (nested quote context): fail closed, scan the unblanked text
   const subs = [...unquoted.split("$(").slice(1), ...unquoted.split("`").filter((_, i) => i % 2)];
   if (subs.some((sub) => commandContainsInlineInterpreter(sub))) return true;
   // The raw head keeps the env-option forms; the stripped head adds sudo/xargs/timeout.
