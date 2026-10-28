@@ -263,6 +263,10 @@ test("wrapper and substitution forms get one verdict from hook and retro paths; 
     ["cat <<'END-X'\ndon't\nEND-X\nX=$(python3 -c x)\n# it's", true], ["cat <<END-X\ndon't\nEND-X\nX=$(python3 -c x)\n# it's", true],
     ["cat <<'END-X'\nuse `node -e 1`\nEND-X", false], ["cat <<'EOF'\nuse `node -e 1`\nEOF", false], ["cat <<EOF\nplain text\nEOF", false],
     ["gh pr comment 1 --body \"the hook refuses \\`node - <<EOF\\`\"", false], ["git commit -m 'refuse `python3 - <<EOF`'", false],
+    ["X=$(node '-e' 1)", true], ["X=$(node \\-e 1)", true], ["X=$(python3 '-c' x)", true], ["X=$(python3 \\-c x)", true], ["X=$(python3 script.py)", false],
+    ["cat <<'EOF'\nEOF", false], ["cat <<'EOF'\nEOF\nX=$(python3 -c x)\ncat <<'EOF'\nhi\nEOF", true], ["cat <<EOF\nEOF\nX=$(python3 -c x)", true],
+    ["echo \"<<'EOF'\"", false], ["echo \"<<'EOF'\"\n$(python3 -c x)\nEOF", true], ["# <<'EOF'\n$(python3 -c x)\nEOF", true],
+    ["X=$'a\\'b' node scripts/x.mjs", false], ["X=$'\\'' $(python3 -c x) $'\\'''", true],
     ["cat <<EOF-X\n# $(python3 -c y)\nEOF-X", true], ["cat <<A <<B\nx\nA\ndon't\n$(python3 -c y)\nit's\nB", true],
   ];
   for (const [cmd, bad] of cases) {
@@ -273,4 +277,11 @@ test("wrapper and substitution forms get one verdict from hook and retro paths; 
   assert.match(analyzeTranscript("X=$(python3 -c x)").violations[0], /^python3\b/);
   assert.match(src, /stripLeadingWrappers \} from "@dev-loops\/core\/loop\/bash-command-classify"/);
   assert.doesNotMatch(src, /function stripLeadingWrappers|WRAPPER_BINARIES/);
+});
+
+test("the retro violation label names the matched form, not a python mention elsewhere in the segment (#2943)", () => {
+  assert.match(analyzeTranscript('node -e "x" /opt/python3/bin').violations[0], /^node inline/);
+  assert.match(analyzeTranscript("gh pr ready 5 $(node -e 1) --body python").violations[0], /^node inline/);
+  assert.match(analyzeTranscript("X=$(python3 -c x)").violations[0], /^python3/);
+  assert.match(analyzeTranscript("X=$(python -c x)").violations[0], /^python:/);
 });

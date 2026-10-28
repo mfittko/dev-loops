@@ -112,7 +112,8 @@ function splitSegments(line) {
 function classifySegment(rawSegment) {
   // The shared matcher runs first, so an allowed head (`gh pr ready 5 $(node -e 1)`) never hides a substitution from it.
   if (commandContainsInlineInterpreter(rawSegment)) {
-    const py = /\bpython(3?)\b/.exec(rawSegment);
+    // The label names the matched form: a python head (plain, wrapped, or at the head of a substitution), else node inline.
+    const py = /^python(3?)\b/.exec(stripLeadingWrappers(rawSegment)) ?? /(?:\$\(|`)\s*(?:\S*\/)?python(3?)\b/.exec(rawSegment);
     return { kind: "violation", tool: py ? `python${py[1]}` : "node inline" };
   }
   const segment = stripLeadingWrappers(rawSegment);
