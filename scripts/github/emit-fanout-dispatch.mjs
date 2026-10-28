@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { validateZeroUnitCarryProof } from "./_carried-angles.mjs";
@@ -13,6 +13,7 @@ import { WorkOrderRefusal, buildDispatchPointer, materializationHash, workOrderD
 import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseDiffFileBlocks, renderRequiredReadLine } from "./write-gate-context.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
@@ -285,6 +286,7 @@ export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRo
   const want = String(headSha).trim().toLowerCase();
   const prefix = `${gate}-`;
   const heads = new Set();
+  const cutoff = await latestQuarantineMs({ repo, pr, gate, tmpRoot });
   let entries;
   try {
     entries = await readdir(dir);
@@ -306,6 +308,9 @@ export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRo
     let log;
     try {
       log = JSON.parse(await readFile(path.join(dir, entry), "utf8"));
+      // A log written at or before the latest quarantine of this PR+gate no longer counts
+      // (GATE-EXEC-FINDINGS-LOG-QUARANTINE): fail-safe, more review, never less.
+      if (cutoff !== null && logWrittenMs(log, (await stat(path.join(dir, entry))).mtimeMs) <= cutoff) continue;
     } catch (err) {
       if (err?.code && err.code !== "ENOENT") throw err;
       continue;
@@ -568,6 +573,14 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // fan-in independently verifies the carry proof before accepting findings.
   const carried = new Set(Array.isArray(fanout.preflight?.carriedAngles)
     ? fanout.preflight.carriedAngles.filter((angle) => typeof angle === "string").map((angle) => angle.trim().toLowerCase()) : []);
+  // A context built at or before the latest quarantine may carry angles from a log that no longer counts
+  // (GATE-EXEC-FINDINGS-LOG-QUARANTINE): refuse so it is rebuilt with every angle fresh.
+  if (LIFECYCLE_GATES.includes(gate) && carried.size > 0) {
+    const cutoff = await latestQuarantineMs({ repo, pr, gate, tmpRoot: ledgerTmpRoot });
+    if (cutoff !== null && (await stat(contextPath)).mtimeMs <= cutoff) {
+      return finish({ ok: false, error: `GATE-EXEC-FINDINGS-LOG-QUARANTINE: refusing — the gate-context artifact at ${JSON.stringify(contextPath)} carries angles but was built at or before the latest quarantine of this PR and gate; re-run resolve-angle-carry-forward.mjs, then rebuild the context without stale carried angles` }, false);
+    }
+  }
   const allCarried = pendingOnly && Array.isArray(fanout.groups) && fanout.groups.length > 0
     && fanout.groups.every((unit) => normalizeUnitAngles(unit).length > 0
       && normalizeUnitAngles(unit).every((angle) => carried.has(angle.trim().toLowerCase())));
@@ -581,7 +594,18 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       if (angles.some((angle) => angleReviewSurface(angle).kind !== "kinds")) {
         throw new Error("zero-unit plan cannot carry mandatory, always-run, or unknown angles");
       }
-      carryProof = validateZeroUnitCarryProof(JSON.parse(resolveFlagValue(argv, "--carry-forward-plan") ?? "null"), angles);
+      const rawProof = JSON.parse(resolveFlagValue(argv, "--carry-forward-plan") ?? "null");
+      carryProof = validateZeroUnitCarryProof(rawProof, angles);
+      // A proof resolved from a head whose log was quarantined no longer counts (GATE-EXEC-FINDINGS-LOG-QUARANTINE):
+      // fail closed so the caller rebuilds the context and dispatches every angle.
+      if (LIFECYCLE_GATES.includes(gate)) {
+        const heads = [rawProof?.prevHead, ...carryProof.map((entry) => entry.carriedFromHead)].filter((h) => typeof h === "string" && h.trim() !== "");
+        for (const head of heads) {
+          if (await isQuarantinedHead({ repo, pr, gate, tmpRoot: ledgerTmpRoot, prevHead: head })) {
+            throw new Error(`GATE-EXEC-FINDINGS-LOG-QUARANTINE: the carry proof names quarantined head ${head}; re-run resolve-angle-carry-forward.mjs and dispatch every angle`);
+          }
+        }
+      }
     } catch (error) {
       return finish({ ok: false, error: `zero-unit carry proof refused: ${error.message}` }, false);
     }

@@ -825,6 +825,17 @@ test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scr
   assert.equal(commandContainsDetachedWaitTool("timeout 600 npm test &"), false);
 });
 
+test("commandContainsInlineInterpreter unescapes nested escaped backticks in a backtick substitution", () => {
+  assert.equal(commandContainsInlineInterpreter("echo `echo \\`node -e 1\\``"), true);
+  assert.equal(commandContainsInlineInterpreter("X=`echo \\`python3 -c x\\``"), true);
+  assert.equal(commandContainsInlineInterpreter("X=`node -e 1`"), true);
+  assert.equal(commandContainsInlineInterpreter("echo `echo \\`node scripts/x.mjs\\``"), false);
+  assert.equal(commandContainsInlineInterpreter("X=`node scripts/x.mjs`"), false);
+  assert.equal(commandContainsInlineInterpreter("echo \\`node -e 1\\`"), false);
+  assert.equal(commandContainsInlineInterpreter("X=`echo \\$(node -e 1)`"), true);
+  assert.equal(commandContainsInlineInterpreter("X=`echo \\$(node scripts/x.mjs)`"), false);
+});
+
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {
   assert.equal(commandContainsInlineInterpreter('node -e "console.log(1)"'), true);
   assert.equal(commandContainsInlineInterpreter('node --eval "console.log(1)"'), true);
@@ -1457,6 +1468,15 @@ test("escaped quotes never open or close a quoted span (#2964)", () => {
     assert.equal(commandContainsInlineInterpreter(c), true, c);
   }
   for (const c of ["node --title 'a b' script.mjs -e x", "node --title a\\ b script.mjs -e x", "python3 -W \"a b\" script.py -c x"]) {
+    assert.equal(commandContainsInlineInterpreter(c), false, c);
+  }
+});
+
+test("a plain heredoc closes only on an unindented delimiter, `<<-` on tab-indented (#2967)", () => {
+  for (const c of ["cat <<EOF\n EOF\n'$(node -e 1)'\nEOF", "cat <<EOF\n\tEOF\n$(node -e 1)\nEOF", "cat <<'EOF'\n EOF\nEOF\n$(node -e 1)", "cat <<-EOF\n  EOF\n$(node -e 1)\nEOF"]) {
+    assert.equal(commandContainsInlineInterpreter(c), true, c);
+  }
+  for (const c of ["cat <<-EOF\n\ttext\n\tEOF\necho ok", "cat <<EOF\n$(echo hi)\nEOF\necho ok", "cat <<'EOF'\n $(node -e 1)\nEOF"]) {
     assert.equal(commandContainsInlineInterpreter(c), false, c);
   }
 });

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { commandContainsInlineInterpreter } from "@dev-loops/core/loop/bash-command-classify";
+import { decideBashGate } from "@dev-loops/core/claude/hook-decisions";
 
 // OPS-NO-INLINE-INTERPRETER verdict table. perl/ruby/deno are outside the pinned toolchain and
 // are recorded as deliberately uncovered (false).
@@ -67,10 +68,25 @@ const CASES = [
   ["perl -e 'x'", false],
   ["ruby -e 'x'", false],
   ["deno eval 'x'", false],
+  ["gh pr comment 1 --body-file - <<'EOF'\nthe hook refuses cat <<EOF then `node -e 1`\nEOF", false],
+  ["gh issue comment 1 --body-file - <<'EOF'\nsee `python3 -c x`\n```\ncat <<X\nhi\nX\n```\nEOF", false],
+  ["git commit -F - <<'EOF'\nfix: refuse `node -e`\n\nmention: python3 - <<EOF\nEOF", false],
 ];
 
 test("inline interpreter verdict table", () => {
   for (const [command, expected] of CASES) {
     assert.equal(commandContainsInlineInterpreter(command), expected, command);
   }
+});
+
+const GATE = (command) => decideBashGate({ command, inManagedContext: true });
+
+test("nested heredoc and ANSI-C quoted words fail closed (#2943 slice 2)", () => {
+  assert.equal(commandContainsInlineInterpreter("cat <<B <<'A'\n$(python3 -c x)\nB\nA"), true);
+  for (const [bin, opt, flag] of [["node", "--title", "-e"], ["python", "-W", "-c"], ["python3", "-W", "-c"], ["bun", "--cwd", "-e"]]) {
+    const verdict = GATE(`${bin} ${opt} $'a\\' b' ${flag} x`);
+    assert.equal(verdict.decision, "deny", bin);
+    assert.match(verdict.reason, /^OPS-NO-INLINE-INTERPRETER/, bin);
+  }
+  assert.equal(commandContainsInlineInterpreter("node --title $'a\\' b' script.mjs"), false);
 });
