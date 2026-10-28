@@ -483,3 +483,17 @@ test("editPr (#2898): the untick guard counts duplicate labels and reports a rem
   // a checked label removed: refused
   await assert.rejects(() => attempt(live.replace("\n- [x] Docs updated", "")), /untick or remove 1 checked row.*"Docs updated"/s);
 });
+
+test("editPr (#2898): the untick guard sees every checkbox row form the gate parser reads", async () => {
+  const attempt = (live, body) => editPr(
+    { repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] },
+    { run: stubGh().run, fetchPrContext: async () => ({ headRefName: "x", closingIssuesReferences: [], body: live }) },
+  );
+  for (const marker of ["-", "*", "+", "1.", "1)", "> -", "> 1."]) {
+    await assert.rejects(() => attempt(`${marker} [x] Docs updated`, `${marker} [ ] Docs updated`), /untick or remove 1 checked row.*"Docs updated"/s, marker);
+  }
+  // Not checkbox rows: unticking them is no refusal.
+  for (const line of ["plain text line without a checkbox", "[x] Docs updated"]) {
+    await attempt(line, line.replace("[x]", "[ ]"));
+  }
+});
