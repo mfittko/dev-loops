@@ -1210,9 +1210,19 @@ const NODE_BOOLEAN_FLAGS = new Set(["--no-warnings", "--no-deprecation", "--trac
  */
 export function commandContainsInlineInterpreter(command) {
   // Token-level, not a shell parser: text after each `$(` and inside backtick pairs is checked as a command too.
-  // Single-quoted spans are literal in bash: blank them for this scan only (the per-segment check below keeps the raw text).
-  // ponytail: ceiling: escaped nested backticks, process substitution `<(...)`, subshell `(...)`, and quoted-delimiter heredoc bodies are not covered; wrapper options (`sudo -u x`, `nice -n 5`, `xargs -I{}`) are not skipped by stripLeadingWrappers (pre-existing).
-  const unquoted = command.replace(/'[^']*'/g, "''");
+  // Literal text is blanked for this scan only (the per-segment check below keeps the raw text): quoted-delimiter heredoc bodies, single-quoted spans outside double quotes, and backslash-escaped characters.
+  // ponytail: ceiling: nested quote context inside `$(...)`, process substitution `<(...)` and subshell `(...)` are not covered; wrapper options (`sudo -u x`, `nice -n 5`, `xargs -I{}`) are not skipped by stripLeadingWrappers (pre-existing).
+  const noHeredoc = command.replace(/(<<-?\s*(['"])(\w+)\2[^\n]*\n)[\s\S]*?\n[ \t]*\3(?=\n|$)/g, "$1");
+  let unquoted = "";
+  let quote = "";
+  for (let i = 0; i < noHeredoc.length; i++) {
+    const c = noHeredoc[i];
+    if (c === "\\" && quote !== "'") { unquoted += "  "; i++; continue; }
+    if (quote === "'") { if (c === "'") { quote = ""; unquoted += "'"; } continue; }
+    if (c === "'" && quote === "") { quote = "'"; unquoted += "'"; continue; }
+    if (c === '"') quote = quote === '"' ? "" : '"';
+    unquoted += c;
+  }
   const subs = [...unquoted.split("$(").slice(1), ...unquoted.split("`").filter((_, i) => i % 2)];
   if (subs.some((sub) => commandContainsInlineInterpreter(sub))) return true;
   // The raw head keeps the env-option forms; the stripped head adds sudo/xargs/timeout.

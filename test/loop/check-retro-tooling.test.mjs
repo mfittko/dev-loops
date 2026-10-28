@@ -246,17 +246,20 @@ test("comment-only transcript is analyzed normally", async () => {
   assert.equal(JSON.parse(r.stdout).internalToolingOnly, true);
 });
 
-test("wrapper, substitution and python cluster forms get one verdict from hook and retro paths (#2943)", () => {
+test("wrapper and substitution forms get one verdict from hook and retro paths; python forms are compared on the hook only (#2943)", () => {
   const cases = [
     ["sudo node - <<EOF", true], ["xargs node - <<EOF", true], ["timeout 5 node - <<EOF", true], ["env X=1 nice node -p 1", true],
     ["X=$(python3 -c \"print(1)\")", true], ["X=`node -e 1`", true], ["python3 -Ic \"print(1)\"", true], ["python3 -IEc \"x\"", true], ["python -Sc \"x\"", true],
     ["sudo node scripts/x.mjs", false], ["X=$(node scripts/x.mjs)", false], ["python3 -I script.py", false], ["python3 -W error script.py", false], ["python3 -Wc script.py", false], ["node scripts/x.mjs -e", false],
     ["gh pr comment --body 'the hook missed `node -e 1`'", false], ["git commit -m 'mention $(python3 -c x)'", false], ["echo \"$(date)\"", false],
     ["echo \"$(python3 -c x)\"", true], ["echo $(echo $(python3 -c x))", true], ["time node -", true], ["nice node -e 1", true],
+    ["echo \"don't\" ; X=$(python3 -c x) ; echo \"it's\"", true], ["gh pr comment 1 --body \"Here's the result: $(python3 -c 'print(1)')\"", true], ["echo \"don't\" `node -e 'x'`", true],
+    ["gh pr comment 1 --body \"$(cat <<'EOF'\nthe hook missed `node -e 1`\nEOF\n)\"", false],
+    ["gh pr comment 1 --body \"the hook missed \\`node -e 1\\`\"", false], ["echo \"\\$(python3 -c x)\"", false], ["X=$(node -e 1)", true],
   ];
   for (const [cmd, bad] of cases) {
     assert.equal(commandContainsInlineInterpreter(cmd), bad, `hook ${cmd}`);
-    if (!/[$`]/.test(cmd) && !/^python/.test(cmd)) assert.equal(analyzeTranscript(cmd).violations.length > 0, bad, `retro ${cmd}`);
+    if (!/python/.test(cmd) && !cmd.includes("\n") && !/gh pr/.test(cmd)) assert.equal(analyzeTranscript(cmd).violations.length > 0, bad, `retro ${cmd}`);
   }
   const src = readFileSync(fileURLToPath(new URL("../../scripts/loop/check-retro-tooling.mjs", import.meta.url)), "utf8");
   assert.match(src, /stripLeadingWrappers \} from "@dev-loops\/core\/loop\/bash-command-classify"/);

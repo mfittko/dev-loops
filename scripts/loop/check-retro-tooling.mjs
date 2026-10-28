@@ -124,7 +124,8 @@ function classifySegment(rawSegment) {
   if (/^python3?\b/.test(segment)) {
     return { kind: "violation", tool: /^python3\b/.test(segment) ? "python3" : "python" };
   }
-  return { kind: "clean" };
+  // A substitution (`X=$(node -e 1)`) hides the interpreter from the head dispatch: ask the shared matcher on the raw segment.
+  return commandContainsInlineInterpreter(rawSegment) ? { kind: "violation", tool: "inline interpreter" } : { kind: "clean" };
 }
 
 /**
