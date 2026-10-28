@@ -1863,7 +1863,7 @@ export async function readClosedPriorRoundLogs(options, { repoRoot, onUnreadable
   } catch {
     return [];
   }
-  const names = await readdir(ledgerDir).catch(() => []);
+  const names = (await readdir(ledgerDir).catch(() => [])).sort();
   const head = String(options.headSha).trim().toLowerCase();
   const namePrefix = `${options.gate}-`;
   const repo = options.repo.trim().toLowerCase();
