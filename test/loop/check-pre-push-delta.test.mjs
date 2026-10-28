@@ -235,11 +235,30 @@ test("the evidence rule reads, forbids executing tests, and the input carries no
   for (const banned of [/\bsed\b/, /\| head/, /git diff/, /run the tests/i]) assert.doesNotMatch(text, banned);
 });
 
+// The facts the shared Bash-gate deny needs, resolved for a cwd that is NOT dev-loops-managed, so
+// no shared deny rule can fire here. Every call below passes them explicitly: an omitted `facts`
+// injection makes the shared seam's fail-closed missing-facts deny block first, which would keep
+// these assertions green even if the read-only role restriction were deleted outright.
+const ROLE_GATE_FACTS = Object.freeze({
+  inManagedContext: false,
+  managedRepoSlug: null,
+  repoSlug: null,
+  humanMergeOnly: false,
+  enforceCoordinator: false,
+  readyGate: null,
+});
+
 test("the read-only role gate allows read and git grep and blocks bun test", () => {
-  assert.equal(decidePiToolCall({ toolName: "read", input: { path: "/x.patch" }, agentType: "review" }).block, false);
-  assert.equal(decidePiToolCall({ toolName: "bash", input: { command: "git grep -n foo" }, agentType: "review" }).block, false);
-  for (const command of ["grep -n foo x", "rg -n foo"]) assert.equal(decidePiToolCall({ toolName: "bash", input: { command }, agentType: "review" }).block, false);
-  for (const role of ["review", "judge"]) assert.equal(decidePiToolCall({ toolName: "bash", input: { command: "bun test" }, agentType: role }).block, true);
+  const decide = (toolName, input, agentType) => decidePiToolCall({ toolName, input, agentType, facts: ROLE_GATE_FACTS });
+  assert.equal(decide("read", { path: "/x.patch" }, "review").block, false);
+  assert.equal(decide("bash", { command: "git grep -n foo" }, "review").block, false);
+  for (const command of ["grep -n foo x", "rg -n foo"]) assert.equal(decide("bash", { command }, "review").block, false);
+  for (const role of ["review", "judge"]) {
+    const denied = decide("bash", { command: "bun test" }, role);
+    assert.equal(denied.block, true);
+    // The reason, not just the verdict: the role boundary must be what denies.
+    assert.match(denied.reason, /Read-only role boundary/, `role ${role} must be denied by the role boundary`);
+  }
 });
 
 test("with --result the CLI records the decision for the baseline, and the last write wins", async () => {

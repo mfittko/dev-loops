@@ -129,6 +129,34 @@ test("the Claude and Pi adapters agree on every Bash-gate fixture (AC3, #1086)",
   assert.equal(piBlocks("gh pr ready 5", null, passed), false);
 });
 
+// The seam is the public surface a third adapter would call next, so a fact it forgets to inject
+// must deny, never default. `role: null` and a nullable slug stay legitimate VALUES; an omitted or
+// mistyped one does not.
+const REQUIRED_ADAPTER_FACTS = Object.freeze(["role", "repoSlug", "managedRepoSlug", "inManagedContext", "humanMergeOnly", "enforceCoordinator"]);
+
+test("the shared seam refuses a call that omits or mistypes an adapter fact (fail closed)", () => {
+  for (const fact of REQUIRED_ADAPTER_FACTS) {
+    const facts = { ...MANAGED, command: "gh pr merge 5 --squash", role: null };
+    delete facts[fact];
+    const denied = decideBashGateDeny(facts);
+    assert.equal(denied?.ruleId, null, `${fact}: the missing-facts deny carries no registered rule ID`);
+    assert.match(denied?.reason ?? "", /Bash gate blocked/, `${fact}: omitting the fact must deny`);
+    assert.match(denied?.reason ?? "", new RegExp(fact), `${fact}: the deny names the missing fact`);
+  }
+  // The three booleans are the ones whose default failed open, so a non-boolean is refused too.
+  for (const fact of ["inManagedContext", "humanMergeOnly", "enforceCoordinator"]) {
+    assert.match(decideBashGateDeny({ ...MANAGED, command: "gh pr merge 5 --squash", role: null, [fact]: undefined })?.reason ?? "", /Bash gate blocked/, fact);
+    assert.match(decideBashGateDeny({ ...MANAGED, command: "gh pr merge 5 --squash", role: null, [fact]: null })?.reason ?? "", /Bash gate blocked/, fact);
+  }
+  // A complete call still decides: `readyGate: null` means "not probed" and must stay accepted.
+  assert.equal(decideBashGateDeny({ ...MANAGED, command: "gh pr view 5", role: null, readyGate: null }), null);
+  assert.equal(decideBashGateDeny({ ...MANAGED, command: "gh pr merge 5 --squash", role: null, readyGate: null })?.ruleId, "RAW-GH-PR-MERGE-BYPASS");
+  // An omitted readyGate keeps the "not probed" meaning rather than refusing the decision.
+  const unprobed = { ...MANAGED, command: "gh pr ready 5", role: null };
+  delete unprobed.readyGate;
+  assert.equal(decideBashGateDeny(unprobed)?.ruleId, "GATE-COMMENT-DRAFT-REQUIREMENTS");
+});
+
 test("every Bash-gate rule ID is a registered rule in required-rules.json (the pin cannot shrink)", () => {
   // Without an independent anchor the list is circular: deleting a rule from BASH_GATE_RULES, the
   // fixtures AND the contract matrix in one commit would still pass every other assertion here.

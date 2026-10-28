@@ -2,9 +2,8 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadDevLoopConfig, resolveHumanMergeOnly } from '@dev-loops/core/config';
+import { CONFIG_FILE_VARIANTS, loadDevLoopConfig, resolveHumanMergeOnly } from '@dev-loops/core/config';
 import {
-  DEVLOOPS_CONFIG_VARIANTS,
   commandContainsGhPrReady,
   deriveInManagedRepo,
   extractPrNumberFromGhPrReadyAnywhere,
@@ -93,18 +92,18 @@ const couldNotRunReadyGate = (): { passed: false; error: string } =>
   ({ passed: false, error: `could not run ${READY_GATE_SCRIPT_LABEL}` });
 
 /**
- * The repo-level config sources a cached fact entry depends on: the `.devloops` variants the
- * `inManagedContext` probe reads (the core `DEVLOOPS_CONFIG_VARIANTS` list, so a newly supported
- * variant cannot leave the cache blind to it), and the `.pi/dev-loop/defaults` variants the config
- * loader layers underneath them. The packaged extension-defaults layer and the git remote are
- * outside this signature.
+ * The repo-level config sources a cached fact entry depends on: both repo-local layers the config
+ * loader reads — the `.devloops` family above, and the `.pi/dev-loop/defaults` family underneath it
+ * — each probed in the loader's own `CONFIG_FILE_VARIANTS` order. Deriving the extensions from the
+ * loader's exported list is what keeps the signature honest: one hand-copied variant list per base
+ * silently served a cached `humanMergeOnly` for a file the loader had started reading (or stopped
+ * reading). The packaged extension-defaults layer and the git remote are outside this signature.
  */
+const DEVLOOPS_CONFIG_BASE = '.devloops';
 const DEFAULTS_CONFIG_BASE = path.join('.pi', 'dev-loop', 'defaults');
-// The config loader probes these variants of every config base (packages/core/src/config/config.mjs).
-const DEFAULTS_CONFIG_EXTS = Object.freeze(['', '.yaml', '.yml', '.json']);
 const CONFIG_SOURCE_FILES = Object.freeze([
-  ...DEVLOOPS_CONFIG_VARIANTS.map((ext) => `.devloops${ext}`),
-  ...DEFAULTS_CONFIG_EXTS.map((ext) => `${DEFAULTS_CONFIG_BASE}${ext}`),
+  ...CONFIG_FILE_VARIANTS.map((ext) => `${DEVLOOPS_CONFIG_BASE}${ext}`),
+  ...CONFIG_FILE_VARIANTS.map((ext) => `${DEFAULTS_CONFIG_BASE}${ext}`),
 ]);
 
 /**

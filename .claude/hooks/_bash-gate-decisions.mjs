@@ -8,7 +8,11 @@
  * other (`skills/docs/cross-harness-regression-contract.md`). The rule bodies moved here verbatim
  * from the Claude seam: same evaluation order, same reason texts — existing tests pin those strings.
  *
- * Each adapter gathers its own facts and injects them, so this module stays pure:
+ * Each adapter gathers its own facts and injects them, so this module stays pure. Every one of those
+ * facts is REQUIRED and an omitted or mistyped one is refused (fail closed) instead of defaulted: a
+ * permissive default switches off the deny it backs, which is the omission both entry points were
+ * already hardened against. `readyGate` alone stays nullable — `null` is its meaningful "not
+ * probed" input, which still gates a ready verb:
  *   - `role` — the Claude `agent_type` or the Pi role resolved from the calling session's
  *     `active_agent` tag. `null` is the unrestricted main agent / operator on BOTH harnesses; any
  *     other string (including Pi's fail-closed unresolved `""`) is a subagent context.
@@ -145,6 +149,23 @@ function segmentsProvenForeign(segments, managedSlug) {
 }
 
 /**
+ * The adapter-supplied facts this decision reads, each with the shape it must have. A missing or
+ * mistyped entry refuses the decision instead of defaulting: `humanMergeOnly = false` would fail
+ * STOP-HUMAN-MERGE-001 open, `inManagedContext = false` would switch every managed-repo rule off,
+ * and a silent default made exactly that omission invisible at the call site. A slug is nullable
+ * (an unresolvable identity still gates, fail closed); `readyGate` is deliberately absent here
+ * because `null` is its meaningful "not probed" value.
+ */
+const ADAPTER_FACTS = Object.freeze([
+  ["role", (value) => value === null || typeof value === "string"],
+  ["repoSlug", (value) => value === null || typeof value === "string"],
+  ["managedRepoSlug", (value) => value === null || typeof value === "string"],
+  ["inManagedContext", (value) => typeof value === "boolean"],
+  ["humanMergeOnly", (value) => typeof value === "boolean"],
+  ["enforceCoordinator", (value) => typeof value === "boolean"],
+]);
+
+/**
  * The `gh pr ready` half of the proven-foreign escape, for an adapter that decides whether to probe
  * at all. `managedSlug` must already be normalized the way this module normalizes it (trimmed,
  * lowercased, `null` when unresolvable) so the adapter and the decision agree.
@@ -175,35 +196,40 @@ export function prReadySegmentsProvenForeign(command, managedSlug = null) {
  *
  * @param {Object} params
  * @param {string} params.command - The Bash command string.
- * @param {string|null} [params.role] - Calling agent (`agent_type` / Pi `active_agent` role); null
+ * @param {string|null} params.role - Calling agent (`agent_type` / Pi `active_agent` role); null
  *   for the main agent / operator, any other string for a subagent context.
- * @param {string|null} [params.repoSlug] - Resolved owner/name of the cwd repo (null if unknown).
- * @param {string|null} [params.managedRepoSlug] - Resolved owner/name of the dev-loops-managed
+ * @param {string|null} params.repoSlug - Resolved owner/name of the cwd repo (null if unknown).
+ * @param {string|null} params.managedRepoSlug - Resolved owner/name of the dev-loops-managed
  *   repo (the repo `inManagedContext` refers to), or null when the identity can't be resolved.
- * @param {boolean} [params.inManagedContext] - Whether the current repo is dev-loops-managed (a
+ * @param {boolean} params.inManagedContext - Whether the current repo is dev-loops-managed (a
  *   `.devloops` config exists at its root).
- * @param {boolean} [params.humanMergeOnly] - Effective repo `autonomy.humanMergeOnly` invariant;
+ * @param {boolean} params.humanMergeOnly - Effective repo `autonomy.humanMergeOnly` invariant;
  *   when true, `gh pr merge` is refused actor-independently (STOP-HUMAN-MERGE-001).
- * @param {boolean} [params.enforceCoordinator] - Strict mode for the COORDINATOR-VERIFY-BOUNDARY
+ * @param {boolean} params.enforceCoordinator - Strict mode for the COORDINATOR-VERIFY-BOUNDARY
  *   boundary (`DEVLOOPS_COORDINATOR_READONLY=1`). Default fail-open.
  * @param {{passed: boolean, error: string|null}|null} [params.readyGate] - Draft-gate evidence
  *   probe result for the command's PR; null when the adapter did not probe.
  * @returns {{ruleId: string|null, reason: string}|null} The deny decision, or null to allow.
- *   `ruleId` is null for the two inline denies that carry no registered rule ID.
+ *   `ruleId` is null for the two inline denies that carry no registered rule ID and for the
+ *   missing-facts deny.
  */
-export function decideBashGateDeny({
-  command,
-  role = null,
-  repoSlug = null,
-  managedRepoSlug = null,
-  inManagedContext = false,
-  humanMergeOnly = false,
-  enforceCoordinator = false,
-  readyGate = null,
-} = {}) {
+export function decideBashGateDeny(facts = {}) {
+  const { command } = facts;
   if (typeof command !== "string") {
     return null;
   }
+  const missing = ADAPTER_FACTS.filter(([name, isValid]) => !isValid(facts[name])).map(([name]) => name);
+  if (missing.length > 0) {
+    return {
+      ruleId: null,
+      reason:
+        `Bash gate blocked: the caller supplied no valid ${missing.join(", ")} fact(s), so the shared deny ` +
+        "decision cannot run. Inject every adapter fact (`role`, `repoSlug`, `managedRepoSlug`, " +
+        "`inManagedContext`, `humanMergeOnly`, `enforceCoordinator`) instead of omitting one; `readyGate` " +
+        "stays explicitly nullable for its 'not probed' value.",
+    };
+  }
+  const { role, repoSlug, managedRepoSlug, inManagedContext, humanMergeOnly, enforceCoordinator, readyGate = null } = facts;
   const gatePassed = readyGate?.passed === true;
   const gateError = readyGate?.error ?? null;
 

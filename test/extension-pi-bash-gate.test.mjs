@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-import { DEVLOOPS_CONFIG_VARIANTS } from "@dev-loops/core/loop/bash-command-classify";
+import { CONFIG_FILE_VARIANTS } from "@dev-loops/core/config";
 import extension from "../extension/index.ts";
 import { DEV_LOOPS_ROLES, decidePiToolCall } from "../extension/readonly-role-gate.ts";
 import { withTempDir } from "./_helpers.mjs";
@@ -338,9 +338,9 @@ tempTest("Pi tool_call skips the draft-gate probe for a gh pr ready that is prov
 
 tempTest("Pi tool_call revalidates the cached facts when any .devloops variant in the core list appears", async (tmp) => {
   clearCoordinatorFlag();
-  // The signature covers the core `DEVLOOPS_CONFIG_VARIANTS` list, not a local copy of it: a variant
-  // added there (or a config file appearing mid-session) must invalidate the cache for this cwd.
-  for (const ext of DEVLOOPS_CONFIG_VARIANTS) {
+  // The signature derives from the config loader's own `CONFIG_FILE_VARIANTS` list, not a local copy
+  // of it: a variant added there (or a config file appearing mid-session) must invalidate the cache.
+  for (const ext of CONFIG_FILE_VARIANTS) {
     const root = path.join(tmp, `variant${ext ? `-${ext.slice(1)}` : ""}-${(repoSeq += 1)}`);
     fs.mkdirSync(root);
     const gate = register({ repoRoot: root });
@@ -353,6 +353,52 @@ tempTest("Pi tool_call revalidates the cached facts when any .devloops variant i
       `variant ${ext || "(bare)"} must invalidate the cached facts`,
     );
   }
+});
+
+/**
+ * A repo root whose `.devloops` carries only `version` (so it IS dev-loops-managed) and whose
+ * `autonomy.humanMergeOnly` therefore resolves from a DEFAULTS-layer file the caller writes later.
+ */
+function defaultsRepoRoot(tmp) {
+  const root = path.join(tmp, `defaults-${(repoSeq += 1)}`);
+  fs.mkdirSync(path.join(root, ".pi", "dev-loop"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".devloops"), "version: 1\n", "utf8");
+  return root;
+}
+const defaultsFile = (root, ext) => path.join(root, ".pi", "dev-loop", `defaults${ext}`);
+/** The loader parses a `.json` variant as JSON and every other variant as YAML. */
+const defaultsContent = (ext, humanMergeOnly) =>
+  ext === ".json" ? `${JSON.stringify({ version: 1, autonomy: { humanMergeOnly } }, null, 2)}\n` : `version: 1\nautonomy:\n  humanMergeOnly: ${humanMergeOnly}\n`;
+
+tempTest("Pi tool_call revalidates the cached facts when any .pi/dev-loop/defaults variant appears", async (tmp) => {
+  clearCoordinatorFlag();
+  // The defaults layer is the OTHER half of the cache signature, and the half a managed repo can use
+  // to carry `autonomy.humanMergeOnly`: a variant the loader probes but the signature skipped would
+  // serve the cached pre-edit invariant for the rest of the session (fail OPEN on the merge rule).
+  for (const ext of CONFIG_FILE_VARIANTS) {
+    const root = defaultsRepoRoot(tmp);
+    const gate = register({ repoRoot: root });
+    // No defaults file yet: the packaged extension default (humanMergeOnly: true) binds.
+    assert.match((await callAs(gate, "developer", MERGE)).reason, /STOP-HUMAN-MERGE-001/, `defaults${ext || " (bare)"}: packaged default before`);
+    fs.writeFileSync(defaultsFile(root, ext), defaultsContent(ext, false), "utf8");
+    assert.match(
+      (await callAs(gate, "developer", MERGE)).reason,
+      /RAW-GH-PR-MERGE-BYPASS/,
+      `defaults${ext || " (bare)"}: a defaults variant appearing mid-session must invalidate the cached facts`,
+    );
+  }
+});
+
+tempTest("Pi tool_call re-resolves when the .pi/dev-loop/defaults file that supplies the invariant is edited", async (tmp) => {
+  clearCoordinatorFlag();
+  const root = defaultsRepoRoot(tmp);
+  const file = defaultsFile(root, ".yaml");
+  fs.writeFileSync(file, defaultsContent(".yaml", false), "utf8");
+  const gate = register({ repoRoot: root });
+  // The invariant comes from the defaults layer, under a `.devloops` that states none: cached false.
+  assert.match((await callAs(gate, "developer", MERGE)).reason, /RAW-GH-PR-MERGE-BYPASS/);
+  fs.writeFileSync(file, defaultsContent(".yaml", true), "utf8");
+  assert.match((await callAs(gate, "developer", MERGE)).reason, /STOP-HUMAN-MERGE-001/);
 });
 
 tempTest("Pi tool_call re-reads the config after a same-size rewrite inside one timestamp tick", async (tmp) => {

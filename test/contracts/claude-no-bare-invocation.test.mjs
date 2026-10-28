@@ -94,15 +94,38 @@ test("no pinned `npx dev-loops@<version>` form in generated agent/command/skill 
   assert.deepEqual(violations, [], `pinned npx form found in:\n${violations.join("\n")}`);
 });
 
-// The deny texts the Claude hooks print steer an agent to a command. They must name the launcher
-// form, in the core source and in the vendored hook copy.
+// The deny texts a gate boundary prints steer an agent to a command. They must name the launcher
+// form, in the core sources and in the vendored hook copies. Since decision record 0206 almost every
+// one of those steering texts lives in the SHARED deny module both harnesses execute
+// (`packages/core/src/loop/bash-gate-decisions.mjs`), not in the Claude seam that now only re-exports
+// it: scanning the Claude files alone left the texts both harnesses actually print unpoliced.
+const DENY_TEXT_FILES = [
+  "packages/core/src/loop/bash-gate-decisions.mjs",
+  ".claude/hooks/_bash-gate-decisions.mjs",
+  "packages/core/src/claude/hook-decisions.mjs",
+  ".claude/hooks/_hook-decisions.mjs",
+];
+
 test("hook deny texts name no bare `dev-loops <ns> <sub>` and no pinned npx form", () => {
   const violations = [];
-  for (const file of ["packages/core/src/claude/hook-decisions.mjs", ".claude/hooks/_hook-decisions.mjs"]) {
+  for (const file of DENY_TEXT_FILES) {
     const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
     if (BARE_DEV_LOOPS_NS_RE.test(source) || PINNED_NPX_RE.test(source)) violations.push(file);
   }
   assert.deepEqual(violations, [], `bare or pinned dev-loops form found in:\n${violations.join("\n")}`);
+});
+
+// The guard is only as good as the forms it catches, and the shared module is a NEW file in that
+// list: a steering text rewritten to a bare form there must go red. Both rejected forms, plus the
+// routed form that clears it.
+test("self-check: a steering text rewritten to a bare or pinned form is flagged", () => {
+  const bare = "Run `dev-loops gate resolve-validation` through the launcher.";
+  const pinned = "Install with `npx dev-loops@1.2.3 gate resolve-validation`.";
+  const routed = "Run `dev-loops-run cli/index.mjs gate resolve-validation` on a clean commit.";
+  assert.ok(BARE_DEV_LOOPS_NS_RE.test(bare), "a bare `dev-loops gate …` steering text must be flagged");
+  assert.ok(PINNED_NPX_RE.test(pinned), "a pinned `npx dev-loops@…` steering text must be flagged");
+  assert.equal(BARE_DEV_LOOPS_NS_RE.test(routed), false, "the routed launcher form must not be flagged");
+  assert.equal(PINNED_NPX_RE.test(routed), false, "the routed launcher form must not be flagged");
 });
 
 test("scanned tree is non-empty (the guard actually covers files)", () => {
