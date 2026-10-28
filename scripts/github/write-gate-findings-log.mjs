@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { readSealed, writeSealed } from "./_gate-artifact-seal.mjs";
 import path from "node:path";
 import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
 import { expandDispatchUnits } from "./_dispatch-units.mjs";
@@ -824,7 +825,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   let faninLedger;
   if (executionMode === "fanout_fanin" && await exists(faninLedgerPath)) {
     try {
-      faninLedger = JSON.parse(await readFile(faninLedgerPath, "utf8"));
+      faninLedger = JSON.parse(await readSealed(faninLedgerPath));
     } catch (error) {
       throw parseError(`fan-in ledger ${faninLedgerPath} could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1085,7 +1086,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // helper. Pure no-op (byte-identical log) when the flag is absent.
   const stampedLog = stampOptionalSpecAuthority(log, specAuthorityIdentity);
   await mkdir(path.dirname(fullPath), { recursive: true });
-  await writeFile(fullPath, JSON.stringify(stampedLog, null, 2) + "\n", "utf8");
+  await writeSealed(fullPath, JSON.stringify(stampedLog, null, 2) + "\n");
   return angleCoverage.warning
     ? { ok: true, path: logPath, log: stampedLog, warning: angleCoverage.warning }
     : { ok: true, path: logPath, log: stampedLog };

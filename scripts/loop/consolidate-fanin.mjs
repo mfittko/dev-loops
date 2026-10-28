@@ -47,6 +47,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { GATE_NAMES, gateScopePrefix } from "../github/_gate-names.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../github/write-gate-context.mjs";
+import { writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { lintFillerPhrases } from "../github/_gate-finding-text.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, validateCarryForwardPlanEntries, validateCarryForwardPlanShape, validateZeroUnitCarryProof } from "../github/_carried-angles.mjs";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -1607,7 +1608,8 @@ export async function consolidateGateFanin(options) {
     }
     for (const target of ledgerTargets) {
       await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, ledgerText, "utf8");
+      if (target === options.ledgerOut) await writeFile(target, ledgerText, "utf8");
+      else await writeSealed(target, ledgerText);
     }
   }
 
