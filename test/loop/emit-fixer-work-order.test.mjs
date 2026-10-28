@@ -11,6 +11,7 @@ import { test } from "bun:test";
 import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { normalizeFixerDispositionHandoff, siteCoverageGaps } from "@dev-loops/core/loop/fixer-disposition";
 import { startDeltaSequence, toDeltaActItems } from "@dev-loops/core/loop/pre-push-delta-review";
+import { renderOperatorFocusSection } from "../../scripts/loop/_operator-focus.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { authenticateOriginalPlan, beginFixerEmission } from "../../scripts/github/_fixer-emission-evidence.mjs";
 import { decideFixerWriteGuard } from "../../.claude/hooks/_hook-decisions.mjs";
@@ -2402,6 +2403,9 @@ test("operator focus: round and a per-item decision render next to the act item 
     const absent = await readFile(plain.promptPath, "utf8");
     assert.ok(!absent.includes("Operator focus") && !("operatorFocus" in plain.workOrder));
     assert.equal(absent, renderWorkOrder(plain.workOrder));
+    assert.match(absent, /\n\n## Required reads\n/);
+    assert.ok(!absent.includes("\n\n\n## Required reads"));
+    assert.equal(renderOperatorFocusSection(null), "");
   });
 });
 
