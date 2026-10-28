@@ -23,7 +23,10 @@ export async function latestQuarantineMs({ repo, pr, gate, tmpRoot }) {
 
 /** True when a non-rolled_back quarantine record names this exact prior head (its log moved, so a missing log there is audited). */
 export async function isQuarantinedHead({ repo, pr, gate, tmpRoot, prevHead }) {
-  return (await readQuarantineRecords({ repo, pr, gate, tmpRoot })).some((record) => record.prevHead === prevHead);
+  // A short hex head (carry proofs allow 7-64 chars) matches by prefix.
+  const head = String(prevHead ?? "").trim().toLowerCase();
+  return (await readQuarantineRecords({ repo, pr, gate, tmpRoot })).some((record) => record.prevHead === head
+    || (head.length >= 7 && typeof record.prevHead === "string" && record.prevHead.startsWith(head)));
 }
 
 async function readQuarantineRecords({ repo, pr, gate, tmpRoot }) {

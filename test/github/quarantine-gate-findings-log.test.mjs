@@ -212,7 +212,7 @@ test("a second quarantine in the same millisecond cannot overwrite the first aud
     try {
       const first = await run(dir);
       await seed(dir);
-      await assert.rejects(run(dir), (err) => err.code === "EEXIST");
+      await assert.rejects(run(dir), (err) => err.code === "quarantine_concurrent_run");
       const record = JSON.parse(await readFile(path.join(first.auditDir, "quarantine.json"), "utf8"));
       assert.equal(record.status, "complete");
     } finally {
@@ -277,5 +277,28 @@ test("emit refuses an already-materialized carry-filtered context built before t
     const emitted = spawnSync("node", [emitCli, "--repo", REPO, "--pr", String(PR), "--gate", GATE, "--head-sha", HEAD, "--pending"], { encoding: "utf8", cwd: dir });
     assert.equal(emitted.status, 1);
     assert.match(emitted.stdout, /GATE-EXEC-FINDINGS-LOG-QUARANTINE: refusing/);
+  });
+});
+
+test("emit refuses a fresh all-carried context whose carry proof names the quarantined head", async () => {
+  await withRepo(async (dir) => {
+    const ctx = path.join(dir, "tmp", "gate-context", "o-r", "pr-7");
+    await mkdir(ctx, { recursive: true });
+    await writeFile(path.join(ctx, `${GATE}-${HEAD}.briefing-prefix.txt`), "## prefix\n", "utf8");
+    await writeFile(path.join(ctx, `${GATE}-${HEAD}.briefing-volatile.txt`), "# volatile\n", "utf8");
+    await writeFile(path.join(dir, ".devloops"), `version: 1\ngates:\n  preApproval:\n    angles:\n      - name: "coverage"\n        persona: review\n        prompt: Review the angle.\n`, "utf8");
+    await seed(dir);
+    await run(dir);
+    // Built after the quarantine: the mtime check passes, only the proof names the stale head.
+    await writeFile(path.join(ctx, `${GATE}-${HEAD}.json`), JSON.stringify({
+      fanout: {
+        groups: [{ name: "coverage", angles: ["coverage"] }], pendingGroups: [],
+        preflight: { carriedAngles: ["coverage"] },
+      },
+    }), "utf8");
+    const proof = JSON.stringify({ prevHead: PRIOR, carried: [{ angle: "coverage", carriedFromHead: PRIOR, reviewer: "r", model: "m", dispatchId: "d" }] });
+    const emitted = spawnSync("node", [emitCli, "--repo", REPO, "--pr", String(PR), "--gate", GATE, "--head-sha", HEAD, "--pending", "--carry-forward-plan", proof], { encoding: "utf8", cwd: dir });
+    assert.equal(emitted.status, 1);
+    assert.match(emitted.stdout, /carry proof names quarantined head/);
   });
 });

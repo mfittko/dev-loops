@@ -13,7 +13,7 @@ import { WorkOrderRefusal, buildDispatchPointer, materializationHash, workOrderD
 import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseDiffFileBlocks, renderRequiredReadLine } from "./write-gate-context.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
+import { isQuarantinedHead, latestQuarantineMs, logWrittenMs } from "./_gate-quarantine-cutoff.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveFanoutEffectiveConcurrency, resolveFanoutSequential, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
@@ -594,7 +594,18 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       if (angles.some((angle) => angleReviewSurface(angle).kind !== "kinds")) {
         throw new Error("zero-unit plan cannot carry mandatory, always-run, or unknown angles");
       }
-      carryProof = validateZeroUnitCarryProof(JSON.parse(resolveFlagValue(argv, "--carry-forward-plan") ?? "null"), angles);
+      const rawProof = JSON.parse(resolveFlagValue(argv, "--carry-forward-plan") ?? "null");
+      carryProof = validateZeroUnitCarryProof(rawProof, angles);
+      // A proof resolved from a head whose log was quarantined no longer counts (GATE-EXEC-FINDINGS-LOG-QUARANTINE):
+      // fail closed so the caller rebuilds the context and dispatches every angle.
+      if (LIFECYCLE_GATES.includes(gate)) {
+        const heads = [rawProof?.prevHead, ...carryProof.map((entry) => entry.carriedFromHead)].filter((h) => typeof h === "string" && h.trim() !== "");
+        for (const head of heads) {
+          if (await isQuarantinedHead({ repo, pr, gate, tmpRoot: ledgerTmpRoot, prevHead: head })) {
+            throw new Error(`GATE-EXEC-FINDINGS-LOG-QUARANTINE: the carry proof names quarantined head ${head}; re-run resolve-angle-carry-forward.mjs and dispatch every angle`);
+          }
+        }
+      }
     } catch (error) {
       return finish({ ok: false, error: `zero-unit carry proof refused: ${error.message}` }, false);
     }

@@ -134,7 +134,12 @@ export async function quarantineGateFindingsLog({ repo, pr, gate, prevHead, tmpR
   // Reserve the audit dir exclusively: a concurrent invocation in the same millisecond gets EEXIST
   // and cannot overwrite this run's record.
   await mkdir(path.dirname(auditDir), { recursive: true });
-  await mkdir(auditDir);
+  try {
+    await mkdir(auditDir);
+  } catch (err) {
+    if (err?.code === "EEXIST") throw typedError("quarantine_concurrent_run", `GATE-EXEC-FINDINGS-LOG-QUARANTINE: audit dir ${auditDir} already exists (concurrent quarantine); nothing was moved`);
+    throw err;
+  }
   const planned = [];
   const ledgerAbsent = !(await exists(ledgerPath));
   for (const file of [logPath, ledgerPath]) {
