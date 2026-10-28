@@ -1283,7 +1283,7 @@ export function commandContainsInlineInterpreter(command) {
   for (let i = unquoted.indexOf("`"); i !== -1; i = unquoted.indexOf("`", i + 1)) ticks.push(i);
   const subs = [
     ...starts.map((s, k) => base.slice(s, k + 1 < starts.length ? starts[k + 1] - 2 : undefined)),
-    ...ticks.filter((_, k) => k % 2 === 0).map((t, k) => base.slice(t + 1, ticks[2 * k + 1])),
+    ...ticks.filter((_, k) => k % 2 === 0).map((t, k) => base.slice(t + 1, ticks[2 * k + 1]).replaceAll("\\`", "`")), // bash unescapes \` in a backtick body
   ];
   if (subs.some((sub) => commandContainsInlineInterpreter(sub))) return true;
   // The raw head keeps the env-option forms; the stripped head adds sudo/xargs/timeout.

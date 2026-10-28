@@ -825,6 +825,15 @@ test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scr
   assert.equal(commandContainsDetachedWaitTool("timeout 600 npm test &"), false);
 });
 
+test("commandContainsInlineInterpreter unescapes nested escaped backticks in a backtick substitution", () => {
+  assert.equal(commandContainsInlineInterpreter("echo `echo \\`node -e 1\\``"), true);
+  assert.equal(commandContainsInlineInterpreter("X=`echo \\`python3 -c x\\``"), true);
+  assert.equal(commandContainsInlineInterpreter("X=`node -e 1`"), true);
+  assert.equal(commandContainsInlineInterpreter("echo `echo \\`node scripts/x.mjs\\``"), false);
+  assert.equal(commandContainsInlineInterpreter("X=`node scripts/x.mjs`"), false);
+  assert.equal(commandContainsInlineInterpreter("echo \\`node -e 1\\`"), false);
+});
+
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {
   assert.equal(commandContainsInlineInterpreter('node -e "console.log(1)"'), true);
   assert.equal(commandContainsInlineInterpreter('node --eval "console.log(1)"'), true);
