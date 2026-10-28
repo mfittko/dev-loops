@@ -20,12 +20,10 @@ The change re-scopes a rule in [Retrospective checkpoint contract](../../skills/
 
 - `checkpoint-contract.mjs --state complete` refuses with `retro_artifact_missing` when the `--record-source` file is missing or empty, or when it does not contain the `--merge-commit` oid (case-insensitive match).
 - The `dev-loops` wrapper spawns routed subcommands with a 64 MiB `maxBuffer` (`SPAWN_MAX_BUFFER` in `cli/index.mjs`). On `ENOBUFS` it writes no partial stdout and exits 1 with `child_output_too_large`. Any other spawn error exits 1 with `subcommand_spawn_failed: <code>`.
-- `audit-pi-session.mjs` refuses a whole-document `--json` record above 1,000,000 bytes (`MAX_JSON_BYTES`) with `audit_json_too_large` and exit 1. `--jq`, `--fields` and `--silent` output is exempt from this cap, and the wrapper buffer is its backstop.
+- Audit output is limited only by the wrapper's 64 MiB buffer. Callers audit one transcript at a time or narrow output with `--jq` or `--fields`.
 
 ## Consequences
 
 A `complete` retro checkpoint now proves that its record names the cycle's merge commit. A record that names another cycle is refused at write time.
 
-Oversized audit output fails with a typed message on stderr. Callers narrow the output with `--jq` or `--fields`, or audit one transcript at a time.
-
-`MAX_JSON_BYTES` in `scripts/loop/audit-pi-session.mjs` must stay below `SPAWN_MAX_BUFFER` in `cli/index.mjs`. Otherwise the wrapper kills the child before the typed refusal is written.
+Oversized audit output fails with the typed `child_output_too_large` message on stderr. Callers narrow the output with `--jq` or `--fields`, or audit one transcript at a time.

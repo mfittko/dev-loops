@@ -722,7 +722,7 @@ export async function runCli({
   // Test-only injection seam for the `doctor` registry freshness check;
   // production callers always take the real `fetchLatestPublishedVersion`.
   fetchLatestVersion,
-  // Child-output buffer for routed subcommands; the audit-session per-script cap must stay below it.
+  // Child-output buffer for routed subcommands.
   spawnMaxBuffer = SPAWN_MAX_BUFFER,
 } = {}) {
   const fromTop = parseTopLevelCommand(argv);
