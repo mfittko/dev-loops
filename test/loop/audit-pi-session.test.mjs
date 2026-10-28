@@ -947,6 +947,19 @@ describe("audit-pi-session unit & integration", () => {
     assert.doesNotMatch(markdown, /1\.234\.567|1 234 567/);
   });
 
+  it("refuses oversized --json output with a typed error naming the limit", async () => {
+    const tmpDir = createTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    writeSimpleTranscript(sessionFile);
+    const stdout = captureStream();
+    const stderr = captureStream();
+    assert.equal(await runAuditCli([sessionFile, "--json"], { stdout, stderr, maxJsonBytes: 10 }), 1);
+    assert.equal(stdout.value, "");
+    assert.match(stderr.value, /audit_json_too_large/);
+    assert.match(stderr.value, /10-byte limit/);
+    assert.match(stderr.value, /one transcript at a time/);
+  });
+
   it("covers structured output, explicit latest, and CLI errors", async () => {
     const tmpDir = createTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");

@@ -79,7 +79,7 @@ test("checkpoint-contract CLI writes checkpoint file", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-contract-test-"));
   try {
     await mkdir(path.join(tempDir, "tmp", "retro"), { recursive: true });
-    await writeFile(path.join(tempDir, "tmp", "retro", "transcript.jsonl"), "tool-call record line\n", "utf8");
+    await writeFile(path.join(tempDir, "tmp", "retro", "transcript.jsonl"), `tool-call record ${VALID_SHA}\n`, "utf8");
     const { code, stdout, stderr } = await runNode(
       [
         "--state", "complete", "--notes", "Retrospective documented after merge",
@@ -343,6 +343,30 @@ test("checkpoint-contract CLI rejects a --record-source that does not resolve to
       assert.equal(code, 1, `expected rejection for --record-source ${badSource}`);
       assert.match(JSON.parse(stderr).error, /existing, non-empty file/i);
     }
+  });
+});
+
+test("checkpoint-contract CLI refuses a present record that does not name the merge commit (retro_artifact_missing)", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    await mkdir(path.join(cwd, "tmp", "retro"), { recursive: true });
+    await writeFile(path.join(cwd, "tmp", "retro", "unrelated.md"), "a retro for some other cycle\n", "utf8");
+    const { code, stderr } = await runNode(
+      ["--state", "complete", "--notes", "ok", "--retro-context", "fresh", "--record-source", "tmp/retro/unrelated.md", "--repo", "mfittko/dev-loops", "--pr", "5", "--merge-commit", VALID_SHA],
+      { cwd },
+    );
+    assert.equal(code, 1);
+    assert.match(JSON.parse(stderr).error, /retro_artifact_missing.*unrelated\.md.*does not contain.*abcdef/);
+  });
+});
+
+test("checkpoint-contract CLI refuses a nonexistent --record-source with retro_artifact_missing", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    const { code, stderr } = await runNode(
+      ["--state", "complete", "--notes", "ok", "--retro-context", "fresh", "--record-source", "tmp/retro/nope.md", "--repo", "mfittko/dev-loops", "--pr", "5", "--merge-commit", VALID_SHA],
+      { cwd },
+    );
+    assert.equal(code, 1);
+    assert.match(JSON.parse(stderr).error, /retro_artifact_missing.*nope\.md/);
   });
 });
 

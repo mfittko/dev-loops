@@ -41,6 +41,10 @@ node scripts/loop/audit-pi-session.mjs --latest --jq '.sessions[] | select(.snow
 node scripts/loop/audit-pi-session.mjs --harness claude path/to/claude-transcripts --json
 ```
 
+## Granularity and output limit
+
+Audit one transcript at a time. A whole-directory `--json` record that exceeds 1,000,000 bytes is refused with `audit_json_too_large` (exit 1, message on stderr naming the limit and the audited path); the tool never emits a truncated document. On that error, audit each transcript file separately, or narrow the output with `--jq` or `--fields`.
+
 ## Pi vs Claude Code
 
 Harness auto-detects per record from the usage envelope's field-naming shape (Claude's

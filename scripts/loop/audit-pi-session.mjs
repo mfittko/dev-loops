@@ -48,7 +48,9 @@ Options:
 
 ${JQ_OUTPUT_USAGE}`;
 
-const VALID_HARNESS_VALUES = ["auto", "pi", "claude"];
+// Whole-document --json above this size has been observed cut mid-object on a pipe.
+export const MAX_JSON_BYTES = 1_000_000;
+const VALID_HARNESS_VALUES =["auto", "pi", "claude"];
 
 export async function runAuditCli(
   args = process.argv.slice(2),
@@ -57,6 +59,7 @@ export async function runAuditCli(
     stderr = process.stderr,
     findLatestSession = findLatestAuditSession,
     cwd = process.cwd(),
+    maxJsonBytes = MAX_JSON_BYTES,
   } = {},
 ) {
   const options = {
@@ -119,8 +122,9 @@ export async function runAuditCli(
   }
 
   let result;
+  let targetPath;
   try {
-    let targetPath = options.sessionPath;
+    targetPath = options.sessionPath;
 
     if (!targetPath) {
       const latest = findLatestSession(undefined, cwd);
@@ -139,6 +143,15 @@ export async function runAuditCli(
   }
 
   if (options.json || options.jq !== undefined || options.silent || options.fields !== undefined) {
+    // Refuse oversized whole-document output: a piped stdout can be cut
+    // mid-object with no message. --jq/--fields/--silent emit small output.
+    if (options.jq === undefined && !options.silent && options.fields === undefined) {
+      const bytes = Buffer.byteLength(JSON.stringify(result));
+      if (bytes > maxJsonBytes) {
+        stderr.write(`${formatCliError(`audit_json_too_large: the --json record is ${bytes} bytes, above the ${maxJsonBytes}-byte limit (${targetPath}). Audit one transcript at a time (pass a single transcript file), or narrow the output with --jq/--fields.`, { usage: USAGE })}\n`);
+        return 1;
+      }
+    }
     return emitResult(result, {
       jq: options.jq,
       silent: options.silent,

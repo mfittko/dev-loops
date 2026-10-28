@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -226,7 +226,11 @@ function parseCliArgs(argv) {
       recordStat = null;
     }
     if (!recordStat?.isFile() || recordStat.size === 0) {
-      throw parseError(`--record-source must resolve to an existing, non-empty file (the agent/subagent tool-call record the fresh-context retro was seeded with): ${recordSource}`);
+      throw parseError(`retro_artifact_missing: --record-source must resolve to an existing, non-empty file (the agent/subagent tool-call record the fresh-context retro was seeded with): ${recordPath}`);
+    }
+    // The record must name this cycle: a present-but-unrelated file is hollow evidence.
+    if (!readFileSync(recordPath, "utf8").includes(mergeCommit.trim())) {
+      throw parseError(`retro_artifact_missing: --record-source ${recordPath} does not contain the cycle's merge commit ${mergeCommit.trim()}`);
     }
     // Delegate shape ownership to the core normalizer — the CLI validates the
     // two flag values above, but never hand-builds the canonical provenance
