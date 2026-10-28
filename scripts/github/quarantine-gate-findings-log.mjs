@@ -121,7 +121,7 @@ export async function quarantineGateFindingsLog({ repo, pr, gate, prevHead, tmpR
     failure = `prior gate findings-log is not valid JSON: ${err.message}`;
   }
   if (failure === null) {
-    throw typedError("quarantine_refused_log_valid", `prior gate findings-log at ${logPath} passes integrity; quarantine refuses to discard valid evidence`);
+    throw typedError("quarantine_refused_log_valid", `GATE-EXEC-FINDINGS-LOG-QUARANTINE: prior gate findings-log at ${logPath} passes integrity; quarantine refuses to discard valid evidence`);
   }
   const ledgerPath = path.resolve(repoRoot, buildGateFaninLedgerPath({ repo, pr, gate, headSha: prevHead, tmpRoot: contextTmpRoot || "tmp" }));
   const auditDir = path.resolve(
