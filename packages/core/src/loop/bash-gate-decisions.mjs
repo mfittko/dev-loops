@@ -122,6 +122,39 @@ export const BASH_GATE_RULES = Object.freeze([
 ]);
 
 /**
+ * True when EVERY one of `segments` is PROVEN foreign: it carries an explicit repo, the managed
+ * slug resolves, and the explicit repo demonstrably differs. A segment with no explicit repo, or
+ * an unresolvable managed slug, is NOT proven foreign (fail closed).
+ *
+ * Shared with the Pi fact adapter, which must reach the same verdict BEFORE it runs the `gh pr
+ * ready` draft-gate probe: the probe's result is never consulted for a command this escape allows,
+ * so a second, unlinked copy of the comparison in the adapter would let the two drift.
+ * @param {Array<{explicitRepo: string|null}>} segments @param {string|null} managedSlug
+ */
+function segmentsProvenForeign(segments, managedSlug) {
+  return (
+    segments.length > 0 &&
+    segments.every(
+      (seg) =>
+        seg.explicitRepo != null &&
+        managedSlug !== null &&
+        seg.explicitRepo.toLowerCase() !== managedSlug,
+    )
+  );
+}
+
+/**
+ * The `gh pr ready` half of the proven-foreign escape, for an adapter that decides whether to probe
+ * at all. `managedSlug` must already be normalized the way this module normalizes it (trimmed,
+ * lowercased, `null` when unresolvable) so the adapter and the decision agree.
+ * @param {string} command @param {string|null} [managedSlug]
+ * @returns {boolean}
+ */
+export function prReadySegmentsProvenForeign(command, managedSlug = null) {
+  return segmentsProvenForeign(extractRepoFlagsFromGhPrReadySegments(command), managedSlug ?? null);
+}
+
+/**
  * Decide whether a Bash command must be denied by a dev-loop gate boundary.
  *
  * Gated commands on the managed repo (each rationale sits inline at its check):
@@ -173,6 +206,7 @@ export function decideBashGateDeny({
   const gatePassed = readyGate?.passed === true;
   const gateError = readyGate?.error ?? null;
 
+  // COORDINATOR-VERIFY-BOUNDARY: a known code-verification/build entrypoint (bun run
   // verify/test, vitest, npm test/run test/run build, ...) run inline by the dev-loop COORDINATOR
   // itself (agent_type "dev-loop" or "gate-coordinator"). The hook allows WORKER subagents to run targeted checks;
   // full-repository runs still belong to gate resolve-validation. Only the coordinator is scoped
@@ -428,18 +462,13 @@ export function decideBashGateDeny({
   // slug, is NOT proven foreign — fail closed (preserves the fail-closed default). Mirrors the
   // per-segment `.some()` scoping on the create/external-write paths: a proven-foreign FIRST segment
   // must not shield a later managed segment (`gh pr merge --repo other/x 1 && gh pr merge 2`).
-  const gatedVerbSegments = [
-    ...(isMerge ? extractRepoFlagsFromGhPrMergeSegments(command) : []),
-    ...(isReady ? extractRepoFlagsFromGhPrReadySegments(command) : []),
-  ];
-  const allSegmentsProvenForeign =
-    gatedVerbSegments.length > 0 &&
-    gatedVerbSegments.every(
-      (seg) =>
-        seg.explicitRepo != null &&
-        managedSlug !== null &&
-        seg.explicitRepo.toLowerCase() !== managedSlug,
-    );
+  const allSegmentsProvenForeign = segmentsProvenForeign(
+    [
+      ...(isMerge ? extractRepoFlagsFromGhPrMergeSegments(command) : []),
+      ...(isReady ? extractRepoFlagsFromGhPrReadySegments(command) : []),
+    ],
+    managedSlug,
+  );
   if (allSegmentsProvenForeign) {
     return null;
   }

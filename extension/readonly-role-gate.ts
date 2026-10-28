@@ -124,8 +124,12 @@ export type PiToolCallDecision = { block: false } | { block: true; reason: strin
 
 /**
  * The facts the shared Bash-gate deny decision needs, resolved by `extension/bash-gate-facts.ts` and
- * injected here so this module stays pure (no IO). The defaults are all-empty: a caller that injects
- * nothing gets no managed context and no human-merge invariant, i.e. only the read-only role gate.
+ * injected here so this module stays pure (no IO).
+ *
+ * `facts` is REQUIRED on `decidePiToolCall` and has no empty default: a default switched every deny
+ * rule off (no managed context, no human-merge invariant, no coordinator enforcement, no ready-gate
+ * probe) and the omission was invisible at the call site — the fail-open this module closes, kept as
+ * the default.
  */
 export type PiBashGateFacts = {
   inManagedContext: boolean;
@@ -135,15 +139,6 @@ export type PiBashGateFacts = {
   enforceCoordinator: boolean;
   readyGate: { passed: boolean; error: string | null } | null;
 };
-
-const EMPTY_BASH_GATE_FACTS: PiBashGateFacts = Object.freeze({
-  inManagedContext: false,
-  managedRepoSlug: null,
-  repoSlug: null,
-  humanMergeOnly: false,
-  enforceCoordinator: false,
-  readyGate: null,
-});
 
 /** Every dev-loops agent role: the `name` frontmatter of `agents/*.agent.md`. */
 export const DEV_LOOPS_ROLES = Object.freeze([
@@ -197,22 +192,42 @@ export function resolvePiRole({ systemPrompt, env = process.env, sessionId }: {
 /**
  * Decide a Pi `tool_call`.
  *
- * The harness-neutral Bash-gate deny rules run first, for EVERY role including the untagged main
- * agent: raw `gh pr merge`, raw waiver body writes and the other guard rules deny exactly as the
- * Claude PreToolUse hook denies them (decision record 0206). A restricted role then
+ * The harness-neutral Bash-gate deny rules run for EVERY role including the untagged main agent: raw
+ * `gh pr merge`, raw waiver body writes and the other guard rules deny exactly as the Claude
+ * PreToolUse hook denies them (decision record 0206). A restricted role then
  * runs only the sanctioned pull line (plus read and search commands for the reviewer; the judge
  * also runs its decision check). An unresolved role ('' from a blank tag, an unknown `dev-loops:`
  * name, conflicting tags or an untagged native async child session) fails closed: it is treated as
  * a restricted role that may pull only.
+ *
+ * The reviewer's shell-inert read/search form is decided BEFORE the shared deny: the deny
+ * classifiers split shell segments without quote awareness, so a quoted search text that happens to
+ * spell a gated verb (`grep '; gh pr merge 42 ;' README.md`, the reviewer form the cross-harness
+ * contract names) would otherwise be misread as that verb and deny a read the role gate allows.
+ * `isReadSearchCommand` admits no unquoted shell-active character, so such a command can only read
+ * or search — it cannot execute the text it matches.
  */
-export function decidePiToolCall({ toolName, input, agentType, facts = EMPTY_BASH_GATE_FACTS }: {
+export function decidePiToolCall({ toolName, input, agentType, facts }: {
   toolName?: string;
   input?: { command?: unknown };
   agentType: string | null;
-  facts?: PiBashGateFacts;
+  facts: PiBashGateFacts;
 }): PiToolCallDecision {
   if (toolName !== 'bash') return { block: false };
   const command = typeof input?.command === 'string' ? input.command : '';
+  if (agentType !== null && READ_SEARCH_ROLES.has(agentType) && isReadSearchCommand(command)) return { block: false };
+  // Fail closed on a missing injection: without facts every shared deny rule would be switched off
+  // and only the read-only role restriction would remain (`facts` is required above, so this guards
+  // an untyped caller at runtime rather than a legitimate call shape).
+  if (!facts) {
+    return {
+      block: true,
+      reason:
+        'Bash gate blocked: the Pi tool_call handler resolved no repo facts for this command, so the shared ' +
+        'deny decision (raw `gh pr merge`/`gh pr create`, the ADR tripwire body writes, the coordinator verify ' +
+        'boundary) cannot run. Inject the facts from extension/bash-gate-facts.ts instead of omitting them.',
+    };
+  }
   const deny = decideBashGateDeny({
     command,
     role: agentType,
@@ -228,7 +243,6 @@ export function decidePiToolCall({ toolName, input, agentType, facts = EMPTY_BAS
   if (agentType !== '' && !BASH_RESTRICTED_ROLES.includes(agentType)) return { block: false };
   if (parseSanctionedPullLine(command)) return { block: false };
   if (agentType === 'judge' && JUDGE_DECISION_CHECK_RE.test(command.trim()) && !command.includes('..')) return { block: false };
-  if (READ_SEARCH_ROLES.has(agentType) && isReadSearchCommand(command)) return { block: false };
   return {
     block: true,
     reason:

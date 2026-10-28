@@ -1,15 +1,18 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadDevLoopConfig, resolveHumanMergeOnly } from '@dev-loops/core/config';
 import {
+  DEVLOOPS_CONFIG_VARIANTS,
   commandContainsGhPrReady,
   deriveInManagedRepo,
   extractPrNumberFromGhPrReadyAnywhere,
   isCleanRepoSlug,
 } from '@dev-loops/core/loop/bash-command-classify';
+import { prReadySegmentsProvenForeign } from '@dev-loops/core/loop/bash-gate-decisions';
 import type { ExtensionHarnessAdapter } from './harness-types.ts';
-import { PR_READY_GATE_TIMEOUT_MS, defaultResolveRepoContext } from './post-merge-update.ts';
+import { PRE_PR_READY_GATE_SCRIPT, PR_READY_GATE_TIMEOUT_MS, defaultResolveRepoContext } from './post-merge-update.ts';
 import type { PiBashGateFacts } from './readonly-role-gate.ts';
 
 /**
@@ -33,11 +36,12 @@ import type { PiBashGateFacts } from './readonly-role-gate.ts';
  * the packaged `autonomy.humanMergeOnly: true` default still binds (mirrors the Claude edge's
  * `scripts/loop/resolve-human-merge-only.mjs`). Repo and config facts are cached per resolved cwd,
  * so a session pays for the git/config reads once per working directory — and the cache is
- * revalidated on every call against a `stat` signature of that repo's own `.devloops` and
- * `.pi/dev-loop/defaults` variants, so an edit to one of those files is never served from the cache
- * (a stale `humanMergeOnly: false` would fail OPEN on STOP-HUMAN-MERGE-001, the rule this module
- * exists to enforce). That signature does not cover the packaged extension-defaults layer the
- * loader always merges, nor the git remote the slug derives from; an unresolved (non-repo) cwd is
+ * revalidated on every call against a signature of that repo's own `.devloops` and
+ * `.pi/dev-loop/defaults` variants (a content digest of each file that exists), so an edit to one of
+ * those files is never served from the cache — not even a same-size rewrite inside one filesystem
+ * timestamp tick (a stale `humanMergeOnly: false` would fail OPEN on STOP-HUMAN-MERGE-001, the rule
+ * this module exists to enforce). That signature does not cover the packaged extension-defaults layer
+ * the loader always merges, nor the git remote the slug derives from; an unresolved (non-repo) cwd is
  * not cached at all, so a directory that becomes a repo later is re-probed on the next call.
  */
 
@@ -53,16 +57,19 @@ const EMPTY_REPO_FACTS: RepoFacts = Object.freeze({
 const NO_READY_GATE: { passed: false; error: null } = Object.freeze({ passed: false, error: null });
 
 /**
- * The draft-gate evidence script, resolved from THIS module's own location — the dev-loops package
- * the extension runs from — never from the cwd repo. The Claude edge resolves its own launcher the
- * same way (`<plugin>/bin/dev-loops-run`) and runs it with `cwd: repoRoot`; a repo-relative path
- * would deny every `gh pr ready` in a managed consumer repo that ships no `scripts/loop/` of its
- * own, where the identical command is allowed on Claude Code. Quoted at the call site so an install
- * path containing spaces still reaches the script.
+ * The draft-gate evidence script, derived from the ONE declaration the extension already carries
+ * (`PRE_PR_READY_GATE_SCRIPT`, the post-merge hook's own invocation) so a rename or flag change is
+ * applied there once instead of by hand in every copy.
+ *
+ * The absolute path resolves from THIS module's own location — the dev-loops package the extension
+ * runs from — never from the cwd repo. The Claude edge resolves its own launcher the same way
+ * (`<plugin>/bin/dev-loops-run`) and runs it with `cwd: repoRoot`; a repo-relative path would deny
+ * every `gh pr ready` in a managed consumer repo that ships no `scripts/loop/` of its own, where the
+ * identical command is allowed on Claude Code. Quoted at the call site so an install path containing
+ * spaces still reaches the script.
  */
-const READY_GATE_SCRIPT = fileURLToPath(new URL('../scripts/loop/pre-pr-ready-gate.mjs', import.meta.url));
-/** The script's package-relative name — stable across install roots for the deny message. */
-const READY_GATE_SCRIPT_LABEL = 'scripts/loop/pre-pr-ready-gate.mjs';
+const READY_GATE_SCRIPT_LABEL = PRE_PR_READY_GATE_SCRIPT.replace(/^node\s+/, '');
+const READY_GATE_SCRIPT = fileURLToPath(new URL(`../${READY_GATE_SCRIPT_LABEL}`, import.meta.url));
 /**
  * Node's own startup diagnostics (missing module, unknown extension, permission error): the probe
  * never reached the gate script, so "could not run" must not be reported as "no clean record".
@@ -87,26 +94,33 @@ const couldNotRunReadyGate = (): { passed: false; error: string } =>
 
 /**
  * The repo-level config sources a cached fact entry depends on: the `.devloops` variants the
- * `inManagedContext` probe reads, and the `.pi/dev-loop/defaults` variants the config loader layers
- * underneath them. Their `stat` signature is a cheap, spawn-free fingerprint that changes whenever
- * one of those repo files does, so the cache can be revalidated per call without a git read. The
- * packaged extension-defaults layer and the git remote are outside this signature.
+ * `inManagedContext` probe reads (the core `DEVLOOPS_CONFIG_VARIANTS` list, so a newly supported
+ * variant cannot leave the cache blind to it), and the `.pi/dev-loop/defaults` variants the config
+ * loader layers underneath them. The packaged extension-defaults layer and the git remote are
+ * outside this signature.
  */
-const CONFIG_SOURCE_BASES = Object.freeze(['.devloops', path.join('.pi', 'dev-loop', 'defaults')]);
-const CONFIG_SOURCE_EXTS = Object.freeze(['', '.yaml', '.yml', '.json']);
+const DEFAULTS_CONFIG_BASE = path.join('.pi', 'dev-loop', 'defaults');
+// The config loader probes these variants of every config base (packages/core/src/config/config.mjs).
+const DEFAULTS_CONFIG_EXTS = Object.freeze(['', '.yaml', '.yml', '.json']);
+const CONFIG_SOURCE_FILES = Object.freeze([
+  ...DEVLOOPS_CONFIG_VARIANTS.map((ext) => `.devloops${ext}`),
+  ...DEFAULTS_CONFIG_EXTS.map((ext) => `${DEFAULTS_CONFIG_BASE}${ext}`),
+]);
 
-/** A stat fingerprint of every repo config source under `repoRoot`; absent files are pinned too. */
+/**
+ * A fingerprint of every repo config source under `repoRoot`: absent files are pinned as absent and
+ * each present file contributes a digest of its bytes. A `stat`-only signature (`mtimeMs`, `size`,
+ * `ino`) cannot see a same-size rewrite inside one filesystem timestamp tick, which would serve a
+ * stale `humanMergeOnly`. Every file that exists is small, so the digest costs one read per present
+ * source (usually one) and no spawn.
+ */
 function configSourceSignature(repoRoot: string): string {
   const parts: string[] = [];
-  for (const base of CONFIG_SOURCE_BASES) {
-    for (const ext of CONFIG_SOURCE_EXTS) {
-      const file = path.join(repoRoot, base + ext);
-      try {
-        const stat = fs.statSync(file);
-        parts.push(`${base}${ext}:${stat.mtimeMs}:${stat.size}:${stat.ino}`);
-      } catch {
-        parts.push(`${base}${ext}:-`);
-      }
+  for (const file of CONFIG_SOURCE_FILES) {
+    try {
+      parts.push(`${file}:${createHash('sha256').update(fs.readFileSync(path.join(repoRoot, file))).digest('hex')}`);
+    } catch {
+      parts.push(`${file}:-`);
     }
   }
   return parts.join('|');
@@ -158,6 +172,12 @@ async function resolveReadyGate(
   command: string,
 ): Promise<PiBashGateFacts['readyGate']> {
   if (!commandContainsGhPrReady(command)) return null;
+  // The shared decider allows a ready verb whose EVERY segment is PROVEN foreign (an explicit repo
+  // differing from the managed slug) BEFORE it consults `readyGate`, so probing there would spend up
+  // to PR_READY_GATE_TIMEOUT_MS on a command that runs anyway. Same normalized slug the decider
+  // compares against, from the same shared escape.
+  const managedSlug = (facts.managedRepoSlug ?? '').trim().toLowerCase() || null;
+  if (prReadySegmentsProvenForeign(command, managedSlug)) return null;
   const prNumber = extractPrNumberFromGhPrReadyAnywhere(command);
   // No PR number or no clean slug to probe: deny fail-closed with the decider's own message.
   if (prNumber === null || !facts.repoSlug || !isCleanRepoSlug(facts.repoSlug)) return NO_READY_GATE;
