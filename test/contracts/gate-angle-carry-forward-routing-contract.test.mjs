@@ -146,7 +146,7 @@ test("Phase 3 writer-flag matcher accepts sanctioned forms and rejects --provena
 
 function assertJudgeBridge(step) {
   const commands = [...step.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
-  const writer = commands.find((command) => command.startsWith("write-gate-findings-log.mjs "));
+  const writer = commands.find((command) => command.startsWith("write-gate-findings-log.mjs ") && command.includes("--judge-verdict"));
   const bridge = commands.find((command) => command.startsWith("node <dev-loops-package-root>/cli/index.mjs gate judge-pass ") && !command.includes("--judge-skip"));
   assert.ok(writer && bridge, "fan-in must write judged findings and run the judge bridge");
   assert.match(writer, /--judge-verdict\s+<judge-verdict-path>/);
@@ -170,6 +170,16 @@ test("fan-in routes judged findings through the spec-bound act-list bridge", asy
     step.replaceAll("--judge-verdict <judge-verdict-path>", ""),
     step.replace("--spec-authority-verdict <spec-authority-verdict-path>", "") + "\n`other-command --spec-authority-verdict <spec-authority-verdict-path>`",
   ]) assert.throws(() => assertJudgeBridge(changed));
+});
+
+test("the judge-skip paragraph names the judge-free ledger write and forbids --findings-json", async () => {
+  const step = extractStep(await readRepo(SKILL), "3", SKILL);
+  const skip = step.split("\n").find((line) => line.includes("--judge-skip"));
+  assert.ok(skip, "skip paragraph present");
+  const commands = [...skip.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+  const writer = commands.find((command) => command.startsWith("write-gate-findings-log.mjs "));
+  assert.ok(writer && !writer.includes("--judge-verdict"), "skip path uses the judge-free writer call");
+  assert.match(skip, /never `--findings-json`/);
 });
 
 test("the fixer persona derives no disposition from severity without a judge verdict", async () => {

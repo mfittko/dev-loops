@@ -51,6 +51,7 @@ import {
 } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-verdict <path> --judge-plan <path> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>] [--tmp-root <path>]
+       judge-pass.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --findings-file <path> --judge-skip --spec-file <path> --content-digest <digest> [--out <act-list-path>] [--ledger-out <path>] [--repo-root <path>] [--tmp-root <path>]
 
 Bridge the judge pass between gate fan-in (Phase 3) and the fixer pass (Phase 4).
 Reads the judge agent's verdict artifact, enforces current-head freshness, applies
@@ -85,6 +86,9 @@ Inputs:
   --judge-skip                 GATE-EXEC-JUDGE-SKIP-EMPTY: skip the judge for a round with zero
                                findings and no carried act item. Takes no --judge-verdict,
                                --judge-plan or --spec-authority-verdict; fails closed otherwise.
+                               Requires --spec-file and --content-digest, and refuses
+                               --approvals-out, --prior-approvals, --changed-paths,
+                               --coverage-map and --carry-forward-proof.
   --head-sha <sha>             The round's current head. The verdict's headSha must
                                equal this (trim+lowercase compare) or the pass fails
                                closed.
