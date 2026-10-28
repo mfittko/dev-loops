@@ -115,7 +115,8 @@ function classifySegment(rawSegment) {
     // The label names the matched form: a python head (plain, wrapped, or at the head of a substitution), else node inline.
     // Each candidate (the head up to its first substitution, and each substitution body) must itself hit the matcher, so a python script call beside a node hit never labels python.
     const candidates = [rawSegment.split(/\$\(|`/)[0], ...[...rawSegment.matchAll(/(?:\$\(|`)([^)`]*)/g)].map((m) => m[1])];
-    const py = candidates.map((c) => /^(?:\S*\/)?python(3?)\b/.exec(stripLeadingWrappers(c.trim())) && commandContainsInlineInterpreter(c) ? /python(3?)\b/.exec(c)[1] : null).find((d) => d !== null);
+    // The digit comes from the stripped head that matched, never from a python path earlier in the raw text.
+    const py = candidates.map((c) => (/^(?:\S*\/)?python(3?)\b/.exec(stripLeadingWrappers(c.trim())) ?? [])[1]).find((d, i) => d !== undefined && commandContainsInlineInterpreter(candidates[i]));
     return { kind: "violation", tool: py === undefined ? "node inline" : `python${py}` };
   }
   const segment = stripLeadingWrappers(rawSegment);

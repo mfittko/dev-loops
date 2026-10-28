@@ -267,6 +267,7 @@ test("wrapper and substitution forms get one verdict from hook and retro paths; 
     ["cat <<'EOF'\nEOF", false], ["cat <<'EOF'\nEOF\nX=$(python3 -c x)\ncat <<'EOF'\nhi\nEOF", true], ["cat <<EOF\nEOF\nX=$(python3 -c x)", true],
     ["echo \"<<'EOF'\"", false], ["echo \"<<'EOF'\"\n$(python3 -c x)\nEOF", true], ["# <<'EOF'\n$(python3 -c x)\nEOF", true],
     ["cat <<'A'\n\"\nA\necho \"<<'EOF'\"\n$(python3 -c x)\nEOF", true],
+    ["cat <<A\n\"\nA\necho \"<<'EOF'\"\n$(python3 -c x)\nEOF", true],
     ["X=$'a\\'b' node scripts/x.mjs", false], ["X=$'\\'' $(python3 -c x) $'\\'''", true],
     ["cat <<EOF-X\n# $(python3 -c y)\nEOF-X", true], ["cat <<A <<B\nx\nA\ndon't\n$(python3 -c y)\nit's\nB", true],
   ];
@@ -287,4 +288,5 @@ test("the retro violation label names the matched form, not a python mention els
   assert.match(analyzeTranscript("node -e 1 $(python3 script.py)").violations[0], /^node inline/);
   assert.match(analyzeTranscript("X=$(python3 -c x)").violations[0], /^python3/);
   assert.match(analyzeTranscript("X=$(python -c x)").violations[0], /^python:/);
+  assert.match(analyzeTranscript("X=/opt/python/bin python3 -c x").violations[0], /^python3\b/);
 });

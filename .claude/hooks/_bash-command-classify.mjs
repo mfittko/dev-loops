@@ -1265,8 +1265,8 @@ export function commandContainsInlineInterpreter(command) {
     return out + text.slice(last);
   };
   let consumed = 0;
-  const afterQuoted = replaceUnquoted(command, /(<<-?\s*(['"])([^\s'"<>|;&()\\]+)\2[^\n]*\n)(?:[\s\S]*?\n)??[ \t]*\3(?=\)|\n|$)/g, (m) => m[1]); // body optional: an empty body closes on the first terminator line
-  const noHeredoc = replaceUnquoted(afterQuoted, /(<<-?\s*([^\s'"<>|;&()\\]+)[^\n]*\n)([\s\S]*?)(?=(?:(?<=\n)|\n)[ \t]*\2(?:\)|\n|$))/g, (m) => m[1] + m[3].replace(/['"#]/g, " "));
+  // One left-to-right pass handles both forms, so a quote character in an earlier unquoted-delimiter body never desynchronizes the quote state of a later operator.
+  const noHeredoc = replaceUnquoted(command, /(<<-?\s*(['"])([^\s'"<>|;&()\\]+)\2[^\n]*\n)(?:[\s\S]*?\n)??[ \t]*\3(?=\)|\n|$)|(<<-?\s*([^\s'"<>|;&()\\]+)[^\n]*\n)([\s\S]*?)(?=(?:(?<=\n)|\n)[ \t]*\5(?:\)|\n|$))/g, (m) => m[1] ?? m[4] + m[6].replace(/['"#]/g, " ")); // quoted: body optional, an empty body closes on the first terminator line
   // An operator with no later newline has no body to hide, so a single-line mention (quoted text, arithmetic) keeps the blanked scan. ponytail: a multi-line command that quotes `<<` still fails closed.
   const heredocOperators = (noHeredoc.match(/(?<!<)<<(?!<)(?=[^\n]*\n)/g) ?? []).length;
   // `unquoted` has the same length as `base`, so offsets found in it slice `base` (the text with quotes intact).
