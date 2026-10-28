@@ -26,7 +26,7 @@ import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } f
 import { OperatorFocusRefusal, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
 import { isFindingsLogName, resolveGateRound } from "../github/_gate-finding-surface.mjs";
 
-const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--operator-focus-file <path>] [--tmp-root <path>]
+const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--tmp-root <path>] [--operator-focus-file <path>]
 Derives the judge's work order from the round's authoritative inputs: the consolidated
 ledger (consolidate-fanin --ledger-out), the structured spec and identity stamp
 (spec-context.mjs --spec-out/--identity-out), the gate-context evidence read and the
