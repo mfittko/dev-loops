@@ -36,7 +36,7 @@ import { commentDeferredFindings, fingerprintFinding, readGateFindingsLedger } f
 import { readClosedPriorRoundLogs, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
-import { writeSealed } from "../github/_gate-artifact-seal.mjs";
+import { readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
@@ -593,7 +593,8 @@ async function stampDurableDeferTargets(enriched, options, resolvedRoot) {
   if (!(await access(logPath).then(() => true, (err) => (err?.code === "ENOENT" ? false : Promise.reject(err))))) return;
   // One validity rule for the ledger: the canonical reader rejects a malformed log. It normalizes in memory, so the raw log is re-read to stamp it.
   await readGateFindingsLedger(logPath);
-  const log = JSON.parse(await readFile(logPath, "utf8"));
+  // readSealed refuses a log edited after its sealed write, so the stamp never reseals (launders) an out-of-band edit (AC2).
+  const log = JSON.parse(await readSealed(logPath));
   let changed = false;
   for (const f of log.findings) {
     if (f?.judgeDisposition !== "defer" || f.followUpIssueNumber != null) continue;
