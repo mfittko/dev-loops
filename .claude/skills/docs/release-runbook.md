@@ -61,7 +61,8 @@ Everything after the tag is hands-off.
    DEVLOOPS_ALLOW_MAIN=1 git push origin main
    ```
 
-   **Staging the release commit.** Stage the exact release files explicitly
+   <!-- rule: RELEASE-COMMIT-EXPLICIT-STAGING -->
+   **Staging the release commit** (`RELEASE-COMMIT-EXPLICIT-STAGING`). Stage the exact release files explicitly
    (the version bump, `CHANGELOG.md`, `bun.lock`, and any regenerated
    assets) — never
    `git add -A` or `git add .`, because `DEVLOOPS_ALLOW_MAIN=1` turns the
@@ -192,7 +193,8 @@ manually. Local pre-flight (optional but recommended before pushing the tag):
 
 ## Failure modes
 
-- Release commit contains unintended content: cancel the publish run
+- <!-- rule: RELEASE-CANCEL-PUBLISH-FIRST -->
+  `RELEASE-CANCEL-PUBLISH-FIRST`: release commit contains unintended content: cancel the publish run
   **first** (the run is the irreversible step — it publishes from the tag),
   then clean up `main`, then delete and re-cut the tag:
 
@@ -221,3 +223,17 @@ manually. Local pre-flight (optional but recommended before pushing the tag):
   ```
 
   Here `<sha>` is the new CHANGELOG commit, not the original release commit.
+
+## Post-release recurring steps
+
+<!-- rule: RELEASE-POST-RELEASE-RECURRING-STEPS -->
+`RELEASE-POST-RELEASE-RECURRING-STEPS`: After every stable release, the orchestrator MUST file and drive these steps in this order before any other work in the next milestone, without waiting for the operator:
+
+1. Contract and codebase audit.
+2. Memory cleanup.
+3. Prose cleanup.
+
+Each of the three steps files its own issue in the next milestone. The orchestrator files and drives each issue. This rule is the standing explicit operator instruction for these three issues, so the AGENTS.md explicit-instruction requirement is met. The operator keeps only the tag, publish and approval decisions.
+
+<!-- rule: RELEASE-COMBINED-RETRO -->
+`RELEASE-COMBINED-RETRO`: A combined release retro runs once after a stable release, before the steps above. Its inputs are the per-merge retros, the round data and the findings logs of the release. It MUST report these metrics: active minutes, gate rounds, parks by cause and size-class approvals. Each per-merge retro checkpoint recorded as `skipped` for that release MUST name the combined retro (issue or PR link) in its `--reason`, so the skip links back to the retro that folded it.

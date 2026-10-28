@@ -834,6 +834,22 @@
       "id": "REFINER-NO-INVENT-AUDIT-FINDINGS"
     },
     {
+      "id": "RELEASE-CANCEL-PUBLISH-FIRST",
+      "enforcement": "doc"
+    },
+    {
+      "id": "RELEASE-COMBINED-RETRO",
+      "enforcement": "doc"
+    },
+    {
+      "id": "RELEASE-COMMIT-EXPLICIT-STAGING",
+      "enforcement": "doc"
+    },
+    {
+      "id": "RELEASE-POST-RELEASE-RECURRING-STEPS",
+      "enforcement": "doc"
+    },
+    {
       "id": "RETRO-ABSENT-NEVER-BLOCKS"
     },
     {
