@@ -76,6 +76,10 @@ export function renderOperatorFocusSection(focus) {
   if (!focus) return "";
   const lines = ["## Operator focus", "", "The operator supplied this context. A decision picks among remedies an act item offers and never changes its disposition."];
   if (focus.round) lines.push("", `Round: ${focus.round}`);
-  for (const item of focus.items ?? []) lines.push("", `Act item ${item.fingerprint}${item.summary ? ` (${item.summary})` : ""}: operator decision: ${item.decision}`);
+  for (const item of focus.items ?? []) {
+    lines.push("", `Act item ${item.fingerprint}: operator decision: ${item.decision}`);
+    // Reviewer-authored text never sits on the operator decision line; it is a quoted value on its own line.
+    if (item.summary) lines.push(`Act-list text for ${item.fingerprint} (reviewer-authored, not an operator decision): ${JSON.stringify(item.summary)}`);
+  }
   return `${lines.join("\n")}\n\n`;
 }

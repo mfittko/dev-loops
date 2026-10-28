@@ -302,7 +302,10 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     return 2;
   }
   const emit = (payload) => emitResult(payload, { jq: values.jq, silent: values.silent, fields: values.fields });
-  if (values["operator-focus-file"] === "") return emit({ ok: false, error: "--operator-focus-file must not be an empty value; pass a path or omit the flag" });
+  if (values["operator-focus-file"] === "") {
+    process.stderr.write(`--operator-focus-file must not be an empty value; pass a path or omit the flag\n${USAGE}\n`);
+    return 2;
+  }
   const jqSyntaxError = preflightJqFilter(values.jq);
   if (jqSyntaxError !== undefined) return jqSyntaxError;
   const tmpRoot = values["tmp-root"] ? path.resolve(cwd, values["tmp-root"]) : undefined;

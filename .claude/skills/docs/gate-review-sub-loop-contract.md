@@ -880,8 +880,10 @@ fan-in it runs the deterministic producer over the round's sources:
 dev-loops-run scripts/loop/emit-judge-work-order.mjs --repo <owner/name> --pr <N> --gate <gate> \
   --head-sha <current_head_sha> --findings-file <ledger-path> --spec-file <spec-path> \
   --identity-file <identity-path> [--prior-verdict <prior-judge-verdict-path> ...] \
-  [--round <n>] [--tmp-root <checkout>/tmp]
+  [--round <n>] [--operator-focus-file <path>] [--tmp-root <checkout>/tmp]
 ```
+
+Write the `--operator-focus-file` JSON only when the operator supplied round context for the judge (`GATE-EXEC-OPERATOR-FOCUS`).
 
 A prior head's verdict path is not derivable from the head alone, because each emission's
 `<roundId>` is random. The conductor reads it from the `workOrder.outputRefs` of
@@ -1138,7 +1140,9 @@ If the judge act list is non-empty (a round with an unjudged finding and no act 
 
 - The coordinator emits the fixer work order with `scripts/loop/emit-fixer-work-order.mjs
   --repo <owner/name> --pr <n> --head-sha <headRefOid> --phase commit_only
-  --act-list-file <judge-pass --out> --gate <gate> --harness <claude|pi|codex>` and dispatches the
+  --act-list-file <judge-pass --out> --gate <gate> --harness <claude|pi|codex>
+  [--operator-focus-file <path>]` (write that file only when the operator supplied a round note or
+  a per-item decision, `GATE-EXEC-OPERATOR-FOCUS`) and dispatches the
   printed `dispatchPayload` unchanged, on initial, resumed and replacement dispatches alike
   (ADR 0106, 0107). The act-list fix pass is `commit_only`: the later `full` emission that
   pushes and replies follows [delta mode](pre-pr-review-contract.md#delta-mode).

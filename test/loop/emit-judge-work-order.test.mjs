@@ -476,12 +476,56 @@ test("operator focus: the round renders before the required reads and is pinned;
     const plain = await emitJudgeWorkOrder({ ...sources, roundId });
     const plainText = await readFile(plain.promptPath, "utf8");
     assert.ok(!plainText.includes("Operator focus") && !("operatorFocus" in plain.workOrder));
+    // Absent focus leaves the Widening line followed directly by one blank line and the required reads.
+    assert.match(plainText, /\nWidening: [^\n]*\n\n## Required reads\n/);
     const plan = await emitJudgeWorkOrder({ ...sources, operatorFocusFile: focusFile, roundId: "j1790000000001-bbbbbbbb" });
     const text = await readFile(plan.promptPath, "utf8");
     assert.ok(text.indexOf("## Operator focus") > 0 && text.indexOf("## Operator focus") < text.indexOf("## Required reads"));
     assert.match(text, /Round: Round 8: no churn on docs lows/);
-    assert.notEqual(plan.workOrderDigest, plain.workOrderDigest);
+    // The two emits use different roundIds, so a digest inequality is vacuous; assert the pinned content.
+    assert.deepEqual(plan.workOrder.operatorFocus, { round: "Round 8: no churn on docs lows" });
     await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "f", decision: "d" }] }));
     await assert.rejects(() => emitJudgeWorkOrder({ ...sources, operatorFocusFile: focusFile, roundId: "j1790000000002-cccccccc" }), /fixer only/);
+  });
+});
+
+async function runJudgeMain(root, sources, extra) {
+  const out = [];
+  const err = [];
+  const writeOut = process.stdout.write;
+  const writeErr = process.stderr.write;
+  process.stdout.write = (chunk) => (out.push(String(chunk)), true);
+  process.stderr.write = (chunk) => (err.push(String(chunk)), true);
+  try {
+    const code = await main(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-file", sources.findingsFile,
+      "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...extra], { cwd: root });
+    return { code, stdout: out.join(""), stderr: err.join("") };
+  } finally {
+    process.stdout.write = writeOut;
+    process.stderr.write = writeErr;
+  }
+}
+
+test("operator focus CLI: an empty --operator-focus-file is a usage error (exit 2, stderr USAGE)", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const { code, stdout, stderr } = await runJudgeMain(root, sources, ["--operator-focus-file", ""]);
+    assert.equal(code, 2);
+    assert.equal(stdout, "");
+    assert.match(stderr, /--operator-focus-file must not be an empty value/);
+    assert.match(stderr, /Usage/);
+  });
+});
+
+test("operator focus CLI: a refusing focus file (items on the judge) exits 1 with a GATE-EXEC-OPERATOR-FOCUS error", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const focusFile = path.join(root, "focus.json");
+    await writeFile(focusFile, JSON.stringify({ items: [{ fingerprint: "f", decision: "d" }] }));
+    const { code, stdout } = await runJudgeMain(root, sources, ["--operator-focus-file", focusFile]);
+    const body = JSON.parse(stdout);
+    assert.equal(code, 1);
+    assert.equal(body.ok, false);
+    assert.match(body.error, /^GATE-EXEC-OPERATOR-FOCUS:/);
   });
 });

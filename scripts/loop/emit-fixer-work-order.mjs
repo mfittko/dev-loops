@@ -348,7 +348,7 @@ export async function emitFixerWorkOrder({
     throw new Refusal(`act list ${actListFile} has an act item (${JSON.stringify(badFingerprint.summary)}) whose fingerprint is ${badFingerprint.fingerprint === undefined ? "missing" : "not the canonical fingerprintFinding value"}; re-run judge-pass to regenerate it`);
   }
   const operatorFocusRaw = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined, { allowItems: true });
-  if (operatorFocusRaw?.items && !actListFile) throw new OperatorFocusRefusal("operator focus items need an --act-list-file source; a threads source accepts a round only");
+  if (operatorFocusRaw?.items && !actListFile) throw new OperatorFocusRefusal("GATE-EXEC-OPERATOR-FOCUS: operator focus items need an --act-list-file source; a threads source accepts a round only");
   const operatorFocus = actListFile ? bindOperatorFocusItems(operatorFocusRaw, source.parsed) : operatorFocusRaw;
   if (threadsFile && (source.parsed?.ok !== true || !Array.isArray(source.parsed.threads) || source.parsed.repo !== repo || Number(source.parsed.pr) !== Number(pr)
     || !source.parsed.threads.every((thread) => thread?.isResolved === false))) {
@@ -680,7 +680,10 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   if (jqSyntaxError !== undefined) return jqSyntaxError;
   if (values["tmp-root"]) assertTmpRootOutsideLinkedWorktree(path.resolve(cwd, values["tmp-root"]), resolveRepoRoot(cwd));
   const emit = (payload) => emitResult(payload, { jq: values.jq, silent: values.silent, fields: values.fields });
-  if (values["operator-focus-file"] === "") return emit({ ok: false, error: "--operator-focus-file must not be an empty value; pass a path or omit the flag" });
+  if (values["operator-focus-file"] === "") {
+    process.stderr.write(`--operator-focus-file must not be an empty value; pass a path or omit the flag\n${USAGE}\n`);
+    return 2;
+  }
   try {
     fixerDispatchAdapter(values.harness); // refuse an unknown harness before emitting
     const plan = await emitFixerWorkOrder({
