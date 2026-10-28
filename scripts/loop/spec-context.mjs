@@ -37,6 +37,7 @@ import { captureChangedFilesBetween } from "../lib/git-delta.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveTrackerLocalSpec } from "../github/resolve-tracker-local-spec.mjs";
 import { viewPr } from "../github/view-pr.mjs";
+import { SLICE_LINKAGE_SENTENCE, hasReopenLine } from "./_slice-linkage.mjs";
 
 const USAGE = `Usage:
   spec-context.mjs --repo <owner/name> (--issue <number> | --pr <number> | --body-file <path>) --content-file <path> [--head-sha <sha>] [--spec-out <path>] [--identity-out <path>]
@@ -297,6 +298,7 @@ export async function specContextExtract(
     contentDigest,
     criterionIds,
     ...(options.headSha !== undefined ? { headSha: options.headSha } : {}),
+    ...(hasReopenLine(spec.nonGoals) ? { sliceLinkage: SLICE_LINKAGE_SENTENCE } : {}),
   };
   if (options.specOut !== undefined) {
     const specPath = path.resolve(repoRoot, options.specOut);

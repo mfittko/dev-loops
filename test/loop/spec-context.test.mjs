@@ -684,3 +684,10 @@ test("--body-file is mutually exclusive with --issue and --pr, and an unreadable
   assert.equal(parseSpecContextCliArgs([...base, "--body-file", "b.md"]).bodyFile, "b.md");
   await assert.rejects(extractBodyFile("x", { bodyFile: "./missing.md" }), /Cannot read --body-file/);
 });
+
+test("--body-file states the slice-linkage rule only when a Non-goals reopen line is present", async () => {
+  const slice = await extractBodyFile("Closes #7\n## Acceptance criteria\n- [ ] a\n## Definition of done\n- [ ] d\n## Non-goals\n- Reopen #7 after the merge; later slices follow.\n");
+  assert.match(slice.sliceLinkage, /SPEC-SLICE-PR-KEEPS-CLOSING-REF: a slice PR keeps its closing reference/);
+  const plain = await extractBodyFile("Closes #7\n## Acceptance criteria\n- [ ] a\n## Definition of done\n- [ ] d\n## Non-goals\n- no build changes\n");
+  assert.equal(plain.sliceLinkage, undefined);
+});

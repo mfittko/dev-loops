@@ -41,6 +41,7 @@ import { resolveFindingsInput } from "../github/_findings-input.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { rejectClosingRefRemoval } from "./_slice-linkage.mjs";
 import { locateJudgeUnit, renderWorkOrder } from "./emit-judge-work-order.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import {
@@ -972,6 +973,14 @@ export async function judgePassCli(
   );
   const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
   const result = runJudgePass(findings, judgeVerdict, options.headSha, { pastCap: lowFixCapped, round });
+
+  if (options.specFile !== undefined) {
+    const { nonGoals } = await readJsonArtifact(path.resolve(resolvedRoot, options.specFile), "--spec-file", parseError);
+    if (rejectClosingRefRemoval(result.enriched, nonGoals) > 0) {
+      result.act = result.enriched.filter(isOpenActItem);
+      result.counts = countByDisposition(result.enriched);
+    }
+  }
 
   // Immutable spec-authority gate (opt-in via --spec-file). A spec_cannot_decide
   // outcome fails closed here so the loop stops at the human-spec-decision state

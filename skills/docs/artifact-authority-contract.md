@@ -208,6 +208,8 @@ The shipped extension layer pairs local-first with a low-noise posture, in `pack
 
 `BUILT_IN_DEFAULTS` keeps the tracker-first values (`humanMergeOnly: false`, `maxAutoFiledIssues: 10`); the extension layer sets the local-first values above. A repo `.devloops` can override any of them.
 
+`SPEC-SLICE-PR-KEEPS-CLOSING-REF`: A slice PR MUST keep its closing reference (`Closes #N`) and carry a Non-goals line that reopens the issue after the merge. Changing `Closes` to `Refs` is never an act remedy for a slice PR, because a `Refs`-only slice PR has no spec authority. The spec context states this rule for a PR whose Non-goals hold a reopen line (`sliceLinkage`). `judge-pass.mjs` coerces an `act` disposition whose remedy removes the PR's only closing reference to `reject`, and names this rule ID in `judgeReason`.
+
 ## dev-loops own mode
 
 dev-loops runs **local-planning**: its repo-root `.devloops` sets `strategy: local-first` and `inputSource: tracker`. With `inputSource: tracker`, a local-first session implements from a supplied GitHub issue body (the issue is the spec source for that run); `phase-docs` switches the source to a committed plan file.

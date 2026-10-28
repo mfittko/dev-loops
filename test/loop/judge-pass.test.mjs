@@ -13,6 +13,7 @@ import {
   validateCliArgs,
 } from "../../scripts/loop/judge-pass.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { rejectClosingRefRemoval } from "../../scripts/loop/_slice-linkage.mjs";
 import { readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { resolveDraftRoundCap } from "../../scripts/github/write-gate-context.mjs";
 import { dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
@@ -2131,4 +2132,17 @@ test("judgePassCli keeps the uncovered-finding code in the refusal message", asy
     clusterVerdictRun([]),
     (e) => /\[spec_authority_uncovered_finding\]/.test(e.message) && e.code === "spec_authority_uncovered_finding",
   );
+});
+
+test("a judge act that swaps Closes for Refs on a slice PR is coerced to reject naming SPEC-SLICE-PR-KEEPS-CLOSING-REF", () => {
+  const closesToRefs = { ...finding({ summary: "AC unmet" }), judgeDisposition: "act", judgeFix: "Replace `Closes #10` with `Refs #10` in the PR body." };
+  const realFix = { ...finding({ summary: "bug" }), judgeDisposition: "act", judgeFix: "Guard the null branch." };
+  const slice = [closesToRefs, realFix];
+  assert.equal(rejectClosingRefRemoval(slice, ["Closing the issue: Reopen #10 after the merge; later slices follow."]), 1);
+  assert.equal(closesToRefs.judgeDisposition, "reject");
+  assert.match(closesToRefs.judgeReason, /SPEC-SLICE-PR-KEEPS-CLOSING-REF/);
+  assert.equal(realFix.judgeDisposition, "act");
+  const noReopen = { ...finding(), judgeDisposition: "act", judgeFix: "Replace `Closes #10` with `Refs #10`." };
+  assert.equal(rejectClosingRefRemoval([noReopen], ["no build changes"]), 0);
+  assert.equal(noReopen.judgeDisposition, "act");
 });
