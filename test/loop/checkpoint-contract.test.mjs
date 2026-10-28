@@ -79,7 +79,7 @@ test("checkpoint-contract CLI writes checkpoint file", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "checkpoint-contract-test-"));
   try {
     await mkdir(path.join(tempDir, "tmp", "retro"), { recursive: true });
-    await writeFile(path.join(tempDir, "tmp", "retro", "transcript.jsonl"), "tool-call record line\n", "utf8");
+    await writeFile(path.join(tempDir, "tmp", "retro", "transcript.jsonl"), `tool-call record ${VALID_SHA}\n`, "utf8");
     const { code, stdout, stderr } = await runNode(
       [
         "--state", "complete", "--notes", "Retrospective documented after merge",
@@ -346,6 +346,30 @@ test("checkpoint-contract CLI rejects a --record-source that does not resolve to
   });
 });
 
+test("checkpoint-contract CLI refuses a present record that does not name the merge commit (retro_artifact_missing)", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    await mkdir(path.join(cwd, "tmp", "retro"), { recursive: true });
+    await writeFile(path.join(cwd, "tmp", "retro", "unrelated.md"), "a retro for some other cycle\n", "utf8");
+    const { code, stderr } = await runNode(
+      ["--state", "complete", "--notes", "ok", "--retro-context", "fresh", "--record-source", "tmp/retro/unrelated.md", "--repo", "mfittko/dev-loops", "--pr", "5", "--merge-commit", VALID_SHA],
+      { cwd },
+    );
+    assert.equal(code, 1);
+    assert.match(JSON.parse(stderr).error, /retro_artifact_missing.*unrelated\.md.*does not contain.*abcdef/);
+  });
+});
+
+test("checkpoint-contract CLI refuses a nonexistent --record-source with retro_artifact_missing", async () => {
+  await withIsolatedCwd(async (cwd) => {
+    const { code, stderr } = await runNode(
+      ["--state", "complete", "--notes", "ok", "--retro-context", "fresh", "--record-source", "tmp/retro/nope.md", "--repo", "mfittko/dev-loops", "--pr", "5", "--merge-commit", VALID_SHA],
+      { cwd },
+    );
+    assert.equal(code, 1);
+    assert.match(JSON.parse(stderr).error, /retro_artifact_missing.*nope\.md/);
+  });
+});
+
 test("checkpoint-contract CLI rejects --state complete without --retro-context", async () => {
   await withIsolatedCwd(async (cwd) => {
     const { code, stderr } = await runNode(
@@ -514,5 +538,20 @@ test("checkpoint-contract CLI writes to the MAIN checkout when invoked from a li
     try { execFileSync("git", ["worktree", "remove", "--force", worktreeDir], { cwd: mainDir, stdio: "ignore" }); } catch { /* best-effort */ }
     await rm(mainDir, { recursive: true, force: true });
     await rm(worktreeParent, { recursive: true, force: true });
+  }
+});
+
+test("checkpoint-contract CLI matches the merge commit in the record case-insensitively", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "checkpoint-contract-case-"));
+  try {
+    await mkdir(path.join(cwd, "tmp", "retro"), { recursive: true });
+    await writeFile(path.join(cwd, "tmp", "retro", "record.md"), `merge ${VALID_SHA}\n`, "utf8");
+    const { code, stderr } = await runNode(
+      ["--state", "complete", "--notes", "ok", "--retro-context", "fresh", "--record-source", "tmp/retro/record.md", "--repo", "mfittko/dev-loops", "--pr", "5", "--merge-commit", VALID_SHA.toUpperCase()],
+      { cwd },
+    );
+    assert.equal(code, 0, stderr);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
   }
 });

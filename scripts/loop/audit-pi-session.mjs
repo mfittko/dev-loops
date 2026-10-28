@@ -119,8 +119,9 @@ export async function runAuditCli(
   }
 
   let result;
+  let targetPath;
   try {
-    let targetPath = options.sessionPath;
+    targetPath = options.sessionPath;
 
     if (!targetPath) {
       const latest = findLatestSession(undefined, cwd);

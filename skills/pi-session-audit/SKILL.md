@@ -41,6 +41,10 @@ node scripts/loop/audit-pi-session.mjs --latest --jq '.sessions[] | select(.snow
 node scripts/loop/audit-pi-session.mjs --harness claude path/to/claude-transcripts --json
 ```
 
+## Granularity and output limit
+
+Audit one transcript at a time. The `dev-loops` wrapper buffers a routed subcommand's output up to 64 MiB. When output exceeds that buffer, the wrapper reports `child_output_too_large` (exit 1, no partial stdout, message naming the limit). Narrow the output with `--jq` or `--fields`, or audit each transcript file separately. Any other spawn failure reports `subcommand_spawn_failed` with the error code.
+
 ## Pi vs Claude Code
 
 Harness auto-detects per record from the usage envelope's field-naming shape (Claude's
