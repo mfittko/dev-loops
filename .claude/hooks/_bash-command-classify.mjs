@@ -1162,6 +1162,7 @@ const isStdinScriptToken = (t) => t === "-" || t.startsWith("<<") || (t.startsWi
 const REDIRECTION_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)/;
 const REDIRECTION_OPERATOR_ONLY_RE = /^(?:\d*(?:>>?|<|>&)|&>>?)$/;
 const redirectionSkip = (t) => (!t.includes("<<") && REDIRECTION_RE.test(t) ? (REDIRECTION_OPERATOR_ONLY_RE.test(t) ? 2 : 1) : 0);
+const QUOTE_AWARE_TOKEN_RE = /(?:[^\s'"]|'[^']*'|"[^"]*")+/g;
 const SCRIPT_EXT_RE = /\.(?:[cm]?js|[cm]?ts)$/;
 // Closed allow-list of known boolean node flags: the token after one is the script, not a value. Any unlisted `--flag` is treated as value-taking (the refusing direction), so a new value-taking flag can never slip through as boolean.
 const NODE_BOOLEAN_FLAGS = new Set(["--no-warnings", "--no-deprecation", "--trace-warnings", "--trace-deprecation", "--trace-uncaught", "--enable-source-maps", "--experimental-vm-modules", "--experimental-strip-types", "--experimental-transform-types", "--experimental-detect-module", "--experimental-require-module", "--experimental-websocket", "--experimental-sqlite", "--experimental-permission", "--permission", "--watch", "--expose-gc", "--abort-on-uncaught-exception", "--pending-deprecation", "--throw-deprecation", "--no-experimental-fetch"]);
@@ -1178,7 +1179,7 @@ export function commandContainsInlineInterpreter(command) {
     const s = segment.trim();
     if (interpreterRegex("node").test(s)) {
       const code = s.replace(interpreterRegex("node"), "").trim();
-      const tokens = code.split(/\s+/).filter(Boolean);
+      const tokens = code.match(QUOTE_AWARE_TOKEN_RE) ?? []; // quote-aware: a quoted option value with spaces stays one token
       // ponytail: closed list of value flags. an unlisted `--long value` flag fails closed: a non-flag token that follows a `--flag` (not `--`, no `=`) is skipped as its value and the scan continues, unless it ends in a script extension (.js/.mjs/.cjs/.ts/.mts/.cts) and so is the script. A relative path-like token (starts with `.` or has a non-leading `/`) is the script, not a value. Path-valued flags (--report-dir, --diagnostic-dir, --cpu-prof-dir, ...) are on the closed list so a relative value is skipped. Ceiling: a relative path value after an UNLISTED path-valued long flag is read as the script (fail-open); a bare extensionless name or absolute path after a boolean long flag is still read as a value.
       // Node value-taking flags (short + long) each consume the following token. Consuming them lets
       // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
@@ -1203,7 +1204,7 @@ export function commandContainsInlineInterpreter(command) {
     }
     if (interpreterRegex("python3?").test(s)) {
       const code = s.replace(interpreterRegex("python3?"), "").trim();
-      const tokens = code.split(/\s+/).filter(Boolean);
+      const tokens = code.match(QUOTE_AWARE_TOKEN_RE) ?? []; // quote-aware: a quoted option value with spaces stays one token
       const PYTHON_VALUE_FLAGS = new Set(["-W", "-X", "--check-hash-based-pycs"]);
       for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
@@ -1216,7 +1217,7 @@ export function commandContainsInlineInterpreter(command) {
       }
     }
     if (interpreterRegex("bun").test(s)) {
-      const tokens = s.replace(interpreterRegex("bun"), "").trim().match(/(?:[^\s'"]|'[^']*'|"[^"]*")+/g) ?? []; // quote-aware: a quoted option value with spaces stays one token
+      const tokens = s.replace(interpreterRegex("bun"), "").trim().match(QUOTE_AWARE_TOKEN_RE) ?? [];
       const BUN_VALUE_FLAGS = new Set(["--cwd", "--env-file", "-r", "--preload", "--require", "--import", "-c", "--config", "--tsconfig-override", "--define", "-d", "--loader", "-l", "--port", "--conditions"]);
       const BUN_BOOLEAN_FLAGS = new Set(["--silent", "--bun", "--watch", "--hot", "--smol", "--no-install", "--if-present", "--no-clear-screen"]); // the token after one is the script/subcommand, not a value
       for (let i = 0; i < tokens.length; i++) {
