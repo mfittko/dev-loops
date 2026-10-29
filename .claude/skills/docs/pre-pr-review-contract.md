@@ -165,22 +165,25 @@ fixer and owns the push. The sequence is:
    commits the fix, writes the site coverage record to the work order's outputRef
    (`PRE-PUSH-DELTA-RESIDUE`), and hands back the commit SHA unpushed. The
    coordinator passes that record to the check with `--site-coverage` and the emission's
-   canonical `--fixer-plan`. Both flags are mandatory for ACT coordinator input and
-   result recording; omission of either or both refuses. Every fixer emission
+   canonical `--fixer-plan` on both ACT and THREAD routes, including a no-commit
+   handback. Both flags are mandatory for ACT coordinator input and result recording;
+   omission of either or both refuses. Every fixer emission
    in delta mode uses the PR head (`headRefOid`), never the local candidate
    head, because the emitter pins the GitHub PR head and the local fix commits
    descend from it.
 2. The dev-loop coordinator builds the reviewer input with `check-pre-push-delta.mjs`
-   (plus the ACT-only flags above on the act-list route). On that route it requires
+   with both flags above on either route. On the ACT route it requires
    `--findings-log <the reviewed gate round's findings log>`; the thread route takes no
    `--findings-log`. It passes `--pr-head <the full PR head SHA just read from GitHub>` to
-   the check and dispatches one fresh delta reviewer for the current worktree head,
+   the check. Handle authenticated `no_commit` or `head_moved` outcomes first:
+   the matching sequence is closed and `nextStep: push_to_gate` routes to the full
+   gate path, with open-thread admission still separate. Dispatch no delta reviewer
+   and emit no `full` fixer for these closure outcomes. Otherwise dispatch one fresh delta reviewer for the current worktree head,
    briefing it that it MUST NOT push (`PRE-PUSH-DELTA-PUSH-AUTHORITY`); the brief also names `input.patchPath` and `input.evidenceRule`.
 3. The coordinator runs the CLI `--result` check (no `--findings-log`; only the input run
-   reads it), and follows its `nextStep`. The ACT route again passes `--fixer-plan`
+   reads it), and follows its `nextStep`. Both routes again pass `--fixer-plan`
    and `--site-coverage`. The THREAD route retains `--threads-file`, `--repo`,
-   `--pr`, `--baseline`, `--result` and `--invocation`, without the ACT-only
-   `--fixer-plan` or `--site-coverage` flags. On `nextStep: fix_and_rereview`,
+   `--pr`, `--baseline`, `--result` and `--invocation`; its result still carries no ACT binding. On `nextStep: fix_and_rereview`,
    it dispatches a fresh fixer again, commit-only, and returns to step 2. It
    emits a new work order with `--delta-result <result>` at the PR head.
    That fixer receives the delta result's `not_resolved` and `cannot_verify` act
@@ -210,7 +213,9 @@ fixer and owns the push. The sequence is:
    `--delta-result` flag stays refused for thread sources), so this residual-thread
    rule applies to thread sources through that read.
 
-   A round in which the `commit_only` fixer makes no commit has no unpushed fix, so no delta review runs and no record is
+   A round in which the `commit_only` fixer makes no commit writes a minimal baseline-headed
+   handback at its outputRef. The coordinator still runs step 2 with the plan and handback
+   to authenticate `no_commit` closure. No delta reviewer runs and no delta decision record is
    written (`PRE-PUSH-DELTA-TRIGGER`), and `--phase full` stays refused. The coordinator then posts each declined or deferred
    thread reply directly with `reply-resolve-review-thread.mjs --disposition rejected|deferred` at the unchanged head. That
    helper refuses only a `fixed` reply, so no full-phase refusal is bypassed. The fixer's `handbackCheck` does not apply to a

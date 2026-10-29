@@ -75,7 +75,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --pr-head <sha>         The PR head just read from GitHub; the check fails closed when it differs from --baseline
   --spec-identity <id>    Current spec identity passed to the reviewer (required without --result)
   --site-coverage <path>  The fixer's commit_only handback { headSha, siteCoverage: [...] } (the work order's outputRef)
-  --fixer-plan <path>     Canonical current pulled commit_only plan; both flags required for ACT input/result
+  --fixer-plan <path>     Canonical current pulled commit_only plan; pair with --site-coverage for ACT/THREAD closure (required for ACT input/result)
   --findings-log <path>   Required on the act-list route, input mode: the reviewed gate round's findings log (its headSha must equal --baseline);
                           its provenance.perAngle angles join the surface hints (PRE-PUSH-DELTA-INPUT). Refused with --threads-file.
   --handback              The fixer handbackCheck run: waives the --findings-log requirement (it validates --site-coverage, no reviewer input is used)
@@ -362,7 +362,7 @@ export async function runCli(
       throw new Error(`worktree HEAD ${currentHead} differs from the baseline ${sequence.reviewBaselineHead} but the ${options.threadsFile ? "thread" : "act"} list has no items: the delta review has nothing to check, and the sequence marker stays until the fix commit is pushed or the marker is deleted`);
     }
     // PRE-PUSH-DELTA-PUSH-AUTHORITY: the commit_only round ended without a fix commit, so its marker guards nothing and would only block later pushes.
-    if (!options.fixerPlan) throw new Error(`worktree HEAD ${currentHead} equals the baseline: pass the current pulled --fixer-plan and --site-coverage to close its sequence`);
+    if (!(options.fixerPlan && options.siteCoverage && !options.result && !options.handback)) throw new Error(`worktree HEAD ${currentHead} equals the baseline: pass the current pulled --fixer-plan and --site-coverage in input-only mode to close its sequence`);
   }
   // The fixer's commit_only handback. Without it every act item with a site query reports a coverage gap.
   const result = options.result ? JSON.parse(readFileSync(options.result, "utf8")) : null;
@@ -373,6 +373,7 @@ export async function runCli(
     const raw = JSON.parse(reportBytes);
     const record = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
     if (options.fixerPlan && !options.result && !options.handback && (!fixCommitted || record.headSha !== currentHead)) {
+      if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(raw.headSha)) throw new Error("sequence closure requires a canonical full commit SHA in the handback");
       const planBytes = readFileSync(options.fixerPlan);
       await authenticateCoverage(options, sequence, raw.headSha, raw, reportBytes, { candidateHead: raw.headSha }, isAncestor);
       const root = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);

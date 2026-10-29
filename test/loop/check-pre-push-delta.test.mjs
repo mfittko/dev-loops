@@ -331,6 +331,31 @@ test("the baseline resolves to a full SHA, and authenticated HEAD equal to basel
   assert.equal((await runCli(args, resolve(full))).outcome, "no_commit");
 });
 
+test("baseline equality refuses invocations that cannot authenticate input-only closure", async () => {
+  const { threadsFile } = threadsFixture();
+  const { result } = fixture();
+  for (const extra of [[], ["--fixer-plan", "missing.json"], ["--fixer-plan", "missing.json", "--site-coverage", "missing.json", "--result", result, "--invocation", "1"]]) {
+    const seam = headAt(A);
+    const marker = writeSequenceMarker({ tmpRoot: seam.tmpRoot, baselineHead: A, branch: "issue-1" });
+    await assert.rejects(runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", A, "--spec-identity", "s", ...extra], seam), /equals the baseline/);
+    assert.equal(fs.existsSync(marker), true);
+    assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`)), false);
+    assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}-${A}.patch`)), false);
+  }
+});
+
+test("symbolic and abbreviated handback heads cannot close a genuine fixer sequence", async () => {
+  for (const headSha of ["HEAD", B.slice(0, 7)]) {
+    const { dir, actList } = fixture();
+    const coverage = path.join(dir, "coverage.json");
+    fs.writeFileSync(coverage, JSON.stringify({ headSha, siteCoverage: [] }));
+    const seam = headAt(B);
+    const marker = writeSequenceMarker({ tmpRoot: seam.tmpRoot, baselineHead: A, branch: "issue-1" });
+    await assert.rejects(runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "s", "--findings-log", logFor(A), "--site-coverage", coverage], seam), /canonical full commit SHA/);
+    assert.equal(fs.existsSync(marker), true);
+  }
+});
+
 test("an authenticated commit_only round without a fix commit clears its sequence marker", async () => {
   const { actList } = fixture();
   const full = A;
