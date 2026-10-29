@@ -182,7 +182,7 @@ guard above (reported separately, as `commitMsgGuard` in the result, since it
 guards message CONTENT rather than a branch). It enforces the commit-message
 contract at commit time instead of leaving it to agent discipline:
 
-- A Claude-authored commit (`CLAUDECODE=1` without `OMPCODE=1`) carries
+- A Claude-authored commit (`CLAUDECODE=1` without `OMPCODE=1` or a non-empty `CODEX_THREAD_ID`) carries
   `Co-Authored-By: Claude <model> <noreply@anthropic.com>` in every
   repository, and carries a `Claude-Session:` trailer only when the
   repository opts in (the key bullet below). omp sets `OMPCODE=1` alongside
@@ -192,9 +192,8 @@ contract at commit time instead of leaving it to agent discipline:
   carries `Co-Authored-By: Codex <model> <noreply@openai.com>` instead of
   the Claude trailers. A Claude Code session started from a Codex shell
   inherits `CODEX_THREAD_ID`, a known limitation (the waiver line applies).
-  Plain human
-  commits are also exempt from the Claude-specific trailers. All commits
-  still undergo the subject and issue-reference checks below.
+  Plain human commits are also exempt from the Claude-specific trailers. All
+  commits still undergo the subject and issue-reference checks below.
 - The key `worktree.commitMsgGuard.requireClaudeSession` opts a repository in
   to the `Claude-Session:` check. Its default is `false`. The value is read
   only from the `.devloops` family (`.devloops`, `.devloops.yaml`,

@@ -117,6 +117,20 @@ test("a Codex marker outranks inherited CLAUDECODE and requires only the Codex t
   });
 });
 
+test("a standalone Codex commit (no CLAUDECODE) requires the Codex trailer; a blank marker is not Codex", async () => {
+  await withHook({}, (dir) => {
+    const env = { CODEX_THREAD_ID: "t" };
+    const bare = commitAttempt(dir, "fix(gate): xx", env);
+    assert.equal(bare.blocked, true);
+    assert.match(bare.stderr, /Co-Authored-By: Codex <model> <noreply@openai\.com>/);
+    assert.equal(commitAttempt(dir, "fix(gate): xx\n\nCo-Authored-By: Codex gpt-5 <noreply@openai.com>", env).blocked, false);
+    assert.equal(commitAttempt(dir, "fix(gate): xx", { CODEX_THREAD_ID: " " }).blocked, false);
+    const padded = commitAttempt(dir, "fix(gate): xx", { CODEX_THREAD_ID: " t " });
+    assert.equal(padded.blocked, true);
+    assert.match(padded.stderr, /Co-Authored-By: Codex/);
+  });
+});
+
 test("CLAUDECODE without a Codex marker still requires Claude trailers; OMPCODE skips both", async () => {
   await withHook({}, (dir) => {
     const result = commitAttempt(dir, "fix(gate): do the thing", { CLAUDECODE: "1" });
