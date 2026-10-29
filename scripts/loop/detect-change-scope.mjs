@@ -7,7 +7,8 @@ import { DIFF_ISOLATION_FLAGS, gitEnvWithoutDirOverrides } from "../github/write
 import { isScopeCountExcluded } from "@dev-loops/core/config";
 
 const USAGE = `Usage: detect-change-scope.mjs [--base <ref>] [--head <ref>]
-Detect change scope from git diff for light-mode eligibility.
+Detect change scope from git diff. The raw counts and eligibleForLightMode are informational;
+startup and gate dispatch decide light-mode eligibility through lightModeCapState.
 filesChanged/linesChanged skip SCOPE_COUNT_EXCLUDE_GLOBS paths (changes/*.md,
 .claude/{skills,agents,commands}/**); see ADR 0108.
 Options:
@@ -130,13 +131,13 @@ function detectMergeBaseChangedFiles({ base, head, cwd } = {}) {
   try {
     output = execFileSync(
       "git",
-      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", "--no-renames", `${base}...${head}`],
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", "-z", "--no-renames", `${base}...${head}`],
       { encoding: "utf8", maxBuffer: 10_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() },
     );
   } catch (err) {
     return { ok: false, files: null, error: err instanceof Error ? err.message : String(err) };
   }
-  const files = output.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  const files = output.split("\0").filter((l) => l.length > 0);
   return { ok: true, files };
 }
 async function main() {
@@ -175,4 +176,19 @@ if (isDirectRun) {
     process.exitCode = 1;
   });
 }
-export { detectScope, detectMergeBaseChangedFiles, isEligibleForLightMode };
+// Changed paths from `base` to the working tree (committed plus uncommitted), isolated like the merge-base reader.
+function detectWorkingTreeChangedFiles({ base, cwd } = {}) {
+  let output;
+  try {
+    output = execFileSync(
+      "git",
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", "-z", "--no-renames", base],
+      { encoding: "utf8", maxBuffer: 10_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() },
+    );
+  } catch (err) {
+    return { ok: false, files: null, error: err instanceof Error ? err.message : String(err) };
+  }
+  return { ok: true, files: output.split("\0").filter((l) => l.length > 0) };
+}
+
+export { detectScope, detectMergeBaseChangedFiles, detectWorkingTreeChangedFiles, isEligibleForLightMode };
