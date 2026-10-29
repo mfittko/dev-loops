@@ -466,7 +466,7 @@ test("a converged post on a cap-fixed PR is still refused when coordination forb
     try {
       const { result, error } = await post(tempDir, { findings, converged: convergedInput(findings), root: capOnRoot, runChildOptions: { prState: "CLOSED" } });
       assert.equal(result, undefined);
-      assert.match(error, /closed|CLOSED|refus|Cannot/i, error);
+      assert.match(error, /^Cannot enter draft_gate on owner\/repo#17: .*(closed|CLOSED)/i, error);
     } finally {
       await rm(dir, { recursive: true, force: true });
       await rm(path.join(capOnRoot, "tmp", "gate-delta"), { recursive: true, force: true });

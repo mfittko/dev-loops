@@ -51,6 +51,8 @@ import { STATE, DISPOSITION } from "@dev-loops/core/loop/copilot-loop-state";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
+import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { consolidateGateFanin } from "../../scripts/loop/consolidate-fanin.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
@@ -4778,10 +4780,21 @@ test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate f
   const headSha = "abc1234";
   const finding = (round, isResolved) => ({ id: `t${round}${isResolved}`, isResolved, comments: { nodes: [{ body: `<!-- dev-loops:finding 0123456789abcdef severity=low angle=scope round=${round} -->` }] } });
   const verdict = (gate, head, v) => ["Gate review: " + gate, `Reviewed head SHA: ${head}`, `Verdict: ${v}`, "Findings summary: x", "Next action: y"].join("\n");
-  const run = async ({ round, threads, preHead }) => {
+  const run = async ({ round, rounds = [round], cap, threads, preHead, seedProof = false, baseRefName }) => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-capfixed-"));
     try {
-      await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+      await writeFile(path.join(tempDir, ".devloops"), `version: 1\ngates:\n  requireFanoutEvidence: false\n${cap === undefined ? "" : `  draft:\n    maxReviewRounds: ${cap}\n`}`, "utf8");
+      if (seedProof) {
+        // Four closed cap-round ledgers plus a sealed clearing record bound to the cap-round head (GATE-EXEC-ROUND-CAP).
+        const dir = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-17");
+        await mkdir(dir, { recursive: true });
+        const items = [{ severity: "low", angle: "correctness", summary: "low finding", judgeDisposition: "act", judgeRationale: "r" }];
+        const capHead = "a".repeat(40);
+        for (const [i, sha] of ["1", "2", "3"].map((c) => c.repeat(40)).concat(capHead).entries()) {
+          await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: sha === capHead ? items : [] }), "utf8");
+        }
+        writeGateDeltaRecord({ tmpRoot: path.join(tempDir, "tmp"), sequence: { reviewBaselineHead: capHead, actSetId: "0123456789abcdef" }, candidateHead: "b".repeat(40), invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: items.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) } });
+      }
       const env = await writeGhStub(tempDir, [
         { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `{"headRefOid":"${headSha}"}\n` },
         { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: `${JSON.stringify([
@@ -4789,11 +4802,11 @@ test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate f
           { id: 2, body: renderGateReviewCommentBody({ gate: "pre_approval_gate", headSha: preHead, repo: "owner/repo", verdict: "clean", findingsSummary: "x", nextAction: "y", sizeOutcome: "pass", sizeTouchesT1: false, sizeWaiverGranted: false }), updated_at: "2026-05-29T22:00:00Z" },
         ])}\n` },
         { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: `${JSON.stringify([
-          { id: 900, body: `Gate findings\n<!-- dev-loops:gate-findings-review draft_gate bcd5678 round=${round} -->`, submitted_at: "2026-05-29T20:00:00Z" },
+          ...rounds.map((r, i) => ({ id: 900 + i, body: `Gate findings\n<!-- dev-loops:gate-findings-review draft_gate bcd5678 round=${r} -->`, submitted_at: `2026-05-29T20:0${i}:00Z` })),
         ])}\n` },
         { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: threads } } } } }) + "\n" },
       ]);
-      const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+      const result = await runNode(["--repo", "owner/repo", "--pr", "17", ...(baseRefName ? ["--base-ref-name", baseRefName] : [])], { env, cwd: tempDir });
       return JSON.parse(result.code === 0 ? result.stdout : result.stderr).evidenceState;
     } finally {
       await rm(tempDir, { recursive: true, force: true });
@@ -4803,4 +4816,13 @@ test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate f
   assert.equal(await run({ round: 4, threads: [finding(4, false)], preHead: headSha }), "violation", "unresolved cap-round thread");
   assert.equal(await run({ round: 3, threads: [finding(3, true)], preHead: headSha }), "violation", "round below the cap");
   assert.notEqual(await run({ round: 4, threads: [finding(4, true)], preHead: "old5678" }), "satisfied", "stale pre_approval head");
-});
+  // The cap round marker is found even when a later post-cap header exists (the PR 2976 shape).
+  assert.equal(await run({ rounds: [4, 5], threads: [finding(4, true)], preHead: headSha }), "satisfied", "round=4 and round=5 headers");
+  assert.equal(await run({ rounds: [4, 5], threads: [finding(4, false)], preHead: headSha }), "violation", "round=4 and round=5 headers, unresolved cap-round thread");
+  assert.equal(await run({ rounds: [3, 2], threads: [finding(3, true)], preHead: headSha }), "violation", "only headers below the cap");
+  assert.equal(await run({ rounds: [], threads: [], preHead: headSha }), "violation", "no draft_gate header");
+  assert.equal(await run({ round: 4, cap: 0, threads: [finding(4, true)], preHead: headSha }), "violation", "cap of 0 is no cap round");
+  // --base-ref-name wires resolveCapRoundFixed: a sealed clearing record passes with the flag and not without it.
+  assert.equal(await run({ rounds: [], threads: [], preHead: headSha, seedProof: true, baseRefName: "main" }), "satisfied", "sealed proof with --base-ref-name");
+  assert.equal(await run({ rounds: [], threads: [], preHead: headSha, seedProof: true }), "violation", "sealed proof without --base-ref-name");
+}, 60000);

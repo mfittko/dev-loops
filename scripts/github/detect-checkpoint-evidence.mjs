@@ -1220,8 +1220,8 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     // buildPreMergeGateCheck's fail-closed handling is reachable without
     // threading the raw reviews array through it.
     reviewsReadFailed,
-    // The round the posted draft_gate review header carries when it is the cap round, else null (GitHub-visible; no tmp record).
-    capRoundNumber: (() => { const round = crossCheckRoundFromReviewBodies(prReviews.map((r) => r.body), "draft_gate"); return isCapRound(round, resolveGateConfig(config, "draft").maxReviewRounds ?? 0) ? round : null; })(),
+    // The cap round when any posted draft_gate review header carries it (a later post-cap header does not mask it), else null (GitHub-visible; no tmp record).
+    capRoundNumber: (() => { const cap = resolveGateConfig(config, "draft").maxReviewRounds ?? 0; return prReviews.some((r) => isCapRound(crossCheckRoundFromReviewBodies([r.body], "draft_gate"), cap)) ? cap : null; })(),
     fanoutEnforcement,
     ...(runnerOwnership.status !== "skipped_no_async_run_id" ? { runnerOwnership } : {}),
     staleRunner: {
