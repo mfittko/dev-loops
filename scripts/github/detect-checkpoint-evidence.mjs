@@ -46,9 +46,11 @@ import { SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/copilot-helpers"
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
 Fetch the live PR head SHA and visible PR issue comments, then summarize the
 latest valid draft-gate and pre-approval checkpoint verdict comments. Always fail
-closed (exit 1) unless both required gate comments exist: a clean draft_gate
-comment for the one-time draft boundary and a clean current-head
-pre_approval_gate comment.
+closed (exit 1) unless both requirements hold: the draft requirement is met by a
+clean draft_gate comment for the one-time draft boundary, or by the
+cap-round-fixed state (GATE-EXEC-ROUND-CAP: the GitHub-visible round=<cap>
+header with resolved round threads, or the sealed proof read with
+--base-ref-name); and a clean current-head pre_approval_gate comment exists.
 Required:
   --repo <owner/name>   Repository slug (e.g. owner/repo)
   --pr <number>         Pull request number

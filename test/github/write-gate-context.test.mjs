@@ -8805,6 +8805,10 @@ test("a pre_approval_gate context builds for a ready cap-fixed PR with no clean 
       process.exitCode = undefined;
       await main(args, { repoRoot, run: stubGhRun, loadCoordination: coordination(0) });
       assert.notEqual(process.exitCode, 1, "the sealed proof stands in for the clean draft verdict");
+      await rm(path.join(repoRoot, "tmp", "gate-delta"), { recursive: true, force: true });
+      process.exitCode = undefined;
+      await main(args, { repoRoot, run: stubGhRun, loadCoordination: coordination(0) });
+      assert.equal(process.exitCode, 1, "resolved gate threads without a sealed proof keep the refusal");
     } finally {
       process.stderr.write = origErr;
     }
