@@ -913,7 +913,7 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   if (!current || current.stale || current.workOrderDigest !== plan.workOrderDigest || current.executionIdentity !== plan.executionIdentity) {
     throw new Error(`judge execution ${plan.executionIdentity} is not the current emission for ${options.gate} at ${options.headSha} (${current?.stale ?? "no checkout holds its plan"}); re-emit the judge work order and re-run the judge`);
   }
-  return { ...order.authority, sliceLinkage: typeof order.sliceLinkage === "string" };
+  return { ...order.authority, sliceLinkageIssues: Array.isArray(order.sliceLinkageIssues) ? order.sliceLinkageIssues : [] };
 }
 
 /**
@@ -974,9 +974,8 @@ export async function judgePassCli(
   const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
   const result = runJudgePass(findings, judgeVerdict, options.headSha, { pastCap: lowFixCapped, round });
 
-  // The pinned work order's sliceLinkage (spec or PR body reopen line) arms the coercion; the --spec-file Non-goals are a second trigger.
-  const spec = options.specFile === undefined ? undefined : await readJsonArtifact(path.resolve(resolvedRoot, options.specFile), "--spec-file", parseError);
-  if (rejectClosingRefRemoval(result.enriched, pinned.sliceLinkage === true, spec?.nonGoals) > 0) {
+  // Only the pinned work order's sliceLinkageIssues arm the coercion; the emitter already read the spec and PR body Non-goals.
+  if (rejectClosingRefRemoval(result.enriched, pinned.sliceLinkageIssues) > 0) {
     result.act = result.enriched.filter(isOpenActItem);
     result.counts = countByDisposition(result.enriched);
   }

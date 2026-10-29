@@ -24,11 +24,11 @@ import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { OUT_OF_BAND_WRITE, readSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
-import { SLICE_LINKAGE_SENTENCE, hasReopenLine, prBodyNonGoals } from "./_slice-linkage.mjs";
+import { SLICE_LINKAGE_SENTENCE, sliceLinkageIssues } from "./_slice-linkage.mjs";
 import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
 import { isFindingsLogName, resolveGateRound } from "../github/_gate-finding-surface.mjs";
 
-const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--tmp-root <path>] [--operator-focus-file <path>] [--pr-body-file <path>]
+const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--tmp-root <path>] [--operator-focus-file <path>] --pr-body-file <path>
 Derives the judge's work order from the round's authoritative inputs: the consolidated
 ledger (consolidate-fanin --ledger-out), the structured spec and identity stamp
 (spec-context.mjs --spec-out/--identity-out), the gate-context evidence read and the
@@ -40,7 +40,7 @@ The work order's two verdict outputRefs sit under that directory's <roundId>/ se
 Dispatch the judge with the compact dispatchPrompt only; each run supersedes the
 previous emission for this PR and gate at any head. The only operator input is --operator-focus-file, a JSON file { round?: string } that
 renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
-It accepts no other brief or summary input. --pr-body-file is the PR body text, pinned as a "pr-body" read; when its Non-goals (or the spec Non-goals) hold a reopen line, the work order carries "sliceLinkage" (SPEC-SLICE-PR-KEEPS-CLOSING-REF) and renders it.
+It accepts no other brief or summary input. --pr-body-file is required: the PR body text, pinned as a "pr-body" read, written with dev-loops-run scripts/github/view-pr.mjs --repo <owner/name> --pr <N> --jq '.pr.body' > <path>. When the body holds exactly one closing reference and its number is named by a reopen line in the body or spec Non-goals, the work order carries "sliceLinkage" and "sliceLinkageIssues" (SPEC-SLICE-PR-KEEPS-CLOSING-REF) and renders it.
 Exit codes: 0 emitted, 1 refused (missing or inconsistent source), 2 usage/IO error.`;
 
 // ref = judge:<owner/repo>#<pr>:<gate>:<headSha>:<roundId>; executionIdentity = roundId.
@@ -156,8 +156,9 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     if (typeof parsedBody?.angle !== "string" || !Array.isArray(parsedBody?.findings)) throw new Refusal(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${bodyFile} is not JSON with an angle and a findings array`);
   }
   const operatorFocus = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined);
-  const prBody = prBodyFile ? await readSource("pr-body", abs(prBodyFile)) : null;
-  const sliceLinkage = hasReopenLine(parseSource(spec).nonGoals) || (prBody !== null && hasReopenLine(prBodyNonGoals(prBody.bytes.toString("utf8"))));
+  if (!prBodyFile) throw Object.assign(new Refusal("--pr-body-file is required: write the PR body with dev-loops-run scripts/github/view-pr.mjs --repo <owner/name> --pr <N> --jq '.pr.body' > <pr-body-path> and pass it, so the slice-linkage coercion is armed"), { refusal: "pr_body_file_required" });
+  const prBody = await readSource("pr-body", abs(prBodyFile));
+  const linkageIssues = sliceLinkageIssues(parseSource(spec).nonGoals, prBody.bytes.toString("utf8"));
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
   const workOrder = {
     role: "judge",
@@ -176,7 +177,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     // GATE-EXEC-ROUND-CAP: the one past-cap closure round (the gate context records scope.closureRound).
     ...(context?.scope?.closureRound ? { closureRound: true } : {}),
     ...(operatorFocus ? { operatorFocus, ...operatorFocusDigestEntry(operatorFocus) } : {}),
-    ...(sliceLinkage ? { sliceLinkage: SLICE_LINKAGE_SENTENCE } : {}),
+    ...(linkageIssues.length > 0 ? { sliceLinkage: SLICE_LINKAGE_SENTENCE, sliceLinkageIssues: linkageIssues } : {}),
     configSha256: sha256(JSON.stringify(config ?? {})),
     authority: {
       specDigest,

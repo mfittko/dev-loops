@@ -13,7 +13,7 @@ import {
   validateCliArgs,
 } from "../../scripts/loop/judge-pass.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
-import { hasReopenLine, rejectClosingRefRemoval } from "../../scripts/loop/_slice-linkage.mjs";
+import { hasReopenLine, rejectClosingRefRemoval, sliceLinkageIssues } from "../../scripts/loop/_slice-linkage.mjs";
 import { readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { resolveDraftRoundCap } from "../../scripts/github/write-gate-context.mjs";
 import { dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
@@ -2135,20 +2135,20 @@ test("judgePassCli keeps the uncovered-finding code in the refusal message", asy
 });
 
 const actFix = (judgeFix, over = {}) => ({ ...finding(), judgeDisposition: "act", judgeFix, ...over });
-const coercedBy = (judgeFix, nonGoals = ["Reopen #10 after the merge; later slices follow."], over = {}) => {
+const coercedBy = (judgeFix, issues = [10, 2883], over = {}) => {
   const f = actFix(judgeFix, over);
-  return rejectClosingRefRemoval([f], nonGoals) === 1 && f.judgeDisposition === "reject";
+  return rejectClosingRefRemoval([f], issues) === 1 && f.judgeDisposition === "reject";
 };
 
 test("a judge act that swaps Closes for Refs on a slice PR is coerced to reject naming SPEC-SLICE-PR-KEEPS-CLOSING-REF", () => {
   const closesToRefs = actFix("Replace `Closes #10` with `Refs #10` in the PR body.", { summary: "AC unmet" });
   const realFix = actFix("Guard the null branch.", { summary: "bug" });
-  assert.equal(rejectClosingRefRemoval([closesToRefs, realFix], ["Closing the issue: Reopen #10 after the merge; later slices follow."]), 1);
+  assert.equal(rejectClosingRefRemoval([closesToRefs, realFix], [10]), 1);
   assert.equal(closesToRefs.judgeDisposition, "reject");
   assert.match(closesToRefs.judgeReason, /SPEC-SLICE-PR-KEEPS-CLOSING-REF/);
   assert.equal(realFix.judgeDisposition, "act");
   const noReopen = actFix("Replace `Closes #10` with `Refs #10`.");
-  assert.equal(rejectClosingRefRemoval([noReopen], ["no build changes"]), 0);
+  assert.equal(rejectClosingRefRemoval([noReopen], []), 0);
   assert.equal(noReopen.judgeDisposition, "act");
 });
 
@@ -2221,19 +2221,41 @@ test("removesClosingRef accepts every Closes-to-Refs phrasing and rejects the re
     "Keep Closes #10; do not change it to Refs #10.",
     "Tick AC3; do not remove the Closes #10 line.",
   ]) assert.equal(coercedBy(fix), false, fix);
-  assert.equal(coercedBy("Replace `Refs #10` with `Closes #10`.", ["Reopen #10 after the merge."]), false);
-  assert.equal(coercedBy("Replace `Closes #10` with `Refs #10`.", ["Do not reopen the old design decision."]), false);
+  assert.equal(coercedBy("Replace `Refs #10` with `Closes #10`.", [10]), false);
+  assert.equal(coercedBy("Replace `Closes #10` with `Refs #10`.", []), false);
 });
 
 test("the coercion reads only judgeFix, so cluster members with one judgeFix share one disposition", () => {
   const recommendation = "replace Closes 10 with Refs 10";
   const members = [actFix("Tick the AC box"), actFix("Tick the AC box", { recommendation })];
-  assert.equal(rejectClosingRefRemoval(members, ["Reopen #10 after the merge."]), 0);
+  assert.equal(rejectClosingRefRemoval(members, [10]), 0);
   assert.deepEqual(members.map((m) => m.judgeDisposition), ["act", "act"]);
   const dropped = actFix("Add the missing AC test", { recommendation: "Change `Closes 10` to `Refs 10`" });
-  assert.equal(rejectClosingRefRemoval([dropped], ["Reopen #10 after the merge."]), 0);
+  assert.equal(rejectClosingRefRemoval([dropped], [10]), 0);
   const shared = [actFix("Replace Closes #10 with Refs #10"), actFix("Replace Closes #10 with Refs #10", { recommendation })];
-  assert.equal(rejectClosingRefRemoval(shared, ["Reopen #10 after the merge."]), 2);
+  assert.equal(rejectClosingRefRemoval(shared, [10]), 2);
+});
+
+test("the coercion scopes to the reopened issue and the PR's only closing reference", () => {
+  // Accepted: a removal of the reopened issue's reference, number-less or numbered.
+  assert.equal(coercedBy("Replace Closes 10 with Refs 10", [10]), true);
+  assert.equal(coercedBy("Remove the Closes #10 line.", [10]), true);
+  assert.equal(coercedBy("Change `Closes` to `Refs` in the PR body.", [2883]), true);
+  // Rejected: a removal that names another issue number.
+  assert.equal(coercedBy("Remove the `Closes 99` line; 99 is unrelated to this PR.", [10]), false);
+  assert.equal(coercedBy("Replace Closes 11 with Refs 11", [10]), false);
+  assert.equal(coercedBy("Replace Closes 2883 with Refs 2883 and keep Closes 2990", [2990]), false);
+  assert.equal(rejectClosingRefRemoval([actFix("Replace Closes 10 with Refs 10")], undefined), 0);
+});
+
+test("sliceLinkageIssues arms only for exactly one closing reference that a reopen line names", () => {
+  const body = (closing, reopen) => `${closing}\n\n## Non-goals\n\n- ${reopen}\n`;
+  assert.deepEqual(sliceLinkageIssues([], body("Closes #10", "Reopen #10 on merge")), [10]);
+  assert.deepEqual(sliceLinkageIssues(["Reopen #10 on merge"], "Closes #10\n"), [10]);
+  assert.deepEqual(sliceLinkageIssues([], body("Closes #10\nCloses #99", "Reopen #10 on merge")), []);
+  assert.deepEqual(sliceLinkageIssues([], body("Closes #2883\nCloses #2990", "Reopen #2883 on merge")), []);
+  assert.deepEqual(sliceLinkageIssues([], body("Closes #10", "Reopen #12 later")), []);
+  assert.deepEqual(sliceLinkageIssues([], body("Refs #10", "Reopen #10 on merge")), []);
 });
 
 async function sliceRound(tmpDir, { specNonGoals, prBody, specText }) {
@@ -2252,11 +2274,19 @@ async function sliceRound(tmpDir, { specNonGoals, prBody, specText }) {
   return judgePassCli(options, { ...deps, ...(prBody !== undefined ? { pinned: { prBodyFile: "./pr-body.md" } } : {}) });
 }
 
-test("judgePassCli coerces a Closes-to-Refs act to reject from the --spec-file Non-goals and recounts", async () => {
-  const payload = await sliceRound(await mkdtemp(path.join(os.tmpdir(), "judge-pass-slice-")), { specNonGoals: ["Reopen #10 after the merge; later slices follow."] });
+test("judgePassCli coerces a Closes-to-Refs act to reject from the spec Non-goals reopen line and the pinned PR body, and recounts", async () => {
+  const payload = await sliceRound(await mkdtemp(path.join(os.tmpdir(), "judge-pass-slice-")), { specNonGoals: ["Reopen #10 after the merge; later slices follow."], prBody: "Closes #10\n" });
   assert.equal(payload.act.length, 0);
   assert.equal(payload.counts.act, 0);
   assert.equal(payload.counts.reject, 1);
+});
+
+test("judgePassCli leaves the act when the spec Non-goals reopen line is not backed by a pinned single closing reference", async () => {
+  for (const prBody of ["Declared scope.\n", "Closes #10\nCloses #11\n", "Closes #12\n"]) {
+    const payload = await sliceRound(await mkdtemp(path.join(os.tmpdir(), "judge-pass-slice-open-")), { specNonGoals: ["Reopen #10 after the merge; later slices follow."], prBody });
+    assert.equal(payload.act.length, 1, prBody);
+    assert.equal(payload.counts.reject, 0, prBody);
+  }
 });
 
 test("judgePassCli arms the coercion from the pinned work order sliceLinkage when an issue-derived spec has none and no PR body flag is passed", async () => {

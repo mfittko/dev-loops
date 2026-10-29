@@ -174,6 +174,8 @@ content_digest=$(dev-loops-run scripts/loop/spec-context.mjs --repo <owner/name>
   --spec-out <spec-path> --identity-out <identity-path> [--pr-body-file <pr-body-path>] --jq '.contentDigest')
 ```
 
+Write `<pr-body-path>` with `dev-loops-run scripts/github/view-pr.mjs --repo <owner/name> --pr <N> --jq '.pr.body' > <pr-body-path>`. `emit-judge-work-order.mjs` requires the same file as `--pr-body-file`.
+
 On a fixer-push re-entry round (a prior clean round's `--approvals-out` record exists), also derive
 the AC7 affected-criteria producer's input:
 
