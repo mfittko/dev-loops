@@ -264,6 +264,10 @@
                         "description": "Set false to drop this angle from the resolved list (a later config layer disabling a base angle).",
                         "type": "boolean"
                       },
+                      "implementationRelevant": {
+                        "description": "Mark an angle whose prompt states criteria a developer can apply before the first edit. Only marked angles reach the implementation brief and the fixer expectations section; an unmarked angle is excluded.",
+                        "type": "boolean"
+                      },
                       "persona": {
                         "description": "Reviewer persona for this angle.",
                         "type": "string",
@@ -504,6 +508,10 @@
                         "description": "Set false to drop this angle from the resolved list (a later config layer disabling a base angle).",
                         "type": "boolean"
                       },
+                      "implementationRelevant": {
+                        "description": "Mark an angle whose prompt states criteria a developer can apply before the first edit. Only marked angles reach the implementation brief and the fixer expectations section; an unmarked angle is excluded.",
+                        "type": "boolean"
+                      },
                       "persona": {
                         "description": "Reviewer persona for this angle.",
                         "type": "string",
@@ -737,6 +745,10 @@
                       },
                       "enabled": {
                         "description": "Set false to drop this angle from the resolved list (a later config layer disabling a base angle).",
+                        "type": "boolean"
+                      },
+                      "implementationRelevant": {
+                        "description": "Mark an angle whose prompt states criteria a developer can apply before the first edit. Only marked angles reach the implementation brief and the fixer expectations section; an unmarked angle is excluded.",
                         "type": "boolean"
                       },
                       "persona": {

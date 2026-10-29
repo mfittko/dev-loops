@@ -23,6 +23,7 @@ import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "..
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { OperatorFocusRefusal, bindOperatorFocusItems, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
+import { expectationsSectionError, renderExpectationsSection } from "./_review-expectations.mjs";
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
@@ -206,7 +207,7 @@ Read every \`required\` entry below IN FULL before any change. If one is missing
 Mutation authority: branch ${JSON.stringify(branch)}, paths ${allowedPaths.map((p) => JSON.stringify(p)).join(", ")}. ${workOrder.executionRules.mutation}.
 Validation: ${workOrder.executionRules.validation}.${workOrder.executionRules.regenerate ? `\nRegenerate: ${workOrder.executionRules.regenerate}.` : ""}
 
-${renderOperatorFocusSection(workOrder.operatorFocus)}## Required reads
+${renderOperatorFocusSection(workOrder.operatorFocus)}${renderExpectationsSection(workOrder.expectations)}## Required reads
 
 ${workOrder.requiredReads.map((read) => renderRequiredReadLine(read, "/")).join("\n")}
 
@@ -270,7 +271,7 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidat
  * and `fetchPr` are injectable for tests.
  */
 export async function emitFixerWorkOrder({
-  repo, pr, headSha, phase, actListFile, gate, threadsFile, deltaResult, allowedPaths = [], operatorFocusFile, cwd = process.cwd(), tmpRoot,
+  repo, pr, headSha, phase, actListFile, gate, threadsFile, deltaResult, allowedPaths = [], operatorFocusFile, expectations, cwd = process.cwd(), tmpRoot,
   fetchPr = defaultFetchPr, fetchVerdictMarkers = defaultFetchVerdictMarkers, executionIdentity = `f${Date.now()}-${randomBytes(4).toString("hex")}`,
   env = process.env, ghCommand = "gh", runChild,
 }) {
@@ -439,6 +440,8 @@ export async function emitFixerWorkOrder({
   const { config, errors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
   if (errors?.length > 0) throw new Refusal(`dev-loops config is invalid; fix it before emitting: ${errors.map((e) => e?.message ?? String(e)).join("; ")}`);
   const outputRef = path.join(dir, executionIdentity, "fixer-disposition.json");
+  const expectationsError = expectationsSectionError(expectations);
+  if (expectationsError) throw new Refusal(expectationsError);
   const workOrder = {
     role: "fixer",
     target: { repo, pr: Number(pr) },
@@ -448,6 +451,7 @@ export async function emitFixerWorkOrder({
     source: source.read.kind,
     gate: actListFile ? gate : undefined,
     ...(operatorFocus ? { operatorFocus, ...operatorFocusDigestEntry(operatorFocus) } : {}),
+    ...(expectations ? { expectations } : {}),
     configSha256: sha256(JSON.stringify(config ?? {})),
     authority: { sourceDigest: jsonContentDigest(source.parsed), deltaResultDigest: delta ? jsonContentDigest(delta.parsed) : undefined,
       ...(completion ? { reviewBaselineHead: headSha, completionInputDigest: jsonContentDigest(completion), completionInputBytesDigest: completionRead.sha256 } : {}) },
@@ -648,6 +652,8 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots }) {
 registerWorkOrderRole("fixer", {
   locate: locateFixerUnit,
   validate: (order) => {
+    const expectationsError = expectationsSectionError(order.expectations);
+    if (expectationsError) return `fixer work order ${expectationsError}`;
     if (order.operation === "complete") return completeAdmissionError(order);
     const kinds = new Set((Array.isArray(order.requiredReads) ? order.requiredReads : []).map((read) => read?.kind));
     return !kinds.has("act-list") && !kinds.has("threads") ? "fixer work order has no act-list or threads required read"

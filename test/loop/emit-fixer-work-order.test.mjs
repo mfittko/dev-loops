@@ -2463,3 +2463,67 @@ test("operator focus CLI: a refusing focus file exits 1 with ok false and a GATE
     assert.match(body.error, /^GATE-EXEC-OPERATOR-FOCUS:/);
   });
 });
+
+// Issue 2588 slice 3 (expand): the optional review expectations section.
+const EXPECTATIONS = { angles: [{ angle: "coverage", criterion: "Cover every negative case." }], overflow: { angles: ["dry"], reads: [{ path: ".devloops", sha256: "a".repeat(64) }] } };
+
+test("expectations section: an order without it renders and digests unchanged; one with it renders, pulls and is digest-pinned", async () => {
+  await withFixture(async ({ root, files, emit }) => {
+    const plain = await emit({ deltaResult: files.delta });
+    const text = await readFile(plain.promptPath, "utf8");
+    assert.ok(!text.includes("Review expectations") && !("expectations" in plain.workOrder));
+    assert.equal(text, renderWorkOrder(plain.workOrder));
+    assert.equal(pull(plain, root).status, 0, "fixer pull without the section");
+    const withSection = await emit({ deltaResult: files.delta, expectations: EXPECTATIONS });
+    const rendered = await readFile(withSection.promptPath, "utf8");
+    assert.ok(rendered.indexOf("## Review expectations") > 0 && rendered.indexOf("## Review expectations") < rendered.indexOf("## Required reads"));
+    assert.match(rendered, /- coverage: Cover every negative case\./);
+    assert.match(rendered, /More criteria for dry: read \.devloops \(sha256 a{64}\)\./);
+    assert.deepEqual(withSection.workOrder.expectations, EXPECTATIONS);
+    assert.equal(withSection.workOrderDigest, workOrderDigest(withSection.workOrder));
+    assert.notEqual(workOrderDigest(withSection.workOrder), workOrderDigest({ ...withSection.workOrder, expectations: { angles: [] } }));
+    assert.equal(pull(withSection, root).status, 0, "fixer pull with the section");
+  });
+});
+
+test("expectations section: a malformed section refuses at emit", async () => {
+  await withFixture(async ({ files, emit }) => {
+    for (const bad of [{ angles: "x" }, { angles: [{ angle: "a" }] }, { angles: [], overflow: { angles: ["a"], reads: [{ path: "p", sha256: "short" }] } }]) {
+      await assert.rejects(() => emit({ deltaResult: files.delta, expectations: bad }), /expectations section/);
+    }
+  });
+});
+
+for (const withSection of [false, true]) test(`expectations section: complete delivery verifies ${withSection ? "with" : "without"} the section`, async () => {
+  await withFixture(async ({ root, wt, head, emit, files, writeRecord }) => {
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
+    await writeRecord({ items: [{ ref: "PRRT_T1", status: "resolved" }] });
+    const unit = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined, ...(withSection ? { expectations: EXPECTATIONS } : {}) });
+    unit.workOrder.operation = "complete";
+    unit.workOrder.mutationAuthority.allowedPaths = [];
+    await sealBaselineUnit(unit, root);
+    assert.equal(pull(unit, wt).status, 0);
+    await mkdir(path.dirname(unit.workOrder.outputRefs[0]), { recursive: true });
+    await writeMarked(unit.workOrder.outputRefs[0], JSON.stringify({ headSha: head, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: head, disposition: "tackled" }] }));
+    const nodes = ["PRRT_T1", "PRRT_UNRELATED"].map((id, index) => ({ id, isResolved: id === "PRRT_T1", comments: { nodes: [{ id: `c${index}`, databaseId: index + 1, body: id === "PRRT_T1" ? `Fixed in commit ${head}.` : "unrelated", author: { login: "bot", __typename: "User" } }] } }));
+    const mock = () => makeGhMock([
+      { assertArgs: ["pr", "view"], stdout: JSON.stringify({ headRefOid: head }) },
+      { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } }) },
+      ...ciEntries(head),
+      { assertArgs: ["api", `repos/${REPO}/compare/${head}...${head}`], stdout: '{"status":"identical"}' },
+    ]);
+    const options = { repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath };
+    for (const check of [false, true]) assert.equal((await verifyFixerDisposition({ ...options, check }, { repoRoot: wt, env: gitFreeEnv(), runChild: mock().runChild })).complete, true);
+  });
+});
+
+test("expectations section: the verifier refuses a resealed plan whose section is malformed", async () => {
+  await withFixture(async ({ root, wt, head, emit, files, writeRecord }) => {
+    await writeRecord({ items: [{ ref: "T1", status: "resolved" }] });
+    const unit = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    unit.workOrder.expectations = { angles: "x" };
+    unit.workOrderDigest = workOrderDigest(unit.workOrder);
+    await writeFile(unit.planPath, JSON.stringify(unit));
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: head, fixerPlan: unit.planPath }, { repoRoot: wt, env: gitFreeEnv(), runChild: makeGhMock([]).runChild }), /expectations section/);
+  });
+});

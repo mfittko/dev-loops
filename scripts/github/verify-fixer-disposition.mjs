@@ -17,6 +17,7 @@ import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "
 import { captureParsedReviewThreads, findDeltaBlockedFixedReply, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
 import { planBatchReplyTargets } from "./reply-resolve-review-threads.mjs";
 import { buildContainmentMap, isCommitContainedByHead } from "./_commit-containment.mjs";
+import { expectationsSectionError } from "../loop/_review-expectations.mjs";
 import { EXECUTION_IDENTITY_RE, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
 import {
   evaluateFixerDisposition,
@@ -217,6 +218,8 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     throw new Error(`--fixer-plan "${options.fixerPlan}" does not match its workOrderDigest; the plan was edited after emission, re-emit it`);
   }
   const order = plan.workOrder;
+  const expectationsError = expectationsSectionError(order.expectations);
+  if (expectationsError) throw new Error(`--fixer-plan "${options.fixerPlan}" is not a valid fixer work order: ${expectationsError}`);
   if (order?.role !== "fixer" || order.phase !== "full" || order.target?.repo !== options.repo || order.target?.pr !== options.pr) {
     throw new Error(`--fixer-plan "${options.fixerPlan}" is not a full-phase fixer work order for ${options.repo}#${options.pr}`);
   }

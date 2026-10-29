@@ -32,9 +32,11 @@ gates:
         persona: review
         prompt: Check whether every changed file belongs in this PR. Flag unrelated or out-of-scope changes. The PR description's scope section is the contract.
       - name: coverage
+        implementationRelevant: true
         persona: review
         prompt: "Check whether tests cover the changed behavior adequately. Look for missing edge cases, untested error paths, and acceptance-criteria gaps. Also flag test-name quality issues: test names that misrepresent what is actually asserted, overly broad names that hide gaps, and names that don't match the behavior under test. Flag missing negative-case coverage: malformed-argument tests, error-contract tests, and edge-case coverage for boundary conditions, empty inputs, and unexpected states. Do not accept happy-path-only test suites."
       - name: correctness
+        implementationRelevant: true
         persona: review
         prompt: "Check whether the implementation matches the acceptance criteria and PR description. Flag logic errors, contract violations, and behavior mismatches. When the diff moves or re-hosts code, list what the old code path guaranteed (bounds, timeouts, injected dependencies, error handling) and flag each guarantee that the new path drops."
       - name: ci-guard
@@ -49,6 +51,7 @@ gates:
           - Flag pending check-run states that could silently hide failures. - Flag Node.js support-floor mismatches between CI matrices,
             package.json engines, and documented requirements.
       - name: contract-surface
+        implementationRelevant: true
         persona: review
         prompt: Review this change for public contract-surface drift. Check whether documented schema fields, state/sentinel names, runtime values, tests, and CLI output agree. Verify CLI --help usage matches accepted flags. Compare stdout JSON success shape and stderr JSON error shape against documented examples. Flag optional fields documented as always emitted but conditionally omitted, or fields emitted but undocumented. Stay repo-agnostic; cite concrete changed files and give minimal fixes.
       - name: link-check
@@ -102,6 +105,7 @@ gates:
           - Flag commands whose output is generated but never consumed. - Flag patterns where a tool is called in a loop but only the last
             iteration's result is used (or none at all).
       - name: input-validation
+        implementationRelevant: true
         persona: review
         prompt: Review this change for input-validation drift. Check repo slug, issue number, host, SHA, whitespace, and sentinel normalization. Prefer shared parsers/helpers over ad hoc validation. Flag malformed inputs that slip through, confusing errors, path traversal-like segments, and inconsistent trimming/normalization across CLI/API entrypoints. Recommend minimal tests for accepted and rejected forms.
       - name: threat-model

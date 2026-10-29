@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1184,4 +1185,49 @@ test("exactly 50 importers are listed without importersTruncated", async () => {
   const entry = brief.importers["src/a.mjs"];
   assert.equal(entry.files.length, 50);
   assert.equal("importersTruncated" in entry, false);
+});
+
+// Issue 2588 slice 3: the implementation-relevant angle projection.
+const SHIPPED_MARKED = ["coverage", "correctness", "contract-surface", "input-validation"];
+const devloopsAngles = (angles) => ({ ".devloops": JSON.stringify({ version: 1, gates: { draft: { angles } } }) });
+const projected = async (files) => (await buildImplementationBrief({ body: MATRIX, repoRoot: await fixtureRepo({ files }) })).reviewExpectations;
+
+test("review expectations: the shipped implementation angles are marked, in canonical order, and an unmarked angle is excluded", async () => {
+  const expectations = await projected({});
+  assert.deepEqual(expectations.angles.map(({ angle }) => angle), SHIPPED_MARKED);
+  assert.equal("overflow" in expectations, false);
+  const custom = await projected(devloopsAngles([
+    { name: "custom-unmarked", prompt: "UNMARKED-CRITERION" },
+    { name: "custom-marked", implementationRelevant: true, prompt: "MARKED-CRITERION" },
+  ]));
+  assert.deepEqual(custom.angles.map(({ angle }) => angle), [...SHIPPED_MARKED, "custom-marked"]);
+  assert.ok(!JSON.stringify(custom).includes("UNMARKED-CRITERION"));
+});
+
+test("review expectations: a repository override of a criterion appears in the projection", async () => {
+  const expectations = await projected(devloopsAngles([{ name: "coverage", prompt: "REPO-OVERRIDE-CRITERION" }]));
+  assert.equal(expectations.angles.find(({ angle }) => angle === "coverage").criterion, "REPO-OVERRIDE-CRITERION");
+});
+
+test("review expectations: at most 12 criteria inline, overflow names no text and pins the config read by digest", async () => {
+  const extra = Array.from({ length: 9 }, (_, i) => ({ name: `extra-${i}`, implementationRelevant: true, prompt: `EXTRA-CRITERION-${i}` }));
+  const files = devloopsAngles(extra);
+  const expectations = await projected(files);
+  assert.equal(expectations.angles.length, 12);
+  assert.deepEqual(expectations.angles.map(({ angle }) => angle), [...SHIPPED_MARKED, ...extra.slice(0, 8).map(({ name }) => name)]);
+  assert.deepEqual(expectations.overflow.angles, ["extra-8"]);
+  assert.ok(!JSON.stringify(expectations).includes("EXTRA-CRITERION-8"));
+  assert.deepEqual(expectations.overflow.reads, [{ path: ".devloops", sha256: createHash("sha256").update(files[".devloops"]).digest("hex") }]);
+});
+
+test("review expectations: inline criteria stop at 2,000 characters and the rest goes to the overflow in order", async () => {
+  const files = devloopsAngles([
+    { name: "long-a", implementationRelevant: true, prompt: "A".repeat(500) },
+    { name: "short-b", implementationRelevant: true, prompt: "SHORT-B-CRITERION" },
+  ]);
+  const expectations = await projected(files);
+  assert.ok(expectations.angles.reduce((sum, { criterion }) => sum + criterion.length, 0) <= 2000);
+  assert.deepEqual(expectations.angles.map(({ angle }) => angle), SHIPPED_MARKED);
+  assert.deepEqual(expectations.overflow.angles, ["long-a", "short-b"]);
+  assert.ok(!JSON.stringify(expectations.angles).includes("SHORT-B-CRITERION"));
 });

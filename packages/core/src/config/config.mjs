@@ -212,6 +212,7 @@ const GateAngleEntry = z.preprocess(
     name: z.string().trim().min(1),
     mandatory: z.boolean().optional().describe("Always run this angle, regardless of diff-based dynamic selection."),
     enabled: z.boolean().optional().describe("Set false to drop this angle from the resolved list (a later config layer disabling a base angle)."),
+    implementationRelevant: z.boolean().optional().describe("Mark an angle whose prompt states criteria a developer can apply before the first edit. Only marked angles reach the implementation brief and the fixer expectations section; an unmarked angle is excluded."),
     persona: z.string().trim().min(1).optional().describe("Reviewer persona for this angle."),
     prompt: z.string().min(1).optional().describe("Short focused instruction for the reviewer agent — what to look for and how to judge this angle."),
     model: z.string().trim().min(1).optional().describe("Concrete model override for this angle (highest precedence)."),
@@ -1163,6 +1164,7 @@ function normalizeAngleEntry(a) {
     const entry = { name };
     if (a.mandatory === true) entry.mandatory = true;
     if (a.enabled === false) entry.enabled = false;
+    if (a.implementationRelevant === true) entry.implementationRelevant = true;
     if (typeof a.persona === "string" && a.persona.trim().length > 0) entry.persona = a.persona.trim();
     if (typeof a.prompt === "string" && a.prompt.length > 0) entry.prompt = a.prompt;
     if (typeof a.model === "string" && a.model.trim().length > 0) entry.model = a.model.trim();
@@ -1196,6 +1198,27 @@ function normalizeAngleEntries(raw) {
   for (const a of raw) {
     const entry = normalizeAngleEntry(a);
     if (entry) out.push(entry);
+  }
+  return out;
+}
+
+/**
+ * Implementation-relevant angles of the merged config as `{ angle, criterion }`,
+ * in canonical order: gate order draft, preApproval, spike, then list order
+ * within the gate; the first enabled entry of a name wins. An angle without the
+ * explicit `implementationRelevant: true` marker, or without a prompt, is excluded.
+ * @param {DevLoopConfig} config
+ * @returns {Array<{angle: string, criterion: string}>}
+ */
+export function resolveImplementationRelevantAngles(config) {
+  const seen = new Set();
+  const out = [];
+  for (const gate of ["draft", "preApproval", "spike"]) {
+    for (const e of normalizeAngleEntries(config?.gates?.[gate]?.angles)) {
+      if (e.enabled === false || seen.has(e.name)) continue;
+      seen.add(e.name);
+      if (e.implementationRelevant === true && e.prompt) out.push({ angle: e.name, criterion: e.prompt });
+    }
   }
   return out;
 }

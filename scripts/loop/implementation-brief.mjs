@@ -16,10 +16,12 @@
  * authority drift.
  */
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
+import { loadDevLoopConfig, resolveImplementationRelevantAngles } from "@dev-loops/core/config";
 import { detectAcDodMatrix, readNonGoalItems } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { extractSection } from "@dev-loops/core/loop/markdown-sections";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -30,6 +32,7 @@ import {
   extractRuleDefinitions,
 } from "../docs/validate-rule-ownership.mjs";
 import { gitEnvNoDirOverrides } from "./_repo-root-resolver.mjs";
+import { buildReviewExpectations } from "./_review-expectations.mjs";
 import { CONTRACT_DOC_RE, DEVLOOPS_CONFIG_PATHS, GATE_CONFIG_PATH } from "./check-adr-tripwire.mjs";
 import { citedAdrNumbers, indexDecisionRecords, inForceAmenders, loadKnownRuleIds, stripFencedCode } from "./spec-lint.mjs";
 
@@ -53,6 +56,7 @@ Output (stdout, JSON):
     "adrNeed": "<section text>" | "unstated", "adrTripwirePaths": ["..."],
     "helperInventory": { "modules": [{ "path", "exports": ["<name>"] }], "overflowModules": ["<path>"] },
     "importers": null | { "<touched source module>": { "files": ["<path>"], "importersTruncated"?: true } },
+    "reviewExpectations": { "angles": [{ "angle", "criterion" }], "overflow"?: { "angles": ["<name>"], "reads": [{ "path", "sha256" }] } },
     "requiredReads": ["skills/docs/structural-quality.md", "changes/README.md"],
     "findings": [{ "kind", "reason" }] }
 
@@ -80,6 +84,12 @@ those against the diff.
 "nonGoals" joins a wrapped continuation line into its item and accepts numbered
 list markers. "findings" carries missing_decision_records when the checkout has
 no docs/decisions directory and missing_adr_record for a cited ADR with no record.
+
+"reviewExpectations" projects the criteria (the prompt) of the merged-config review angles marked
+"implementationRelevant: true", in gate order (draft, preApproval, spike) then list order; an unmarked
+angle is excluded and a repository override of a criterion shows. Inline criteria stop at 12 and
+2,000 characters. The rest is named in "overflow.angles" without text; read the config files in
+"overflow.reads", pinned by sha256, for it.
 
 "helperInventory" lists the sorted exported names of every tracked module (git ls-files,
 offline) in each touched path's directory and in scripts/lib/; inline names stop at
@@ -577,6 +587,10 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
   const trackedSources = await trackedSourceFiles(root, rootReal);
   if (trackedSources.error) findings.push({ kind: "importers_unavailable", reason: trackedSources.error });
 
+  const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot: root });
+  if (configErrors?.length > 0) findings.push({ kind: "config_load_errors", reason: "dev-loops config failed to load; reviewExpectations uses the layers that loaded" });
+  const reviewExpectations = await projectReviewExpectations(root, config);
+
   return {
     ok: true,
     matrix,
@@ -589,9 +603,25 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
     adrTripwirePaths: touchedPaths.filter(matchesAdrTripwire),
     helperInventory: await helperInventory(root, touchedPaths, resolved, trackedSources.files),
     importers: await importersByModule(root, touchedPaths, resolved, trackedSources.files),
+    reviewExpectations,
     requiredReads: [...REQUIRED_READS],
     findings,
   };
+}
+
+// Config layers that can hold angle criteria; the overflow read pins the ones present.
+const ANGLE_CONFIG_FILES = ["packages/core/src/config/extension-defaults.yaml", ".pi/dev-loop/defaults.yaml", ".pi/dev-loop/defaults.yml", ".pi/dev-loop/defaults.json", ".devloops"];
+
+async function projectReviewExpectations(root, config) {
+  const entries = resolveImplementationRelevantAngles(config);
+  const probe = buildReviewExpectations(entries);
+  if (!probe.overflow) return probe;
+  const reads = [];
+  for (const rel of ANGLE_CONFIG_FILES) {
+    const bytes = await readFile(path.join(root, ...rel.split("/"))).catch(() => null);
+    if (bytes) reads.push({ path: rel, sha256: createHash("sha256").update(bytes).digest("hex") });
+  }
+  return buildReviewExpectations(entries, reads);
 }
 
 export function parseImplementationBriefArgs(argv) {
