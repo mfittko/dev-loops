@@ -89,3 +89,20 @@ test("detectMergeBaseChangedFiles ignores an ambient GIT_DIR/GIT_WORK_TREE point
     await rm(poisonRepo, { recursive: true, force: true });
   }
 });
+
+test("detectMergeBaseChangedFiles returns non-ASCII paths unquoted (-z)", async () => {
+  const dir = await makeRepo();
+  try {
+    await writeFile(path.join(dir, "a.txt"), "one\n", "utf8");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "base");
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    await writeFile(path.join(dir, "café1.md"), "two\n", "utf8");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "head");
+    const result = detectMergeBaseChangedFiles({ base, head: "HEAD", cwd: dir });
+    assert.deepEqual(result.files, ["café1.md"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

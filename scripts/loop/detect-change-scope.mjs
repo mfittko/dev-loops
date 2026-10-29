@@ -131,13 +131,13 @@ function detectMergeBaseChangedFiles({ base, head, cwd } = {}) {
   try {
     output = execFileSync(
       "git",
-      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", "--no-renames", `${base}...${head}`],
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", "-z", "--no-renames", `${base}...${head}`],
       { encoding: "utf8", maxBuffer: 10_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() },
     );
   } catch (err) {
     return { ok: false, files: null, error: err instanceof Error ? err.message : String(err) };
   }
-  const files = output.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  const files = output.split("\0").filter((l) => l.length > 0);
   return { ok: true, files };
 }
 async function main() {
@@ -182,13 +182,13 @@ function detectWorkingTreeChangedFiles({ base, cwd } = {}) {
   try {
     output = execFileSync(
       "git",
-      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", "--no-renames", base],
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", "-z", "--no-renames", base],
       { encoding: "utf8", maxBuffer: 10_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() },
     );
   } catch (err) {
     return { ok: false, files: null, error: err instanceof Error ? err.message : String(err) };
   }
-  return { ok: true, files: output.split("\n").map((l) => l.trim()).filter((l) => l.length > 0) };
+  return { ok: true, files: output.split("\0").filter((l) => l.length > 0) };
 }
 
 export { detectScope, detectMergeBaseChangedFiles, detectWorkingTreeChangedFiles, isEligibleForLightMode };
