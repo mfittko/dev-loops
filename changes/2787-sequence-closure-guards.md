@@ -1,2 +1,2 @@
 ### Fixed
-- Reject unauthenticated empty-range delta reviews and noncanonical handback heads; align no-commit and THREAD closure instructions (#2787)
+- Authenticate empty-range delta exits and canonical handback heads, close sequences after baseline amendments, and align no-commit and THREAD instructions (#2787)

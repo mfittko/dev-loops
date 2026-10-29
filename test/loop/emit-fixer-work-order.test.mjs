@@ -222,15 +222,19 @@ async function withFixture(fn) {
 
 test("THREAD no_commit and head_moved close an authenticated sequence and allow the next push", async () => {
   const { checkFixPushAuthority } = await import("../../scripts/loop/check-fix-push-authority.mjs");
-  for (const outcome of ["no_commit", "head_moved"]) await withFixture(async ({ root, wt, head, files, emit }) => {
+  for (const move of ["none", "descendant", "amended"]) await withFixture(async ({ root, wt, head, files, emit }) => {
+    const outcome = move === "none" ? "no_commit" : "head_moved";
     const unit = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     assert.equal(pull(unit, root).status, 0);
     const output = unit.workOrder.outputRefs[0];
     await mkdir(path.dirname(output), { recursive: true });
     await writeFile(output, JSON.stringify({ headSha: head, dispositions: [] }));
-    if (outcome === "head_moved") git(wt, "commit", "-q", "--allow-empty", "-m", "developer change");
+    if (move !== "none") git(wt, "commit", "-q", "--allow-empty", ...(move === "amended" ? ["--amend"] : []), "-m", "developer change");
+    const located = await locateFixerUnit({ ref: unit.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] });
+    if (move === "amended") assert.match(located.stale, /no longer contains/);
+    else assert.equal(located.stale, undefined);
     const args = ["--threads-file", files.threads, "--repo", REPO, "--pr", String(PR), "--baseline", head, "--spec-identity", "s", "--fixer-plan", unit.planPath, "--site-coverage", output, "--worktree", wt];
-    assert.equal(checkFixPushAuthority(wt).ok, false);
+    if (move !== "amended") assert.equal(checkFixPushAuthority(wt).ok, false);
     const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
     const original = await readFile(marker);
     await writeFile(marker, JSON.stringify({ baselineHead: head, branch: "other", fullGranted: false }));

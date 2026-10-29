@@ -571,7 +571,8 @@ export function fixerPlanPath(ref, tmpRoot) {
   return match ? path.join(buildFixerDir({ repo: match[1], pr: match[2], tmpRoot }), PLAN_FILE) : null;
 }
 
-export async function locateFixerUnit({ ref, cwd, tmpRoots }) {
+// Closure authenticates the original delivery even after a branch rewrite; pulls keep ancestry admission.
+export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false }) {
   const match = FIXER_REF_RE.exec(ref);
   if (!match) return null;
   const [, repo, pr, headSha, executionIdentity] = match;
@@ -633,7 +634,7 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots }) {
   } catch { /* missing branch or head, or a reset/rewritten branch: stale authority */ }
   const stale = (changed.length > 0 && `required fixer source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`)
     || (retired && `fixer execution ${executionIdentity} belongs to a ${order.gate} round at ${headSha} retired as ${retired}`)
-    || (!contained && `authority branch ${branch} no longer contains head ${headSha}; refresh the PR state and re-emit`);
+    || (!contained && !closureOnly && `authority branch ${branch} no longer contains head ${headSha}; refresh the PR state and re-emit`);
   // The integrity hash is recomputed from the order, never the plan's copied field (as the judge adapter does).
   let rendered = null;
   try { rendered = materializationHash(renderWorkOrder(order)); } catch { /* malformed order: fails the integrity check */ }

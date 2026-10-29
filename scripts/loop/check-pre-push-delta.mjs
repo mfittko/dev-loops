@@ -291,7 +291,7 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
   return perAngle.map((row) => row?.angle).filter((angle) => typeof angle === "string" && angle.length > 0);
 }
 
-async function authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor) {
+async function authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor, { closureOnly = false } = {}) {
   const root = realpathSync(resolveGateArtifactTmpRoot(options.worktree));
   const planPath = realpathSync(options.fixerPlan), plan = JSON.parse(readFileSync(planPath, "utf8"));
   const order = plan.workOrder, origin = { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity };
@@ -306,7 +306,7 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
     && branch.status === 0 && branch.stdout.trim() === order.mutationAuthority?.branch
     && plan.workOrderRef === `fixer:${target?.repo}#${target?.pr}:${sequence.reviewBaselineHead}:${plan.executionIdentity}`
     && workOrderDigest(order) === plan.workOrderDigest, "wrong role, target, phase, baseline, branch or semantic digest");
-  const unit = await locateFixerUnit({ ref: plan.workOrderRef, cwd: options.worktree, tmpRoots: [root] });
+  const unit = await locateFixerUnit({ ref: plan.workOrderRef, cwd: options.worktree, tmpRoots: [root], closureOnly });
   refuse(unit && !unit.stale && unit.executionIdentity === plan.executionIdentity, unit?.stale ?? "no current emitted unit");
   const dir = path.dirname(planPath), expectedOutput = path.join(dir, plan.executionIdentity, "fixer-disposition.json");
   const expectedPrompt = path.join(dir, "work-orders", `${plan.executionIdentity}.md`);
@@ -375,7 +375,7 @@ export async function runCli(
     if (options.fixerPlan && !options.result && !options.handback && (!fixCommitted || record.headSha !== currentHead)) {
       if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(raw.headSha)) throw new Error("sequence closure requires a canonical full commit SHA in the handback");
       const planBytes = readFileSync(options.fixerPlan);
-      await authenticateCoverage(options, sequence, raw.headSha, raw, reportBytes, { candidateHead: raw.headSha }, isAncestor);
+      await authenticateCoverage(options, sequence, raw.headSha, raw, reportBytes, { candidateHead: raw.headSha }, isAncestor, { closureOnly: true });
       const root = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
       const plan = JSON.parse(planBytes);
       const marker = readSequenceMarker(root, sequence.reviewBaselineHead);
