@@ -49,6 +49,16 @@ function fixture() {
 }
 
 const quiet = { stdout: { write: () => {} } };
+test("help describes authenticated closure as an alternative successful response", async () => {
+  let help = "";
+  await runDeltaCli(["--help"], { stdout: { write: (text) => { help += text; } } });
+  assert.match(help, /"outcome": "no_commit\|head_moved", "nextStep": "push_to_gate"/);
+  assert.match(help, /"reviewBaselineHead": "<baseline sha>", "candidateHead": "<current HEAD sha>"/);
+  assert.match(help, /HEAD equal to baseline yields no_commit; otherwise HEAD differing from the authenticated handback yields head_moved/);
+  assert.match(help, /Removes the matching active ungranted branch marker instead of producing reviewer input or a patch/);
+  assert.match(help, /Exit codes: 0 reviewer input, decision or authenticated no_commit\/head_moved closure printed/);
+});
+
 const headAt = (head, tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"))) => ({ ...quiet, tmpRoot, changedPaths: () => [], revParse: (_worktree, rev) => (rev === "HEAD" ? head : rev), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }), diffPatch: () => "patch\n" });
 
 test("result-only changelog seam checks touched changes paths before writing evidence", async () => {
@@ -312,22 +322,49 @@ test("with --result the CLI authorizes the push only for the reviewed head", asy
   assert.equal(stale.nextStep, "rereview_current_head");
 });
 
-test("the baseline resolves to a full SHA, and HEAD equal to the baseline fails", async () => {
+test("the baseline resolves to a full SHA, and authenticated HEAD equal to baseline closes as no_commit", async () => {
   const { actList } = fixture();
   const full = A;
   const resolve = (head) => ({ ...quiet, revParse: (_worktree, rev) => (rev === "HEAD" ? head : full), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }) });
   const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)];
   assert.equal((await runCli(args, resolve(B))).input.reviewBaselineHead, full);
-  await assert.rejects(runCli(args, resolve(full)), /equals the baseline/);
+  assert.equal((await runCli(args, resolve(full))).outcome, "no_commit");
 });
 
-test("a commit_only round without a fix commit clears its sequence marker", async () => {
+test("baseline equality refuses invocations that cannot authenticate input-only closure", async () => {
+  const { threadsFile } = threadsFixture();
+  const { result } = fixture();
+  for (const extra of [[], ["--fixer-plan", "missing.json"], ["--fixer-plan", "missing.json", "--site-coverage", "missing.json", "--result", result, "--invocation", "1"]]) {
+    const seam = headAt(A);
+    const marker = writeSequenceMarker({ tmpRoot: seam.tmpRoot, baselineHead: A, branch: "issue-1" });
+    await assert.rejects(runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", A, "--spec-identity", "s", ...extra], seam), /equals the baseline/);
+    assert.equal(fs.existsSync(marker), true);
+    assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`)), false);
+    assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}-${A}.patch`)), false);
+  }
+});
+
+test("symbolic and abbreviated handback heads cannot close a genuine fixer sequence", async () => {
+  for (const headSha of ["HEAD", B.slice(0, 7)]) {
+    const { dir, actList } = fixture();
+    const coverage = path.join(dir, "coverage.json");
+    fs.writeFileSync(coverage, JSON.stringify({ headSha, siteCoverage: [] }));
+    const seam = headAt(B);
+    const marker = writeSequenceMarker({ tmpRoot: seam.tmpRoot, baselineHead: A, branch: "issue-1" });
+    await assert.rejects(runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "s", "--findings-log", logFor(A), "--site-coverage", coverage], seam), /canonical full commit SHA/);
+    assert.equal(fs.existsSync(marker), true);
+  }
+});
+
+test("an authenticated commit_only round without a fix commit clears its sequence marker", async () => {
   const { actList } = fixture();
-  const full = `${A}${"0".repeat(26)}`;
+  const full = A;
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"));
-  const marker = writeSequenceMarker({ tmpRoot, baselineHead: full });
+  const marker = writeSequenceMarker({ tmpRoot, baselineHead: full, branch: "issue-1" });
   const seam = { ...quiet, tmpRoot, revParse: (_worktree, rev) => (rev === "HEAD" ? full : full), isAncestor: () => true };
-  await assert.rejects(runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], seam), /equals the baseline/);
+  const result = await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], seam);
+  assert.equal(result.outcome, "no_commit");
+  assert.equal(result.nextStep, "push_to_gate");
   assert.equal(fs.existsSync(marker), false);
 });
 
@@ -418,12 +455,12 @@ test("--site-coverage threads a valid record into the delta input", async () => 
   assert.equal(out.input.siteCoverage[0].fingerprint, "fp1");
 });
 
-test("--site-coverage fails on a headSha mismatch or malformed JSON", async () => {
+test("--site-coverage refuses foreign-head closure without its matching marker and rejects malformed JSON", async () => {
   const { dir, actList } = fixture();
   const coverage = path.join(dir, "coverage.json");
   const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A), "--site-coverage", coverage];
   fs.writeFileSync(coverage, JSON.stringify({ headSha: A, siteCoverage: [] }));
-  await assert.rejects(runCli(args, headAt(B)), /site coverage record names head/);
+  await assert.rejects(runCli(args, headAt(B)), /matching active commit_only branch marker/);
   fs.writeFileSync(coverage, "{not json");
   await assert.rejects(runCli(args, headAt(B)), SyntaxError);
 });

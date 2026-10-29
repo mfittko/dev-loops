@@ -9,13 +9,18 @@
  * - without --result: prints the neutral reviewer input for the current
  *   worktree head (cumulative baseline..candidate range, act refs, spec
  *   identity, surface hints (act angles and the round angles of --findings-log),
- *   staleSurfaceHits[], checklist);
+ *   staleSurfaceHits[], checklist), unless authenticated sequence closure applies;
+ *   with --fixer-plan and --site-coverage (not --handback), HEAD equal to the
+ *   baseline closes as no_commit, or HEAD differing from the authenticated
+ *   handback closes as head_moved. Both remove the matching ungranted branch
+ *   marker and return { ok: true, outcome, nextStep: "push_to_gate",
+ *   reviewBaselineHead, candidateHead } instead of reviewer input;
  * - with --result: validates the reviewer's DeltaPrePushReviewResult against
  *   the current worktree head, prints the next step and records the decision at
  *   <tmp-root>/gate-delta/<baseline>.json (last write wins; local evidence only,
  *   PRE-PUSH-DELTA-NOT-GATE-EVIDENCE).
  *
- * The run without --result (except --handback, which writes nothing and omits patchPath and evidenceRule) writes only the cumulative patch (PRE-PUSH-DELTA-PATCH-ARTIFACT) at
+ * The reviewer-input run without --result (except --handback, which writes nothing and omits patchPath and evidenceRule) writes only the cumulative patch (PRE-PUSH-DELTA-PATCH-ARTIFACT) at
  * <tmp-root>/gate-delta/<baseline>-<candidate>.patch: it reads the act list (or the
  * unresolved-threads file of the thread route), the result file, the
  * --findings-log file and `git rev-parse HEAD`, runs the stale-surface reads
@@ -28,7 +33,7 @@ import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
-import { clearSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { clearSequenceMarker, readSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import {
   DELTA_MAX_INVOCATIONS,
   buildDeltaInput,
@@ -70,7 +75,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --pr-head <sha>         The PR head just read from GitHub; the check fails closed when it differs from --baseline
   --spec-identity <id>    Current spec identity passed to the reviewer (required without --result)
   --site-coverage <path>  The fixer's commit_only handback { headSha, siteCoverage: [...] } (the work order's outputRef)
-  --fixer-plan <path>     Canonical current pulled commit_only plan; both flags required for ACT input/result
+  --fixer-plan <path>     Canonical current pulled commit_only plan; pair with --site-coverage for ACT/THREAD closure (required for ACT input/result)
   --findings-log <path>   Required on the act-list route, input mode: the reviewed gate round's findings log (its headSha must equal --baseline);
                           its provenance.perAngle angles join the surface hints (PRE-PUSH-DELTA-INPUT). Refused with --threads-file.
   --handback              The fixer handbackCheck run: waives the --findings-log requirement (it validates --site-coverage, no reviewer input is used)
@@ -79,9 +84,15 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
 
 Output (stdout, JSON):
-  without --result (except --handback, which writes nothing and omits "patchPath" and "evidenceRule"): { "ok": true, "input": { ..., "patchPath", "evidenceRule", "resultShape": { ... } } }
+  without --result, reviewer input (except --handback, which writes nothing and omits "patchPath" and "evidenceRule"): { "ok": true, "input": { ..., "patchPath", "evidenceRule", "resultShape": { ... } } }
                     Also writes the cumulative baseline..candidate patch to input.patchPath (<tmp-root>/gate-delta/<baseline>-<candidate>.patch); the reviewer reads it with the read tool and needs no shell.
                     Fill input.resultShape; on ACT copy its binding below unchanged.
+  without --result, authenticated closure (requires --fixer-plan and --site-coverage, excludes --handback):
+                    { "ok": true, "outcome": "no_commit|head_moved", "nextStep": "push_to_gate",
+                      "reviewBaselineHead": "<baseline sha>", "candidateHead": "<current HEAD sha>" }
+                    HEAD equal to baseline yields no_commit; otherwise HEAD differing from the authenticated handback yields head_moved.
+                    Removes the matching active ungranted branch marker instead of producing reviewer input or a patch.
+                    Invalid authentication or a missing/mismatched marker remains an error; genuine fixer commits retain normal delta review.
 
 Result JSON (--result, DeltaPrePushReviewResult):
   Base shape (complete THREAD shape; genuine legacy results remain readable):
@@ -112,8 +123,8 @@ Result JSON (--result, DeltaPrePushReviewResult):
 
 ${JQ_OUTPUT_USAGE}
 
-Exit codes: 0 decision printed; 2 argument or runtime error (including HEAD equal
-to the baseline), or invalid --jq filter.`;
+Exit codes: 0 reviewer input, decision or authenticated no_commit/head_moved closure printed;
+2 argument or runtime error (including unauthenticated baseline equality), or invalid --jq filter.`;
 
 const parseError = buildParseError(USAGE);
 
@@ -164,7 +175,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
   if (values.handback && !(values["act-list"] && values["site-coverage"] && !values.result)) throw parseError("--handback is the fixer handbackCheck flag: it requires --act-list and --site-coverage and refuses --result; the coordinator input run never passes it");
   if (values["act-list"] && !values.result && !values.handback && !values["findings-log"]) throw parseError("--findings-log <path> is required on the act-list input run: PRE-PUSH-DELTA-INPUT makes the reviewed round's angles part of the surface hints");
   if (values["act-list"] && !values.handback && !(values["fixer-plan"] && values["site-coverage"])) throw parseError("ACT review requires both --fixer-plan and --site-coverage");
-  if (values["fixer-plan"] && (values.handback || values["threads-file"])) throw parseError("--fixer-plan is only for ACT coordinator input/result runs");
+  if (values["fixer-plan"] && values.handback) throw parseError("--fixer-plan is only for coordinator input/result runs");
   return {
     help: false,
     actList: values["act-list"] ?? null,
@@ -280,7 +291,7 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
   return perAngle.map((row) => row?.angle).filter((angle) => typeof angle === "string" && angle.length > 0);
 }
 
-async function authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor) {
+async function authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor, { closureOnly = false } = {}) {
   const root = realpathSync(resolveGateArtifactTmpRoot(options.worktree));
   const planPath = realpathSync(options.fixerPlan), plan = JSON.parse(readFileSync(planPath, "utf8"));
   const order = plan.workOrder, origin = { workOrderRef: plan.workOrderRef, workOrderDigest: plan.workOrderDigest, executionIdentity: plan.executionIdentity };
@@ -289,12 +300,13 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   refuse(canonicalPlan && planPath === path.resolve(canonicalPlan), "not the canonical current fixer plan");
   const branch = spawnSync("git", ["-C", options.worktree, "branch", "--show-current"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
   const target = order?.target;
-  refuse(order?.role === "fixer" && order.phase === "commit_only" && order.source === "act-list"
+  refuse(order?.role === "fixer" && order.phase === "commit_only" && order.source === (options.threadsFile ? "threads" : "act-list")
     && order.headSha === sequence.reviewBaselineHead && target?.repo === order.mutationAuthority?.repo && target?.pr === order.mutationAuthority?.pr
+    && (!options.repo || target.repo === options.repo) && (!options.pr || target.pr === options.pr)
     && branch.status === 0 && branch.stdout.trim() === order.mutationAuthority?.branch
     && plan.workOrderRef === `fixer:${target?.repo}#${target?.pr}:${sequence.reviewBaselineHead}:${plan.executionIdentity}`
     && workOrderDigest(order) === plan.workOrderDigest, "wrong role, target, phase, baseline, branch or semantic digest");
-  const unit = await locateFixerUnit({ ref: plan.workOrderRef, cwd: options.worktree, tmpRoots: [root] });
+  const unit = await locateFixerUnit({ ref: plan.workOrderRef, cwd: options.worktree, tmpRoots: [root], closureOnly });
   refuse(unit && !unit.stale && unit.executionIdentity === plan.executionIdentity, unit?.stale ?? "no current emitted unit");
   const dir = path.dirname(planPath), expectedOutput = path.join(dir, plan.executionIdentity, "fixer-disposition.json");
   const expectedPrompt = path.join(dir, "work-orders", `${plan.executionIdentity}.md`);
@@ -309,15 +321,16 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   const renderedHash = materializationHash(readFileSync(expectedPrompt));
   refuse(renderedHash === plan.materializationHash && renderedHash === unit.materializationHash
     && renderedHash === pull.receipt.materializationHash, "materialization differs from actual bytes, renderer, plan or receipt");
-  const actRead = order.requiredReads?.find((read) => read.kind === "act-list");
-  const actBytes = readFileSync(options.actList);
-  refuse(actRead && realpathSync(actRead.path) === realpathSync(options.actList)
+  const sourcePath = options.threadsFile ?? options.actList;
+  const actRead = order.requiredReads?.find((read) => read.kind === order.source);
+  const actBytes = readFileSync(sourcePath);
+  refuse(actRead && realpathSync(actRead.path) === realpathSync(sourcePath)
     && actRead.sha256 === sha256Hex(actBytes).slice(7) && order.authority?.sourceDigest === sha256Hex(JSON.parse(actBytes)).slice(7)
-    && startDeltaSequence({ reviewBaselineHead: sequence.reviewBaselineHead, actList: JSON.parse(actBytes) }).actSetId === sequence.actSetId, "changed ACT source or authority");
+    && startDeltaSequence({ reviewBaselineHead: sequence.reviewBaselineHead, actList: options.threadsFile ? threadsToActList(JSON.parse(actBytes), { repo: options.repo, pr: options.pr }) : JSON.parse(actBytes) }).actSetId === sequence.actSetId, "changed ACT source or authority");
   refuse(raw.headSha === (result ? result.candidateHead : currentHead)
     && isAncestor(options.worktree, sequence.reviewBaselineHead, raw.headSha)
     && isAncestor(options.worktree, raw.headSha, currentHead), "handback candidate is not the reviewed contained commit");
-  return { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex(raw.siteCoverage).slice(7), handbackBytesDigest: sha256Hex(reportBytes).slice(7), origin };
+  return options.threadsFile ? null : { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex(raw.siteCoverage).slice(7), handbackBytesDigest: sha256Hex(reportBytes).slice(7), origin };
 }
 
 export async function runCli(
@@ -349,13 +362,7 @@ export async function runCli(
       throw new Error(`worktree HEAD ${currentHead} differs from the baseline ${sequence.reviewBaselineHead} but the ${options.threadsFile ? "thread" : "act"} list has no items: the delta review has nothing to check, and the sequence marker stays until the fix commit is pushed or the marker is deleted`);
     }
     // PRE-PUSH-DELTA-PUSH-AUTHORITY: the commit_only round ended without a fix commit, so its marker guards nothing and would only block later pushes.
-    clearSequenceMarker(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sequence.reviewBaselineHead);
-    throw new Error(`worktree HEAD ${currentHead} equals the baseline: commit the act-list or thread-route fix before the delta review`);
-  }
-  if (!isAncestor(options.worktree, sequence.reviewBaselineHead, currentHead)) {
-    throw new Error(
-      `baseline ${sequence.reviewBaselineHead} is not an ancestor of worktree HEAD ${currentHead}: the delta range must extend the reviewed head`,
-    );
+    if (!(options.fixerPlan && options.siteCoverage && !options.result && !options.handback)) throw new Error(`worktree HEAD ${currentHead} equals the baseline: pass the current pulled --fixer-plan and --site-coverage in input-only mode to close its sequence`);
   }
   // The fixer's commit_only handback. Without it every act item with a site query reports a coverage gap.
   const result = options.result ? JSON.parse(readFileSync(options.result, "utf8")) : null;
@@ -365,6 +372,22 @@ export async function runCli(
     const reportBytes = readFileSync(options.siteCoverage);
     const raw = JSON.parse(reportBytes);
     const record = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
+    if (options.fixerPlan && !options.result && !options.handback && (!fixCommitted || record.headSha !== currentHead)) {
+      if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(raw.headSha)) throw new Error("sequence closure requires a canonical full commit SHA in the handback");
+      const planBytes = readFileSync(options.fixerPlan);
+      await authenticateCoverage(options, sequence, raw.headSha, raw, reportBytes, { candidateHead: raw.headSha }, isAncestor, { closureOnly: true });
+      const root = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
+      const plan = JSON.parse(planBytes);
+      const marker = readSequenceMarker(root, sequence.reviewBaselineHead);
+      if (!readFileSync(options.fixerPlan).equals(planBytes) || !marker || marker.branch !== plan.workOrder.mutationAuthority.branch || marker.fullGranted) throw new Error("sequence closure requires the matching active commit_only branch marker");
+      clearSequenceMarker(root, sequence.reviewBaselineHead);
+      const payload = { ok: true, outcome: fixCommitted ? "head_moved" : "no_commit", nextStep: "push_to_gate", reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead };
+      process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
+      return payload;
+    }
+    if (!isAncestor(options.worktree, sequence.reviewBaselineHead, currentHead)) {
+      throw new Error(`baseline ${sequence.reviewBaselineHead} is not an ancestor of worktree HEAD ${currentHead}: the delta range must extend the reviewed head`);
+    }
     if (record.headSha !== currentHead && !options.result) {
       throw new Error(`site coverage record names head ${record.headSha}, not the worktree HEAD ${currentHead}: the fixer must record coverage for its latest commit`);
     }
@@ -373,9 +396,12 @@ export async function runCli(
       if (gaps.length > 0) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: ${gaps.join("; ")}`);
     }
     // Only the validation view discards stale coverage; the reviewed raw identity stays bound.
-    if (options.fixerPlan) coverageBinding = await authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor);
-    siteCoverage = options.fixerPlan ? raw.siteCoverage : record.headSha === currentHead ? record.siteCoverage ?? [] : [];
+    if (options.fixerPlan && !options.threadsFile) coverageBinding = await authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor);
+    siteCoverage = options.fixerPlan && !options.threadsFile ? raw.siteCoverage : record.headSha === currentHead ? record.siteCoverage ?? [] : [];
     validationCoverage = record.headSha === currentHead ? record.siteCoverage ?? [] : [];
+  }
+  if (!options.siteCoverage && !isAncestor(options.worktree, sequence.reviewBaselineHead, currentHead)) {
+    throw new Error(`baseline ${sequence.reviewBaselineHead} is not an ancestor of worktree HEAD ${currentHead}: the delta range must extend the reviewed head`);
   }
   // A custom `staleSurface` may return the hits array alone.
   const stale = staleSurface(options.worktree, sequence.reviewBaselineHead, currentHead);

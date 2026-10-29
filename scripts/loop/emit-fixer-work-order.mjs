@@ -252,6 +252,7 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidat
     return;
   }
   if (!record) throw new Refusal(`--phase full with --threads-file needs a delta record at ${recordPath} from a thread-route delta review: ${next}`);
+  if (record.candidateHead !== candidateHead) throw new Refusal("--phase full refused: THREAD delta candidateHead differs from the committed candidate");
   const threadIds = new Set(threads.map((thread) => thread.threadId));
   const refs = (Array.isArray(record.items) ? record.items : []).map((item) => item?.ref);
   const unbound = refs.filter((ref) => !threadIds.has(ref));
@@ -364,7 +365,7 @@ export async function emitFixerWorkOrder({
     if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}`);
   }
   await capture.read(gateDeltaRecordPath(tmpRoot, headSha));
-  if (phase === "full") assertDeltaClearsFullPhase({ tmpRoot, headSha, delta: delta?.parsed, threads: threadsFile ? source.parsed.threads : null });
+  if (phase === "full") assertDeltaClearsFullPhase({ tmpRoot, headSha, delta: delta?.parsed, threads: threadsFile ? source.parsed.threads : null, ...(threadsFile ? { candidateHead: execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() } : {}) });
 
   // Mutation authority comes from the PR itself, never from the caller.
   const prState = await fetchPr({ repo, pr });
@@ -570,7 +571,8 @@ export function fixerPlanPath(ref, tmpRoot) {
   return match ? path.join(buildFixerDir({ repo: match[1], pr: match[2], tmpRoot }), PLAN_FILE) : null;
 }
 
-export async function locateFixerUnit({ ref, cwd, tmpRoots }) {
+// Closure authenticates the original delivery even after a branch rewrite; pulls keep ancestry admission.
+export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false }) {
   const match = FIXER_REF_RE.exec(ref);
   if (!match) return null;
   const [, repo, pr, headSha, executionIdentity] = match;
@@ -632,7 +634,7 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots }) {
   } catch { /* missing branch or head, or a reset/rewritten branch: stale authority */ }
   const stale = (changed.length > 0 && `required fixer source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`)
     || (retired && `fixer execution ${executionIdentity} belongs to a ${order.gate} round at ${headSha} retired as ${retired}`)
-    || (!contained && `authority branch ${branch} no longer contains head ${headSha}; refresh the PR state and re-emit`);
+    || (!contained && !closureOnly && `authority branch ${branch} no longer contains head ${headSha}; refresh the PR state and re-emit`);
   // The integrity hash is recomputed from the order, never the plan's copied field (as the judge adapter does).
   let rendered = null;
   try { rendered = materializationHash(renderWorkOrder(order)); } catch { /* malformed order: fails the integrity check */ }

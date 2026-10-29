@@ -32,7 +32,7 @@ import { countCompletedRounds, resolveCapRoundFixed } from "../github/write-gate
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
-import { verifyFixerDisposition } from "../github/verify-fixer-disposition.mjs";
+import { loadDeliveredHandoff, verifyFixerDisposition } from "../github/verify-fixer-disposition.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "../github/_gate-finding-surface.mjs";
 import { resolveAuthenticatedLogin } from "../github/post-gate-findings.mjs";
@@ -871,6 +871,28 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
           applicable = relation.contained;
         }
         if (applicable) {
+          const currentCheckpoint = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot });
+          const legacyCurrent = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot: "tmp" });
+          if (![currentCheckpoint, ...resolveLedgerCheckouts(repoRoot).map((root) => path.resolve(root, legacyCurrent))].some(existsSync)) {
+            const output = path.join(path.dirname(planPath), plan.executionIdentity, "fixer-disposition.json");
+            const head = await readFile(output, "utf8").then((text) => JSON.parse(text).headSha).catch(() => null);
+            if (head && head !== currentHeadSha && existsSync(buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: head, tmpRoot }))) {
+              const checkpointPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: head, tmpRoot });
+              const checkpoint = await readFile(checkpointPath, "utf8").then(JSON.parse);
+              if (checkpoint.complete !== true) throw new Error("ancestor checkpoint is not complete; run a full gate round");
+              const { handoff, delivery } = await loadDeliveredHandoff({ repo, pr, headSha: head, fixerPlan: planPath }, { repoRoot, receiptTmpRoot: tmpRoot, runtime });
+              if (Object.entries(delivery).some(([key, value]) => checkpoint[key] !== value)) throw new Error("ancestor checkpoint belongs to another fixer execution");
+              if (JSON.stringify(normalizeFixerDispositionHandoff(checkpoint)) !== JSON.stringify(handoff)) throw new Error("ancestor checkpoint differs from authenticated delivery");
+              const relation = await isCommitContainedByHead({ repo, commitSha: head, headSha: currentHeadSha, requireAhead: true }, runtime);
+              if (!relation.contained) throw new Error("ancestor checkpoint requires an ahead live head; run a full gate round");
+              const threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
+              const containment = await buildContainmentMap(handoff.dispositions.filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.fixingCommitSha), { repo, headSha: currentHeadSha }, runtime);
+              const liveThreads = threads.threads.map((thread) => ({ threadId: thread.id, isResolved: thread.isResolved, replyBodies: threads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body) }));
+              const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment });
+              if (!(await readFile(planPath)).equals(planBytes)) throw new Error("active fixer plan changed during carry verification");
+              return { complete: evaluation.ok, incomplete: evaluation.incomplete, ...(evaluation.ok ? { carriedFromHead: head } : {}) };
+            }
+          }
           const checked = await verifyFixerDisposition({ repo, pr, headSha: currentHeadSha, fixerPlan: planPath, check: true }, { ...runtime, repoRoot });
           if (!checked.complete) {
             const unchanged = (await readFile(planPath)).equals(planBytes);

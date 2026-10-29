@@ -1,11 +1,54 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { test } from "bun:test";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { A, B, boundArgs, coverageRepo, git } from "./_delta-coverage-fixture.mjs";
+import { checkFixPushAuthority } from "../../scripts/loop/check-fix-push-authority.mjs";
+import { readSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { initGitFixture } from "../_helpers.mjs";
+
+test("authenticated no_commit and foreign-head exits close only their own sequence and permit the push", async () => {
+  for (const outcome of ["no_commit", "head_moved"]) {
+    const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "delta-closure-")));
+    initGitFixture(cwd, { branch: "issue-1" });
+    const A = git(cwd, "rev-parse", "HEAD");
+    git(cwd, "commit", "--allow-empty", "-m", "developer change");
+    const act = { severity: "low", angle: "correctness", summary: outcome, judgeDisposition: "act" };
+    act.fingerprint = fingerprintFinding(act);
+    const actPath = path.join(cwd, `${outcome}.json`), coverage = path.join(cwd, `${outcome}-coverage.json`), log = path.join(cwd, `${outcome}-log.json`);
+    fs.writeFileSync(actPath, JSON.stringify([act]));
+    fs.writeFileSync(coverage, JSON.stringify({ headSha: A, siteCoverage: [] }));
+    fs.writeFileSync(log, JSON.stringify({ headSha: A, provenance: { perAngle: [{ angle: "correctness" }] } }));
+    const fixture = await boundArgs(["--act-list", actPath, "--baseline", A, "--site-coverage", coverage, "--spec-identity", "s", "--findings-log", log, "--worktree", cwd]);
+    const options = { stdout: { write() {} }, ...(outcome === "no_commit" ? { revParse: (_cwd, rev) => rev === "HEAD" ? A : rev } : {}) };
+    assert.equal(checkFixPushAuthority(cwd).ok, false);
+    const planBytes = fs.readFileSync(fixture.unit.planPath), receiptBytes = fs.readFileSync(fixture.pulled.receiptPath), outputBytes = fs.readFileSync(fixture.output);
+    for (const defect of ["execution", "branch", "PR", "receipt", "malformed"]) {
+      const plan = JSON.parse(planBytes);
+      if (defect === "execution") plan.executionIdentity = "f1-00000000";
+      if (defect === "branch") plan.workOrder.mutationAuthority.branch = "other";
+      if (defect === "PR") plan.workOrder.target.pr++;
+      fs.writeFileSync(fixture.unit.planPath, JSON.stringify(plan));
+      if (defect === "receipt") fs.unlinkSync(fixture.pulled.receiptPath);
+      if (defect === "malformed") fs.writeFileSync(fixture.output, "{");
+      await assert.rejects(runCli(fixture.args, options), undefined, defect);
+      assert.notEqual(readSequenceMarker(fixture.tmpRoot, A), null, defect);
+      fs.writeFileSync(fixture.unit.planPath, planBytes);
+      fs.writeFileSync(fixture.pulled.receiptPath, receiptBytes);
+      fs.writeFileSync(fixture.output, outputBytes);
+    }
+    const result = await runCli(fixture.args, options);
+    assert.equal(result.outcome, outcome);
+    assert.equal(result.nextStep, "push_to_gate");
+    assert.equal(readSequenceMarker(fixture.tmpRoot, A), null);
+    assert.equal(checkFixPushAuthority(cwd).ok, true);
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 test("pulled coverage binding preserves raw identity through the input, result and decision", async () => {
   const act = { severity: "low", angle: "correctness", summary: "binding", judgeDisposition: "act", siteQuery: "git grep x" };
