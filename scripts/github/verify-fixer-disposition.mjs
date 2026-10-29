@@ -833,6 +833,9 @@ export async function verifyFixerDisposition(
     ? { ...entry, failedStep: FIXER_DISPOSITION_FAILED_STEP.DELTA_BLOCKED, deltaStatus: deltaBlocked.get(entry.threadId).status, deltaRecord: deltaBlocked.get(entry.threadId).recordPath }
     : entry));
   const activeFixer = evaluation.ok ? undefined : await bindActiveFixer(false);
+  if (!options.check && evaluation.ok && residualFailures.length === 0) {
+    await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery, complete: true }, null, 2)}\n`, "utf8");
+  }
   return {
     // A failed residual-status reply is not delivered: nonzero exit naming the thread.
     ok: residualFailures.length === 0,
@@ -880,6 +883,8 @@ async function main() {
     process.exitCode = 1;
   }
 }
+export { loadDeliveredHandoff };
+
 if (isDirectCliRun(import.meta.url)) {
   await main();
 }

@@ -1087,7 +1087,6 @@ const FIX_LOOP_TO_FIXTURE = new Map([
 
 export const FIX_LOOP_KNOWN_GAPS = new Map([
   ["head_moved->full_gate_round", "slice 3 (C10): close the sequence, remove the marker and route the head"],
-  ["head_moved->disposition_complete", "slice 3 (C7): descendant-head carry of the checkpoint"],
   ["no_commit->full_gate_round", "slice 3 (C9): a no-commit pass closes its sequence and removes its marker"],
   ["ci_red->act_pending", "slice 4 (C11): a CI-failure source enters a fixer order"],
   ["delta_review->commit_only_emitted", "slice 4 (C12): delta residue and new findings re-emit commit_only"],

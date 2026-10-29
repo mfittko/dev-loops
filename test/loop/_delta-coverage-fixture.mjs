@@ -25,7 +25,7 @@ export async function boundArgs(argv, seam = {}) {
   const cwd = get("--worktree"), actList = get("--act-list");
   const baseline = seam.revParse ? seam.revParse(cwd, get("--baseline")) : git(cwd, "rev-parse", get("--baseline"));
   const candidate = seam.revParse ? seam.revParse(cwd, "HEAD") : git(cwd, "rev-parse", "HEAD");
-  if (!fs.existsSync(actList) || !JSON.parse(fs.readFileSync(actList)).length || baseline === candidate) {
+  if (!fs.existsSync(actList) || !JSON.parse(fs.readFileSync(actList)).length) {
     args.push("--fixer-plan", "unused", "--site-coverage", "unused");
     return { args, seam };
   }

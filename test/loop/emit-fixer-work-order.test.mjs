@@ -76,6 +76,70 @@ const clearingDeltaFor = (head, over = {}) => deltaResultFor(head, {
 let clock = 1_790_000_000_000;
 const nextExecution = () => `f${clock++}-0000abcd`;
 
+for (const route of ["ACT", "THREAD"]) test(`detector carries only a complete authenticated ${route} ancestor checkpoint`, async () => {
+  const { resolveFixerDispositionInput } = await import("../../scripts/loop/detect-pr-gate-coordination-state.mjs");
+  await withFixture(async ({ root, wt, head, emit, files, writeRecord, prepareFull }) => {
+    let unit, candidate, fixing, siteCoverage;
+    if (route === "ACT") {
+      const prepared = await prepareFull({ bounded: true });
+      candidate = prepared.candidate;
+      fixing = prepared.fixing;
+      siteCoverage = prepared.siteCoverage;
+      unit = await prepared.full();
+    } else {
+      git(wt, "commit", "-q", "--allow-empty", "-m", "fix");
+      candidate = git(wt, "rev-parse", "HEAD");
+      fixing = head;
+      await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
+      await writeRecord({ candidateHead: candidate, items: [{ ref: "PRRT_T1", status: "resolved" }] });
+      unit = await emit({ phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    }
+    assert.equal(pull(unit, root).status, 0);
+    const threadId = "PRRT_T1";
+    const handoff = { headSha: candidate, dispositions: [{ threadId, disposition: "tackled", fixingCommitSha: fixing }], ...(siteCoverage ? { siteCoverage } : {}) };
+    await mkdir(path.dirname(unit.workOrder.outputRefs[0]), { recursive: true });
+    await writeMarked(unit.workOrder.outputRefs[0], JSON.stringify(handoff));
+    git(wt, "commit", "-q", "--allow-empty", "-m", "developer follow-up");
+    const live = git(wt, "rev-parse", "HEAD");
+    const directory = path.join(root, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
+    const checkpoint = path.join(directory, `fixer-disposition-${candidate}.json`);
+    await mkdir(directory, { recursive: true });
+    for (const defect of ["none", "behind", "diverged", "identical", "incomplete", "unstamped", "unresolved", "uncontained", "malformed-current"]) {
+      await writeFile(checkpoint, JSON.stringify({ ...handoff, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity, ...(defect === "unstamped" ? {} : { complete: defect !== "incomplete" }) }));
+      const current = path.join(directory, `fixer-disposition-${live}.json`);
+      if (defect === "malformed-current") await writeFile(current, "{");
+      const compare = (sha, target = live) => ["api", `repos/${REPO}/compare/${sha}...${target}`];
+      const relation = ["behind", "diverged", "identical"].includes(defect) ? defect : "ahead";
+      const expected = [{ args: compare(unit.workOrder.headSha), status: route === "ACT" ? relation : "ahead" }];
+      const authenticatesAncestor = !["incomplete", "unstamped", "malformed-current"].includes(defect)
+        && (route === "THREAD" || !["behind", "diverged"].includes(defect));
+      if (authenticatesAncestor) {
+        expected.push({ args: compare(head, candidate), status: "ahead" });
+        if (route === "ACT") expected.push({ args: compare(fixing, candidate), status: "ahead" });
+        expected.push({ args: compare(candidate), status: relation });
+        if (["none", "unresolved", "uncontained"].includes(defect)) expected.push({ args: compare(fixing), status: defect === "uncontained" ? "behind" : "ahead" });
+      }
+      const calls = [];
+      const runtime = { repoRoot: wt, env: gitFreeEnv(), runChild: async (command, args) => {
+        const entry = expected[calls.length];
+        calls.push({ command, args });
+        assert.equal(command, "gh");
+        assert.deepEqual(args, entry?.args, `${defect}: unexpected containment call`);
+        return { code: 0, stdout: JSON.stringify({ status: entry.status }), stderr: "" };
+      } };
+      const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: live, parsedThreads: {
+        threads: [{ id: threadId, isResolved: defect !== "unresolved" }], comments: [{ threadId, body: `Fixed in ${fixing}` }],
+      } }, runtime);
+      assert.deepEqual(calls, expected.map(({ args }) => ({ command: "gh", args })), `${defect}: exact expected calls consumed`);
+      assert.equal(result?.complete === true, defect === "none", `${defect}: ${JSON.stringify(result)}`);
+      if (defect === "none") assert.equal(result.carriedFromHead, candidate);
+      assert.equal(result?.gateVerdict, undefined);
+      if (defect === "malformed-current") await rm(current);
+    }
+    assert.notEqual(head, live);
+  });
+});
+
 // A main checkout on `main` (commit C0) with the PR branch issue-1 at head C1 in a
 // linked worktree, plus typed source files under the main checkout's tmp/.
 async function withFixture(fn) {
@@ -104,7 +168,7 @@ async function withFixture(fn) {
     const writeRecord = async (over = {}) => {
       await mkdir(path.dirname(recordPath), { recursive: true });
       await writeFile(recordPath, JSON.stringify({
-        reviewBaselineHead: head, candidateHead: "c".repeat(40), actSetId: startDeltaSequence({ reviewBaselineHead: head, actList: ACT }).actSetId, invocation: 1,
+        reviewBaselineHead: head, candidateHead: head, actSetId: startDeltaSequence({ reviewBaselineHead: head, actList: ACT }).actSetId, invocation: 1,
         outcome: "locally_clear", nextStep: "push", items: [{ ref: "T1", status: "resolved" }], ...over,
       }));
     };
@@ -155,6 +219,49 @@ async function withFixture(fn) {
     await fn({ root, wt, head, files, emit, recordPath, writeRecord, prepareFull });
   }, { prefix: "dev-loops-fixer-" });
 }
+
+test("THREAD no_commit and head_moved close an authenticated sequence and allow the next push", async () => {
+  const { checkFixPushAuthority } = await import("../../scripts/loop/check-fix-push-authority.mjs");
+  for (const move of ["none", "descendant", "amended"]) await withFixture(async ({ root, wt, head, files, emit }) => {
+    const outcome = move === "none" ? "no_commit" : "head_moved";
+    const unit = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    assert.equal(pull(unit, root).status, 0);
+    const output = unit.workOrder.outputRefs[0];
+    await mkdir(path.dirname(output), { recursive: true });
+    await writeFile(output, JSON.stringify({ headSha: head, dispositions: [] }));
+    if (move !== "none") git(wt, "commit", "-q", "--allow-empty", ...(move === "amended" ? ["--amend"] : []), "-m", "developer change");
+    const located = await locateFixerUnit({ ref: unit.workOrderRef, cwd: wt, tmpRoots: [path.join(root, "tmp")] });
+    if (move === "amended") assert.match(located.stale, /no longer contains/);
+    else assert.equal(located.stale, undefined);
+    const args = ["--threads-file", files.threads, "--repo", REPO, "--pr", String(PR), "--baseline", head, "--spec-identity", "s", "--fixer-plan", unit.planPath, "--site-coverage", output, "--worktree", wt];
+    if (move !== "amended") assert.equal(checkFixPushAuthority(wt).ok, false);
+    const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
+    const original = await readFile(marker);
+    await writeFile(marker, JSON.stringify({ baselineHead: head, branch: "other", fullGranted: false }));
+    await assert.rejects(runCli(args, { stdout: { write() {} } }), /matching active commit_only branch marker/);
+    assert.equal(existsSync(marker), true);
+    await writeFile(marker, original);
+    const result = await runCli(args, { stdout: { write() {} } });
+    assert.equal(result.outcome, outcome);
+    assert.equal(result.nextStep, "push_to_gate");
+    assert.equal(existsSync(marker), false);
+    assert.equal(checkFixPushAuthority(wt).ok, true);
+  });
+});
+
+test("THREAD full emission binds the delta to the committed candidate rather than the baseline", async () => {
+  await withFixture(async ({ wt, files, emit, writeRecord }) => {
+    git(wt, "commit", "-q", "--allow-empty", "-m", "candidate");
+    const candidate = git(wt, "rev-parse", "HEAD");
+    const options = { phase: "full", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined };
+    for (const candidateHead of [undefined, "d".repeat(40)]) {
+      await writeRecord({ candidateHead });
+      await assert.rejects(emit(options), /candidateHead.*committed candidate/);
+    }
+    await writeRecord({ candidateHead: candidate });
+    assert.equal((await emit(options)).workOrder.phase, "full");
+  });
+});
 
 for (const phase of ["commit_only", "full"]) test(`capture preserves genuine ${phase} delivery before replacement without granting archive authority`, async () => {
   await withFixture(async ({ root, wt, emit, prepareFull }) => {

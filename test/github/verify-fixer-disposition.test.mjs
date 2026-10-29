@@ -158,6 +158,17 @@ async function boundFixture(root, writeHandoff = false, setup = {}) {
   return { plan, planPath, receiptPath, subject };
 }
 
+test("only successful normal verification stamps a checkpoint complete for descendant carry", async () => {
+  for (const complete of [false, true]) await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, complete ? [] : TACKLED);
+    const { deps } = runtime([threadsCallEntry([]), ...complete ? [] : [compareEntry(FIX_SHA, "diverged")]], repoRoot);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
+    assert.equal(result.complete, complete);
+    const checkpoint = JSON.parse(await readFile(path.resolve(repoRoot, result.checkpointPath), "utf8"));
+    assert.equal(checkpoint.complete === true, complete);
+  });
+});
+
 test("bound active full missing output is typed subject evidence and resolver stays incomplete", async () => {
   await withRepoRoot(async (root) => {
     const f = await boundFixture(root);
