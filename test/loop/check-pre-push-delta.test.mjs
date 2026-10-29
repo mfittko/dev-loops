@@ -49,6 +49,16 @@ function fixture() {
 }
 
 const quiet = { stdout: { write: () => {} } };
+test("help describes authenticated closure as an alternative successful response", async () => {
+  let help = "";
+  await runDeltaCli(["--help"], { stdout: { write: (text) => { help += text; } } });
+  assert.match(help, /"outcome": "no_commit\|head_moved", "nextStep": "push_to_gate"/);
+  assert.match(help, /"reviewBaselineHead": "<baseline sha>", "candidateHead": "<current HEAD sha>"/);
+  assert.match(help, /HEAD equal to baseline yields no_commit; otherwise HEAD differing from the authenticated handback yields head_moved/);
+  assert.match(help, /Removes the matching active ungranted branch marker instead of producing reviewer input or a patch/);
+  assert.match(help, /Exit codes: 0 reviewer input, decision or authenticated no_commit\/head_moved closure printed/);
+});
+
 const headAt = (head, tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"))) => ({ ...quiet, tmpRoot, changedPaths: () => [], revParse: (_worktree, rev) => (rev === "HEAD" ? head : rev), isAncestor: () => true, staleSurface: () => ({ hits: [], truncated: false }), diffPatch: () => "patch\n" });
 
 test("result-only changelog seam checks touched changes paths before writing evidence", async () => {

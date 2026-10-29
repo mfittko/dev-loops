@@ -108,15 +108,29 @@ for (const route of ["ACT", "THREAD"]) test(`detector carries only a complete au
       await writeFile(checkpoint, JSON.stringify({ ...handoff, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity, ...(defect === "unstamped" ? {} : { complete: defect !== "incomplete" }) }));
       const current = path.join(directory, `fixer-disposition-${live}.json`);
       if (defect === "malformed-current") await writeFile(current, "{");
-      const runtime = { repoRoot: wt, env: gitFreeEnv(), runChild: async (_cmd, args) => {
-        const status = args.some((arg) => String(arg).includes(`${candidate}...${live}`))
-          ? ["behind", "diverged", "identical"].includes(defect) ? defect : "ahead"
-          : "ahead";
-        return { code: 0, stdout: JSON.stringify({ status: defect === "uncontained" && args.some((arg) => String(arg).includes(`${fixing}...${live}`)) ? "behind" : status }), stderr: "" };
+      const compare = (sha, target = live) => ["api", `repos/${REPO}/compare/${sha}...${target}`];
+      const relation = ["behind", "diverged", "identical"].includes(defect) ? defect : "ahead";
+      const expected = [{ args: compare(unit.workOrder.headSha), status: route === "ACT" ? relation : "ahead" }];
+      const authenticatesAncestor = !["incomplete", "unstamped", "malformed-current"].includes(defect)
+        && (route === "THREAD" || !["behind", "diverged"].includes(defect));
+      if (authenticatesAncestor) {
+        expected.push({ args: compare(head, candidate), status: "ahead" });
+        if (route === "ACT") expected.push({ args: compare(fixing, candidate), status: "ahead" });
+        expected.push({ args: compare(candidate), status: relation });
+        if (["none", "unresolved", "uncontained"].includes(defect)) expected.push({ args: compare(fixing), status: defect === "uncontained" ? "behind" : "ahead" });
+      }
+      const calls = [];
+      const runtime = { repoRoot: wt, env: gitFreeEnv(), runChild: async (command, args) => {
+        const entry = expected[calls.length];
+        calls.push({ command, args });
+        assert.equal(command, "gh");
+        assert.deepEqual(args, entry?.args, `${defect}: unexpected containment call`);
+        return { code: 0, stdout: JSON.stringify({ status: entry.status }), stderr: "" };
       } };
       const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: live, parsedThreads: {
         threads: [{ id: threadId, isResolved: defect !== "unresolved" }], comments: [{ threadId, body: `Fixed in ${fixing}` }],
       } }, runtime);
+      assert.deepEqual(calls, expected.map(({ args }) => ({ command: "gh", args })), `${defect}: exact expected calls consumed`);
       assert.equal(result?.complete === true, defect === "none", `${defect}: ${JSON.stringify(result)}`);
       if (defect === "none") assert.equal(result.carriedFromHead, candidate);
       assert.equal(result?.gateVerdict, undefined);

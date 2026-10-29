@@ -9,13 +9,18 @@
  * - without --result: prints the neutral reviewer input for the current
  *   worktree head (cumulative baseline..candidate range, act refs, spec
  *   identity, surface hints (act angles and the round angles of --findings-log),
- *   staleSurfaceHits[], checklist);
+ *   staleSurfaceHits[], checklist), unless authenticated sequence closure applies;
+ *   with --fixer-plan and --site-coverage (not --handback), HEAD equal to the
+ *   baseline closes as no_commit, or HEAD differing from the authenticated
+ *   handback closes as head_moved. Both remove the matching ungranted branch
+ *   marker and return { ok: true, outcome, nextStep: "push_to_gate",
+ *   reviewBaselineHead, candidateHead } instead of reviewer input;
  * - with --result: validates the reviewer's DeltaPrePushReviewResult against
  *   the current worktree head, prints the next step and records the decision at
  *   <tmp-root>/gate-delta/<baseline>.json (last write wins; local evidence only,
  *   PRE-PUSH-DELTA-NOT-GATE-EVIDENCE).
  *
- * The run without --result (except --handback, which writes nothing and omits patchPath and evidenceRule) writes only the cumulative patch (PRE-PUSH-DELTA-PATCH-ARTIFACT) at
+ * The reviewer-input run without --result (except --handback, which writes nothing and omits patchPath and evidenceRule) writes only the cumulative patch (PRE-PUSH-DELTA-PATCH-ARTIFACT) at
  * <tmp-root>/gate-delta/<baseline>-<candidate>.patch: it reads the act list (or the
  * unresolved-threads file of the thread route), the result file, the
  * --findings-log file and `git rev-parse HEAD`, runs the stale-surface reads
@@ -79,9 +84,15 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --worktree <dir>        Worktree whose HEAD is the candidate (default: cwd)
 
 Output (stdout, JSON):
-  without --result (except --handback, which writes nothing and omits "patchPath" and "evidenceRule"): { "ok": true, "input": { ..., "patchPath", "evidenceRule", "resultShape": { ... } } }
+  without --result, reviewer input (except --handback, which writes nothing and omits "patchPath" and "evidenceRule"): { "ok": true, "input": { ..., "patchPath", "evidenceRule", "resultShape": { ... } } }
                     Also writes the cumulative baseline..candidate patch to input.patchPath (<tmp-root>/gate-delta/<baseline>-<candidate>.patch); the reviewer reads it with the read tool and needs no shell.
                     Fill input.resultShape; on ACT copy its binding below unchanged.
+  without --result, authenticated closure (requires --fixer-plan and --site-coverage, excludes --handback):
+                    { "ok": true, "outcome": "no_commit|head_moved", "nextStep": "push_to_gate",
+                      "reviewBaselineHead": "<baseline sha>", "candidateHead": "<current HEAD sha>" }
+                    HEAD equal to baseline yields no_commit; otherwise HEAD differing from the authenticated handback yields head_moved.
+                    Removes the matching active ungranted branch marker instead of producing reviewer input or a patch.
+                    Invalid authentication or a missing/mismatched marker remains an error; genuine fixer commits retain normal delta review.
 
 Result JSON (--result, DeltaPrePushReviewResult):
   Base shape (complete THREAD shape; genuine legacy results remain readable):
@@ -112,8 +123,8 @@ Result JSON (--result, DeltaPrePushReviewResult):
 
 ${JQ_OUTPUT_USAGE}
 
-Exit codes: 0 decision printed; 2 argument or runtime error (including HEAD equal
-to the baseline), or invalid --jq filter.`;
+Exit codes: 0 reviewer input, decision or authenticated no_commit/head_moved closure printed;
+2 argument or runtime error (including unauthenticated baseline equality), or invalid --jq filter.`;
 
 const parseError = buildParseError(USAGE);
 
