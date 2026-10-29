@@ -188,7 +188,7 @@ test("a diverged base (base advanced independently of head) still resolves one c
 test("over-cap still short-circuits to over_threshold before the new floors are consulted", async () => {
   const { tmp, fixture } = await makeFixture({
     devloops: "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 1\n    maxLines: 1\n",
-    headFiles: { "docs/note.md": "line one\nline two\nline three\n" },
+    headFiles: { "src/note.mjs": "export const a = 1;\nexport const b = 2;\nexport const c = 3;\n" },
   });
   try {
     const result = runDispatch(fixture);
@@ -288,15 +288,15 @@ test("judge record + matching label + current head lowers the track; every misma
   }
 });
 
-const BIG_DOC = `${"A line of documentation.\n".repeat(150)}`;
+const BIG_DOC = `${"export const a = 1;\n".repeat(150)}`;
 const judgeRec = (headSha, track = "light") => JSON.stringify({ schemaVersion: 1, headSha, track, signals: [{ signal: "additive", reason: "docs only" }] });
 
 test("over the cap, a lowering judge track re-checks the size outcome and risk facts", async () => {
-  const clean = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "docs/big.md": BIG_DOC } });
-  // A t1 pattern that matches a docs file makes the size outcome unusable (block).
+  const clean = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "src/big.mjs": BIG_DOC } });
+  // A t1 pattern that matches the code file makes the size outcome unusable (block).
   const t1 = await makeFixture({
-    devloops: `${LIGHT_DEVLOOPS}gates:\n  size:\n    tiers:\n      t1:\n        patterns: ["docs/**"]\n        sliceHardLoc: 10\n`,
-    headFiles: { "docs/big.md": BIG_DOC },
+    devloops: `${LIGHT_DEVLOOPS}gates:\n  size:\n    tiers:\n      t1:\n        patterns: ["src/**"]\n        sliceHardLoc: 10\n`,
+    headFiles: { "src/big.mjs": BIG_DOC },
   });
   try {
     for (const [f, tmp, expected] of [[clean.fixture, clean.tmp, "reduced"], [t1.fixture, t1.tmp, "full"]]) {
@@ -350,7 +350,33 @@ test("--base without --head diffs the working tree, so a matching --head-sha nev
     const noBase = runJudge(fixture, { record: rec, labels: "gate:light", headSha: sha, noRange: true });
     assert.equal(noBase.track, "light");
     const baseOnly = runJudge(fixture, { record: rec, labels: "gate:light", headSha: sha, baseOnly: true });
-    assert.deepEqual([baseOnly.track, baseOnly.trackReason], ["full", "judge_head_mismatch"]);
+    assert.deepEqual([baseOnly.track, baseOnly.trackReason], ["full", "risk_floor"]);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("--base without --head leaves the size outcome unavailable and fails closed", async () => {
+  const { tmp, fixture } = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "docs/note.md": "A trivial docs change.\n" } });
+  try {
+    const out = JSON.parse(execFileSync((Bun.which("node") ?? "node"), [SCRIPT, "--gate", "draft", "--base", "base"], { cwd: fixture, encoding: "utf8" }).trim());
+    assert.deepEqual([out.mode, out.reason], ["full_fanout", "size_outcome_unavailable"]);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("pure renames of source files into docs keep the source endpoint and count against maxFiles", async () => {
+  const names = [1, 2, 3, 4, 5, 6];
+  const { tmp, fixture } = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "x.txt": "x\n" } });
+  try {
+    for (const n of names) await writeFile(path.join(fixture, `s${n}.mjs`), `export const v${n} = ${n};\n`.repeat(3));
+    execSync("git add . && git commit -qm src && git branch base2", { cwd: fixture, stdio: "ignore" });
+    await mkdir(path.join(fixture, "docs"), { recursive: true });
+    for (const n of names) execSync(`git mv s${n}.mjs docs/s${n}.md`, { cwd: fixture });
+    execSync("git commit -qm rename", { cwd: fixture, stdio: "ignore" });
+    const out = execFileSync((Bun.which("node") ?? "node"), [SCRIPT, "--gate", "draft", "--base", "base2", "--head", "HEAD"], { cwd: fixture, encoding: "utf8" });
+    assert.equal(JSON.parse(out.trim()).reason, "over_threshold");
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

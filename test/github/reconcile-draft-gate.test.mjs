@@ -867,7 +867,7 @@ test("reconcile-draft-gate succeeds for a light-mode under-threshold PR under ac
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reconcile-draft-gate-light-success-"));
 
   try {
-    // Real git repo so detectMergeBaseScope's `git diff <base>...<head>` derives
+    // Real git repo so the merge-base `git diff <base>...<head>` derives
     // a genuine under-threshold scope (1 file, 1 line) — not a synthetic marker.
     const g = (...args) => execFileSync("git", args, { cwd: tempDir, encoding: "utf8" });
     g("init", "-q");
@@ -953,7 +953,7 @@ test("reconcile-draft-gate succeeds for a light-mode under-threshold PR under ac
         stdout: "src/index.ts\n",
       },
       // Post-time light-facts fetch (enforcePostTimeFanoutMode): the real base
-      // commit SHA + no gate:full label, so detectMergeBaseScope re-derives the
+      // commit SHA + no gate:full label, so the merge-gate re-verify re-derives the
       // under-threshold scope and the inline verdict is ACCEPTED.
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"],

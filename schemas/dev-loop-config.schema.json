@@ -1357,12 +1357,12 @@
             "maxFiles": {
               "type": "integer",
               "minimum": 1,
-              "description": "Light mode applies only when the change touches at most this many files."
+              "description": "Light mode applies only when the change counts at most this many non-doc files (docs and scope-count exclusions are not counted)."
             },
             "maxLines": {
               "type": "integer",
               "minimum": 1,
-              "description": "Light mode applies only when the change stays within this many lines."
+              "description": "Light mode applies only when the change stays within this many weighted logic lines of code (docs, config, CI and asset lines count 0; test lines are discounted)."
             },
             "maxCopilotRounds": {
               "default": 1,
