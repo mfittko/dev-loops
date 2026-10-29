@@ -3936,6 +3936,8 @@ test("resolveIssuelessLightweightEligibility and resolveGateDispatchMode agree o
     // File-count half of the predicate: raw count over maxFiles is refused; docs do not count.
     { name: "many-files", files: { "a.mjs": "const a = 1;\n", "b.mjs": "const b = 1;\n", "c.mjs": "const c = 1;\n", "d.mjs": "const d = 1;\n" }, eligible: false, reason: "over_threshold" },
     { name: "docs-not-counted", files: { "a.mjs": "const a = 1;\n", "b.mjs": "const b = 1;\n", "c.mjs": "const c = 1;\n", "x.md": "doc\n", "y.md": "doc\n" }, eligible: true, reason: "under_threshold" },
+    // Unclassified source reads 0 logic LOC but the size outcome is block: both callers refuse.
+    { name: "unclassified", files: { "big.xyz": "line\n".repeat(400) }, eligible: false, reason: "size_outcome_unavailable", dispatchReason: "size_outcome_block" },
   ];
   const config = { version: 1, localImplementation: { lightMode: { enabled: true, maxFiles: 3, maxLines: 10 } } };
   for (const c of cases) {
@@ -3950,7 +3952,8 @@ test("resolveIssuelessLightweightEligibility and resolveGateDispatchMode agree o
       const sizeOutcome = evaluateWorkingTreeSizeBudget({ config, base, repoRoot: tempDir });
       const dispatch = resolveGateDispatchMode(config, "preApproval", { changedFiles: Object.keys(c.files), sizeOutcome });
       assert.equal(dispatch.mode === "inline", c.eligible, `${c.name}: ${JSON.stringify(dispatch)}`);
-      if (!c.eligible) assert.equal(dispatch.reason, eligibility.reason);
+      if (!c.eligible) assert.equal(dispatch.reason, c.dispatchReason ?? eligibility.reason);
+      assert.equal(eligibility.reason ?? "under_threshold", c.eligible ? "under_threshold" : c.reason);
     }, { prefix: `resolve-dev-loop-shared-cap-${c.name}-` });
   }
   await withTempDir(async (tempDir) => {
@@ -3974,6 +3977,13 @@ test("resolveIssuelessLightweightEligibility: missing size evidence fails closed
     assert.equal(reason({ evaluateSize: () => ({ wholeLogicLoc: Number.NaN }) }), "size_outcome_unavailable");
     assert.equal(reason({ evaluateSize: () => { throw new Error("boom"); } }), "size_outcome_unavailable");
     assert.equal(reason({ detectChangedFiles: () => ({ ok: false, files: null, error: "boom" }), evaluateSize: () => ({ wholeLogicLoc: 1 }) }), "size_outcome_unavailable");
+    assert.equal(reason({ evaluateSize: () => ({ outcome: "block", wholeLogicLoc: 0 }) }), "size_outcome_unavailable");
+    assert.equal(reason({ evaluateSize: () => ({ outcome: "block", wholeLogicLoc: 5 }) }), "size_outcome_unavailable");
+    assert.equal(reason({ evaluateSize: () => null }), "size_outcome_unavailable");
+    assert.equal(reason({ evaluateSize: () => ({ wholeLogicLoc: -1 }) }), "size_outcome_unavailable");
+    for (const outcome of ["pass", "escalate"]) {
+      assert.equal(resolveIssuelessLightweightEligibility(config, tempDir, { evaluateSize: () => ({ outcome, wholeLogicLoc: 1 }) }).eligible, true, outcome);
+    }
     assert.equal(reason({ detectChangedFiles: () => ({ ok: true, files: [".devloops"] }), evaluateSize: () => ({ wholeLogicLoc: 1 }) }), "config_source_touch");
     const over = resolveIssuelessLightweightEligibility(config, tempDir, { detectChangedFiles: () => ({ ok: true, files: ["a.mjs"] }), evaluateSize: () => ({ wholeLogicLoc: 99 }) });
     assert.deepEqual([over.reason, over.fileCount, over.wholeLogicLoc], ["over_threshold", 1, 99]);

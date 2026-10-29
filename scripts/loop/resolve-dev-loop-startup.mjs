@@ -102,10 +102,12 @@ Optional modifier:
                  issue-less PR-first (#1210) — no tracker binding at all
                  (canonicalSpecSource: pr_body, no issue-keyed worktree
                  requirement). Gated on localImplementation.lightMode being
-                 enabled AND the live change scope (git diff) staying within
-                 its maxFiles/maxLines threshold; fails closed with a distinct
-                 reason (light mode disabled / scope undetectable / over
-                 threshold) requiring --issue above the threshold — unless
+                 enabled AND the live change scope passing the shared
+                 lightModeCapState predicate (weighted logic LOC against
+                 maxLines, non-doc file count against maxFiles); fails closed
+                 with a distinct reason (light mode disabled / scope
+                 undetectable / over threshold / size_outcome_unavailable /
+                 config_source_touch) requiring --issue above the threshold — unless
                  localImplementation.issueless is set, which sanctions
                  issue-less PR-first at ANY change scope (the whole eligibility
                  gate is skipped; gate dispatch still resolves review depth
@@ -1219,9 +1221,12 @@ function configuredBaseBranch(config) {
 
 /**
  * Decide whether the live change scope is eligible for issue-less lightweight
- * PR-first: reuses the same localImplementation.lightMode threshold that
- * gates inline vs full-fanout gate dispatch, so "genuinely small" means the
- * same thing everywhere in the repo.
+ * PR-first: reuses the shared lightModeCapState predicate (weighted logic LOC
+ * against maxLines, non-doc file count against maxFiles) that gates inline vs
+ * full-fanout gate dispatch, so "genuinely small" means the same thing
+ * everywhere in the repo. Refusal reasons: light_mode_disabled,
+ * scope_detection_failed, over_threshold, config_source_touch and
+ * size_outcome_unavailable.
  *
  * Scope is measured from the merge-base with the default branch to the
  * working tree (`git diff --stat <merge-base>`), so multi-commit branches and
@@ -1286,7 +1291,8 @@ export function resolveIssuelessLightweightEligibility(config, cwd, { detectChan
   if (Array.isArray(changedFiles) && touchesConfigSource(changedFiles)) {
     return { eligible: false, reason: "config_source_touch", threshold };
   }
-  if (!cap.locValid || !Array.isArray(changedFiles)) {
+  // A "block" outcome means the size cannot be computed safely (e.g. substantial unclassified source reads 0 LOC): fail closed.
+  if (!cap.locValid || sizeOutcome.outcome === "block" || !Array.isArray(changedFiles)) {
     return { eligible: false, reason: "size_outcome_unavailable", threshold };
   }
   return { eligible: true, scope, threshold };
