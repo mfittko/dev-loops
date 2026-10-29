@@ -22,7 +22,8 @@ test("GATE-EXEC-FIXER-CYCLE-BOUND names the draft_gate round cap and no closure 
   assert.ok(!/closure/i.test(line));
 });
 
-test("the judge brief carries the closure-round rule and cites the owning rule", async () => {
+test("the judge brief names the closure round as superseded by ADR 0208", async () => {
   const judge = await read("agents/judge.agent.md");
-  assert.match(judge, /closure round \(work order `closureRound: true`, `GATE-EXEC-ROUND-CAP`\)/);
+  assert.match(judge, /closure round \(work order `closureRound: true`, count cap\+1\) is superseded by ADR 0208 \(`GATE-EXEC-ROUND-CAP`\)/);
+  assert.doesNotMatch(judge, /In a closure round/);
 });

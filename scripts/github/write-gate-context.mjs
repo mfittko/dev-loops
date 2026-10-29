@@ -58,7 +58,8 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
-import { DELTA_CLEARING_NEXT_STEPS, readGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
+import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
+import { DELTA_CLEARING_NEXT_STEPS, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { captureMainRelativeChangedFilesSince } from "../lib/git-delta.mjs";
 
 /**
@@ -1981,8 +1982,10 @@ export async function resolveCapRound(options, { repoRoot }) {
   const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
   const cap = resolveGateConfig(config, "draft").maxReviewRounds ?? 0;
   const draft = { ...options, gate: "draft_gate" };
-  if (!(cap > 0) || await countCompletedRounds(draft, { repoRoot }) - 1 < cap) return null;
-  const log = (await readClosedPriorRoundLogs(draft, { repoRoot })).at(-1);
+  // The findings ledger is main-anchored: never read it from a relocated --tmp-root.
+  const ledger = { ...draft, tmpRoot: undefined };
+  if (!(cap > 0) || await countCompletedRounds(ledger, { repoRoot }) - 1 < cap) return null;
+  const log = (await readClosedPriorRoundLogs(ledger, { repoRoot })).at(-1);
   if (log?.verdict !== "findings_present") return null;
   const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => isOpenActItem(f) || f?.capClosed).map((f) => ({
     fingerprint: fingerprintFinding(f), file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary, disposition: isOpenActItem(f) ? "act" : "cap_closed",
@@ -1991,16 +1994,19 @@ export async function resolveCapRound(options, { repoRoot }) {
 }
 
 /**
- * "Cap round fixed" (ADR 0208): the cap round exists, and a pre-push delta record bound to the cap-round head cleared (or bounded out) the current head.
- * No full draft_gate round runs after it. Fails closed on an unreadable delta record.
+ * "Cap round fixed" (ADR 0208): the cap round exists, and a sealed pre-push delta record bound to the cap-round head cleared (or bounded out) the current head.
+ * No full draft_gate round runs after it. Fails closed on an unreadable, unsealed or hand-edited delta record.
+ * `options.anyHead` (a ready PR, where later commits belong to pre_approval_gate) accepts the record whatever its candidate head.
  */
 export async function resolveCapRoundFixed(options, { repoRoot }) {
   const capRound = await resolveCapRound(options, { repoRoot });
   if (!capRound) return null;
   let record;
-  try { record = readGateDeltaRecord(options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot), capRound.log.headSha); } catch { return null; }
+  // The delta record is main-anchored like the findings ledger: never read it from a relocated --tmp-root.
+  try { record = readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), capRound.log.headSha); } catch { return null; }
   const head = String(options.headSha).trim().toLowerCase();
-  if (String(record?.candidateHead).trim().toLowerCase() !== head || !DELTA_CLEARING_NEXT_STEPS.includes(record.nextStep)) return null;
+  if (!record || !DELTA_CLEARING_NEXT_STEPS.includes(record.nextStep)) return null;
+  if (!options.anyHead && String(record.candidateHead).trim().toLowerCase() !== head) return null;
   return capRound;
 }
 
@@ -3687,13 +3693,11 @@ export async function main(
     // never fall back to defaults.
     const { config } = await loadDevLoopConfigStrict({ repoRoot });
     options.config = config;
-    // GATE-EXEC-ROUND-CAP (ADR 0191): the one closure round diffs from the cap round's head.
-    // The findings ledger is main-anchored: read it from its own root, not the (possibly relocated) context --tmp-root.
-    const closureRound = await resolveClosureRound({ ...options, tmpRoot: undefined }, { repoRoot, cap: resolveGateConfig(config, "draft").maxReviewRounds ?? 0 });
-    if (closureRound) {
-      // The closure round diffs from fromHead whatever --base the caller passes (coordinators pass origin/main) and records the ignored --base.
-      options.closureRound = { ...closureRound, ignoredBase: options.base ?? null };
-      options.base = closureRound.fromHead;
+    // GATE-EXEC-ROUND-CAP (ADR 0208): round N+1 never runs; refuse its context. The findings ledger is main-anchored: read it from its own root, not the (possibly relocated) context --tmp-root.
+    const cap = resolveGateConfig(config, "draft").maxReviewRounds ?? 0;
+    if (options.gate === "draft_gate") {
+      const round = await countCompletedRounds({ ...options, tmpRoot: undefined }, { repoRoot });
+      if (isRoundRefused(round, cap)) throw new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs; after the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`.`);
     }
     // AC6 (issue 2885): every dispatch runs the freshness check against the PR's own base branch (baseRefName),
     // whatever --base is (absent, SHA, revision, remote ref). draft_gate and pre_approval_gate refuse (no artifact) on anything but base_current; the review gate records the status and continues; base_unresolved refuses on every gate.

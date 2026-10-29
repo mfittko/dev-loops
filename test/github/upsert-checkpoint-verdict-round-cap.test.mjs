@@ -357,6 +357,15 @@ test("a round N+1 post is refused with round_cap_reached, whatever its ledger (A
 });
 
 
+test("an inline clean draft_gate post with only --findings-summary is refused at round N+1 and accepted at the cap round (ADR 0208)", async () => {
+  await seedPrior(repoRoot, [...priorHeads, extraPriors[0]]);
+  const refused = await post(["--verdict", "clean", "--execution-mode", "inline_single_agent"]);
+  assert.match(refused.error ?? "", /round_cap_reached.*round 5 .*cap is 4/);
+  assert.equal(refused.body, undefined, "nothing is posted");
+  await seedPrior(repoRoot, priorHeads);
+  assert.equal(verdictOf(await post(["--verdict", "clean", "--execution-mode", "inline_single_agent"])), "clean");
+});
+
 test("at the cap round an act item without judgeFix still blocks", async () => {
   await withTempDir(async (tempDir) => {
     const out = await pastCap(tempDir, [finding("medium", "act")]);

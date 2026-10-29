@@ -4242,3 +4242,59 @@ test("the detector writes the body finding to the derived judge file and removes
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// ADR 0208 (#2462 slice 8): the PR 2976 shape. Cap round 4 found items, the fixer pass landed and its sealed delta cleared the current head, and a blocked round 5 sits at that head.
+async function seedCapFixedRepo(repoRoot, { headSha, seal = true }) {
+  initGitFixture(repoRoot, { branch: "main" });
+  const capHead = "c".repeat(40);
+  const findings = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-10");
+  await mkdir(findings, { recursive: true });
+  const ledger = (head, verdict, i) => writeFile(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict, loggedAt: `2026-11-0${i}T00:00:00.000Z`, findings: [] }), "utf8");
+  for (const [i, head] of ["1", "2", "3"].entries()) await ledger(head.repeat(40), "findings_present", i + 1);
+  await ledger(capHead, "findings_present", 4);
+  await ledger(headSha, "blocked", 5);
+  const deltaDir = path.join(repoRoot, "tmp", "gate-delta");
+  await mkdir(deltaDir, { recursive: true });
+  const record = `${JSON.stringify({ reviewBaselineHead: capHead, candidateHead: headSha, nextStep: "push", outcome: "locally_clear" })}\n`;
+  await writeFile(path.join(deltaDir, `${capHead}.json`), record, "utf8");
+  if (seal) await writeFile(path.join(deltaDir, `${capHead}.json.seal`), `${createHash("sha256").update(record).digest("hex")}\n`, "utf8");
+}
+
+async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody }) {
+  return writeGhStub(tempDir, [
+    {
+      stdout: JSON.stringify({
+        number: 10, state: "OPEN", isDraft, headRefOid: headSha, baseRefName: "main", mergeStateStatus: "CLEAN",
+        body: "## Objective\n\nShip.\n\n## In scope\n\n- x\n\n## Explicit non-goals\n\n- y\n\n## Acceptance criteria\n\n- [ ] x\n\n## Definition of done\n\n- [ ] tests pass\n\n## Open questions/risks\n\n- none\n",
+        closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }) + "\n",
+    },
+    { stdout: "{\"users\":[]}\n" },
+    { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+    { stdout: jsonLine({ headRefOid: headSha }) },
+    { stdout: jsonLine([[{ id: 11, body: draftGateBody, html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }]]) },
+    { stdout: "[]\n" },
+    { assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: "\n" },
+  ]);
+}
+
+for (const { name, isDraft, seal, expected } of [
+  { name: "a draft PR with a cleared sealed cap-round delta and a blocked round 5 goes mark_ready_for_review", isDraft: true, seal: true, expected: PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW },
+  { name: "a ready PR with a cleared sealed cap-round delta never reconciles the draft gate (goes to the Copilot cycle)", isDraft: false, seal: true, expected: PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW },
+  { name: "a draft PR whose delta record is unsealed is not cap-round-fixed and reports blocked (round N+1 never runs)", isDraft: true, seal: false, expected: PR_CHECKPOINT_ACTION.REPORT_BLOCKED },
+]) {
+  test(`detect-pr-gate-coordination-state (ADR 0208): ${name}`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-fixed-"));
+    try {
+      const headSha = "abc1234567";
+      await seedCapFixedRepo(tempDir, { headSha, seal });
+      const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
+      const env = await capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody: body });
+      const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+      assert.equal(result.ok, true);
+      assert.equal(result.nextAction, expected, result.reason);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}

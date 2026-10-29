@@ -29,3 +29,20 @@ test("a fixed cap round still waits on CI and on unresolved gate threads before 
     assert.ok(threads.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
   }
 });
+
+test("a ready PR with a fixed cap round and a stale blocked draft marker opens pre_approval_gate, never reconcile_draft_gate", () => {
+  const ready = (overrides = {}) => evaluatePrGateCoordination({
+    pr: 10, currentHeadSha: "fedcba987654", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true, ciStatus: "success", draftGate: marker("blocked"), draftGateMarker: marker("blocked"),
+    preApprovalGate: { visible: false }, preApprovalGateMarker: { visible: false }, ...overrides,
+  });
+  assert.equal(ready({ draftCapRoundFixed: true }).nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert.equal(ready({ draftCapRoundFixed: false }).nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE, "without the proof the evidence guard still reconciles");
+});
+
+test("a draft PR past the round cap without a fixed cap round reports blocked, never run_draft_gate", () => {
+  const refused = draftAt({ draftRoundRefused: true });
+  assert.equal(refused.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.ok(refused.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  assert.equal(draftAt({ draftRoundRefused: true, draftCapRoundFixed: true }).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "a fixed cap round wins");
+});

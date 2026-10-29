@@ -1077,7 +1077,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
         : lifecycleState);
   const sameHeadCleanConverged = input.sameHeadCleanConverged === true || gateEntryConverged;
 
-  const draftGate = toGateStatus(input.draftGate, input.draftGateMarker, currentHeadSha, input.unresolvedGateThreadCount);
+  const baseDraftGate = toGateStatus(input.draftGate, input.draftGateMarker, currentHeadSha, input.unresolvedGateThreadCount);
+  // ADR 0208: on a ready PR the cap-round-fixed proof stands in for clean draft_gate evidence, so the evidence guard never reconciles it.
+  const draftGate = !prDraft && input.draftCapRoundFixed === true && !baseDraftGate.cleanEvidenceExists ? { ...baseDraftGate, cleanEvidenceExists: true } : baseDraftGate;
   const preApprovalGate = toGateStatus(input.preApprovalGate, input.preApprovalGateMarker, currentHeadSha);
   // A base-merge carried verdict (ADR 0186) proves the review, not the new head's CI.
   const draftGateCarried = draftGate.currentHeadClean && trimmedOrNull(input.draftGateMarker?.carriedFrom) !== null;
@@ -1477,6 +1479,30 @@ function evaluatePrGateCoordinationCore(input = {}) {
             refinementArtifact,
         });
       }
+    }
+
+    // ADR 0208: the next draft_gate round is past the cap and the cap round is not proven fixed; the context writer refuses it, so never route to it.
+    if (input.draftRoundRefused === true && !draftReady) {
+      pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
+      pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, ...draftReviewForbidden]);
+      return buildResult({
+        repo: input.repo ?? null,
+        pr: Number.isInteger(input.pr) ? input.pr : null,
+        currentHeadSha,
+        lifecycleState: STATE.BLOCKED_NEEDS_USER_DECISION,
+        loopDisposition: DISPOSITION.BLOCKED,
+        gateBoundary: PR_CHECKPOINT.BLOCKED,
+        draftGateAlreadySatisfied,
+        draftGate,
+        preApprovalGate,
+        allowedNextActions,
+        forbiddenActions,
+        nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        reason: "The PR is still draft and the next `draft_gate` round is past the round cap (`round_cap_reached`, ADR 0208), but the cap round's fixer pass is not proven landed with a cleared pre-push delta. Complete the cap round's fixer pass and its pre-push delta review; round N+1 never runs.",
+        mergeStateStatus,
+        conflictFiles,
+        refinementArtifact,
+      });
     }
 
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE]);
