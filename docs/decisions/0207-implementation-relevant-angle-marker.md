@@ -17,6 +17,9 @@ The change adds a field to the angle schema and marks angles in `packages/core/s
 - `scripts/loop/_review-expectations.mjs` bounds the projection to 12 criteria and 2,000 criterion characters inline. The remaining angles go to `overflow`, which holds names and digest-pinned config file reads and never criterion text.
 - `loop implementation-brief` shows the projection as `reviewExpectations`.
 - The fixer role adapter in `emit-fixer-work-order.mjs` and `verify-fixer-disposition.mjs` accept an optional `expectations` section of the same shape. A work order without it renders, pulls and verifies unchanged. Ordinary fix orders do not emit it until a later slice.
+- The marker only adds. `implementationRelevant: false` is the same as no marker and does not remove a shipped mark. An operator drops an angle from the projection by disabling it, or by not marking it.
+- An overflow lists at least one digest-pinned read: the shipped defaults (named `@dev-loops/core/config/extension-defaults.yaml`, read from the package module dir where the config loader resolves them) and each repository config file present (`.devloops`, `.devloops.yaml`, `.devloops.yml`, `.devloops.json`, `.pi/dev-loop/defaults.*`). The path lists come from `check-adr-tripwire.mjs`, not a copy.
+- Overflow reads are not in `workOrder.requiredReads`, so the work-order puller does not check their pins. Slice 4 binds them into the required-reads manifest.
 - The section carries no authority and no gate evidence. No gate, judge or reviewer module reads it.
 
 ## Consequences

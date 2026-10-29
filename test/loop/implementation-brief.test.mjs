@@ -893,8 +893,19 @@ test("no gate, judge or reviewer surface consumes the brief", async () => {
   // The rule-ownership validator lists agent docs as contract files to parse for
   // rule markers; it is the brief's own import and no gate input.
   const AGENT_DOC_LISTERS = new Set([path.join("scripts", "docs", "validate-rule-ownership.mjs")]);
+  // The review-expectations projection is authority-neutral: only its producer, the
+  // brief, the fixer emitter and the fixer verifier may name it.
+  const EXPECTATIONS_USERS = new Set([
+    path.join("packages", "core", "src", "config", "config.mjs"),
+    path.join("scripts", "loop", "_review-expectations.mjs"),
+    path.join("scripts", "github", "verify-fixer-disposition.mjs"),
+    path.join("scripts", "loop", "emit-fixer-work-order.mjs"),
+  ]);
   for (const file of surfaces) {
     const content = await readFile(file, "utf8");
+    if (!EXPECTATIONS_USERS.has(path.relative(repoRoot, file))) {
+      assert.ok(!/_review-expectations|resolveImplementationRelevantAngles/u.test(content), `${path.relative(repoRoot, file)} must not consume the review expectations`);
+    }
     assert.ok(!content.includes("implementation-brief"), `${path.relative(repoRoot, file)} must not consume the brief`);
     // The brief's instruction lives in the developer agent doc, so a surface that
     // reads that doc also consumes the brief indirectly.
@@ -910,7 +921,7 @@ test("both the developer agent source and its generated mirror carry the brief i
   assert.ok(generated.includes("dev-loops-run cli/index.mjs loop implementation-brief"));
   assert.ok(!generated.includes("<dev-loops-package-root>"), "the Pi token must not reach the Claude mirror");
   for (const doc of [source, generated]) {
-    for (const fragment of ["adrTripwirePaths", "adrNeed", "first commit", "--jq .issue.body", "--jq .pr.body", "helperInventory", "`importers`", "before hand-back"]) {
+    for (const fragment of ["adrTripwirePaths", "adrNeed", "reviewExpectations", "first commit", "--jq .issue.body", "--jq .pr.body", "helperInventory", "`importers`", "before hand-back"]) {
       assert.ok(doc.includes(fragment), `both agent surfaces must carry ${fragment}`);
     }
   }
@@ -1217,7 +1228,7 @@ test("review expectations: at most 12 criteria inline, overflow names no text an
   assert.deepEqual(expectations.angles.map(({ angle }) => angle), [...SHIPPED_MARKED, ...extra.slice(0, 8).map(({ name }) => name)]);
   assert.deepEqual(expectations.overflow.angles, ["extra-8"]);
   assert.ok(!JSON.stringify(expectations).includes("EXTRA-CRITERION-8"));
-  assert.deepEqual(expectations.overflow.reads, [{ path: ".devloops", sha256: createHash("sha256").update(files[".devloops"]).digest("hex") }]);
+  assert.ok(expectations.overflow.reads.some(({ path: p, sha256 }) => p === ".devloops" && sha256 === createHash("sha256").update(files[".devloops"]).digest("hex")));
 });
 
 test("review expectations: inline criteria stop at 2,000 characters and the rest goes to the overflow in order", async () => {
@@ -1230,4 +1241,15 @@ test("review expectations: inline criteria stop at 2,000 characters and the rest
   assert.deepEqual(expectations.angles.map(({ angle }) => angle), SHIPPED_MARKED);
   assert.deepEqual(expectations.overflow.angles, ["long-a", "short-b"]);
   assert.ok(!JSON.stringify(expectations.angles).includes("SHORT-B-CRITERION"));
+});
+
+test("review expectations: overflow pins the shipped defaults and a .devloops.yaml, not an empty read", async () => {
+  const extra = Array.from({ length: 9 }, (_, i) => ({ name: `extra-${i}`, implementationRelevant: true, prompt: `EXTRA-CRITERION-${i}` }));
+  const yaml = `version: 1\ngates:\n  draft:\n    angles:\n${extra.map(({ name, prompt }) => `      - { name: ${name}, implementationRelevant: true, prompt: ${prompt} }`).join("\n")}\n`;
+  const expectations = await projected({ ".devloops.yaml": yaml });
+  const shipped = await readFile(path.join(repoRoot, "packages/core/src/config/extension-defaults.yaml"));
+  assert.deepEqual(expectations.overflow.reads, [
+    { path: "@dev-loops/core/config/extension-defaults.yaml", sha256: createHash("sha256").update(shipped).digest("hex") },
+    { path: ".devloops.yaml", sha256: createHash("sha256").update(yaml).digest("hex") },
+  ]);
 });

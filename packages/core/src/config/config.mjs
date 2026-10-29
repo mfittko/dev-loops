@@ -212,7 +212,7 @@ const GateAngleEntry = z.preprocess(
     name: z.string().trim().min(1),
     mandatory: z.boolean().optional().describe("Always run this angle, regardless of diff-based dynamic selection."),
     enabled: z.boolean().optional().describe("Set false to drop this angle from the resolved list (a later config layer disabling a base angle)."),
-    implementationRelevant: z.boolean().optional().describe("Mark an angle whose prompt states criteria a developer can apply before the first edit. Only marked angles reach the implementation brief and the fixer expectations section; an unmarked angle is excluded."),
+    implementationRelevant: z.boolean().optional().describe("Mark an angle whose prompt states criteria a developer can apply before the first edit. Only marked angles reach the implementation brief and the fixer expectations section; an unmarked angle is excluded. The marker only adds: `false` is the same as unmarked and does not remove a shipped mark (disable the angle to drop it)."),
     persona: z.string().trim().min(1).optional().describe("Reviewer persona for this angle."),
     prompt: z.string().min(1).optional().describe("Short focused instruction for the reviewer agent — what to look for and how to judge this angle."),
     model: z.string().trim().min(1).optional().describe("Concrete model override for this angle (highest precedence)."),

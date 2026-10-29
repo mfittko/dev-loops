@@ -2488,7 +2488,7 @@ test("expectations section: an order without it renders and digests unchanged; o
 
 test("expectations section: a malformed section refuses at emit", async () => {
   await withFixture(async ({ files, emit }) => {
-    for (const bad of [{ angles: "x" }, { angles: [{ angle: "a" }] }, { angles: [], overflow: { angles: ["a"], reads: [{ path: "p", sha256: "short" }] } }]) {
+    for (const bad of [{ angles: "x" }, { angles: [{ angle: "a" }] }, { angles: [], overflow: { angles: ["a"], reads: [{ path: "p", sha256: "short" }] } }, { angles: [], overflow: { angles: ["a"], reads: [] } }]) {
       await assert.rejects(() => emit({ deltaResult: files.delta, expectations: bad }), /expectations section/);
     }
   });

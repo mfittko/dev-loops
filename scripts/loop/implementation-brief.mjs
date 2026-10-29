@@ -19,6 +19,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 
 import { loadDevLoopConfig, resolveImplementationRelevantAngles } from "@dev-loops/core/config";
@@ -610,16 +611,21 @@ export async function buildImplementationBrief({ body = "", repoRoot = process.c
 }
 
 // Config layers that can hold angle criteria; the overflow read pins the ones present.
-const ANGLE_CONFIG_FILES = ["packages/core/src/config/extension-defaults.yaml", ".pi/dev-loop/defaults.yaml", ".pi/dev-loop/defaults.yml", ".pi/dev-loop/defaults.json", ".devloops"];
+// The shipped defaults load from the package module dir (as the config loader resolves them),
+// so they are read from there and named by a package label that holds in any consumer repo.
+const SHIPPED_DEFAULTS_LABEL = "@dev-loops/core/config/extension-defaults.yaml";
+const REPO_ANGLE_CONFIG_FILES = [".pi/dev-loop/defaults.yaml", ".pi/dev-loop/defaults.yml", ".pi/dev-loop/defaults.json", ...DEVLOOPS_CONFIG_PATHS];
 
 async function projectReviewExpectations(root, config) {
   const entries = resolveImplementationRelevantAngles(config);
   const probe = buildReviewExpectations(entries);
   if (!probe.overflow) return probe;
+  const shipped = fileURLToPath(new URL(path.posix.basename(GATE_CONFIG_PATH), import.meta.resolve("@dev-loops/core/config")));
+  const sources = [[SHIPPED_DEFAULTS_LABEL, shipped], ...REPO_ANGLE_CONFIG_FILES.map((rel) => [rel, path.join(root, ...rel.split("/"))])];
   const reads = [];
-  for (const rel of ANGLE_CONFIG_FILES) {
-    const bytes = await readFile(path.join(root, ...rel.split("/"))).catch(() => null);
-    if (bytes) reads.push({ path: rel, sha256: createHash("sha256").update(bytes).digest("hex") });
+  for (const [label, file] of sources) {
+    const bytes = await readFile(file).catch(() => null);
+    if (bytes) reads.push({ path: label, sha256: createHash("sha256").update(bytes).digest("hex") });
   }
   return buildReviewExpectations(entries, reads);
 }

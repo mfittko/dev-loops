@@ -42,7 +42,7 @@ export function expectationsSectionError(section) {
   if (section.overflow !== undefined) {
     const { overflow } = section;
     if (!Array.isArray(overflow?.angles) || overflow.angles.length === 0 || overflow.angles.some((n) => typeof n !== "string")
-      || !Array.isArray(overflow.reads) || overflow.reads.some((r) => typeof r?.path !== "string" || !SHA256_RE.test(r.sha256 ?? ""))) return bad("overflow needs angle names and digest-pinned reads");
+      || !Array.isArray(overflow.reads) || overflow.reads.length === 0 || overflow.reads.some((r) => typeof r?.path !== "string" || !SHA256_RE.test(r.sha256 ?? ""))) return bad("overflow needs angle names and digest-pinned reads");
   }
   return null;
 }
