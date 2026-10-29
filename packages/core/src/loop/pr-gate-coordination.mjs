@@ -1355,7 +1355,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // reply_resolve_review_threads (FEEDBACK_RESOLUTION) is reused as-is —
     // resolving the thread (reject-close or fixer triage) is exactly what
     // this action already means on the post-draft path.
-    if (draftGate.markerCleanThreadsUnresolved || (capRoundFixed && !capFixedReady)) {
+    const capFixedThreadsUnreadable = capRoundFixed && input.unresolvedGateThreadCount === -1;
+    if (draftGate.markerCleanThreadsUnresolved || (capRoundFixed && !capFixedReady && !capFixedThreadsUnreadable)) {
       pushUnique(allowedNextActions, [
         PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
         // The reason text names "stop for the operator" as the remedy for an
@@ -1398,7 +1399,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // no known thread to resolve. MARK_READY_FOR_REVIEW stays forbidden
     // either way (draftReviewForbidden); reply_resolve_review_threads is
     // reused as-is rather than adding a new action for "retry the read".
-    if (draftGate.markerCleanThreadStateUnreadable) {
+    if (draftGate.markerCleanThreadStateUnreadable || capFixedThreadsUnreadable) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS]);
       pushUnique(forbiddenActions, [
         PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
@@ -1505,7 +1506,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
       });
     }
 
-    pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE]);
+    if (capRoundFixed) pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE]);
+    else pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE]);
     if (draftReady) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW]);
     }

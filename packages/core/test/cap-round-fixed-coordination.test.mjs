@@ -16,6 +16,8 @@ test("a fixed cap round returns mark_ready_for_review, and never run_draft_gate"
     const fixed = draftAt({ draftCapRoundFixed: true, draftGate: marker(verdict), draftGateMarker: marker(verdict) });
     assert.equal(fixed.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, verdict);
     assert.ok(!fixed.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+    assert.ok(!fixed.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE), verdict);
+    assert.ok(fixed.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE), verdict);
   }
   assert.equal(draftAt({ draftCapRoundFixed: false }).nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE, "without the cap-round-fixed proof draft_gate still runs");
 });
@@ -27,6 +29,7 @@ test("a fixed cap round still waits on CI and on unresolved gate threads before 
     const threads = draftAt({ draftCapRoundFixed: true, unresolvedGateThreadCount: count });
     assert.equal(threads.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS, String(count));
     assert.ok(threads.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+    assert.equal(/could not be read/.test(threads.reason), count === -1, `${count}: only an unreadable count gets the retry-the-read reason`);
   }
 });
 

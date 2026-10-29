@@ -8930,6 +8930,10 @@ test("resolveCapRoundFixed guards the chain: a record loop, a non-SHA candidateH
     await writeDeltaRecord(repoRoot, m2, headSha);
     const baseOnlyMerge = async () => true;
     assert.ok(await resolveCapRoundFixed({ ...opts, baseRefName: "main" }, { repoRoot, baseOnlyMerge }));
+    // A malformed foreign record (empty, internal whitespace, non-hex, missing) is skipped and never aborts the proof.
+    for (const bad of ["", "a b", "z".repeat(40)]) await writeDeltaRecord(repoRoot, bad, headSha);
+    await writeFile(path.join(repoRoot, "tmp", "gate-delta", "nobaseline.json"), JSON.stringify({ candidateHead: headSha }), "utf8");
+    assert.ok(await resolveCapRoundFixed({ ...opts, baseRefName: "main" }, { repoRoot, baseOnlyMerge }), "a malformed foreign record does not abort the proof");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

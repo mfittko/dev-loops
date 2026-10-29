@@ -2043,8 +2043,9 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   if (direct) starts.push(direct);
   else if (typeof options.baseRefName === "string" && options.baseRefName) {
     // Sorted, and every candidate tried: the proof never depends on directory enumeration order.
-    for (const { reviewBaselineHead: merged } of listGateDeltaRecords(tmpRoot).sort((a, b) => (a.reviewBaselineHead < b.reviewBaselineHead ? -1 : 1))) {
-      if (merged === capHead || existsSync(buildLogPath({ repo: options.repo, pr: options.pr, gate: "draft_gate", headSha: merged, tmpRoot }))) continue;
+    for (const { reviewBaselineHead: raw } of listGateDeltaRecords(tmpRoot).sort((a, b) => (String(a.reviewBaselineHead) < String(b.reviewBaselineHead) ? -1 : 1))) {
+      const merged = normalizeSha(raw);
+      if (!merged || merged === capHead || existsSync(buildLogPath({ repo: options.repo, pr: options.pr, gate: "draft_gate", headSha: merged, tmpRoot }))) continue;
       const candidate = clearing(merged);
       if (candidate && await baseOnlyMerge({ fromHead: capHead, head: merged, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false)) starts.push(candidate);
     }
