@@ -4286,7 +4286,7 @@ for (const { name, isDraft, seal, expected } of [
   test(`detect-pr-gate-coordination-state (ADR 0208): ${name}`, async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-fixed-"));
     try {
-      const headSha = "abc1234567";
+      const headSha = "abc1234567".repeat(4);
       await seedCapFixedRepo(tempDir, { headSha, seal });
       const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
       const env = await capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody: body });
@@ -4306,8 +4306,8 @@ for (const { name, chained, expected } of [
   test(`detect-pr-gate-coordination-state (ADR 0208 chain): ${name}`, async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-chain-"));
     try {
-      const fixerHead = "abc1234567";
-      const laterHead = "def7654321";
+      const fixerHead = "abc1234567".repeat(4);
+      const laterHead = "def7654321".repeat(4);
       await seedCapFixedRepo(tempDir, { headSha: fixerHead, seal: true });
       if (chained) {
         const record = `${JSON.stringify({ reviewBaselineHead: fixerHead, candidateHead: laterHead, nextStep: "push", outcome: "locally_clear" })}\n`;
