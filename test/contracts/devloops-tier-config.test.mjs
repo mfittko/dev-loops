@@ -20,22 +20,16 @@ import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolve
 
 const GATE_KEYS = ["draft", "preApproval"];
 
-test("Codex fixture role mappings mirror the shared policy without changing conductor or angle dispatch", async () => {
-  const { config, errors } = await loadDevLoopConfig({
-    repoRoot: process.cwd(),
-    devloopsOverride: { raw: JSON.stringify({ version: 1, models: {
-      roleTiers: { "gate-coordinator": "low", judge: "high", "pre-push-reviewer": "pre-pr-strong" },
-      harnesses: { codex: { tiers: {
-        low: { model: "example-low" },
-        high: { model: "example-high" },
-        "pre-pr-strong": { model: "example-strong" },
-      } } },
-    } }) },
-  });
+test("this repo's Codex role mappings preserve the shared tier structure without changing conductor or angle dispatch", async () => {
+  const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
   assert.deepEqual(errors, []);
-  const tiers = config.models.harnesses.codex.tiers;
-  for (const tier of ["low", "high", "pre-pr-strong"]) assert.ok(tiers[tier].model?.trim());
+  const tiers = config.models.harnesses.codex?.tiers;
+  for (const tier of ["low", "high", "pre-pr-strong"]) {
+    assert.equal(typeof tiers?.[tier]?.model, "string", `${tier} must carry a Codex model`);
+    assert.ok(tiers[tier].model.trim(), `${tier} must carry a nonempty Codex model`);
+  }
   for (const [role, tier] of [["developer", "low"], ["docs", "low"], ["quality", "low"], ["fixer", "low"], ["gate-coordinator", "low"], ["refiner", "high"], ["judge", "high"], ["pre-push-reviewer", "pre-pr-strong"]]) {
+    assert.equal(config.models.roleTiers[role] ?? (["docs", "quality"].includes(role) ? "low" : role === "refiner" ? "high" : undefined), tier, `${role} must map to ${tier}`);
     assert.equal(resolveRoleModel(config, { role, harness: "codex" }), tiers[tier].model);
     assert.equal(resolveRoleModel(config, { role, harness: "codex", kind: "angle" }), null);
   }
