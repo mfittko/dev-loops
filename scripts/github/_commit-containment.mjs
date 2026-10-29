@@ -20,7 +20,7 @@ import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 // unparseable/unexpected payload — an uncertain answer must never read as
 // contained.
 export async function isCommitContainedByHead(
-  { repo, commitSha, headSha },
+  { repo, commitSha, headSha, requireAhead = false },
   { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {},
 ) {
   let result;
@@ -47,7 +47,7 @@ export async function isCommitContainedByHead(
     return { contained: false, reason: "gh compare returned unparseable JSON", retryable: true };
   }
   const status = payload?.status;
-  if (status === "identical" || status === "ahead") {
+  if (status === "ahead" || status === "identical" && !requireAhead) {
     return { contained: true, reason: null, retryable: false };
   }
   if (status === "behind" || status === "diverged") {

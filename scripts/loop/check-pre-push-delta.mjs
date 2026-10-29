@@ -28,7 +28,7 @@ import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
-import { clearSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { clearSequenceMarker, readSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import {
   DELTA_MAX_INVOCATIONS,
   buildDeltaInput,
@@ -164,7 +164,7 @@ export function parseCheckPrePushDeltaArgs(argv) {
   if (values.handback && !(values["act-list"] && values["site-coverage"] && !values.result)) throw parseError("--handback is the fixer handbackCheck flag: it requires --act-list and --site-coverage and refuses --result; the coordinator input run never passes it");
   if (values["act-list"] && !values.result && !values.handback && !values["findings-log"]) throw parseError("--findings-log <path> is required on the act-list input run: PRE-PUSH-DELTA-INPUT makes the reviewed round's angles part of the surface hints");
   if (values["act-list"] && !values.handback && !(values["fixer-plan"] && values["site-coverage"])) throw parseError("ACT review requires both --fixer-plan and --site-coverage");
-  if (values["fixer-plan"] && (values.handback || values["threads-file"])) throw parseError("--fixer-plan is only for ACT coordinator input/result runs");
+  if (values["fixer-plan"] && values.handback) throw parseError("--fixer-plan is only for coordinator input/result runs");
   return {
     help: false,
     actList: values["act-list"] ?? null,
@@ -289,8 +289,9 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   refuse(canonicalPlan && planPath === path.resolve(canonicalPlan), "not the canonical current fixer plan");
   const branch = spawnSync("git", ["-C", options.worktree, "branch", "--show-current"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
   const target = order?.target;
-  refuse(order?.role === "fixer" && order.phase === "commit_only" && order.source === "act-list"
+  refuse(order?.role === "fixer" && order.phase === "commit_only" && order.source === (options.threadsFile ? "threads" : "act-list")
     && order.headSha === sequence.reviewBaselineHead && target?.repo === order.mutationAuthority?.repo && target?.pr === order.mutationAuthority?.pr
+    && (!options.repo || target.repo === options.repo) && (!options.pr || target.pr === options.pr)
     && branch.status === 0 && branch.stdout.trim() === order.mutationAuthority?.branch
     && plan.workOrderRef === `fixer:${target?.repo}#${target?.pr}:${sequence.reviewBaselineHead}:${plan.executionIdentity}`
     && workOrderDigest(order) === plan.workOrderDigest, "wrong role, target, phase, baseline, branch or semantic digest");
@@ -309,15 +310,16 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
   const renderedHash = materializationHash(readFileSync(expectedPrompt));
   refuse(renderedHash === plan.materializationHash && renderedHash === unit.materializationHash
     && renderedHash === pull.receipt.materializationHash, "materialization differs from actual bytes, renderer, plan or receipt");
-  const actRead = order.requiredReads?.find((read) => read.kind === "act-list");
-  const actBytes = readFileSync(options.actList);
-  refuse(actRead && realpathSync(actRead.path) === realpathSync(options.actList)
+  const sourcePath = options.threadsFile ?? options.actList;
+  const actRead = order.requiredReads?.find((read) => read.kind === order.source);
+  const actBytes = readFileSync(sourcePath);
+  refuse(actRead && realpathSync(actRead.path) === realpathSync(sourcePath)
     && actRead.sha256 === sha256Hex(actBytes).slice(7) && order.authority?.sourceDigest === sha256Hex(JSON.parse(actBytes)).slice(7)
-    && startDeltaSequence({ reviewBaselineHead: sequence.reviewBaselineHead, actList: JSON.parse(actBytes) }).actSetId === sequence.actSetId, "changed ACT source or authority");
+    && startDeltaSequence({ reviewBaselineHead: sequence.reviewBaselineHead, actList: options.threadsFile ? threadsToActList(JSON.parse(actBytes), { repo: options.repo, pr: options.pr }) : JSON.parse(actBytes) }).actSetId === sequence.actSetId, "changed ACT source or authority");
   refuse(raw.headSha === (result ? result.candidateHead : currentHead)
     && isAncestor(options.worktree, sequence.reviewBaselineHead, raw.headSha)
     && isAncestor(options.worktree, raw.headSha, currentHead), "handback candidate is not the reviewed contained commit");
-  return { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex(raw.siteCoverage).slice(7), handbackBytesDigest: sha256Hex(reportBytes).slice(7), origin };
+  return options.threadsFile ? null : { coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex(raw.siteCoverage).slice(7), handbackBytesDigest: sha256Hex(reportBytes).slice(7), origin };
 }
 
 export async function runCli(
@@ -349,13 +351,7 @@ export async function runCli(
       throw new Error(`worktree HEAD ${currentHead} differs from the baseline ${sequence.reviewBaselineHead} but the ${options.threadsFile ? "thread" : "act"} list has no items: the delta review has nothing to check, and the sequence marker stays until the fix commit is pushed or the marker is deleted`);
     }
     // PRE-PUSH-DELTA-PUSH-AUTHORITY: the commit_only round ended without a fix commit, so its marker guards nothing and would only block later pushes.
-    clearSequenceMarker(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sequence.reviewBaselineHead);
-    throw new Error(`worktree HEAD ${currentHead} equals the baseline: commit the act-list or thread-route fix before the delta review`);
-  }
-  if (!isAncestor(options.worktree, sequence.reviewBaselineHead, currentHead)) {
-    throw new Error(
-      `baseline ${sequence.reviewBaselineHead} is not an ancestor of worktree HEAD ${currentHead}: the delta range must extend the reviewed head`,
-    );
+    if (!options.fixerPlan) throw new Error(`worktree HEAD ${currentHead} equals the baseline: pass the current pulled --fixer-plan and --site-coverage to close its sequence`);
   }
   // The fixer's commit_only handback. Without it every act item with a site query reports a coverage gap.
   const result = options.result ? JSON.parse(readFileSync(options.result, "utf8")) : null;
@@ -365,6 +361,21 @@ export async function runCli(
     const reportBytes = readFileSync(options.siteCoverage);
     const raw = JSON.parse(reportBytes);
     const record = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
+    if (options.fixerPlan && !options.result && !options.handback && (!fixCommitted || record.headSha !== currentHead)) {
+      const planBytes = readFileSync(options.fixerPlan);
+      await authenticateCoverage(options, sequence, raw.headSha, raw, reportBytes, { candidateHead: raw.headSha }, isAncestor);
+      const root = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
+      const plan = JSON.parse(planBytes);
+      const marker = readSequenceMarker(root, sequence.reviewBaselineHead);
+      if (!readFileSync(options.fixerPlan).equals(planBytes) || !marker || marker.branch !== plan.workOrder.mutationAuthority.branch || marker.fullGranted) throw new Error("sequence closure requires the matching active commit_only branch marker");
+      clearSequenceMarker(root, sequence.reviewBaselineHead);
+      const payload = { ok: true, outcome: fixCommitted ? "head_moved" : "no_commit", nextStep: "push_to_gate", reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead };
+      process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
+      return payload;
+    }
+    if (!isAncestor(options.worktree, sequence.reviewBaselineHead, currentHead)) {
+      throw new Error(`baseline ${sequence.reviewBaselineHead} is not an ancestor of worktree HEAD ${currentHead}: the delta range must extend the reviewed head`);
+    }
     if (record.headSha !== currentHead && !options.result) {
       throw new Error(`site coverage record names head ${record.headSha}, not the worktree HEAD ${currentHead}: the fixer must record coverage for its latest commit`);
     }
@@ -373,9 +384,12 @@ export async function runCli(
       if (gaps.length > 0) throw new Error(`GATE-EXEC-REMEDIATION-SITE-QUERY: the disposition handoff leaves site coverage incomplete: ${gaps.join("; ")}`);
     }
     // Only the validation view discards stale coverage; the reviewed raw identity stays bound.
-    if (options.fixerPlan) coverageBinding = await authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor);
-    siteCoverage = options.fixerPlan ? raw.siteCoverage : record.headSha === currentHead ? record.siteCoverage ?? [] : [];
+    if (options.fixerPlan && !options.threadsFile) coverageBinding = await authenticateCoverage(options, sequence, currentHead, raw, reportBytes, result, isAncestor);
+    siteCoverage = options.fixerPlan && !options.threadsFile ? raw.siteCoverage : record.headSha === currentHead ? record.siteCoverage ?? [] : [];
     validationCoverage = record.headSha === currentHead ? record.siteCoverage ?? [] : [];
+  }
+  if (!options.siteCoverage && !isAncestor(options.worktree, sequence.reviewBaselineHead, currentHead)) {
+    throw new Error(`baseline ${sequence.reviewBaselineHead} is not an ancestor of worktree HEAD ${currentHead}: the delta range must extend the reviewed head`);
   }
   // A custom `staleSurface` may return the hits array alone.
   const stale = staleSurface(options.worktree, sequence.reviewBaselineHead, currentHead);

@@ -252,6 +252,7 @@ function assertDeltaClearsFullPhase({ tmpRoot, headSha, delta, threads, candidat
     return;
   }
   if (!record) throw new Refusal(`--phase full with --threads-file needs a delta record at ${recordPath} from a thread-route delta review: ${next}`);
+  if (record.candidateHead !== candidateHead) throw new Refusal("--phase full refused: THREAD delta candidateHead differs from the committed candidate");
   const threadIds = new Set(threads.map((thread) => thread.threadId));
   const refs = (Array.isArray(record.items) ? record.items : []).map((item) => item?.ref);
   const unbound = refs.filter((ref) => !threadIds.has(ref));
@@ -364,7 +365,7 @@ export async function emitFixerWorkOrder({
     if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}`);
   }
   await capture.read(gateDeltaRecordPath(tmpRoot, headSha));
-  if (phase === "full") assertDeltaClearsFullPhase({ tmpRoot, headSha, delta: delta?.parsed, threads: threadsFile ? source.parsed.threads : null });
+  if (phase === "full") assertDeltaClearsFullPhase({ tmpRoot, headSha, delta: delta?.parsed, threads: threadsFile ? source.parsed.threads : null, ...(threadsFile ? { candidateHead: execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", env: gitEnvNoDirOverrides() }).trim() } : {}) });
 
   // Mutation authority comes from the PR itself, never from the caller.
   const prState = await fetchPr({ repo, pr });
