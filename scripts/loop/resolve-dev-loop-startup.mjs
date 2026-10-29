@@ -32,7 +32,7 @@ import {
   ownershipNeedsViewerLogin,
 } from "@dev-loops/core/github/ownership-helpers";
 import { resolveLinkedIssuesFromPr } from "./detect-pr-gate-coordination-state.mjs";
-import { configLoadFailure, lightModeCapState, loadDevLoopConfig, normalizeToBareBranch, resolveBaseBranch, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig, touchesConfigSource } from "@dev-loops/core/config";
+import { configLoadFailure, countLightModeFiles, lightModeCapState, loadDevLoopConfig, normalizeToBareBranch, resolveBaseBranch, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig, touchesConfigSource } from "@dev-loops/core/config";
 import { detectScope, detectWorkingTreeChangedFiles } from "./detect-change-scope.mjs";
 import { evaluateWorkingTreeSizeBudget } from "./check-size-budget.mjs";
 import { createPiAdapter } from "@dev-loops/core/harness";
@@ -1232,8 +1232,9 @@ function configuredBaseBranch(config) {
  *
  * Every git invocation is bound to `cwd` (the adapter-resolved repoRoot) —
  * process.cwd() is never relied on implicitly.
+ * The optional `detectChangedFiles` and `evaluateSize` seams default to the real readers; tests inject failures.
  */
-export function resolveIssuelessLightweightEligibility(config, cwd) {
+export function resolveIssuelessLightweightEligibility(config, cwd, { detectChangedFiles = detectWorkingTreeChangedFiles, evaluateSize = evaluateWorkingTreeSizeBudget } = {}) {
   const threshold = resolveLightMode(config);
   if (!threshold) {
     return { eligible: false, reason: "light_mode_disabled" };
@@ -1262,20 +1263,30 @@ export function resolveIssuelessLightweightEligibility(config, cwd) {
   }
   // The same cap predicate as gate dispatch: weighted logic LOC plus the non-doc
   // file count. Missing evidence fails closed.
-  const changed = detectWorkingTreeChangedFiles({ base: mergeBase, cwd });
+  const changed = detectChangedFiles({ base: mergeBase, cwd });
   let sizeOutcome = null;
   try {
-    sizeOutcome = evaluateWorkingTreeSizeBudget({ config, base: mergeBase, repoRoot: cwd });
+    sizeOutcome = evaluateSize({ config, base: mergeBase, repoRoot: cwd });
   } catch {
     sizeOutcome = null;
   }
   const changedFiles = changed.ok === true ? changed.files : undefined;
   const cap = lightModeCapState(config, threshold, { changedFiles, sizeOutcome });
   if (cap.over) {
-    return { eligible: false, reason: "over_threshold", scope, threshold, wholeLogicLoc: sizeOutcome?.wholeLogicLoc };
+    return {
+      eligible: false,
+      reason: "over_threshold",
+      scope,
+      threshold,
+      wholeLogicLoc: cap.locValid ? sizeOutcome.wholeLogicLoc : undefined,
+      fileCount: Array.isArray(changedFiles) ? countLightModeFiles(config, changedFiles) : undefined,
+    };
   }
   // Same floor as gate dispatch: a config-source edit can reclassify its own code as docs.
-  if (!cap.locValid || !Array.isArray(changedFiles) || touchesConfigSource(changedFiles)) {
+  if (Array.isArray(changedFiles) && touchesConfigSource(changedFiles)) {
+    return { eligible: false, reason: "config_source_touch", threshold };
+  }
+  if (!cap.locValid || !Array.isArray(changedFiles)) {
     return { eligible: false, reason: "size_outcome_unavailable", threshold };
   }
   return { eligible: true, scope, threshold };
@@ -1310,9 +1321,12 @@ export function buildLightweightIssuelessInput({ config, cwd }) {
         throw new Error(`--lightweight without --issue (issue-less PR-first) requires a measurable change scope; git diff failed (${eligibility.detail}). Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.`);
       }
       if (eligibility.reason === "size_outcome_unavailable") {
-        throw new Error("--lightweight without --issue (issue-less PR-first) requires a measurable weighted change size and no dev-loop config-source edit; the size outcome is unavailable or the change touches the config source. Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.");
+        throw new Error("--lightweight without --issue (issue-less PR-first) requires a measurable weighted change size; the size outcome or changed-file list is unavailable. Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.");
       }
-      throw new Error(`--lightweight without --issue (issue-less PR-first) requires the change to stay within the light-mode threshold (maxFiles=${eligibility.threshold.maxFiles} non-doc files, maxLines=${eligibility.threshold.maxLines} weighted logic lines); this change is ${eligibility.wholeLogicLoc} weighted logic lines. Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.`);
+      if (eligibility.reason === "config_source_touch") {
+        throw new Error("--lightweight without --issue (issue-less PR-first) requires no dev-loop config-source edit, which could reclassify its own code as docs. Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.");
+      }
+      throw new Error(`--lightweight without --issue (issue-less PR-first) requires the change to stay within the light-mode threshold (maxFiles=${eligibility.threshold.maxFiles} non-doc files, maxLines=${eligibility.threshold.maxLines} weighted logic lines); this change is ${eligibility.fileCount ?? "unknown"} non-doc files and ${eligibility.wholeLogicLoc ?? "unknown"} weighted logic lines. Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.`);
     }
   }
   return {

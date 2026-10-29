@@ -3956,6 +3956,23 @@ test("resolveIssuelessLightweightEligibility and resolveGateDispatchMode agree o
     execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
     execFileSync("git", ["commit", "-m", "config"], { cwd: tempDir, stdio: "ignore" });
     const result = resolveIssuelessLightweightEligibility(config, tempDir);
-    assert.deepEqual([result.eligible, result.reason], [false, "size_outcome_unavailable"]);
+    assert.deepEqual([result.eligible, result.reason], [false, "config_source_touch"]);
   }, { prefix: "resolve-dev-loop-shared-cap-config-" });
+});
+
+test("resolveIssuelessLightweightEligibility: missing size evidence fails closed as size_outcome_unavailable; config-source touch is its own reason", async () => {
+  const config = { version: 1, localImplementation: { lightMode: { enabled: true, maxFiles: 3, maxLines: 10 } } };
+  await withTempDir(async (tempDir) => {
+    await initFeatureBranchRepo(tempDir);
+    await writeFile(path.join(tempDir, "a.mjs"), "const a = 1;\n", "utf8");
+    execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "change"], { cwd: tempDir, stdio: "ignore" });
+    const reason = (deps) => resolveIssuelessLightweightEligibility(config, tempDir, deps).reason;
+    assert.equal(reason({ evaluateSize: () => ({ wholeLogicLoc: Number.NaN }) }), "size_outcome_unavailable");
+    assert.equal(reason({ evaluateSize: () => { throw new Error("boom"); } }), "size_outcome_unavailable");
+    assert.equal(reason({ detectChangedFiles: () => ({ ok: false, files: null, error: "boom" }), evaluateSize: () => ({ wholeLogicLoc: 1 }) }), "size_outcome_unavailable");
+    assert.equal(reason({ detectChangedFiles: () => ({ ok: true, files: [".devloops"] }), evaluateSize: () => ({ wholeLogicLoc: 1 }) }), "config_source_touch");
+    const over = resolveIssuelessLightweightEligibility(config, tempDir, { detectChangedFiles: () => ({ ok: true, files: ["a.mjs"] }), evaluateSize: () => ({ wholeLogicLoc: 99 }) });
+    assert.deepEqual([over.reason, over.fileCount, over.wholeLogicLoc], ["over_threshold", 1, 99]);
+  }, { prefix: "resolve-dev-loop-eligibility-seams-" });
 });
