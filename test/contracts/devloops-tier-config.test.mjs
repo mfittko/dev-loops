@@ -20,8 +20,18 @@ import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolve
 
 const GATE_KEYS = ["draft", "preApproval"];
 
-test("Codex role mappings mirror the shared policy without changing conductor or angle dispatch", async () => {
-  const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+test("Codex fixture role mappings mirror the shared policy without changing conductor or angle dispatch", async () => {
+  const { config, errors } = await loadDevLoopConfig({
+    repoRoot: process.cwd(),
+    devloopsOverride: { raw: JSON.stringify({ version: 1, models: {
+      roleTiers: { "gate-coordinator": "low", judge: "high", "pre-push-reviewer": "pre-pr-strong" },
+      harnesses: { codex: { tiers: {
+        low: { model: "example-low" },
+        high: { model: "example-high" },
+        "pre-pr-strong": { model: "example-strong" },
+      } } },
+    } }) },
+  });
   assert.deepEqual(errors, []);
   const tiers = config.models.harnesses.codex.tiers;
   for (const tier of ["low", "high", "pre-pr-strong"]) assert.ok(tiers[tier].model?.trim());

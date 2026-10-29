@@ -189,12 +189,6 @@ localImplementation:
 # structure (which role maps to which tier, which harness key carries a model)
 # and never pins a model id (ADR 0175).
 models:
-  harnesses:
-    codex:
-      tiers:
-        low: { model: gpt-6.1-sol }
-        high: { model: gpt-6-astra }
-        pre-pr-strong: { model: gpt-6-astra }
   tiers:
     low:
       claude: sonnet
