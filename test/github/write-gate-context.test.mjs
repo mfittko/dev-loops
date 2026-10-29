@@ -55,6 +55,7 @@ import {
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
+import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { readSealedGateDeltaRecord, writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { packedUnitName } from "../../scripts/github/_dispatch-units.mjs";
@@ -8699,10 +8700,11 @@ test("readClosedPriorRoundLogs rejects with gate_artifact_out_of_band_write on a
 });
 
 // ADR 0208: the cap round fixed goes ready; pre_approval_gate receives the cap round's residue.
-async function writeDeltaRecord(repoRoot, baselineHead, candidateHead, nextStep = "push", { seal = true, tmpDir = "tmp" } = {}) {
+const SEEDED_ACT = { severity: "medium", summary: "guard missing", files: ["src/changed.mjs"], line: 2, judgeDisposition: "act", judgeTitle: "Guard is missing", judgeFix: "add the guard" };
+async function writeDeltaRecord(repoRoot, baselineHead, candidateHead, nextStep = "push", { seal = true, tmpDir = "tmp", items = [{ ref: fingerprintFinding(SEEDED_ACT), status: "resolved" }] } = {}) {
   const dir = path.join(repoRoot, tmpDir, "gate-delta");
   await mkdir(dir, { recursive: true });
-  const text = JSON.stringify({ reviewBaselineHead: baselineHead, candidateHead, nextStep, outcome: "locally_clear" });
+  const text = JSON.stringify({ reviewBaselineHead: baselineHead, candidateHead, nextStep, outcome: "locally_clear", items });
   await writeFile(path.join(dir, `${baselineHead}.json`), text, "utf8");
   if (seal) await writeFile(path.join(dir, `${baselineHead}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`, "utf8");
 }
@@ -8748,6 +8750,64 @@ test("a pre_approval_gate context carries the cap round's unresolved residue as 
     assert.deepEqual(context.scope.capRoundResidue.map((i) => [i.title, i.disposition]), [["Guard is missing", "act"]]);
     await main(["--repo", "owner/repo", "--pr", "51", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], { repoRoot, run: stubGhRun });
     assert.equal("capRoundResidue" in (await readGateContext({ repo: "owner/repo", pr: 51, gate: "pre_approval_gate", headSha }, { repoRoot })).scope, false);
+  } finally {
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveCapRound treats a cap round whose persisted verdict is clean as a cap round when a judge-act medium is open", async () => {
+  const { repoRoot, baseSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 61, headSha: "8".repeat(40) };
+    await seedClosedRounds(repoRoot, 61, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-61", `draft_gate-${baseSha}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    await writeFile(ledger, JSON.stringify({ ...log, verdict: "clean" }), "utf8");
+    assert.equal((await resolveCapRound(opts, { repoRoot })).residue.length, 1, "a clean severity verdict with an open act item is the cap round");
+    await writeFile(ledger, JSON.stringify({ ...log, verdict: "clean", findings: [] }), "utf8");
+    assert.equal(await resolveCapRound(opts, { repoRoot }), null, "a clean round without an act item is no cap round");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveCapRoundFixed refuses a clearing record that does not name every cap-round act item", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 62, gate: "draft_gate", headSha };
+    await seedClosedRounds(repoRoot, 62, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    await writeDeltaRecord(repoRoot, baseSha, headSha, "push", { items: [{ ref: "a-thread-route-item", status: "resolved" }] });
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "a record for another act set proves nothing");
+    await writeDeltaRecord(repoRoot, baseSha, headSha, "push", { items: [] });
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "a record without items proves nothing");
+    await writeDeltaRecord(repoRoot, baseSha, headSha);
+    assert.ok(await resolveCapRoundFixed(opts, { repoRoot }), "a record naming the act item proves the fix");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a pre_approval_gate context builds for a ready cap-fixed PR with no clean draft verdict and resolved gate threads only", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  try {
+    await seedClosedRounds(repoRoot, 63, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    await writeDeltaRecord(repoRoot, baseSha, "9".repeat(40));
+    const coordination = (unresolvedGateThreadCount) => async () => ({ currentHeadSha: headSha, unresolvedGateThreadCount, prData: { isDraft: false, baseRefName: "main" }, gateEvidence: { draftGateSatisfied: false } });
+    const args = ["--repo", "owner/repo", "--pr", "63", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha];
+    const origErr = process.stderr.write;
+    process.stderr.write = () => true;
+    try {
+      process.exitCode = undefined;
+      await main(args, { repoRoot, run: stubGhRun, loadCoordination: coordination(1) });
+      assert.equal(process.exitCode, 1, "an unresolved gate thread keeps the refusal");
+      process.exitCode = undefined;
+      await main(args, { repoRoot, run: stubGhRun, loadCoordination: coordination(0) });
+      assert.notEqual(process.exitCode, 1, "the sealed proof stands in for the clean draft verdict");
+    } finally {
+      process.stderr.write = origErr;
+    }
   } finally {
     process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });

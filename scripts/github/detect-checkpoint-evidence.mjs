@@ -31,7 +31,9 @@ import { FANOUT_UNAVAILABLE_MESSAGE, JUDGE_DISPOSITIONS, VALID_SEVERITIES, check
 import { detectMergeBaseChangedFiles } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
+import { resolveCapRoundFixed } from "./write-gate-context.mjs";
+import { crossCheckRoundFromReviewBodies, normalizePrReviewsPayload, parseFindingMarker, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
+import { isCapRound } from "@dev-loops/core/loop/review-round-cap";
 import { flattenPaginatedSlurp, resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
@@ -51,6 +53,7 @@ Required:
   --repo <owner/name>   Repository slug (e.g. owner/repo)
   --pr <number>         Pull request number
 Optional:
+  --base-ref-name <name>  PR base branch; lets a sealed cap-round-fixed proof stand in for the clean draft_gate comment
   --skip-fanout-ledger-check  Skip the fan-out findings-log ledger/provenance/
                               angle-coverage layer of requireFanoutEvidence
                               enforcement. That evidence lives in a gitignored,
@@ -164,6 +167,7 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       pr: { type: "string" },
       "require-before-merge": { type: "boolean" },
       "skip-fanout-ledger-check": { type: "boolean" },
+      "base-ref-name": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -201,6 +205,10 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       // below, never silently enabling the skip. So presence => enable, and the
       // only way to keep full enforcement is to omit the flag (the default).
       options.skipFanoutLedgerCheck = true;
+      continue;
+    }
+    if (token.name === "base-ref-name") {
+      options.baseRefName = requireTokenValue(token, parseError).trim();
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -389,10 +397,18 @@ export function coerceUnresolvedThreadCount(parsedThreads) {
   const raw = parsedThreads?.summary?.unresolvedThreads;
   return Number.isInteger(raw) && raw >= 0 ? raw : -1;
 }
-export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false } = {}) {
+// GitHub-visible cap-round-fixed predicate: the cap-round marker is posted and every thread carrying a finding of that round is resolved.
+export function capRoundThreadsResolved(capRoundNumber, threadNodes) {
+  if (!Number.isInteger(capRoundNumber) || !Array.isArray(threadNodes)) return false;
+  return threadNodes.every((node) => parseFindingMarker(node?.comments?.nodes?.[0]?.body)?.round !== capRoundNumber || node?.isResolved === true);
+}
+export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false, capRoundFixed = false } = {}) {
   const failures = [];
   const warnings = [];
-  if (!(evidence.draftGate.visible && evidence.draftGate.verdict === "clean")) {
+  // A sealed "cap round fixed" proof stands in for the clean draft_gate comment; every other condition below stays fail-closed.
+  if (capRoundFixed === true) {
+    // proof accepted
+  } else if (!(evidence.draftGate.visible && evidence.draftGate.verdict === "clean")) {
     failures.push("missing visible clean draft_gate comment");
   } else if (evidence.draftGate.converged?.malformed) {
     failures.push("draft_gate comment carries a malformed Converged marker (expected `fixer <sha> delta sha256:<digest>`)");
@@ -620,8 +636,11 @@ function gateVerdictState({ visible, verdict, contractComplete = true }) {
  * definition — a clean-gates PR can still fail on an unrelated pre-merge
  * check, which is a real problem (violation), not "waiting".
  */
-export function deriveEvidenceState(evidence, preMergeGateCheck) {
-  const draftState = gateVerdictState({ visible: evidence.draftGate.visible, verdict: evidence.draftGate.verdict });
+export function deriveEvidenceState(evidence, preMergeGateCheck, capRoundFixed = false) {
+  // A cap-fixed PR holds the draft gate by the sealed proof: its visible findings_present review is not a violation, and preMergeGateCheck decides.
+  const draftState = capRoundFixed === true
+    ? "clean"
+    : gateVerdictState({ visible: evidence.draftGate.visible, verdict: evidence.draftGate.verdict });
   const preApprovalState = gateVerdictState({
     visible: evidence.preApprovalGateMarker.visible,
     verdict: evidence.preApprovalGateMarker.verdict,
@@ -1201,6 +1220,8 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     // buildPreMergeGateCheck's fail-closed handling is reachable without
     // threading the raw reviews array through it.
     reviewsReadFailed,
+    // The round the posted draft_gate review header carries when it is the cap round, else null (GitHub-visible; no tmp record).
+    capRoundNumber: (() => { const round = crossCheckRoundFromReviewBodies(prReviews.map((r) => r.body), "draft_gate"); return isCapRound(round, resolveGateConfig(config, "draft").maxReviewRounds ?? 0) ? round : null; })(),
     fanoutEnforcement,
     ...(runnerOwnership.status !== "skipped_no_async_run_id" ? { runnerOwnership } : {}),
     staleRunner: {
@@ -1245,7 +1266,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
  * same fact.
  */
 export async function detectCheckpointEvidence(options, ctx) {
-  const { reviews: _reviews, comments: _comments, ...publicResult } = await gatherCheckpointEvidenceRaw(options, ctx);
+  const { reviews: _reviews, comments: _comments, capRoundNumber: _capRoundNumber, ...publicResult } = await gatherCheckpointEvidenceRaw(options, ctx);
   if (typeof ctx?.unresolvedGateThreadCount === "number") {
     publicResult.draftGateSatisfied = publicResult.draftGateSatisfied && ctx.unresolvedGateThreadCount === 0;
   }
@@ -1272,10 +1293,12 @@ async function main() {
     const result = await gatherCheckpointEvidenceRaw(options);
     let unresolvedThreadCount = -1;
     let unresolvedGateThreadCount = -1;
+    let githubCapFixed = false;
     try {
       const threadsPayload = await fetchGithubReviewThreadsPayload(options, { env: process.env });
       const parsedThreads = parseReviewThreads(threadsPayload);
       unresolvedThreadCount = coerceUnresolvedThreadCount(parsedThreads);
+      githubCapFixed = capRoundThreadsResolved(result.capRoundNumber, threadsPayload);
       // The draftGateSatisfied field must assert 0 unresolved gate-authored
       // threads (high, medium, low, question, AND nit), not just a clean
       // verdict. Narrowed by the authenticated gate login (ADR 0088), the
@@ -1320,15 +1343,19 @@ async function main() {
         ? [`exit signal recorded for run ${result.staleRunner.activeRun?.runId}: refuse to merge`]
         : [],
     };
-    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true });
-    const evidenceState = deriveEvidenceState(result, preMergeGateCheck);
+    // The proof is read only when no clean draft_gate comment is visible and the caller named the base branch.
+    const draftClean = result.draftGate.visible && result.draftGate.verdict === "clean";
+    const capRoundFixed = !draftClean && (githubCapFixed || (Boolean(options.baseRefName)
+      && Boolean(await resolveCapRoundFixed({ repo: result.repo, pr: result.pr, headSha: result.currentHeadSha, baseRefName: options.baseRefName, anyHead: true }, { repoRoot: resolveRepoRoot(process.cwd()) }).catch(() => null))));
+    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true, capRoundFixed });
+    const evidenceState = deriveEvidenceState(result, preMergeGateCheck, capRoundFixed);
     // reviews/comments are raw size-budget-gate input facts (comments carry
     // FULL PR comment bodies) consumed internally by buildPreMergeGateCheck
     // above; they are never read from the CLI's own JSON output by any
     // consumer (merge-pr.mjs reads only preMergeGateCheck.failures), so they
     // are excluded here to keep emitted output bounded regardless of how many
     // comments the PR has accumulated.
-    const { reviews: _reviews, comments: _comments, ...serializableResult } = result;
+    const { reviews: _reviews, comments: _comments, capRoundNumber: _capRoundNumber, ...serializableResult } = result;
     const output = { ...serializableResult, preMergeGateCheck, staleRunnerCheck, evidenceState };
     if (!preMergeGateCheck.ok) {
       process.stderr.write(`${JSON.stringify({

@@ -37,6 +37,7 @@ import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpo
 import {
   parseDetectCheckpointEvidenceCliArgs,
   buildPreMergeGateCheck,
+  capRoundThreadsResolved,
   buildFanoutEnforcement,
   detectCheckpointEvidence,
   deriveEvidenceState,
@@ -1258,6 +1259,18 @@ test("detect-checkpoint-evidence fails pre-merge when graphql review-thread fetc
   }
 });
 
+
+test("buildPreMergeGateCheck accepts the sealed cap-round-fixed proof in place of a clean draft_gate comment and stays fail-closed otherwise", () => {
+  const evidence = (preHead = "abc1234") => ({
+    currentHeadSha: "abc1234",
+    draftGate: { visible: true, verdict: "findings_present" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: preHead, sizeOutcome: "pass", sizeTouchesT1: false },
+  });
+  assert.equal(buildPreMergeGateCheck(evidence(), 0, null, null, { capRoundFixed: true }).ok, true, "proof, no clean draft_gate");
+  assert.deepEqual(buildPreMergeGateCheck(evidence(), 0).failures, ["missing visible clean draft_gate comment"], "no proof");
+  assert.deepEqual(buildPreMergeGateCheck(evidence("old5678"), 0, null, null, { capRoundFixed: true }).failures, ["missing visible clean current-head pre_approval_gate comment"], "stale pre_approval_gate head");
+  assert.deepEqual(buildPreMergeGateCheck(evidence(), 2, null, null, { capRoundFixed: true }).failures, ["unresolved review threads present (2); must resolve all threads before merge"], "unresolved threads");
+});
 
 test("buildPreMergeGateCheck fails with non-zero unresolved thread count", () => {
   const evidence = {
@@ -4744,4 +4757,50 @@ test("detectCheckpointEvidence carries clean gate markers from an earlier head a
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("capRoundThreadsResolved is true only for a cap-round marker with every cap-round thread resolved", () => {
+  const thread = (round, isResolved) => ({ isResolved, comments: { nodes: [{ body: `<!-- dev-loops:finding 0123456789abcdef severity=low angle=scope round=${round} -->` }] } });
+  assert.equal(capRoundThreadsResolved(3, [thread(3, true), thread(2, false)]), true, "earlier-round thread may stay open");
+  assert.equal(capRoundThreadsResolved(3, [thread(3, true), thread(3, false)]), false, "unresolved cap-round thread");
+  assert.equal(capRoundThreadsResolved(null, [thread(3, true)]), false, "no cap-round marker (lower round)");
+  assert.equal(capRoundThreadsResolved(3, null), false, "unreadable threads fail closed");
+});
+
+test("deriveEvidenceState: a cap-fixed PR with a visible findings_present draft_gate is decided by preMergeGateCheck, not a violation", () => {
+  const evidence = { draftGate: { visible: true, verdict: "findings_present" }, preApprovalGateMarker: { visible: true, verdict: "clean", contractComplete: true } };
+  assert.equal(deriveEvidenceState(evidence, { ok: true, failures: [] }, true), EVIDENCE_STATE.SATISFIED);
+  assert.equal(deriveEvidenceState(evidence, { ok: false, failures: ["x"] }, true), EVIDENCE_STATE.VIOLATION);
+  assert.equal(deriveEvidenceState(evidence, { ok: true, failures: [] }), EVIDENCE_STATE.VIOLATION, "without the proof stays fail-closed");
+});
+
+test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate follows cap-round marker, thread resolution and pre_approval head", async () => {
+  const headSha = "abc1234";
+  const finding = (round, isResolved) => ({ id: `t${round}${isResolved}`, isResolved, comments: { nodes: [{ body: `<!-- dev-loops:finding 0123456789abcdef severity=low angle=scope round=${round} -->` }] } });
+  const verdict = (gate, head, v) => ["Gate review: " + gate, `Reviewed head SHA: ${head}`, `Verdict: ${v}`, "Findings summary: x", "Next action: y"].join("\n");
+  const run = async ({ round, threads, preHead }) => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-capfixed-"));
+    try {
+      await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+      const env = await writeGhStub(tempDir, [
+        { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `{"headRefOid":"${headSha}"}\n` },
+        { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: `${JSON.stringify([
+          { id: 1, body: verdict("draft_gate", "bcd5678", "findings_present"), updated_at: "2026-05-29T21:00:00Z" },
+          { id: 2, body: renderGateReviewCommentBody({ gate: "pre_approval_gate", headSha: preHead, repo: "owner/repo", verdict: "clean", findingsSummary: "x", nextAction: "y", sizeOutcome: "pass", sizeTouchesT1: false, sizeWaiverGranted: false }), updated_at: "2026-05-29T22:00:00Z" },
+        ])}\n` },
+        { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: `${JSON.stringify([
+          { id: 900, body: `Gate findings\n<!-- dev-loops:gate-findings-review draft_gate bcd5678 round=${round} -->`, submitted_at: "2026-05-29T20:00:00Z" },
+        ])}\n` },
+        { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: threads } } } } }) + "\n" },
+      ]);
+      const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+      return JSON.parse(result.code === 0 ? result.stdout : result.stderr).evidenceState;
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  };
+  assert.equal(await run({ round: 4, threads: [finding(4, true)], preHead: headSha }), "satisfied", "cap round, resolved, clean current-head pre_approval");
+  assert.equal(await run({ round: 4, threads: [finding(4, false)], preHead: headSha }), "violation", "unresolved cap-round thread");
+  assert.equal(await run({ round: 3, threads: [finding(3, true)], preHead: headSha }), "violation", "round below the cap");
+  assert.notEqual(await run({ round: 4, threads: [finding(4, true)], preHead: "old5678" }), "satisfied", "stale pre_approval head");
 });

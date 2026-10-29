@@ -1374,7 +1374,7 @@ export function collectVerdictHeadShas(comments, gate, headShas) {
 // review BODY at all (only in the separate review comment GitHub attaches
 // it to), so scanning finding markers here could never find a round the
 // header does not already carry.
-function crossCheckRoundFromReviewBodies(bodies, gate) {
+export function crossCheckRoundFromReviewBodies(bodies, gate) {
   let max = 0;
   for (const body of bodies) {
     if (typeof body !== "string") continue;

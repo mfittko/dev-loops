@@ -7,6 +7,8 @@ import { execFileSync } from "node:child_process";
 import { DEFAULT_TEST_PR_BODY, initGitFixture, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 import { parseUpsertCheckpointVerdictCliArgs, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { startDeltaSequence } from "../../packages/core/src/loop/pre-push-delta-review.mjs";
+import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
+import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 
 // GATE-EXEC-LOW-NIT-CONVERGENCE: an all-low/nit draft_gate round at head A converges after one fixer pass and a
 // clean delta review. The comment at A is updated to clean with the Converged field while the PR head is the
@@ -72,9 +74,9 @@ function convergedInput(actList, overrides = {}) {
 }
 
 // Answers every gh call; the PR head is the fixer commit and the draft_gate review lives at A.
-function makeRunChild({ puts, existingReview = true, currentHead = FIX, body = existingBody() }) {
+function makeRunChild({ puts, existingReview = true, currentHead = FIX, body = existingBody(), prState = "OPEN" }) {
   const prJson = JSON.stringify({
-    number: 17, state: "OPEN", isDraft: true, headRefOid: currentHead, body: DEFAULT_TEST_PR_BODY,
+    number: 17, state: prState, isDraft: true, headRefOid: currentHead, body: DEFAULT_TEST_PR_BODY,
     closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
   }) + "\n";
   const reviews = existingReview
@@ -422,4 +424,52 @@ test("an inline converged post is refused when A qualifies for inline review but
     process.env.PATH = saved.path;
     await rm(gitRepo, { recursive: true, force: true });
   }
+});
+
+test("a converged post is accepted on a cap-fixed PR whose sealed clearing record names the cap-round act set", async () => {
+  await withTempDir(async (tempDir) => {
+    const dir = path.join(capOnRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    const findings = [finding("low", 1), finding("nit", 2)];
+    for (const head of ["1", "2", "3", A]) {
+      const sha = head.length === 1 ? head.repeat(40) : head;
+      await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({
+        repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${head.length === 1 ? head : 4}T00:00:00.000Z`, findings: sha === A ? findings : [],
+      }), "utf8");
+    }
+    writeGateDeltaRecord({ tmpRoot: path.join(capOnRoot, "tmp"), sequence: { reviewBaselineHead: A, actSetId: "0123456789abcdef" }, candidateHead: FIX, invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: findings.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) } });
+    try {
+      const { result, error } = await post(tempDir, { findings, converged: convergedInput(findings), root: capOnRoot });
+      assert.equal(error, undefined);
+      assert.equal(result.action, "updated");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      await rm(path.join(capOnRoot, "tmp", "gate-delta"), { recursive: true, force: true });
+    }
+  }, { prefix: "dev-loops-converged-capfixed-" });
+});
+
+test("a converged post on a cap-fixed PR is still refused when coordination forbids the draft gate for another reason", async () => {
+  await withTempDir(async (tempDir) => {
+    const dir = path.join(capOnRoot, "tmp", "gate-findings", "owner-repo", "pr-17");
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    const findings = [finding("low", 1), finding("nit", 2)];
+    for (const head of ["1", "2", "3", A]) {
+      const sha = head.length === 1 ? head.repeat(40) : head;
+      await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({
+        repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${head.length === 1 ? head : 4}T00:00:00.000Z`, findings: sha === A ? findings : [],
+      }), "utf8");
+    }
+    writeGateDeltaRecord({ tmpRoot: path.join(capOnRoot, "tmp"), sequence: { reviewBaselineHead: A, actSetId: "0123456789abcdef" }, candidateHead: FIX, invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: findings.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) } });
+    try {
+      const { result, error } = await post(tempDir, { findings, converged: convergedInput(findings), root: capOnRoot, runChildOptions: { prState: "CLOSED" } });
+      assert.equal(result, undefined);
+      assert.match(error, /closed|CLOSED|refus|Cannot/i, error);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      await rm(path.join(capOnRoot, "tmp", "gate-delta"), { recursive: true, force: true });
+    }
+  }, { prefix: "dev-loops-converged-capfixed-closed-" });
 });

@@ -2012,7 +2012,8 @@ export async function resolveCapRound(options, { repoRoot }) {
   // An unreadable ledger counts toward the cap but readClosedPriorRoundLogs drops it, so the cap-round authority could be an earlier round: fail closed.
   let unreadable = 0;
   const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, onUnreadable: () => { unreadable += 1; } })).at(-1);
-  if (unreadable > 0 || log?.verdict !== "findings_present") return null;
+  // The persisted severity verdict can read `clean` for judge-act mediums whose posted review composes findings_present: an open act item makes the round a cap round too.
+  if (unreadable > 0 || !log || (log.verdict !== "findings_present" && listOpenActItems(log.findings).length === 0)) return null;
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
   let items = [];
   try { items = readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), log.headSha)?.items ?? []; } catch { /* unverifiable: keep every item */ }
@@ -2065,7 +2066,13 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
     }
     return false;
   };
-  return starts.some(reaches) ? capRound : null;
+  // The first clearing record must name every act item of the cap round: a delta record keyed on the same baseline for another route (a thread review) proves nothing about them.
+  // With no open act item the check is vacuously true: any clearing record then binds, and the cap round rests on the baseline match alone.
+  const covers = (record) => {
+    const refs = (Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref));
+    return listOpenActItems(capRound.log.findings).every((f) => { const fp = fingerprintFinding(f); return refs.some((r) => r === fp || r.startsWith(`${fp}#`)); });
+  };
+  return starts.filter(covers).some(reaches) ? capRound : null;
 }
 
 /**
@@ -3712,12 +3719,15 @@ export async function main(
         // draftGateAlreadySatisfied no-op; pre_approval keeps the folded fact.
         const isDraftGate = options.gate === "draft_gate";
         const draftVerdict = coordination.gateEvidence?.draftGate;
+        // A ready PR whose cap round is fixed holds no clean draft verdict: the sealed proof stands in for it, so pre_approval_gate can build its context.
+        const capFixedPreApproval = !isDraftGate && coordination.prData?.isDraft === false && coordination.gateEvidence?.draftGateSatisfied !== true && coordination.unresolvedGateThreadCount === 0
+          && Boolean(await resolveCapRoundFixed({ repo: options.repo, pr: options.pr, headSha: coordination.currentHeadSha, baseRefName: typeof coordination.prData?.baseRefName === "string" ? coordination.prData.baseRefName.trim() : "", anyHead: true }, { repoRoot }).catch(() => null));
         const refusal = prematureGateOrderingRefusal({
           gate: options.gate,
           isDraft: isDraftGate ? coordination.prData?.isDraft : Boolean(coordination.prData?.isDraft),
           draftGateSatisfied: isDraftGate
             ? draftVerdict?.verdict === "clean" && typeof draftVerdict?.headSha === "string"
-            : coordination.gateEvidence?.draftGateSatisfied === true,
+            : capFixedPreApproval || coordination.gateEvidence?.draftGateSatisfied === true,
           repo: options.repo,
           pr: options.pr,
         });
