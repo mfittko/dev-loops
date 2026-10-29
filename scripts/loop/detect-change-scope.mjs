@@ -130,7 +130,7 @@ function detectMergeBaseChangedFiles({ base, head, cwd } = {}) {
   try {
     output = execFileSync(
       "git",
-      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", `${base}...${head}`],
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", "--no-renames", `${base}...${head}`],
       { encoding: "utf8", maxBuffer: 10_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() },
     );
   } catch (err) {

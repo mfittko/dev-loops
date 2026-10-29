@@ -156,7 +156,7 @@ function detectChangedFiles({ base, head, cwd }) {
   try {
     const output = execFileSync(
       "git",
-      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", diffRange(base, head)],
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", "--no-renames", diffRange(base, head)],
       { cwd: cwd || undefined, encoding: "utf8", maxBuffer: 10 * 1024 * 1024, env: gitEnvWithoutDirOverrides(), stdio: ["ignore", "pipe", "ignore"] },
     );
     return output.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
@@ -232,7 +232,10 @@ export async function run(argv) {
       headSha: resolvedHeadSha != null && resolvedHeadSha.toLowerCase() === suppliedHeadSha ? resolvedHeadSha : undefined,
     });
     let sizeOutcome = null;
-    if (threshold != null || judge.track !== "full") {
+    // Base without head diffs the working tree, which the three-dot size reader cannot
+    // measure: leave the outcome null so it fails closed.
+    const sizeMeasurable = !(opts.base && !opts.head);
+    if (sizeMeasurable && (threshold != null || judge.track !== "full")) {
       try {
         sizeOutcome = await evaluatePrSizeBudget({
           base: opts.base ?? "HEAD~1",

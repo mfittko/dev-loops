@@ -350,7 +350,33 @@ test("--base without --head diffs the working tree, so a matching --head-sha nev
     const noBase = runJudge(fixture, { record: rec, labels: "gate:light", headSha: sha, noRange: true });
     assert.equal(noBase.track, "light");
     const baseOnly = runJudge(fixture, { record: rec, labels: "gate:light", headSha: sha, baseOnly: true });
-    assert.deepEqual([baseOnly.track, baseOnly.trackReason], ["full", "judge_head_mismatch"]);
+    assert.deepEqual([baseOnly.track, baseOnly.trackReason], ["full", "risk_floor"]);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("--base without --head leaves the size outcome unavailable and fails closed", async () => {
+  const { tmp, fixture } = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "docs/note.md": "A trivial docs change.\n" } });
+  try {
+    const out = JSON.parse(execFileSync((Bun.which("node") ?? "node"), [SCRIPT, "--gate", "draft", "--base", "base"], { cwd: fixture, encoding: "utf8" }).trim());
+    assert.deepEqual([out.mode, out.reason], ["full_fanout", "size_outcome_unavailable"]);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("pure renames of source files into docs keep the source endpoint and count against maxFiles", async () => {
+  const names = [1, 2, 3, 4, 5, 6];
+  const { tmp, fixture } = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "x.txt": "x\n" } });
+  try {
+    for (const n of names) await writeFile(path.join(fixture, `s${n}.mjs`), `export const v${n} = ${n};\n`.repeat(3));
+    execSync("git add . && git commit -qm src && git branch base2", { cwd: fixture, stdio: "ignore" });
+    await mkdir(path.join(fixture, "docs"), { recursive: true });
+    for (const n of names) execSync(`git mv s${n}.mjs docs/s${n}.md`, { cwd: fixture });
+    execSync("git commit -qm rename", { cwd: fixture, stdio: "ignore" });
+    const out = execFileSync((Bun.which("node") ?? "node"), [SCRIPT, "--gate", "draft", "--base", "base2", "--head", "HEAD"], { cwd: fixture, encoding: "utf8" });
+    assert.equal(JSON.parse(out.trim()).reason, "over_threshold");
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
