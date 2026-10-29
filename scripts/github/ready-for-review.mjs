@@ -218,7 +218,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   // (skipCiPrecondition=false) keeps accepting either.
   const gateHeadClean = skipCiPrecondition === true ? gate.currentHeadClean : gate.effectiveHeadClean;
   // ADR 0208: the cap round's fixer pass landed and its delta cleared: no further draft_gate round runs, so this stands in for a clean current-head verdict. CI and every check below stay.
-  const capRoundFixed = !gateHeadClean && skipCiPrecondition !== true && Boolean(await resolveCapRoundFixedFn({ repo: options.repo, pr: options.pr, headSha }, { repoRoot }));
+  const capRoundFixed = !gateHeadClean && skipCiPrecondition !== true && Boolean(await resolveCapRoundFixedFn({ repo: options.repo, pr: options.pr, headSha, baseRefName: prState.baseRefName }, { repoRoot }));
   if (!capRoundFixed && !gate.cleanEvidenceExists && !gateHeadClean) throw new Error(`No visible clean draft_gate evidence on ${headSha.slice(0,7)}`);
   if (!capRoundFixed && !gateHeadClean) { const mv = gate.draftGateMarker?.visible; const mh = gate.draftGateMarker?.headSha; throw new Error(mv && mh ? `PR #${options.pr} draft_gate marker does not match current head ${headSha.slice(0,7)}. Re-run draft gate.` : `PR #${options.pr} draft_gate marker is missing or incomplete on current head ${headSha.slice(0,7)}. Re-run draft gate.`); }
   // #1585: a clean verdict is not enough — every gate-authored review thread

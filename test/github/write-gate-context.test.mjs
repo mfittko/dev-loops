@@ -44,6 +44,7 @@ import {
   resolvePriorDispositions,
   countCompletedRounds,
   resolveClosureRound,
+  resolveCapRound,
   resolveCapRoundFixed,
   readGateContext,
   renderBriefingEvidence,
@@ -54,6 +55,7 @@ import {
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
+import { readSealedGateDeltaRecord, writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { OUT_OF_BAND_WRITE, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { packedUnitName } from "../../scripts/github/_dispatch-units.mjs";
 
@@ -8749,6 +8751,118 @@ test("resolveCapRoundFixed trusts only a sealed, unmodified delta record (ADR 02
     const recordPath = path.join(repoRoot, "tmp", "gate-delta", `${baseSha}.json`);
     await writeFile(recordPath, JSON.stringify({ reviewBaselineHead: baseSha, candidateHead: headSha, nextStep: "push", outcome: "locally_clear", edited: true }), "utf8");
     assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "a hand-edited record fails the seal");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("the delta record the writer seals is the record the sealed reader returns, and a hand edit is refused", async () => {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-delta-roundtrip-"));
+  try {
+    const baseline = "a".repeat(40);
+    const candidate = "b".repeat(40);
+    const recordPath = writeGateDeltaRecord({ tmpRoot, sequence: { reviewBaselineHead: baseline, actSetId: "0123456789abcdef" }, candidateHead: candidate, invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: [{ ref: "act-1", status: "resolved" }] } });
+    const record = readSealedGateDeltaRecord(tmpRoot, baseline);
+    assert.equal(record.reviewBaselineHead, baseline);
+    assert.equal(record.candidateHead, candidate);
+    assert.equal(record.nextStep, "push");
+    // A second write for the same baseline replaces the record and reseals it.
+    writeGateDeltaRecord({ tmpRoot, sequence: { reviewBaselineHead: baseline, actSetId: "0123456789abcdef" }, candidateHead: "c".repeat(40), invocation: 2, decision: { outcome: "locally_clear", nextStep: "push_to_gate" }, result: {} });
+    assert.equal(readSealedGateDeltaRecord(tmpRoot, baseline).candidateHead, "c".repeat(40));
+    await writeFile(recordPath, `${JSON.stringify({ ...record, nextStep: "push" })}\n`, "utf8");
+    assert.equal(readSealedGateDeltaRecord(tmpRoot, baseline), null);
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveCapRound keeps a cap_closed finding in the residue with disposition cap_closed", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const dir = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-53");
+    await mkdir(dir, { recursive: true });
+    const heads = ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha];
+    for (const [i, head] of heads.entries()) {
+      const findings = i === 3 ? [{ severity: "medium", summary: "closed by the cap", files: ["src/changed.mjs"], line: 3, judgeDisposition: "defer", capClosed: true, judgeTitle: "Closed by the cap" }] : [];
+      await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 53, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings }), "utf8");
+    }
+    const round = await resolveCapRound({ repo: "owner/repo", pr: 53, headSha }, { repoRoot });
+    assert.deepEqual(round.residue.map((i) => [i.title, i.disposition]), [["Closed by the cap", "cap_closed"]]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("the pre_approval_gate briefing volatile tail lists the cap round residue for reviewers and the judge", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  try {
+    await seedClosedRounds(repoRoot, 54, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    process.exitCode = undefined;
+    await main(["--repo", "owner/repo", "--pr", "54", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], { repoRoot, run: stubGhRun });
+    assert.notEqual(process.exitCode, 1);
+    const dir = path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-54");
+    const name = (await readdir(dir)).find((n) => n.endsWith(".briefing-volatile.txt"));
+    const volatile = await readFile(path.join(dir, name), "utf8");
+    assert.match(volatile, /Cap-round residue .*: 1 items\./);
+    assert.match(volatile, /^- [0-9a-f]+ \| act \| src\/changed\.mjs:2 \| Guard is missing$/m);
+    await main(["--repo", "owner/repo", "--pr", "55", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], { repoRoot, run: stubGhRun });
+    const none = path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-55");
+    assert.doesNotMatch(await readFile(path.join(none, (await readdir(none)).find((n) => n.endsWith(".briefing-volatile.txt"))), "utf8"), /Cap-round residue/);
+  } finally {
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("an unreadable cap-round ledger fails closed: no earlier round becomes the cap round or its proof", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 56, gate: "draft_gate", headSha };
+    const earlier = "3".repeat(40);
+    await seedClosedRounds(repoRoot, 56, ["1".repeat(40), "2".repeat(40), earlier, baseSha]);
+    await writeDeltaRecord(repoRoot, earlier, headSha);
+    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-56", `draft_gate-${baseSha}.json`), "{not json", "utf8");
+    assert.equal(await resolveCapRound(opts, { repoRoot }), null);
+    assert.equal(await resolveCapRoundFixed({ ...opts, anyHead: true }, { repoRoot }), null);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveCapRoundFixed follows a chain of sealed clearing records to the current head and refuses a gap", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 57, gate: "draft_gate" };
+    const fixer = "6".repeat(40);
+    await seedClosedRounds(repoRoot, 57, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    await writeDeltaRecord(repoRoot, baseSha, fixer);
+    await writeDeltaRecord(repoRoot, fixer, headSha);
+    assert.ok(await resolveCapRoundFixed({ ...opts, headSha: fixer }, { repoRoot }), "the first hop reaches the fixer head");
+    assert.ok(await resolveCapRoundFixed({ ...opts, headSha }, { repoRoot }), "a later push is covered by the record bound to the fixer head");
+    assert.equal(await resolveCapRoundFixed({ ...opts, headSha: "7".repeat(40) }, { repoRoot }), null, "a head the chain never reaches stays refused");
+    await writeDeltaRecord(repoRoot, fixer, headSha, "fix");
+    assert.equal(await resolveCapRoundFixed({ ...opts, headSha }, { repoRoot }), null, "a non-clearing link breaks the chain");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveCapRoundFixed starts the chain at a ledgerless base-only merge of the cap-round head", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 58, gate: "draft_gate", headSha, baseRefName: "main" };
+    const merged = "7".repeat(40);
+    await seedClosedRounds(repoRoot, 58, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    await writeDeltaRecord(repoRoot, merged, headSha);
+    const calls = [];
+    const baseOnlyMerge = async (args) => { calls.push(args); return args.fromHead === baseSha && args.head === merged; };
+    assert.ok(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge }));
+    assert.deepEqual(calls.map((c) => [c.fromHead, c.head, c.mainRef]), [[baseSha, merged, "origin/main"]]);
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge: async () => false }), null, "a merge that is not base-only is no proof");
+    assert.equal(await resolveCapRoundFixed({ ...opts, baseRefName: undefined }, { repoRoot, baseOnlyMerge }), null, "without the base branch the successor is not considered");
+    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-58", `draft_gate-${merged}.json`), JSON.stringify({ repo: "owner/repo", pr: 58, gate: "draft_gate", headSha: merged, verdict: "blocked", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge }), null, "a head with its own ledger is not a ledgerless base merge");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

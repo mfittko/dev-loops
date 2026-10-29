@@ -15,6 +15,7 @@ The closure round ran one more full `draft_gate` round after the cap round's fix
 - Rounds 1 to N run, including the cap round N. A clean round stops early.
 - The fixer runs on the cap round's judge-acted findings. Round N+1 never runs.
 - After the cap round's fixer pass has landed and its pre-push delta has cleared or bounded out, gate coordination returns `mark_ready_for_review` and never `run_draft_gate`. `ready-for-review` accepts this "cap round fixed" state in place of a clean current-head verdict. CI, size, ADR tripwire and spec conditions stay fail-closed.
+- The local pre-merge `gate_evidence` check (`buildPreMergeGateCheck`) accepts the same sealed proof in place of the visible clean `draft_gate` comment. This narrows `PRE-PUSH-DELTA-NOT-GATE-EVIDENCE`: a sealed delta record is merge-readiness evidence for this one substitution. The stateless CI `gate-evidence` check reads no local record and does not accept it.
 - `pre_approval_gate` stays the final full round. It receives the cap round's residue (act items the fixer did not close and the cap round's `capClosed` items) as round input.
 - A PR that already holds a post-cap `blocked` draft verdict has the same transition. It needs no marker, cap raise or supersede.
 - `round_cap_reached` remains only as the refusal of a round N+1 that is attempted anyway.

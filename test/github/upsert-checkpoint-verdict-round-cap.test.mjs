@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
-import { parseUpsertCheckpointVerdictCliArgs, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
+import { parseUpsertCheckpointVerdictCliArgs, renderGateReviewCommentBody, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
 // GATE-EXEC-ROUND-CAP: the cap reads only the judged ledger, counts completed rounds, and past the cap a new
 // act item blocks with round_cap_reached while an all-low/nit act list converges by the low/nit rule.
@@ -410,4 +410,12 @@ test("closureFromHeadOf, shared by the poster and resolveClosureRound, refuses a
   for (const headSha of ["", "  ", 7, undefined]) assert.throws(() => closureFromHeadOf([{ headSha }]), message);
   assert.throws(() => closureFromHeadOf([]), message);
   assert.equal(closureFromHeadOf([{ headSha: ` ${"A".repeat(40)} ` }]), "a".repeat(40));
+});
+
+test("the closure round line renders a normalized full SHA and refuses a short, blank or missing head", () => {
+  const line = (closureFromHead) => renderGateReviewCommentBody({ gate: "draft_gate", headSha: HEAD, repo: "o/r", verdict: "clean", closureFromHead });
+  for (const [input, rendered] of [["a".repeat(40), "a".repeat(40)], ["b".repeat(64), "b".repeat(64)], [` ${"A".repeat(40)} `, "a".repeat(40)]]) {
+    assert.match(line(input), new RegExp(`closure round: diff from ${rendered}\\b`));
+  }
+  for (const input of ["abc1234", "", "  ", null, undefined]) assert.doesNotMatch(line(input), /closure round: diff from/, String(input));
 });

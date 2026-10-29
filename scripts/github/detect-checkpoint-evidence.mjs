@@ -1255,8 +1255,9 @@ export async function detectCheckpointEvidence(options, ctx) {
   }
   return publicResult;
 }
-/** Cap-round proof, computed only when no visible clean draft comment exists; any failure reads as false. */
+/** Cap-round proof, computed only when no visible clean draft comment exists; any failure reads as false. The stateless check (--skip-fanout-ledger-check) reads only GitHub-visible state, never a local record. */
 export async function probeCapRoundFixed(result, options, { resolve = resolveCapRoundFixed, repoRoot = null } = {}) {
+  if (options.skipFanoutLedgerCheck === true) return false;
   if (result.draftGate.visible && result.draftGate.verdict === "clean") return false;
   try {
     return Boolean(await resolve({ repo: options.repo, pr: options.pr, headSha: result.currentHeadSha, anyHead: true }, { repoRoot: repoRoot ?? resolveRepoRoot(process.cwd()) }));

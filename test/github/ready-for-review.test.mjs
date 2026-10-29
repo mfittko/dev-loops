@@ -967,15 +967,22 @@ function capRoundGhStub(tempDir, { bucket }) {
     { stdout: "" },
   ]);
 }
-const capRoundRuntime = (env, tempDir, capRoundFixed) => ({ env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: async () => ({ ok: true, skipped: true }), evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire, evaluateCommentDiscipline: passingCommentDiscipline, resolveCapRoundFixed: async () => (capRoundFixed ? { log: {}, residue: [] } : null) });
+const capRoundRuntime = (env, tempDir, capRoundFixed, resolverCalls = []) => ({ env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: async () => ({ ok: true, skipped: true }), evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire, evaluateCommentDiscipline: passingCommentDiscipline, resolveCapRoundFixed: async (...args) => { resolverCalls.push(args); return capRoundFixed ? { log: {}, residue: [] } : null; } });
 
 test("a cap round fixed state stands in for a clean current-head verdict, and red CI still refuses (ADR 0208)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-cap-fixed-"));
   try {
     const green = await capRoundGhStub(tempDir, { bucket: "pass" });
-    const ready = await readyForReview({ repo: "owner/repo", pr: 17 }, capRoundRuntime(green.env, tempDir, true));
+    const resolverCalls = [];
+    const ready = await readyForReview({ repo: "owner/repo", pr: 17 }, capRoundRuntime(green.env, tempDir, true, resolverCalls));
     assert.equal(ready.action, "marked_ready");
     assert.equal(ready.capRoundFixed, true);
+    // The resolver runs once for the current head with no anyHead: a draft PR keeps the exact candidate-head check.
+    assert.equal(resolverCalls.length, 1);
+    assert.deepEqual(resolverCalls[0][0], { repo: "owner/repo", pr: 17, headSha: "abc123def456", baseRefName: "main" });
+    assert.equal(resolverCalls[0][0].anyHead, undefined);
+    const ghCalls = await readGhCalls(green.ghLogPath);
+    assert.equal(ghCalls.filter((c) => c[0] === "pr" && c[1] === "ready").length, 1, `gh pr ready runs once: ${JSON.stringify(ghCalls)}`);
     const red = await capRoundGhStub(tempDir, { bucket: "fail" });
     await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, capRoundRuntime(red.env, tempDir, true)), /blocking CI/);
     const unfixed = await capRoundGhStub(tempDir, { bucket: "pass" });

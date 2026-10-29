@@ -4732,5 +4732,9 @@ test("cap-round proof: malformed Converged still fails, evidenceState agrees wit
   const visibleClean = { ...result, draftGate: { visible: true, verdict: "clean" } };
   assert.equal(await probeCapRoundFixed(visibleClean, options, { resolve, repoRoot: "/r" }), false);
   assert.equal(calls.length, 1, "no proof lookup when a clean draft comment is visible");
+  assert.equal(await probeCapRoundFixed(result, { ...options, skipFanoutLedgerCheck: true }, { resolve, repoRoot: "/r" }), false);
+  assert.equal(calls.length, 1, "the stateless check never reads the local proof");
+  const stateless = buildPreMergeGateCheck(evidence, 0, null, null, { skipFanoutLedgerCheck: true, capRoundFixed: false });
+  assert.ok(stateless.failures.includes("missing visible clean draft_gate comment"));
   assert.equal(await probeCapRoundFixed(result, options, { resolve: async () => { throw new Error("x"); }, repoRoot: "/r" }), false);
 });

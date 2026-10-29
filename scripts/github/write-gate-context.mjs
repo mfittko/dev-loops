@@ -59,8 +59,9 @@ import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, bui
 import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
-import { DELTA_CLEARING_NEXT_STEPS, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
-import { captureMainRelativeChangedFilesSince } from "../lib/git-delta.mjs";
+import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
+import { captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
+import { existsSync } from "node:fs";
 
 /**
  * Up-front gate-ORDERING tripwire (pure). Given the target gate and the raw
@@ -1721,7 +1722,7 @@ export const VALIDATION_POSTURE_MAX_LENGTH = 500;
  * @param {{ kind: "known-findings", path: string, sha256: string, bytes: number, entries: number, required: true }|null} [input.knownFindingsRead]
  * @param {string} [input.worktreeRoot] — resolves the read's path worktree-absolute
  */
-export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPosture = null, priorDispositionsRead = null, knownFindingsRead = null, worktreeRoot = process.cwd() }) {
+export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPosture = null, priorDispositionsRead = null, knownFindingsRead = null, capRoundResidue = null, worktreeRoot = process.cwd() }) {
   if (validationPosture != null && /[\r\n]/.test(validationPosture)) {
     throw new Error("renderBriefingVolatile: validationPosture must not contain a newline — an embedded newline could forge additional key: value lines in this line-structured file");
   }
@@ -1744,6 +1745,13 @@ export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPost
   if (knownFindingsRead) {
     lines.push(`Known findings (do not re-raise what an open or resolved thread already covers): ${knownFindingsRead.entries} threads with full bodies, listed in this required read. Read it IN FULL with \`jq\` before judgment; the mandatory sentinel verifies its sha256.`);
     lines.push(renderRequiredReadLine(knownFindingsRead, worktreeRoot));
+    lines.push("");
+  }
+  if (Array.isArray(capRoundResidue) && capRoundResidue.length > 0) {
+    // ADR 0208: what the cap round left open or closed by the cap; this round judges it. One line per item, whitespace collapsed so a title cannot forge a line.
+    const oneLine = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+    lines.push(`Cap-round residue (the draft_gate cap round left these unresolved; judge them this round): ${capRoundResidue.length} items.`);
+    for (const item of capRoundResidue) lines.push(`- ${oneLine(item.fingerprint)} | ${oneLine(item.disposition)} | ${oneLine(item.file ?? "(no file)")}${Number.isInteger(item.line) ? `:${item.line}` : ""} | ${oneLine(item.title)}`);
     lines.push("");
   }
   return lines.join("\n") + "\n";
@@ -1985,8 +1993,10 @@ export async function resolveCapRound(options, { repoRoot }) {
   // The findings ledger is main-anchored: never read it from a relocated --tmp-root.
   const ledger = { ...draft, tmpRoot: undefined };
   if (!(cap > 0) || await countCompletedRounds(ledger, { repoRoot }) - 1 < cap) return null;
-  const log = (await readClosedPriorRoundLogs(ledger, { repoRoot })).at(-1);
-  if (log?.verdict !== "findings_present") return null;
+  // An unreadable ledger counts toward the cap but readClosedPriorRoundLogs drops it, so the cap-round authority could be an earlier round: fail closed.
+  let unreadable = 0;
+  const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, onUnreadable: () => { unreadable += 1; } })).at(-1);
+  if (unreadable > 0 || log?.verdict !== "findings_present") return null;
   const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => isOpenActItem(f) || f?.capClosed).map((f) => ({
     fingerprint: fingerprintFinding(f), file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary, disposition: isOpenActItem(f) ? "act" : "cap_closed",
   }));
@@ -1996,18 +2006,35 @@ export async function resolveCapRound(options, { repoRoot }) {
 /**
  * "Cap round fixed" (ADR 0208): the cap round exists, and a sealed pre-push delta record bound to the cap-round head cleared (or bounded out) the current head.
  * No full draft_gate round runs after it. Fails closed on an unreadable, unsealed or hand-edited delta record.
- * `options.anyHead` (a ready PR, where later commits belong to pre_approval_gate) accepts the record whatever its candidate head.
+ * The proof is a chain of sealed clearing records: the record bound to the cap-round head names a candidate head, and a later push on the still-draft PR is covered by the record bound to that candidate, until the chain reaches the current head.
+ * When the cap-round head has no record, a base-only merge of it (a ledgerless head whose own record exists, with `options.baseRefName` set) starts the chain, as the fixer emitter does.
+ * `options.anyHead` (a ready PR, where later commits belong to pre_approval_gate) accepts the first record whatever its candidate head.
  */
-export async function resolveCapRoundFixed(options, { repoRoot }) {
+export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
   const capRound = await resolveCapRound(options, { repoRoot });
   if (!capRound) return null;
-  let record;
   // The delta record is main-anchored like the findings ledger: never read it from a relocated --tmp-root.
-  try { record = readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), capRound.log.headSha); } catch { return null; }
+  const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
+  const clearing = (headSha) => { try { const r = readSealedGateDeltaRecord(tmpRoot, headSha); return r && DELTA_CLEARING_NEXT_STEPS.includes(r.nextStep) ? r : null; } catch { return null; } };
+  const capHead = capRound.log.headSha;
+  let record = clearing(capHead);
+  if (!record && typeof options.baseRefName === "string" && options.baseRefName) {
+    for (const { reviewBaselineHead: merged } of listGateDeltaRecords(tmpRoot)) {
+      if (merged === capHead || existsSync(buildLogPath({ repo: options.repo, pr: options.pr, gate: "draft_gate", headSha: merged, tmpRoot }))) continue;
+      const candidate = clearing(merged);
+      if (candidate && await baseOnlyMerge({ fromHead: capHead, head: merged, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false)) { record = candidate; break; }
+    }
+  }
   const head = String(options.headSha).trim().toLowerCase();
-  if (!record || !DELTA_CLEARING_NEXT_STEPS.includes(record.nextStep)) return null;
-  if (!options.anyHead && String(record.candidateHead).trim().toLowerCase() !== head) return null;
-  return capRound;
+  const seen = new Set();
+  while (record) {
+    const next = String(record.candidateHead).trim().toLowerCase();
+    if (options.anyHead || next === head) return capRound;
+    if (seen.has(next)) return null;
+    seen.add(next);
+    record = clearing(next);
+  }
+  return null;
 }
 
 /**
@@ -3056,6 +3083,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // preserve any prior valid context. It is physically separate from the prefix.
   // acceptanceCriteria is deliberately NOT threaded here — see
   // {@link renderBriefingVolatile} for the rule.
+  // ADR 0208: pre_approval_gate receives the cap round's residue as round input, in the artifact and in the briefing its reviewers and judge read.
+  const capRoundResidue = options.gate === "pre_approval_gate" ? (await resolveCapRound(options, { repoRoot }))?.residue : undefined;
   const volatileText = renderBriefingVolatile({
     gate: options.gate,
     headSha: options.headSha,
@@ -3063,10 +3092,9 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     validationPosture: options.validationPosture ?? null,
     priorDispositionsRead,
     knownFindingsRead,
+    capRoundResidue,
     worktreeRoot: path.resolve(repoRoot),
   });
-  // ADR 0208: pre_approval_gate receives the cap round's residue as round input.
-  const capRoundResidue = options.gate === "pre_approval_gate" ? (await resolveCapRound(options, { repoRoot }))?.residue : undefined;
   const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants, capRoundResidue }), ...(requiredReads ? { requiredReads } : {}), loggedAt };
   // Keep the marker available only when prefix AND referenced stable files
   // are unchanged on disk (the prefix hash-binds the evidence and full diff).

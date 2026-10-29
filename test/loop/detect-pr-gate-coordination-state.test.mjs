@@ -4298,3 +4298,30 @@ for (const { name, isDraft, seal, expected } of [
     }
   });
 }
+
+for (const { name, chained, expected } of [
+  { name: "a draft PR whose later push is covered by a chain of sealed cap-round delta records goes mark_ready_for_review", chained: true, expected: PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW },
+  { name: "a draft PR whose later push has no record in the chain reports blocked", chained: false, expected: PR_CHECKPOINT_ACTION.REPORT_BLOCKED },
+]) {
+  test(`detect-pr-gate-coordination-state (ADR 0208 chain): ${name}`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-chain-"));
+    try {
+      const fixerHead = "abc1234567";
+      const laterHead = "def7654321";
+      await seedCapFixedRepo(tempDir, { headSha: fixerHead, seal: true });
+      if (chained) {
+        const record = `${JSON.stringify({ reviewBaselineHead: fixerHead, candidateHead: laterHead, nextStep: "push", outcome: "locally_clear" })}\n`;
+        const deltaDir = path.join(tempDir, "tmp", "gate-delta");
+        await writeFile(path.join(deltaDir, `${fixerHead}.json`), record, "utf8");
+        await writeFile(path.join(deltaDir, `${fixerHead}.json.seal`), `${createHash("sha256").update(record).digest("hex")}\n`, "utf8");
+      }
+      const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha: laterHead, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
+      const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha: laterHead, draftGateBody: body });
+      const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+      assert.equal(result.ok, true);
+      assert.equal(result.nextAction, expected, result.reason);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
