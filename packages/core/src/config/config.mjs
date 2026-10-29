@@ -3249,7 +3249,14 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
     const { analyzeT0, analyzeT1 } = await import("../analysis/diff-analyzer.mjs");
     const rules = resolveClassifyRules(config);
     const t0 = analyzeT0(diff.nameStatusOutput, rules);
-    changedFiles = t0.files;
+    // AC5: a rename row feeds BOTH endpoints, matching the `--no-renames` readers
+    // in resolve-gate-dispatch and detect-change-scope (analyzeT0 keeps only the destination).
+    const renameSources = diff.nameStatusOutput.split("\n")
+      .map((line) => line.split("\t"))
+      .filter((parts) => parts.length >= 3 && parts[0].startsWith("R"))
+      .map((parts) => parts[1].replace(/\\/g, "/"))
+      .filter((p) => p && !t0.files.includes(p));
+    changedFiles = [...t0.files, ...renameSources];
     filesChanged = changedFiles.length;
     prosePresent = t0.prosePresent; // gate deslop on the prose surface
     if (diff.diffOutput) {

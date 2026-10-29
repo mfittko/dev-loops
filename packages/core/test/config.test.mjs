@@ -6600,6 +6600,17 @@ describe("resolveGateAnglesDynamic", () => {
     assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs"]));
   });
 
+  test("checkFloors:true — a rename out of a risk path fires the riskPath floor via the source endpoint (AC5)", async () => {
+    const config = tieredRiskyConfig();
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: `R100\t${riskyDocPath}\t${nonRiskyDocPath}`, diffOutput: "" },
+      checkFloors: true,
+      explicitAngles: ["docs"],
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
+    });
+    assert.notDeepEqual(result.recommendedAngles, ["docs"]);
+  });
+
   test("checkFloors:true — a malformed sizeOutcome keeps the matching tier's angle set", async () => {
     const config = tieredRiskyConfig();
     const result = await resolveGateAnglesDynamic(config, "draft", {
