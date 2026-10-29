@@ -44,6 +44,7 @@ import {
   resolvePriorDispositions,
   countCompletedRounds,
   resolveClosureRound,
+  resolveCapRoundFixed,
   readGateContext,
   renderBriefingEvidence,
   renderBriefingPrefix,
@@ -8776,6 +8777,54 @@ test("readClosedPriorRoundLogs rejects with gate_artifact_out_of_band_write on a
       (err) => err.code === OUT_OF_BAND_WRITE && err.file === file,
     );
   } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ADR 0208: the cap round fixed goes ready; pre_approval_gate receives the cap round's residue.
+async function writeDeltaRecord(repoRoot, baselineHead, candidateHead, nextStep = "push") {
+  const dir = path.join(repoRoot, "tmp", "gate-delta");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `${baselineHead}.json`), JSON.stringify({ reviewBaselineHead: baselineHead, candidateHead, nextStep, outcome: "locally_clear" }), "utf8");
+}
+
+test("resolveCapRoundFixed replays the PR 2976 shape: cap round 4, the fixer commit, a blocked round 5", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 48, gate: "draft_gate", headSha };
+    await seedClosedRounds(repoRoot, 48, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "no delta record: the fix pass is not complete");
+    await writeDeltaRecord(repoRoot, baseSha, "9".repeat(40));
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "a delta record for another head does not clear this head");
+    await writeDeltaRecord(repoRoot, baseSha, headSha, "fix");
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "a delta that still needs a fix does not clear");
+    await writeDeltaRecord(repoRoot, baseSha, headSha, "push_to_gate");
+    // The blocked round 5 at the fixer head is not a counted round.
+    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-48", `draft_gate-${"6".repeat(40)}.json`), JSON.stringify({
+      repo: "owner/repo", pr: 48, gate: "draft_gate", headSha: "6".repeat(40), verdict: "blocked", loggedAt: "2026-11-09T00:00:00.000Z", findings: [],
+    }), "utf8");
+    const fixed = await resolveCapRoundFixed(opts, { repoRoot });
+    assert.equal(fixed.log.headSha, baseSha);
+    assert.equal(await resolveCapRoundFixed({ ...opts, pr: 49 }, { repoRoot }), null, "a PR below the cap is never cap-round-fixed");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a pre_approval_gate context carries the cap round's unresolved residue as scope.capRoundResidue", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  try {
+    await seedClosedRounds(repoRoot, 50, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    process.exitCode = undefined;
+    await main(["--repo", "owner/repo", "--pr", "50", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], { repoRoot, run: stubGhRun });
+    assert.notEqual(process.exitCode, 1);
+    const context = await readGateContext({ repo: "owner/repo", pr: 50, gate: "pre_approval_gate", headSha }, { repoRoot });
+    assert.deepEqual(context.scope.capRoundResidue.map((i) => [i.title, i.disposition]), [["Guard is missing", "act"]]);
+    await main(["--repo", "owner/repo", "--pr", "51", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], { repoRoot, run: stubGhRun });
+    assert.equal("capRoundResidue" in (await readGateContext({ repo: "owner/repo", pr: 51, gate: "pre_approval_gate", headSha }, { repoRoot })).scope, false);
+  } finally {
+    process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });
   }
 });

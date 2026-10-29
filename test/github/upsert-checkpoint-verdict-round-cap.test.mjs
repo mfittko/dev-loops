@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
-import { parseUpsertCheckpointVerdictCliArgs, renderGateReviewCommentBody, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
+import { parseUpsertCheckpointVerdictCliArgs, upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
 // GATE-EXEC-ROUND-CAP: the cap reads only the judged ledger, counts completed rounds, and past the cap a new
 // act item blocks with round_cap_reached while an all-low/nit act list converges by the low/nit rule.
@@ -344,26 +344,18 @@ test("at the cap round judge-acted findings with a remedy compose findings_prese
   }, { prefix: "dev-loops-round-cap-closure-cap-" });
 });
 
-test("the closure round with an act item blocks, and a round counted cap+2 blocks too", async () => {
+// ADR 0208: round N+1 never runs; any post counted above the cap is refused with round_cap_reached.
+test("a round N+1 post is refused with round_cap_reached, whatever its ledger (ADR 0208)", async () => {
   await withTempDir(async (tempDir) => {
     for (const heads of [[...priorHeads, extraPriors[0]], [...priorHeads, ...extraPriors]]) {
       await seedPrior(repoRoot, heads);
       const out = await post(["--findings-ledger", await writeLedger(tempDir, { findings: pr2944Shape() })]);
-      assert.equal(verdictOf(out), "blocked");
-      assert.match(out.body, /round_cap_reached/);
+      assert.match(out.error ?? "", /round_cap_reached.*round [56] .*cap is 4/);
+      assert.equal(out.body, undefined, "nothing is posted");
     }
   }, { prefix: "dev-loops-round-cap-closure-next-" });
 });
 
-test("in the closure round a finding judged defer with a target is final and the round composes clean", async () => {
-  await withTempDir(async (tempDir) => {
-    await seedPrior(repoRoot, [...priorHeads, extraPriors[0]]);
-    const findings = [{ ...finding("medium", "defer", { ...withFix, followUpIssueNumber: 2950 }), summary: "outside the delta" }];
-    const out = await post(["--findings-ledger", await writeLedger(tempDir, { findings })]);
-    assert.equal(out.error, undefined);
-    assert.equal(verdictOf(out), "clean");
-  }, { prefix: "dev-loops-round-cap-closure-defer-" });
-});
 
 test("at the cap round an act item without judgeFix still blocks", async () => {
   await withTempDir(async (tempDir) => {
@@ -402,26 +394,6 @@ test("a judge-marked failOpen act item with a judgeFix at the cap round goes to 
   assert.doesNotMatch(out.body, /round_cap_reached/);
 });
 
-test("in the closure round a low or nit act item blocks, though the cap round keeps it for the fixer", async () => {
-  await withTempDir(async (tempDir) => {
-    for (const severity of ["low", "nit"]) {
-      await seedPrior(repoRoot, [...priorHeads, extraPriors[0]]);
-      const out = await post(["--findings-ledger", await writeLedger(tempDir, { findings: [finding(severity, "act")] })]);
-      assert.equal(verdictOf(out), "blocked", severity);
-      assert.match(out.body, /round_cap_reached/);
-    }
-  }, { prefix: "dev-loops-round-cap-closure-lownit-" });
-});
-
-test("the closure round (count cap+1) posts the closure round line with the last closed ledger head", async () => {
-  await withTempDir(async (tempDir) => {
-    const ledger = await writeLedger(tempDir, { overallVerdict: "clean", findings: [] });
-    await seedPrior(repoRoot, [...priorHeads, extraPriors[0]]);
-    assert.match((await post(["--findings-ledger", ledger])).body, new RegExp(`closure round: diff from ${extraPriors[0]}`));
-    await seedPrior(repoRoot, priorHeads);
-    assert.doesNotMatch((await post(["--findings-ledger", ledger])).body, /closure round: diff from/, "the cap round has no closure line");
-  }, { prefix: "dev-loops-round-cap-closure-line-" });
-});
 
 test("closureFromHeadOf, shared by the poster and resolveClosureRound, refuses a blank or non-string last head with one message", async () => {
   const { closureFromHeadOf } = await import("../../scripts/github/write-gate-context.mjs");
@@ -429,12 +401,4 @@ test("closureFromHeadOf, shared by the poster and resolveClosureRound, refuses a
   for (const headSha of ["", "  ", 7, undefined]) assert.throws(() => closureFromHeadOf([{ headSha }]), message);
   assert.throws(() => closureFromHeadOf([]), message);
   assert.equal(closureFromHeadOf([{ headSha: ` ${"A".repeat(40)} ` }]), "a".repeat(40));
-});
-
-test("the closure round line renders a normalized full SHA and refuses a short, blank or missing head", () => {
-  const line = (closureFromHead) => renderGateReviewCommentBody({ gate: "draft_gate", headSha: HEAD, repo: "o/r", verdict: "clean", closureFromHead });
-  for (const [input, rendered] of [["a".repeat(40), "a".repeat(40)], ["b".repeat(64), "b".repeat(64)], [` ${"A".repeat(40)} `, "a".repeat(40)]]) {
-    assert.match(line(input), new RegExp(`closure round: diff from ${rendered}\\b`));
-  }
-  for (const input of ["abc1234", "", "  ", null, undefined]) assert.doesNotMatch(line(input), /closure round: diff from/, String(input));
 });

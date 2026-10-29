@@ -28,6 +28,7 @@ import {
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
+import { resolveCapRoundFixed } from "../github/write-gate-context.mjs";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { verifyFixerDisposition } from "../github/verify-fixer-disposition.mjs";
@@ -1245,6 +1246,7 @@ export function buildGateCoordinationEvaluatorInput({
   designerReviewExempt = false,
   designerReviewEvidence = null,
   earlySurface = null,
+  draftCapRoundFixed = false,
 }) {
   return {
     repo: context.repo,
@@ -1306,6 +1308,7 @@ export function buildGateCoordinationEvaluatorInput({
     preApprovalGateMarker: context.gateEvidence.preApprovalGateMarker,
     refinementArtifact: context.refinementArtifact,
     postConvergenceSignificantChange,
+    draftCapRoundFixed,
     ...(earlySurface ?? {}),
   };
 }
@@ -1380,6 +1383,8 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
         prBody: typeof context.prData?.body === "string" ? context.prData.body : "",
         repoRoot,
       });
+  // ADR 0208: a draft PR whose cap round is fixed never runs draft_gate again; fail closed when the evidence is unreadable.
+  const draftCapRoundFixed = context.prData?.isDraft === true && await resolveCapRoundFixed({ repo: context.repo, pr: context.pr, headSha: context.currentHeadSha }, { repoRoot }).then(Boolean, () => false);
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,
@@ -1395,6 +1400,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     }),
     designerReviewEvidence,
     earlySurface,
+    draftCapRoundFixed,
   }));
   // Copilot review request guard: when Copilot has reviewed the PR but no
   // formal review request was made, block pre-approval gate entry. Only

@@ -1081,6 +1081,10 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // A base-merge carried verdict (ADR 0186) proves the review, not the new head's CI.
   const draftGateCarried = draftGate.currentHeadClean && trimmedOrNull(input.draftGateMarker?.carriedFrom) !== null;
   const draftGateAlreadySatisfied = !prDraft && (draftGate?.cleanEvidenceExists ?? false);
+  // ADR 0208: the caller proved the cap round's fixer pass landed and its pre-push delta cleared, so draft_gate never runs again.
+  const capRoundFixed = input.draftCapRoundFixed === true && !draftGate.currentHeadClean;
+  const capFixedReady = capRoundFixed && input.unresolvedGateThreadCount === 0;
+  const draftReady = draftGate.currentHeadClean || capFixedReady;
 
   const allowedNextActions = [];
   const forbiddenActions = [];
@@ -1331,7 +1335,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       });
     }
     const draftReviewForbidden = [
-      ...(draftGate.currentHeadClean ? [] : [PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW]),
+      ...(draftReady ? [] : [PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW]),
       PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
       PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW,
       PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
@@ -1348,7 +1352,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // reply_resolve_review_threads (FEEDBACK_RESOLUTION) is reused as-is —
     // resolving the thread (reject-close or fixer triage) is exactly what
     // this action already means on the post-draft path.
-    if (draftGate.markerCleanThreadsUnresolved) {
+    if (draftGate.markerCleanThreadsUnresolved || (capRoundFixed && !capFixedReady)) {
       pushUnique(allowedNextActions, [
         PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
         // The reason text names "stop for the operator" as the remedy for an
@@ -1472,7 +1476,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     }
 
     pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE]);
-    if (draftGate.currentHeadClean) {
+    if (draftReady) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW]);
     }
     pushUnique(forbiddenActions, draftReviewForbidden);
@@ -1489,8 +1493,10 @@ function evaluatePrGateCoordinationCore(input = {}) {
       preApprovalGate,
       allowedNextActions,
       forbiddenActions,
-      nextAction: draftGate.currentHeadClean ? PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW : PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
-      reason: draftGate.currentHeadClean
+      nextAction: draftReady ? PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW : PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+      reason: capFixedReady
+        ? "The PR is still draft, the `draft_gate` cap round's fixer pass landed and its pre-push delta cleared (ADR 0208), so no further `draft_gate` round runs and `gh pr ready` is now legal. `pre_approval_gate` judges what remains."
+        : draftGate.currentHeadClean
         ? "The PR is still draft, and current-head clean `draft_gate` evidence exists, so `gh pr ready` is now legal."
         : (draftGateRequireCi
           ? "The PR is still draft, current-head CI is green, and `draft_gate` is now the legal gate boundary before `gh pr ready`."

@@ -540,17 +540,6 @@ test("renderGateReviewCommentBody (single surface): no body-filed finding line c
   assert.equal(forged, undefined, `a line forged a gate field: ${JSON.stringify(forged)}`);
 });
 
-test("renderGateReviewCommentBody states the closure round diff base for a draft_gate only (GATE-EXEC-ROUND-CAP)", () => {
-  const base = { gate: "draft_gate", headSha: HEAD_SHA, verdict: "clean", findingsSummary: "no issues found", nextAction: "mark ready for review" };
-  const from = "c".repeat(40);
-  assert.ok(renderGateReviewCommentBody({ ...base, closureFromHead: from }).split("\n").includes(`closure round: diff from ${from}`));
-  const sha256 = "d".repeat(64);
-  assert.ok(renderGateReviewCommentBody({ ...base, closureFromHead: sha256 }).split("\n").includes(`closure round: diff from ${sha256}`));
-  for (const bad of ["abc123", "g".repeat(40), ""]) assert.doesNotMatch(renderGateReviewCommentBody({ ...base, closureFromHead: bad }), /closure round/);
-  assert.doesNotMatch(renderGateReviewCommentBody({ ...base, closureFromHead: null }), /closure round/);
-  assert.doesNotMatch(renderGateReviewCommentBody({ ...base, gate: "pre_approval_gate", closureFromHead: from }), /closure round/);
-});
-
 test("renderGateReviewCommentBody (single surface): the round marker is rendered, and no finding-surface artifact leaks without one", () => {
   const base = { gate: "draft_gate", headSha: HEAD_SHA, verdict: "clean", findingsSummary: "no issues found", nextAction: "mark ready for review" };
   const withSurface = renderGateReviewCommentBody({ ...base, round: 2, nonLocatableFindings: [] });
