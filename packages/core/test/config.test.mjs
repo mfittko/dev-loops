@@ -4421,7 +4421,7 @@ test("resolveGateDispatchMode: over threshold on weighted lines → full fan-out
   assert.equal(result.reason, "over_threshold");
 });
 
-test("resolveGateDispatchMode: weighted LOC under the cap with raw lines over it → inline (AC1)", () => {
+test("resolveGateDispatchMode: weighted LOC under the cap → inline (AC1)", () => {
   const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
     changedFiles: ["a.mjs"],
     sizeOutcome: { ...PASS_OUTCOME, wholeLogicLoc: 13 },
