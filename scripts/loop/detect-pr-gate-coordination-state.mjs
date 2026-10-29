@@ -354,8 +354,8 @@ export async function loadRecordedDesignerEvidence(evidencePath) {
 }
 
 // Total changed lines across a PR's changed files (additions + deletions),
-// mirroring the canonical light-mode line dimension (resolveGateDispatchMode's
-// scope.linesChanged). Returns 0 when no line data is available.
+// as a raw-diff line total, independent of the weighted size-budget LOC that
+// resolveGateDispatchMode caps on. Returns 0 when no line data is available.
 export function countPrChangedLines(prData) {
   const files = Array.isArray(prData?.files) ? prData.files : [];
   let total = 0;

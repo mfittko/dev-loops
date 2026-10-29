@@ -69,7 +69,9 @@ describe("resolveReviewProportionality judgeTrack", () => {
     gates: { draft: { tiers: [{ name: "docs", match: { kinds: ["docs"] }, angles: ["link-check"] }] } },
   });
   const PASS = { outcome: "pass", tierLogicLoc: { t1: 0 } };
-  const plan = (gate, facts) => resolveReviewProportionality(config(), gate, { sizeOutcome: PASS, ...facts });
+  // Weighted LOC follows the fixture scope lines unless the facts set their own.
+  const withLoc = (facts) => (facts.sizeOutcome === null ? facts : { ...facts, sizeOutcome: { wholeLogicLoc: facts.scope?.linesChanged ?? 1, ...(facts.sizeOutcome ?? PASS) } });
+  const plan = (gate, facts) => resolveReviewProportionality(config(), gate, withLoc(facts));
   const small = { scope: { filesChanged: 1, linesChanged: 5 }, changedFiles: ["docs/a.md"] };
   const big = { scope: { filesChanged: 1, linesChanged: 400 }, changedFiles: ["docs/a.md"] };
   const pr2614 = ["packages/core/src/analysis/new-helper.mjs", "skills/docs/some-section.md", "test/new-helper.test.mjs", "changes/x.md"];
@@ -106,7 +108,7 @@ describe("resolveReviewProportionality judgeTrack", () => {
 
   test("light mode disabled keeps a lowering judge track at full", () => {
     const disabled = { ...config(), localImplementation: { lightMode: { enabled: false } } };
-    const r = resolveReviewProportionality(disabled, "draft", { sizeOutcome: PASS, ...small, judgeTrack: "light" });
+    const r = resolveReviewProportionality(disabled, "draft", withLoc({ ...small, judgeTrack: "light" }));
     assert.deepEqual([r.track, r.trackReason], ["full", "light_mode_disabled"]);
   });
 
@@ -136,7 +138,7 @@ describe("resolveReviewProportionality judgeTrack", () => {
       const tierless = { version: 1, localImplementation: { lightMode: { enabled: true, maxFiles: 2, maxLines: 20 } } };
       for (const scope of [{ filesChanged: 1, linesChanged: 5 }, { filesChanged: 1, linesChanged: 400 }]) {
         for (const judgeTrack of ["light", "reduced"]) {
-          const r = resolveReviewProportionality(tierless, gate, { sizeOutcome: PASS, scope, changedFiles: ["data/blob.unknownkind"], judgeTrack });
+          const r = resolveReviewProportionality(tierless, gate, withLoc({ scope, changedFiles: ["data/blob.unknownkind"], judgeTrack }));
           assert.deepEqual([r.track, r.trackReason], ["full", "risk_floor"], JSON.stringify({ scope, judgeTrack }));
         }
       }
@@ -161,11 +163,11 @@ describe("resolveReviewProportionality judgeTrack", () => {
     assert.equal(GATE_FULL_LABEL, "gate:full");
   });
 
-  test("over the cap, a missing size outcome with a lowering track is full (risk_floor); without a lowering track nothing changes", () => {
+  test("over the cap, a missing size outcome with a lowering track is full (risk_floor)", () => {
     const r = plan("draft", { ...big, sizeOutcome: null, judgeTrack: "light" });
     assert.deepEqual([r.track, r.trackReason], ["full", "risk_floor"]);
     const none = plan("draft", { ...big, sizeOutcome: null });
-    assert.deepEqual([none.track, none.trackReason], ["full", "judge_full"]);
+    assert.deepEqual([none.track, none.trackReason], ["full", "risk_floor"]); // unreadable size evidence is an ambiguity floor
   });
 
   test("an inline-severity escalation forces track full", () => {

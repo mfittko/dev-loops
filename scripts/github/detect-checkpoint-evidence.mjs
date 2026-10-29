@@ -26,9 +26,9 @@ import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "./_gate-finding-
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
-import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, assertConfigLoaded, isSizeOutcomeT1Clean, loadDevLoopConfig, loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance, touchesRiskPath } from "@dev-loops/core/config";
+import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, assertConfigLoaded, isSizeOutcomeT1Clean, loadDevLoopConfig, loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveGateDispatchMode, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
 import { FANOUT_UNAVAILABLE_MESSAGE, JUDGE_DISPOSITIONS, VALID_SEVERITIES, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, ledgerAngleNames, listOpenActItems, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
-import { detectMergeBaseChangedFiles, detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
+import { detectMergeBaseChangedFiles } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
@@ -976,23 +976,23 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
     // fails closed regardless of what it claims.
     let scopeUnderThreshold = false;
     if (lightMode && !hasFullLabel && baseRef && spec.marker.executionMode === "inline_single_agent") {
-      const scope = detectMergeBaseScope({ base: baseRef, head: scopeHeadSha, cwd: repoRoot });
-      const sizeCapOk = scope.ok === true && isEligibleForLightMode(scope, lightThreshold);
-      let riskPathOk = false;
-      if (sizeCapOk) {
-        const changedFilesResult = detectMergeBaseChangedFiles({ base: baseRef, head: scopeHeadSha, cwd: repoRoot });
-        riskPathOk = changedFilesResult.ok === true && !touchesRiskPath(changedFilesResult.files, lightThreshold.riskPaths);
-      }
-      let sizeOutcomeOk = false;
-      if (riskPathOk) {
+      // The ONE shared resolver (resolveGateDispatchMode) decides the weighted
+      // LOC + non-doc file cap, risk-path and T1 floors from the merge-base
+      // diff, so the merge check cannot drift from the draft/pre_approval gates.
+      const changedFilesResult = detectMergeBaseChangedFiles({ base: baseRef, head: scopeHeadSha, cwd: repoRoot });
+      let sizeOutcome = null;
+      if (changedFilesResult.ok === true) {
         try {
-          const sizeOutcome = await evaluatePrSizeBudget({ base: baseRef, head: scopeHeadSha, repoRoot });
-          sizeOutcomeOk = isSizeOutcomeT1Clean(sizeOutcome);
+          sizeOutcome = await evaluatePrSizeBudget({ base: baseRef, head: scopeHeadSha, repoRoot });
         } catch {
-          sizeOutcomeOk = false; // fails CLOSED on a size-budget computation error
+          sizeOutcome = null; // fails CLOSED on a size-budget computation error
         }
       }
-      scopeUnderThreshold = sizeCapOk && riskPathOk && sizeOutcomeOk;
+      scopeUnderThreshold = resolveGateDispatchMode(config, spec.name === "draft_gate" ? "draft" : "preApproval", {
+        changedFiles: changedFilesResult.ok === true ? changedFilesResult.files : undefined,
+        sizeOutcome,
+        hasFullLabel,
+      }).mode === "inline";
     }
     // Read ledger provenance for ANY fanout_fanin gate (not just when
     // requireProvenance is on): angle-coverage enforcement re-validates

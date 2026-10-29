@@ -2508,16 +2508,34 @@ export function isSizeOutcomeT1Clean(sizeOutcome) {
 }
 
 /**
+ * Light-mode file count: changed files that are not scope-count excluded and do not
+ * classify as docs. Code, test, config, CI, asset and unknown files all count. The one
+ * shared counter for every light-mode caller (GATE-EXEC-PROPORTIONALITY).
+ * @param {DevLoopConfig} config
+ * @param {string[]} changedFiles
+ * @returns {number}
+ */
+export function countLightModeFiles(config, changedFiles) {
+  const rules = resolveClassifyRules(config);
+  return changedFiles.filter((f) => {
+    if (isScopeCountExcluded(f)) return false;
+    const kind = classifyFile(String(f), rules);
+    return kind !== "docs";
+  }).length;
+}
+
+/**
  * Decide whether a gate runs as a single-agent inline check or full fan-out,
  * from light-mode config + authoritative PR facts.
  *
  * Precedence (first match wins):
  *   1. `gate:full` label present              → full_fanout
  *   2. light mode disabled / no threshold      → full_fanout
- *   3. scope over threshold (files OR lines)   → full_fanout
+ *   3. over threshold: weighted `sizeOutcome.wholeLogicLoc` > maxLines OR
+ *      non-doc file count (countLightModeFiles) > maxFiles → full_fanout
  *   4. `changedFiles` unavailable (ambiguous)  → full_fanout
  *   5. a changed file touches a risk path      → full_fanout
- *   6. `sizeOutcome` unavailable (ambiguous)    → full_fanout
+ *   6. `sizeOutcome` or its `wholeLogicLoc` unavailable/invalid → full_fanout
  *   7. size-outcome escalate/block             → full_fanout
  *   8. size-outcome touches the T1 risk tier   → full_fanout
  *   9. inline finding severity in the gate's blockCleanOnFindingSeverities set
@@ -2525,7 +2543,7 @@ export function isSizeOutcomeT1Clean(sizeOutcome) {
  *   10. otherwise                              → inline
  *
  * Steps 4-8 are the GATE-EXEC-PROPORTIONALITY non-overridable floors
- * (gate-review-sub-loop-contract.md): they run only once the cheap file/line
+ * (gate-review-sub-loop-contract.md): they run only once the file/line
  * cap (step 3) has already passed, so an already-over-cap diff costs the
  * caller nothing extra. A caller that omits `changedFiles`/`sizeOutcome` for
  * an otherwise-under-cap diff fails CLOSED (full fan-out) rather than silently
@@ -2534,14 +2552,14 @@ export function isSizeOutcomeT1Clean(sizeOutcome) {
  *
  * Pre-check omits `inlineFindingSeverities` (decides whether to run the inline
  * pass at all); escalation passes the inline pass's severities. Absent/partial
- * `facts.scope` fails safe to full_fanout (missing counts → Infinity).
+ * `facts.sizeOutcome`/`facts.changedFiles` fails safe to full_fanout.
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
  * @param {object} facts
- * @param {{ filesChanged?: number, linesChanged?: number }} [facts.scope] PR scope; absent/partial fields fail safe to full_fanout
+ * @param {object} [facts.scope] ignored; the cap uses weighted LOC and the non-doc file count
  * @param {string[]} [facts.changedFiles] repo-relative changed-file paths; absent/non-array fails safe to full_fanout
- * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome] check-size-budget.mjs's computeSizeBudget outcome; absent/null fails safe to full_fanout
+ * @param {{ outcome?: "pass"|"escalate"|"block", wholeLogicLoc?: number, tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome] check-size-budget.mjs's computeSizeBudget outcome; absent/null fails safe to full_fanout
  * @param {boolean} [facts.hasFullLabel]           `gate:full` label present on the PR
  * @param {string[]} [facts.inlineFindingSeverities] severities from the inline pass (escalation phase)
  * @returns {{ mode: "inline"|"full_fanout", reason: string, threshold: ({maxFiles:number,maxLines:number,riskPaths:string[]})|null }}
@@ -2554,9 +2572,15 @@ export function resolveGateDispatchMode(config, gate, { scope, changedFiles, siz
   if (!threshold) {
     return { mode: "full_fanout", reason: "light_mode_disabled", threshold: null };
   }
-  const filesChanged = Number(scope?.filesChanged ?? Infinity);
-  const linesChanged = Number(scope?.linesChanged ?? Infinity);
-  if (filesChanged > threshold.maxFiles || linesChanged > threshold.maxLines) {
+  // Cap inputs: weighted logic LOC from the size outcome and the non-doc
+  // file count. An unreadable input never counts as "over"; it falls through
+  // to the ambiguity floors below, which fail closed.
+  const wholeLogicLoc = sizeOutcome?.wholeLogicLoc;
+  const locValid = typeof wholeLogicLoc === "number" && Number.isFinite(wholeLogicLoc) && wholeLogicLoc >= 0;
+  if (
+    (locValid && wholeLogicLoc > threshold.maxLines)
+    || (Array.isArray(changedFiles) && countLightModeFiles(config, changedFiles) > threshold.maxFiles)
+  ) {
     return { mode: "full_fanout", reason: "over_threshold", threshold };
   }
   if (!Array.isArray(changedFiles)) {
@@ -2565,7 +2589,7 @@ export function resolveGateDispatchMode(config, gate, { scope, changedFiles, siz
   if (touchesRiskPath(changedFiles, threshold.riskPaths)) {
     return { mode: "full_fanout", reason: "risk_path_touch", threshold };
   }
-  if (sizeOutcome == null || typeof sizeOutcome !== "object") {
+  if (sizeOutcome == null || typeof sizeOutcome !== "object" || !locValid) {
     return { mode: "full_fanout", reason: "size_outcome_unavailable", threshold };
   }
   if (sizeOutcome.outcome !== "pass") {
@@ -3003,8 +3027,9 @@ function selectFloorPlusJustifiedAngles(config, gate, changedFiles) {
  * @param {"draft"|"preApproval"} gate
  * @param {object} facts
  * @param {{ filesChanged?: number, linesChanged?: number, rawFilesChanged?: number, rawLinesChanged?: number }} [facts.scope]
- *   `filesChanged`/`linesChanged` feed the light-mode cap. Tier matching reads
- *   the unfiltered `raw*` counts when present, matching resolveGateAnglesDynamic.
+ *   The light-mode cap reads `sizeOutcome.wholeLogicLoc` and `changedFiles`, not
+ *   this scope. Tier matching reads the unfiltered `raw*` counts when present,
+ *   matching resolveGateAnglesDynamic.
  * @param {string[]} [facts.changedFiles]
  * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome]
  * @param {boolean} [facts.hasFullLabel]

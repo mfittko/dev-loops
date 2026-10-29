@@ -190,9 +190,6 @@ export async function run(argv) {
       return;
     }
     const threshold = !opts.hasFullLabel ? resolveLightMode(config) : null;
-    const isCandidate = threshold != null
-      && Number(scope.filesChanged) <= threshold.maxFiles
-      && Number(scope.linesChanged) <= threshold.maxLines;
     // The changed-file list feeds BOTH the risk-path floor AND resolveGateTier's
     // diff-classification (which the composer needs for its angle set — an
     // over-cap diff can still legitimately match a reduced tier, and an
@@ -200,12 +197,11 @@ export async function run(argv) {
     // mandatory-floor best-effort angle set, never the full untiered pool) —
     // so it is always read, unlike the heavier size-budget evaluation below.
     const changedFiles = detectChangedFiles({ base: opts.base, head: opts.head, cwd: process.cwd() });
-    // The size-budget outcome only ever changes an already-under-cap decision
-    // (an over-cap diff is full_fanout regardless of it), so this heavier read
-    // runs ONLY on a diff that is at least a plausible inline candidate,
-    // keeping the over-cap path's extra I/O cost bounded to one cheap diff.
+    // Invariant: the size-budget outcome supplies the weighted-LOC cap, so it is
+    // read whenever light mode is on or a lowering judge track needs the size
+    // floor re-checked. The disabled path skips this heavier read.
     // KNOWN, bounded range asymmetry: `changedFiles` above is the two-dot
-    // `base..head` diff (diffRange, matching detectScope/`scope` exactly).
+    // `base..head` diff (diffRange, matching the scope facts exactly).
     // evaluatePrSizeBudget below is the SHARED size-budget reader
     // (check-size-budget.mjs) and always diffs `base...head` (the three-dot
     // merge-base form) — its own contract, reused as-is everywhere else it is
@@ -233,7 +229,7 @@ export async function run(argv) {
       headSha: resolvedHeadSha != null && resolvedHeadSha.toLowerCase() === suppliedHeadSha ? resolvedHeadSha : undefined,
     });
     let sizeOutcome = null;
-    if (isCandidate || judge.track !== "full") {
+    if (threshold != null || judge.track !== "full") {
       try {
         sizeOutcome = await evaluatePrSizeBudget({
           base: opts.base ?? "HEAD~1",

@@ -188,7 +188,7 @@ test("a diverged base (base advanced independently of head) still resolves one c
 test("over-cap still short-circuits to over_threshold before the new floors are consulted", async () => {
   const { tmp, fixture } = await makeFixture({
     devloops: "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 1\n    maxLines: 1\n",
-    headFiles: { "docs/note.md": "line one\nline two\nline three\n" },
+    headFiles: { "src/note.mjs": "export const a = 1;\nexport const b = 2;\nexport const c = 3;\n" },
   });
   try {
     const result = runDispatch(fixture);
@@ -288,15 +288,15 @@ test("judge record + matching label + current head lowers the track; every misma
   }
 });
 
-const BIG_DOC = `${"A line of documentation.\n".repeat(150)}`;
+const BIG_DOC = `${"export const a = 1;\n".repeat(150)}`;
 const judgeRec = (headSha, track = "light") => JSON.stringify({ schemaVersion: 1, headSha, track, signals: [{ signal: "additive", reason: "docs only" }] });
 
 test("over the cap, a lowering judge track re-checks the size outcome and risk facts", async () => {
-  const clean = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "docs/big.md": BIG_DOC } });
-  // A t1 pattern that matches a docs file makes the size outcome unusable (block).
+  const clean = await makeFixture({ devloops: LIGHT_DEVLOOPS, headFiles: { "src/big.mjs": BIG_DOC } });
+  // A t1 pattern that matches the code file makes the size outcome unusable (block).
   const t1 = await makeFixture({
-    devloops: `${LIGHT_DEVLOOPS}gates:\n  size:\n    tiers:\n      t1:\n        patterns: ["docs/**"]\n        sliceHardLoc: 10\n`,
-    headFiles: { "docs/big.md": BIG_DOC },
+    devloops: `${LIGHT_DEVLOOPS}gates:\n  size:\n    tiers:\n      t1:\n        patterns: ["src/**"]\n        sliceHardLoc: 10\n`,
+    headFiles: { "src/big.mjs": BIG_DOC },
   });
   try {
     for (const [f, tmp, expected] of [[clean.fixture, clean.tmp, "reduced"], [t1.fixture, t1.tmp, "full"]]) {
