@@ -412,6 +412,12 @@ For each delegated task:
 
 ### Status monitoring
 
+On Codex, ordinary worker dispatch follows [Generic Codex dispatch](../docs/main-agent-contract.md#generic-codex-dispatch):
+run `gate resolve-role --role <name> --harness codex` from the target repo,
+forward `nativeOverrides` unchanged with `fork_turns: "none"`, and stop on
+config or native rejection without fallback. This includes artifact-only
+refiners; fixer work orders keep their immutable emitted payloads.
+
 Track each dispatched task:
 - at minimum record agent name, task summary, status (`queued`, `running`, `done`, `failed`),
   and output artifacts

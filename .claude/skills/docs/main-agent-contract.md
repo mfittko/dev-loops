@@ -67,6 +67,28 @@ bar: `judge-pass.mjs` and `close-gate-findings.mjs` never create an issue for a 
 
 Generic `collaboration.spawn_agent` does not automatically load repository role definitions. For ordinary Codex developer, refiner (including artifact-only refiners), docs and coordinator dispatches, provide verified absolute paths to the applicable role definition and [Codex runtime setup](./copilot-loop-operations.md#codex-runtime-setup) in the task. Verify both files exist in the selected source/install before dispatch; require the child to read them before scoped artifact writes, any Git write or targeted verification. Preserve the mandatory initial startup/envelope and exact pull-first protocols; this is read delivery, not new role or mutation authority. Pull-pointer coordinators and fixers retain their exact emitted payloads and learn applicable setup after their bootstrap; never append generic setup to those payloads.
 
+For ordinary role dispatch (developer, docs, quality, refiner, gate-coordinator and
+pre-push-reviewer), run `dev-loops-run cli/index.mjs gate resolve-role --role <name> --harness codex`
+from the target repository. Only exit 0 permits dispatch; exit 1 config refusal
+and exit 2 argument/runtime errors stop it. Pass returned `nativeOverrides`
+unchanged as `collaboration.spawn_agent` fields with the authorized task and
+`fork_turns: "none"`; omit absent fields. Native rejection stops this dispatch:
+report harness, role, config path and requested values; never retry with dropped
+fields or an inherited replacement. Do not add model instructions to pointers.
+Judge/fixer names can be resolved, but their immutable emitters do not yet bind
+these settings; keep their emitted payloads unchanged. Use the selected source
+worktree's CLI for this slice; an older main-checkout/installed consumer lacks
+`--role` and must not be treated as qualified by tests of the PR-head source.
+
+Codex `models.harnesses.codex.roles.<name>` and `.tiers.<alias>` use the same
+strict nullable model/effort object as conductor. Fields merge across layers;
+null clears a field. Shared `models.roleTiers` aliases validate against final
+merged tier definitions. An explicit role object wins as a whole, even when its
+tier is `inherit`; otherwise select the shared/built-in role tier. Missing Codex
+mappings inherit. Never borrow omitted effort or legacy Claude/Pi concrete
+values. Gate-angle settings remain unsupported. Requested/emitted values are
+separate from observed runtime telemetry; missing telemetry is unknown.
+
 ## Codex coordinator dispatch
 
 Before an initial agent-driven Codex conductor spawn, run the config-only selector
@@ -93,8 +115,8 @@ models:
 
 Fields merge across config layers; omission preserves a field and explicit null
 clears it. The selected conductor object is the only source: legacy Claude/Pi
-concrete settings cannot supply Codex model or effort. Codex roles, tiers and
-angle overrides remain unsupported schema fields. Requested/emitted settings
+concrete settings cannot supply Codex model or effort. Codex angle overrides
+remain unsupported schema fields. Requested/emitted settings
 are distinct from observed runtime telemetry; unavailable telemetry is unknown,
 and child self-report is not proof of an effective model.
 

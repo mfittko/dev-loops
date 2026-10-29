@@ -15,6 +15,17 @@ const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)))
 
 const read = (rel) => fs.readFileSync(path.join(repoRoot, rel), "utf8");
 
+test("Codex ordinary and pre-push callers forward native overrides without fallback", () => {
+  for (const rel of ["skills/docs/main-agent-contract.md", "skills/local-implementation/SKILL.md", "skills/docs/pre-pr-review-contract.md"]) {
+    const content = read(rel);
+    assert.match(content, /gate resolve-role --role (?:<name>|pre-push-reviewer) --harness codex/);
+    assert.match(content, /nativeOverrides/);
+    assert.match(content, /fork_turns: "none"/);
+    assert.match(content, /(?:without fallback|never retry)/);
+  }
+  assert.doesNotMatch(read("skills/docs/main-agent-contract.md"), /Codex roles, tiers and\s+angle overrides remain unsupported/);
+});
+
 // The five reviewer-facing surfaces the AC/DoD matrix names.
 const REVIEWER_SURFACES = [
   "agents/review.agent.md",

@@ -69,6 +69,13 @@ task and the config-resolved model (see below) passed only when non-null:
 - Pi: dispatch one fresh subagent with the brief as its task (a general-purpose
   reviewer; the PR-bound `review` gate procedure does not apply). The model stays
   keyed on the `pre-push-reviewer` role.
+- Codex: run `dev-loops-run cli/index.mjs gate resolve-role --role pre-push-reviewer --harness codex`
+  from the target repo and consume only exit 0. Forward `nativeOverrides`
+  unchanged to `collaboration.spawn_agent` with the brief and `fork_turns: "none"`.
+  Omit absent fields; config or native rejection stops dispatch without fallback.
+  Follow [Generic Codex dispatch](main-agent-contract.md#generic-codex-dispatch)
+  for role/setup reads and source-worktree qualification. This is a routine role,
+  never a lifecycle fan-out angle.
 
 ### Adversarial-enumeration checklist
 
@@ -88,7 +95,10 @@ to name it too.
 ## Reviewer model (harness-agnostic, config-resolved)
 
 <!-- rule: PRE-PR-MODEL-CONFIG-RESOLVED -->
-`PRE-PR-MODEL-CONFIG-RESOLVED`: the pre-push reviewer's model, in both modes, MUST be resolved
+`PRE-PR-MODEL-CONFIG-RESOLVED`: on Codex, both modes MUST use the role selector above,
+which resolves model and effort together from `models.harnesses.codex.roles` or
+`.tiers` with shared `models.roleTiers`; no legacy concrete values are borrowed.
+On Claude/Pi the pre-push reviewer's model, in both modes, MUST be resolved
 through `resolveRoleModel(config, { role: "pre-push-reviewer", harness })` from
 `@dev-loops/core/config`. No model literal is hardcoded in this phase's prose,
 tooling, or dispatch. The resolved model MUST be passed to the dispatch only when
