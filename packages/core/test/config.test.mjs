@@ -4564,6 +4564,17 @@ describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", (
     assert.equal(result.reason, "risk_path_touch");
   });
 
+  test("a config-source touch fails closed even when classify rules turn code into docs", () => {
+    const config = lightConfig();
+    config.classify = { paths: [{ pattern: "src/**", kind: "docs" }] };
+    const facts = { sizeOutcome: { outcome: "pass", wholeLogicLoc: 0, tierLogicLoc: { t1: 0 } } };
+    const hit = resolveGateDispatchMode(config, "preApproval", { ...facts, changedFiles: [".devloops", "src/a.mjs", "src/b.mjs", "src/c.mjs"] });
+    assert.equal(hit.mode, "full_fanout");
+    assert.equal(hit.reason, "config_source_touch");
+    const miss = resolveGateDispatchMode(config, "preApproval", { ...facts, changedFiles: ["src/a.mjs"] });
+    assert.equal(miss.mode, "inline");
+  });
+
   test("missing changedFiles fails CLOSED to full_fanout (ambiguous, not trivial)", () => {
     const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
       scope: { filesChanged: 1, linesChanged: 1 },

@@ -622,8 +622,8 @@ const LocalImplementationConfig = z.strictObject({
   /** Opt into light mode for small scoped changes */
   lightMode: z.strictObject({
     enabled: z.boolean().describe("Opt small scoped changes into the lightweight dispatch path."),
-    maxFiles: z.number().int().min(1).describe("Light mode applies only when the change touches at most this many files."),
-    maxLines: z.number().int().min(1).describe("Light mode applies only when the change stays within this many lines."),
+    maxFiles: z.number().int().min(1).describe("Light mode applies only when the change counts at most this many non-doc files (docs and scope-count exclusions are not counted)."),
+    maxLines: z.number().int().min(1).describe("Light mode applies only when the change stays within this many weighted logic lines of code (docs, config, CI and asset lines count 0; test lines are discounted)."),
     // Composes with (does not replace) refinement.maxCopilotRounds — see
     // resolveEffectiveCopilotRoundCap.
     maxCopilotRounds: z.number().int().nonnegative().default(1).describe("Copilot round cap for light-dispatched PRs; composes as min(this, refinement.maxCopilotRounds)."),
@@ -2535,6 +2535,8 @@ export function countLightModeFiles(config, changedFiles) {
  *      non-doc file count (countLightModeFiles) > maxFiles → full_fanout
  *   4. `changedFiles` unavailable (ambiguous)  → full_fanout
  *   5. a changed file touches a risk path      → full_fanout
+ *      or is a dev-loop config source (`config_source_touch`: a PR can
+ *      reclassify its own code as docs through `classify`, so it never goes inline)
  *   6. `sizeOutcome` or its `wholeLogicLoc` unavailable/invalid → full_fanout
  *   7. size-outcome escalate/block             → full_fanout
  *   8. size-outcome touches the T1 risk tier   → full_fanout
@@ -2589,6 +2591,11 @@ export function resolveGateDispatchMode(config, gate, { scope, changedFiles, siz
   }
   if (touchesRiskPath(changedFiles, threshold.riskPaths)) {
     return { mode: "full_fanout", reason: "risk_path_touch", threshold };
+  }
+  // Both cap inputs read the head config's `classify` rules, so a diff that edits
+  // the config source could reclassify its own code as docs. Fail closed.
+  if (changedFiles.some((f) => isDevLoopConfigSourcePath(f))) {
+    return { mode: "full_fanout", reason: "config_source_touch", threshold };
   }
   if (sizeOutcome == null || typeof sizeOutcome !== "object" || !locValid) {
     return { mode: "full_fanout", reason: "size_outcome_unavailable", threshold };
