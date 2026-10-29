@@ -117,6 +117,11 @@ describe("resolveReviewProportionality judgeTrack", () => {
     assert.deepEqual([r.track, r.mode], ["full", "full_fanout"]);
   });
 
+  test("an over-cap diff touching a config source stays full with a lowering judge track", () => {
+    const r = plan("draft", { ...big, changedFiles: [...(big.changedFiles ?? []), ".devloops"], judgeTrack: "reduced" });
+    assert.deepEqual([r.mode, r.reason, r.track], ["full_fanout", "over_threshold", "full"]);
+  });
+
   test("each floor keeps full_fanout mode and track full", () => {
     const floors = [
       { ...small, sizeOutcome: { outcome: "escalate", tierLogicLoc: { t1: 0 } } },

@@ -3098,6 +3098,7 @@ export function resolveReviewProportionality(config, gate, {
   const overCapRisk = judgeTrack !== "full" && dispatch.reason === "over_threshold"
     && (!Array.isArray(changedFiles)
       || touchesRiskPath(changedFiles, threshold.riskPaths)
+      || changedFiles.some((f) => isDevLoopConfigSourcePath(f))
       || !isSizeOutcomeT1Clean(sizeOutcome));
   // resolveGateTier returns before classifying when no tiers are configured, so
   // classify here independently of tier configuration before lowering the track.
