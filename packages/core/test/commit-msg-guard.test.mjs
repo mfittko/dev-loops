@@ -21,7 +21,7 @@ import {
 // requirement is gated on it (issue #1869: a plain human commit is never
 // "Claude", so it must not be forced to carry a Claude co-author trailer).
 const BASE_GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
-for (const name of ["OMPCODE", "CLAUDECODE", "PI_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "AI_AGENT"]) delete BASE_GIT_ENV[name];
+for (const name of ["OMPCODE", "CLAUDECODE", "CODEX_THREAD_ID", "PI_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "AI_AGENT"]) delete BASE_GIT_ENV[name];
 
 const AGENT_TRAILERS = "\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_test\n";
 
@@ -101,6 +101,29 @@ test("a non-agent commit (CLAUDECODE unset) is not forced to carry a Claude trai
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("a Codex marker outranks inherited CLAUDECODE and requires only the Codex trailer", async () => {
+  const env = { CLAUDECODE: "1", CODEX_THREAD_ID: "thread-1" };
+  await withHook({ requireClaudeSession: true }, (dir) => {
+    const ok = commitAttempt(dir, "fix(gate): codex work\n\nCo-Authored-By: Codex gpt-5 <noreply@openai.com>", env);
+    assert.equal(ok.blocked, false, ok.stderr);
+    const bare = commitAttempt(dir, "fix(gate): more codex work", env);
+    assert.equal(bare.blocked, true);
+    assert.match(bare.stderr, /Co-Authored-By: Codex <model> <noreply@openai\.com>/);
+    const claudeOnly = commitAttempt(dir, "fix(gate): claude trailer\n\nCo-Authored-By: Claude x <noreply@anthropic.com>", env);
+    assert.equal(claudeOnly.blocked, true);
+    assert.match(claudeOnly.stderr, /Co-Authored-By: Codex/);
+  });
+});
+
+test("CLAUDECODE without a Codex marker still requires Claude trailers; OMPCODE skips both", async () => {
+  await withHook({}, (dir) => {
+    const result = commitAttempt(dir, "fix(gate): do the thing", { CLAUDECODE: "1" });
+    assert.equal(result.blocked, true);
+    assert.match(result.stderr, /Co-Authored-By: Claude/);
+    assert.equal(commitAttempt(dir, "fix(gate): do the thing", { OMPCODE: "1", CODEX_THREAD_ID: "t" }).blocked, false);
+  });
 });
 
 test("omp compatibility markers do not require Claude attribution or skip other commit checks", async () => {

@@ -81,8 +81,15 @@ const REQUIRE_CLAUDE_SESSION = ${requireSession};
 
 // omp sets OMPCODE=1 and also CLAUDECODE=1 for compatibility. Its own marker
 // takes precedence: requiring Claude trailers there would misattribute work.
+// Codex run from inside Claude Code inherits CLAUDECODE=1, so a Codex marker
+// (CODEX_THREAD_ID) outranks it: Codex commits carry Codex attribution only.
 // Genuine Claude Code commits still require attribution; human commits do not.
-if (process.env.OMPCODE !== "1" && process.env.CLAUDECODE === "1") {
+const isCodex = process.env.OMPCODE !== "1" && !!process.env.CODEX_THREAD_ID;
+if (isCodex) {
+  if (!/^Co-Authored-By:\s*Codex\s+.+\s+<noreply@openai\.com>\s*$/imu.test(message)) {
+    errors.push("missing required trailer: Co-Authored-By: Codex <model> <noreply@openai.com>");
+  }
+} else if (process.env.OMPCODE !== "1" && process.env.CLAUDECODE === "1") {
   if (!/^Co-Authored-By:\s*Claude\s+.+\s+<noreply@anthropic\.com>\s*$/imu.test(message)) {
     errors.push("missing required trailer: Co-Authored-By: Claude <model> <noreply@anthropic.com>");
   }
