@@ -38,6 +38,9 @@ Options:
   --help, -h                   Show this help
 Output also carries "track" (light|reduced|full) and "trackReason". The judge track never changes
 mode, angles, groups or floors.
+The light-mode cap reads the weighted wholeLogicLoc from the size budget and the non-doc file
+count. "scope" is informational only and does not decide the outcome; the examples below show
+its raw counts for illustration.
 Output (stdout, JSON):
   { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 1, "linesChanged": 5 }, "mode": "inline", "reason": "under_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": { "sizeCap": false, "riskPath": false, "sizeOutcome": false, "ambiguity": false, "unclassifiable": false }, "track": "full", "trackReason": "judge_record_absent" }
   { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 9, "linesChanged": 300 }, "mode": "full_fanout", "reason": "over_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": {...}, "track": ..., "trackReason": ... }
@@ -109,7 +112,7 @@ function parseCliArgs(argv) {
 
 // Mirrors detectScope's own two-dot range construction (detect-change-scope.mjs)
 // so the changed-file list this resolver evaluates the risk-path floor against
-// is the SAME diff detectScope already measured filesChanged/linesChanged from
+// is the SAME diff detectScope already measured the informational scope from
 // — never a different (e.g. three-dot merge-base) range that could silently
 // disagree with the scope this round already committed to.
 function diffRange(base, head) {
@@ -153,7 +156,7 @@ function detectChangedFiles({ base, head, cwd }) {
   try {
     const output = execFileSync(
       "git",
-      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", diffRange(base, head)],
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", "--no-renames", diffRange(base, head)],
       { cwd: cwd || undefined, encoding: "utf8", maxBuffer: 10 * 1024 * 1024, env: gitEnvWithoutDirOverrides(), stdio: ["ignore", "pipe", "ignore"] },
     );
     return output.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
@@ -190,9 +193,6 @@ export async function run(argv) {
       return;
     }
     const threshold = !opts.hasFullLabel ? resolveLightMode(config) : null;
-    const isCandidate = threshold != null
-      && Number(scope.filesChanged) <= threshold.maxFiles
-      && Number(scope.linesChanged) <= threshold.maxLines;
     // The changed-file list feeds BOTH the risk-path floor AND resolveGateTier's
     // diff-classification (which the composer needs for its angle set — an
     // over-cap diff can still legitimately match a reduced tier, and an
@@ -200,12 +200,11 @@ export async function run(argv) {
     // mandatory-floor best-effort angle set, never the full untiered pool) —
     // so it is always read, unlike the heavier size-budget evaluation below.
     const changedFiles = detectChangedFiles({ base: opts.base, head: opts.head, cwd: process.cwd() });
-    // The size-budget outcome only ever changes an already-under-cap decision
-    // (an over-cap diff is full_fanout regardless of it), so this heavier read
-    // runs ONLY on a diff that is at least a plausible inline candidate,
-    // keeping the over-cap path's extra I/O cost bounded to one cheap diff.
+    // Invariant: the size-budget outcome supplies the weighted-LOC cap, so it is
+    // read whenever light mode is on or a lowering judge track needs the size
+    // floor re-checked. The disabled path skips this heavier read.
     // KNOWN, bounded range asymmetry: `changedFiles` above is the two-dot
-    // `base..head` diff (diffRange, matching detectScope/`scope` exactly).
+    // `base..head` diff (diffRange, matching the scope facts exactly).
     // evaluatePrSizeBudget below is the SHARED size-budget reader
     // (check-size-budget.mjs) and always diffs `base...head` (the three-dot
     // merge-base form) — its own contract, reused as-is everywhere else it is
@@ -233,7 +232,10 @@ export async function run(argv) {
       headSha: resolvedHeadSha != null && resolvedHeadSha.toLowerCase() === suppliedHeadSha ? resolvedHeadSha : undefined,
     });
     let sizeOutcome = null;
-    if (isCandidate || judge.track !== "full") {
+    // Base without head diffs the working tree, which the three-dot size reader cannot
+    // measure: leave the outcome null so it fails closed.
+    const sizeMeasurable = !(opts.base && !opts.head);
+    if (sizeMeasurable && (threshold != null || judge.track !== "full")) {
       try {
         sizeOutcome = await evaluatePrSizeBudget({
           base: opts.base ?? "HEAD~1",

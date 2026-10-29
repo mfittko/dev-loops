@@ -2858,6 +2858,55 @@ test("buildFanoutEnforcement (#1174) re-derives scope fail-closed and sets scope
   }
 });
 
+// #2982: the merge-gate re-verify caps on weighted wholeLogicLoc and the
+// non-doc file count, not raw diff counts.
+for (const [label, files, expected] of [
+  ["weighted-under but raw-over (code + doc)", { "a.mjs": "export const a = 1;\n", "notes.md": Array.from({ length: 150 }, (_, i) => `line ${i}`).join("\n") + "\n" }, true],
+  ["non-doc file count over maxFiles", { "a.mjs": "export const a = 1;\n", "b.mjs": "export const b = 1;\n", "c.mjs": "export const c = 1;\n" }, false],
+]) {
+  test(`buildFanoutEnforcement (#2982): ${label} sets scopeUnderThreshold=${expected}`, async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-weighted-"));
+    try {
+      const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+      g("init", "-q");
+      g("config", "user.email", "t@t.t");
+      g("config", "user.name", "t");
+      g("config", "commit.gpgsign", "false");
+      await writeFile(
+        path.join(dir, ".devloops"),
+        "version: 1\ngates:\n  requireFanoutEvidence: true\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 2\n    maxLines: 40\n",
+        "utf8",
+      );
+      await writeFile(path.join(dir, "base.md"), "base\n", "utf8");
+      g("add", "-A");
+      g("commit", "-qm", "base");
+      const baseRef = g("rev-parse", "HEAD").trim();
+      for (const [name, body] of Object.entries(files)) await writeFile(path.join(dir, name), body, "utf8");
+      g("add", "-A");
+      g("commit", "-qm", "head");
+      const headSha = g("rev-parse", "HEAD").trim();
+      const { config } = await loadDevLoopConfig({ repoRoot: dir });
+      const marker = { visible: true, headSha, executionMode: "inline_single_agent", inlineReason: "under_threshold" };
+      const enforcement = await buildFanoutEnforcement({
+        repo: "owner/repo",
+        pr: 17,
+        currentHeadSha: headSha,
+        draftGateMarker: marker,
+        preApprovalGateMarker: marker,
+        config,
+        cwd: dir,
+        hasFullLabel: false,
+        baseRef,
+      });
+      for (const gate of enforcement.gates) {
+        assert.equal(gate.scopeUnderThreshold, expected, gate.name);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // #1984 (GATE-EXEC-PROPORTIONALITY): the merge gate RE-VERIFIES the recorded
 // light-mode decision against the actual diff — a mislabelled-trivial verdict
