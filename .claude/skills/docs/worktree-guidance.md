@@ -191,7 +191,9 @@ contract at commit time instead of leaving it to agent discipline:
   commit (non-empty `CODEX_THREAD_ID`, even with an inherited `CLAUDECODE=1`)
   carries `Co-Authored-By: Codex <model> <noreply@openai.com>` instead of
   the Claude trailers. A Claude Code session started from a Codex shell
-  inherits `CODEX_THREAD_ID`, a known limitation (the waiver line applies).
+  inherits `CODEX_THREAD_ID`, a known limitation: such a commit needs the
+  operator-only waiver line, so an agent in that session stops and hands the
+  commit to the operator.
   Plain human commits are also exempt from the Claude-specific trailers. All
   commits still undergo the subject and issue-reference checks below.
 - The key `worktree.commitMsgGuard.requireClaudeSession` opts a repository in
