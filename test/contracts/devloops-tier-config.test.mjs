@@ -20,6 +20,28 @@ import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolve
 
 const GATE_KEYS = ["draft", "preApproval"];
 
+test("Codex fixture role mappings mirror the shared policy without changing conductor or angle dispatch", async () => {
+  const { config, errors } = await loadDevLoopConfig({
+    repoRoot: process.cwd(),
+    devloopsOverride: { raw: JSON.stringify({ version: 1, models: {
+      roleTiers: { "gate-coordinator": "low", judge: "high", "pre-push-reviewer": "pre-pr-strong" },
+      harnesses: { codex: { tiers: {
+        low: { model: "example-low" },
+        high: { model: "example-high" },
+        "pre-pr-strong": { model: "example-strong" },
+      } } },
+    } }) },
+  });
+  assert.deepEqual(errors, []);
+  const tiers = config.models.harnesses.codex.tiers;
+  for (const tier of ["low", "high", "pre-pr-strong"]) assert.ok(tiers[tier].model?.trim());
+  for (const [role, tier] of [["developer", "low"], ["docs", "low"], ["quality", "low"], ["fixer", "low"], ["gate-coordinator", "low"], ["refiner", "high"], ["judge", "high"], ["pre-push-reviewer", "pre-pr-strong"]]) {
+    assert.equal(resolveRoleModel(config, { role, harness: "codex" }), tiers[tier].model);
+    assert.equal(resolveRoleModel(config, { role, harness: "codex", kind: "angle" }), null);
+  }
+  assert.equal(config.models.harnesses.codex.conductor, undefined);
+});
+
 // Keep the repo's Pi policy guard local: concrete ids and tier distinctness are
 // operator choices (ADR 0176, amending 0175).
 function assertPiTierPolicy(tiers) {

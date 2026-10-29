@@ -18,6 +18,7 @@ import { NEUTRAL_RUN_ID_VAR, RUN_ID_MARKERS } from "../src/loop/run-context.mjs"
 import {
   resolveConductorModel,
   resolveConductorSettings,
+  resolveRoleSettings,
   resolveAutonomyStopAt,
   resolveHumanMergeOnly,
   resolveEffectiveMergeAuthorized,
@@ -80,7 +81,7 @@ test("Codex conductor settings are strict, isolated, and merged field by field",
     assert.equal(resolveConductorModel(parsed), "legacy");
     for (const harness of ["pi", "claude"]) assert.equal(resolveRoleModel(parsed, { role: "dev-loop", harness }), "legacy-role");
   }
-  for (const codex of [{ conductor: {} }, { conductor: { model: " " } }, { conductor: { reasoningEffort: 1 } }, { conductor: { extra: true } }, { roles: {} }, { tiers: {} }, { angles: {} }]) {
+  for (const codex of [{ conductor: {} }, { conductor: { model: " " } }, { conductor: { reasoningEffort: 1 } }, { conductor: { extra: true } }, { angles: {} }]) {
     assert.equal(FileConfigSchema.safeParse({ version: 1, models: { harnesses: { codex } } }).success, false, JSON.stringify(codex));
   }
   const dir = await mkdtemp(path.join(os.tmpdir(), "codex-conductor-"));
@@ -95,6 +96,92 @@ test("Codex conductor settings are strict, isolated, and merged field by field",
     }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+test("Codex roles select whole objects, isolate legacy values and reject malformed settings", () => {
+  const models = { roles: { developer: "legacy" }, roleTiers: { developer: "low" }, harnesses: { codex: {
+    tiers: { low: { model: "tier", reasoningEffort: "high" } }, roles: { developer: { model: "explicit" } },
+  } } };
+  const resolve = () => resolveRoleSettings({ models }, { role: "developer", harness: "codex" });
+  assert.deepEqual(resolve(), { model: "explicit", reasoningEffort: null });
+  models.roleTiers.developer = "inherit";
+  assert.deepEqual(resolve(), { model: "explicit", reasoningEffort: null });
+  models.harnesses.codex.roles.developer = { model: null, reasoningEffort: null };
+  assert.deepEqual(resolve(), { model: null, reasoningEffort: null });
+  delete models.harnesses.codex.roles.developer;
+  assert.deepEqual(resolve(), { model: null, reasoningEffort: null });
+  models.roleTiers.developer = "low";
+  assert.deepEqual(resolve(), { model: "tier", reasoningEffort: "high" });
+  assert.equal(resolveRoleModel({ models }, { role: "developer", harness: "codex" }), "tier");
+  assert.equal(resolveRoleModel({ models }, { role: "developer", harness: "codex", kind: "angle" }), null);
+  delete models.harnesses;
+  assert.deepEqual(resolve(), { model: null, reasoningEffort: null });
+  for (const harness of ["pi", "claude"]) assert.equal(resolveRoleModel({ models }, { role: "developer", harness }), "legacy");
+  for (const map of ["roles", "tiers"]) {
+    for (const value of [{}, null, [], "model", { model: " " }, { reasoningEffort: 2 }, { extra: true }]) {
+      assert.equal(FileConfigSchema.safeParse({ version: 1, models: { harnesses: { codex: { [map]: { developer: value } } } } }).success, false);
+    }
+  }
+});
+
+test("Codex map keys normalize before layer merging and retain omitted fields", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "codex-map-keys-"));
+  try {
+    await mkdir(path.join(dir, ".pi/dev-loop"), { recursive: true });
+    for (const map of ["roles", "tiers"]) {
+      for (const [lowerKey, upperKey] of [["docs", " docs "], [" docs ", "docs"]]) {
+        const models = { ...(map === "tiers" ? { roleTiers: { docs: "docs" } } : {}), roles: { docs: "legacy" } };
+        await writeFile(path.join(dir, ".pi/dev-loop/defaults.json"), JSON.stringify({ version: 1, models: {
+          ...models, harnesses: { codex: { [map]: { [lowerKey]: { model: "lower", reasoningEffort: "high" } } } },
+        } }));
+        for (const override of [{ model: "upper" }, { model: null }, { reasoningEffort: null }]) {
+          await writeFile(path.join(dir, ".devloops"), JSON.stringify({ version: 1, models: {
+            harnesses: { codex: { [map]: { [upperKey]: override } } },
+          } }));
+          const loaded = await loadDevLoopConfig({ repoRoot: dir });
+          assert.deepEqual(loaded.errors, []);
+          assert.deepEqual(resolveRoleSettings(loaded.config, { role: "docs", harness: "codex" }), {
+            model: "lower", reasoningEffort: "high", ...override,
+          });
+          for (const harness of ["claude", "pi"]) {
+            assert.equal(resolveRoleModel(loaded.config, { role: "docs", harness }), "legacy");
+          }
+        }
+      }
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("Codex maps merge fields and validate aliases against final layers", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "codex-roles-"));
+  try {
+    await mkdir(path.join(dir, ".pi/dev-loop"), { recursive: true });
+    const lower = { version: 1, models: { roleTiers: { developer: "custom" }, harnesses: { codex: {
+      conductor: { model: "conductor" }, roles: { docs: { model: "writer", reasoningEffort: "medium" } },
+      tiers: { low: { model: "low", reasoningEffort: "high" } },
+    } } } };
+    const upper = { version: 1, models: { harnesses: { codex: {
+      roles: { docs: { model: null }, quality: { reasoningEffort: "low" } },
+      tiers: { custom: { model: " custom " }, low: { reasoningEffort: null } },
+    } } } };
+    await writeFile(path.join(dir, ".pi/dev-loop/defaults.json"), JSON.stringify(lower));
+    await writeFile(path.join(dir, ".devloops"), JSON.stringify(upper));
+    const loaded = await loadDevLoopConfig({ repoRoot: dir });
+    assert.deepEqual(loaded.errors, []);
+    for (const [role, expected] of [["developer", { model: "custom", reasoningEffort: null }], ["docs", { model: null, reasoningEffort: "medium" }], ["quality", { model: null, reasoningEffort: "low" }], ["fixer", { model: "low", reasoningEffort: null }]]) {
+      assert.deepEqual(resolveRoleSettings(loaded.config, { role, harness: "codex" }), expected);
+    }
+    assert.equal(resolveConductorSettings(loaded.config, { harness: "codex" }).model, "conductor");
+    assert.equal(resolveRoleModel(loaded.config, { role: "developer", harness: "pi" }), null);
+    delete upper.models.harnesses.codex.tiers.custom;
+    await writeFile(path.join(dir, ".devloops"), JSON.stringify(upper));
+    assert.match(JSON.stringify((await loadDevLoopConfig({ repoRoot: dir })).errors), /unknown model tier alias/);
+    lower.models = { roleTiers: { developer: "legacy-custom" } };
+    upper.models = { tiers: { "legacy-custom": { pi: "legacy" } } };
+    await writeFile(path.join(dir, ".pi/dev-loop/defaults.json"), JSON.stringify(lower));
+    await writeFile(path.join(dir, ".devloops"), JSON.stringify(upper));
+    assert.deepEqual((await loadDevLoopConfig({ repoRoot: dir })).errors, []);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 // #1592: a few fixtures below deliberately keep pre-rename severity spellings
 // ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
 // intentional backward-compat coverage (normalizeSeverity normalizes them on
