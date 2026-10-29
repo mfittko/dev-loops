@@ -1,4 +1,5 @@
 import { DISPOSITION, isCopilotRoundCapReached, STATE } from "./copilot-loop-state.mjs";
+import { CAP_ROUND_FIXED_NEXT_ACTION } from "./review-round-cap.mjs";
 import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { evaluateUiE2eScoping } from "./ui-e2e-scoping.mjs";
 import { evaluateUiDesignerReviewScoping } from "./ui-designer-review-scoping.mjs";
@@ -1378,7 +1379,10 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
-        reason: "The PR is still draft and this round's draft_gate verdict is clean, but a gate-authored review thread is still unresolved (ADR 0088) — reply/resolve it rather than re-running the draft gate. An open defect thread is resolved via fixer fix-close, or a close-gate-findings rerun once the judge has deferred it or disposed it act with an evidence-only remedy (ADR 0144); a judge-rejected medium, low or nit defect thread is reject-closed by a close-gate-findings rerun (ADR 0144), and a judge-rejected high needs an operator decision. A question thread's remedy depends on the judge's disposition: unanswered — post an answer reply, then rerun close-gate-findings, which reject-closes it if the judge disposed it reject; answered and judge-disposed reject — rerun close-gate-findings to reject-close it; answered and judge-disposed act with an evidence-only remedy — closed by a close-gate-findings rerun; any other judge-disposed act question — resolved by the fixer's own answer-and-resolve path; ambiguous/unrecorded disposition — needs an operator decision, no automated path.",
+        reason: (capRoundFixed && !draftGate.markerCleanThreadsUnresolved
+          ? "The PR is still draft and the `draft_gate` cap round's fixer pass landed (ADR 0208), but"
+          : "The PR is still draft and this round's draft_gate verdict is clean, but")
+          + " a gate-authored review thread is still unresolved (ADR 0088) — reply/resolve it rather than re-running the draft gate. An open defect thread is resolved via fixer fix-close, or a close-gate-findings rerun once the judge has deferred it or disposed it act with an evidence-only remedy (ADR 0144); a judge-rejected medium, low or nit defect thread is reject-closed by a close-gate-findings rerun (ADR 0144), and a judge-rejected high needs an operator decision. A question thread's remedy depends on the judge's disposition: unanswered — post an answer reply, then rerun close-gate-findings, which reject-closes it if the judge disposed it reject; answered and judge-disposed reject — rerun close-gate-findings to reject-close it; answered and judge-disposed act with an evidence-only remedy — closed by a close-gate-findings rerun; any other judge-disposed act question — resolved by the fixer's own answer-and-resolve path; ambiguous/unrecorded disposition — needs an operator decision, no automated path.",
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,
@@ -1493,7 +1497,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       preApprovalGate,
       allowedNextActions,
       forbiddenActions,
-      nextAction: draftReady ? PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW : PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+      nextAction: capFixedReady ? CAP_ROUND_FIXED_NEXT_ACTION : (draftReady ? PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW : PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE),
       reason: capFixedReady
         ? "The PR is still draft, the `draft_gate` cap round's fixer pass landed and its pre-push delta cleared (ADR 0208), so no further `draft_gate` round runs and `gh pr ready` is now legal. `pre_approval_gate` judges what remains."
         : draftGate.currentHeadClean

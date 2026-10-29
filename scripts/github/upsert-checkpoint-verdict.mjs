@@ -4,6 +4,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
+import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, isPastRoundCap, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, pastCapBlockers, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { composeConvergedDraftGate, convergedActItemKey } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseArgs } from "node:util";
@@ -3046,7 +3047,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ? await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot })
       : 0;
     // ADR 0208: round N+1 never runs; the cap round's fixer pass is the last draft step and the PR goes ready.
-    if (completedRound > cap) {
+    if (isRoundRefused(completedRound, cap)) {
       throw new Error(`round_cap_reached: this would be draft_gate round ${completedRound} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs and no fixer follows. After the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`; pre_approval_gate judges what remains.`);
     }
     const gateBlockers = [
