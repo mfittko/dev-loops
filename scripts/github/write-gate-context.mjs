@@ -2017,9 +2017,8 @@ export async function resolveCapRound(options, { repoRoot }) {
   let fixedRefs = [];
   try { fixedRefs = (readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), log.headSha)?.items ?? []).filter((i) => i?.status === "resolved").map((i) => i.ref); } catch { /* unverifiable: keep every item */ }
   // The delta act set suffixes a repeated fingerprint (fp, fp#2, ...) in ledger order; match each act item by that exact ref.
-  const seen = new Map();
-  const refOf = (f) => { const fp = fingerprintFinding(f); const n = (seen.get(fp) ?? 0) + 1; seen.set(fp, n); return n > 1 ? `${fp}#${n}` : fp; };
-  const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => { const open = isOpenActItem(f); return (open && !fixedRefs.includes(refOf(f))) || f?.capClosed; }).map((f) => ({
+  const seen = new Map(), refOf = (f) => { const fp = fingerprintFinding(f), n = (seen.get(fp) ?? 0) + 1; seen.set(fp, n); return n > 1 ? `${fp}#${n}` : fp; };
+  const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => (isOpenActItem(f) && !fixedRefs.includes(refOf(f))) || f?.capClosed).map((f) => ({
     fingerprint: fingerprintFinding(f), file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary, disposition: isOpenActItem(f) ? "act" : "cap_closed",
   }));
   return { log, residue };
