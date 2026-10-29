@@ -142,7 +142,7 @@ judgment cannot substitute. The
 rejects `--ready`. Agents MUST NOT create ready PRs. The two sanctioned draft exits are
 `ready-for-review.mjs` (`gh pr ready`) for a normal ready flip, and `restore-ready.mjs`
 only to restore a PR that `convert-to-draft.mjs` made a transient draft while CI is
-blocking. Both run through `readyForReview()` and require clean current-head `draft_gate` evidence.
+blocking. Both run through `readyForReview()` and require clean current-head `draft_gate` evidence, with one exception owned by `GATE-EXEC-ROUND-CAP` (ADR 0208): `ready-for-review.mjs` accepts the cap-round-fixed proof in place of that verdict. `restore-ready.mjs` never accepts it, because the proof was never CI-checked at the current head. It refuses a cap-fixed PR whose only evidence is that proof, and the remedy is `ready-for-review.mjs` once CI is green.
 [TRACKER-PROJECTION-REQUIRED-METADATA](./tracker-first-loop-state.md#31-required-pr-metadata)
 owns the corresponding tracker metadata requirement.
 
