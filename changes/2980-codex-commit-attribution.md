@@ -1,2 +1,2 @@
 ### Fixed
-- The commit-msg guard accepts truthful Codex attribution (`Co-Authored-By: Codex <model> <noreply@openai.com>`) when `CLAUDECODE=1` is inherited, keyed on `CODEX_THREAD_ID` (#2980)
+- A non-empty `CODEX_THREAD_ID` (without `OMPCODE=1`) requires the Codex trailer instead of the Claude trailers, including without `CLAUDECODE` (#2980)
