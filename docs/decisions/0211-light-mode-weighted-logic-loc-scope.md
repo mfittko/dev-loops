@@ -25,7 +25,4 @@ Amends ADR 0108 (light mode scope count excludes fragments and mirrors). It repl
 - Small code-and-test fixes with doc notes reach the inline light track.
 - A large doc-only change outside the risk paths can go inline. This is accepted.
 - Config, CI and asset files count toward the file cap but add no weighted lines. A large edit to one or two such files outside the risk paths can go inline. This is accepted.
-- Lightweight startup eligibility calls the same `lightModeCapState` helper as `resolveGateDispatchMode` (issue 2985). Startup measures the base-to-working-tree diff for weighted LOC. The `eligibleForLightMode` field of `scripts/loop/detect-change-scope.mjs` is informational and still reads raw counts.
-- The floor for a touched dev-loop config source (`config_source_touch`) applies at gate dispatch and at startup, because the head config's `classify` rules feed both cap inputs.
-- Renames count both endpoints, because the name list comes from a `--no-renames` diff.
-- Startup eligibility fails closed with `size_outcome_unavailable` when the weighted LOC is missing or the size capture fails. The gate dispatch CLI reaches the same state for a `--base`-only run, where the three-dot size reader cannot measure the working tree.
+- Lightweight startup eligibility and the `eligibleForLightMode` field of `scripts/loop/detect-change-scope.mjs` still read raw counts. They are outside this decision and do not decide gate dispatch.
