@@ -2014,11 +2014,11 @@ export async function resolveCapRound(options, { repoRoot }) {
   const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, onUnreadable: () => { unreadable += 1; } })).at(-1);
   if (unreadable > 0 || log?.verdict !== "findings_present") return null;
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
-  let fixedRefs = [];
-  try { fixedRefs = (readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), log.headSha)?.items ?? []).filter((i) => i?.status === "resolved").map((i) => i.ref); } catch { /* unverifiable: keep every item */ }
-  // The delta act set suffixes a repeated fingerprint (fp, fp#2, ...) in ledger order; match each act item by that exact ref.
-  const seen = new Map(), refOf = (f) => { const fp = fingerprintFinding(f), n = (seen.get(fp) ?? 0) + 1; seen.set(fp, n); return n > 1 ? `${fp}#${n}` : fp; };
-  const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => (isOpenActItem(f) && !fixedRefs.includes(refOf(f))) || f?.capClosed).map((f) => ({
+  let items = [];
+  try { items = readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), log.headSha)?.items ?? []; } catch { /* unverifiable: keep every item */ }
+  // The delta act set suffixes a repeated fingerprint (fp, fp#2, ...): fixed only when a ref of that fingerprint exists and every one is resolved.
+  const isFixed = (f) => { const fp = fingerprintFinding(f), own = items.filter((i) => i?.ref === fp || String(i?.ref).startsWith(`${fp}#`)); return own.length > 0 && own.every((i) => i.status === "resolved"); };
+  const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => (isOpenActItem(f) && !isFixed(f)) || f?.capClosed).map((f) => ({
     fingerprint: fingerprintFinding(f), file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary, disposition: isOpenActItem(f) ? "act" : "cap_closed",
   }));
   return { log, residue };

@@ -8906,7 +8906,7 @@ test("resolveCapRound lists only the cap-round act items the sealed delta record
   }
 });
 
-test("resolveCapRound matches the suffixed delta ref of an act item that shares a fingerprint", async () => {
+test("resolveCapRound keeps every act item of a fingerprint while any suffixed ref is unresolved", async () => {
   const { repoRoot, baseSha } = await makeBaseDiffRepo();
   try {
     const opts = { repo: "owner/repo", pr: 60, headSha: "8".repeat(40) };
@@ -8919,7 +8919,9 @@ test("resolveCapRound matches the suffixed delta ref of an act item that shares 
     const [fp] = (await resolveCapRound(opts, { repoRoot })).residue.map((i) => i.fingerprint);
     const seal = (items) => writeGateDeltaRecord({ tmpRoot: path.join(repoRoot, "tmp"), sequence: { reviewBaselineHead: baseSha, actSetId: "0123456789abcdef" }, candidateHead: "9".repeat(40), invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: items } });
     seal([{ ref: fp, status: "resolved" }, { ref: `${fp}#2`, status: "not_resolved" }]);
-    assert.equal((await resolveCapRound(opts, { repoRoot })).residue.length, 1, "only the unresolved second occurrence stays");
+    assert.equal((await resolveCapRound(opts, { repoRoot })).residue.length, 2, "an unresolved fp#2 keeps both items");
+    seal([{ ref: fp, status: "resolved" }, { ref: `${fp}#2`, status: "resolved" }]);
+    assert.equal((await resolveCapRound(opts, { repoRoot })).residue.length, 0, "all same-fingerprint refs resolved drops both");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
