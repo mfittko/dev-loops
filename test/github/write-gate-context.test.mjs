@@ -8906,6 +8906,25 @@ test("resolveCapRound lists only the cap-round act items the sealed delta record
   }
 });
 
+test("resolveCapRound matches the suffixed delta ref of an act item that shares a fingerprint", async () => {
+  const { repoRoot, baseSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 60, headSha: "8".repeat(40) };
+    await seedClosedRounds(repoRoot, 60, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-60", `draft_gate-${baseSha}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const act = log.findings.find((f) => f.judgeDisposition === "act");
+    log.findings.push({ ...act, angle: "other-angle" });
+    await writeFile(ledger, JSON.stringify(log), "utf8");
+    const [fp] = (await resolveCapRound(opts, { repoRoot })).residue.map((i) => i.fingerprint);
+    const seal = (items) => writeGateDeltaRecord({ tmpRoot: path.join(repoRoot, "tmp"), sequence: { reviewBaselineHead: baseSha, actSetId: "0123456789abcdef" }, candidateHead: "9".repeat(40), invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: items } });
+    seal([{ ref: fp, status: "resolved" }, { ref: `${fp}#2`, status: "not_resolved" }]);
+    assert.equal((await resolveCapRound(opts, { repoRoot })).residue.length, 1, "only the unresolved second occurrence stays");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapRoundFixed guards the chain: a record loop, a non-SHA candidateHead and enumeration order", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
