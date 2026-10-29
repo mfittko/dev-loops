@@ -47,8 +47,8 @@ const GOVERNED = new RegExp(String.raw`(?:\b(?:do\s+not|don't|never|must\s+not|s
 // With `issues`, a removal that names another issue number is not coerced; a number-less removal is.
 export const removesClosingRef = (finding, issues) => {
   if (typeof finding?.judgeFix !== "string") return false;
-  // A clause whose remedy is directly negated ("Do not remove the Closes #10 line") restates the rule and is skipped.
-  // A keep or negation after the remedy is its reason ("Replace Closes #10 with Refs #10 to keep the parent open") and does not skip it.
+  // A clause whose remedy is directly negated ("Do not remove the Closes line") restates the rule and is skipped.
+  // A keep or negation after the remedy is its reason ("Replace Closes with Refs to keep the parent open") and does not skip it.
   return finding.judgeFix.replace(/[`*"]|(?<!\w)'|'(?!\w)/g, "").split(/[;\n]|\.(?:\s|$)/).some((clause) => [
     [CLOSING_THEN_REFS, SAME_NUMBER], [REFS_INSTEAD_OF_CLOSING, SAME_NUMBER], [REMOVES_CLOSING, (m) => m[1] !== undefined || PR_KEYWORD.test(m[0])],
   ].some(([re, accepts]) => [...clause.matchAll(re)].some((m) => accepts(m) && (!Array.isArray(issues) || m[1] === undefined || issues.includes(Number(m[1]))) && !GOVERNED.test(clause.slice(0, m.index)))));
