@@ -3062,7 +3062,7 @@ export function resolveReviewProportionality(config, gate, {
   });
   const floors = Object.freeze({
     sizeCap: dispatch.reason === "over_threshold",
-    riskPath: dispatch.reason === "risk_path_touch",
+    riskPath: dispatch.reason === "risk_path_touch" || dispatch.reason === "config_source_touch",
     sizeOutcome: typeof dispatch.reason === "string" && dispatch.reason.startsWith("size_outcome_") && dispatch.reason !== "size_outcome_unavailable",
     ambiguity: dispatch.reason === "changed_files_unavailable" || dispatch.reason === "size_outcome_unavailable",
     // resolveGateDispatchMode has no diff-classification awareness of its own

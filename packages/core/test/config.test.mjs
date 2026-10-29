@@ -4767,6 +4767,19 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     assert.deepStrictEqual(first, second);
   });
 
+  test("config_source_touch pins the plan floor and refuses a lowered judge track", () => {
+    const config = preApprovalTierConfig();
+    config.classify = { paths: [{ pattern: "src/**", kind: "docs" }] };
+    const plan = resolveReviewProportionality(config, "preApproval", {
+      scope: { filesChanged: 4, linesChanged: 900 },
+      changedFiles: [".devloops", "src/a.mjs", "src/b.mjs"],
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 0, tierLogicLoc: { t1: 0 } },
+    });
+    assert.equal(plan.mode, "full_fanout");
+    assert.equal(plan.reason, "config_source_touch");
+    assert.equal(plan.floors.riskPath, true);
+  });
+
   test("trivial micro-diff → inline, single combined reviewer covering mandatory angles", () => {
     const config = preApprovalTierConfig();
     const plan = resolveReviewProportionality(config, "preApproval", {
