@@ -35,6 +35,7 @@ import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from ".
 import { flattenPaginatedSlurp, resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
+import { resolveCapRoundFixed } from "./write-gate-context.mjs";
 import { carryFromPostedVerdict } from "./_carried-verdict.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -389,10 +390,13 @@ export function coerceUnresolvedThreadCount(parsedThreads) {
   const raw = parsedThreads?.summary?.unresolvedThreads;
   return Number.isInteger(raw) && raw >= 0 ? raw : -1;
 }
-export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false } = {}) {
+export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false, capRoundFixed = false } = {}) {
   const failures = [];
   const warnings = [];
-  if (!(evidence.draftGate.visible && evidence.draftGate.verdict === "clean")) {
+  // A sealed "cap round fixed" proof (resolveCapRoundFixed) stands in for the visible clean draft_gate comment.
+  if (capRoundFixed === true) {
+    // satisfied
+  } else if (!(evidence.draftGate.visible && evidence.draftGate.verdict === "clean")) {
     failures.push("missing visible clean draft_gate comment");
   } else if (evidence.draftGate.converged?.malformed) {
     failures.push("draft_gate comment carries a malformed Converged marker (expected `fixer <sha> delta sha256:<digest>`)");
@@ -1320,7 +1324,13 @@ async function main() {
         ? [`exit signal recorded for run ${result.staleRunner.activeRun?.runId}: refuse to merge`]
         : [],
     };
-    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true });
+    let capRoundFixed = false;
+    if (!(result.draftGate.visible && result.draftGate.verdict === "clean")) {
+      try {
+        capRoundFixed = Boolean(await resolveCapRoundFixed({ repo: options.repo, pr: options.pr, headSha: result.currentHeadSha, anyHead: true }, { repoRoot: resolveRepoRoot(process.cwd()) }));
+      } catch { capRoundFixed = false; }
+    }
+    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true, capRoundFixed });
     const evidenceState = deriveEvidenceState(result, preMergeGateCheck);
     // reviews/comments are raw size-budget-gate input facts (comments carry
     // FULL PR comment bodies) consumed internally by buildPreMergeGateCheck

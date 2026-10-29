@@ -4696,3 +4696,18 @@ test("detectCheckpointEvidence carries clean gate markers from an earlier head a
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("buildPreMergeGateCheck: a sealed cap-round-fixed proof stands in for the visible clean draft_gate comment, fail-closed otherwise", () => {
+  const evidence = cleanEvidence();
+  evidence.draftGate = { visible: false, verdict: null, headSha: null };
+  const missing = "missing visible clean draft_gate comment";
+  assert.ok(buildPreMergeGateCheck(evidence, 0).failures.includes(missing));
+  assert.ok(buildPreMergeGateCheck(evidence, 0, null, null, { capRoundFixed: false }).failures.includes(missing));
+  assert.ok(buildPreMergeGateCheck(evidence, 0, null, null, { capRoundFixed: "yes" }).failures.includes(missing));
+  const fixed = buildPreMergeGateCheck(evidence, 0, null, null, { capRoundFixed: true });
+  assert.equal(fixed.ok, true, JSON.stringify(fixed.failures));
+  // Every other condition stays fail-closed.
+  evidence.preApprovalGateMarker.headSha = "other";
+  assert.equal(buildPreMergeGateCheck(evidence, 0, null, null, { capRoundFixed: true }).ok, false);
+  assert.equal(buildPreMergeGateCheck(cleanEvidence(), 2, null, null, { capRoundFixed: true }).ok, false);
+});
