@@ -60,7 +60,7 @@ import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
-import { buildValidationResultsPath, countCompletedRounds } from "./write-gate-context.mjs";
+import { buildValidationResultsPath, countCompletedRounds, resolveCapRoundFixed } from "./write-gate-context.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -2031,6 +2031,7 @@ export function buildCoordinationEvaluatorInput({
   draftGateConfig,
   preApprovalGateConfig,
   reviewMode,
+  draftCapRoundFixed = false,
 }) {
   return {
     repo: coordinationContext.repo,
@@ -2072,6 +2073,7 @@ export function buildCoordinationEvaluatorInput({
     preApprovalGate: coordinationContext.gateEvidence.preApprovalGate,
     preApprovalGateMarker: coordinationContext.gateEvidence.preApprovalGateMarker,
     ...(reviewMode ? { reviewMode } : {}),
+    draftCapRoundFixed,
   };
 }
 
@@ -2693,7 +2695,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // Non-fatal: internal-only detection failure is best-effort.
       // Proceed with the default (external Copilot review) mode.
     }
+    // ADR 0208: the same cap-round-fixed proof the detector resolves, so a ready cap-fixed PR can enter pre_approval_gate; fail closed on error.
+    const prBaseRefName = typeof coordinationContext.prData?.baseRefName === "string" ? coordinationContext.prData.baseRefName.trim() : "";
+    const draftCapRoundFixed = await resolveCapRoundFixed({ repo: options.repo, pr: options.pr, headSha: coordinationContext.currentHeadSha, baseRefName: prBaseRefName, anyHead: coordinationContext.prData?.isDraft !== true }, { repoRoot }).then(Boolean, () => false);
     coordination = evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
+      draftCapRoundFixed,
       coordinationContext,
       maxCopilotRounds,
       draftGateConfig,
