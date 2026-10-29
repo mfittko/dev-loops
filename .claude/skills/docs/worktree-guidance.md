@@ -187,7 +187,12 @@ contract at commit time instead of leaving it to agent discipline:
   repository, and carries a `Claude-Session:` trailer only when the
   repository opts in (the key bullet below). omp sets `OMPCODE=1` alongside
   a compatibility `CLAUDECODE=1`; its own marker takes precedence, so omp
-  commits are not forced to carry false Claude attribution. Plain human
+  commits are not forced to carry false Claude attribution. A Codex-authored
+  commit (non-empty `CODEX_THREAD_ID`, even with an inherited `CLAUDECODE=1`)
+  carries `Co-Authored-By: Codex <model> <noreply@openai.com>` instead of
+  the Claude trailers. A Claude Code session started from a Codex shell
+  inherits `CODEX_THREAD_ID`, a known limitation (the waiver line applies).
+  Plain human
   commits are also exempt from the Claude-specific trailers. All commits
   still undergo the subject and issue-reference checks below.
 - The key `worktree.commitMsgGuard.requireClaudeSession` opts a repository in
