@@ -3099,6 +3099,21 @@ test("renderBriefingPrefix and renderScopedBriefingVariant: the Reviewer token d
   }
 });
 
+test("renderBriefingEvidence and renderScopedBriefingVariant: the Cap-round residue section is byte-identical across the full evidence file and every scoped variant, and absent without residue", () => {
+  const capRoundResidue = [{ fingerprint: "abc123", disposition: "act", file: "src/a.mjs", line: 4, title: "Guard\nis missing" }];
+  const extractSection = (text) => {
+    const start = text.indexOf("## Cap-round residue");
+    return text.slice(start, text.indexOf("\n## ", start));
+  };
+  const fullSection = extractSection(renderBriefingEvidence(renderInput({ capRoundResidue })).text);
+  assert.match(fullSection, /^- abc123 \| act \| src\/a\.mjs:4 \| Guard is missing$/m);
+  for (const scope of GATE_ANGLE_SCOPES.filter((s) => s !== "full")) {
+    const input = { repo: "owner/repo", pr: 1, gate: "pre_approval_gate", headSha: "abc1234", evidencePath: "tmp/x.briefing-evidence.txt", diffOutput: "" };
+    assert.equal(extractSection(renderScopedBriefingVariant(scope, { ...input, capRoundResidue }).text), fullSection, `${scope}: residue matches the full evidence file`);
+    assert.doesNotMatch(renderScopedBriefingVariant(scope, input).text, /Cap-round residue/);
+  }
+});
+
 test("renderBriefingEvidence and renderScopedBriefingVariant: the Validation results section is byte-identical across the full evidence file and every scoped variant", () => {
   const validationResultsPath = "/abs/tmp/gate-context/owner-repo/pr-9/draft_gate-abc1234567890.validation.json";
   const { text: fullText } = renderBriefingEvidence(renderInput({ validationResultsPath }));

@@ -1372,6 +1372,21 @@ function pushExcludedFilesLines(lines, excludedFiles) {
 }
 
 /**
+ * Lines of the `## Cap-round residue` section; none when the residue is empty.
+ * ADR 0208: what the draft cap round left open or closed by the cap, which this round judges. One line per item, whitespace collapsed so a title cannot forge a line. The full and the scoped evidence variants share it, so every reviewer sees the same section.
+ * @param {object[]|null} residue
+ * @returns {string[]}
+ */
+function renderCapRoundResidueLines(residue) {
+  if (!Array.isArray(residue) || residue.length === 0) return [];
+  const oneLine = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const lines = ["## Cap-round residue", "", `The draft_gate cap round left these unresolved; judge them this round: ${residue.length} items.`];
+  for (const item of residue) lines.push(`- ${oneLine(item.fingerprint)} | ${oneLine(item.disposition)} | ${oneLine(item.file ?? "(no file)")}${Number.isInteger(item.line) ? `:${item.line}` : ""} | ${oneLine(item.title)}`);
+  lines.push("");
+  return lines;
+}
+
+/**
  * Render the referenced evidence file: PR body, linked-issue body (when
  * present), a pointer to the filtered diff at the reviewed head (`diffPath`,
  * the required `diff` read; the diff bytes are never repeated here), a
@@ -1486,15 +1501,7 @@ export function renderBriefingEvidence({
     lines.push(issueBodyFence);
     lines.push("");
   }
-  if (Array.isArray(capRoundResidue) && capRoundResidue.length > 0) {
-    // ADR 0208: what the draft cap round left open or closed by the cap; this round judges it. One line per item, whitespace collapsed so a title cannot forge a line. Omitted when empty, so evidence without residue is unchanged.
-    const oneLine = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
-    lines.push("## Cap-round residue");
-    lines.push("");
-    lines.push(`The draft_gate cap round left these unresolved; judge them this round: ${capRoundResidue.length} items.`);
-    for (const item of capRoundResidue) lines.push(`- ${oneLine(item.fingerprint)} | ${oneLine(item.disposition)} | ${oneLine(item.file ?? "(no file)")}${Number.isInteger(item.line) ? `:${item.line}` : ""} | ${oneLine(item.title)}`);
-    lines.push("");
-  }
+  lines.push(...renderCapRoundResidueLines(capRoundResidue));
   lines.push(`## Diff at reviewed head (${headSha})`);
   lines.push("");
   const filteredBytes = hasDiffText ? persistedDiffBytes(diffOutput) : 0;
@@ -1574,6 +1581,7 @@ export function renderScopedBriefingVariant(scope, {
   validationResultsPath = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
   rules = null,
+  capRoundResidue = null,
 }) {
   if (!GATE_ANGLE_SCOPES.includes(scope) || scope === "full") {
     throw new Error(`renderScopedBriefingVariant: scope must be a non-"full" GATE_ANGLE_SCOPES value, got ${JSON.stringify(scope)}`);
@@ -1644,6 +1652,7 @@ export function renderScopedBriefingVariant(scope, {
     lines.push("");
   }
 
+  lines.push(...renderCapRoundResidueLines(capRoundResidue));
   // The filtered diff is the unit's required `diff` read, so every variant
   // points at it like the full evidence file does.
   const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
@@ -2843,6 +2852,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           excludedFiles: diffFilter?.excludedFiles ?? [],
           validationResultsPath: options.validationResultsPath ?? null,
           rules: resolveClassifyRules(options.config),
+          capRoundResidue,
         });
         pendingVariants.set(scope, { path: scopePath, text: variant.text });
         briefingVariants[scope] = scopePath;
