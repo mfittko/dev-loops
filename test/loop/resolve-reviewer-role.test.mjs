@@ -35,6 +35,7 @@ function runCli(args, { cwd, env = {} } = {}) {
   return spawnSync(process.execPath, [CLI, "gate", "resolve-role", ...args], {
     cwd,
     encoding: "utf8",
+    timeout: 10000,
     env: { ...process.env, ...env },
   });
 }
@@ -42,6 +43,42 @@ function runCli(args, { cwd, env = {} } = {}) {
 function parseJson(stdout) {
   return JSON.parse(stdout.trim().split("\n").pop());
 }
+
+test("ordinary Codex role caller captures all roles and stops on config or native rejection", async () => {
+  const dir = await makeFixtureRepo();
+  try {
+    for (const role of ["developer", "docs", "quality", "refiner", "gate-coordinator", "judge", "fixer", "pre-push-reviewer"]) {
+      for (const settings of (role === "developer" ? [null, { model: "native" }, { reasoningEffort: "medium" }, { model: null, reasoningEffort: null }] : [{ model: "native", reasoningEffort: "medium" }])) {
+        await writeFile(path.join(dir, ".devloops"), JSON.stringify({ version: 1, models: { harnesses: { codex: { roles: settings ? { [role]: settings } : {} } } } }));
+        const result = runCli(["--role", role, "--harness", "codex"], { cwd: dir });
+        assert.equal(result.status, 0, result.stderr);
+        const selected = parseJson(result.stdout);
+        const nativeOverrides = { ...(settings?.model ? { model: settings.model } : {}), ...(settings?.reasoningEffort ? { reasoning_effort: settings.reasoningEffort } : {}) };
+        assert.deepEqual(selected, { ok: true, harness: "codex", kind: "role", role, settings: { model: null, reasoningEffort: null, ...settings }, nativeOverrides, configErrors: [] });
+        const calls = [];
+        const task = { task_name: role, message: "Qualification only", fork_turns: "none" };
+        const spawn = async (args) => { calls.push(args); throw new Error("native refusal"); };
+        await assert.rejects(() => spawn({ ...task, ...selected.nativeOverrides }), /native refusal/);
+        assert.deepEqual(calls, [{ ...task, ...nativeOverrides }]);
+      }
+    }
+    for (const extra of [["--conductor"], ["--gate", "review"], ["--angle", "docs"]]) {
+      assert.equal(runCli(["--role", "docs", "--harness", "codex", ...extra], { cwd: dir }).status, 2);
+    }
+    for (const args of [["--role"], ["--role", " " , "--harness", "codex"], ["--role", "docs"], ["--role", "docs", "--harness", "pi"]]) {
+      assert.equal(runCli(args, { cwd: dir }).status, 2);
+    }
+    const selector = ["--role", "docs", "--harness", "codex"];
+    assert.equal(runCli([...selector, "--jq", ".nativeOverrides", "--silent"], { cwd: dir }).status, 0);
+    assert.equal(runCli([...selector, "--jq", "["], { cwd: dir }).status, 2);
+    await writeFile(path.join(dir, ".devloops"), JSON.stringify({ version: 1, models: { harnesses: { codex: { roles: { docs: { model: " " } } } } } }));
+    for (const extra of [[], ["--silent"], ["--jq", ".kind", "--silent"]]) {
+      const refused = runCli([...selector, ...extra], { cwd: dir });
+      assert.equal(refused.status, 1);
+      if (!extra.length) assert.deepEqual(parseJson(refused.stdout).nativeOverrides, {});
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+}, 20000);
 
 test("conductor selector emits only configured native overrides and retains refusal exits", async () => {
   const dir = await makeFixtureRepo();

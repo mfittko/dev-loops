@@ -409,7 +409,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "reply-resolve": "Reply and resolve review threads",
     "offer-human-handoff": "Offer to assign PR to a human reviewer/assignee",
     "size-budget": "Compute PR size/tier budget outcome (pass/escalate/block; pure computation, no enforcement)",
-    "resolve-role": "Resolve a review angle's role or Codex conductor native settings",
+    "resolve-role": "Resolve a review angle's role or Codex conductor/role native settings",
     "resolve-validation": "Resolve gate validation at an exact head (ci-only CI evidence, declared full command, or the pinned-Bun verify script)",
     "wait-for-units": "Block until a gate round's dispatched reviewer or judge units are done (read-only)",
   },

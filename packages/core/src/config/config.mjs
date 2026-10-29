@@ -77,12 +77,12 @@ const ModelTierMapping = z
 /**
  * Reject `models.roleTiers` entries that reference a tier alias which is neither
  * a built-in alias (low/high), the literal "inherit", nor defined in this
- * config's own `models.tiers`. Applied to both the merged and file-level
- * ModelsConfig so a typo'd alias fails closed with a clear message.
+ * legacy or Codex tier definitions. The loader defers alias checks until
+ * layers are merged; standalone schema validation still checks references.
  * @param {Record<string, unknown>|undefined} models
  * @param {z.RefinementCtx} ctx
  */
-function refineRoleTiers(models, ctx) {
+function refineRoleTiers(models, ctx, { aliases = true } = {}) {
   for (const key of ["roleTiers", "roles"]) {
     if (Object.hasOwn(models?.[key] ?? {}, "pre-PR-reviewer")) {
       ctx.addIssue({
@@ -92,27 +92,32 @@ function refineRoleTiers(models, ctx) {
       });
     }
   }
-  const known = new Set([...BUILTIN_TIER_ALIASES, ...Object.keys(models?.tiers ?? {})]);
+  if (!aliases) return;
+  const known = new Set([...BUILTIN_TIER_ALIASES, ...Object.keys(models?.tiers ?? {}), ...Object.keys(models?.harnesses?.codex?.tiers ?? {})]);
   for (const [role, tier] of Object.entries(models?.roleTiers ?? {})) {
     if (tier !== "inherit" && !known.has(tier)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["roleTiers", role],
-        message: `unknown model tier alias "${tier}" — define it under models.tiers, use a built-in alias (${BUILTIN_TIER_ALIASES.join(", ")}), or "inherit"`,
+        message: `unknown model tier alias "${tier}" — define it under models.tiers or models.harnesses.codex.tiers, use a built-in alias (${BUILTIN_TIER_ALIASES.join(", ")}), or "inherit"`,
       });
     }
   }
 }
 
-const CodexExecutionToken = z.string({ error: (issue) => `expected a Codex string token or null, got ${JSON.stringify(issue.input)}; correct the conductor setting` })
-  .regex(/\S/, { error: (issue) => `empty Codex token ${JSON.stringify(issue.input)}; use a nonempty conductor setting or null to inherit` }).trim().nullable();
+const CodexExecutionToken = z.string({ error: (issue) => `expected a Codex string token or null, got ${JSON.stringify(issue.input)}; correct the execution setting` })
+  .regex(/\S/, { error: (issue) => `empty Codex token ${JSON.stringify(issue.input)}; use a nonempty execution setting or null to inherit` }).trim().nullable();
 const CodexExecutionSettings = z.strictObject({
   model: CodexExecutionToken.optional(),
   reasoningEffort: CodexExecutionToken.optional(),
-}).refine((settings) => Object.keys(settings).length > 0, "conductor settings must set model or reasoningEffort (null clears a field)").meta({ minProperties: 1 });
+}).refine((settings) => Object.keys(settings).length > 0, "execution settings must set model or reasoningEffort (null clears a field)").meta({ minProperties: 1 });
 
 const ModelsConfigBase = z.strictObject({
-  harnesses: z.strictObject({ codex: z.strictObject({ conductor: CodexExecutionSettings.optional() }) }).optional(),
+  harnesses: z.strictObject({ codex: z.strictObject({
+    conductor: CodexExecutionSettings.optional(),
+    roles: z.record(z.string().trim().min(1), CodexExecutionSettings).optional(),
+    tiers: z.record(z.string().trim().min(1), CodexExecutionSettings).optional(),
+  }) }).optional(),
   conductor: z.string().trim().min(1).describe("Model override for the conductor (dev-loop) session; absent = inherit the session model.").optional(),
   roles: z.record(z.string(), z.string().trim().min(1)).describe("Concrete per-role/angle model overrides (highest precedence, above tiers).").optional(),
   tiers: z.record(z.string().min(1), ModelTierMapping).describe("Tier alias → per-harness concrete model; null on a harness means inherit (no override).").optional(),
@@ -1323,13 +1328,13 @@ export function resolveReviewerRole(config, angle) {
  * (only `docs` today) MUST pass `kind: "angle"` to avoid the silent downgrade.
  *
  * @param {DevLoopConfig} config
- * Codex currently has no model mapping; it returns `null` so dispatch
- * inherits the active Codex session model.
+ * Codex roles select harness-scoped settings; Codex angles still inherit.
  *
  * @param {{ role: string, harness: "claude"|"pi"|"codex", kind?: "role"|"angle" }} params
  * @returns {string|null}
  */
 export function resolveRoleModel(config, { role, harness, kind } = {}) {
+  if (harness === "codex") return kind === "angle" || !role ? null : resolveRoleSettings(config, { role, harness }).model;
   if (!role || (harness !== "claude" && harness !== "pi")) return null;
 
   if (kind === "angle") {
@@ -1511,13 +1516,17 @@ function mergeConfigLayers(target, source) {
       result[key] = key === "gates"
         ? mergeGatesFamily(result[key], source[key])
         : { ...(result[key] || {}), ...(source[key] || {}) };
-      if (key === "models" && source.models.harnesses?.codex?.conductor) {
-        result.models.harnesses = { codex: { conductor: {
-          ...target.models?.harnesses?.codex?.conductor,
-          ...source.models.harnesses.codex.conductor,
-        } } };
-      } else if (key === "models" && target.models?.harnesses) {
-        result.models.harnesses = target.models.harnesses;
+      if (key === "models" && (target.models?.harnesses || source.models.harnesses)) {
+        const lower = target.models?.harnesses?.codex ?? {};
+        const upper = source.models.harnesses?.codex ?? {};
+        const codex = { ...lower, ...upper };
+        if (lower.conductor || upper.conductor) codex.conductor = { ...lower.conductor, ...upper.conductor };
+        for (const map of ["roles", "tiers"]) {
+          if (!lower[map] && !upper[map]) continue;
+          codex[map] = { ...lower[map], ...upper[map] };
+          for (const name of Object.keys(upper[map] ?? {})) codex[map][name] = { ...lower[map]?.[name], ...upper[map][name] };
+        }
+        result.models.harnesses = { codex };
       }
     } else {
       result[key] = source[key];
@@ -1783,7 +1792,9 @@ function applyParsedLayer(merged, filePath, data, layer, warnings, errors, repoR
   // in this layer drops the WHOLE layer (errors populated, `merged` returned
   // unchanged) rather than merging the file's other valid keys. errors[].message
   // names the offending path/field so the failure is actionable.
-  const validation = FileConfigSchema.safeParse(data);
+  // Alias references can point into later layers; shape and retired keys remain strict here.
+  const validation = FileConfigSchema.extend({ models: ModelsConfigBase.partial()
+    .superRefine((models, ctx) => refineRoleTiers(models, ctx, { aliases: false })).optional() }).safeParse(data);
   if (!validation.success) {
     // Surface a visible WARNING (not just the structured error) so the
     // whole-layer drop is never silent: many consumers never read
@@ -1980,11 +1991,29 @@ export function resolveConductorSettings(config, { harness } = {}) {
   return { model: settings?.model ?? null, reasoningEffort: settings?.reasoningEffort ?? null };
 }
 
+/** Select one Codex role object, never borrowing omitted fields from its tier. */
+export function resolveRoleSettings(config, { role, harness } = {}) {
+  if (harness !== "codex" || typeof role !== "string" || !role.trim()) throw new Error("Role execution settings require a nonempty role and harness codex");
+  const codex = config?.models?.harnesses?.codex;
+  const tier = config?.models?.roleTiers?.[role] ?? BUILTIN_ROLE_TIERS[role];
+  const settings = codex?.roles?.[role] ?? (tier !== "inherit" ? codex?.tiers?.[tier] : null);
+  return { model: settings?.model ?? null, reasoningEffort: settings?.reasoningEffort ?? null };
+}
+
+export function resolveRoleDispatch(loadResult, { role, harness } = {}) {
+  return resolveExecutionDispatch(loadResult, { role, harness });
+}
+
 /** Shared config-only selection for initial native dispatch and emitted coordinators. */
 export function resolveConductorDispatch(loadResult, { harness } = {}) {
+  return resolveExecutionDispatch(loadResult, { harness });
+}
+
+function resolveExecutionDispatch(loadResult, { role, harness }) {
   const configErrors = loadResult.errors ?? [];
-  const settings = resolveConductorSettings(configErrors.length ? null : loadResult.config, { harness });
-  return { ok: configErrors.length === 0, harness, kind: "conductor", settings,
+  const config = configErrors.length ? null : loadResult.config;
+  const settings = role === undefined ? resolveConductorSettings(config, { harness }) : resolveRoleSettings(config, { role, harness });
+  return { ok: configErrors.length === 0, harness, ...(role === undefined ? { kind: "conductor" } : { kind: "role", role }), settings,
     nativeOverrides: configErrors.length ? {} : {
       ...(settings.model !== null ? { model: settings.model } : {}),
       ...(settings.reasoningEffort !== null ? { reasoning_effort: settings.reasoningEffort } : {}),
