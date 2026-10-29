@@ -4,6 +4,8 @@
 
 Accepted — 2026-09-28 ([issue 2527](https://github.com/mfittko/dev-loops/issues/2527))
 
+Amended by [0211](./0211-light-mode-weighted-logic-loc-scope.md), which replaces the raw-count cap input.
+
 Amends [0026](./0026-light-mode-inline-micro-prs.md). It changes how light-mode scope is counted and moves this repo's cap from 2/20 to 2/40. The inline path, the merge-gate re-verify and the escalation rules of ADR 0026 are unchanged.
 
 ## Context

@@ -24,4 +24,5 @@ Amends ADR 0108 (light mode scope count excludes fragments and mirrors). It repl
 
 - Small code-and-test fixes with doc notes reach the inline light track.
 - A large doc-only change outside the risk paths can go inline. This is accepted.
-- Lightweight startup eligibility still reads raw counts and is outside this decision.
+- Config, CI and asset files count toward the file cap but add no weighted lines. A large edit to one or two such files outside the risk paths can go inline. This is accepted.
+- Lightweight startup eligibility and the `eligibleForLightMode` field of `scripts/loop/detect-change-scope.mjs` still read raw counts. They are outside this decision and do not decide gate dispatch.
