@@ -1409,6 +1409,10 @@ function pushExcludedFilesLines(lines, excludedFiles) {
  *   run-gate-validation.mjs artifact for this head SHA (GATE-EXEC-VALIDATION-RESOLUTION).
  *   When non-empty, ONE additional `## Validation results at this head` section is
  *   appended LAST. Omitted entirely when absent.
+ * @param {object[]|null} [input.capRoundResidue] — pre_approval_gate only: the
+ *   draft cap round's unresolved items. When non-empty, a `## Cap-round residue`
+ *   section lists them before the diff section, in the evidence file reviewers
+ *   and the judge both read.
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES
  * @returns {{ text: string, prefixMode: "inline"|"pointer", diffBytes: number }}
  */
@@ -1417,6 +1421,7 @@ export function renderBriefingEvidence({
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null, changedFiles = [], excludedFiles = [], adjacentCode = null,
   validationResultsPath = null,
+  capRoundResidue = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
   const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
@@ -1479,6 +1484,15 @@ export function renderBriefingEvidence({
     lines.push(issueBodyFence);
     lines.push(trimmedIssueBody);
     lines.push(issueBodyFence);
+    lines.push("");
+  }
+  if (Array.isArray(capRoundResidue) && capRoundResidue.length > 0) {
+    // ADR 0208: what the draft cap round left open or closed by the cap; this round judges it. One line per item, whitespace collapsed so a title cannot forge a line. Omitted when empty, so evidence without residue is unchanged.
+    const oneLine = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+    lines.push("## Cap-round residue");
+    lines.push("");
+    lines.push(`The draft_gate cap round left these unresolved; judge them this round: ${capRoundResidue.length} items.`);
+    for (const item of capRoundResidue) lines.push(`- ${oneLine(item.fingerprint)} | ${oneLine(item.disposition)} | ${oneLine(item.file ?? "(no file)")}${Number.isInteger(item.line) ? `:${item.line}` : ""} | ${oneLine(item.title)}`);
     lines.push("");
   }
   lines.push(`## Diff at reviewed head (${headSha})`);
@@ -1722,7 +1736,7 @@ export const VALIDATION_POSTURE_MAX_LENGTH = 500;
  * @param {{ kind: "known-findings", path: string, sha256: string, bytes: number, entries: number, required: true }|null} [input.knownFindingsRead]
  * @param {string} [input.worktreeRoot] — resolves the read's path worktree-absolute
  */
-export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPosture = null, priorDispositionsRead = null, knownFindingsRead = null, capRoundResidue = null, worktreeRoot = process.cwd() }) {
+export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPosture = null, priorDispositionsRead = null, knownFindingsRead = null, worktreeRoot = process.cwd() }) {
   if (validationPosture != null && /[\r\n]/.test(validationPosture)) {
     throw new Error("renderBriefingVolatile: validationPosture must not contain a newline — an embedded newline could forge additional key: value lines in this line-structured file");
   }
@@ -1745,13 +1759,6 @@ export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPost
   if (knownFindingsRead) {
     lines.push(`Known findings (do not re-raise what an open or resolved thread already covers): ${knownFindingsRead.entries} threads with full bodies, listed in this required read. Read it IN FULL with \`jq\` before judgment; the mandatory sentinel verifies its sha256.`);
     lines.push(renderRequiredReadLine(knownFindingsRead, worktreeRoot));
-    lines.push("");
-  }
-  if (Array.isArray(capRoundResidue) && capRoundResidue.length > 0) {
-    // ADR 0208: what the cap round left open or closed by the cap; this round judges it. One line per item, whitespace collapsed so a title cannot forge a line.
-    const oneLine = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
-    lines.push(`Cap-round residue (the draft_gate cap round left these unresolved; judge them this round): ${capRoundResidue.length} items.`);
-    for (const item of capRoundResidue) lines.push(`- ${oneLine(item.fingerprint)} | ${oneLine(item.disposition)} | ${oneLine(item.file ?? "(no file)")}${Number.isInteger(item.line) ? `:${item.line}` : ""} | ${oneLine(item.title)}`);
     lines.push("");
   }
   return lines.join("\n") + "\n";
@@ -2689,6 +2696,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // before.
   let prefixBytes;
   let prefixMode;
+  // ADR 0208: pre_approval_gate receives the cap round's residue as round input, in the artifact and in the evidence file its reviewers and judge read.
+  const capRoundResidue = options.gate === "pre_approval_gate" ? (await resolveCapRound(options, { repoRoot }))?.residue : undefined;
   let pendingEvidence = null;
   let pendingFilteredDiff = null;
   let requiredReads = null;
@@ -2757,6 +2766,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       excludedFiles: diffFilter?.excludedFiles ?? [],
       adjacentCode: options.adjacentCode ?? null,
       validationResultsPath: options.validationResultsPath ?? null,
+      capRoundResidue,
     });
     prefixMode = evidence.prefixMode;
     pendingEvidence = { path: evidencePath, text: evidence.text };
@@ -3083,8 +3093,6 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // preserve any prior valid context. It is physically separate from the prefix.
   // acceptanceCriteria is deliberately NOT threaded here — see
   // {@link renderBriefingVolatile} for the rule.
-  // ADR 0208: pre_approval_gate receives the cap round's residue as round input, in the artifact and in the briefing its reviewers and judge read.
-  const capRoundResidue = options.gate === "pre_approval_gate" ? (await resolveCapRound(options, { repoRoot }))?.residue : undefined;
   const volatileText = renderBriefingVolatile({
     gate: options.gate,
     headSha: options.headSha,
@@ -3092,7 +3100,6 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     validationPosture: options.validationPosture ?? null,
     priorDispositionsRead,
     knownFindingsRead,
-    capRoundResidue,
     worktreeRoot: path.resolve(repoRoot),
   });
   const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants, capRoundResidue }), ...(requiredReads ? { requiredReads } : {}), loggedAt };

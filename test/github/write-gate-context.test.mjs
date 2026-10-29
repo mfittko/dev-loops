@@ -8793,7 +8793,7 @@ test("resolveCapRound keeps a cap_closed finding in the residue with disposition
   }
 });
 
-test("the pre_approval_gate briefing volatile tail lists the cap round residue for reviewers and the judge", async () => {
+test("the pre_approval_gate evidence file lists the cap round residue for reviewers and the judge", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   const priorExitCode = process.exitCode;
   try {
@@ -8802,13 +8802,17 @@ test("the pre_approval_gate briefing volatile tail lists the cap round residue f
     await main(["--repo", "owner/repo", "--pr", "54", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], { repoRoot, run: stubGhRun });
     assert.notEqual(process.exitCode, 1);
     const dir = path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-54");
-    const name = (await readdir(dir)).find((n) => n.endsWith(".briefing-volatile.txt"));
-    const volatile = await readFile(path.join(dir, name), "utf8");
-    assert.match(volatile, /Cap-round residue .*: 1 items\./);
-    assert.match(volatile, /^- [0-9a-f]+ \| act \| src\/changed\.mjs:2 \| Guard is missing$/m);
+    const evidenceName = (await readdir(dir)).find((n) => n.endsWith(".briefing-evidence.txt"));
+    const evidence = await readFile(path.join(dir, evidenceName), "utf8");
+    assert.match(evidence, /^## Cap-round residue$/m);
+    assert.match(evidence, /judge them this round: 1 items\./);
+    assert.match(evidence, /^- [0-9a-f]+ \| act \| src\/changed\.mjs:2 \| Guard is missing$/m);
+    // The judge reads this same file as its required evidence read.
+    const context = await readGateContext({ repo: "owner/repo", pr: 54, gate: "pre_approval_gate", headSha }, { repoRoot });
+    assert.ok(context.requiredReads.some((read) => read.kind === "evidence" && read.path.endsWith(evidenceName)));
     await main(["--repo", "owner/repo", "--pr", "55", "--gate", "pre_approval_gate", "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha], { repoRoot, run: stubGhRun });
     const none = path.join(repoRoot, "tmp", "gate-context", "owner-repo", "pr-55");
-    assert.doesNotMatch(await readFile(path.join(none, (await readdir(none)).find((n) => n.endsWith(".briefing-volatile.txt"))), "utf8"), /Cap-round residue/);
+    assert.doesNotMatch(await readFile(path.join(none, (await readdir(none)).find((n) => n.endsWith(".briefing-evidence.txt"))), "utf8"), /Cap-round residue/);
   } finally {
     process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });
