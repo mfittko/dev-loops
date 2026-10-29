@@ -40,6 +40,7 @@ import {
   buildFanoutEnforcement,
   detectCheckpointEvidence,
   deriveEvidenceState,
+  probeCapRoundFixed,
   isSizeOutcomeT1Clean,
   coerceUnresolvedThreadCount,
   EVIDENCE_STATE,
@@ -4710,4 +4711,26 @@ test("buildPreMergeGateCheck: a sealed cap-round-fixed proof stands in for the v
   evidence.preApprovalGateMarker.headSha = "other";
   assert.equal(buildPreMergeGateCheck(evidence, 0, null, null, { capRoundFixed: true }).ok, false);
   assert.equal(buildPreMergeGateCheck(cleanEvidence(), 2, null, null, { capRoundFixed: true }).ok, false);
+});
+
+test("cap-round proof: malformed Converged still fails, evidenceState agrees with the pre-merge check, probe wiring is guarded", async () => {
+  const bad = cleanEvidence();
+  bad.draftGate = { ...bad.draftGate, converged: { malformed: true } };
+  assert.equal(buildPreMergeGateCheck(bad, 0, null, null, { capRoundFixed: true }).ok, false);
+  const evidence = cleanEvidence();
+  evidence.draftGate = { visible: false, verdict: null, headSha: null };
+  const check = buildPreMergeGateCheck(evidence, 0, null, null, { capRoundFixed: true });
+  assert.equal(deriveEvidenceState(evidence, check, { capRoundFixed: true }), EVIDENCE_STATE.SATISFIED);
+  assert.equal(deriveEvidenceState(evidence, check, { capRoundFixed: "yes" }), EVIDENCE_STATE.NOT_ESTABLISHED);
+  assert.equal(deriveEvidenceState(evidence, check), EVIDENCE_STATE.NOT_ESTABLISHED);
+  const calls = [];
+  const resolve = async (...args) => { calls.push(args); return { log: {} }; };
+  const options = { repo: "o/r", pr: 7 };
+  const result = { currentHeadSha: "abc", draftGate: { visible: false } };
+  assert.equal(await probeCapRoundFixed(result, options, { resolve, repoRoot: "/r" }), true);
+  assert.deepEqual(calls, [[{ repo: "o/r", pr: 7, headSha: "abc", anyHead: true }, { repoRoot: "/r" }]]);
+  const visibleClean = { ...result, draftGate: { visible: true, verdict: "clean" } };
+  assert.equal(await probeCapRoundFixed(visibleClean, options, { resolve, repoRoot: "/r" }), false);
+  assert.equal(calls.length, 1, "no proof lookup when a clean draft comment is visible");
+  assert.equal(await probeCapRoundFixed(result, options, { resolve: async () => { throw new Error("x"); }, repoRoot: "/r" }), false);
 });
