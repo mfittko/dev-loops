@@ -32,8 +32,9 @@ import {
   ownershipNeedsViewerLogin,
 } from "@dev-loops/core/github/ownership-helpers";
 import { resolveLinkedIssuesFromPr } from "./detect-pr-gate-coordination-state.mjs";
-import { configLoadFailure, loadDevLoopConfig, normalizeToBareBranch, resolveBaseBranch, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig } from "@dev-loops/core/config";
-import { detectScope } from "./detect-change-scope.mjs";
+import { configLoadFailure, lightModeCapState, loadDevLoopConfig, normalizeToBareBranch, resolveBaseBranch, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig, touchesConfigSource } from "@dev-loops/core/config";
+import { detectScope, detectWorkingTreeChangedFiles } from "./detect-change-scope.mjs";
+import { evaluateWorkingTreeSizeBudget } from "./check-size-budget.mjs";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { validatePlanFile } from "../refine/validate-plan-file.mjs";
 import {
@@ -1259,8 +1260,23 @@ export function resolveIssuelessLightweightEligibility(config, cwd) {
   if (scope.ok === false) {
     return { eligible: false, reason: "scope_detection_failed", detail: scope.error };
   }
-  if (scope.filesChanged > threshold.maxFiles || scope.linesChanged > threshold.maxLines) {
-    return { eligible: false, reason: "over_threshold", scope, threshold };
+  // The same cap predicate as gate dispatch: weighted logic LOC plus the non-doc
+  // file count. Missing evidence fails closed.
+  const changed = detectWorkingTreeChangedFiles({ base: mergeBase, cwd });
+  let sizeOutcome = null;
+  try {
+    sizeOutcome = evaluateWorkingTreeSizeBudget({ config, base: mergeBase, repoRoot: cwd });
+  } catch {
+    sizeOutcome = null;
+  }
+  const changedFiles = changed.ok === true ? changed.files : undefined;
+  const cap = lightModeCapState(config, threshold, { changedFiles, sizeOutcome });
+  if (cap.over) {
+    return { eligible: false, reason: "over_threshold", scope, threshold, wholeLogicLoc: sizeOutcome?.wholeLogicLoc };
+  }
+  // Same floor as gate dispatch: a config-source edit can reclassify its own code as docs.
+  if (!cap.locValid || !Array.isArray(changedFiles) || touchesConfigSource(changedFiles)) {
+    return { eligible: false, reason: "size_outcome_unavailable", threshold };
   }
   return { eligible: true, scope, threshold };
 }
@@ -1293,7 +1309,10 @@ export function buildLightweightIssuelessInput({ config, cwd }) {
       if (eligibility.reason === "scope_detection_failed") {
         throw new Error(`--lightweight without --issue (issue-less PR-first) requires a measurable change scope; git diff failed (${eligibility.detail}). Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.`);
       }
-      throw new Error(`--lightweight without --issue (issue-less PR-first) requires the change to stay within the light-mode threshold (maxFiles=${eligibility.threshold.maxFiles}, maxLines=${eligibility.threshold.maxLines}); this change is ${eligibility.scope.filesChanged} files / ${eligibility.scope.linesChanged} lines. Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.`);
+      if (eligibility.reason === "size_outcome_unavailable") {
+        throw new Error("--lightweight without --issue (issue-less PR-first) requires a measurable weighted change size and no dev-loop config-source edit; the size outcome is unavailable or the change touches the config source. Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.");
+      }
+      throw new Error(`--lightweight without --issue (issue-less PR-first) requires the change to stay within the light-mode threshold (maxFiles=${eligibility.threshold.maxFiles} non-doc files, maxLines=${eligibility.threshold.maxLines} weighted logic lines); this change is ${eligibility.wholeLogicLoc} weighted logic lines. Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.`);
     }
   }
   return {

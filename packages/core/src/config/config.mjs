@@ -626,7 +626,7 @@ const WorkflowConfig = z.strictObject({
 const LocalImplementationConfig = z.strictObject({
   /** Opt into light mode for small scoped changes */
   lightMode: z.strictObject({
-    enabled: z.boolean().describe("Opt small scoped changes into the lightweight dispatch path."),
+    enabled: z.boolean().describe("Opt small scoped changes into the lightweight dispatch path. Gate dispatch and --lightweight startup eligibility share one cap predicate (weighted logic LOC and non-doc file count); a change that touches the dev-loop config source always takes full fan-out (config_source_touch)."),
     maxFiles: z.number().int().min(1).describe("Light mode applies only when the change counts at most this many non-doc files (docs and scope-count exclusions are not counted)."),
     maxLines: z.number().int().min(1).describe("Light mode applies only when the change stays within this many weighted logic lines of code (docs, config, CI and asset lines count 0; test lines are discounted)."),
     // Composes with (does not replace) refinement.maxCopilotRounds — see
@@ -2546,6 +2546,34 @@ export function isSizeOutcomeT1Clean(sizeOutcome) {
 }
 
 /**
+ * True when any changed file is a dev-loop config-source path. One shared
+ * predicate: a diff that edits the config source could reclassify its own code.
+ * @param {string[]} changedFiles
+ * @returns {boolean}
+ */
+export function touchesConfigSource(changedFiles) {
+  return changedFiles.some((f) => isDevLoopConfigSourcePath(f));
+}
+
+/**
+ * The one light-mode over-cap decision, shared by gate dispatch and lightweight
+ * startup eligibility: weighted logic LOC (`sizeOutcome.wholeLogicLoc`) above
+ * `maxLines`, or the non-doc file count above `maxFiles`. An unreadable input
+ * never counts as over; `locValid` tells the caller whether the LOC was usable.
+ * @param {DevLoopConfig} config
+ * @param {{ maxFiles: number, maxLines: number }} threshold
+ * @param {{ changedFiles?: string[], sizeOutcome?: { wholeLogicLoc?: number }|null }} facts
+ * @returns {{ over: boolean, locValid: boolean }}
+ */
+export function lightModeCapState(config, threshold, { changedFiles, sizeOutcome } = {}) {
+  const wholeLogicLoc = sizeOutcome?.wholeLogicLoc;
+  const locValid = typeof wholeLogicLoc === "number" && Number.isFinite(wholeLogicLoc) && wholeLogicLoc >= 0;
+  const over = (locValid && wholeLogicLoc > threshold.maxLines)
+    || (Array.isArray(changedFiles) && countLightModeFiles(config, changedFiles) > threshold.maxFiles);
+  return { over, locValid };
+}
+
+/**
  * Light-mode file count: changed files that are not scope-count excluded and do not
  * classify as docs. Code, test, config, CI, asset and unknown files all count. The one
  * shared counter for every light-mode caller (GATE-EXEC-PROPORTIONALITY).
@@ -2598,14 +2626,13 @@ export function countLightModeFiles(config, changedFiles) {
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
  * @param {object} facts
- * @param {object} [facts.scope] ignored; the cap uses weighted LOC and the non-doc file count
  * @param {string[]} [facts.changedFiles] repo-relative changed-file paths; absent/non-array fails safe to full_fanout
  * @param {{ outcome?: "pass"|"escalate"|"block", wholeLogicLoc?: number, tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome] check-size-budget.mjs's computeSizeBudget outcome; absent/null fails safe to full_fanout
  * @param {boolean} [facts.hasFullLabel]           `gate:full` label present on the PR
  * @param {string[]} [facts.inlineFindingSeverities] severities from the inline pass (escalation phase)
  * @returns {{ mode: "inline"|"full_fanout", reason: string, threshold: ({maxFiles:number,maxLines:number,riskPaths:string[]})|null }}
  */
-export function resolveGateDispatchMode(config, gate, { scope, changedFiles, sizeOutcome, hasFullLabel = false, inlineFindingSeverities } = {}) {
+export function resolveGateDispatchMode(config, gate, { changedFiles, sizeOutcome, hasFullLabel = false, inlineFindingSeverities } = {}) {
   if (hasFullLabel) {
     return { mode: "full_fanout", reason: "gate_full_label", threshold: null };
   }
@@ -2613,15 +2640,8 @@ export function resolveGateDispatchMode(config, gate, { scope, changedFiles, siz
   if (!threshold) {
     return { mode: "full_fanout", reason: "light_mode_disabled", threshold: null };
   }
-  // Cap inputs: weighted logic LOC from the size outcome and the non-doc
-  // file count. An unreadable input never counts as "over"; it falls through
-  // to the ambiguity floors below, which fail closed.
-  const wholeLogicLoc = sizeOutcome?.wholeLogicLoc;
-  const locValid = typeof wholeLogicLoc === "number" && Number.isFinite(wholeLogicLoc) && wholeLogicLoc >= 0;
-  if (
-    (locValid && wholeLogicLoc > threshold.maxLines)
-    || (Array.isArray(changedFiles) && countLightModeFiles(config, changedFiles) > threshold.maxFiles)
-  ) {
+  const { over, locValid } = lightModeCapState(config, threshold, { changedFiles, sizeOutcome });
+  if (over) {
     return { mode: "full_fanout", reason: "over_threshold", threshold };
   }
   if (!Array.isArray(changedFiles)) {
@@ -2632,7 +2652,7 @@ export function resolveGateDispatchMode(config, gate, { scope, changedFiles, siz
   }
   // Both cap inputs read the head config's `classify` rules, so a diff that edits
   // the config source could reclassify its own code as docs. Fail closed.
-  if (changedFiles.some((f) => isDevLoopConfigSourcePath(f))) {
+  if (touchesConfigSource(changedFiles)) {
     return { mode: "full_fanout", reason: "config_source_touch", threshold };
   }
   if (sizeOutcome == null || typeof sizeOutcome !== "object" || !locValid) {
@@ -2968,7 +2988,7 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
   ) {
     return { tier: null, angles: null, reason: "scope_unavailable" };
   }
-  if (changedFiles.some((f) => isDevLoopConfigSourcePath(f))) {
+  if (touchesConfigSource(changedFiles)) {
     return { tier: null, angles: null, reason: "config_source_delta" };
   }
   const rules = resolveClassifyRules(config);
@@ -3091,7 +3111,7 @@ export function resolveReviewProportionality(config, gate, {
   judgeTrack = "full",
   judgeTrackReason = "judge_full",
 } = {}) {
-  const dispatch = resolveGateDispatchMode(config, gate, { scope, changedFiles, sizeOutcome, hasFullLabel, inlineFindingSeverities });
+  const dispatch = resolveGateDispatchMode(config, gate, { changedFiles, sizeOutcome, hasFullLabel, inlineFindingSeverities });
   const tier = resolveGateTier(config, gate, {
     changedFiles,
     filesChanged: scope?.rawFilesChanged ?? scope?.filesChanged,
@@ -3136,7 +3156,7 @@ export function resolveReviewProportionality(config, gate, {
   const overCapRisk = judgeTrack !== "full" && dispatch.reason === "over_threshold"
     && (!Array.isArray(changedFiles)
       || touchesRiskPath(changedFiles, threshold.riskPaths)
-      || changedFiles.some((f) => isDevLoopConfigSourcePath(f))
+      || touchesConfigSource(changedFiles)
       || !isSizeOutcomeT1Clean(sizeOutcome));
   // resolveGateTier returns before classifying when no tiers are configured, so
   // classify here independently of tier configuration before lowering the track.

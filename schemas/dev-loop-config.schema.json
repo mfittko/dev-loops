@@ -1352,7 +1352,7 @@
           "properties": {
             "enabled": {
               "type": "boolean",
-              "description": "Opt small scoped changes into the lightweight dispatch path."
+              "description": "Opt small scoped changes into the lightweight dispatch path. Gate dispatch and --lightweight startup eligibility share one cap predicate (weighted logic LOC and non-doc file count); a change that touches the dev-loop config source always takes full fan-out (config_source_touch)."
             },
             "maxFiles": {
               "type": "integer",

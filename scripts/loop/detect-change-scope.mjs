@@ -175,4 +175,19 @@ if (isDirectRun) {
     process.exitCode = 1;
   });
 }
-export { detectScope, detectMergeBaseChangedFiles, isEligibleForLightMode };
+// Changed paths from `base` to the working tree (committed plus uncommitted), isolated like the merge-base reader.
+function detectWorkingTreeChangedFiles({ base, cwd } = {}) {
+  let output;
+  try {
+    output = execFileSync(
+      "git",
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", "--no-renames", base],
+      { encoding: "utf8", maxBuffer: 10_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() },
+    );
+  } catch (err) {
+    return { ok: false, files: null, error: err instanceof Error ? err.message : String(err) };
+  }
+  return { ok: true, files: output.split("\n").map((l) => l.trim()).filter((l) => l.length > 0) };
+}
+
+export { detectScope, detectMergeBaseChangedFiles, detectWorkingTreeChangedFiles, isEligibleForLightMode };

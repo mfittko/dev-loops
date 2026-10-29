@@ -39,6 +39,8 @@ import {
   resolveIssuelessEnabled,
   resolveGateDispatchMode,
   countLightModeFiles,
+  lightModeCapState,
+  touchesConfigSource,
   resolveReviewProportionality,
   isSizeOutcomeT1Clean,
   touchesRiskPath,
@@ -7978,4 +7980,16 @@ describe("gates.size.planningBand", () => {
     assert.ok(!DevLoopConfigSchema.safeParse({ version: 1, gates: { size: { planningBand: { minLoc: -1 } } } }).success);
     assert.ok(!DevLoopConfigSchema.safeParse({ version: 1, gates: { size: { planningBand: { maxLoc: 400 } } } }).success);
   });
+});
+
+test("lightModeCapState: weighted LOC or non-doc file count decides over; invalid LOC is reported, never over", () => {
+  const t = { maxFiles: 2, maxLines: 20 };
+  assert.deepEqual(lightModeCapState(lightConfig(), t, { changedFiles: ["a.mjs", "d.md"], sizeOutcome: { wholeLogicLoc: 20 } }), { over: false, locValid: true });
+  assert.equal(lightModeCapState(lightConfig(), t, { changedFiles: ["a.mjs"], sizeOutcome: { wholeLogicLoc: 21 } }).over, true);
+  assert.equal(lightModeCapState(lightConfig(), t, { changedFiles: ["a.mjs", "b.mjs", "c.mjs"], sizeOutcome: { wholeLogicLoc: 1 } }).over, true);
+  for (const sizeOutcome of [null, {}, { wholeLogicLoc: -1 }, { wholeLogicLoc: NaN }]) {
+    assert.deepEqual(lightModeCapState(lightConfig(), t, { changedFiles: ["a.mjs"], sizeOutcome }), { over: false, locValid: false });
+  }
+  assert.equal(touchesConfigSource([".devloops", "a.mjs"]), true);
+  assert.equal(touchesConfigSource(["a.mjs"]), false);
 });
