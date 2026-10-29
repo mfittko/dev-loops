@@ -30,6 +30,7 @@ test("a fixed cap round still waits on CI and on unresolved gate threads before 
     assert.equal(threads.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS, String(count));
     assert.ok(threads.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
     assert.equal(/could not be read/.test(threads.reason), count === -1, `${count}: only an unreadable count gets the retry-the-read reason`);
+    assert.ok(!/verdict is clean/.test(threads.reason), `${count}: the cap-round reason never claims a clean verdict`);
   }
 });
 

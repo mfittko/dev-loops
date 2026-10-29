@@ -1418,7 +1418,10 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
-        reason: "The PR is still draft and this round's draft_gate verdict is clean, but this round's gate-authored review-thread count could not be read (API failure) — could not read review-thread state; re-run when API connectivity is restored, rather than treating an unreadable count as either clean or a real dangling thread.",
+        reason: (capFixedThreadsUnreadable
+          ? "The PR is still draft and the `draft_gate` cap round's fixer pass landed (ADR 0208), but"
+          : "The PR is still draft and this round's draft_gate verdict is clean, but")
+          + " this round's gate-authored review-thread count could not be read (API failure) — could not read review-thread state; re-run when API connectivity is restored, rather than treating an unreadable count as either clean or a real dangling thread.",
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,
