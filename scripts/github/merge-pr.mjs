@@ -215,11 +215,14 @@ export function parseMergePrCliArgs(argv) {
 // current-head pre_approval_gate verdicts, unresolved threads, the runner lock,
 // and fan-out provenance — reused wholesale (non-goal: do not re-derive the set).
 const DETECT_EVIDENCE_PATH = fileURLToPath(new URL("./detect-checkpoint-evidence.mjs", import.meta.url));
+export function buildDetectEvidenceArgv({ repo, pr, baseRefName }) {
+  return [DETECT_EVIDENCE_PATH, "--repo", repo, "--pr", String(pr), ...(baseRefName ? ["--base-ref-name", baseRefName] : [])];
+}
 function defaultDetectEvidence({ repo, pr, env, cwd, baseRefName }) {
   return new Promise((resolve) => {
     execFile(
       process.execPath,
-      [DETECT_EVIDENCE_PATH, "--repo", repo, "--pr", String(pr), ...(baseRefName ? ["--base-ref-name", baseRefName] : [])],
+      buildDetectEvidenceArgv({ repo, pr, baseRefName }),
       { env, cwd, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
         let parsed = null;
