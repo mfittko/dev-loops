@@ -2016,7 +2016,7 @@ export async function resolveCapRound(options, { repoRoot }) {
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
   let items = [];
   try { items = readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), log.headSha)?.items ?? []; } catch { /* unverifiable: keep every item */ }
-  // The delta act set suffixes a repeated fingerprint (fp, fp#2, ...): fixed only when a ref of that fingerprint exists and every one is resolved.
+  // The delta act set suffixes a repeated fingerprint (fp, then fp with a #N suffix for each repeat): fixed only when a ref of that fingerprint exists and every one is resolved.
   const isFixed = (f) => { const fp = fingerprintFinding(f), own = items.filter((i) => i?.ref === fp || String(i?.ref).startsWith(`${fp}#`)); return own.length > 0 && own.every((i) => i.status === "resolved"); };
   const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => (isOpenActItem(f) && !isFixed(f)) || f?.capClosed).map((f) => ({
     fingerprint: fingerprintFinding(f), file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary, disposition: isOpenActItem(f) ? "act" : "cap_closed",
