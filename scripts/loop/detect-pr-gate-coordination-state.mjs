@@ -368,10 +368,10 @@ export function countPrChangedLines(prData) {
 }
 
 // Whether a light/spike relaxed-gate carve-out exempts the required
-// designer/vision recorded-evidence check. Mirrors the existing relaxed-gate
-// carve-outs (resolveGateDispatchMode): light-dispatched, spike,
+// designer/vision recorded-evidence check. Light-dispatched, spike,
 // or a change under the configured light-mode threshold (files AND lines)
-// exempts. When changed-lines data is unavailable the line dimension is
+// exempts. The threshold uses raw file and line counts, independent of the
+// weighted cap in resolveGateDispatchMode. When changed-lines data is unavailable the line dimension is
 // treated as within threshold, preserving files-only behavior for callers
 // that lack it.
 export function deriveUiDesignerReviewExempt({

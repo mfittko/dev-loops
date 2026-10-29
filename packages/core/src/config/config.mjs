@@ -2544,8 +2544,9 @@ export function countLightModeFiles(config, changedFiles) {
  *
  * Steps 4-8 are the GATE-EXEC-PROPORTIONALITY non-overridable floors
  * (gate-review-sub-loop-contract.md): they run only once the file/line
- * cap (step 3) has already passed, so an already-over-cap diff costs the
- * caller nothing extra. A caller that omits `changedFiles`/`sizeOutcome` for
+ * cap (step 3) has already passed. The line cap reads
+ * `sizeOutcome.wholeLogicLoc`, so callers supply `sizeOutcome` (and
+ * `changedFiles`) whenever light mode is on. A caller that omits them for
  * an otherwise-under-cap diff fails CLOSED (full fan-out) rather than silently
  * treating missing evidence as trivial — no flag/waiver/prompt can lower these
  * floors.
@@ -3031,7 +3032,7 @@ function selectFloorPlusJustifiedAngles(config, gate, changedFiles) {
  *   this scope. Tier matching reads the unfiltered `raw*` counts when present,
  *   matching resolveGateAnglesDynamic.
  * @param {string[]} [facts.changedFiles]
- * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome]
+ * @param {{ outcome?: "pass"|"escalate"|"block", wholeLogicLoc?: number, tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome]
  * @param {boolean} [facts.hasFullLabel]
  * @param {string[]} [facts.inlineFindingSeverities]
  * @returns {{ mode: "inline"|"full_fanout", angles: string[]|null, groups: { name: string, angles: string[] }[], reason: string, floors: { sizeCap: boolean, riskPath: boolean, sizeOutcome: boolean, ambiguity: boolean, unclassifiable: boolean } }}
@@ -3146,7 +3147,7 @@ export function resolveReviewProportionality(config, gate, {
  * @param {{ nameStatusOutput: string, diffOutput?: string }} [options.diff]
  * @param {boolean} [options.hasFullLabel] — `gate:full` label present on the PR (bypasses tier resolution)
  * @param {boolean} [options.checkFloors] — opt into the GATE-EXEC-PROPORTIONALITY floor check above
- * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [options.sizeOutcome] — only consulted when `checkFloors` is true
+ * @param {{ outcome?: "pass"|"escalate"|"block", wholeLogicLoc?: number, tierLogicLoc?: { t1?: number } }|null} [options.sizeOutcome] — only consulted when `checkFloors` is true
  * @param {boolean} [options.seamFirstRound] — true in a draft_gate round, or in a pre_approval_gate round at a head where no draft_gate round ran threat-model (caller-derived; defaults to true only for `draft`); only then does a SECURITY_SENSITIVE_SEAM diff force threat-model past `enabled: false`, so a pre_approval_gate round after a draft round at the same head does not re-run it
  * @param {string[]} [options.explicitAngles] — caller-supplied verbatim override (e.g. CLI `--angles`); wins over tier/dynamic resolution but NEVER over a fired floor above (a fired floor refuses the override and continues to tier/dynamic best-effort selection); a SECURITY_SENSITIVE_SEAM diff still adds threat-model to the explicit set (when seamFirstRound)
  * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: boolean, dynamicAnglesActive: boolean, addedAngles: string[], addedReasons: Record<string,string> }}

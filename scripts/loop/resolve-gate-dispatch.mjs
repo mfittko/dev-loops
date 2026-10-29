@@ -38,6 +38,9 @@ Options:
   --help, -h                   Show this help
 Output also carries "track" (light|reduced|full) and "trackReason". The judge track never changes
 mode, angles, groups or floors.
+The light-mode cap reads the weighted wholeLogicLoc from the size budget and the non-doc file
+count. "scope" is informational only and does not decide the outcome; the examples below show
+its raw counts for illustration.
 Output (stdout, JSON):
   { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 1, "linesChanged": 5 }, "mode": "inline", "reason": "under_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": { "sizeCap": false, "riskPath": false, "sizeOutcome": false, "ambiguity": false, "unclassifiable": false }, "track": "full", "trackReason": "judge_record_absent" }
   { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 9, "linesChanged": 300 }, "mode": "full_fanout", "reason": "over_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": {...}, "track": ..., "trackReason": ... }
@@ -109,7 +112,7 @@ function parseCliArgs(argv) {
 
 // Mirrors detectScope's own two-dot range construction (detect-change-scope.mjs)
 // so the changed-file list this resolver evaluates the risk-path floor against
-// is the SAME diff detectScope already measured filesChanged/linesChanged from
+// is the SAME diff detectScope already measured the informational scope from
 // — never a different (e.g. three-dot merge-base) range that could silently
 // disagree with the scope this round already committed to.
 function diffRange(base, head) {
