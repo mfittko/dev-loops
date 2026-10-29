@@ -54,7 +54,7 @@ When the spec Non-goals hold a reopen line (a slice PR), the result also carries
 the SPEC-SLICE-PR-KEEPS-CLOSING-REF sentence. With --issue, the optional --pr-body-file (the PR
 body text) also arms it, because the slice PR's reopen line sits in its own body. It is stdout-only: the --spec-out spec is the
 specDigest input and stays unchanged. The judge sees the sentence through
-emit-judge-work-order.mjs, which renders it from the spec or the PR body Non-goals.
+emit-judge-work-order.mjs, which renders the rule only when the PR body has exactly one closing reference that a reopen line names, and carries that number as sliceLinkageIssues.
 Required (extract mode):
   --repo <owner/name>        Repository slug
   --issue <number>           Canonical tracker issue number; exactly one of --issue/--pr/--body-file
