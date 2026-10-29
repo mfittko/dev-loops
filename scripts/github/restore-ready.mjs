@@ -17,7 +17,9 @@ runtime seam (no CLI flag exists on this script or on ready-for-review.mjs to
 skip CI). The skip is redundant for a verdict posted at the current head: it
 already carried the gates.draft.requireCi precondition when it was posted. A
 carried verdict (ADR 0186) was posted at an earlier head, so green current-head
-CI is required for it.
+CI is required for it. The ADR 0208 cap-round-fixed proof is never accepted
+here, because it was never CI-checked at the current head: a cap-round-fixed PR
+leaves draft through \`dev-loops pr ready-for-review\` once CI is green.
 This script accepts NO size-budget waiver flags: a PR over the size budget
 restores via \`dev-loops pr ready-for-review --waive-size-budget --reason
 <text> [--approved-by <human>]\` once CI is green, not through restore-ready.

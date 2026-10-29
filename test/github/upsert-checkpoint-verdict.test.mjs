@@ -29,6 +29,7 @@ import { buildLogPath, writeGateFindingsLog } from "../../scripts/github/write-g
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
 
 // The legacy input shapes in this file predate the round cap. A fixture repo root that does not set the cap gets
@@ -12318,4 +12319,36 @@ test("deriveEffectiveNextAction derives from the act list on review, draft_gate 
   assert.equal(deriveEffectiveNextAction("findings_present", "pre_approval_gate", act), "rerun gate");
   assert.equal(deriveEffectiveNextAction("clean", "draft_gate", []), null);
   assert.equal(deriveEffectiveNextAction("clean", "pre_approval_gate", []), null);
+});
+
+// ADR 0208: a ready PR whose cap round is proven fixed enters pre_approval_gate without a clean draft_gate comment.
+test("buildCoordinationEvaluatorInput threads draftCapRoundFixed so pre_approval_gate entry is allowed only with the proof", () => {
+  const coordinationContext = {
+    repo: "owner/repo",
+    pr: 2979,
+    currentHeadSha: "29aa40b7deadbeef",
+    prData: { isDraft: false, state: "OPEN" },
+    interpretation: { state: "pr_ready_no_feedback", sameHeadCleanConverged: true },
+    disposition: { loopDisposition: "action_required" },
+    snapshot: { ciStatus: "success", copilotReviewRoundCount: 1, unresolvedThreadCount: 0, copilotReviewOnCurrentHead: true, copilotReviewRequestStatus: "none" },
+    gateEvidence: {
+      draftGate: { visible: false },
+      draftGateMarker: { visible: false },
+      preApprovalGate: { visible: false },
+      preApprovalGateMarker: { visible: false },
+    },
+    refinementArtifact: null,
+    copilotBodyConvergence: { ok: true },
+  };
+  const evaluate = (draftCapRoundFixed) => evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
+    coordinationContext,
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: "internal_only",
+    ...(draftCapRoundFixed === undefined ? {} : { draftCapRoundFixed }),
+  }));
+  assert.ok(evaluate(true).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "cap-round-fixed proof: entry allowed");
+  assert.ok(!evaluate(false).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "no proof: entry refused");
+  assert.ok(!evaluate(undefined).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "an unresolved proof (resolver threw) fails closed");
 });

@@ -4,6 +4,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
+import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, isPastRoundCap, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, pastCapBlockers, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { composeConvergedDraftGate, convergedActItemKey } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseArgs } from "node:util";
@@ -59,7 +60,7 @@ import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
-import { buildValidationResultsPath, closureFromHeadOf, countCompletedRounds, readClosedPriorRoundLogs } from "./write-gate-context.mjs";
+import { buildValidationResultsPath, countCompletedRounds, resolveCapRoundFixed } from "./write-gate-context.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -142,8 +143,10 @@ function ledgerTmpRoot(ledgerPath) {
   return parts.length > 4 && parts.at(-4) === "gate-findings" && /^pr-\d+$/.test(parts.at(-2)) ? parts.slice(0, -4).join(path.sep) || path.sep : undefined;
 }
 
+const roundCapReachedError = (round, cap) => new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs and no fixer follows. After the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`; pre_approval_gate judges what remains.`);
+
 const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>; a draft_gate post requires --findings-ledger carrying overallVerdict while gates.draft.maxReviewRounds > 0) [--next-action <text> (required except on --gate review)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
-The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin, except on --gate draft_gate while gates.draft.maxReviewRounds > 0 (GATE-EXEC-ROUND-CAP): there --findings-ledger carrying overallVerdict is the only accepted input, and --findings-json and --findings-file posts are refused (an inline clean with only --findings-summary stays accepted, as reconcile-draft-gate posts it).
+The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin, except on --gate draft_gate while gates.draft.maxReviewRounds > 0 (GATE-EXEC-ROUND-CAP): there --findings-ledger carrying overallVerdict is the only accepted input, and --findings-json and --findings-file posts are refused (an inline clean with only --findings-summary stays accepted, as reconcile-draft-gate posts it, except at round N+1, where every post but --converged-json is refused with round_cap_reached, ADR 0208).
 Post the gate round's SINGLE visible surface: one PR review of type COMMENT whose
 body carries the checkpoint verdict fields and, with --findings-ledger, the
 round's body-filed findings, while every locatable finding becomes one of that
@@ -2028,6 +2031,7 @@ export function buildCoordinationEvaluatorInput({
   draftGateConfig,
   preApprovalGateConfig,
   reviewMode,
+  draftCapRoundFixed = false,
 }) {
   return {
     repo: coordinationContext.repo,
@@ -2069,6 +2073,7 @@ export function buildCoordinationEvaluatorInput({
     preApprovalGate: coordinationContext.gateEvidence.preApprovalGate,
     preApprovalGateMarker: coordinationContext.gateEvidence.preApprovalGateMarker,
     ...(reviewMode ? { reviewMode } : {}),
+    draftCapRoundFixed,
   };
 }
 
@@ -2690,7 +2695,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // Non-fatal: internal-only detection failure is best-effort.
       // Proceed with the default (external Copilot review) mode.
     }
+    // ADR 0208: the same cap-round-fixed proof the detector resolves, so a ready cap-fixed PR can enter pre_approval_gate; fail closed on error.
+    const prBaseRefName = typeof coordinationContext.prData?.baseRefName === "string" ? coordinationContext.prData.baseRefName.trim() : "";
+    const draftCapRoundFixed = await resolveCapRoundFixed({ repo: options.repo, pr: options.pr, headSha: coordinationContext.currentHeadSha, baseRefName: prBaseRefName, anyHead: coordinationContext.prData?.isDraft !== true }, { repoRoot }).then(Boolean, () => false);
     coordination = evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
+      draftCapRoundFixed,
       coordinationContext,
       maxCopilotRounds,
       draftGateConfig,
@@ -2804,6 +2813,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // refuses every other shape before any cap logic runs. The one exception is an inline clean without findings content (--findings-summary text only, as reconcile-draft-gate posts):
     // it holds no finding, so the cap has nothing to count or block.
     if (options.gate === "draft_gate" && draftGateConfig.maxReviewRounds > 0) {
+      // ADR 0208: round N+1 never runs, whatever the post shape (the inline exception below included); a converged post is the one carve-out.
+      const roundNo = options.convergedJson ? 0 : await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.findingsLedger ? ledgerTmpRoot(options.findingsLedger) : undefined }, { repoRoot });
+      if (isRoundRefused(roundNo, draftGateConfig.maxReviewRounds)) throw roundCapReachedError(roundNo, draftGateConfig.maxReviewRounds);
       const inlineVerdictOnlyClean = !options.findingsJson && !options.findingsLedger && !options.findingsFile && options.verdict === "clean"
         && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent";
       const refused = inlineVerdictOnlyClean ? null : options.findingsJson ? "--findings-json"
@@ -3031,8 +3043,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const roundFindings = [...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems, ...jsonUnactedFindings];
   const judgedRound = isFullyJudged(roundFindings);
   let checkpointComposition = null;
-  // GATE-EXEC-ROUND-CAP: the closure round (count cap+1) states where its diff starts.
-  let closureFromHead = null;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
     // Judged non-act findings stay in the list so a judged round with an empty act list composes clean; the converged guard replaces only the act items.
@@ -3043,13 +3053,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       : composeReviewVerdict(preloadedFindingsLedger.overallVerdict, [...roundFindings.filter((f) => !isOpenActItem(f)), ...guardedRoundActs]);
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
-    // Past the round cap a new act item blocks (round_cap_reached) and no fixer runs; an all-low/nit act list converges by the 0168 rule.
+    // ADR 0208: round N+1 (count cap+1) never runs; every post but --converged-json is refused with round_cap_reached, and the cap round's fixer pass leads to ready.
     const cap = draftGateConfig?.maxReviewRounds ?? 0;
     const completedRound = options.gate === "draft_gate" && !convergedInput && cap > 0
       ? await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot })
       : 0;
-    if (completedRound > 0 && completedRound === cap + 1) {
-      closureFromHead = closureFromHeadOf(await readClosedPriorRoundLogs({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot }));
+    // ADR 0208: round N+1 never runs; the cap round's fixer pass is the last draft step and the PR goes ready.
+    if (isRoundRefused(completedRound, cap)) {
+      throw roundCapReachedError(completedRound, cap);
     }
     const gateBlockers = [
       ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),
@@ -3518,7 +3529,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
     ...(checkpointComposition ? { reviewVerdict: checkpointComposition.reviewVerdict, gateBlockers: checkpointComposition.blockers } : {}),
-    closureFromHead,
     ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable, locatableFindings: findingSurface.locatable, foldedFindings: findingSurface.folded } : {}),
   });
   // ISSUE/PR-ID GUARD: the rendered gate verdict body must never emit a

@@ -956,3 +956,48 @@ test("a differently cased --repo owner resolves the canonical owner login for th
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+// ADR 0208: a draft PR whose last draft verdict is the cap round's findings_present and whose fix pass is complete goes ready.
+function capRoundGhStub(tempDir, { bucket, withCi = true }) {
+  return writeGhStub(tempDir, [
+    { stdout: JSON.stringify({ data: { repository: { pullRequest: { id: "PR_abc123", isDraft: true, headRefOid: "abc123def456", baseRefName: "main", state: "OPEN", mergeStateStatus: "CLEAN", title: "Add feature", body: "", closingIssuesReferences: { nodes: [] } } } } }) },
+    ...(withCi ? [{ stdout: JSON.stringify([{ name: "test", state: bucket === "pass" ? "success" : "failure", bucket }]) }] : []),
+    { stdout: JSON.stringify([{ body: "Gate review: draft_gate\nReviewed head SHA: abc123def456\nVerdict: findings_present\nFindings summary: 3 act items\nNext action: fix", id: 101, html_url: "https://github.com/owner/repo/pull/17#issuecomment-101", created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" }]) },
+    ...gateCloseStubs(),
+    { stdout: "" },
+  ]);
+}
+const capRoundRuntime = (env, tempDir, capRoundFixed, resolverCalls = []) => ({ env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: async () => ({ ok: true, skipped: true }), evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire, evaluateCommentDiscipline: passingCommentDiscipline, resolveCapRoundFixed: async (...args) => { resolverCalls.push(args); return capRoundFixed ? { log: {}, residue: [] } : null; } });
+
+test("a cap round fixed state stands in for a clean current-head verdict, and red CI still refuses (ADR 0208)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-cap-fixed-"));
+  try {
+    const green = await capRoundGhStub(tempDir, { bucket: "pass" });
+    const resolverCalls = [];
+    const ready = await readyForReview({ repo: "owner/repo", pr: 17 }, capRoundRuntime(green.env, tempDir, true, resolverCalls));
+    assert.equal(ready.action, "marked_ready");
+    assert.equal(ready.capRoundFixed, true);
+    // The resolver runs once for the current head with no anyHead: a draft PR keeps the exact candidate-head check.
+    assert.equal(resolverCalls.length, 1);
+    assert.deepEqual(resolverCalls[0][0], { repo: "owner/repo", pr: 17, headSha: "abc123def456", baseRefName: "main" });
+    assert.equal(resolverCalls[0][0].anyHead, undefined);
+    const ghCalls = await readGhCalls(green.ghLogPath);
+    assert.equal(ghCalls.filter((c) => c[0] === "pr" && c[1] === "ready").length, 1, `gh pr ready runs once: ${JSON.stringify(ghCalls)}`);
+    const red = await capRoundGhStub(tempDir, { bucket: "fail" });
+    await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, capRoundRuntime(red.env, tempDir, true)), /blocking CI/);
+    const unfixed = await capRoundGhStub(tempDir, { bucket: "pass" });
+    await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, capRoundRuntime(unfixed.env, tempDir, false)), /draft_gate marker does not match|No visible clean draft_gate/);
+  } finally { await rm(tempDir, { recursive: true, force: true }); }
+});
+
+test("the restore path never accepts the cap round fixed proof and its refusal names ready-for-review on green CI (ADR 0208)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-restore-cap-fixed-"));
+  try {
+    for (const bucket of ["pass", "fail"]) {
+      const stub = await capRoundGhStub(tempDir, { bucket, withCi: false });
+      const calls = [];
+      await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, { ...capRoundRuntime(stub.env, tempDir, true, calls), skipCiPrecondition: true }), /ready-for-review\.mjs once CI is green/);
+      assert.equal(calls.length, 0, "the resolver is never consulted under skipCiPrecondition");
+    }
+  } finally { await rm(tempDir, { recursive: true, force: true }); }
+});
