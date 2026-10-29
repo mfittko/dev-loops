@@ -44,7 +44,7 @@ function parseJson(stdout) {
   return JSON.parse(stdout.trim().split("\n").pop());
 }
 
-test("ordinary Codex role caller captures all roles and stops on config or native rejection", async () => {
+test("ordinary Codex role resolver covers envelopes, argument/config exits and synthetic payload assembly", async () => {
   const dir = await makeFixtureRepo();
   try {
     for (const role of ["developer", "docs", "quality", "refiner", "gate-coordinator", "judge", "fixer", "pre-push-reviewer"]) {
@@ -56,7 +56,8 @@ test("ordinary Codex role caller captures all roles and stops on config or nativ
         const nativeOverrides = { ...(settings?.model ? { model: settings.model } : {}), ...(settings?.reasoningEffort ? { reasoning_effort: settings.reasoningEffort } : {}) };
         assert.deepEqual(selected, { ok: true, harness: "codex", kind: "role", role, settings: { model: null, reasoningEffort: null, ...settings }, nativeOverrides, configErrors: [] });
         const calls = [];
-        const task = { task_name: role, message: "Qualification only", fork_turns: "none" };
+        // Synthetic assembly only; agent-driven native no-fallback behavior needs separate native evidence.
+        const task = { task_name: role, message: "Synthetic payload check", fork_turns: "none" };
         const spawn = async (args) => { calls.push(args); throw new Error("native refusal"); };
         await assert.rejects(() => spawn({ ...task, ...selected.nativeOverrides }), /native refusal/);
         assert.deepEqual(calls, [{ ...task, ...nativeOverrides }]);

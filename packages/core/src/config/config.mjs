@@ -1834,6 +1834,15 @@ function applyParsedLayer(merged, filePath, data, layer, warnings, errors, repoR
     return merged;
   }
 
+  // Merge Codex map identities after schema trimming, without normalizing legacy families.
+  const codex = data.models?.harnesses?.codex;
+  if (codex) {
+    const normalized = { ...codex };
+    for (const map of ["roles", "tiers"]) {
+      if (codex[map]) normalized[map] = validation.data.models.harnesses.codex[map];
+    }
+    data = { ...data, models: { ...data.models, harnesses: { codex: normalized } } };
+  }
   return mergeConfigLayers(merged, data);
 }
 

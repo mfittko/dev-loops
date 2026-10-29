@@ -122,6 +122,34 @@ test("Codex roles select whole objects, isolate legacy values and reject malform
   }
 });
 
+test("Codex map keys normalize before layer merging and retain omitted fields", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "codex-map-keys-"));
+  try {
+    await mkdir(path.join(dir, ".pi/dev-loop"), { recursive: true });
+    for (const map of ["roles", "tiers"]) {
+      for (const [lowerKey, upperKey] of [["docs", " docs "], [" docs ", "docs"]]) {
+        const models = { ...(map === "tiers" ? { roleTiers: { docs: "docs" } } : {}), roles: { docs: "legacy" } };
+        await writeFile(path.join(dir, ".pi/dev-loop/defaults.json"), JSON.stringify({ version: 1, models: {
+          ...models, harnesses: { codex: { [map]: { [lowerKey]: { model: "lower", reasoningEffort: "high" } } } },
+        } }));
+        for (const override of [{ model: "upper" }, { model: null }, { reasoningEffort: null }]) {
+          await writeFile(path.join(dir, ".devloops"), JSON.stringify({ version: 1, models: {
+            harnesses: { codex: { [map]: { [upperKey]: override } } },
+          } }));
+          const loaded = await loadDevLoopConfig({ repoRoot: dir });
+          assert.deepEqual(loaded.errors, []);
+          assert.deepEqual(resolveRoleSettings(loaded.config, { role: "docs", harness: "codex" }), {
+            model: "lower", reasoningEffort: "high", ...override,
+          });
+          for (const harness of ["claude", "pi"]) {
+            assert.equal(resolveRoleModel(loaded.config, { role: "docs", harness }), "legacy");
+          }
+        }
+      }
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test("Codex maps merge fields and validate aliases against final layers", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "codex-roles-"));
   try {
