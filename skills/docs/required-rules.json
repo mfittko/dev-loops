@@ -495,7 +495,7 @@
     {
       "id": "GATE-EXEC-ROUND-CAP",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by upsert-checkpoint-verdict.mjs (choke point, count, past-cap composition via pastCapBlockers in packages/core/src/loop/gate-fanin.mjs) and countCompletedRounds and resolveCapRoundFixed in write-gate-context.mjs (the cap-round-fixed ready transition, also read by ready-for-review.mjs, detect-pr-gate-coordination-state.mjs and detect-checkpoint-evidence.mjs via probeCapRoundFixed in buildPreMergeGateCheck), and capClosedFor at write-gate-findings-log.mjs, and emit-fixer-work-order.mjs (refuses round_cap_reached after the cap round and at a blocked cap round); the rule body in gate-review-sub-loop-contract.md owns the clauses"
+      "enforcementNote": "Enforced by upsert-checkpoint-verdict.mjs (choke point, count, past-cap composition via pastCapBlockers in packages/core/src/loop/gate-fanin.mjs) and countCompletedRounds and resolveCapRoundFixed in write-gate-context.mjs (the cap-round-fixed ready transition, also read by ready-for-review.mjs and detect-pr-gate-coordination-state.mjs), and capClosedFor at write-gate-findings-log.mjs, and emit-fixer-work-order.mjs (refuses round_cap_reached after the cap round and at a blocked cap round); the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-ROUND-RETIREMENT",
