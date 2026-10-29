@@ -1,6 +1,6 @@
 /**
  * The single statement of the review-round cap shape (GATE-EXEC-ROUND-CAP, ADR 0208).
- * Pure and dependency-free. `draft_gate` uses it today; Copilot rounds (#2445) import it later.
+ * Pure and dependency-free. `draft_gate` uses it today; Copilot rounds import it later.
  *
  * Rounds 1..cap run, including the cap round (count equal to the cap). A clean round stops early.
  * The fixer runs on cap-round findings. Round cap+1 is refused. After the cap-round fix the next
