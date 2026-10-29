@@ -44,5 +44,6 @@ test("a draft PR past the round cap without a fixed cap round reports blocked, n
   const refused = draftAt({ draftRoundRefused: true });
   assert.equal(refused.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
   assert.ok(refused.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  assert.match(refused.reason, /legacy unsealed delta record: rerun the pre-push delta for the cap-round baseline/);
   assert.equal(draftAt({ draftRoundRefused: true, draftCapRoundFixed: true }).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "a fixed cap round wins");
 });

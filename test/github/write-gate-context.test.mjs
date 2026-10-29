@@ -8886,3 +8886,51 @@ test("resolveCapRoundFixed starts the chain at a ledgerless base-only merge of t
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("resolveCapRound lists only the cap-round act items the sealed delta record does not mark resolved", async () => {
+  const { repoRoot, baseSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 59, headSha: "8".repeat(40) };
+    await seedClosedRounds(repoRoot, 59, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-59", `draft_gate-${baseSha}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    log.findings.push({ severity: "medium", summary: "second gap", files: ["src/dep.mjs"], line: 1, judgeDisposition: "act", judgeTitle: "Second gap", judgeFix: "close it" });
+    await writeFile(ledger, JSON.stringify(log), "utf8");
+    const [fixed, unfixed] = (await resolveCapRound(opts, { repoRoot })).residue.map((i) => i.fingerprint);
+    const seal = (items) => writeGateDeltaRecord({ tmpRoot: path.join(repoRoot, "tmp"), sequence: { reviewBaselineHead: baseSha, actSetId: "0123456789abcdef" }, candidateHead: "9".repeat(40), invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: items } });
+    assert.equal((await resolveCapRound(opts, { repoRoot })).residue.length, 2, "no record: every act item stays");
+    seal([{ ref: fixed, status: "resolved" }, { ref: unfixed, status: "not_resolved" }]);
+    assert.deepEqual((await resolveCapRound(opts, { repoRoot })).residue.map((i) => i.fingerprint), [unfixed]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveCapRoundFixed guards the chain: a record loop, a non-SHA candidateHead and enumeration order", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 60, gate: "draft_gate", headSha };
+    const fixer = "6".repeat(40);
+    await seedClosedRounds(repoRoot, 60, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    await writeDeltaRecord(repoRoot, baseSha, fixer);
+    await writeDeltaRecord(repoRoot, fixer, baseSha);
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "a record loop that never reaches the head ends");
+    for (const bad of [undefined, null, "", "../x", "abc123", "z".repeat(40), `${"6".repeat(39)}/`]) {
+      await writeDeltaRecord(repoRoot, baseSha, bad);
+      assert.equal(await resolveCapRoundFixed({ ...opts, anyHead: true }, { repoRoot }), null, `candidateHead ${JSON.stringify(bad)} is refused`);
+    }
+    for (const good of [headSha, ` ${headSha.toUpperCase()} `, "a".repeat(64)]) {
+      await writeDeltaRecord(repoRoot, baseSha, good);
+      assert.ok(await resolveCapRoundFixed({ ...opts, anyHead: true }, { repoRoot }), `candidateHead ${JSON.stringify(good)} is accepted`);
+    }
+    // Two base-only merges of the cap-round head: only the later one reaches the head, whichever the directory lists first.
+    await rm(path.join(repoRoot, "tmp", "gate-delta"), { recursive: true, force: true });
+    const [m1, m2] = ["4".repeat(40), "5".repeat(40)];
+    await writeDeltaRecord(repoRoot, m1, "7".repeat(40));
+    await writeDeltaRecord(repoRoot, m2, headSha);
+    const baseOnlyMerge = async () => true;
+    assert.ok(await resolveCapRoundFixed({ ...opts, baseRefName: "main" }, { repoRoot, baseOnlyMerge }));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});

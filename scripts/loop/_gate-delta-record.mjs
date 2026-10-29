@@ -5,7 +5,7 @@
  * fixer work-order emitter and the fixed-reply guard. It never feeds a gate verdict, findings
  * ledger, comment or merge signal (PRE-PUSH-DELTA-NOT-GATE-EVIDENCE). An absent record means
  * "no delta decision". Two exceptions (PRE-PUSH-DELTA-NOT-GATE-EVIDENCE): ADR 0168 (the converged
- * marker) and ADR 0208 (the cap round's cleared delta lets the PR go ready); the ADR 0208 reader
+ * marker) and ADR 0208 (the cap round's cleared delta lets the PR go ready and stands in for the clean draft_gate comment in the local pre-merge `gate_evidence` check, `buildPreMergeGateCheck`); the ADR 0208 reader
  * is `readSealedGateDeltaRecord`, which trusts only a record carrying its sha256 seal.
  */
 import { createHash } from "node:crypto";

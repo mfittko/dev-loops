@@ -2013,7 +2013,10 @@ export async function resolveCapRound(options, { repoRoot }) {
   let unreadable = 0;
   const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, onUnreadable: () => { unreadable += 1; } })).at(-1);
   if (unreadable > 0 || log?.verdict !== "findings_present") return null;
-  const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => isOpenActItem(f) || f?.capClosed).map((f) => ({
+  // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
+  let fixedRefs = [];
+  try { fixedRefs = (readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), log.headSha)?.items ?? []).filter((i) => i?.status === "resolved").map((i) => i.ref); } catch { /* unverifiable: keep every item */ }
+  const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => (isOpenActItem(f) && !fixedRefs.includes(fingerprintFinding(f))) || f?.capClosed).map((f) => ({
     fingerprint: fingerprintFinding(f), file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary, disposition: isOpenActItem(f) ? "act" : "cap_closed",
   }));
   return { log, residue };
@@ -2031,26 +2034,35 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   if (!capRound) return null;
   // The delta record is main-anchored like the findings ledger: never read it from a relocated --tmp-root.
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
-  const clearing = (headSha) => { try { const r = readSealedGateDeltaRecord(tmpRoot, headSha); return r && DELTA_CLEARING_NEXT_STEPS.includes(r.nextStep) ? r : null; } catch { return null; } };
+  // A head is a path segment of the record lookup: only a 40 or 64 character hex SHA (after trim and lowercase) is looked up or compared.
+  const normalizeSha = (value) => { const sha = String(value ?? "").trim().toLowerCase(); return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha) ? sha : null; };
+  const clearing = (headSha) => { const sha = normalizeSha(headSha); if (!sha) return null; try { const r = readSealedGateDeltaRecord(tmpRoot, sha); return r && DELTA_CLEARING_NEXT_STEPS.includes(r.nextStep) ? r : null; } catch { return null; } };
   const capHead = capRound.log.headSha;
-  let record = clearing(capHead);
-  if (!record && typeof options.baseRefName === "string" && options.baseRefName) {
-    for (const { reviewBaselineHead: merged } of listGateDeltaRecords(tmpRoot)) {
+  const starts = [];
+  const direct = clearing(capHead);
+  if (direct) starts.push(direct);
+  else if (typeof options.baseRefName === "string" && options.baseRefName) {
+    // Sorted, and every candidate tried: the proof never depends on directory enumeration order.
+    for (const { reviewBaselineHead: merged } of listGateDeltaRecords(tmpRoot).sort((a, b) => (a.reviewBaselineHead < b.reviewBaselineHead ? -1 : 1))) {
       if (merged === capHead || existsSync(buildLogPath({ repo: options.repo, pr: options.pr, gate: "draft_gate", headSha: merged, tmpRoot }))) continue;
       const candidate = clearing(merged);
-      if (candidate && await baseOnlyMerge({ fromHead: capHead, head: merged, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false)) { record = candidate; break; }
+      if (candidate && await baseOnlyMerge({ fromHead: capHead, head: merged, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false)) starts.push(candidate);
     }
   }
-  const head = String(options.headSha).trim().toLowerCase();
-  const seen = new Set();
-  while (record) {
-    const next = String(record.candidateHead).trim().toLowerCase();
-    if (options.anyHead || next === head) return capRound;
-    if (seen.has(next)) return null;
-    seen.add(next);
-    record = clearing(next);
-  }
-  return null;
+  const head = normalizeSha(options.headSha);
+  const reaches = (start) => {
+    const seen = new Set();
+    for (let record = start; record;) {
+      const next = normalizeSha(record.candidateHead);
+      if (!next) return false;
+      if (options.anyHead || next === head) return true;
+      if (seen.has(next)) return false;
+      seen.add(next);
+      record = clearing(next);
+    }
+    return false;
+  };
+  return starts.some(reaches) ? capRound : null;
 }
 
 /**
