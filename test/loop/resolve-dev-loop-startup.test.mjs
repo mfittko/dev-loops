@@ -3933,6 +3933,9 @@ test("resolveIssuelessLightweightEligibility and resolveGateDispatchMode agree o
     // Small code change plus a large doc: weighted LOC stays under the cap.
     { name: "small", files: { "a.mjs": "const a = 1;\nconst b = 2;\n", "note.md": "doc\n".repeat(50) }, eligible: true, reason: "under_threshold" },
     { name: "big", files: { "a.mjs": "const a = 1;\n".repeat(30) }, eligible: false, reason: "over_threshold" },
+    // File-count half of the predicate: raw count over maxFiles is refused; docs do not count.
+    { name: "many-files", files: { "a.mjs": "const a = 1;\n", "b.mjs": "const b = 1;\n", "c.mjs": "const c = 1;\n", "d.mjs": "const d = 1;\n" }, eligible: false, reason: "over_threshold" },
+    { name: "docs-not-counted", files: { "a.mjs": "const a = 1;\n", "b.mjs": "const b = 1;\n", "c.mjs": "const c = 1;\n", "x.md": "doc\n", "y.md": "doc\n" }, eligible: true, reason: "under_threshold" },
   ];
   const config = { version: 1, localImplementation: { lightMode: { enabled: true, maxFiles: 3, maxLines: 10 } } };
   for (const c of cases) {

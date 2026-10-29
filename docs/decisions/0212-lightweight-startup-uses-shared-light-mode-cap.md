@@ -16,7 +16,7 @@ ADR 0211 moved the gate dispatch light-mode cap to weighted logic LOC and a non-
 - The `eligibleForLightMode` field of `scripts/loop/detect-change-scope.mjs` is informational and still reads raw counts.
 - The floor for a touched dev-loop config source (`config_source_touch`) applies at gate dispatch and at startup, because the head config's `classify` rules feed both cap inputs.
 - Renames count both endpoints, because the name list comes from a `--no-renames` diff.
-- Startup eligibility fails closed with `size_outcome_unavailable` when the weighted LOC is missing or the size capture fails. The gate dispatch CLI reaches the same state for a `--base`-only run, where the three-dot size reader cannot measure the working tree.
+- Startup eligibility fails closed with `size_outcome_unavailable` when the weighted LOC is missing, the size capture fails, or the changed-file read fails (gate dispatch reports the last case as `changed_files_unavailable`). The gate dispatch CLI reaches the same state for a `--base`-only run, where the three-dot size reader cannot measure the working tree.
 
 ## Consequences
 

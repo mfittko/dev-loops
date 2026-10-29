@@ -7,7 +7,8 @@ import { DIFF_ISOLATION_FLAGS, gitEnvWithoutDirOverrides } from "../github/write
 import { isScopeCountExcluded } from "@dev-loops/core/config";
 
 const USAGE = `Usage: detect-change-scope.mjs [--base <ref>] [--head <ref>]
-Detect change scope from git diff for light-mode eligibility.
+Detect change scope from git diff. The raw counts and eligibleForLightMode are informational;
+startup and gate dispatch decide light-mode eligibility through lightModeCapState.
 filesChanged/linesChanged skip SCOPE_COUNT_EXCLUDE_GLOBS paths (changes/*.md,
 .claude/{skills,agents,commands}/**); see ADR 0108.
 Options:

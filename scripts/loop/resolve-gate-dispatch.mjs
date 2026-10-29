@@ -39,7 +39,7 @@ Options:
 Output also carries "track" (light|reduced|full) and "trackReason". The judge track never changes
 mode, angles, groups or floors.
 The light-mode cap reads the weighted wholeLogicLoc from the size budget and the non-doc file
-count. "scope" is informational only and does not decide the outcome; the examples below show
+count. It is the shared lightModeCapState predicate, which --lightweight startup eligibility also uses."scope" is informational only and does not decide the outcome; the examples below show
 its raw counts for illustration.
 Output (stdout, JSON):
   { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 1, "linesChanged": 5 }, "mode": "inline", "reason": "under_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": { "sizeCap": false, "riskPath": false, "sizeOutcome": false, "ambiguity": false, "unclassifiable": false }, "track": "full", "trackReason": "judge_record_absent" }
