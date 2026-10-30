@@ -741,17 +741,30 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
   // significant post-convergence change). A doc-only change stays at the clean
   // fallback (stop), unchanged.
   let reopenedCapCycle = false;
+  let reopenFacts = null;
   if (!internalOnlySkipCopilot
       && options.watchStatus === undefined
       && interpretation.roundCapReopenEligible === true) {
-    const reopenFacts = await fetchReopenCycleFacts(options, { env, ghCommand, runChild });
+    reopenFacts = await fetchReopenCycleFacts(options, { env, ghCommand, runChild });
+    // A draft-gate reset below the cap changes cap routing itself, not only the carry:
+    // apply the adjusted count to the snapshot and reinterpret, so a request below the cap
+    // never depends on change significance.
+    if (!requireCopilotConvergenceAtLatestHead) {
+      const adjustedCount = await resolveDraftGateAdjustedRoundCount(options, reopenFacts, snapshot.copilotReviewRoundCount, refinementConfig.maxCopilotRounds, { env, ghCommand, runChild });
+      if (adjustedCount !== snapshot.copilotReviewRoundCount) {
+        snapshot = { ...snapshot, copilotReviewRoundCount: adjustedCount };
+        interpretation = interpretLoopState(snapshot, refinementConfig);
+      }
+    }
+  }
+  if (!internalOnlySkipCopilot
+      && options.watchStatus === undefined
+      && interpretation.roundCapReopenEligible === true) {
     const currentHeadSha = typeof reopenFacts?.headRefOid === "string" ? reopenFacts.headRefOid.trim() : null;
+    const carryRoundCount = snapshot.copilotReviewRoundCount;
     // Converged-once mode: a converged latest review stands for this head, so
     // no post-convergence change reopens the cycle (the shared predicate the
     // request tool and the gate coordination detector use).
-    const carryRoundCount = requireCopilotConvergenceAtLatestHead
-      ? snapshot.copilotReviewRoundCount
-      : await resolveDraftGateAdjustedRoundCount(options, reopenFacts, snapshot.copilotReviewRoundCount, refinementConfig.maxCopilotRounds, { env, ghCommand, runChild });
     const convergedOnce = !requireCopilotConvergenceAtLatestHead && (await resolveCarriedConvergence(
       {
         repo: options.repo,

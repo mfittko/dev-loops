@@ -3287,10 +3287,19 @@ async function runDraftGateResetScenario({ withDraftGate }) {
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"], stdout: JSON.stringify({ headRefOid: "newsha", reviews, files: [{ path: "packages/core/src/loop/foo.mjs" }] }) + "\n" },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([withDraftGate ? [draftGateComment] : []]) + "\n" },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
-      { assertArgs: ["api", "repos/owner/repo/compare/oldsha-2...newsha"], stdout: JSON.stringify({ status: "ahead", files: [{ filename: "packages/core/src/loop/foo.mjs", changes: 670 }] }) + "\n" },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([withDraftGate ? [draftGateComment] : []]) + "\n" },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
     ];
+    if (withDraftGate) {
+      // The reset count is below the cap, so the requester runs: reviewer-state reads, the POST, and verification.
+      entries.push(
+        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+        { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: prView },
+        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+        { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: prView },
+      );
+    }
     const { env, ghLogPath: logPath, claimsDir } = await writeGhStubHelper(tempDir, entries, { matchMode: "claims", logCalls: true });
     env.DEVLOOPS_RUN_ID = "";
 
@@ -3306,7 +3315,13 @@ async function runDraftGateResetScenario({ withDraftGate }) {
 
 test("copilot-pr-handoff in converged-once mode feeds the draft-gate-adjusted round count to the carry at the cap", async () => {
   const reset = await runDraftGateResetScenario({ withDraftGate: true });
-  assert.ok(reset.log.includes("compare/oldsha-2...newsha"), "the reset count is below the cap, so the carry refuses and the significance probe runs");
+  assert.equal(reset.run.code, 0, reset.run.stderr);
+  const output = JSON.parse(reset.run.stdout);
+  assert.equal(output.action, "watch");
+  assert.equal(output.state, "waiting_for_copilot_review");
+  assert.equal(output.reviewRequestStatus, "requested");
+  assert.equal(output.snapshot.copilotReviewRoundCount, 1, "the snapshot carries the draft-gate-adjusted count");
+  assert.ok(!reset.log.includes("compare/oldsha-2...newsha"), "below the cap the request never depends on change significance, so no probe runs");
   assert.equal(reset.log.split("\n").filter((l) => l.includes("graphql")).length, 2, "both thread reads matched a declared entry");
   assert.equal(reset.claimed, reset.declared, "every declared stub entry was claimed, so no call missed a stub");
   // Control: with no draft_gate comment the raw count equals the cap and the carry converges without the probe.
