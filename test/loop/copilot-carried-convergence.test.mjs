@@ -1176,6 +1176,32 @@ describe("COPILOT-STATE-CONVERGED-BELOW-CAP: below the round cap an unclean revi
     assert.match(refused.reason, /COPILOT-STATE-CONVERGED-BELOW-CAP/);
   });
 
+  it("AC1b: the request tool requests and the detector reports no carry for a body-only review with a fix-form record below the cap", async () => {
+    const fixture = () => scenario({ priorBody: YELLOW, delta: CODE_DELTA, dispositions: [dispositionComment({ reviewId: "PRR_prior", kind: FIX })], extraShared: [...FIX_AFTER_PRIOR, ...FIX_AFTER_PRIOR], gatePassedRead: {} });
+    const request = await runRequestTool(fixture(), { root: convergedOnceWideRoot });
+    assert.notEqual(request.status, "suppressed_post_convergence");
+    const detected = await runDetector(fixture(), { root: convergedOnceWideRoot });
+    assert.equal(detected.carriedConvergence, null);
+  });
+
+  it("AC4b: the request tool requests and the detector routes to a re-request for a mixed review with an operator record below the cap", async () => {
+    const fixture = () => scenario({ priorBody: YELLOW, delta: CODE_DELTA, threads: own, dispositions: [dispositionComment({ reviewId: "PRR_prior" })], gatePassedRead: {} });
+    const request = await runRequestTool(fixture(), { root: convergedOnceWideRoot });
+    assert.notEqual(request.status, "suppressed_post_convergence");
+    const detected = await runDetector(fixture(), { root: convergedOnceWideRoot });
+    assert.equal(detected.carriedConvergence, null);
+    assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+  });
+
+  it("a clean current-head review with a later own-thread yellow review on an earlier commit carries in default mode below the cap", async () => {
+    const currentHeadClean = { id: "PRR_head", author: { login: COPILOT }, state: "COMMENTED", body: "", commit: { oid: HEAD }, submittedAt: "2026-09-22T09:30:00Z" };
+    const laterYellow = { id: "PRR_prior", author: { login: COPILOT }, state: "COMMENTED", body: YELLOW, commit: { oid: PRIOR }, submittedAt: "2026-09-22T10:00:00Z" };
+    const shape = { reviews: [currentHeadClean, laterYellow], threads: [thread({ isResolved: true, reviewId: "PRR_prior" })] };
+    const merged = await runMerge(scenario(shape), shape, { strict: false });
+    assert.equal(merged.merged, true, JSON.stringify(merged.failures));
+    assert.equal((await carry(shape, below)).carried, true);
+  });
+
   it("after a pre_approval_gate marker on the issue-comment surface, the earlier fix-resolved review still converges", async () => {
     const gatePassedRead = { issueComments: [gatePassed] };
     assert.equal((await carry({ priorBody: YELLOW, threads: own, gatePassedRead }, below)).carried, true);
