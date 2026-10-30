@@ -2446,7 +2446,7 @@ for (const form of ["foreign-route", "two-matching"]) test(`complete THREAD --co
 });
 
 // ADR 0197 (#2937 S4b): the cap round (cap 2) ran at `head`; origin/main then moved and the branch merged it.
-async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfterMerge = false, fixerCommitBeforeMerge = false } = {}) {
+async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfterMerge = false, fixerCommitBeforeMerge = false, secondCandidate = false } = {}) {
   await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
   const medium = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
   await writeFile(files.actList, JSON.stringify([medium]));
@@ -2460,10 +2460,22 @@ async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfter
     await writeFile(path.join(wt, "fixer.md"), "fixer change\n");
     git(wt, "add", "fixer.md");
     git(wt, "commit", "-q", "-m", "fixer commit");
-    const text = JSON.stringify({ reviewBaselineHead: head, candidateHead: git(wt, "rev-parse", "HEAD"), nextStep: "push_to_gate", outcome: "locally_clear", items: [] });
-    await mkdir(path.join(root, "tmp", "gate-delta"), { recursive: true });
-    await writeFile(path.join(root, "tmp", "gate-delta", `${head}.json`), text);
-    await writeFile(path.join(root, "tmp", "gate-delta", `${head}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
+    const seal = async (from, to) => {
+      const text = JSON.stringify({ reviewBaselineHead: from, candidateHead: to, nextStep: "push_to_gate", outcome: "locally_clear", items: [] });
+      await mkdir(path.join(root, "tmp", "gate-delta"), { recursive: true });
+      await writeFile(path.join(root, "tmp", "gate-delta", `${from}.json`), text);
+      await writeFile(path.join(root, "tmp", "gate-delta", `${from}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
+    };
+    const b1 = git(wt, "rev-parse", "HEAD");
+    await seal(head, b1);
+    if (secondCandidate) {
+      // Chain A -> B1 -> B2: B2 sits on a side branch, so the merge M below is a base-only merge since B1 but not since the chain's last candidate B2.
+      git(wt, "checkout", "-q", "-b", "side-b2");
+      git(wt, "commit", "-q", "--allow-empty", "-m", "second fixer commit");
+      const b2 = git(wt, "rev-parse", "HEAD");
+      git(wt, "checkout", "-q", "issue-1");
+      await seal(b1, b2);
+    }
   }
   await writeFile(path.join(root, "main-only.md"), "main content\n");
   git(root, "add", "main-only.md");
@@ -2491,6 +2503,13 @@ test("ADR 0216: a base-only merge of the chain's last clearing candidate is stil
   await withFixture(async (fx) => {
     const { over } = await capRoundThenBaseMerge(fx, { fixerCommitBeforeMerge: true });
     assert.equal((await fx.emit(over)).workOrder.source, "act-list");
+  });
+});
+
+test("ADR 0216: only the chain's last candidate counts; a base merge on an earlier candidate B1 of chain A->B1->B2 keeps the refusal", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, { fixerCommitBeforeMerge: true, secondCandidate: true });
+    await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
   });
 });
 

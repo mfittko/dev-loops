@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { test } from "bun:test";
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "../src/loop/pr-gate-coordination.mjs";
 import { DISPOSITION, STATE } from "../src/loop/copilot-loop-state.mjs";
@@ -70,6 +70,8 @@ test("the cap-round refusal names its failed condition and the remedy for that c
 });
 
 test("no source file contains the catch-all 'legacy unsealed delta record' refusal text", () => {
-  const hits = execFileSync("git", ["grep", "-l", "legacy unsealed delta record", "--", "*.mjs", "*.js", "*.ts"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).split("\n").filter((file) => file && !file.includes("cap-round-fixed-coordination.test.mjs"));
+  const grep = spawnSync("git", ["grep", "-l", "legacy unsealed delta record", "--", "*.mjs", "*.js", "*.ts"], { encoding: "utf8" });
+  assert.ok(grep.status === 0 || grep.status === 1, "git grep ran"); // status 1 = no hits
+  const hits = grep.stdout.split("\n").filter((file) => file && !file.includes("cap-round-fixed-coordination.test.mjs"));
   assert.deepEqual(hits, []);
 });

@@ -62,6 +62,7 @@ export function parseWaitArgs(argv) {
   if (timeoutMs > MAX_TIMEOUT_MS) throw new Error(`--timeout must be at most ${MAX_TIMEOUT_MS / 1000} seconds`);
   if (values.artifact !== undefined) {
     if (values["emit-plan"] !== undefined || values["judge-plan"] !== undefined || values.unit !== undefined || values["tmp-root"] !== undefined) throw new Error("--artifact excludes --emit-plan, --judge-plan, --unit and --tmp-root");
+    if (values.artifact.trim() === "" || !path.isAbsolute(values.artifact)) throw new Error("--artifact must be a non-empty absolute path; pass the child's absolute hand-back path");
     return { artifact: values.artifact, timeoutMs, jq: values.jq, fields: values.fields, silent: values.silent };
   }
   if ((values["emit-plan"] === undefined) === (values["judge-plan"] === undefined)) throw new Error("pass exactly one of --emit-plan, --judge-plan and --artifact");

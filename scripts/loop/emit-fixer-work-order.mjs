@@ -318,7 +318,8 @@ export async function emitFixerWorkOrder({
         // ADR 0216: the chain's last clearing candidate (the fixer commit that followed the cap round) counts as a base of the merge as well.
         let baseOnly = false;
         if (typeof baseRefName === "string" && baseRefName) {
-          for (const from of [...clearingChainCandidates(resolveGateArtifactTmpRoot(cwd), fromHead).reverse(), fromHead]) {
+          for (const from of [clearingChainCandidates(resolveGateArtifactTmpRoot(cwd), fromHead).at(-1), fromHead]) {
+            if (!from) continue;
             if (await isBaseOnlyMergeSince({ fromHead: from, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd })) { baseOnly = true; break; }
           }
         }

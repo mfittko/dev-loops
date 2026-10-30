@@ -9047,6 +9047,24 @@ test("resolveCapRoundFixed accepts a base-only merge M of the chain's last clear
   }
 });
 
+test("resolveCapRoundFixed reports unsealed_record for an unsealed or seal-mismatched record at the base-only merge start", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const merged = "7".repeat(40);
+    const opts = { repo: "owner/repo", pr: 60, gate: "draft_gate", headSha: merged, baseRefName: "main" };
+    await seedClosedRounds(repoRoot, 60, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const failure = async () => { let condition = null; await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge: async () => true, onFailure: (c) => { condition = c; } }); return condition; };
+    assert.equal(await failure(), "no_clearing_record");
+    await writeDeltaRecord(repoRoot, merged, B, "push_to_gate", { seal: false });
+    assert.equal(await failure(), "unsealed_record");
+    await writeDeltaRecord(repoRoot, merged, B, "push_to_gate");
+    await writeFile(path.join(repoRoot, "tmp", "gate-delta", `${merged}.json.seal`), `${"0".repeat(64)}\n`, "utf8");
+    assert.equal(await failure(), "unsealed_record");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapRound lists only the cap-round act items the sealed delta record does not mark resolved", async () => {
   const { repoRoot, baseSha } = await makeBaseDiffRepo();
   try {

@@ -335,10 +335,19 @@ test("--artifact: an existing JSON artifact gives all_done; absent, empty and no
 });
 
 test("--artifact is a mode of its own: combined with --emit-plan, --judge-plan, --unit or --tmp-root it fails with exit 1", () => {
-  assert.deepEqual(Object.keys(parseWaitArgs(["--artifact", "a.json", "--timeout", "0"])).slice(0, 2), ["artifact", "timeoutMs"]);
+  assert.deepEqual(Object.keys(parseWaitArgs(["--artifact", "/a.json", "--timeout", "0"])).slice(0, 2), ["artifact", "timeoutMs"]);
   for (const extra of [["--emit-plan", "p"], ["--judge-plan", "p"], ["--unit", "u"], ["--tmp-root", "t"]]) {
     assert.throws(() => parseWaitArgs(["--artifact", "a.json", ...extra]), /--artifact excludes/, extra[0]);
     const run = spawnSync(process.execPath, [SCRIPT, "--artifact", "a.json", ...extra], { encoding: "utf8" });
     assert.equal(run.status, 1, extra[0]);
+  }
+});
+
+test("--artifact rejects an empty or relative path with exit 1 and an absolute-path message", () => {
+  for (const value of ["", "  ", "rel/a.json"]) {
+    assert.throws(() => parseWaitArgs(["--artifact", value]), /absolute path/, JSON.stringify(value));
+    const run = spawnSync(process.execPath, [SCRIPT, "--artifact", value], { encoding: "utf8" });
+    assert.equal(run.status, 1, JSON.stringify(value));
+    assert.match(run.stdout, /absolute path/);
   }
 });

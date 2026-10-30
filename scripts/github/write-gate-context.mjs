@@ -2084,6 +2084,12 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
   const clearing = (headSha) => clearingDeltaRecord(tmpRoot, headSha);
   const capHead = capRound.log.headSha;
+  // A record that exists but is not a verifiable sealed record (no seal, a seal mismatch, or a throwing seal check) is the unsealed_record condition.
+  const isUnsealed = (head) => {
+    try { if (readGateDeltaRecord(tmpRoot, head) === null) return false; } catch { return false; }
+    try { return readSealedGateDeltaRecord(tmpRoot, head) === null; } catch { return true; }
+  };
+  let baseOnlyUnsealed = false;
   const starts = [];
   const direct = clearing(capHead);
   if (direct) starts.push(direct);
@@ -2093,7 +2099,8 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
       const merged = normalizeSha(raw);
       if (!merged || merged === capHead || existsSync(buildLogPath({ repo: options.repo, pr: options.pr, gate: "draft_gate", headSha: merged, tmpRoot }))) continue;
       const candidate = clearing(merged);
-      if (candidate && await baseOnlyMerge({ fromHead: capHead, head: merged, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false)) starts.push(candidate);
+      if (!candidate) { if (isUnsealed(merged) && await baseOnlyMerge({ fromHead: capHead, head: merged, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false)) baseOnlyUnsealed = true; continue; }
+      if (await baseOnlyMerge({ fromHead: capHead, head: merged, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false)) starts.push(candidate);
     }
   }
   const head = normalizeSha(options.headSha);
@@ -2122,9 +2129,8 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   const covering = starts.filter(covers);
   for (const start of covering) if (await reaches(start)) return capRound;
   // ADR 0216: report the one condition that failed, so the refusal names its own remedy.
-  let unsealed = false;
-  if (starts.length === 0) { try { unsealed = readGateDeltaRecord(tmpRoot, capHead) !== null && readSealedGateDeltaRecord(tmpRoot, capHead) === null; } catch { /* unreadable: no clearing record */ } }
-  onFailure(starts.length === 0 ? (unsealed ? "unsealed_record" : "no_clearing_record") : covering.length === 0 ? "items_do_not_cover" : "chain_does_not_reach_head");
+  const unsealed = starts.length === 0 && (isUnsealed(capHead) || baseOnlyUnsealed);
+  onFailure(starts.length === 0 ? (unsealed ?"unsealed_record" : "no_clearing_record") : covering.length === 0 ? "items_do_not_cover" : "chain_does_not_reach_head");
   return null;
 }
 

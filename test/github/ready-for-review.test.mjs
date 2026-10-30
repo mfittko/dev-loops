@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -21,6 +23,7 @@ function passingCommentDiscipline() {
 }
 
 import { describeUnresolvedGateThreadReasons, parseReadyForReviewCliArgs, readyForReview } from "../../scripts/github/ready-for-review.mjs";
+import { resolveCapRoundFixed as realResolveCapRoundFixed } from "../../scripts/github/write-gate-context.mjs";
 import { verifyPolicyChangeApproval as realVerifyPolicyChangeApproval } from "../../scripts/github/_policy-change-approval.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
@@ -958,9 +961,9 @@ test("a differently cased --repo owner resolves the canonical owner login for th
 });
 
 // ADR 0208: a draft PR whose last draft verdict is the cap round's findings_present and whose fix pass is complete goes ready.
-function capRoundGhStub(tempDir, { bucket, withCi = true }) {
+function capRoundGhStub(tempDir, { bucket, withCi = true, head = "abc123def456" }) {
   return writeGhStub(tempDir, [
-    { stdout: JSON.stringify({ data: { repository: { pullRequest: { id: "PR_abc123", isDraft: true, headRefOid: "abc123def456", baseRefName: "main", state: "OPEN", mergeStateStatus: "CLEAN", title: "Add feature", body: "", closingIssuesReferences: { nodes: [] } } } } }) },
+    { stdout: JSON.stringify({ data: { repository: { pullRequest: { id: "PR_abc123", isDraft: true, headRefOid: head, baseRefName: "main", state: "OPEN", mergeStateStatus: "CLEAN", title: "Add feature", body: "", closingIssuesReferences: { nodes: [] } } } } }) },
     ...(withCi ? [{ stdout: JSON.stringify([{ name: "test", state: bucket === "pass" ? "success" : "failure", bucket }]) }] : []),
     { stdout: JSON.stringify([{ body: "Gate review: draft_gate\nReviewed head SHA: abc123def456\nVerdict: findings_present\nFindings summary: 3 act items\nNext action: fix", id: 101, html_url: "https://github.com/owner/repo/pull/17#issuecomment-101", created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" }]) },
     ...gateCloseStubs(),
@@ -999,5 +1002,31 @@ test("the restore path never accepts the cap round fixed proof and its refusal n
       await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, { ...capRoundRuntime(stub.env, tempDir, true, calls), skipCiPrecondition: true }), /ready-for-review\.mjs once CI is green/);
       assert.equal(calls.length, 0, "the resolver is never consulted under skipCiPrecondition");
     }
+  } finally { await rm(tempDir, { recursive: true, force: true }); }
+});
+
+// ADR 0216: the real cap-round resolver, called with the head M of a base-only merge since the chain's last clearing candidate B.
+test("ready-for-review accepts a base-only merge M of the chain's last clearing candidate through the real resolver, and refuses a merge that is not base-only (ADR 0216)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-chain-"));
+  try {
+    const [A, B, M] = ["a", "b", "c"].map((c) => c.repeat(40));
+    execFileSync("git", ["init", "-q", tempDir]);
+    await writeFile(path.join(tempDir, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
+    const ledgers = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-17");
+    await mkdir(ledgers, { recursive: true });
+    for (const [i, head] of ["1".repeat(40), "2".repeat(40), A].entries()) {
+      await writeFile(path.join(ledgers, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [] }));
+    }
+    const deltaDir = path.join(tempDir, "tmp", "gate-delta");
+    await mkdir(deltaDir, { recursive: true });
+    const text = JSON.stringify({ reviewBaselineHead: A, candidateHead: B, nextStep: "push_to_gate", outcome: "locally_clear", items: [] });
+    await writeFile(path.join(deltaDir, `${A}.json`), text);
+    await writeFile(path.join(deltaDir, `${A}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
+    const runtime = (stub, merged) => ({ ...capRoundRuntime(stub.env, tempDir, true), resolveCapRoundFixed: (options, deps) => realResolveCapRoundFixed(options, { ...deps, baseOnlyMerge: async ({ fromHead, head }) => merged && fromHead === B && head === M }) });
+    const ready = await readyForReview({ repo: "owner/repo", pr: 17 }, runtime(await capRoundGhStub(tempDir, { bucket: "pass", head: M }), true));
+    assert.equal(ready.action, "marked_ready");
+    assert.equal(ready.capRoundFixed, true);
+    const refusedStub = await capRoundGhStub(tempDir, { bucket: "pass", head: M });
+    await assert.rejects(() => readyForReview({ repo: "owner/repo", pr: 17 }, runtime(refusedStub, false)), /draft_gate marker does not match|No visible clean draft_gate/);
   } finally { await rm(tempDir, { recursive: true, force: true }); }
 });
