@@ -402,14 +402,38 @@ overwritten or deleted. Inspection writes nothing. The exports are
 `verifyResidualEvidenceSnapshot` and `snapshotResidualEvidence`. Success returns
 `ok: true`, `status: "unqualified"`, `recorded`, `applied: false`, target identity
 and `snapshotPath` (null for inspection). Persisted schema version 1 has
-`kind: "residual-evidence-snapshot"` and `status: "unqualified"`. There is no
-accepted field or accepted-record API. Unsupported flags, including `--accept`,
-`--apply` and caller delivery flags, fail nonzero without a new snapshot.
+`kind: "residual-evidence-snapshot"` and `status: "unqualified"`.
+Unsupported flags, including `--apply` and caller delivery flags, fail nonzero.
 
 Stage 1 (#2918) establishes no delivery, CI or full-gate validity. Stage 2 (#2920)
-must authenticate fixer materialization/receipt/index, capture delivery inputs
-before verification and reconcile reviewer results, ledger and visible verdict
-before the first accepted record. Findings F2/F3/F5 remain mandatory there.
+provides `--accept --snapshot <canonical-path>` with the same explicit target
+selectors; it is incompatible with `--record`. `verifyResidualEvidenceAcceptance`
+is read-only; `acceptResidualEvidence` publishes only after reauthentication.
+Acceptance reconstructs the exact captured reviewer round, assessment and live
+roots/members, refusing altered, superseded or retired proof. A fresh snapshot
+is required when provenance cannot be reestablished. It authenticates historical
+fixer materialization, receipt, execution index and execution-owned outputs,
+including the original execution for delivery-only continuation. All delivery
+inputs are captured before the read-only delivery check and rechecked afterward
+and before publication, together with the live candidate.
+
+Acceptance requires complete fresh resolved/mandatory angle coverage and
+independent reviewer pairing. It recomputes the configured severity verdict and
+lossless clusters before canonical text normalization/truncation, then compares
+every durable finding as a multiset. The durable writer omits cluster IDs;
+optional stored stamps must agree with the lossless projection. Judge metadata
+cannot change source fields or lower the severity floor; invalid dispositions,
+missing deferral evidence and open non-evidence-only act items refuse. Ledger
+and live full-draft-gate verdicts must agree in temporal order, and exact-head
+CI must be settled green. No pre-approval gate is an acceptance input.
+
+Success returns `ok: true`, `status: "accepted"`, `recorded: true`,
+`applied: false`, target, `snapshotPath` and `reconciliationPath`. Schema version
+1 has `kind: "residual-evidence-acceptance"`, snapshot digest/reference, captured
+proof and limitations. Records live at
+`tmp/residual-evidence/<repo-slug>/pr-<n>/<headSha>/accepted/<content-sha256>.json`.
+Complete bytes publish without overwriting; identical proof is idempotent.
+The accepted flag or filename never replaces read-only reauthentication.
 Only dependent stage 3 (#2919) can consume accepted proof for closure. Parent
 #2917's original criteria remain unchanged and the parent stays open.
 Snapshot capture grants no closure authority: no apply action, reply,
