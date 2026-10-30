@@ -92,10 +92,12 @@ Request statuses:
                                 submitted Copilot review sits on an earlier head and converged: its body is clean,
                                 headerless, or needs-a-closer-look, or it is changes-recommended/unrecognized and it
                                 opened a thread of its own or a trusted copilot-body-disposition record names it.
-                                That last clause holds only at the round cap or after a pre_approval_gate marker
-                                exists on the PR for any head. Below the cap and before that marker, a review with
-                                its own thread or a fix-form record does not converge, an operator record does not
-                                converge a mixed review, and only an operator record on a body-only review converges;
+                                A review with a thread of its own, whatever its body, or a fix-form record converges
+                                only at the round cap or after a pre_approval_gate marker exists on the PR for any
+                                head. Below the cap and before that marker, any review with a thread of its own
+                                (clean, headerless, needs-a-closer-look or otherwise) or a fix-form record does
+                                not converge, an operator record does not converge a review with a thread of its
+                                own, and only an operator record on a body-only review converges;
                                 the tool requests Copilot instead (COPILOT-STATE-CONVERGED-BELOW-CAP).
                                 The delta since that head is not checked; pre_approval_gate reviews the current head.
                                 The gate coordination detector reports the same carried convergence

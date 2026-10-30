@@ -107,7 +107,9 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
   head: copilot_gate_disabled (round cap 0, or an internal-only PR),
   converged_once (default mode: the latest Copilot review converged on an
   earlier head, with zero unresolved threads and no Copilot review outstanding
-  on the current head; the delta is not checked),
+  on the current head; the delta is not checked; below the effective round cap and
+  before a pre_approval_gate marker, a review with findings, meaning its own thread or a
+  fix-form record, does not grant it: COPILOT-STATE-CONVERGED-BELOW-CAP),
   round_cap_clean_fallback (round cap reached, unless the last review was clean
   and a significant change landed since), or, with
   refinement.requireCopilotConvergenceAtLatestHead: true, docs_only_suppression

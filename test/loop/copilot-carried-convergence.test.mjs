@@ -127,15 +127,15 @@ function scenario({ priorBody = "", threads = [], delta = DOCS_DELTA, prOwn = de
       slurpEntry(`repos/${REPO}/pulls/${PR}/reviews?per_page=100`, gatePassedRead.prReviews ?? []),
     ] : []),
   ];
-  return { reviews, shared };
+  return { reviews, shared, gateComments: gatePassedRead?.issueComments ?? [] };
 }
 
 // The draft_gate evidence both tools read to adjust the round count at the cap.
-function gateEvidenceEntry() {
+function gateEvidenceEntry(extraComments = []) {
   return {
     matchByClaims: true,
     assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/issues/${PR}/comments?per_page=100`],
-    stdout: line([[{
+    stdout: line([[...extraComments, {
       id: 21,
       body: ["Gate review: draft_gate", `Reviewed head SHA: ${PRIOR}`, "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"),
       html_url: "https://example.test/comment/21",
@@ -159,10 +159,10 @@ function strictRunChild(entries) {
   return { runChild, calls: mock.calls, unmatched };
 }
 
-function requestEntries({ reviews, shared }) {
+function requestEntries({ reviews, shared, gateComments }) {
   const prView = { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: line({ headRefOid: HEAD, isDraft: false, state: "OPEN", number: PR, reviews, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }) };
   return [
-    gateEvidenceEntry(),
+    gateEvidenceEntry(gateComments),
     REVIEWS_ENTRY,
     { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`, "-X", "POST"], stdout: line({ requested_reviewers: [{ login: COPILOT }] }) },
     { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: line({ users: [], teams: [] }) },
@@ -173,7 +173,7 @@ function requestEntries({ reviews, shared }) {
   ];
 }
 
-function detectorEntries({ reviews, shared }, { extra = [], files, formallyRequested = true } = {}) {
+function detectorEntries({ reviews, shared, gateComments }, { extra = [], files, formallyRequested = true } = {}) {
   return [
     {
       matchByClaims: true,
@@ -184,7 +184,7 @@ function detectorEntries({ reviews, shared }, { extra = [], files, formallyReque
     { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--json", "headRefOid"], stdout: line({ headRefOid: HEAD }) },
     // Lazy base-ref fetch for the clean cross-head gate-marker carry candidate (#2752).
     { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--json", "baseRefName"], stdout: line({ baseRefName: "main" }) },
-    gateEvidenceEntry(),
+    gateEvidenceEntry(gateComments),
     REVIEWS_ENTRY,
     { matchByClaims: true, assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: formallyRequested ? `${COPILOT}\n` : "" },
     ...shared,
@@ -1169,6 +1169,13 @@ describe("COPILOT-STATE-CONVERGED-BELOW-CAP: below the round cap an unclean revi
     assert.equal((await carry(fixed, atCap)).carried, true);
   });
 
+  it("an operator record posted after a fix record for the same review and head converges a body-only review below the cap", async () => {
+    const both = { priorBody: YELLOW, dispositions: [dispositionComment({ reviewId: "PRR_prior", kind: FIX }), dispositionComment({ reviewId: "PRR_prior" })], extraShared: FIX_AFTER_PRIOR };
+    const carried = await carry(both, below);
+    assert.equal(carried.carried, true, carried.reason);
+    assert.equal(carried.bodyDisposition.operator, true);
+  });
+
   it("an operator record does not converge a mixed review whose thread a fix resolved below the cap", async () => {
     const mixed = { priorBody: YELLOW, threads: own, dispositions: [dispositionComment({ reviewId: "PRR_prior" })] };
     const refused = await carry(mixed, below);
@@ -1213,6 +1220,15 @@ describe("COPILOT-STATE-CONVERGED-BELOW-CAP: below the round cap an unclean revi
     assert.equal((await carry({ priorBody: YELLOW, threads: own, gatePassedRead }, below)).carried, true);
     const noMarker = await carry({ priorBody: YELLOW, threads: own, gatePassedRead: {} }, below);
     assert.equal(noMarker.carried, false);
+  });
+
+  it("AC4: with a pre_approval_gate marker on an earlier head, the request tool suppresses and the detector runs the gate on a new head", async () => {
+    const fixture = () => scenario({ priorBody: YELLOW, delta: CODE_DELTA, threads: own, gatePassedRead: { issueComments: [gatePassed] } });
+    const request = await runRequestTool(fixture(), { root: convergedOnceWideRoot });
+    assert.equal(request.status, "suppressed_post_convergence");
+    const detected = await runDetector(fixture(), { root: convergedOnceWideRoot });
+    assert.equal(detected.carriedConvergence.source, "converged_once");
+    assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
   });
 });
 

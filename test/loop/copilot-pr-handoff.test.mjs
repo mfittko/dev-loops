@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 
 import os from "node:os";
 import path from "node:path";
@@ -3263,7 +3263,7 @@ test("copilot-pr-handoff in converged-once mode places no request below the cap 
   }
 });
 
-test("copilot-pr-handoff in converged-once mode feeds the draft-gate-adjusted round count to the carry at the cap", async () => {
+async function runDraftGateResetScenario({ withDraftGate }) {
   // Raw count 2 equals the cap 2 and the latest review has its own resolved thread, so a raw count carries.
   // A clean draft_gate on another head between the two reviews resets the count to 1, below the cap: the carry
   // refuses, as the detector and the request tool do, and the significance probe runs.
@@ -3274,28 +3274,42 @@ test("copilot-pr-handoff in converged-once mode feeds the draft-gate-adjusted ro
   ];
   const prView = JSON.stringify({ headRefOid: "newsha", isDraft: false, state: "OPEN", number: 17, reviews, statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n";
   const ownThread = JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_own", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: "fix", author: { login: "copilot-pull-request-reviewer", __typename: "Bot" }, pullRequestReview: { id: "r-2" } }] } }] } } } } }) + "\n";
-  const draftGateComment = { id: 5, body: "### Gate review: `draft_gate`\n\nGate: draft_gate\nHead SHA: midsha\nVerdict: clean\nFindings: none\nNext action: ready", user: { login: "maintainer" }, created_at: "2026-06-02T09:00:00Z", updated_at: "2026-06-02T09:00:00Z" };
+  const draftGateComment = { id: 5, body: ["Gate review: draft_gate", "Reviewed head SHA: abc1234def5678", "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"), html_url: "https://example.test/comment/5", created_at: "2026-06-02T09:00:00Z", updated_at: "2026-06-02T09:00:00Z" };
 
   try {
-    const { env, ghLogPath: logPath } = await writeGhStubHelper(tempDir, [
+    const entries = [
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo"], stdout: prView },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: ownThread },
       { assertArgs: ["api", "graphql"], stdout: ownThread },
       { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
       { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"], stdout: JSON.stringify({ headRefOid: "newsha", reviews, files: [{ path: "packages/core/src/loop/foo.mjs" }] }) + "\n" },
-      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[draftGateComment]]) + "\n" },
-      { assertArgs: ["api", "repos/owner/repo/issues/17/comments", "--paginate", "--jq", ".[]"], stdout: JSON.stringify(draftGateComment) + "\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([withDraftGate ? [draftGateComment] : []]) + "\n" },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
       { assertArgs: ["api", "repos/owner/repo/compare/oldsha-2...newsha"], stdout: JSON.stringify({ status: "ahead", files: [{ filename: "packages/core/src/loop/foo.mjs", changes: 670 }] }) + "\n" },
-    ], { matchMode: "claims", logCalls: true });
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([withDraftGate ? [draftGateComment] : []]) + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+    ];
+    const { env, ghLogPath: logPath, claimsDir } = await writeGhStubHelper(tempDir, entries, { matchMode: "claims", logCalls: true });
     env.DEVLOOPS_RUN_ID = "";
 
-    await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: convergedOnceRepoRoot });
+    const run = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: convergedOnceRepoRoot });
 
     const log = await readFile(logPath, "utf8");
-    assert.ok(log.includes("compare/oldsha-2...newsha"), "the reset count is below the cap, so the carry refuses and the significance probe runs");
+    const claimed = (await readdir(claimsDir)).length;
+    return { log, claimed, declared: entries.length, run };
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+}
+
+test("copilot-pr-handoff in converged-once mode feeds the draft-gate-adjusted round count to the carry at the cap", async () => {
+  const reset = await runDraftGateResetScenario({ withDraftGate: true });
+  assert.ok(reset.log.includes("compare/oldsha-2...newsha"), "the reset count is below the cap, so the carry refuses and the significance probe runs");
+  assert.equal(reset.log.split("\n").filter((l) => l.includes("graphql")).length, 2, "both thread reads matched a declared entry");
+  assert.equal(reset.claimed, reset.declared, "every declared stub entry was claimed, so no call missed a stub");
+  // Control: with no draft_gate comment the raw count equals the cap and the carry converges without the probe.
+  const control = await runDraftGateResetScenario({ withDraftGate: false });
+  assert.ok(!control.log.includes("compare/oldsha-2...newsha"), "no reset: the raw count converges and the probe does not run");
 });

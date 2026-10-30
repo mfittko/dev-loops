@@ -223,7 +223,7 @@ async function finishCarry({ repo, pr, currentHeadSha, prData, sourceHeadSha, de
     return carried;
   }
   const record = await resolveCopilotBodyDisposition(
-    { repo, pr, headSha: currentHeadSha, reviewId: sourceReviewId, reviewCommitSha: sourceHeadSha },
+    { repo, pr, headSha: currentHeadSha, reviewId: sourceReviewId, reviewCommitSha: sourceHeadSha, preferOperator: belowCapUnclean },
     runtime,
   );
   if (!record.cleared) {
