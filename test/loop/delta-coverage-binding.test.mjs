@@ -26,7 +26,9 @@ test("authenticated no_commit and foreign-head exits close only their own sequen
     const fixture = await boundArgs(["--act-list", actPath, "--baseline", A, "--site-coverage", coverage, "--spec-identity", "s", "--findings-log", log, "--worktree", cwd]);
     const options = { stdout: { write() {} }, ...(outcome === "no_commit" ? { revParse: (_cwd, rev) => rev === "HEAD" ? A : rev } : {}) };
     assert.equal(checkFixPushAuthority(cwd).ok, false);
+    assert.match(checkFixPushAuthority(cwd).reason, /check-pre-push-delta\.mjs .*--baseline [0-9a-f]{40} .*no_commit/, "the refusal names the close command");
     const planBytes = fs.readFileSync(fixture.unit.planPath), receiptBytes = fs.readFileSync(fixture.pulled.receiptPath), outputBytes = fs.readFileSync(fixture.output);
+    if (outcome === "head_moved") assert.equal(checkFixPushAuthority(cwd).ok, false, "a marker with an unpushed fix commit still refuses before the close");
     for (const defect of ["execution", "branch", "PR", "receipt", "malformed"]) {
       const plan = JSON.parse(planBytes);
       if (defect === "execution") plan.executionIdentity = "f1-00000000";
@@ -46,6 +48,15 @@ test("authenticated no_commit and foreign-head exits close only their own sequen
     assert.equal(result.nextStep, "push_to_gate");
     assert.equal(readSequenceMarker(fixture.tmpRoot, A), null);
     assert.equal(checkFixPushAuthority(cwd).ok, true);
+    if (outcome === "no_commit") {
+      // PR 2992 shape (ADR 0216): after the close, the push of a base-refresh merge on the baseline is allowed.
+      git(cwd, "branch", "base-side", A);
+      git(cwd, "checkout", "-q", "base-side");
+      git(cwd, "commit", "--allow-empty", "-m", "base moves");
+      git(cwd, "checkout", "-q", "issue-1");
+      git(cwd, "merge", "--no-ff", "-m", "merge base", "base-side");
+      assert.equal(checkFixPushAuthority(cwd).ok, true, "the base-refresh merge push is allowed once the sequence is closed");
+    }
     fs.rmSync(cwd, { recursive: true, force: true });
   }
 });

@@ -2446,7 +2446,7 @@ for (const form of ["foreign-route", "two-matching"]) test(`complete THREAD --co
 });
 
 // ADR 0197 (#2937 S4b): the cap round (cap 2) ran at `head`; origin/main then moved and the branch merged it.
-async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfterMerge = false } = {}) {
+async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfterMerge = false, fixerCommitBeforeMerge = false } = {}) {
   await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
   const medium = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
   await writeFile(files.actList, JSON.stringify([medium]));
@@ -2454,6 +2454,16 @@ async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfter
   await mkdir(dir, { recursive: true });
   for (const [sha, loggedAt] of [["d".repeat(40), "2026-11-01T00:00:00.000Z"], [head, "2026-11-02T00:00:00.000Z"]]) {
     await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt, findings: sha === head ? [medium] : [] }));
+  }
+  if (fixerCommitBeforeMerge) {
+    // PR 2992 shape: the cap-round fixer commit B carries a sealed clearing record head -> B, and the base merge M follows B.
+    await writeFile(path.join(wt, "fixer.md"), "fixer change\n");
+    git(wt, "add", "fixer.md");
+    git(wt, "commit", "-q", "-m", "fixer commit");
+    const text = JSON.stringify({ reviewBaselineHead: head, candidateHead: git(wt, "rev-parse", "HEAD"), nextStep: "push_to_gate", outcome: "locally_clear", items: [] });
+    await mkdir(path.join(root, "tmp", "gate-delta"), { recursive: true });
+    await writeFile(path.join(root, "tmp", "gate-delta", `${head}.json`), text);
+    await writeFile(path.join(root, "tmp", "gate-delta", `${head}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
   }
   await writeFile(path.join(root, "main-only.md"), "main content\n");
   git(root, "add", "main-only.md");
@@ -2474,6 +2484,20 @@ test("ADR 0197: a base-only merge after the cap round does not consume the closu
     const { over } = await capRoundThenBaseMerge(fx, {});
     const result = await fx.emit(over);
     assert.equal(result.workOrder.source, "act-list");
+  });
+});
+
+test("ADR 0216: a base-only merge of the chain's last clearing candidate is still the cap round (PR 2992 shape)", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, { fixerCommitBeforeMerge: true });
+    assert.equal((await fx.emit(over)).workOrder.source, "act-list");
+  });
+});
+
+test("ADR 0216: a PR-own change after the chain's last candidate keeps the round_cap_reached refusal", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, { fixerCommitBeforeMerge: true, ownChangeAfterMerge: true });
+    await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
   });
 });
 

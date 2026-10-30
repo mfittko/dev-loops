@@ -851,6 +851,14 @@ export const ADR_TRIPWIRE_REMEDIES = Object.freeze([
   "add an `adr-tripwire:allow <reason>` line to the PR body",
 ]);
 
+/** The one failed cap-round-fixed condition (`resolveCapRoundFixed` `onFailure`, ADR 0216) and its remedy. */
+const CAP_ROUND_REFUSAL = Object.freeze({
+  no_clearing_record: "Condition no_clearing_record: no sealed clearing delta record exists for the cap-round baseline. Remedy: complete the cap round's fixer pass and run `check-pre-push-delta.mjs --result` for that baseline.",
+  unsealed_record: "Condition unsealed_record: the delta record for the cap-round baseline carries no valid seal. Remedy: rerun `check-pre-push-delta.mjs --result` for that baseline so the writer seals it; never edit the record.",
+  items_do_not_cover: "Condition items_do_not_cover: the clearing record's items do not cover the cap round's act refs (it may belong to another route). Remedy: rerun the pre-push delta on the cap round's act list so every act ref is resolved.",
+  chain_does_not_reach_head: "Condition chain_does_not_reach_head: the sealed clearing chain ends before the current head and the head is not a base-only merge of its last candidate. Remedy: run the pre-push delta for the current head's fix commit, or fetch origin/<base> so a base-only merge is verifiable.",
+});
+
 /** Typed `adrTripwire` field from an `evaluateAdrTripwire` result (null = evaluation failed). */
 export function buildAdrTripwireField(evaluation) {
   if (!evaluation || typeof evaluation.outcome !== "string") {
@@ -1502,7 +1510,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        reason: "The PR is still draft and the next `draft_gate` round is past the round cap (`round_cap_reached`, ADR 0208), but the cap round's fixer pass is not proven landed with a cleared pre-push delta. Complete the cap round's fixer pass and its pre-push delta review (a legacy unsealed delta record: rerun the pre-push delta for the cap-round baseline so the writer seals it); round N+1 never runs.",
+        reason: `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but the cap round's fixer pass is not proven landed with a cleared pre-push delta. ${CAP_ROUND_REFUSAL[input.draftCapRoundFailure] ?? CAP_ROUND_REFUSAL.no_clearing_record} Round N+1 never runs.`,
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,

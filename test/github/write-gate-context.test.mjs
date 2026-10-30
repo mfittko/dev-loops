@@ -54,6 +54,8 @@ import {
   resolveReviewGateAngles,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
+import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
+import { DISPOSITION, STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { readSealedGateDeltaRecord, writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
@@ -9010,6 +9012,36 @@ test("resolveCapRoundFixed starts the chain at a ledgerless base-only merge of t
     assert.equal(await resolveCapRoundFixed({ ...opts, baseRefName: undefined }, { repoRoot, baseOnlyMerge }), null, "without the base branch the successor is not considered");
     await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-58", `draft_gate-${merged}.json`), JSON.stringify({ repo: "owner/repo", pr: 58, gate: "draft_gate", headSha: merged, verdict: "blocked", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
     assert.equal(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge }), null, "a head with its own ledger is not a ledgerless base merge");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ADR 0216, PR 2992 shape: cap round at head A, fixer commit B with a sealed clearing record A to B, base merge M on B.
+test("resolveCapRoundFixed accepts a base-only merge M of the chain's last clearing candidate B, and reports the failed condition otherwise", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const M = "7".repeat(40);
+    const opts = { repo: "owner/repo", pr: 59, gate: "draft_gate", headSha: M, baseRefName: "main" };
+    await seedClosedRounds(repoRoot, 59, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const failure = async (o, deps) => { let condition = null; const result = await resolveCapRoundFixed(o, { repoRoot, ...deps, onFailure: (c) => { condition = c; } }); return { result, condition }; };
+    assert.equal((await failure(opts, {})).condition, "no_clearing_record");
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", { seal: false });
+    assert.equal((await failure(opts, {})).condition, "unsealed_record");
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", { items: [] });
+    const merge = async (args) => args.fromHead === B && args.head === M;
+    assert.equal((await failure(opts, { baseOnlyMerge: merge })).condition, "items_do_not_cover");
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate");
+    const accepted = await failure(opts, { baseOnlyMerge: merge });
+    assert.equal(accepted.result.log.headSha, A);
+    assert.equal(accepted.condition, null);
+    // The coordination state for M: mark_ready_for_review, and the proof ready-for-review asks for (headSha M, baseRefName) is the same call.
+    const marker = { visible: true, headSha: A.slice(0, 7), verdict: "findings_present", contractComplete: true };
+    const state = evaluatePrGateCoordination({ pr: 59, currentHeadSha: M, prDraft: true, lifecycleState: STATE.PR_DRAFT, loopDisposition: DISPOSITION.ACTION_REQUIRED, ciStatus: "success", draftGate: marker, draftGateMarker: marker, unresolvedGateThreadCount: 0, draftCapRoundFixed: Boolean(accepted.result) });
+    assert.equal(state.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+    // Fail closed: a merge that changes the PR-own patch, and a missing baseRefName.
+    assert.equal((await failure(opts, { baseOnlyMerge: async () => false })).condition, "chain_does_not_reach_head");
+    assert.equal((await failure({ ...opts, baseRefName: undefined }, { baseOnlyMerge: merge })).result, null);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

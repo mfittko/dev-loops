@@ -316,3 +316,29 @@ test("wait-for-gate-units warns on stderr for deprecated --timeout-ms", () => {
   const err = captureStderr(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "1500"]));
   assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
 });
+
+// COORDINATOR-SINGLE-CHILD-JOIN: --artifact joins one child by its hand-back file.
+test("--artifact: an existing JSON artifact gives all_done; absent, empty and non-JSON files stay pending with the remedy", async () => {
+  await withDir(async (root) => {
+    const file = path.join(root, "handback.json");
+    const wait = (timeoutMs = 0) => waitForUnits({ artifact: file, timeoutMs, ...fakeClock() });
+    const absent = await wait();
+    assert.equal(absent.outcome, "timeout");
+    assert.match(absent.remedy, /Re-run the same command.*three consecutive timeout.*units_stalled/);
+    await writeFile(file, "");
+    assert.equal((await wait()).outcome, "timeout", "an empty file is pending");
+    await writeFile(file, "{not json");
+    assert.equal((await wait()).outcome, "timeout", "a non-JSON file is pending");
+    await writeFile(file, JSON.stringify({ headSha: HEAD }));
+    assert.equal((await wait()).outcome, "all_done");
+  });
+});
+
+test("--artifact is a mode of its own: combined with --emit-plan, --judge-plan, --unit or --tmp-root it fails with exit 1", () => {
+  assert.deepEqual(Object.keys(parseWaitArgs(["--artifact", "a.json", "--timeout", "0"])).slice(0, 2), ["artifact", "timeoutMs"]);
+  for (const extra of [["--emit-plan", "p"], ["--judge-plan", "p"], ["--unit", "u"], ["--tmp-root", "t"]]) {
+    assert.throws(() => parseWaitArgs(["--artifact", "a.json", ...extra]), /--artifact excludes/, extra[0]);
+    const run = spawnSync(process.execPath, [SCRIPT, "--artifact", "a.json", ...extra], { encoding: "utf8" });
+    assert.equal(run.status, 1, extra[0]);
+  }
+});

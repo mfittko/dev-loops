@@ -62,7 +62,7 @@ export function checkFixPushAuthority(cwd = process.cwd(), pushedShas = null) {
     if (sequence !== null && sequence.fullGranted !== true) { refusedBy = sequence; break; }
   }
   return refusedBy
-    ? { ok: false, reason: `PRE-PUSH-DELTA-PUSH-AUTHORITY: a gate fix sequence is active and the full work order has not been emitted; only the full-phase fixer pushes the fix branch.${recoveryHint(sequenceMarkerPath(tmpRoot, refusedBy.baselineHead))}` }
+    ? { ok: false, reason: `PRE-PUSH-DELTA-PUSH-AUTHORITY: a gate fix sequence is active and the full work order has not been emitted; only the full-phase fixer pushes the fix branch.${recoveryHint(refusedBy.baselineHead, sequenceMarkerPath(tmpRoot, refusedBy.baselineHead))}` }
     : { ok: true };
 }
 

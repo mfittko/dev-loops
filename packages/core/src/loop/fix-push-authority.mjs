@@ -24,8 +24,11 @@ export function clearSequenceMarker(tmpRoot, baselineHead) {
   rmSync(sequenceMarkerPath(tmpRoot, baselineHead), { force: true });
 }
 
-/** The recovery pointer the refusal reason carries. `--phase full` works only after a clearing delta record, so deleting the marker is the general recovery. */
-export const recoveryHint = (markerPath) => markerPath ? ` To recover an abandoned sequence, delete the marker ${markerPath} (emit-fixer-work-order.mjs --phase full grants the push only after a clearing delta record).` : "";
+/**
+ * The recovery pointer the refusal reason carries (ADR 0216): the sanctioned no-commit close of the sequence. A `commit_only` fixer that handed back with no commit closes with the authenticated
+ * `check-pre-push-delta.mjs` input-only run (`--fixer-plan` and `--site-coverage`, outcome `no_commit`), which removes the marker. A fix commit keeps the marker and takes the normal delta review.
+ */
+export const recoveryHint = (baselineHead, markerPath) => baselineHead ? ` The sequence marker is ${markerPath}. To close a commit_only sequence whose fixer made no commit, run \`check-pre-push-delta.mjs --act-list <act-list> --baseline ${baselineHead} --spec-identity <id> --findings-log <findings-log> --fixer-plan <fixer-plan> --site-coverage <handback> --worktree <dir>\` (outcome no_commit); a fix commit takes the delta review and the full-phase push.` : "";
 
 /** Approximates git check-ref-format for a branch name; an invalid name reads as no branch (fail closed). */
 const isValidBranchName = (b) =>

@@ -26,7 +26,7 @@ import { OperatorFocusRefusal, bindOperatorFocusItems, operatorFocusDigestEntry,
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
-import { closureFromHeadOf, readClosedPriorRoundLogs, renderRequiredReadLine, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
+import { closureFromHeadOf, clearingChainCandidates, readClosedPriorRoundLogs, renderRequiredReadLine, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
@@ -315,7 +315,14 @@ export async function emitFixerWorkOrder({
         // An unreadable ledger counts toward the cap but is dropped above, so the cap-round authority could be an earlier round: fail closed.
         if (unreadable > 0) throw new Error("unreadable prior ledger");
         const baseRefName = (await fetchPr({ repo, pr }))?.baseRefName;
-        if (typeof baseRefName === "string" && baseRefName && await isBaseOnlyMergeSince({ fromHead, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd })) {
+        // ADR 0216: the chain's last clearing candidate (the fixer commit that followed the cap round) counts as a base of the merge as well.
+        let baseOnly = false;
+        if (typeof baseRefName === "string" && baseRefName) {
+          for (const from of [...clearingChainCandidates(resolveGateArtifactTmpRoot(cwd), fromHead).reverse(), fromHead]) {
+            if (await isBaseOnlyMergeSince({ fromHead: from, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd })) { baseOnly = true; break; }
+          }
+        }
+        if (baseOnly) {
           round = cap;
           lowFixCapped = isPastRoundCap(round, cap);
           capRoundHead = fromHead;

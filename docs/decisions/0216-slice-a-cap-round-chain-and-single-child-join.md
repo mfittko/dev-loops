@@ -1,0 +1,22 @@
+# 0216. Cap-round chain end, named refusal conditions, no-commit sequence close and single-child join
+
+## Status
+
+Accepted — 2026-10-30 ([issue 2462](https://github.com/mfittko/dev-loops/issues/2462), operator scope decision for Slice A).
+
+Builds on ADR 0197, ADR 0208 and ADR 0213. Accepted records remain unchanged.
+
+## Context
+
+PR 2992 reached four blockers. A base merge after the cap-round fixer commit read as round cap+1. The cap-round refusal named one catch-all remedy for four different conditions. A `commit_only` fixer without a commit left a stale sequence marker that the push refusal told the operator to delete by hand. A coordinator ended its turn while a single child ran.
+
+## Decision
+
+1. Chain-end base-only rule. `resolveCapRoundFixed` accepts a head M when the chain's last sealed clearing record names candidate B and M is a base-only merge since B (`isBaseOnlyMergeSince` against `origin/<baseRefName>`). `emit-fixer-work-order.mjs` applies the ADR 0197 base-only rule against every candidate of that chain as well as the cap-round head, so M is the cap round. A merge that changes the PR-own patch, or a missing `baseRefName`, fails closed. The ADR 0197 rule and the sealed delta record format are otherwise unchanged.
+2. Named refusal conditions. The cap-round refusal of `pr-gate-coordination.mjs` names the one failed condition and its remedy: `no_clearing_record`, `unsealed_record`, `items_do_not_cover` or `chain_does_not_reach_head`. `resolveCapRoundFixed` reports the condition through its `onFailure` callback.
+3. No-commit sequence close. The remedy for the `PRE-PUSH-DELTA-PUSH-AUTHORITY` refusal is the existing authenticated no-commit closure of `check-pre-push-delta.mjs` (input-only, `--fixer-plan`, `--site-coverage`, outcome `no_commit`). The refusal names that command with the marker's baseline head and no longer names marker deletion. No new subcommand is added.
+4. Single-child join. On Claude Code a coordinator joins one child with `gate wait-for-units --artifact <path>`, a single-unit mode that returns `all_done` once the artifact exists and parses as JSON and `timeout` with the remedy otherwise. The rule `COORDINATOR-SINGLE-CHILD-JOIN` forbids ending the turn before the join returns. Pi keeps the blocking dispatch (`async: false`), `runs.all` or `bg_wait`.
+
+## Consequences
+
+A base merge after a cleared cap-round fix reaches `mark_ready_for_review`. Each cap-round refusal carries one actionable remedy. A stale sequence marker closes through a sanctioned command. A single child gets a deterministic join on Claude Code.
