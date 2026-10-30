@@ -3263,7 +3263,7 @@ test("copilot-pr-handoff in converged-once mode places no request below the cap 
   }
 });
 
-async function runDraftGateResetScenario({ withDraftGate }) {
+async function runDraftGateResetScenario({ withDraftGate, factsFail = false }) {
   // Raw count 2 equals the cap 2 and the latest review has its own resolved thread, so a raw count carries.
   // A clean draft_gate on another head between the two reviews resets the count to 1, below the cap: the carry
   // refuses, as the detector and the request tool do, and the significance probe runs.
@@ -3284,7 +3284,7 @@ async function runDraftGateResetScenario({ withDraftGate }) {
       { assertArgs: ["api", "graphql"], stdout: ownThread },
       { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
       { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"], stdout: JSON.stringify({ headRefOid: "newsha", reviews, files: [{ path: "packages/core/src/loop/foo.mjs" }] }) + "\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"], ...(factsFail ? { stdout: "", stderr: "boom", exitCode: 1 } : { stdout: JSON.stringify({ headRefOid: "newsha", reviews, files: [{ path: "packages/core/src/loop/foo.mjs" }] }) + "\n" }) },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([withDraftGate ? [draftGateComment] : []]) + "\n" },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([withDraftGate ? [draftGateComment] : []]) + "\n" },
@@ -3327,4 +3327,12 @@ test("copilot-pr-handoff in converged-once mode feeds the draft-gate-adjusted ro
   // Control: with no draft_gate comment the raw count equals the cap and the carry converges without the probe.
   const control = await runDraftGateResetScenario({ withDraftGate: false });
   assert.ok(!control.log.includes("compare/oldsha-2...newsha"), "no reset: the raw count converges and the probe does not run");
+});
+
+test("copilot-pr-handoff keeps the raw round count when the reopen facts fetch fails at the cap", async () => {
+  const failed = await runDraftGateResetScenario({ withDraftGate: true, factsFail: true });
+  assert.equal(failed.run.code, 0, failed.run.stderr);
+  const output = JSON.parse(failed.run.stdout);
+  assert.equal(output.snapshot.copilotReviewRoundCount, 2, "unavailable facts never lower the count");
+  assert.notEqual(output.reviewRequestStatus, "requested", "no below-cap re-request on a transient read failure");
 });

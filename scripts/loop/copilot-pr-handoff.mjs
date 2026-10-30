@@ -369,6 +369,8 @@ async function resolveDraftGateAdjustedRoundCount(options, facts, rawCount, effe
   if (!Number.isInteger(rawCount) || !Number.isInteger(effectiveCap) || rawCount < effectiveCap) return rawCount;
   try {
     const currentHeadSha = typeof facts?.headRefOid === "string" ? facts.headRefOid.trim() : null;
+    // Unavailable facts (a failed gh read) must never lower the count: a null head reads every clean draft_gate as off-head.
+    if (!currentHeadSha) return rawCount;
     const gateSummary = summarizeGateReviewComments(await fetchGateEvidenceComments({ repo: options.repo, pr: options.pr }, runtime));
     const draftGateResetAtMs = resolveDraftGateRoundResetMs({ draftGate: gateSummary?.draft_gate, currentHeadSha });
     if (draftGateResetAtMs == null) return rawCount;
@@ -677,28 +679,32 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
   }
   // Skip internal detection in sequential stub/test mode to avoid consuming stub entries.
   // Claims-mode stubs handle interleaved calls; detection runs normally.
-  if (
-    !internalOnlySkipCopilot &&
-    (!env.GH_SEQUENCE_PATH || env.GH_STUB_MODE === "claims") &&
-    options.watchStatus === undefined &&
-    (interpretation.state === STATE.PR_READY_NO_FEEDBACK ||
-      interpretation.state === STATE.READY_TO_REREQUEST_REVIEW)
-  ) {
-    try {
-      const internalCheck = await detectPrInternalOnly(options, { env, ghCommand, runChild });
-      if (internalCheck.ok && internalCheck.internalOnly) {
-        internalOnlySkipCopilot = true;
-        interpretation = {
-          ...interpretation,
-          state: STATE.INTERNAL_TOOLING_DIRECT_GATE,
-          nextAction: NEXT_ACTIONS[STATE.INTERNAL_TOOLING_DIRECT_GATE],
-          allowedTransitions: TRANSITIONS[STATE.INTERNAL_TOOLING_DIRECT_GATE] || [STATE.DONE],
-        };
+  // Run again after a draft-gate reinterpretation below, which can newly reach a requestable state.
+  const applyInternalOnlyDetection = async () => {
+    if (
+      !internalOnlySkipCopilot &&
+      (!env.GH_SEQUENCE_PATH || env.GH_STUB_MODE === "claims") &&
+      options.watchStatus === undefined &&
+      (interpretation.state === STATE.PR_READY_NO_FEEDBACK ||
+        interpretation.state === STATE.READY_TO_REREQUEST_REVIEW)
+    ) {
+      try {
+        const internalCheck = await detectPrInternalOnly(options, { env, ghCommand, runChild });
+        if (internalCheck.ok && internalCheck.internalOnly) {
+          internalOnlySkipCopilot = true;
+          interpretation = {
+            ...interpretation,
+            state: STATE.INTERNAL_TOOLING_DIRECT_GATE,
+            nextAction: NEXT_ACTIONS[STATE.INTERNAL_TOOLING_DIRECT_GATE],
+            allowedTransitions: TRANSITIONS[STATE.INTERNAL_TOOLING_DIRECT_GATE] || [STATE.DONE],
+          };
+        }
+      } catch {
+        // Best-effort: if detection fails, fall through to normal request behavior
       }
-    } catch {
-      // Best-effort: if detection fails, fall through to normal request behavior
     }
-  }
+  };
+  await applyInternalOnlyDetection();
 
   // In-flight-rerequest race: the interpreter routes to
   // ROUND_CAP_CLEAN_FALLBACK even when a Copilot review is REQUESTED and pending
@@ -754,6 +760,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
       if (adjustedCount !== snapshot.copilotReviewRoundCount) {
         snapshot = { ...snapshot, copilotReviewRoundCount: adjustedCount };
         interpretation = interpretLoopState(snapshot, refinementConfig);
+        await applyInternalOnlyDetection();
       }
     }
   }
