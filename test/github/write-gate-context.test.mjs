@@ -7568,6 +7568,29 @@ test("writeGateContext REFUSES a same-head rebuild that would rewrite the prior 
   }
 });
 
+for (const reason of ["thread_site_changed", "thread_site_unverifiable", "no_commit"]) test(`C19 ${reason} admits pre_approval_gate with the open thread and no live-baseline delta`, async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const { interpretFixLoopState } = await import("@dev-loops/core/loop/fix-loop-state");
+    const state = interpretFixLoopState({ headMoved: reason !== "no_commit", noCommit: reason === "no_commit", sequenceClosed: true });
+    assert.equal(state.state, "full_gate_round");
+    const capturePath = path.join(repoRoot, "open-thread.json"), id = { repo: "owner/repo", pr: 2787, headSha, gate: "pre_approval_gate" };
+    await writeFile(capturePath, JSON.stringify({ threads: [{ id: "C19_OPEN", isResolved: false }], comments: [{ threadId: "C19_OPEN", author: { login: "gate" }, body: `${reason}: reassess this exact open thread` }] }));
+    let admitted = false;
+    await main(["--repo", id.repo, "--pr", String(id.pr), "--gate", id.gate, "--head-sha", headSha, "--base", baseSha,
+      "--angles", '["correctness"]', "--known-findings", capturePath, "--silent"], { repoRoot, run: stubGhRun,
+      loadCoordination: async () => { admitted = true; return { prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true, draftGate: { verdict: "clean", headSha: baseSha } } }; } });
+    assert.equal(admitted, true, "the actual CLI admission path observes the historical draft boundary");
+    const context = await readGateContext(id, { repoRoot });
+    const read = context.requiredReads.find((entry) => entry.kind === "known-findings");
+    const bytes = await readFile(path.resolve(repoRoot, read.path));
+    assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"));
+    assert.deepEqual(JSON.parse(bytes), [{ threadId: "C19_OPEN", isResolved: false, comments: [{ author: "gate", body: `${reason}: reassess this exact open thread` }] }]);
+    assert.match(await readFile(path.resolve(repoRoot, read.path.replace(/\.known-findings\.json$/, ".briefing-volatile.txt")), "utf8"), /Unresolved recovery threads must be assessed in this full round/);
+    assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-delta", `${headSha}.json`)), false);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
+});
+
 test("writeGateContext --known-findings: full thread bodies go to a hash-bound required read, never the prefix; no threads means no read; a live-sentinel rewrite is refused", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-known-findings-"));
   try {

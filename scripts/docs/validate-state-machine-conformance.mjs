@@ -1086,8 +1086,6 @@ const FIX_LOOP_TO_FIXTURE = new Map([
 ]);
 
 export const FIX_LOOP_KNOWN_GAPS = new Map([
-  ["head_moved->full_gate_round", "slice 3 (C10): close the sequence, remove the marker and route the head"],
-  ["no_commit->full_gate_round", "slice 3 (C9): a no-commit pass closes its sequence and removes its marker"],
   ["ci_red->act_pending", "slice 4 (C11): a CI-failure source enters a fixer order"],
   ["delta_review->commit_only_emitted", "slice 4 (C12): delta residue and new findings re-emit commit_only"],
   ["delivery_incomplete->disposition_complete", "slice 5 (C14): --completion-only delivery re-entry"],
@@ -1118,8 +1116,12 @@ for (const [from, to] of realEdges(FIX_LOOP_DOC_TRANSITIONS)) {
   if (!buildFromFixture) throw new Error(`fix-loop-state: no fixture registered for source state "${from}"`);
   FIX_LOOP_TRANSITION_CHECKS.set(key, {
     status: "verified",
+    ...(["head_moved->full_gate_round", "no_commit->full_gate_round"].includes(key)
+      ? { note: "C19 admission replays: test/github/write-gate-context.test.mjs; descendant delivery: test/github/verify-fixer-disposition.test.mjs" } : {}),
     verify: () => {
-      const fixture = buildFixture();
+      const closesSequence = to === FIX_LOOP_STATE.FULL_GATE_ROUND && [FIX_LOOP_STATE.HEAD_MOVED, FIX_LOOP_STATE.NO_COMMIT].includes(from);
+      const fixture = closesSequence ? { ...buildFromFixture(), sequenceClosed: true }
+        : to === FIX_LOOP_STATE.HEAD_MOVED ? { ...buildFromFixture(), headMoved: true } : buildFixture();
       const i = interpretFixLoopState(fixture);
       return {
         ok: i.state === to

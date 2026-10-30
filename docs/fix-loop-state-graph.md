@@ -8,6 +8,10 @@ One fix sequence for PR head H is one state machine. Every fail-closed state has
 
 A transition that a later slice of issue 2787 implements is registered as `known_gap` in the harness until that slice lands. Slice 6 re-arms the fail-closed boundary only when no `known_gap` is left.
 
+Open-thread descendant delivery keeps the authenticated candidate X and fixing commit separate from live head H. The verifier looks up each authenticated thread root's original RIGHT-side range, maps it through linear history to X, then rejects any overlapping commit in X..H, including a touch later reverted. Unrelated edits in the same file and earlier-line offsets pass. LEFT-side, missing or uncertain coordinates, deleted/binary files and nonlinear history refuse with `thread_site_unverifiable`; overlap refuses with `thread_site_changed`. Both refusals name the thread and direct the full `pre_approval_gate` round to read it through `--known-findings`, without a live-head-baseline Delta. Existing draft-boundary admission still applies. A successful delivery observes H's CI and live resolution; it never supplies a gate verdict.
+
+The C19 replays in `test/github/verify-fixer-disposition.test.mjs` and `test/github/write-gate-context.test.mjs` verify `head_moved` and `no_commit` admission with open threads. Their two full-gate edges are verified; CI-source intake, delta residue intake and completion re-entry remain the three later-slice `known_gap` rows.
+
 Implementation: `packages/core/src/loop/fix-loop-state.mjs` (`FIX_LOOP_STATE`, `FIX_LOOP_TRANSITIONS`, `normalizeFixLoopSnapshot`, `interpretFixLoopState`).
 
 ## State Definitions
@@ -50,14 +54,19 @@ Terminal states with no outgoing transitions: `full_gate_round`, `stopped`.
 - `full_emitted` -> `head_moved`
 - `pushed` -> `ci_green`
 - `pushed` -> `ci_red`
+- `pushed` -> `head_moved`
 - `ci_red` -> `act_pending`
   - the CI failure is the source of the next order
+- `ci_red` -> `head_moved`
 - `ci_green` -> `disposition_complete`
 - `ci_green` -> `delivery_incomplete`
+- `ci_green` -> `head_moved`
 - `delivery_incomplete` -> `disposition_complete`
   - completion re-entry at the live head
 - `delivery_incomplete` -> `full_gate_round`
+- `delivery_incomplete` -> `head_moved`
 - `disposition_complete` -> `full_gate_round`
+- `disposition_complete` -> `head_moved`
 - `head_moved` -> `full_gate_round`
   - the sequence closes and the marker is removed
 - `head_moved` -> `disposition_complete`
