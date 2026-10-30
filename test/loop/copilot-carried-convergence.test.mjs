@@ -108,8 +108,11 @@ const BASE_REF_ENTRY = { matchByClaims: true, assertArgs: ["pr", "view", String(
 // The single scenario table: prior Copilot review on PRIOR, current head HEAD.
 // `prOwn` is the PR's own diff (compare main...HEAD); it defaults to the delta.
 // The comment stream is declared twice: the body-feedback resolver and the
-// carry predicate each read it once. The below-cap gate-passed read adds a third.
-function scenario({ priorBody = "", threads = [], delta = DOCS_DELTA, prOwn = delta, dispositions = [], olderReviews = [], extraShared = [], reviews: reviewsOverride = null } = {}) {
+// carry predicate each read it once. `gatePassedRead` declares the below-cap
+// gate-passed read (issue comments, then PR reviews) only for scenarios that
+// reach it: `{ issueComments, prReviews }` raw API items.
+const slurpEntry = (path, items) => ({ matchByClaims: true, assertArgs: ["api", "--paginate", "--slurp", path], stdout: line([items]) });
+function scenario({ priorBody = "", threads = [], delta = DOCS_DELTA, prOwn = delta, dispositions = [], olderReviews = [], extraShared = [], reviews: reviewsOverride = null, gatePassedRead = null } = {}) {
   const reviews = reviewsOverride ?? [...olderReviews, { id: "PRR_prior", author: { login: COPILOT }, state: "COMMENTED", body: priorBody, commit: { oid: PRIOR }, submittedAt: "2026-09-22T10:00:00Z" }];
   const shared = [
     ...extraShared,
@@ -119,7 +122,10 @@ function scenario({ priorBody = "", threads = [], delta = DOCS_DELTA, prOwn = de
     { matchByClaims: true, assertArgs: ["api", "graphql"], assertArgContains: ["reviewThreads"], stdout: line({ data: { repository: { pullRequest: { reviewThreads: { nodes: threads } } } } }) },
     commentsEntry(dispositions),
     commentsEntry(dispositions),
-    commentsEntry(dispositions),
+    ...(gatePassedRead ? [
+      slurpEntry(`repos/${REPO}/issues/${PR}/comments?per_page=100`, gatePassedRead.issueComments ?? []),
+      slurpEntry(`repos/${REPO}/pulls/${PR}/reviews?per_page=100`, gatePassedRead.prReviews ?? []),
+    ] : []),
   ];
   return { reviews, shared };
 }
@@ -806,9 +812,9 @@ const MODE_CASES = [
   { name: "clean review, code delta", fixture: { delta: CODE_DELTA }, once: true, strict: false },
   { name: "clean review, docs-only delta", fixture: {}, once: true, strict: true },
   { name: "needs-a-closer-look review, code delta", fixture: { priorBody: BLUE, delta: CODE_DELTA }, once: true, strict: false },
-  { name: "changes-recommended review with its own resolved thread, code delta", fixture: { priorBody: YELLOW, delta: CODE_DELTA, threads: [thread({ isResolved: true, reviewId: "PRR_prior" })] }, once: false, strict: false },
-  { name: "unrecognized review with a trusted operator record, code delta", fixture: { priorBody: "### 🟣 Something new\n\nBody.", delta: CODE_DELTA, dispositions: [dispositionComment({ reviewId: "PRR_prior" })] }, once: true, strict: false },
-  { name: "body-only changes-recommended review, no thread, no record, code delta", fixture: { priorBody: YELLOW, delta: CODE_DELTA }, once: false, strict: false },
+  { name: "changes-recommended review with its own resolved thread, code delta", fixture: { priorBody: YELLOW, delta: CODE_DELTA, threads: [thread({ isResolved: true, reviewId: "PRR_prior" })], gatePassedRead: {} }, once: false, strict: false },
+  { name: "unrecognized review with a trusted operator record, code delta", fixture: { priorBody: "### 🟣 Something new\n\nBody.", delta: CODE_DELTA, dispositions: [dispositionComment({ reviewId: "PRR_prior" })], gatePassedRead: {} }, once: true, strict: false },
+  { name: "body-only changes-recommended review, no thread, no record, code delta", fixture: { priorBody: YELLOW, delta: CODE_DELTA, gatePassedRead: {} }, once: false, strict: false },
   { name: "clean review with an unresolved thread, code delta", fixture: { delta: CODE_DELTA, threads: [thread({ isResolved: false, reviewId: "PRR_prior" })] }, once: false, strict: false },
 ];
 
@@ -951,7 +957,7 @@ describe("readback: the handoff's advice agrees with the request tool", () => {
   });
 
   it("unconverged: the readback advises a re-request the request tool executes", async () => {
-    const fixture = { priorBody: YELLOW, delta: CODE_DELTA };
+    const fixture = { priorBody: YELLOW, delta: CODE_DELTA, gatePassedRead: {} };
     const readback = await runHandoffReadback(scenario(fixture), { root: convergedOnceWideRoot });
     const request = await runRequestTool(scenario(fixture), { root: convergedOnceWideRoot });
 
@@ -1015,7 +1021,7 @@ describe("converged-once: the detector routes a post-convergence change to pre_a
 
 describe("converged-once: a later Copilot review wins over an earlier convergence", () => {
   const cleanOlder = { ...OLDER_REVIEW, body: "### 🟢 Approval recommended" };
-  const later = (isResolved) => ({ olderReviews: [cleanOlder], priorBody: YELLOW, delta: CODE_DELTA, threads: [thread({ isResolved, reviewId: "PRR_prior" })] });
+  const later = (isResolved) => ({ olderReviews: [cleanOlder], priorBody: YELLOW, delta: CODE_DELTA, threads: [thread({ isResolved, reviewId: "PRR_prior" })], gatePassedRead: {} });
 
   it("the detector and merge refuse while the later review's thread is unresolved", async () => {
     const detected = await runDetector(scenario(later(false)), { root: convergedOnceWideRoot });
@@ -1046,18 +1052,18 @@ describe("converged-once: a later Copilot review wins over an earlier convergenc
   });
 
   it("a light-dispatched PR at the composed cap of 1 converges a fix-resolved own-thread review and routes to pre_approval_gate", async () => {
-    const fixture = scenario({ priorBody: YELLOW, delta: CODE_DELTA, threads: [thread({ isResolved: true, reviewId: "PRR_prior" })] });
+    const fixture = scenario({ priorBody: YELLOW, delta: CODE_DELTA, threads: [thread({ isResolved: true, reviewId: "PRR_prior" })], gatePassedRead: {} });
     const detected = await runDetector(fixture, { root: convergedOnceWideRoot, lightweight: true });
     assert.equal(detected.carriedConvergence.source, "converged_once");
     assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
-    const notLight = await runDetector(scenario({ priorBody: YELLOW, delta: CODE_DELTA, threads: [thread({ isResolved: true, reviewId: "PRR_prior" })] }), { root: convergedOnceWideRoot });
+    const notLight = await runDetector(scenario({ priorBody: YELLOW, delta: CODE_DELTA, threads: [thread({ isResolved: true, reviewId: "PRR_prior" })], gatePassedRead: {} }), { root: convergedOnceWideRoot });
     assert.equal(notLight.carriedConvergence, null);
   });
 
   it("a clean current-head review does not stand over a later body-only changes-recommended review on an earlier commit for the loop and merge until a record names it", async () => {
     const currentHeadClean = { id: "PRR_head", author: { login: COPILOT }, state: "COMMENTED", body: "", commit: { oid: HEAD }, submittedAt: "2026-09-22T09:30:00Z" };
     const laterYellow = { id: "PRR_prior", author: { login: COPILOT }, state: "COMMENTED", body: YELLOW, commit: { oid: PRIOR }, submittedAt: "2026-09-22T10:00:00Z" };
-    const shape = (dispositions) => ({ reviews: [currentHeadClean, laterYellow], delta: CODE_DELTA, dispositions });
+    const shape = (dispositions) => ({ reviews: [currentHeadClean, laterYellow], delta: CODE_DELTA, dispositions, gatePassedRead: {} });
 
     const blocked = await runDetector(scenario(shape([])), { root: convergedOnceWideRoot });
     // Gate entry routes the finding to the judge (#2937); the merge below keeps the marker.
@@ -1170,8 +1176,17 @@ describe("COPILOT-STATE-CONVERGED-BELOW-CAP: below the round cap an unclean revi
     assert.match(refused.reason, /COPILOT-STATE-CONVERGED-BELOW-CAP/);
   });
 
-  it("after a pre_approval_gate marker on any head, the earlier fix-resolved review still converges", async () => {
-    assert.equal((await carry({ priorBody: YELLOW, threads: own, dispositions: [gatePassed] }, below)).carried, true);
+  it("after a pre_approval_gate marker on the issue-comment surface, the earlier fix-resolved review still converges", async () => {
+    const gatePassedRead = { issueComments: [gatePassed] };
+    assert.equal((await carry({ priorBody: YELLOW, threads: own, gatePassedRead }, below)).carried, true);
+  });
+
+  it("after a pre_approval_gate marker only on the PR review surface, the earlier fix-resolved review still converges", async () => {
+    const review = { id: 901, state: "COMMENTED", submitted_at: "2026-09-22T09:00:00Z", body: gatePassed.body, html_url: null };
+    const gatePassedRead = { prReviews: [review] };
+    assert.equal((await carry({ priorBody: YELLOW, threads: own, gatePassedRead }, below)).carried, true);
+    const noMarker = await carry({ priorBody: YELLOW, threads: own, gatePassedRead: {} }, below);
+    assert.equal(noMarker.carried, false);
   });
 });
 
