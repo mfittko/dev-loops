@@ -269,6 +269,7 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
   if (cap === 0) return pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_GATE_DISABLED);
   const requireCopilotConvergenceAtLatestHead = resolveRequireCopilotConvergenceAtLatestHead(config);
   const reviews = toSharedReviewShape(rawReviews);
+  // A missing draftGate means no round reset (the permissive direction); it only occurs when evidence is unreadable, which already fails gate_evidence.
   const { completedCopilotReviewRounds } = summarizeCopilotReviews(reviews, {
     headSha: currentHeadSha,
     draftGateResetAtMs: resolveDraftGateRoundResetMs({ draftGate, currentHeadSha }),
@@ -290,7 +291,6 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
   const lastReviewedHead = getLastCopilotReviewHeadSha({ reviews });
   const lastReviewConverged = lastReviewedHead !== null && lastReviewedHead !== currentHeadSha
     && evaluateCopilotConvergence({ currentHeadSha: lastReviewedHead, reviews }).state === COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN;
-  // A missing draftGate means no round reset (the permissive direction); it only occurs when evidence is unreadable, which already fails gate_evidence.
   // ADR 0012: at the cap, a significant change after a converged review opens a
   // new cycle regardless of the spent cap. A fix pushed after a findings review
   // keeps the fallback.
@@ -725,7 +725,7 @@ export async function mergePr(options, runtime = {}) {
   // shared predicate, as the loop does. The converged-once form applies in
   // both modes: the current head has its own review, so no delta is carried.
   const copilotLaterReviewRefusal = await resolveLaterCopilotReviewRefusal(
-    { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, rawConvergenceState, draftGate: evidence.draftGate, rules: resolveClassifyRules(configLoad?.config), effectiveCap: resolveEffectiveCopilotRoundCap(configLoad?.config ?? { version: 1 }, { lightweight: options.lightweight === true }) },
+    { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, rawConvergenceState, draftGate: evidence.draftGate, rules: resolveClassifyRules(configLoad?.config), effectiveCap: resolveRequireCopilotConvergenceAtLatestHead(configLoad?.config) ? undefined : resolveEffectiveCopilotRoundCap(configLoad?.config ?? { version: 1 }, { lightweight: options.lightweight === true }) },
     { env, ghCommand, runChild, ghJson },
   );
 

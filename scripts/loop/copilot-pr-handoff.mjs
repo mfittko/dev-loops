@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, isGateMachineArtifactBody, normalizeTimestamp, parseJsonText } from "../_core-helpers.mjs";
+import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, isGateMachineArtifactBody, normalizeTimestamp, parseJsonText, resolveDraftGateRoundResetMs, summarizeCopilotReviews, summarizeGateReviewComments } from "../_core-helpers.mjs";
+import { fetchGateEvidenceComments } from "../github/_gate-finding-surface.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
@@ -360,6 +361,23 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
 // current head, the Copilot reviews (to find the last reviewed head), and the
 // PR's changed files. Fetched only when the interpreter already resolved
 // ROUND_CAP_CLEAN_FALLBACK, so this extra call is off the hot path.
+// The carry predicate takes the draft-gate-adjusted round count, as the
+// detector, the request tool and merge do; a raw count would treat a reset
+// review as at the cap. Best-effort: a gate-evidence read failure keeps the raw count.
+async function resolveDraftGateAdjustedRoundCount(options, facts, rawCount, effectiveCap, runtime) {
+  // A reset only lowers the count, so a count already below the cap needs no gate-evidence read.
+  if (!Number.isInteger(rawCount) || !Number.isInteger(effectiveCap) || rawCount < effectiveCap) return rawCount;
+  try {
+    const currentHeadSha = typeof facts?.headRefOid === "string" ? facts.headRefOid.trim() : null;
+    const gateSummary = summarizeGateReviewComments(await fetchGateEvidenceComments({ repo: options.repo, pr: options.pr }, runtime));
+    const draftGateResetAtMs = resolveDraftGateRoundResetMs({ draftGate: gateSummary?.draft_gate, currentHeadSha });
+    if (draftGateResetAtMs == null) return rawCount;
+    return summarizeCopilotReviews(facts?.reviews ?? [], { headSha: currentHeadSha, draftGateResetAtMs }).completedCopilotReviewRounds ?? rawCount;
+  } catch {
+    return rawCount;
+  }
+}
+
 async function fetchReopenCycleFacts({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   let result;
   try {
@@ -731,6 +749,9 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
     // Converged-once mode: a converged latest review stands for this head, so
     // no post-convergence change reopens the cycle (the shared predicate the
     // request tool and the gate coordination detector use).
+    const carryRoundCount = requireCopilotConvergenceAtLatestHead
+      ? snapshot.copilotReviewRoundCount
+      : await resolveDraftGateAdjustedRoundCount(options, reopenFacts, snapshot.copilotReviewRoundCount, refinementConfig.maxCopilotRounds, { env, ghCommand, runChild });
     const convergedOnce = !requireCopilotConvergenceAtLatestHead && (await resolveCarriedConvergence(
       {
         repo: options.repo,
@@ -741,7 +762,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
         unresolvedThreadCount: snapshot.unresolvedThreadCount,
         requireCopilotConvergenceAtLatestHead,
         rules: resolveClassifyRules(config.config),
-        copilotReviewRoundCount: snapshot.copilotReviewRoundCount,
+        copilotReviewRoundCount: carryRoundCount,
         effectiveCap: refinementConfig.maxCopilotRounds,
       },
       { env, ghCommand, runChild },
@@ -787,7 +808,9 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
         unresolvedThreadCount: snapshot.unresolvedThreadCount,
         requireCopilotConvergenceAtLatestHead,
         rules: resolveClassifyRules(config.config),
-        copilotReviewRoundCount: snapshot.copilotReviewRoundCount,
+        copilotReviewRoundCount: requireCopilotConvergenceAtLatestHead
+          ? snapshot.copilotReviewRoundCount
+          : await resolveDraftGateAdjustedRoundCount(options, facts, snapshot.copilotReviewRoundCount, refinementConfig.maxCopilotRounds, { env, ghCommand, runChild }),
         effectiveCap: refinementConfig.maxCopilotRounds,
       };
       const runtime = { env, ghCommand, runChild };

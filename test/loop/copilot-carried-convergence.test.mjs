@@ -204,7 +204,7 @@ async function runRequestTool(fixture, { root = capRoot, markerDir = checkpointD
 async function runDetector(fixture, options = {}) {
   const { runtime } = runtimeFor([], options);
   const { runChild, unmatched } = strictRunChild(detectorEntries(fixture, options));
-  const result = await detectPrGateCoordinationState({ repo: REPO, pr: PR }, { ...runtime, runChild });
+  const result = await detectPrGateCoordinationState({ repo: REPO, pr: PR, lightweight: options.lightweight === true }, { ...runtime, runChild });
   assert.deepEqual(unmatched, [], "detector made an undeclared gh call");
   return result;
 }
@@ -1032,8 +1032,26 @@ describe("converged-once: a later Copilot review wins over an earlier convergenc
     const detected = await runDetector(scenario(later(true)), { root: convergedOnceWideRoot });
     assert.equal(detected.carriedConvergence, null);
     assert.ok(detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+    assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
     const merged = await runMerge(scenario(later(true)), later(true), { strict: false });
     assert.equal(merged.merged, false);
+  });
+
+  it("strict mode keeps the pre-below-cap merge result for a resolved later-review thread", async () => {
+    const currentHeadClean = { id: "PRR_head", author: { login: COPILOT }, state: "COMMENTED", body: "", commit: { oid: HEAD }, submittedAt: "2026-09-22T09:30:00Z" };
+    const laterYellow = { id: "PRR_prior", author: { login: COPILOT }, state: "COMMENTED", body: YELLOW, commit: { oid: PRIOR }, submittedAt: "2026-09-22T10:00:00Z" };
+    const shape = { reviews: [currentHeadClean, laterYellow], threads: [thread({ isResolved: true, reviewId: "PRR_prior" })] };
+    const merged = await runMerge(scenario(shape), shape, { strict: true });
+    assert.equal(merged.merged, true, JSON.stringify(merged.failures));
+  });
+
+  it("a light-dispatched PR at the composed cap of 1 converges a fix-resolved own-thread review and routes to pre_approval_gate", async () => {
+    const fixture = scenario({ priorBody: YELLOW, delta: CODE_DELTA, threads: [thread({ isResolved: true, reviewId: "PRR_prior" })] });
+    const detected = await runDetector(fixture, { root: convergedOnceWideRoot, lightweight: true });
+    assert.equal(detected.carriedConvergence.source, "converged_once");
+    assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+    const notLight = await runDetector(scenario({ priorBody: YELLOW, delta: CODE_DELTA, threads: [thread({ isResolved: true, reviewId: "PRR_prior" })] }), { root: convergedOnceWideRoot });
+    assert.equal(notLight.carriedConvergence, null);
   });
 
   it("a clean current-head review does not stand over a later body-only changes-recommended review on an earlier commit for the loop and merge until a record names it", async () => {
@@ -1139,13 +1157,17 @@ describe("COPILOT-STATE-CONVERGED-BELOW-CAP: below the round cap an unclean revi
 
   it("a fix-form record does not converge a body-only review below the cap and still clears it at the cap", async () => {
     const fixed = { priorBody: YELLOW, dispositions: [dispositionComment({ reviewId: "PRR_prior", kind: FIX })], extraShared: FIX_AFTER_PRIOR };
-    assert.equal((await carry(fixed, below)).carried, false);
+    const refused = await carry(fixed, below);
+    assert.equal(refused.carried, false);
+    assert.match(refused.reason, /COPILOT-STATE-CONVERGED-BELOW-CAP/);
     assert.equal((await carry(fixed, atCap)).carried, true);
   });
 
   it("an operator record does not converge a mixed review whose thread a fix resolved below the cap", async () => {
     const mixed = { priorBody: YELLOW, threads: own, dispositions: [dispositionComment({ reviewId: "PRR_prior" })] };
-    assert.equal((await carry(mixed, below)).carried, false);
+    const refused = await carry(mixed, below);
+    assert.equal(refused.carried, false);
+    assert.match(refused.reason, /COPILOT-STATE-CONVERGED-BELOW-CAP/);
   });
 
   it("after a pre_approval_gate marker on any head, the earlier fix-resolved review still converges", async () => {

@@ -4,7 +4,7 @@
 
 Accepted — 2026-10-30 ([issue 2445](https://github.com/mfittko/dev-loops/issues/2445), operator-approved).
 
-Amends ADR 0090. Accepted records remain unchanged.
+Amends [ADR 0090](./0090-copilot-converged-once-default.md). Accepted records remain unchanged.
 
 ## Context
 
@@ -18,7 +18,7 @@ Below the cap, only two shapes converge: a review without findings, and a body-o
 
 The Copilot gate has passed when a `pre_approval_gate` marker exists on the PR for any head. From then on, a later head never reopens a Copilot round and the ADR 0090 latest-review rule decides. At or above the cap the ADR 0090 carry applies unchanged.
 
-The predicate `isBelowCopilotRoundCap` reuses the shared round-cap rule of ADR 0208, the one the draft gate reads. The detector, the request tool, the handoff and merge pass the same inputs: the snapshot round count and the effective cap, composed for a light-dispatched PR. Strict mode and the operator withdrawal marker are unchanged.
+The predicate `isBelowCopilotRoundCap` reuses the shared round-cap rule of [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md), the one the draft gate reads. The detector, the request tool, the handoff and merge pass the same inputs: the snapshot round count and the effective cap, composed for a light-dispatched PR. Strict mode and the operator withdrawal marker are unchanged.
 
 ## Consequences
 
