@@ -104,14 +104,14 @@ for (const route of ["ACT", "THREAD"]) test(`detector carries only a complete au
     const directory = path.join(root, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
     const checkpoint = path.join(directory, `fixer-disposition-${candidate}.json`);
     await mkdir(directory, { recursive: true });
-    for (const defect of ["none", "behind", "diverged", "identical", "incomplete", "unstamped", "unresolved", "uncontained", "malformed-current"]) {
+    for (const defect of ["none", "behind", "diverged", "identical", "incomplete", "unstamped", "unresolved", "uncontained", "current-checkpoint-live-verification-refused"]) {
       await writeFile(checkpoint, JSON.stringify({ ...handoff, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity, ...(defect === "unstamped" ? {} : { complete: defect !== "incomplete" }) }));
       const current = path.join(directory, `fixer-disposition-${live}.json`);
-      if (defect === "malformed-current") await writeFile(current, "{");
+      if (defect === "current-checkpoint-live-verification-refused") await writeFile(current, "{");
       const compare = (sha, target = live) => ["api", `repos/${REPO}/compare/${sha}...${target}`];
       const relation = ["behind", "diverged", "identical"].includes(defect) ? defect : "ahead";
       const expected = [{ args: compare(unit.workOrder.headSha), status: route === "ACT" ? relation : "ahead" }];
-      const authenticatesAncestor = !["incomplete", "unstamped", "malformed-current"].includes(defect)
+      const authenticatesAncestor = !["incomplete", "unstamped", "current-checkpoint-live-verification-refused"].includes(defect)
         && (route === "THREAD" || !["behind", "diverged"].includes(defect));
       if (authenticatesAncestor) {
         expected.push({ args: compare(head, candidate), status: "ahead" });
@@ -119,13 +119,21 @@ for (const route of ["ACT", "THREAD"]) test(`detector carries only a complete au
         expected.push({ args: compare(candidate), status: relation });
         if (["none", "unresolved", "uncontained"].includes(defect)) expected.push({ args: compare(fixing), status: defect === "uncontained" ? "behind" : "ahead" });
       }
+      if (defect === "current-checkpoint-live-verification-refused") {
+        // A current checkpoint uses live verification, which authenticates the candidate before observing the PR.
+        expected.push({ args: compare(head, candidate), status: "ahead" });
+        if (route === "ACT") {
+          expected.push({ args: compare(fixing, candidate), status: "ahead" });
+          expected.push({ args: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,statusCheckRollup"], payload: { headRefOid: null } });
+        }
+      }
       const calls = [];
       const runtime = { repoRoot: wt, env: gitFreeEnv(), runChild: async (command, args) => {
         const entry = expected[calls.length];
         calls.push({ command, args });
         assert.equal(command, "gh");
-        assert.deepEqual(args, entry?.args, `${defect}: unexpected containment call`);
-        return { code: 0, stdout: JSON.stringify({ status: entry.status }), stderr: "" };
+        assert.deepEqual(args, entry?.args, `${defect}: unexpected verification call`);
+        return { code: 0, stdout: JSON.stringify(entry.payload ?? { status: entry.status }), stderr: "" };
       } };
       const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: live, parsedThreads: {
         threads: [{ id: threadId, isResolved: defect !== "unresolved" }], comments: [{ threadId, body: `Fixed in ${fixing}` }],
@@ -133,8 +141,11 @@ for (const route of ["ACT", "THREAD"]) test(`detector carries only a complete au
       assert.deepEqual(calls, expected.map(({ args }) => ({ command: "gh", args })), `${defect}: exact expected calls consumed`);
       assert.equal(result?.complete === true, defect === "none", `${defect}: ${JSON.stringify(result)}`);
       if (defect === "none") assert.equal(result.carriedFromHead, candidate);
+      if (defect === "current-checkpoint-live-verification-refused") assert.match(result.incomplete[0].failedStep, route === "ACT"
+        ? /unverified_active_fixer: --head-sha .* is not the live PR head/
+        : /unverified_active_fixer: THREAD report differs from the clearing candidate dispositions/);
       assert.equal(result?.gateVerdict, undefined);
-      if (defect === "malformed-current") await rm(current);
+      if (defect === "current-checkpoint-live-verification-refused") await rm(current);
     }
     assert.notEqual(head, live);
   });
