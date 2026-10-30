@@ -606,6 +606,21 @@ test("a clean draft_gate on an older head resets the round count below the cap a
   });
 });
 
+test("a draft-gate reset puts the later-review carry below the cap, as the detector counts it", async () => {
+  // Raw count 2 equals the cap, so a later findings review with a resolved thread of its own carries.
+  // The clean draft_gate resets the count to 1, below the cap, so the same carry refuses until the Copilot gate passes, as in the detector.
+  const reviews = [copilotAt(MID_HEAD, "### 🟢 Approval recommended", "2026-01-01T00:00:00Z"), withNodeId(copilotAt(OLD_HEAD, YELLOW_BODY, "2026-01-03T00:00:00Z"), "PRR_old")];
+  const evidence = { ok: true, sizeOutcome: "pass", touchesT1: false, failures: [], draftGate: { verdict: "clean", headSha: MID_HEAD, updatedAt: "2026-01-02T00:00:00Z" } };
+  const overrides = { maxCopilotRounds: 2, reviews, reviewThreads: [reviewThread({ reviewId: "PRR_old", isResolved: true })] };
+  const atCap = await mergePr(baseOptions(), makeRuntime(overrides).runtime);
+  assert.equal(atCap.merged, true);
+  const { runtime } = makeRuntime({ ...overrides, evidence });
+  const threw = await mergePr(baseOptions(), runtime).then(() => null, (e) => e);
+  assert.ok(threw, "reset below the cap must refuse");
+  assert.deepEqual(threw.mergePrFailure.failures.map((f) => f.precondition), ["copilot_convergence"]);
+  assert.ok(refusalReason(threw).startsWith(NO_CURRENT_HEAD_REVIEW_REFUSAL));
+});
+
 test("each missing precondition refuses with a machine-readable reason naming it", async () => {
   const cases = [
     ["mergeable", makeRuntime({ prView: { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" } }), {}],
@@ -858,8 +873,13 @@ test("converged-once: a 🔵 review, a 🟡 review with its own resolved thread,
   assert.equal(blue.copilotDisposition, "converged_once");
   assert.equal(blue.copilotCarriedConvergence.sourceReviewId, "PRR_blue");
 
-  const ownThread = await mergePr(baseOptions(), makeRuntime({
+  await expectCopilotRefusal("a review with its own resolved thread below the cap", {
     maxCopilotRounds: 3,
+    reviews: [withNodeId(copilotAt(OLD_HEAD, YELLOW_BODY, "2026-01-01T00:00:00Z"), "PRR_yellow")],
+    reviewThreads: [reviewThread({ reviewId: "PRR_yellow", isResolved: true })],
+  });
+  const ownThread = await mergePr(baseOptions(), makeRuntime({
+    maxCopilotRounds: 1,
     reviews: [withNodeId(copilotAt(OLD_HEAD, YELLOW_BODY, "2026-01-01T00:00:00Z"), "PRR_yellow")],
     reviewThreads: [reviewThread({ reviewId: "PRR_yellow", isResolved: true })],
   }).runtime);
@@ -925,7 +945,7 @@ test("converged-once: a later Copilot review wins over an earlier convergence un
   });
   assert.ok(refusalReason(blocked).includes(NO_CURRENT_HEAD_REVIEW_REFUSAL));
   const resolved = await mergePr(baseOptions(), makeRuntime({
-    maxCopilotRounds: 3,
+    maxCopilotRounds: 2,
     reviews,
     reviewThreads: [reviewThread({ reviewId: "PRR_later", isResolved: true })],
   }).runtime);

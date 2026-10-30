@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, isGateMachineArtifactBody, normalizeTimestamp, parseJsonText } from "../_core-helpers.mjs";
+import { resolveDraftGateAdjustedRoundCount as sharedDraftGateAdjustedRoundCount } from "../github/_gate-finding-surface.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
@@ -360,6 +361,13 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
 // current head, the Copilot reviews (to find the last reviewed head), and the
 // PR's changed files. Fetched only when the interpreter already resolved
 // ROUND_CAP_CLEAN_FALLBACK, so this extra call is off the hot path.
+// The carry predicate takes the draft-gate-adjusted round count, as the
+// detector, the request tool and merge do; a raw count would treat a reset
+// review as at the cap. Best-effort: a gate-evidence read failure keeps the raw count.
+function resolveDraftGateAdjustedRoundCount(options, facts, rawCount, effectiveCap, runtime) {
+  return sharedDraftGateAdjustedRoundCount({ repo: options.repo, pr: options.pr, currentHeadSha: facts?.headRefOid, reviews: facts?.reviews, rawCount, effectiveCap }, runtime);
+}
+
 async function fetchReopenCycleFacts({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   let result;
   try {
@@ -659,28 +667,32 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
   }
   // Skip internal detection in sequential stub/test mode to avoid consuming stub entries.
   // Claims-mode stubs handle interleaved calls; detection runs normally.
-  if (
-    !internalOnlySkipCopilot &&
-    (!env.GH_SEQUENCE_PATH || env.GH_STUB_MODE === "claims") &&
-    options.watchStatus === undefined &&
-    (interpretation.state === STATE.PR_READY_NO_FEEDBACK ||
-      interpretation.state === STATE.READY_TO_REREQUEST_REVIEW)
-  ) {
-    try {
-      const internalCheck = await detectPrInternalOnly(options, { env, ghCommand, runChild });
-      if (internalCheck.ok && internalCheck.internalOnly) {
-        internalOnlySkipCopilot = true;
-        interpretation = {
-          ...interpretation,
-          state: STATE.INTERNAL_TOOLING_DIRECT_GATE,
-          nextAction: NEXT_ACTIONS[STATE.INTERNAL_TOOLING_DIRECT_GATE],
-          allowedTransitions: TRANSITIONS[STATE.INTERNAL_TOOLING_DIRECT_GATE] || [STATE.DONE],
-        };
+  // Run again after a draft-gate reinterpretation below, which can newly reach a requestable state.
+  const applyInternalOnlyDetection = async () => {
+    if (
+      !internalOnlySkipCopilot &&
+      (!env.GH_SEQUENCE_PATH || env.GH_STUB_MODE === "claims") &&
+      options.watchStatus === undefined &&
+      (interpretation.state === STATE.PR_READY_NO_FEEDBACK ||
+        interpretation.state === STATE.READY_TO_REREQUEST_REVIEW)
+    ) {
+      try {
+        const internalCheck = await detectPrInternalOnly(options, { env, ghCommand, runChild });
+        if (internalCheck.ok && internalCheck.internalOnly) {
+          internalOnlySkipCopilot = true;
+          interpretation = {
+            ...interpretation,
+            state: STATE.INTERNAL_TOOLING_DIRECT_GATE,
+            nextAction: NEXT_ACTIONS[STATE.INTERNAL_TOOLING_DIRECT_GATE],
+            allowedTransitions: TRANSITIONS[STATE.INTERNAL_TOOLING_DIRECT_GATE] || [STATE.DONE],
+          };
+        }
+      } catch {
+        // Best-effort: if detection fails, fall through to normal request behavior
       }
-    } catch {
-      // Best-effort: if detection fails, fall through to normal request behavior
     }
-  }
+  };
+  await applyInternalOnlyDetection();
 
   // In-flight-rerequest race: the interpreter routes to
   // ROUND_CAP_CLEAN_FALLBACK even when a Copilot review is REQUESTED and pending
@@ -723,11 +735,29 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
   // significant post-convergence change). A doc-only change stays at the clean
   // fallback (stop), unchanged.
   let reopenedCapCycle = false;
+  let reopenFacts = null;
+  // The draft-gate reset runs for readbacks (--watch-status) too, so a readback never
+  // reports the terminal cap fallback where the requester would reset below the cap.
+  if (!internalOnlySkipCopilot
+      && interpretation.roundCapReopenEligible === true) {
+    reopenFacts = await fetchReopenCycleFacts(options, { env, ghCommand, runChild });
+    // A draft-gate reset below the cap changes cap routing itself, not only the carry:
+    // apply the adjusted count to the snapshot and reinterpret, so a request below the cap
+    // never depends on change significance.
+    if (!requireCopilotConvergenceAtLatestHead) {
+      const adjustedCount = await resolveDraftGateAdjustedRoundCount(options, reopenFacts, snapshot.copilotReviewRoundCount, refinementConfig.maxCopilotRounds, { env, ghCommand, runChild });
+      if (adjustedCount !== snapshot.copilotReviewRoundCount) {
+        snapshot = { ...snapshot, copilotReviewRoundCount: adjustedCount };
+        interpretation = interpretLoopState(snapshot, refinementConfig);
+        await applyInternalOnlyDetection();
+      }
+    }
+  }
   if (!internalOnlySkipCopilot
       && options.watchStatus === undefined
       && interpretation.roundCapReopenEligible === true) {
-    const reopenFacts = await fetchReopenCycleFacts(options, { env, ghCommand, runChild });
     const currentHeadSha = typeof reopenFacts?.headRefOid === "string" ? reopenFacts.headRefOid.trim() : null;
+    const carryRoundCount = snapshot.copilotReviewRoundCount;
     // Converged-once mode: a converged latest review stands for this head, so
     // no post-convergence change reopens the cycle (the shared predicate the
     // request tool and the gate coordination detector use).
@@ -741,6 +771,8 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
         unresolvedThreadCount: snapshot.unresolvedThreadCount,
         requireCopilotConvergenceAtLatestHead,
         rules: resolveClassifyRules(config.config),
+        copilotReviewRoundCount: carryRoundCount,
+        effectiveCap: refinementConfig.maxCopilotRounds,
       },
       { env, ghCommand, runChild },
     )).carried;
@@ -785,6 +817,10 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
         unresolvedThreadCount: snapshot.unresolvedThreadCount,
         requireCopilotConvergenceAtLatestHead,
         rules: resolveClassifyRules(config.config),
+        copilotReviewRoundCount: requireCopilotConvergenceAtLatestHead
+          ? snapshot.copilotReviewRoundCount
+          : await resolveDraftGateAdjustedRoundCount(options, facts, snapshot.copilotReviewRoundCount, refinementConfig.maxCopilotRounds, { env, ghCommand, runChild }),
+        effectiveCap: refinementConfig.maxCopilotRounds,
       };
       const runtime = { env, ghCommand, runChild };
       const markerCarry = await resolvePostConvergenceReviewSuppressed(carryFacts, runtime);

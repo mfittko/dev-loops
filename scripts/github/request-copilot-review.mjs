@@ -9,14 +9,12 @@ import {
   isDirectCliRun,
   parseReviewThreads,
   resolveCopilotReviewPresence,
-  resolveDraftGateRoundResetMs,
   summarizeCopilotReviews,
-  summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { resolveFixerDispositionInput } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
-import { fetchGateEvidenceComments } from "./_gate-finding-surface.mjs";
+import { resolveDraftGateAdjustedRoundCount } from "./_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
@@ -92,6 +90,13 @@ Request statuses:
                                 submitted Copilot review sits on an earlier head and converged: its body is clean,
                                 headerless, or needs-a-closer-look, or it is changes-recommended/unrecognized and it
                                 opened a thread of its own or a trusted copilot-body-disposition record names it.
+                                A review with a thread of its own, whatever its body, or a fix-form record converges
+                                only at the round cap or after a pre_approval_gate marker exists on the PR for any
+                                head. Below the cap and before that marker, any review with a thread of its own
+                                (clean, headerless, needs-a-closer-look or otherwise) or a fix-form record does
+                                not converge, an operator record does not converge a review with a thread of its
+                                own, and only an operator record on a body-only review converges;
+                                the tool requests Copilot instead (COPILOT-STATE-CONVERGED-BELOW-CAP).
                                 The delta since that head is not checked; pre_approval_gate reviews the current head.
                                 The gate coordination detector reports the same carried convergence
                                 (carriedConvergence.source "converged_once"). An operator suppression marker in this mode
@@ -274,25 +279,8 @@ async function fetchCopilotReviewIds({ repo, pr }, { env = process.env, ghComman
 // shared gate-evidence comment reader, not the full checkpoint pipeline.
 // Best-effort: a fetch failure falls back to the raw count, never disabling
 // the cap.
-async function resolveDraftGateAdjustedRounds(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}, before) {
-  try {
-    const currentHeadSha = typeof before?.prData?.headRefOid === "string" && before.prData.headRefOid.trim().length > 0
-      ? before.prData.headRefOid.trim()
-      : null;
-    const comments = await fetchGateEvidenceComments(
-      { repo: options.repo, pr: options.pr },
-      { env, ghCommand, runChild },
-    );
-    const gateSummary = summarizeGateReviewComments(comments);
-    const draftGateResetAtMs = resolveDraftGateRoundResetMs({ draftGate: gateSummary?.draft_gate, currentHeadSha });
-    if (draftGateResetAtMs == null) {
-      return before.completedCopilotReviewRounds ?? 0;
-    }
-    const adjusted = parseReviewsPayload(JSON.stringify(before.prData ?? {}), { draftGateResetAtMs });
-    return adjusted.completedCopilotReviewRounds ?? 0;
-  } catch {
-    return before.completedCopilotReviewRounds ?? 0;
-  }
+function resolveDraftGateAdjustedRounds(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}, before) {
+  return resolveDraftGateAdjustedRoundCount({ repo: options.repo, pr: options.pr, currentHeadSha: before?.prData?.headRefOid, reviews: before?.prData?.reviews, rawCount: before.completedCopilotReviewRounds ?? 0 }, { env, ghCommand, runChild });
 }
 
 // Review-surface presence: Copilot is present when it is a requested reviewer
@@ -776,7 +764,7 @@ async function performRequest(
   let carriedConvergence = null;
   const resolveCarried = async () => {
     carriedConvergence ??= await resolveCarriedConvergence(
-      { repo: options.repo, pr: options.pr, currentHeadSha, prData: before.prData, copilotReviewRequestStatus: "none", requireCopilotConvergenceAtLatestHead, rules: resolveClassifyRules(config) },
+      { repo: options.repo, pr: options.pr, currentHeadSha, prData: before.prData, copilotReviewRequestStatus: "none", requireCopilotConvergenceAtLatestHead, rules: resolveClassifyRules(config), copilotReviewRoundCount: completedRounds, effectiveCap: maxRounds },
       runtime,
     );
     return carriedConvergence;
