@@ -294,7 +294,7 @@ test("THREAD full --construct builds the report from the threads, the clearing r
   });
 });
 
-for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "touch", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source"]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
+for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-diff-opts", "touch", "touch-diff-opts", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source"]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
   await withRepoRoot(async (root) => {
     root = await realpath(root);
     const f = route === "THREAD" ? await threadConstructFixture(root, undefined, true) : await completionFixture(root, "resolved", { site: true });
@@ -312,8 +312,8 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "touch", 
     if (scenario === "missing-report") await rm(output);
     if (scenario === "forged-source") await writeFile(f.plan.workOrder.requiredReads[0].path, "[]");
     let resolved = false, reads = 0; const posts = [];
-    const deps = { env: runIdFreeEnv(), ghCommand: "gh", repoRoot: root, runChild: async (cmd, args, env, stdin) => {
-      if (cmd === "git") { const r = spawnSync(cmd, args, { cwd: root, env: gitEnvNoDirOverrides(), encoding: "utf8" }); return { code: r.status, stdout: r.stdout, stderr: r.stderr }; }
+    const deps = { env: runIdFreeEnv(scenario.endsWith("diff-opts") ? { GIT_DIFF_OPTS: "-u100" } : {}), ghCommand: "gh", repoRoot: root, runChild: async (cmd, args, env, stdin) => {
+      if (cmd === "git") { const r = spawnSync(cmd, args, { cwd: root, env, encoding: "utf8" }); return { code: r.status, stdout: r.stdout, stderr: r.stderr }; }
       if (args[0] === "pr") return { code: 0, stdout: JSON.stringify({ headRefOid: scenario === "head-race" && reads++ ? candidate : head, statusCheckRollup: ["red", "pending"].includes(scenario) ? [{ name: "unit" }] : [] }) };
       if (args[1] === "user") return { code: 0, stdout: JSON.stringify({ login: "gate" }) };
       if (args[1]?.includes("/compare/")) return { code: 0, stdout: JSON.stringify({ status: ["behind", "diverged"].includes(scenario) && args[1].endsWith(`${candidate}...${head}`) ? scenario : "ahead" }) };
@@ -332,9 +332,10 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "touch", 
       throw new Error(`unexpected call ${cmd} ${args.join(" ")}`);
     } };
     const options = { repo: REPO, pr: PR, headSha: head, fixerPlan };
-    if (scenario !== "miss") {
-      const expected = { touch: /thread_site_changed/, "touch-color-diff": /thread_site_changed/, "touch-color-ui": /thread_site_changed/, left: /thread_site_unverifiable/, behind: /not contained/, diverged: /not contained/, red: /ci_failed/, pending: /ci_pending/, "head-race": /live head changed/, "missing-report": /result_missing/, "forged-source": /differ|Invalid fixer review baseline/ }[scenario];
+    if (!["miss", "miss-diff-opts"].includes(scenario)) {
+      const expected = { touch: /thread_site_changed/, "touch-diff-opts": /thread_site_changed/, "touch-color-diff": /thread_site_changed/, "touch-color-ui": /thread_site_changed/, left: /thread_site_unverifiable/, behind: /not contained/, diverged: /not contained/, red: /ci_failed/, pending: /ci_pending/, "head-race": /live head changed/, "missing-report": /result_missing/, "forged-source": /differ|Invalid fixer review baseline/ }[scenario];
       await assert.rejects(verifyFixerDisposition(options, deps), expected); assert.deepEqual(posts, []);
+      assert.equal(resolved, false);
       assert.deepEqual(await checkpointFiles(root), []);
       if (!["touch", "left"].includes(scenario)) return;
       const capture = path.join(root, "tmp", "open-thread.json");

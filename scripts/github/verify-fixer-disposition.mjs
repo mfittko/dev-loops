@@ -631,7 +631,7 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, delta
 // Historical coordinates belong to the authenticated root, never the live (possibly shifted) line.
 export async function assertDescendantThreadSites({ repo, pr, candidateHead, headSha, handoff, parsed, repoRoot }, { env, ghCommand, runChild }) {
   const gitEnv = { ...env };
-  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete gitEnv[key];
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_DIFF_OPTS"]) delete gitEnv[key];
   for (const entry of handoff.dispositions.filter((entry) => entry.disposition === "tackled")) {
     const refuse = (reason, changed = false) => { throw new Error(`thread_site_${changed ? "changed" : "unverifiable"}: ${entry.threadId} (${candidateHead} -> ${headSha}): ${reason}; run pre_approval_gate with this open thread in --known-findings`); };
     const git = async (...args) => {

@@ -28,4 +28,4 @@ Open threads can complete at a descendant head when every intervening change lea
 
 Disposition delivery never supplies or carries a gate verdict. This slice does not re-arm the advisory disposition boundary, claim whole-loop liveness, change cap-round behavior, add emitter authority, or implement slices 4 to 6 or abandoned-marker recovery.
 
-The acceptance evidence records the operator's policy decision; it does not establish that PR 2991 has passed its lifecycle gates. The ADR number must be checked again against the default branch before merge.
+The acceptance evidence records the operator's policy decision. PR 2991's lifecycle gates require separate completion evidence. The ADR number must be checked again against the default branch before merge.
