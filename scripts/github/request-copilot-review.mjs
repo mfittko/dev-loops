@@ -9,14 +9,12 @@ import {
   isDirectCliRun,
   parseReviewThreads,
   resolveCopilotReviewPresence,
-  resolveDraftGateRoundResetMs,
   summarizeCopilotReviews,
-  summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { resolveFixerDispositionInput } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
-import { fetchGateEvidenceComments } from "./_gate-finding-surface.mjs";
+import { resolveDraftGateAdjustedRoundCount } from "./_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { buildSnapshotFromPrFacts, interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
 import { loadDevLoopConfigStrict, resolveClassifyRules, resolveEffectiveCopilotRoundCap, resolveRefinement, resolveRequireCopilotConvergenceAtLatestHead } from "@dev-loops/core/config";
@@ -281,25 +279,8 @@ async function fetchCopilotReviewIds({ repo, pr }, { env = process.env, ghComman
 // shared gate-evidence comment reader, not the full checkpoint pipeline.
 // Best-effort: a fetch failure falls back to the raw count, never disabling
 // the cap.
-async function resolveDraftGateAdjustedRounds(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}, before) {
-  try {
-    const currentHeadSha = typeof before?.prData?.headRefOid === "string" && before.prData.headRefOid.trim().length > 0
-      ? before.prData.headRefOid.trim()
-      : null;
-    const comments = await fetchGateEvidenceComments(
-      { repo: options.repo, pr: options.pr },
-      { env, ghCommand, runChild },
-    );
-    const gateSummary = summarizeGateReviewComments(comments);
-    const draftGateResetAtMs = resolveDraftGateRoundResetMs({ draftGate: gateSummary?.draft_gate, currentHeadSha });
-    if (draftGateResetAtMs == null) {
-      return before.completedCopilotReviewRounds ?? 0;
-    }
-    const adjusted = parseReviewsPayload(JSON.stringify(before.prData ?? {}), { draftGateResetAtMs });
-    return adjusted.completedCopilotReviewRounds ?? 0;
-  } catch {
-    return before.completedCopilotReviewRounds ?? 0;
-  }
+function resolveDraftGateAdjustedRounds(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}, before) {
+  return resolveDraftGateAdjustedRoundCount({ repo: options.repo, pr: options.pr, currentHeadSha: before?.prData?.headRefOid, reviews: before?.prData?.reviews, rawCount: before.completedCopilotReviewRounds ?? 0 }, { env, ghCommand, runChild });
 }
 
 // Review-surface presence: Copilot is present when it is a requested reviewer

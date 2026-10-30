@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, isGateMachineArtifactBody, normalizeTimestamp, parseJsonText, resolveDraftGateRoundResetMs, summarizeCopilotReviews, summarizeGateReviewComments } from "../_core-helpers.mjs";
-import { fetchGateEvidenceComments } from "../github/_gate-finding-surface.mjs";
+import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, isGateMachineArtifactBody, normalizeTimestamp, parseJsonText } from "../_core-helpers.mjs";
+import { resolveDraftGateAdjustedRoundCount as sharedDraftGateAdjustedRoundCount } from "../github/_gate-finding-surface.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "./_copilot-convergence-carry.mjs";
@@ -364,20 +364,8 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
 // The carry predicate takes the draft-gate-adjusted round count, as the
 // detector, the request tool and merge do; a raw count would treat a reset
 // review as at the cap. Best-effort: a gate-evidence read failure keeps the raw count.
-async function resolveDraftGateAdjustedRoundCount(options, facts, rawCount, effectiveCap, runtime) {
-  // A reset only lowers the count, so a count already below the cap needs no gate-evidence read.
-  if (!Number.isInteger(rawCount) || !Number.isInteger(effectiveCap) || rawCount < effectiveCap) return rawCount;
-  try {
-    const currentHeadSha = typeof facts?.headRefOid === "string" ? facts.headRefOid.trim() : null;
-    // Unavailable facts (a failed gh read) must never lower the count: a null head reads every clean draft_gate as off-head.
-    if (!currentHeadSha) return rawCount;
-    const gateSummary = summarizeGateReviewComments(await fetchGateEvidenceComments({ repo: options.repo, pr: options.pr }, runtime));
-    const draftGateResetAtMs = resolveDraftGateRoundResetMs({ draftGate: gateSummary?.draft_gate, currentHeadSha });
-    if (draftGateResetAtMs == null) return rawCount;
-    return summarizeCopilotReviews(facts?.reviews ?? [], { headSha: currentHeadSha, draftGateResetAtMs }).completedCopilotReviewRounds ?? rawCount;
-  } catch {
-    return rawCount;
-  }
+function resolveDraftGateAdjustedRoundCount(options, facts, rawCount, effectiveCap, runtime) {
+  return sharedDraftGateAdjustedRoundCount({ repo: options.repo, pr: options.pr, currentHeadSha: facts?.headRefOid, reviews: facts?.reviews, rawCount, effectiveCap }, runtime);
 }
 
 async function fetchReopenCycleFacts({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {

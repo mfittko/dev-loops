@@ -12,6 +12,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, it, test } from "bun:test";
 import { makeGhMock, runIdFreeEnv } from "../_helpers.mjs";
 import { performCopilotReviewRequest } from "../../scripts/github/request-copilot-review.mjs";
+import { resolveDraftGateAdjustedRoundCount } from "../../scripts/github/_gate-finding-surface.mjs";
 import { mergePr } from "../../scripts/github/merge-pr.mjs";
 import { detectPrGateCoordinationState, loadPrGateCoordinationContext } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
@@ -1229,6 +1230,34 @@ describe("COPILOT-STATE-CONVERGED-BELOW-CAP: below the round cap an unclean revi
     const detected = await runDetector(fixture(), { root: convergedOnceWideRoot });
     assert.equal(detected.carriedConvergence.source, "converged_once");
     assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  });
+
+  it("AC3b: a latest review on HEAD with its own resolved thread keeps no_changes_since_last_review and the detector routing", async () => {
+    const onHead = (id, submittedAt) => ({ id, author: { login: COPILOT }, state: "COMMENTED", body: id === "PRR_head" ? YELLOW : "", commit: { oid: HEAD }, submittedAt });
+    const reviews = [onHead("PRR_head0", "2026-09-22T10:00:00Z"), onHead("PRR_head", "2026-09-22T11:00:00Z")];
+    const fixture = () => scenario({ reviews, delta: CODE_DELTA, threads: [thread({ isResolved: true, reviewId: "PRR_head" })] });
+    const { runChild, unmatched } = strictRunChild(requestEntries(fixture()));
+    const request = await performCopilotReviewRequest(
+      { repo: REPO, pr: PR, forceRerequestReview: true, checkpointDir },
+      { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild, repoRoot: capRoot, delayImpl: async () => {} },
+    );
+    assert.deepEqual(unmatched, [], "request tool made an undeclared gh call");
+    assert.equal(request.status, "no_changes_since_last_review");
+    const detected = await runDetector(fixture(), { root: capRoot });
+    assert.equal(detected.carriedConvergence, null);
+    assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  });
+});
+
+describe("the draft-gate-adjusted round count is one shared derivation (AC5)", () => {
+  it("an unavailable head returns the raw count in the handoff and the request tool without a gate read", async () => {
+    const { runChild, calls } = makeGhMock([]);
+    const runtime = { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild };
+    const reviews = [{ id: "PRR_1", author: { login: COPILOT }, state: "COMMENTED", body: "", commit: { oid: PRIOR }, submittedAt: "2026-09-22T10:00:00Z" }];
+    const args = { repo: REPO, pr: PR, currentHeadSha: null, reviews, rawCount: 5, effectiveCap: 2 };
+    assert.equal(await resolveDraftGateAdjustedRoundCount(args, runtime), 5);
+    assert.equal(await resolveDraftGateAdjustedRoundCount({ ...args, currentHeadSha: "  " }, runtime), 5);
+    assert.equal(calls.length, 0);
   });
 });
 
