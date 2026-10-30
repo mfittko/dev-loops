@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { mergePr, parseMergePrCliArgs, main, defaultIsAncestor, defaultFetchPrHead } from "../../scripts/github/merge-pr.mjs";
+import { mergePr, parseMergePrCliArgs, main, defaultIsAncestor, defaultFetchPrHead, buildDetectEvidenceArgv } from "../../scripts/github/merge-pr.mjs";
 import { captureStream } from "../_helpers.mjs";
 
 const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
@@ -1331,4 +1331,20 @@ test("the ancestry check runs once, after the ADR step and the single fetch", as
   runtime.isAncestor = () => { order.push("ancestry"); return true; };
   await mergePr(baseOptions(), runtime);
   assert.deepEqual(order, ["fetch", "adr", "ancestry"]);
+});
+
+test("the evidence detector receives the PR base branch so the cap-fixed proof can be evaluated", async () => {
+  const { runtime } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+  const seen = [];
+  const detect = runtime.detectEvidence;
+  runtime.detectEvidence = async (opts) => { seen.push(opts.baseRefName); return detect(opts); };
+  await mergePr(baseOptions(), runtime);
+  assert.deepEqual(seen, ["main"]);
+});
+
+test("buildDetectEvidenceArgv adds --base-ref-name only for a non-empty base ref", () => {
+  const withBase = buildDetectEvidenceArgv({ repo: "o/r", pr: 5, baseRefName: "main" });
+  assert.deepEqual(withBase.slice(-2), ["--base-ref-name", "main"]);
+  const without = buildDetectEvidenceArgv({ repo: "o/r", pr: 5, baseRefName: "" });
+  assert.equal(without.includes("--base-ref-name"), false);
 });
