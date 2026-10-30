@@ -2446,7 +2446,7 @@ for (const form of ["foreign-route", "two-matching"]) test(`complete THREAD --co
 });
 
 // ADR 0197 (#2937 S4b): the cap round (cap 2) ran at `head`; origin/main then moved and the branch merged it.
-async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfterMerge = false, fixerCommitBeforeMerge = false, secondCandidate = false } = {}) {
+async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfterMerge = false, fixerCommitBeforeMerge = false, secondCandidate = false, baseMergeBeforeFixer = false } = {}) {
   await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
   const medium = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
   await writeFile(files.actList, JSON.stringify([medium]));
@@ -2455,7 +2455,17 @@ async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfter
   for (const [sha, loggedAt] of [["d".repeat(40), "2026-11-01T00:00:00.000Z"], [head, "2026-11-02T00:00:00.000Z"]]) {
     await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt, findings: sha === head ? [medium] : [] }));
   }
-  if (fixerCommitBeforeMerge) {
+  let ledgerlessBase;
+  if (baseMergeBeforeFixer) {
+    // Chain starts at a ledgerless base-only merge M0 of the cap-round head: A -> M0 -> B (sealed M0 -> B) -> M.
+    await writeFile(path.join(root, "first-main.md"), "first main content\n");
+    git(root, "add", "first-main.md");
+    git(root, "commit", "-q", "-m", "main moves first");
+    git(root, "update-ref", "refs/remotes/origin/main", "main");
+    git(wt, "merge", "-q", "--no-ff", "-m", "merge origin/main first", "origin/main");
+    ledgerlessBase = git(wt, "rev-parse", "HEAD");
+  }
+  if (fixerCommitBeforeMerge || baseMergeBeforeFixer) {
     // PR 2992 shape: the cap-round fixer commit B carries a sealed clearing record head -> B, and the base merge M follows B.
     await writeFile(path.join(wt, "fixer.md"), "fixer change\n");
     git(wt, "add", "fixer.md");
@@ -2467,7 +2477,7 @@ async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfter
       await writeFile(path.join(root, "tmp", "gate-delta", `${from}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
     };
     const b1 = git(wt, "rev-parse", "HEAD");
-    await seal(head, b1);
+    await seal(ledgerlessBase ?? head, b1);
     if (secondCandidate) {
       // Chain A -> B1 -> B2: B2 sits on a side branch, so the merge M below is a base-only merge since B1 but not since the chain's last candidate B2.
       git(wt, "checkout", "-q", "-b", "side-b2");
@@ -2502,6 +2512,13 @@ test("ADR 0197: a base-only merge after the cap round does not consume the closu
 test("ADR 0216: a base-only merge of the chain's last clearing candidate is still the cap round (PR 2992 shape)", async () => {
   await withFixture(async (fx) => {
     const { over } = await capRoundThenBaseMerge(fx, { fixerCommitBeforeMerge: true });
+    assert.equal((await fx.emit(over)).workOrder.source, "act-list");
+  });
+});
+
+test("ADR 0216: a chain that starts at a ledgerless base-only merge M0 of the cap-round head is still the cap round at a later base merge M", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, { baseMergeBeforeFixer: true });
     assert.equal((await fx.emit(over)).workOrder.source, "act-list");
   });
 });

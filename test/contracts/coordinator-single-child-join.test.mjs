@@ -29,3 +29,10 @@ test("the harness-join bullet and the dev-loop agent no longer join the fixer th
     assert.ok(text.includes("COORDINATOR-SINGLE-CHILD-JOIN"), file);
   }
 });
+
+test("the Copilot follow-up THREAD-route delta reviewer dispatch sentence names the --artifact join", () => {
+  const text = read("skills/copilot-pr-followup/SKILL.md");
+  const at = text.indexOf("Otherwise run the delta reviewer");
+  assert.ok(at >= 0);
+  assert.ok(text.slice(at, at + 400).includes("gate wait-for-units --artifact <the delta reviewer's `--result` path>"));
+});

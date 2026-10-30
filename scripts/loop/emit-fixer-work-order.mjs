@@ -26,7 +26,7 @@ import { OperatorFocusRefusal, bindOperatorFocusItems, operatorFocusDigestEntry,
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
-import { closureFromHeadOf, clearingChainCandidates, readClosedPriorRoundLogs, renderRequiredReadLine, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
+import { closureFromHeadOf, clearingChainLastCandidates, readClosedPriorRoundLogs, renderRequiredReadLine, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
@@ -318,7 +318,8 @@ export async function emitFixerWorkOrder({
         // ADR 0216: the chain's last clearing candidate (the fixer commit that followed the cap round) counts as a base of the merge as well.
         let baseOnly = false;
         if (typeof baseRefName === "string" && baseRefName) {
-          for (const from of [clearingChainCandidates(resolveGateArtifactTmpRoot(cwd), fromHead).at(-1), fromHead]) {
+          const ends = await clearingChainLastCandidates({ tmpRoot: resolveGateArtifactTmpRoot(cwd), capHead: fromHead, repo, pr, baseRefName, repoRoot: cwd });
+          for (const from of [...ends, fromHead]) {
             if (!from) continue;
             if (await isBaseOnlyMergeSince({ fromHead: from, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd })) { baseOnly = true; break; }
           }
