@@ -33,7 +33,7 @@ const PR = 1975;
 const HEAD_SHA = "a".repeat(40);
 const FIX_SHA = "b".repeat(40);
 
-for (const change of ["miss", "offset", "offset-touch", "multi-hunk", "multiline", "overlap", "revert", "rename", "delete", "binary", "left", "missing", "foreign", "unknown", "merge"]) test(`C19 historical root proof: ${change}`, async () => {
+for (const change of ["miss", "metadata-text", "mode", "offset", "offset-touch", "multi-hunk", "multiline", "overlap", "revert", "rename", "delete", "binary", "left", "missing", "foreign", "unknown", "merge"]) test(`C19 historical root proof: ${change}`, async () => {
   await withRepoRoot(async (root) => {
     initGitFixture(root, { branch: "issue-1" });
     const git = (...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
@@ -47,6 +47,11 @@ for (const change of ["miss", "offset", "offset-touch", "multi-hunk", "multiline
     else if (change === "rename") { git("mv", "site.txt", "renamed.txt"); git("commit", "-qm", "rename"); }
     else if (change === "delete") { git("rm", "site.txt"); git("commit", "-qm", "delete"); }
     else if (change === "binary") await commit("\0binary\n");
+    else if (change === "metadata-text") {
+      await commit(original.replace("three", "fixed") + "// use the new model\nBinary files a and b differ\nGIT binary patch\ndeleted file mode 100644\nnew file mode 100644\nold mode 100644\nnew mode 100755\n");
+      await commit(original.replace("three", "fixed"));
+    }
+    else if (change === "mode") { git("update-index", "--chmod=+x", "site.txt"); git("commit", "-qm", "mode change"); }
     else if (change === "merge") { git("checkout", "-qb", "other"); await commit(original.replace("three", "changed")); git("checkout", "issue-1"); git("merge", "--no-ff", "other", "-m", "merge"); }
     else { await commit(original.replace("three", ["overlap", "revert"].includes(change) ? "changed" : "fixed").replace("five", "elsewhere")); }
     if (change === "revert") await commit(original.replace("three", "fixed"));
@@ -64,7 +69,7 @@ for (const change of ["miss", "offset", "offset-touch", "multi-hunk", "multiline
     const proof = () => assertDescendantThreadSites({ repo: REPO, pr: PR, candidateHead: candidate, headSha: head,
       handoff: { dispositions: [{ threadId: "t", disposition: "tackled" }] },
       parsed: { comments: [{ threadId: "t", id: "root", databaseId: "1" }] }, repoRoot: root }, deps);
-    if (["miss", "offset"].includes(change)) await proof();
+    if (["miss", "offset", "metadata-text"].includes(change)) await proof();
     else await assert.rejects(proof, change === "overlap" || change === "revert" ? /thread_site_changed.*t/ : /thread_site_(changed|unverifiable).*t/);
   });
 });
