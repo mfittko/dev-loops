@@ -10,6 +10,8 @@ test("COORDINATOR-SINGLE-CHILD-JOIN is registered and carries the no-turn-end an
   assert.ok(contract.includes("<!-- rule: COORDINATOR-SINGLE-CHILD-JOIN -->"));
   assert.ok(contract.indexOf("COORDINATOR-SINGLE-CHILD-JOIN -->") > contract.indexOf("rule: GATE-EXEC-HARNESS-JOIN"));
   assert.match(contract, /The hand-back path must not exist at dispatch: each fixer emission and each delta review invocation gets its own path, and the coordinator never reuses a hand-back path\./);
+  assert.match(contract, /only for a final hand-back: the file parses as JSON and the completed marker `<hand-back path>\.done` exists\. The child writes the hand-back path and then the marker as its last action/);
+  assert.match(read("docs/decisions/0216-slice-a-cap-round-chain-and-single-child-join.md"), /only for a final hand-back/);
   assert.match(contract, /A coordinator never ends its turn while a single child runs, before the `--artifact` join returns\./);
   assert.match(contract, /Pi: the coordinator joins the child with a blocking dispatch \(`async: false`\), `runs\.all` or `bg_wait`.*`extension\/index\.ts` runs the foreground `async: false` child/);
   assert.ok(JSON.parse(read("skills/docs/required-rules.json")).requiredRules.some((rule) => rule.id === "COORDINATOR-SINGLE-CHILD-JOIN"));

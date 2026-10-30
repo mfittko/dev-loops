@@ -330,7 +330,13 @@ test("--artifact: an existing JSON artifact gives all_done; absent, empty and no
     await writeFile(file, "{not json");
     assert.equal((await wait()).outcome, "timeout", "a non-JSON file is pending");
     await writeFile(file, JSON.stringify({ headSha: HEAD }));
+    assert.equal((await wait()).outcome, "timeout", "an interim parseable write without the completed marker is pending");
+    await writeFile(file, JSON.stringify({ headSha: HEAD, siteCoverage: [] }));
+    assert.equal((await wait()).outcome, "timeout", "a rewritten interim record is still pending");
+    await writeFile(`${file}.done`, "");
     assert.equal((await wait()).outcome, "all_done");
+    await writeFile(file, "{partial");
+    assert.equal((await wait()).outcome, "timeout", "the marker alone never reads as done");
   });
 });
 

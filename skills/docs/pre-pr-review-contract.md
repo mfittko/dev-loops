@@ -179,7 +179,7 @@ fixer and owns the push. The sequence is:
    the matching sequence is closed and `nextStep: push_to_gate` routes to the full
    gate path, with open-thread admission still separate. Dispatch no delta reviewer
    and emit no `full` fixer for these closure outcomes. Otherwise dispatch one fresh delta reviewer for the current worktree head,
-   briefing it that it MUST NOT push (`PRE-PUSH-DELTA-PUSH-AUTHORITY`); the brief also names `input.patchPath` and `input.evidenceRule`. On Claude Code the coordinator then joins the delta reviewer with `node <dev-loops-package-root>/cli/index.mjs gate wait-for-units --artifact <hand-back path> [--timeout <seconds>]`, passing the reviewer's `--result` path (`COORDINATOR-SINGLE-CHILD-JOIN`).
+   briefing it that it MUST NOT push (`PRE-PUSH-DELTA-PUSH-AUTHORITY`); the brief also names `input.patchPath` and `input.evidenceRule`. On Claude Code the coordinator then joins the delta reviewer with `node <dev-loops-package-root>/cli/index.mjs gate wait-for-units --artifact <hand-back path> [--timeout <seconds>]`, passing the reviewer's `--result` path (`COORDINATOR-SINGLE-CHILD-JOIN`); the brief tells the reviewer to create the marker `<--result path>.done` as its last action, after the result is final.
 3. The coordinator runs the CLI `--result` check (no `--findings-log`; only the input run
    reads it), and follows its `nextStep`. Both routes again pass `--fixer-plan`
    and `--site-coverage`. The THREAD route retains `--threads-file`, `--repo`,

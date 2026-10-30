@@ -35,7 +35,7 @@ Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), round_retired (e
   --emit-plan <path>   the round's <gate>-<headSha>.emit-plan.json; waits on every unit unless --unit narrows it
   --unit <scope>       repeatable; restrict the wait to these unit scopes
   --judge-plan <path>  the round's judge-emit-plan.json; waits on the one judge unit
-  --artifact <path>    single-unit join (COORDINATOR-SINGLE-CHILD-JOIN): waits until this file exists and parses as JSON; excludes the plan flags and --tmp-root
+  --artifact <path>    single-unit join (COORDINATOR-SINGLE-CHILD-JOIN): waits until this file parses as JSON and the child's completed marker <path>.done exists (the child's last write); excludes the plan flags and --tmp-root
   --tmp-root <dir>     worktree-local tmp root with the sentinels and retirement records
   --timeout <seconds>  0 to ${MAX_TIMEOUT_MS / 1000} (default ${DEFAULT_TIMEOUT_MS / 1000}; 0 = single immediate check)
   --timeout-ms <n>     Deprecated alias for --timeout (milliseconds); warns on stderr. Passing both fails closed.`;
@@ -137,9 +137,14 @@ async function checkUnit(unit, { role, receiptTmpRoot, tmpRoot, headSha }) {
 
 export const ARTIFACT_TIMEOUT_REMEDY = "Re-run the same command. After three consecutive timeout outcomes, stop and return the typed observation units_stalled.";
 
+export const ARTIFACT_DONE_SUFFIX = ".done";
+
+// Final hand-back only: the artifact parses as JSON AND the child's completed marker `<artifact>.done` exists.
+// The child writes the marker as its last action, so an interim parseable write never satisfies the join.
 // A missing, empty or non-JSON file is pending (a partial write reads as not done on this tick); any other read failure propagates.
 async function artifactReady(file) {
-  try { JSON.parse(await readFile(file, "utf8")); return true; } catch (error) { if (error?.code === "ENOENT" || error instanceof SyntaxError) return false; throw error; }
+  try { JSON.parse(await readFile(file, "utf8")); } catch (error) { if (error?.code === "ENOENT" || error instanceof SyntaxError) return false; throw error; }
+  return exists(`${file}${ARTIFACT_DONE_SUFFIX}`);
 }
 
 async function waitForArtifact({ artifact, timeoutMs, now, delay }) {
