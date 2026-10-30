@@ -1250,7 +1250,7 @@ describe("COPILOT-STATE-CONVERGED-BELOW-CAP: below the round cap an unclean revi
 });
 
 describe("the draft-gate-adjusted round count is one shared derivation (AC5)", () => {
-  it("an unavailable head returns the raw count in the handoff and the request tool without a gate read", async () => {
+  it("an unavailable head returns the raw count from the shared helper without a gate read", async () => {
     const { runChild, calls } = makeGhMock([]);
     const runtime = { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild };
     const reviews = [{ id: "PRR_1", author: { login: COPILOT }, state: "COMMENTED", body: "", commit: { oid: PRIOR }, submittedAt: "2026-09-22T10:00:00Z" }];
