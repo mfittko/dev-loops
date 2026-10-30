@@ -294,7 +294,7 @@ test("THREAD full --construct builds the report from the threads, the clearing r
   });
 });
 
-for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-diff-opts", "touch", "touch-diff-opts", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source"]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
+for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-diff-opts", "miss-inter-hunk", "touch", "touch-diff-opts", "touch-inter-hunk", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source"]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
   await withRepoRoot(async (root) => {
     root = await realpath(root);
     const f = route === "THREAD" ? await threadConstructFixture(root, undefined, true) : await completionFixture(root, "resolved", { site: true });
@@ -302,7 +302,10 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
     if (route === "THREAD") await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
     const output = f.output ?? f.plan.workOrder.outputRefs[0], before = await readFile(output);
     const git = (...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
-    await writeFile(path.join(root, "site.txt"), scenario.startsWith("touch") ? "one\ntwo\nchanged\nfour\nfive\n" : "one\ntwo\nthree\nfour\nelsewhere\n");
+    const interHunk = scenario.endsWith("inter-hunk");
+    if (interHunk) git("config", "diff.interHunkContext", "100");
+    const text = scenario.startsWith("touch") ? "one\ntwo\nchanged\nfour\nfive\n" : "one\ntwo\nthree\nfour\nelsewhere\n";
+    await writeFile(path.join(root, "site.txt"), interHunk ? text.replace("one", "before").replace("five", "after") : text);
     git("add", "site.txt"); git("commit", "-qm", "developer");
     if (scenario.startsWith("touch-color")) git("config", scenario === "touch-color-diff" ? "color.diff" : "color.ui", "always");
     let head = git("rev-parse", "HEAD");
@@ -332,8 +335,8 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
       throw new Error(`unexpected call ${cmd} ${args.join(" ")}`);
     } };
     const options = { repo: REPO, pr: PR, headSha: head, fixerPlan };
-    if (!["miss", "miss-diff-opts"].includes(scenario)) {
-      const expected = { touch: /thread_site_changed/, "touch-diff-opts": /thread_site_changed/, "touch-color-diff": /thread_site_changed/, "touch-color-ui": /thread_site_changed/, left: /thread_site_unverifiable/, behind: /not contained/, diverged: /not contained/, red: /ci_failed/, pending: /ci_pending/, "head-race": /live head changed/, "missing-report": /result_missing/, "forged-source": /differ|Invalid fixer review baseline/ }[scenario];
+    if (!["miss", "miss-diff-opts", "miss-inter-hunk"].includes(scenario)) {
+      const expected = { touch: /thread_site_changed/, "touch-diff-opts": /thread_site_changed/, "touch-inter-hunk": /thread_site_changed/, "touch-color-diff": /thread_site_changed/, "touch-color-ui": /thread_site_changed/, left: /thread_site_unverifiable/, behind: /not contained/, diverged: /not contained/, red: /ci_failed/, pending: /ci_pending/, "head-race": /live head changed/, "missing-report": /result_missing/, "forged-source": /differ|Invalid fixer review baseline/ }[scenario];
       await assert.rejects(verifyFixerDisposition(options, deps), expected); assert.deepEqual(posts, []);
       assert.equal(resolved, false);
       assert.deepEqual(await checkpointFiles(root), []);
