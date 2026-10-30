@@ -26,14 +26,17 @@ import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 export const DEFAULT_TIMEOUT_MS = 540000;
 export const MAX_TIMEOUT_MS = 570000;
 export const RECHECK_INTERVAL_MS = 2000;
+export const ARTIFACT_STABLE_MS = 10000;
 const EXIT = { all_done: 0, timeout: 2, round_retired: 3 };
 
 const USAGE = `Usage: wait-for-gate-units.mjs (--emit-plan <path> [--unit <scope>]... | --judge-plan <path>) --tmp-root <worktree>/tmp [--timeout <seconds>]
+       wait-for-gate-units.mjs --artifact <path> [--timeout <seconds>]
 Block in one foreground process until the round's dispatched units are done.
 Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), round_retired (exit 3). Invalid input: ok false, exit 1.
   --emit-plan <path>   the round's <gate>-<headSha>.emit-plan.json; waits on every unit unless --unit narrows it
   --unit <scope>       repeatable; restrict the wait to these unit scopes
   --judge-plan <path>  the round's judge-emit-plan.json; waits on the one judge unit
+  --artifact <path>    single-unit join (COORDINATOR-SINGLE-CHILD-JOIN): waits until this file parses as JSON and carries its terminal field (outcome), or, with no terminal field, stays unchanged for ${ARTIFACT_STABLE_MS / 1000} seconds; excludes the plan flags and --tmp-root
   --tmp-root <dir>     worktree-local tmp root with the sentinels and retirement records
   --timeout <seconds>  0 to ${MAX_TIMEOUT_MS / 1000} (default ${DEFAULT_TIMEOUT_MS / 1000}; 0 = single immediate check)
   --timeout-ms <n>     Deprecated alias for --timeout (milliseconds); warns on stderr. Passing both fails closed.`;
@@ -46,6 +49,7 @@ export function parseWaitArgs(argv) {
       "emit-plan": { type: "string" },
       unit: { type: "string", multiple: true },
       "judge-plan": { type: "string" },
+      artifact: { type: "string" },
       "tmp-root": { type: "string" },
       timeout: { type: "string" },
       "timeout-ms": { type: "string" },
@@ -55,11 +59,16 @@ export function parseWaitArgs(argv) {
     allowPositionals: false,
   });
   if (values.help) return { help: true };
-  if ((values["emit-plan"] === undefined) === (values["judge-plan"] === undefined)) throw new Error("pass exactly one of --emit-plan and --judge-plan");
-  if (values["judge-plan"] !== undefined && values.unit !== undefined) throw new Error("--unit applies only to --emit-plan");
-  if (!values["tmp-root"]) throw new Error("--tmp-root is required");
   const timeoutMs = resolveTimeoutMs({ timeout: values.timeout, timeoutMs: values["timeout-ms"] }) ?? DEFAULT_TIMEOUT_MS;
   if (timeoutMs > MAX_TIMEOUT_MS) throw new Error(`--timeout must be at most ${MAX_TIMEOUT_MS / 1000} seconds`);
+  if (values.artifact !== undefined) {
+    if (values["emit-plan"] !== undefined || values["judge-plan"] !== undefined || values.unit !== undefined || values["tmp-root"] !== undefined) throw new Error("--artifact excludes --emit-plan, --judge-plan, --unit and --tmp-root");
+    if (values.artifact.trim() === "" || values.artifact !== values.artifact.trim() || !path.isAbsolute(values.artifact)) throw new Error("--artifact must be a non-empty absolute path; pass the child's absolute hand-back path");
+    return { artifact: values.artifact, timeoutMs, jq: values.jq, fields: values.fields, silent: values.silent };
+  }
+  if ((values["emit-plan"] === undefined) === (values["judge-plan"] === undefined)) throw new Error("pass exactly one of --emit-plan, --judge-plan and --artifact");
+  if (values["judge-plan"] !== undefined && values.unit !== undefined) throw new Error("--unit applies only to --emit-plan");
+  if (!values["tmp-root"]) throw new Error("--tmp-root is required");
   return { emitPlan: values["emit-plan"], judgePlan: values["judge-plan"], units: values.unit, tmpRoot: values["tmp-root"], timeoutMs, jq: values.jq, fields: values.fields, silent: values.silent };
 }
 
@@ -127,7 +136,34 @@ async function checkUnit(unit, { role, receiptTmpRoot, tmpRoot, headSha }) {
   return { scope: unit.scope, executionIdentity: unit.executionIdentity, state, missingAngles };
 }
 
-export async function waitForUnits({ emitPlan, judgePlan, units: wanted, tmpRoot, timeoutMs = DEFAULT_TIMEOUT_MS, receiptTmpRoot, now = Date.now, delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
+export const ARTIFACT_TIMEOUT_REMEDY = "Re-run the same command. After three consecutive timeout outcomes, stop and return the typed observation units_stalled.";
+
+// Final hand-back only, with no writer obligation on the child: the artifact parses as JSON and carries its terminal field
+// (`outcome`, as a DeltaPrePushReviewResult does), or, with no terminal field, stays byte-identical for ARTIFACT_STABLE_MS.
+// A missing, empty or non-JSON file is pending (a partial write reads as not done on this tick); any other read failure propagates.
+async function artifactReady(file, seen, at) {
+  let raw;
+  let parsed;
+  try { raw = await readFile(file, "utf8"); parsed = JSON.parse(raw); } catch (error) { if (error?.code === "ENOENT" || error instanceof SyntaxError) { seen.raw = undefined; return false; } throw error; }
+  if (typeof parsed?.outcome === "string" && parsed.outcome !== "") return true;
+  if (seen.raw !== raw) { seen.raw = raw; seen.since = at; return false; }
+  return at - seen.since >= ARTIFACT_STABLE_MS;
+}
+
+async function waitForArtifact({ artifact, timeoutMs, now, delay }) {
+  const started = now();
+  const seen = {};
+  for (;;) {
+    const elapsedMs = now() - started;
+    if (await artifactReady(artifact, seen, now())) return { ok: true, outcome: "all_done", artifact, elapsedMs };
+    const remaining = timeoutMs - elapsedMs;
+    if (remaining <= 0) return { ok: true, outcome: "timeout", artifact, elapsedMs, remedy: ARTIFACT_TIMEOUT_REMEDY };
+    await delay(Math.min(RECHECK_INTERVAL_MS, remaining));
+  }
+}
+
+export async function waitForUnits({ artifact, emitPlan, judgePlan, units: wanted, tmpRoot, timeoutMs = DEFAULT_TIMEOUT_MS, receiptTmpRoot, now = Date.now, delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
+  if (artifact !== undefined) return waitForArtifact({ artifact, timeoutMs, now, delay });
   const planPath = emitPlan ?? judgePlan;
   const planStat = await stat(planPath).catch(() => { throw new Error(`plan ${planPath} does not exist`); });
   const { gate, headSha, role, units } = selectUnits({ plan: await readPlan(planPath), judge: judgePlan !== undefined, wanted });

@@ -411,7 +411,7 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "size-budget": "Compute PR size/tier budget outcome (pass/escalate/block; pure computation, no enforcement)",
     "resolve-role": "Resolve a review angle's role or Codex conductor/role native settings",
     "resolve-validation": "Resolve gate validation at an exact head (ci-only CI evidence, declared full command, or the pinned-Bun verify script)",
-    "wait-for-units": "Block until a gate round's dispatched reviewer or judge units are done (read-only)",
+    "wait-for-units": "Block until a gate round's dispatched reviewer or judge units are done, or (--artifact) a single child's hand-back file is final: it parses with its terminal field (outcome) or stays unchanged for 10 seconds (read-only)",
   },
   loop: {
     startup: "Resolve dev-loop startup bundle",

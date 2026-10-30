@@ -1273,6 +1273,7 @@ export function buildGateCoordinationEvaluatorInput({
   earlySurface = null,
   draftCapRoundFixed = false,
   draftRoundRefused = false,
+  draftCapRoundFailure = null,
 }) {
   return {
     repo: context.repo,
@@ -1336,6 +1337,7 @@ export function buildGateCoordinationEvaluatorInput({
     postConvergenceSignificantChange,
     draftCapRoundFixed,
     draftRoundRefused,
+    draftCapRoundFailure,
     ...(earlySurface ?? {}),
   };
 }
@@ -1412,7 +1414,8 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
       });
   // ADR 0208: a PR whose cap round is fixed never runs draft_gate again; fail closed when the evidence is unreadable.
   // A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
-  const draftCapRoundFixed = await resolveCapRoundFixed({ repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName: prBaseRefName, anyHead: context.prData?.isDraft !== true }, { repoRoot }).then(Boolean, () => false);
+  let draftCapRoundFailure = null;
+  const draftCapRoundFixed = await (runtime.resolveCapRoundFixed ?? resolveCapRoundFixed)({ repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName: prBaseRefName, anyHead: context.prData?.isDraft !== true }, { repoRoot, onFailure: (condition) => { draftCapRoundFailure = condition; } }).then(Boolean, () => { draftCapRoundFailure = "cap_round_unresolved"; return false; });
   const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
     && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
@@ -1432,6 +1435,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     earlySurface,
     draftCapRoundFixed,
     draftRoundRefused,
+    draftCapRoundFailure,
   }));
   // Copilot review request guard: when Copilot has reviewed the PR but no
   // formal review request was made, block pre-approval gate entry. Only

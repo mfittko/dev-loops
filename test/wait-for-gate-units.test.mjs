@@ -316,3 +316,54 @@ test("wait-for-gate-units warns on stderr for deprecated --timeout-ms", () => {
   const err = captureStderr(() => parseWaitArgs(["--emit-plan", "a", "--tmp-root", "t", "--timeout-ms", "1500"]));
   assert.match(err, /--timeout-ms is deprecated; use --timeout 1.5/);
 });
+
+// COORDINATOR-SINGLE-CHILD-JOIN: --artifact joins one child by its hand-back file.
+test("--artifact: an existing JSON artifact gives all_done; absent, empty and non-JSON files stay pending with the remedy", async () => {
+  await withDir(async (root) => {
+    const file = path.join(root, "handback.json");
+    const wait = (timeoutMs = 0) => waitForUnits({ artifact: file, timeoutMs, ...fakeClock() });
+    const absent = await wait();
+    assert.equal(absent.outcome, "timeout");
+    assert.match(absent.remedy, /Re-run the same command.*three consecutive timeout.*units_stalled/);
+    await writeFile(file, "");
+    assert.equal((await wait()).outcome, "timeout", "an empty file is pending");
+    await writeFile(file, "{not json");
+    assert.equal((await wait()).outcome, "timeout", "a non-JSON file is pending");
+    await writeFile(file, JSON.stringify({ candidateHead: HEAD }));
+    assert.equal((await wait()).outcome, "timeout", "an interim parseable write without the terminal field is pending");
+    await writeFile(file, JSON.stringify({ candidateHead: HEAD, outcome: "locally_clear" }));
+    assert.equal((await wait()).outcome, "all_done", "a final write with the terminal field satisfies the join");
+  });
+});
+
+test("--artifact: a hand-back with no terminal field is done only after it stays unchanged for 10 seconds", async () => {
+  await withDir(async (root) => {
+    const file = path.join(root, "record.json");
+    await writeFile(file, JSON.stringify({ headSha: HEAD, siteCoverage: [] }));
+    const wait = (timeoutMs, clock = fakeClock()) => waitForUnits({ artifact: file, timeoutMs, ...clock });
+    assert.equal((await wait(9000)).outcome, "timeout", "unchanged for under 10 seconds is pending");
+    assert.equal((await wait(15000)).outcome, "all_done", "unchanged for 10 seconds is final");
+    // A rewrite at t=8000 restarts the stability window, so the join is still pending at t=15000.
+    let t = 0;
+    const clock = { now: () => t, delay: async (ms) => { t += ms; if (t === 8000) await writeFile(file, JSON.stringify({ headSha: HEAD, siteCoverage: [{ fingerprint: "f" }] })); } };
+    assert.equal((await wait(15000, clock)).outcome, "timeout", "a rewrite restarts the window");
+  });
+});
+
+test("--artifact is a mode of its own: combined with --emit-plan, --judge-plan, --unit or --tmp-root it fails with exit 1", () => {
+  assert.deepEqual(Object.keys(parseWaitArgs(["--artifact", "/a.json", "--timeout", "0"])).slice(0, 2), ["artifact", "timeoutMs"]);
+  for (const extra of [["--emit-plan", "p"], ["--judge-plan", "p"], ["--unit", "u"], ["--tmp-root", "t"]]) {
+    assert.throws(() => parseWaitArgs(["--artifact", "a.json", ...extra]), /--artifact excludes/, extra[0]);
+    const run = spawnSync(process.execPath, [SCRIPT, "--artifact", "a.json", ...extra], { encoding: "utf8" });
+    assert.equal(run.status, 1, extra[0]);
+  }
+});
+
+test("--artifact rejects an empty or relative path with exit 1 and an absolute-path message", () => {
+  for (const value of ["", "  ", "rel/a.json", " /tmp/x/handback.json", "/tmp/x/handback.json ", "/tmp/x/handback.json\n"]) {
+    assert.throws(() => parseWaitArgs(["--artifact", value]), /absolute path/, JSON.stringify(value));
+    const run = spawnSync(process.execPath, [SCRIPT, "--artifact", value], { encoding: "utf8" });
+    assert.equal(run.status, 1, JSON.stringify(value));
+    assert.match(run.stdout, /absolute path/);
+  }
+});
