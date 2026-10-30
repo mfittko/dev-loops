@@ -294,7 +294,7 @@ test("THREAD full --construct builds the report from the threads, the clearing r
   });
 });
 
-for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "touch", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source"]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
+for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "touch", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source"]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
   await withRepoRoot(async (root) => {
     root = await realpath(root);
     const f = route === "THREAD" ? await threadConstructFixture(root, undefined, true) : await completionFixture(root, "resolved", { site: true });
@@ -302,8 +302,9 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "touch", 
     if (route === "THREAD") await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
     const output = f.output ?? f.plan.workOrder.outputRefs[0], before = await readFile(output);
     const git = (...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
-    await writeFile(path.join(root, "site.txt"), scenario === "touch" ? "one\ntwo\nchanged\nfour\nfive\n" : "one\ntwo\nthree\nfour\nelsewhere\n");
+    await writeFile(path.join(root, "site.txt"), scenario.startsWith("touch") ? "one\ntwo\nchanged\nfour\nfive\n" : "one\ntwo\nthree\nfour\nelsewhere\n");
     git("add", "site.txt"); git("commit", "-qm", "developer");
+    if (scenario.startsWith("touch-color")) git("config", scenario === "touch-color-diff" ? "color.diff" : "color.ui", "always");
     let head = git("rev-parse", "HEAD");
     const ids = route === "THREAD" ? ["PRRT_T1"] : ["PRRT_MERGED", "PRRT_SHARED"];
     const nodes = route === "THREAD" ? [{ id: ids[0], isResolved: false, comments: { nodes: [{ id: "root0", databaseId: 1, body: "open", author: { login: "bot" } }] } }] : structuredClone(f.nodes);
@@ -332,7 +333,7 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "touch", 
     } };
     const options = { repo: REPO, pr: PR, headSha: head, fixerPlan };
     if (scenario !== "miss") {
-      const expected = { touch: /thread_site_changed/, left: /thread_site_unverifiable/, behind: /not contained/, diverged: /not contained/, red: /ci_failed/, pending: /ci_pending/, "head-race": /live head changed/, "missing-report": /result_missing/, "forged-source": /differ|Invalid fixer review baseline/ }[scenario];
+      const expected = { touch: /thread_site_changed/, "touch-color-diff": /thread_site_changed/, "touch-color-ui": /thread_site_changed/, left: /thread_site_unverifiable/, behind: /not contained/, diverged: /not contained/, red: /ci_failed/, pending: /ci_pending/, "head-race": /live head changed/, "missing-report": /result_missing/, "forged-source": /differ|Invalid fixer review baseline/ }[scenario];
       await assert.rejects(verifyFixerDisposition(options, deps), expected); assert.deepEqual(posts, []);
       assert.deepEqual(await checkpointFiles(root), []);
       if (!["touch", "left"].includes(scenario)) return;
