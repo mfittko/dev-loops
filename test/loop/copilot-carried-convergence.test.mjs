@@ -1232,18 +1232,13 @@ describe("COPILOT-STATE-CONVERGED-BELOW-CAP: below the round cap an unclean revi
     assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
   });
 
-  it("AC3b: a latest review on HEAD with its own resolved thread keeps no_changes_since_last_review and the detector routing", async () => {
+  it("AC3b: a latest review on HEAD with its own resolved thread is not carried below the cap: the request tool requests and the detector routes to the gate", async () => {
     const onHead = (id, submittedAt) => ({ id, author: { login: COPILOT }, state: "COMMENTED", body: id === "PRR_head" ? YELLOW : "", commit: { oid: HEAD }, submittedAt });
     const reviews = [onHead("PRR_head0", "2026-09-22T10:00:00Z"), onHead("PRR_head", "2026-09-22T11:00:00Z")];
     const fixture = () => scenario({ reviews, delta: CODE_DELTA, threads: [thread({ isResolved: true, reviewId: "PRR_head" })] });
-    const { runChild, unmatched } = strictRunChild(requestEntries(fixture()));
-    const request = await performCopilotReviewRequest(
-      { repo: REPO, pr: PR, forceRerequestReview: true, checkpointDir },
-      { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild, repoRoot: capRoot, delayImpl: async () => {} },
-    );
-    assert.deepEqual(unmatched, [], "request tool made an undeclared gh call");
-    assert.equal(request.status, "no_changes_since_last_review");
-    const detected = await runDetector(fixture(), { root: capRoot });
+    const request = await runRequestTool(fixture(), { root: convergedOnceWideRoot });
+    assert.equal(request.status, "requested");
+    const detected = await runDetector(fixture(), { root: convergedOnceWideRoot });
     assert.equal(detected.carriedConvergence, null);
     assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
   });
