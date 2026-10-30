@@ -1179,7 +1179,7 @@ describe("COPILOT-STATE-CONVERGED-BELOW-CAP: below the round cap an unclean revi
   it("AC1b: the request tool requests and the detector reports no carry for a body-only review with a fix-form record below the cap", async () => {
     const fixture = () => scenario({ priorBody: YELLOW, delta: CODE_DELTA, dispositions: [dispositionComment({ reviewId: "PRR_prior", kind: FIX })], extraShared: [...FIX_AFTER_PRIOR, ...FIX_AFTER_PRIOR], gatePassedRead: {} });
     const request = await runRequestTool(fixture(), { root: convergedOnceWideRoot });
-    assert.notEqual(request.status, "suppressed_post_convergence");
+    assert.equal(request.status, "requested");
     const detected = await runDetector(fixture(), { root: convergedOnceWideRoot });
     assert.equal(detected.carriedConvergence, null);
   });
@@ -1187,7 +1187,7 @@ describe("COPILOT-STATE-CONVERGED-BELOW-CAP: below the round cap an unclean revi
   it("AC4b: the request tool requests and the detector routes to a re-request for a mixed review with an operator record below the cap", async () => {
     const fixture = () => scenario({ priorBody: YELLOW, delta: CODE_DELTA, threads: own, dispositions: [dispositionComment({ reviewId: "PRR_prior" })], gatePassedRead: {} });
     const request = await runRequestTool(fixture(), { root: convergedOnceWideRoot });
-    assert.notEqual(request.status, "suppressed_post_convergence");
+    assert.equal(request.status, "requested");
     const detected = await runDetector(fixture(), { root: convergedOnceWideRoot });
     assert.equal(detected.carriedConvergence, null);
     assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);

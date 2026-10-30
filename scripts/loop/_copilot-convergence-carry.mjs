@@ -23,7 +23,7 @@
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
 import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
-import { isCopilotErrorReview, isCopilotLogin, summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
+import { extractReviewCommitSha, isCopilotErrorReview, isCopilotLogin, summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import {
@@ -174,7 +174,7 @@ export function isBelowCopilotRoundCap({ copilotReviewRoundCount, effectiveCap }
 function hasCurrentHeadCopilotReview(prData, currentHeadSha) {
   const reviews = Array.isArray(prData?.reviews) ? prData.reviews : [];
   return reviews.some((r) => r?.state !== "PENDING" && isCopilotLogin(r?.author?.login) && !isCopilotErrorReview(r)
-    && (r?.commit?.oid ?? r?.commit_id) === currentHeadSha);
+    && extractReviewCommitSha(r) === currentHeadSha);
 }
 
 // The Copilot gate has passed when a pre_approval_gate marker exists on the PR
