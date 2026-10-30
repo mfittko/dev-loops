@@ -3263,7 +3263,7 @@ test("copilot-pr-handoff in converged-once mode places no request below the cap 
   }
 });
 
-async function runDraftGateResetScenario({ withDraftGate, factsFail = false }) {
+async function runDraftGateResetScenario({ withDraftGate, factsFail = false, watchStatus }) {
   // Raw count 2 equals the cap 2 and the latest review has its own resolved thread, so a raw count carries.
   // A clean draft_gate on another head between the two reviews resets the count to 1, below the cap: the carry
   // refuses, as the detector and the request tool do, and the significance probe runs.
@@ -3290,7 +3290,7 @@ async function runDraftGateResetScenario({ withDraftGate, factsFail = false }) {
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([withDraftGate ? [draftGateComment] : []]) + "\n" },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
     ];
-    if (withDraftGate) {
+    if (withDraftGate && watchStatus === undefined) {
       // The reset count is below the cap, so the requester runs: reviewer-state reads, the POST, and verification.
       entries.push(
         { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
@@ -3303,7 +3303,7 @@ async function runDraftGateResetScenario({ withDraftGate, factsFail = false }) {
     const { env, ghLogPath: logPath, claimsDir } = await writeGhStubHelper(tempDir, entries, { matchMode: "claims", logCalls: true });
     env.DEVLOOPS_RUN_ID = "";
 
-    const run = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: convergedOnceRepoRoot });
+    const run = await runNode(["--repo", "owner/repo", "--pr", "17", ...(watchStatus ? ["--watch-status", watchStatus] : [])], { env, cwd: convergedOnceRepoRoot });
 
     const log = await readFile(logPath, "utf8");
     const claimed = (await readdir(claimsDir)).length;
@@ -3335,4 +3335,12 @@ test("copilot-pr-handoff keeps the raw round count when the reopen facts fetch f
   const output = JSON.parse(failed.run.stdout);
   assert.equal(output.snapshot.copilotReviewRoundCount, 2, "unavailable facts never lower the count");
   assert.notEqual(output.reviewRequestStatus, "requested", "no below-cap re-request on a transient read failure");
+});
+
+test("copilot-pr-handoff --watch-status idle applies the draft-gate reset below the cap", async () => {
+  const idle = await runDraftGateResetScenario({ withDraftGate: true, watchStatus: "idle" });
+  assert.equal(idle.run.code, 0, idle.run.stderr);
+  const output = JSON.parse(idle.run.stdout);
+  assert.equal(output.snapshot.copilotReviewRoundCount, 1, "the readback snapshot carries the draft-gate-adjusted count");
+  assert.notEqual(output.state, "round_cap_clean_fallback");
 });

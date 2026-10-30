@@ -748,8 +748,9 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
   // fallback (stop), unchanged.
   let reopenedCapCycle = false;
   let reopenFacts = null;
+  // The draft-gate reset runs for readbacks (--watch-status) too, so a readback never
+  // reports the terminal cap fallback where the requester would reset below the cap.
   if (!internalOnlySkipCopilot
-      && options.watchStatus === undefined
       && interpretation.roundCapReopenEligible === true) {
     reopenFacts = await fetchReopenCycleFacts(options, { env, ghCommand, runChild });
     // A draft-gate reset below the cap changes cap routing itself, not only the carry:
