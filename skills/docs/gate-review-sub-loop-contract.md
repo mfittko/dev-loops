@@ -880,9 +880,16 @@ fan-in it runs the deterministic producer over the round's sources:
 dev-loops-run scripts/loop/emit-judge-work-order.mjs --repo <owner/name> --pr <N> --gate <gate> \
   --head-sha <current_head_sha> --findings-file <ledger-path> --spec-file <spec-path> \
   --identity-file <identity-path> [--prior-verdict <prior-judge-verdict-path> ...] \
-  [--round <n>] [--operator-focus-file <path>] [--tmp-root <checkout>/tmp]
+  [--round <n>] [--operator-focus-file <path>] --pr-body-file <pr-body-path> [--tmp-root <checkout>/tmp]
 ```
 
+`--pr-body-file` is required: the producer refuses an emission without it (`pr_body_file_required`). Write the PR body text first:
+
+```sh
+dev-loops-run scripts/github/view-pr.mjs --repo <owner/name> --pr <N> --jq '.pr.body' > <pr-body-path>
+```
+
+A slice PR's reopen line lives in the PR body Non-goals when the spec comes from the linked issue. The producer pins the body and, when it holds exactly one closing reference whose number a reopen line names, carries `sliceLinkage` and `sliceLinkageIssues` in the work order. `judge-pass` arms its coercion from those pinned fields only (`SPEC-SLICE-PR-KEEPS-CLOSING-REF`).
 Write the `--operator-focus-file` JSON only when the operator supplied round context for the judge (`GATE-EXEC-OPERATOR-FOCUS`).
 
 A prior head's verdict path is not derivable from the head alone, because each emission's
@@ -971,8 +978,10 @@ use the same formal-spec parser, digests, complete criteria and identity stamp.
 ```sh
 content_digest=$(node scripts/loop/spec-context.mjs --repo <owner/name> --issue <linked_issue_number> \
   --content-file <reviewed-content-path> --head-sha <current_head_sha> \
-  --spec-out <spec-path> --identity-out <identity-path> --jq '.contentDigest')
+  --spec-out <spec-path> --identity-out <identity-path> [--pr-body-file <pr-body-path>] --jq '.contentDigest')
 ```
+
+Write `<pr-body-path>` with the `view-pr.mjs ... --jq '.pr.body'` producer named in Phase 3.5; it is optional on this seam and required on `emit-judge-work-order.mjs`.
 
 For the existing PR-body authority, use the same command with `--pr` instead:
 

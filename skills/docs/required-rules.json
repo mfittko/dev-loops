@@ -945,6 +945,9 @@
       "enforcement": "runtime"
     },
     {
+      "id": "SPEC-SLICE-PR-KEEPS-CLOSING-REF"
+    },
+    {
       "id": "SPIKE-DISCARD-ZERO-MUTATION"
     },
     {

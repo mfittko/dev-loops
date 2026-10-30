@@ -1,0 +1,69 @@
+// SPEC-SLICE-PR-KEEPS-CLOSING-REF: the slice-PR linkage rule, shared by the spec context, the judge work order and the judge pass.
+import { resolvePrDescriptionSpec } from "@dev-loops/core/loop/spec-authority";
+
+export const SLICE_LINKAGE_RULE_ID = "SPEC-SLICE-PR-KEEPS-CLOSING-REF";
+export const SLICE_LINKAGE_SENTENCE = `${SLICE_LINKAGE_RULE_ID}: a slice PR keeps its closing reference (Closes #N) and its Non-goals reopen line; changing Closes to Refs is never a remedy, because a Refs-only slice PR has no spec authority today. This rule is interim until Refs-only pr_body authority ships in a later slice of issue 2883, and the Refs plus verbatim slice body shape (dod:3) stays open.`;
+
+// A Non-goals entry that says an issue is reopened marks a slice PR: a reopen inflection and an issue number (#N, issue N or a bare number of 3+ digits) on one line.
+// A negated reopen ("Do not reopen ...") and a bare number after "ADR" are not reopen lines.
+const reopenLines = (nonGoals) => (Array.isArray(nonGoals) ? nonGoals : []).map(String).filter((text) => /\bre-?open(?:s|ed|ing)?\b/i.test(text) && !/\b(?:do\s+not|don't|never|not|cannot|can't)\s+re-?open/i.test(text) && /#\d+|\bissues?\s+\d+|(?<!\bADR\s)\b\d{3,}\b/i.test(text));
+export const hasReopenLine = (nonGoals) => reopenLines(nonGoals).length > 0;
+// The issue numbers the reopen lines name.
+export const reopenIssueNumbers = (nonGoals) => [...new Set(reopenLines(nonGoals).flatMap((text) => [...text.matchAll(/#(\d+)|\bissues?\s+(\d+)|(?<!\bADR\s)\b(\d{3,})\b/gi)].map((m) => Number(m[1] ?? m[2] ?? m[3]))))];
+
+// The Non-goals of a PR body; the reopen line lives there when the spec comes from the linked issue.
+export const prBodyNonGoals = (body) => resolvePrDescriptionSpec(String(body ?? "")).spec?.nonGoals;
+
+const KW = String.raw`(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)`;
+// An issue reference: N, #N, owner/repo#N or an issue URL; the number is capture group 1 of its pattern.
+const REF = String.raw`(?:https?://github\.com/[\w.-]+/[\w.-]+/issues/|[\w.-]+/[\w.-]+#|#)?(\d+)\b`;
+// The distinct issue numbers a PR body closes (Closes #N, owner/repo#N or an issue URL).
+const BODY_CLOSING = new RegExp(String.raw`\b${KW}\s*:?\s+(?:https?://github\.com/[\w.-]+/[\w.-]+/issues/|[\w.-]+/[\w.-]+#|#)(\d+)\b`, "gi");
+export const closingRefNumbers = (body) => [...new Set([...String(body ?? "").matchAll(BODY_CLOSING)].map((m) => Number(m[1])))];
+// The reopened issue the slice PR closes: armed only when the PR body holds exactly one closing reference and it names an issue a Non-goals reopen line (spec or PR body) names; [] otherwise.
+export const sliceLinkageIssues = (specNonGoals, prBody) => {
+  const closing = closingRefNumbers(prBody);
+  return closing.length === 1 && reopenIssueNumbers([...(Array.isArray(specNonGoals) ? specNonGoals : []), ...(prBodyNonGoals(prBody) ?? [])]).includes(closing[0]) ? closing : [];
+};
+
+const CLOSING = String.raw`\b${KW}\b(?:\s+${REF})?`;
+const OPT_REF = String.raw`(?:\s+${REF})?`;
+// Closes [N], then a swap connector, then Refs [N]: the numbers (groups 1 and 2) must be equal, both absent counts as equal.
+const CLOSING_THEN_REFS = new RegExp(String.raw`${CLOSING}[^\n]*?(?:\bwith\b|\bto\b|\bby\b|\bfor\b|\bbecomes\b|\binto\b|->|→)[^\n]*?\brefs?\b${OPT_REF}`, "gi");
+// Refs [N] instead of Closes [N]: group 1 is the Refs number, group 2 the Closes number.
+const REFS_INSTEAD_OF_CLOSING = new RegExp(String.raw`\brefs?\b${OPT_REF}[^\n]*?(?:\binstead\s+of\b|\brather\s+than\b|,\s*not\b)[^\n]*?${CLOSING}`, "gi");
+// A present-tense or imperative removal verb on a closing reference; past tense and gerunds narrate and do not remedy.
+const REMOVES_CLOSING = new RegExp(String.raw`\b(?:remov(?:e|es)|drops?|delet(?:e|es)|strips?)\s+(?:the\s+(?:closing\s+(?:reference|keyword)|line)\s+|the\s+)?${KW}\b${OPT_REF}`, "gi");
+// A number-less swap counts only in the PR reference forms (Closes/Fixes/Resolves and Refs, capitalized); "Resolve the path relative to the base ref" is a code fix.
+const PR_KEYWORD = /\b(?:Closes|Fixes|Resolves)\b/;
+const SAME_NUMBER = (m) => m[1] === m[2] && (m[1] !== undefined || (PR_KEYWORD.test(m[0]) && /\bRefs\b/.test(m[0])));
+
+// A negation that directly governs the remedy verb ("Do not change Closes to Refs") or a keep that directly governs the closing reference ("Keep Closes 10") ends the prefix.
+// An unrelated keep or negation earlier in the clause ("Never mind the nit, change ...", "To keep the parent open, replace ...") does not.
+const VERB = String.raw`(?:remove|drop|delete|strip|change|replace|swap|switch|convert|use|write|put|turn|rewrite)`;
+const GOVERNED = new RegExp(String.raw`(?:\b(?:do\s+not|don't|never|must\s+not|should\s+not|shouldn't)\s+(?:${VERB}\s+)?(?:the\s+)?|\bkeep\s+(?:the\s+)?)$`, "i");
+
+// True when the judged remedy (judgeFix only, never the reviewer recommendation) removes a closing reference.
+// With `issues`, a removal that names another issue number is not coerced; a number-less removal is.
+export const removesClosingRef = (finding, issues) => {
+  if (typeof finding?.judgeFix !== "string") return false;
+  // A clause whose remedy is directly negated ("Do not remove the Closes line") restates the rule and is skipped.
+  // A keep or negation after the remedy is its reason ("Replace Closes with Refs to keep the parent open") and does not skip it.
+  return finding.judgeFix.replace(/[`*"]|(?<!\w)'|'(?!\w)/g, "").split(/[;\n]|\.(?:\s|$)/).some((clause) => [
+    [CLOSING_THEN_REFS, SAME_NUMBER], [REFS_INSTEAD_OF_CLOSING, SAME_NUMBER], [REMOVES_CLOSING, (m) => m[1] !== undefined || PR_KEYWORD.test(m[0])],
+  ].some(([re, accepts]) => [...clause.matchAll(re)].some((m) => accepts(m) && (!Array.isArray(issues) || m[1] === undefined || issues.includes(Number(m[1]))) && !GOVERNED.test(clause.slice(0, m.index)))));
+};
+
+// Coerce an act finding whose judged remedy removes the PR's only closing reference to the reopened issue to reject; returns the number coerced.
+// The caller passes the pinned judge work order's sliceLinkageIssues; an empty list leaves the coercion unarmed.
+export function rejectClosingRefRemoval(enriched, issues) {
+  if (!Array.isArray(issues) || issues.length === 0) return 0;
+  let coerced = 0;
+  for (const f of enriched) {
+    if (f.judgeDisposition !== "act" || !removesClosingRef(f, issues)) continue;
+    f.judgeDisposition = "reject";
+    f.judgeReason = [`SPEC-SLICE-PR-KEEPS-CLOSING-REF: refused, the remedy removes the PR's only closing reference to the issue a Non-goals reopen line names.`, f.judgeReason].filter(Boolean).join(" ");
+    coerced += 1;
+  }
+  return coerced;
+}
