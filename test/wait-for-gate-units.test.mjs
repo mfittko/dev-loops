@@ -344,7 +344,7 @@ test("--artifact is a mode of its own: combined with --emit-plan, --judge-plan, 
 });
 
 test("--artifact rejects an empty or relative path with exit 1 and an absolute-path message", () => {
-  for (const value of ["", "  ", "rel/a.json"]) {
+  for (const value of ["", "  ", "rel/a.json", " /tmp/x/handback.json", "/tmp/x/handback.json ", "/tmp/x/handback.json\n"]) {
     assert.throws(() => parseWaitArgs(["--artifact", value]), /absolute path/, JSON.stringify(value));
     const run = spawnSync(process.execPath, [SCRIPT, "--artifact", value], { encoding: "utf8" });
     assert.equal(run.status, 1, JSON.stringify(value));
