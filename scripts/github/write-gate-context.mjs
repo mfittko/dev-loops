@@ -2070,7 +2070,14 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   // With no open act item the check is vacuously true: any clearing record then binds, and the cap round rests on the baseline match alone.
   const covers = (record) => {
     const refs = (Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref));
-    return listOpenActItems(capRound.log.findings).every((f) => { const fp = fingerprintFinding(f); return refs.some((r) => r === fp || r.startsWith(`${fp}#`)); });
+    // The fixer act list is cluster-deduplicated: a stamped cluster is named by any one member's fingerprint, an unstamped finding by its own.
+    const named = (f) => { const fp = fingerprintFinding(f); return refs.some((r) => r === fp || r.startsWith(`${fp}#`)); };
+    const clusters = new Map();
+    for (const f of listOpenActItems(capRound.log.findings)) {
+      const key = Number.isInteger(f?.clusterId) ? `c:${f.clusterId}` : `f:${fingerprintFinding(f)}`;
+      clusters.set(key, [...(clusters.get(key) ?? []), f]);
+    }
+    return [...clusters.values()].every((members) => members.some(named));
   };
   return starts.filter(covers).some(reaches) ? capRound : null;
 }
