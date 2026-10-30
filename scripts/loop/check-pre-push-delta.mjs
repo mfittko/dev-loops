@@ -357,10 +357,6 @@ export async function runCli(
   const fixCommitted = currentHead !== sequence.reviewBaselineHead;
   const itemCounts = options.threadsFile ? { threadItemCount: sequence.actItems.length } : { actItemCount: sequence.actItems.length };
   if (resolveDeltaTrigger({ ...itemCounts, fixCommitted }) !== "delta") {
-    if (fixCommitted) {
-      // PRE-PUSH-DELTA-PUSH-AUTHORITY: an unpushed fix commit exists, so the marker stays and keeps guarding the push.
-      throw new Error(`worktree HEAD ${currentHead} differs from the baseline ${sequence.reviewBaselineHead} but the ${options.threadsFile ? "thread" : "act"} list has no items: the delta review has nothing to check, and the sequence marker stays until the fix commit is pushed`);
-    }
     // PRE-PUSH-DELTA-PUSH-AUTHORITY: the commit_only round ended without a fix commit, so its marker guards nothing and would only block later pushes.
     if (!(options.fixerPlan && options.siteCoverage && !options.result && !options.handback)) throw new Error(`worktree HEAD ${currentHead} equals the baseline: pass the current pulled --fixer-plan and --site-coverage in input-only mode to close its sequence`);
   }

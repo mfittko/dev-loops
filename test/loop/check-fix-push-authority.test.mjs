@@ -114,7 +114,7 @@ test("the refusal names the no-commit close command with the baseline head, and 
     writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
     const refused = checkFixPushAuthority(root);
     assert.equal(refused.ok, false);
-    assert.match(refused.reason, new RegExp(`check-pre-push-delta\\.mjs --act-list <act-list> --baseline ${head} .*--fixer-plan <fixer-plan> --site-coverage <handback>.*no_commit`));
+    assert.match(refused.reason, new RegExp(`check-pre-push-delta\\.mjs \\(--act-list <act-list> --findings-log <findings-log> \\| --threads-file <threads-file> --repo <owner/name> --pr <n>\\) --baseline ${head} .*--fixer-plan <fixer-plan> --site-coverage <handback>.*no_commit`));
     assert.doesNotMatch(refused.reason, /delete the marker|delet/i);
     clearSequenceMarker(path.join(root, "tmp"), head);
     assert.deepEqual(checkFixPushAuthority(root), { ok: true }, "a cleared marker (a commit_only round without a fix commit) guards nothing");

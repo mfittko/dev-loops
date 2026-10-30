@@ -9137,3 +9137,32 @@ test("resolveCapRoundFixed guards the chain: a record loop, a non-SHA candidateH
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("resolveCapRoundFixed reports unsealed_record for a sealed record of non-JSON bytes", async () => {
+  const { repoRoot, baseSha: A } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: "7".repeat(40), baseRefName: "main" };
+    await seedClosedRounds(repoRoot, 61, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const failure = async () => { let condition = null; await resolveCapRoundFixed(opts, { repoRoot, onFailure: (c) => { condition = c; } }); return condition; };
+    const dir = path.join(repoRoot, "tmp", "gate-delta");
+    await mkdir(dir, { recursive: true });
+    const text = "this is not json";
+    await writeFile(path.join(dir, `${A}.json`), text, "utf8");
+    await writeFile(path.join(dir, `${A}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`, "utf8");
+    assert.equal(await failure(), "unsealed_record", "a correctly sealed record with non-JSON bytes is not evidence");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveCapRoundFixed reports cap_round_unresolved when the cap round cannot be resolved", async () => {
+  const { repoRoot } = await makeBaseDiffRepo();
+  try {
+    let condition = null;
+    const result = await resolveCapRoundFixed({ repo: "owner/repo", pr: 62, gate: "draft_gate", headSha: "7".repeat(40) }, { repoRoot, onFailure: (c) => { condition = c; } });
+    assert.equal(result, null);
+    assert.equal(condition, "cap_round_unresolved");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});

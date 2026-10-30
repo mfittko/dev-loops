@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "../src/loop/pr-gate-coordination.mjs";
 import { DISPOSITION, STATE } from "../src/loop/copilot-loop-state.mjs";
@@ -58,6 +59,7 @@ test("the cap-round refusal names its failed condition and the remedy for that c
     ["no_clearing_record", /no sealed clearing delta record exists.*Remedy: complete the cap round's fixer pass and run `check-pre-push-delta.mjs --result`/],
     ["unsealed_record", /carries no valid seal.*Remedy: rerun `check-pre-push-delta.mjs --result`.*never edit the record/],
     ["items_do_not_cover", /do not cover the cap round's act refs.*Remedy: rerun the pre-push delta on the cap round's act list/],
+    ["cap_round_unresolved", /could not be resolved.*Remedy: repair or quarantine the unreadable ledger or config/],
     ["chain_does_not_reach_head", /ends before the current head.*Remedy: run the pre-push delta for the current head's fix commit, or fetch origin\/<base>/],
   ];
   for (const [condition, pattern] of table) {
@@ -70,8 +72,14 @@ test("the cap-round refusal names its failed condition and the remedy for that c
 });
 
 test("no source file contains the catch-all 'legacy unsealed delta record' refusal text", () => {
-  const grep = spawnSync("git", ["grep", "-l", "legacy unsealed delta record", "--", "*.mjs", "*.js", "*.ts"], { encoding: "utf8" });
+  const grep = spawnSync("git", ["grep", "-l", "legacy unsealed delta record", "--", "*.mjs", "*.js", "*.ts"], { encoding: "utf8", cwd: fileURLToPath(new URL("../../..", import.meta.url)) });
   assert.ok(grep.status === 0 || grep.status === 1, "git grep ran"); // status 1 = no hits
   const hits = grep.stdout.split("\n").filter((file) => file && !file.includes("cap-round-fixed-coordination.test.mjs"));
   assert.deepEqual(hits, []);
+});
+
+test("a cap-round refusal with no reported condition names cap_round_unresolved, never no_clearing_record", () => {
+  const { reason } = draftAt({ draftRoundRefused: true, draftCapRoundFailure: null });
+  assert.ok(reason.includes("Condition cap_round_unresolved:"));
+  assert.ok(!reason.includes("no_clearing_record"));
 });

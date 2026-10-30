@@ -171,7 +171,7 @@ test("THREAD cannot opt into the ACT coverage protocol", async () => {
   await assert.rejects(runCli(["--threads-file", file, "--repo", "o/r", "--pr", "7", "--baseline", A, "--result", result, "--invocation", "3", "--worktree", coverageRepo]), /THREAD cannot/);
 });
 
-test("an input-only close with an empty act list refuses while an unpushed fix commit is HEAD, and keeps the marker and the push refusal", async () => {
+test("an unpushed fix commit at HEAD keeps the sequence marker and the push refusal, and an empty act list refuses before any closure logic", async () => {
   const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "delta-unpushed-")));
   initGitFixture(cwd, { branch: "issue-1" });
   const A = git(cwd, "rev-parse", "HEAD");
@@ -186,6 +186,12 @@ test("an input-only close with an empty act list refuses while an unpushed fix c
   fs.writeFileSync(log, JSON.stringify({ headSha: A, provenance: { perAngle: [{ angle: "correctness" }] } }));
   const fixture = await boundArgs(["--act-list", actPath, "--baseline", A, "--site-coverage", coverage, "--spec-identity", "s", "--findings-log", log, "--worktree", cwd]);
   assert.equal(JSON.parse(fs.readFileSync(fixture.output)).headSha, F, "the handback head is the authentic fix commit, equal to HEAD");
+  // The real unpushed-fix path: a non-empty act list and an authentic handback at F equal to HEAD fall through the closure branch and keep the marker.
+  const closed = await runCli([...fixture.args], { stdout: { write() {} } }).catch((error) => ({ error }));
+  assert.ok(!["no_commit", "head_moved"].includes(closed?.outcome), "an unpushed fix commit is never closed as no_commit or head_moved");
+  assert.notEqual(readSequenceMarker(fixture.tmpRoot, A), null);
+  assert.equal(checkFixPushAuthority(cwd).ok, false);
+  // An empty act list never reaches any closure logic.
   const args = [...fixture.args];
   args[args.indexOf("--act-list") + 1] = emptyPath;
   await assert.rejects(runCli(args, { stdout: { write() {} } }), /non-empty judge act list/);

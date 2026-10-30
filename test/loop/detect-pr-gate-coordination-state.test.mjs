@@ -4325,3 +4325,22 @@ for (const { name, chained, expected } of [
     }
   });
 }
+
+// ADR 0216: an unreadable in-range cap-round ledger still counts toward the cap, so the refusal stands, but it names cap_round_unresolved and not a clearing record that was never evaluated.
+test("detect-pr-gate-coordination-state (ADR 0216): an unreadable cap-round ledger reports cap_round_unresolved, not no_clearing_record", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-unresolved-"));
+  try {
+    const headSha = "abc1234567".repeat(4);
+    await seedCapFixedRepo(tempDir, { headSha, seal: true });
+    await writeFile(path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10", `draft_gate-${"c".repeat(40)}.json`), "not json", "utf8");
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+    assert.ok(result.reason.includes("Condition cap_round_unresolved:"), result.reason);
+    assert.ok(!result.reason.includes("no_clearing_record"), result.reason);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

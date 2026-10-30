@@ -2079,15 +2079,17 @@ export function clearingChainCandidates(tmpRoot, startHead) {
  */
 export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, onFailure = () => {} }) {
   const capRound = await resolveCapRound(options, { repoRoot });
-  if (!capRound) return null;
+  if (!capRound) { onFailure("cap_round_unresolved"); return null; }
   // The delta record is main-anchored like the findings ledger: never read it from a relocated --tmp-root.
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
   const clearing = (headSha) => clearingDeltaRecord(tmpRoot, headSha);
   const capHead = capRound.log.headSha;
   // A record that exists but is not a verifiable sealed record (no seal, a seal mismatch, or a throwing seal check) is the unsealed_record condition.
   const isUnsealed = (head) => {
-    try { if (readGateDeltaRecord(tmpRoot, head) === null) return false; } catch { return false; }
-    try { return readSealedGateDeltaRecord(tmpRoot, head) === null; } catch { return true; }
+    const sha = normalizeSha(head);
+    if (!sha) return false;
+    try { if (readGateDeltaRecord(tmpRoot, sha) === null) return false; } catch { /* the record exists but is not JSON: the sealed probe below decides */ }
+    try { return readSealedGateDeltaRecord(tmpRoot, sha) === null; } catch { return true; }
   };
   let baseOnlyUnsealed = false;
   const starts = [];

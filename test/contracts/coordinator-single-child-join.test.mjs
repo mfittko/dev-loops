@@ -15,7 +15,16 @@ test("COORDINATOR-SINGLE-CHILD-JOIN is registered and carries the no-turn-end an
 });
 
 test("the routed fixer and delta reviewer dispatch prose names the --artifact join command", () => {
-  for (const file of ["skills/docs/gate-review-sub-loop-contract.md", "skills/docs/pre-pr-review-contract.md", "skills/local-implementation/SKILL.md", "skills/copilot-pr-followup/SKILL.md"]) {
+  for (const file of ["skills/docs/gate-review-sub-loop-contract.md", "skills/docs/pre-pr-review-contract.md", "skills/local-implementation/SKILL.md", "skills/copilot-pr-followup/SKILL.md", "skills/dev-loop/SKILL.md", "agents/dev-loop.agent.md"]) {
     assert.ok(read(file).includes(JOIN), file);
+  }
+});
+
+test("the harness-join bullet and the dev-loop agent no longer join the fixer through the completion notification", () => {
+  for (const file of ["skills/docs/gate-review-sub-loop-contract.md", "agents/dev-loop.agent.md"]) {
+    const text = read(file);
+    assert.doesNotMatch(text, /developer and fixer/, file);
+    assert.doesNotMatch(text, /developer or fixer completion notification/, file);
+    assert.ok(text.includes("COORDINATOR-SINGLE-CHILD-JOIN"), file);
   }
 });
