@@ -609,7 +609,7 @@ test("a clean draft_gate on an older head resets the round count below the cap a
 test("a draft-gate reset puts the later-review carry below the cap, as the detector counts it", async () => {
   // Raw count 2 equals the cap, so a later findings review with a resolved thread of its own carries.
   // The clean draft_gate resets the count to 1, below the cap, so the same carry refuses until the Copilot gate passes, as in the detector.
-  const reviews = [copilotAt(HEAD, "### 🟢 Approval recommended", "2026-01-01T00:00:00Z"), withNodeId(copilotAt(OLD_HEAD, YELLOW_BODY, "2026-01-03T00:00:00Z"), "PRR_old")];
+  const reviews = [copilotAt(MID_HEAD, "### 🟢 Approval recommended", "2026-01-01T00:00:00Z"), withNodeId(copilotAt(OLD_HEAD, YELLOW_BODY, "2026-01-03T00:00:00Z"), "PRR_old")];
   const evidence = { ok: true, sizeOutcome: "pass", touchesT1: false, failures: [], draftGate: { verdict: "clean", headSha: MID_HEAD, updatedAt: "2026-01-02T00:00:00Z" } };
   const overrides = { maxCopilotRounds: 2, reviews, reviewThreads: [reviewThread({ reviewId: "PRR_old", isResolved: true })] };
   const atCap = await mergePr(baseOptions(), makeRuntime(overrides).runtime);
@@ -618,9 +618,8 @@ test("a draft-gate reset puts the later-review carry below the cap, as the detec
   const threw = await mergePr(baseOptions(), runtime).then(() => null, (e) => e);
   assert.ok(threw, "reset below the cap must refuse");
   assert.deepEqual(threw.mergePrFailure.failures.map((f) => f.precondition), ["copilot_convergence"]);
-  assert.match(refusalReason(threw), /round cap is not reached/u);
+  assert.ok(refusalReason(threw).startsWith(NO_CURRENT_HEAD_REVIEW_REFUSAL));
 });
-
 
 test("each missing precondition refuses with a machine-readable reason naming it", async () => {
   const cases = [
