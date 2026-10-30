@@ -228,8 +228,10 @@ fixer and owns the push. The sequence is:
    `thread_site_changed` or `thread_site_unverifiable` names the open thread for
    the full `pre_approval_gate` input instead. LEFT-side or missing coordinates,
    deleted/binary files and nonlinear history use this conservative fallback.
-   Current-head CI and the existing draft boundary still apply; no carried
-   disposition is a gate verdict.
+   Current-head CI and the existing draft boundary still apply. An unresolved
+   gate-authored thread can still block admission to that full round; recovery
+   admission remains a tracked gap in the [fix-loop state graph](https://github.com/mfittko/dev-loops/blob/main/docs/fix-loop-state-graph.md).
+   No carried disposition is a gate verdict.
 
 Each delta review, including a re-review of the current head, consumes one
 invocation. The dev-loop coordinator owns the invocation count and passes it to

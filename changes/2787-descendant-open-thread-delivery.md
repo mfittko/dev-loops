@@ -1,3 +1,3 @@
 ### Fixed
 
-- Fixer delivery resolves unchanged thread sites at descendant heads and sends changed or uncertain sites to a full gate round without a live-head delta (#2787)
+- Deliver unchanged thread sites at descendant heads; identify changed sites for full-gate input. Unresolved gate-thread recovery admission is deferred until PR #2990 merges (#2787)
