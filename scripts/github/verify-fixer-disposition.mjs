@@ -660,7 +660,7 @@ export async function assertDescendantThreadSites({ repo, pr, candidateHead, hea
       for (const commit of commits) {
         const parents = (await git("rev-list", "--parents", "-n", "1", commit)).split(" ");
         if (parents.length !== 2 || parents[1] !== parent) refuse("nonlinear history");
-        const patch = await git("diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", "--inter-hunk-context=0", parent, commit, "--", site.path);
+        const patch = await git("diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=0", "--inter-hunk-context=0", parent, commit, "--", site.path);
         if (/Binary files|GIT binary patch|deleted file mode|new file mode|old mode|new mode/.test(patch)) refuse("site file replaced, deleted or binary");
         let offset = 0;
         for (const hunk of patch.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) {

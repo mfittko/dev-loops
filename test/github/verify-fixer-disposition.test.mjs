@@ -257,7 +257,7 @@ async function threadConstructFixture(root, recordOver, site = false, commitCand
   root = await realpath(root);
   initGitFixture(root, { branch: "issue-1" });
   if (site) {
-    await writeFile(path.join(root, "site.txt"), "one\ntwo\nthree\nfour\nfive\n");
+    await writeFile(path.join(root, "site.txt"), typeof site === "string" ? site : "one\ntwo\nthree\nfour\nfive\n");
     execFileSync("git", ["-C", root, "add", "site.txt"]);
     execFileSync("git", ["-C", root, "commit", "-qm", "site"]);
   }
@@ -294,18 +294,31 @@ test("THREAD full --construct builds the report from the threads, the clearing r
   });
 });
 
-for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-diff-opts", "miss-inter-hunk", "touch", "touch-diff-opts", "touch-inter-hunk", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source"]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
+const repeatedDiffScenarios = ["myers", "histogram", "patience"].flatMap((algorithm) =>
+  ["true", "false"].flatMap((heuristic) => ["miss", "touch"].map((change) => `${change}-repeated-${algorithm}-${heuristic}`)));
+for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-diff-opts", "miss-inter-hunk", "touch", "touch-diff-opts", "touch-inter-hunk", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source", ...repeatedDiffScenarios]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
   await withRepoRoot(async (root) => {
     root = await realpath(root);
-    const f = route === "THREAD" ? await threadConstructFixture(root, undefined, true) : await completionFixture(root, "resolved", { site: true });
+    const repeated = scenario.includes("-repeated-");
+    const site = repeated ? "start\na\nb\nc\na\nb\nc\nend\n" : true;
+    const f = route === "THREAD" ? await threadConstructFixture(root, undefined, site) : await completionFixture(root, "resolved", { site });
     const candidate = f.head ?? f.candidate, fixerPlan = f.options?.fixerPlan ?? f.fixerPlan;
     if (route === "THREAD") await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
     const output = f.output ?? f.plan.workOrder.outputRefs[0], before = await readFile(output);
     const git = (...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
     const interHunk = scenario.endsWith("inter-hunk");
+    if (repeated) {
+      const [, , algorithm, heuristic] = scenario.split("-");
+      git("config", "diff.algorithm", algorithm);
+      git("config", "diff.indentHeuristic", heuristic);
+      await writeFile(path.join(root, "site.txt"), "start\na\nb\nc\nend\na\nb\nc\n");
+      git("add", "site.txt"); git("commit", "-qm", "shift repeated block");
+    }
     if (interHunk) git("config", "diff.interHunkContext", "100");
     const text = scenario.startsWith("touch") ? "one\ntwo\nchanged\nfour\nfive\n" : "one\ntwo\nthree\nfour\nelsewhere\n";
-    await writeFile(path.join(root, "site.txt"), interHunk ? text.replace("one", "before").replace("five", "after") : text);
+    // Myers maps the original line 6 to 7; touching line 6 must pass and line 7 must refuse.
+    const repeatedText = scenario.startsWith("touch") ? "start\na\nb\nc\nend\na\nchanged\nc\n" : "start\na\nb\nc\nend\nelsewhere\nb\nc\n";
+    await writeFile(path.join(root, "site.txt"), repeated ? repeatedText : interHunk ? text.replace("one", "before").replace("five", "after") : text);
     git("add", "site.txt"); git("commit", "-qm", "developer");
     if (scenario.startsWith("touch-color")) git("config", scenario === "touch-color-diff" ? "color.diff" : "color.ui", "always");
     let head = git("rev-parse", "HEAD");
@@ -322,7 +335,7 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
       if (args[1]?.includes("/compare/")) return { code: 0, stdout: JSON.stringify({ status: ["behind", "diverged"].includes(scenario) && args[1].endsWith(`${candidate}...${head}`) ? scenario : "ahead" }) };
       if (args[1]?.includes("/pulls/comments/")) {
         const index = Number(args[1].split("/").at(-1)) - 1;
-        return { code: 0, stdout: JSON.stringify({ id: index + 1, node_id: `root${index}`, pull_request_url: `https://api.github.com/repos/${REPO}/pulls/${PR}`, path: "site.txt", original_commit_id: candidate, original_line: 3, side: scenario === "left" ? "LEFT" : "RIGHT" }) };
+        return { code: 0, stdout: JSON.stringify({ id: index + 1, node_id: `root${index}`, pull_request_url: `https://api.github.com/repos/${REPO}/pulls/${PR}`, path: "site.txt", original_commit_id: candidate, original_line: repeated ? 6 : 3, side: scenario === "left" ? "LEFT" : "RIGHT" }) };
       }
       if (args.includes("POST")) { posts.push(stdin); return { code: 0, stdout: JSON.stringify({ id: 9, html_url: "https://example.com/9" }) }; }
       if (args[1] === "graphql" && args.some((arg) => arg.includes("resolveReviewThread"))) { resolved = true; return { code: 0, stdout: JSON.stringify({ data: { resolveReviewThread: { thread: { id: args.find((arg) => arg.startsWith("threadId="))?.slice(9) ?? ids[0], isResolved: true } } } }) }; }
@@ -335,8 +348,8 @@ for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-dif
       throw new Error(`unexpected call ${cmd} ${args.join(" ")}`);
     } };
     const options = { repo: REPO, pr: PR, headSha: head, fixerPlan };
-    if (!["miss", "miss-diff-opts", "miss-inter-hunk"].includes(scenario)) {
-      const expected = { touch: /thread_site_changed/, "touch-diff-opts": /thread_site_changed/, "touch-inter-hunk": /thread_site_changed/, "touch-color-diff": /thread_site_changed/, "touch-color-ui": /thread_site_changed/, left: /thread_site_unverifiable/, behind: /not contained/, diverged: /not contained/, red: /ci_failed/, pending: /ci_pending/, "head-race": /live head changed/, "missing-report": /result_missing/, "forged-source": /differ|Invalid fixer review baseline/ }[scenario];
+    if (scenario !== "miss" && !scenario.startsWith("miss-")) {
+      const expected = repeated ? /thread_site_changed/ : { touch: /thread_site_changed/, "touch-diff-opts": /thread_site_changed/, "touch-inter-hunk": /thread_site_changed/, "touch-color-diff": /thread_site_changed/, "touch-color-ui": /thread_site_changed/, left: /thread_site_unverifiable/, behind: /not contained/, diverged: /not contained/, red: /ci_failed/, pending: /ci_pending/, "head-race": /live head changed/, "missing-report": /result_missing/, "forged-source": /differ|Invalid fixer review baseline/ }[scenario];
       await assert.rejects(verifyFixerDisposition(options, deps), expected); assert.deepEqual(posts, []);
       assert.equal(resolved, false);
       assert.deepEqual(await checkpointFiles(root), []);
@@ -1637,7 +1650,7 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   repoRoot = await realpath(repoRoot);
   initGitFixture(repoRoot, { branch: "issue-1" });
   const git = (...args) => execFileSync("git", ["-C", repoRoot, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
-  if (settings.site) { await writeFile(path.join(repoRoot, "site.txt"), "one\ntwo\nthree\nfour\nfive\n"); git("add", "site.txt"); git("commit", "-qm", "site"); }
+  if (settings.site) { await writeFile(path.join(repoRoot, "site.txt"), typeof settings.site === "string" ? settings.site : "one\ntwo\nthree\nfour\nfive\n"); git("add", "site.txt"); git("commit", "-qm", "site"); }
   await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
   git("add", ".gitignore");
   git("commit", "-qm", "ignore evidence");
