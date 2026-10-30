@@ -329,14 +329,24 @@ test("--artifact: an existing JSON artifact gives all_done; absent, empty and no
     assert.equal((await wait()).outcome, "timeout", "an empty file is pending");
     await writeFile(file, "{not json");
     assert.equal((await wait()).outcome, "timeout", "a non-JSON file is pending");
-    await writeFile(file, JSON.stringify({ headSha: HEAD }));
-    assert.equal((await wait()).outcome, "timeout", "an interim parseable write without the completed marker is pending");
+    await writeFile(file, JSON.stringify({ candidateHead: HEAD }));
+    assert.equal((await wait()).outcome, "timeout", "an interim parseable write without the terminal field is pending");
+    await writeFile(file, JSON.stringify({ candidateHead: HEAD, outcome: "locally_clear" }));
+    assert.equal((await wait()).outcome, "all_done", "a final write with the terminal field satisfies the join");
+  });
+});
+
+test("--artifact: a hand-back with no terminal field is done only after it stays unchanged for 10 seconds", async () => {
+  await withDir(async (root) => {
+    const file = path.join(root, "record.json");
     await writeFile(file, JSON.stringify({ headSha: HEAD, siteCoverage: [] }));
-    assert.equal((await wait()).outcome, "timeout", "a rewritten interim record is still pending");
-    await writeFile(`${file}.done`, "");
-    assert.equal((await wait()).outcome, "all_done");
-    await writeFile(file, "{partial");
-    assert.equal((await wait()).outcome, "timeout", "the marker alone never reads as done");
+    const wait = (timeoutMs, clock = fakeClock()) => waitForUnits({ artifact: file, timeoutMs, ...clock });
+    assert.equal((await wait(9000)).outcome, "timeout", "unchanged for under 10 seconds is pending");
+    assert.equal((await wait(15000)).outcome, "all_done", "unchanged for 10 seconds is final");
+    // A rewrite at t=8000 restarts the stability window, so the join is still pending at t=15000.
+    let t = 0;
+    const clock = { now: () => t, delay: async (ms) => { t += ms; if (t === 8000) await writeFile(file, JSON.stringify({ headSha: HEAD, siteCoverage: [{ fingerprint: "f" }] })); } };
+    assert.equal((await wait(15000, clock)).outcome, "timeout", "a rewrite restarts the window");
   });
 });
 
