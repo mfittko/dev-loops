@@ -269,10 +269,14 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
   if (cap === 0) return pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_GATE_DISABLED);
   const requireCopilotConvergenceAtLatestHead = resolveRequireCopilotConvergenceAtLatestHead(config);
   const reviews = toSharedReviewShape(rawReviews);
+  const { completedCopilotReviewRounds } = summarizeCopilotReviews(reviews, {
+    headSha: currentHeadSha,
+    draftGateResetAtMs: resolveDraftGateRoundResetMs({ draftGate, currentHeadSha }),
+  });
   // The request status is checked separately, with merge-side fail-closed reads.
   const carriedDisposition = async (kind) => {
     const carried = await resolveCarriedConvergence(
-      { repo, pr, currentHeadSha, prData: { reviews }, copilotReviewRequestStatus: "none", requireCopilotConvergenceAtLatestHead, rules: resolveClassifyRules(config) },
+      { repo, pr, currentHeadSha, prData: { reviews }, copilotReviewRequestStatus: "none", requireCopilotConvergenceAtLatestHead, rules: resolveClassifyRules(config), copilotReviewRoundCount: completedCopilotReviewRounds, effectiveCap: cap },
       runtime,
     );
     if (!carried.carried || (await isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews }, runtime))) return null;
@@ -287,10 +291,6 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
   const lastReviewConverged = lastReviewedHead !== null && lastReviewedHead !== currentHeadSha
     && evaluateCopilotConvergence({ currentHeadSha: lastReviewedHead, reviews }).state === COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN;
   // A missing draftGate means no round reset (the permissive direction); it only occurs when evidence is unreadable, which already fails gate_evidence.
-  const { completedCopilotReviewRounds } = summarizeCopilotReviews(reviews, {
-    headSha: currentHeadSha,
-    draftGateResetAtMs: resolveDraftGateRoundResetMs({ draftGate, currentHeadSha }),
-  });
   // ADR 0012: at the cap, a significant change after a converged review opens a
   // new cycle regardless of the spent cap. A fix pushed after a findings review
   // keeps the fallback.
@@ -347,12 +347,12 @@ async function resolveAdrNumberCollisionRefusal({ repo, pr, baseRefName }, { env
 // review exists but the latest submitted Copilot review sits on an earlier
 // commit and is not converged by the shared predicate, or is converged while a
 // Copilot review is outstanding on the current head; null otherwise.
-async function resolveLaterCopilotReviewRefusal({ repo, pr, currentHeadSha, rawReviews, rawConvergenceState, rules }, runtime) {
+async function resolveLaterCopilotReviewRefusal({ repo, pr, currentHeadSha, rawReviews, rawConvergenceState, rules, effectiveCap, draftGate }, runtime) {
   if (rawConvergenceState === null || rawConvergenceState === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW) return null;
   const prData = { reviews: toSharedReviewShape(rawReviews) };
   const latestHead = getLastCopilotReviewHeadSha(prData);
   if (latestHead === null || latestHead === currentHeadSha) return null;
-  const carried = await resolveCarriedConvergence({ repo, pr, currentHeadSha, prData, copilotReviewRequestStatus: "none", rules }, runtime);
+  const carried = await resolveCarriedConvergence({ repo, pr, currentHeadSha, prData, copilotReviewRequestStatus: "none", rules, copilotReviewRoundCount: summarizeCopilotReviews(prData.reviews, { headSha: currentHeadSha, draftGateResetAtMs: resolveDraftGateRoundResetMs({ draftGate, currentHeadSha }) }).completedCopilotReviewRounds, effectiveCap }, runtime);
   const later = `a later Copilot review ${getLastCopilotReview(prData)?.id ?? "(unknown id)"} on an earlier commit (${latestHead})`;
   if (!carried.carried) return `${later} is not converged and supersedes the current-head review: ${carried.reason}`;
   // The carry reads the request status as "none"; check it here with the fail-closed reads.
@@ -725,7 +725,7 @@ export async function mergePr(options, runtime = {}) {
   // shared predicate, as the loop does. The converged-once form applies in
   // both modes: the current head has its own review, so no delta is carried.
   const copilotLaterReviewRefusal = await resolveLaterCopilotReviewRefusal(
-    { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, rawConvergenceState, rules: resolveClassifyRules(configLoad?.config) },
+    { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, rawConvergenceState, draftGate: evidence.draftGate, rules: resolveClassifyRules(configLoad?.config), effectiveCap: resolveEffectiveCopilotRoundCap(configLoad?.config ?? { version: 1 }, { lightweight: options.lightweight === true }) },
     { env, ghCommand, runChild, ghJson },
   );
 

@@ -776,7 +776,7 @@ async function performRequest(
   let carriedConvergence = null;
   const resolveCarried = async () => {
     carriedConvergence ??= await resolveCarriedConvergence(
-      { repo: options.repo, pr: options.pr, currentHeadSha, prData: before.prData, copilotReviewRequestStatus: "none", requireCopilotConvergenceAtLatestHead, rules: resolveClassifyRules(config) },
+      { repo: options.repo, pr: options.pr, currentHeadSha, prData: before.prData, copilotReviewRequestStatus: "none", requireCopilotConvergenceAtLatestHead, rules: resolveClassifyRules(config), copilotReviewRoundCount: completedRounds, effectiveCap: maxRounds },
       runtime,
     );
     return carriedConvergence;

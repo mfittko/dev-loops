@@ -23,6 +23,8 @@
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
 import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
+import { summarizeGateReviewCommentMarkers } from "@dev-loops/core/github/copilot-helpers";
+import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import {
   isBodyOnlyBlockingReview,
@@ -158,16 +160,37 @@ async function fetchThreadFacts({ repo, pr }, runtime) {
   }
 }
 
+// COPILOT-STATE-CONVERGED-BELOW-CAP: the shared round-cap predicate (ADR 0208)
+// asks whether the next Copilot round is still allowed. Missing or invalid
+// inputs mean "not below the cap" (legacy behavior).
+export function isBelowCopilotRoundCap({ copilotReviewRoundCount, effectiveCap } = {}) {
+  return Number.isInteger(copilotReviewRoundCount) && Number.isInteger(effectiveCap) && effectiveCap > 0
+    && !isRoundRefused(copilotReviewRoundCount + 1, effectiveCap);
+}
+
+// The Copilot gate has passed when a pre_approval_gate marker exists on the PR
+// for any head. An unreadable comment stream counts as not passed.
+async function isCopilotGatePassed({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  try {
+    const result = await runChild(ghCommand, ["api", `repos/${repo}/issues/${pr}/comments`, "--paginate", "--jq", ".[]"], env);
+    if (result.code !== 0) return false;
+    const comments = result.stdout.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    return summarizeGateReviewCommentMarkers(comments).pre_approval_gate?.visible === true;
+  } catch {
+    return false;
+  }
+}
+
 // The shared tail of both carry paths, run after the delta carries: zero
 // unresolved threads, then the body-only condition on the prior review.
 // `prData` supplies the prior review through resolveLatestCopilotReview, so a
 // timestamp tie with two body-blocking latest reviews refuses to carry.
-async function finishCarry({ repo, pr, currentHeadSha, prData, sourceHeadSha, delta, source, unresolvedThreadCount, reviewThreads }, runtime) {
+async function finishCarry({ repo, pr, currentHeadSha, prData, sourceHeadSha, delta, source, unresolvedThreadCount, reviewThreads, belowCap = false }, runtime) {
   const { review: priorReview, ambiguousBlockingTie } = resolveLatestCopilotReview(prData);
   const sourceReviewId = priorReview?.id !== null && priorReview?.id !== undefined ? String(priorReview.id) : null;
   const bodyBlocking = isBodyOnlyBlockingReview(priorReview);
   let threadFacts = { unresolvedThreadCount, reviewThreads };
-  if (typeof unresolvedThreadCount !== "number" || (bodyBlocking && !Array.isArray(reviewThreads))) {
+  if (typeof unresolvedThreadCount !== "number" || ((bodyBlocking || belowCap) && !Array.isArray(reviewThreads))) {
     threadFacts = await fetchThreadFacts({ repo, pr }, runtime);
     if (threadFacts === null) {
       return { carried: false, reason: "the review-thread list is unavailable" };
@@ -180,7 +203,14 @@ async function finishCarry({ repo, pr, currentHeadSha, prData, sourceHeadSha, de
     return { carried: false, reason: "two or more latest Copilot reviews share a timestamp and carry a body finding; no single review owns it" };
   }
   const carried = { carried: true, source, sourceReviewId, sourceHeadSha, reason: delta.reason, bodyDisposition: null };
-  if (!bodyBlocking || reviewHasOwnThread(threadFacts.reviewThreads, sourceReviewId)) {
+  const ownThread = reviewHasOwnThread(threadFacts.reviewThreads, sourceReviewId);
+  // COPILOT-STATE-CONVERGED-BELOW-CAP: below the cap an unclean review never converges
+  // before the Copilot gate passes; only an operator record on a body-only review does.
+  const belowCapUnclean = source === "converged_once" && belowCap && (bodyBlocking || ownThread) && !(await isCopilotGatePassed({ repo, pr }, runtime));
+  if (belowCapUnclean && ownThread) {
+    return { carried: false, reason: "the latest Copilot review has findings and the round cap is not reached; re-request Copilot (COPILOT-STATE-CONVERGED-BELOW-CAP)" };
+  }
+  if (!bodyBlocking || ownThread) {
     return carried;
   }
   const record = await resolveCopilotBodyDisposition(
@@ -192,6 +222,9 @@ async function finishCarry({ repo, pr, currentHeadSha, prData, sourceHeadSha, de
       carried: false,
       reason: `the prior Copilot review is body-only changes-recommended or unrecognized with no thread of its own and no trusted disposition record naming it`,
     };
+  }
+  if (belowCapUnclean && record.disposition?.operator !== true) {
+    return { carried: false, reason: "a fix-form disposition does not converge a body-only review below the round cap (COPILOT-STATE-CONVERGED-BELOW-CAP)" };
   }
   return { ...carried, bodyDisposition: record.disposition };
 }
@@ -234,6 +267,8 @@ export async function resolveCarriedConvergence({
   reviewThreads,
   requireCopilotConvergenceAtLatestHead = false,
   rules = null,
+  copilotReviewRoundCount,
+  effectiveCap,
 }, runtime = {}) {
   if (copilotReviewRequestStatus !== "none") {
     return { carried: false, reason: "a Copilot review request is outstanding on the current head" };
@@ -248,7 +283,7 @@ export async function resolveCarriedConvergence({
   }
   if (requireCopilotConvergenceAtLatestHead !== true) {
     return finishCarry(
-      { repo, pr, currentHeadSha, prData, sourceHeadSha: lastReviewSha, delta: CONVERGED_ONCE_DELTA, source: "converged_once", unresolvedThreadCount, reviewThreads },
+      { repo, pr, currentHeadSha, prData, sourceHeadSha: lastReviewSha, delta: CONVERGED_ONCE_DELTA, source: "converged_once", unresolvedThreadCount, reviewThreads, belowCap: isBelowCopilotRoundCap({ copilotReviewRoundCount, effectiveCap }) },
       runtime,
     );
   }

@@ -153,6 +153,10 @@
       "enforcement": "runtime"
     },
     {
+      "id": "COPILOT-STATE-CONVERGED-BELOW-CAP",
+      "enforcement": "runtime"
+    },
+    {
       "id": "COPILOT-STATE-REPLY-BEFORE-REREQUEST"
     },
     {

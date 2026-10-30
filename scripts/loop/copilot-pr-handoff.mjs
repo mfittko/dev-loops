@@ -741,6 +741,8 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
         unresolvedThreadCount: snapshot.unresolvedThreadCount,
         requireCopilotConvergenceAtLatestHead,
         rules: resolveClassifyRules(config.config),
+        copilotReviewRoundCount: snapshot.copilotReviewRoundCount,
+        effectiveCap: refinementConfig.maxCopilotRounds,
       },
       { env, ghCommand, runChild },
     )).carried;
@@ -785,6 +787,8 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
         unresolvedThreadCount: snapshot.unresolvedThreadCount,
         requireCopilotConvergenceAtLatestHead,
         rules: resolveClassifyRules(config.config),
+        copilotReviewRoundCount: snapshot.copilotReviewRoundCount,
+        effectiveCap: refinementConfig.maxCopilotRounds,
       };
       const runtime = { env, ghCommand, runChild };
       const markerCarry = await resolvePostConvergenceReviewSuppressed(carryFacts, runtime);
