@@ -58,6 +58,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
+import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
@@ -1998,6 +1999,33 @@ export async function resolveClosureRound(options, { repoRoot, cap }) {
 }
 
 /**
+ * The delta refs of a ledger's open act items, as the fixer act list yields them: clusters reduce as judge-pass.mjs does (the stamped grouping only when
+ * every finding is stamped, else clusterFindings), dedupeActListByCluster keeps one finding per cluster, and toDeltaActItems suffixes a repeated
+ * fingerprint (fp, fp#2, ...). Returns a Map from each open act finding (every cluster member) to its cluster's ref.
+ */
+function capRoundActRefs(findings, headSha) {
+  const all = Array.isArray(findings) ? findings : [];
+  const clusters = all.every((f) => Number.isInteger(f?.clusterId)) ? clustersFromStampedIds(all) : clusterFindings(all, { headSha }).clusters;
+  const act = all.filter(isOpenActItem);
+  const kept = dedupeActListByCluster(act, clusters, all);
+  const counts = new Map();
+  const refs = kept.map((f) => { const fp = fingerprintFinding(f), n = (counts.get(fp) ?? 0) + 1; counts.set(fp, n); return n > 1 ? `${fp}#${n}` : fp; });
+  // kept follows first appearance of each cluster in act order; unresolvable membership stays one entry per finding.
+  const clusterOf = new Map();
+  clusters.forEach((c, ci) => c.memberIndices?.forEach((m) => clusterOf.set(all[m], ci)));
+  const slotOfCluster = new Map();
+  const out = new Map();
+  let slot = 0;
+  for (const f of act) {
+    const ci = clusterOf.get(f);
+    if (ci === undefined) { out.set(f, refs[slot++]); continue; }
+    if (!slotOfCluster.has(ci)) slotOfCluster.set(ci, slot++);
+    out.set(f, refs[slotOfCluster.get(ci)]);
+  }
+  return out;
+}
+
+/**
  * The cap round of a draft_gate (ADR 0208): the last closed ledger when the completed rounds (the head being posted excluded) reached the cap and
  * that ledger is `findings_present`. Returns `{ log, residue }` or null. `residue` is the cap round's act items and `capClosed` items as
  * `{ fingerprint, file, line, title, disposition }`, the input `pre_approval_gate` receives.
@@ -2012,12 +2040,14 @@ export async function resolveCapRound(options, { repoRoot }) {
   // An unreadable ledger counts toward the cap but readClosedPriorRoundLogs drops it, so the cap-round authority could be an earlier round: fail closed.
   let unreadable = 0;
   const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, onUnreadable: () => { unreadable += 1; } })).at(-1);
-  if (unreadable > 0 || log?.verdict !== "findings_present") return null;
+  // The persisted severity verdict can read `clean` for judge-act mediums whose posted review composes findings_present: an open act item makes the round a cap round too.
+  if (unreadable > 0 || !log || (log.verdict !== "findings_present" && listOpenActItems(log.findings).length === 0)) return null;
   // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
   let items = [];
   try { items = readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), log.headSha)?.items ?? []; } catch { /* unverifiable: keep every item */ }
-  // The delta act set suffixes a repeated fingerprint (fp, then fp with a #N suffix for each repeat): fixed only when a ref of that fingerprint exists and every one is resolved.
-  const isFixed = (f) => { const fp = fingerprintFinding(f), own = items.filter((i) => i?.ref === fp || String(i?.ref).startsWith(`${fp}#`)); return own.length > 0 && own.every((i) => i.status === "resolved"); };
+  // Each acted cluster has one delta ref (fp, fp#2, ...): a finding is fixed only when its cluster's ref exists and is resolved.
+  const refOf = capRoundActRefs(log.findings, log.headSha);
+  const isFixed = (f) => { const ref = refOf.get(f); return ref !== undefined && items.some((i) => i?.ref === ref && i.status === "resolved"); };
   const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => (isOpenActItem(f) && !isFixed(f)) || f?.capClosed).map((f) => ({
     fingerprint: fingerprintFinding(f), file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary, disposition: isOpenActItem(f) ? "act" : "cap_closed",
   }));
@@ -2065,7 +2095,14 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
     }
     return false;
   };
-  return starts.some(reaches) ? capRound : null;
+  // The first clearing record must name every act item of the cap round: a delta record keyed on the same baseline for another route (a thread review) proves nothing about them.
+  // With no open act item the check is vacuously true: any clearing record then binds, and the cap round rests on the baseline match alone.
+  const covers = (record) => {
+    const refs = new Set((Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref)));
+    const expected = new Set(capRoundActRefs(capRound.log.findings, capHead).values());
+    return [...expected].every((r) => refs.has(r));
+  };
+  return starts.filter(covers).some(reaches) ? capRound : null;
 }
 
 /**
@@ -3712,12 +3749,15 @@ export async function main(
         // draftGateAlreadySatisfied no-op; pre_approval keeps the folded fact.
         const isDraftGate = options.gate === "draft_gate";
         const draftVerdict = coordination.gateEvidence?.draftGate;
+        // A ready PR whose cap round is fixed holds no clean draft verdict: the sealed proof stands in for it, so pre_approval_gate can build its context.
+        const capFixedPreApproval = !isDraftGate && coordination.prData?.isDraft === false && coordination.gateEvidence?.draftGateSatisfied !== true && coordination.unresolvedGateThreadCount === 0
+          && Boolean(await resolveCapRoundFixed({ repo: options.repo, pr: options.pr, headSha: coordination.currentHeadSha, baseRefName: typeof coordination.prData?.baseRefName === "string" ? coordination.prData.baseRefName.trim() : "", anyHead: true }, { repoRoot }).catch(() => null));
         const refusal = prematureGateOrderingRefusal({
           gate: options.gate,
           isDraft: isDraftGate ? coordination.prData?.isDraft : Boolean(coordination.prData?.isDraft),
           draftGateSatisfied: isDraftGate
             ? draftVerdict?.verdict === "clean" && typeof draftVerdict?.headSha === "string"
-            : coordination.gateEvidence?.draftGateSatisfied === true,
+            : capFixedPreApproval || coordination.gateEvidence?.draftGateSatisfied === true,
           repo: options.repo,
           pr: options.pr,
         });

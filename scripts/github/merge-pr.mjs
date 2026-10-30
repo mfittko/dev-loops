@@ -215,11 +215,14 @@ export function parseMergePrCliArgs(argv) {
 // current-head pre_approval_gate verdicts, unresolved threads, the runner lock,
 // and fan-out provenance — reused wholesale (non-goal: do not re-derive the set).
 const DETECT_EVIDENCE_PATH = fileURLToPath(new URL("./detect-checkpoint-evidence.mjs", import.meta.url));
-function defaultDetectEvidence({ repo, pr, env, cwd }) {
+export function buildDetectEvidenceArgv({ repo, pr, baseRefName }) {
+  return [DETECT_EVIDENCE_PATH, "--repo", repo, "--pr", String(pr), ...(baseRefName ? ["--base-ref-name", baseRefName] : [])];
+}
+function defaultDetectEvidence({ repo, pr, env, cwd, baseRefName }) {
   return new Promise((resolve) => {
     execFile(
       process.execPath,
-      [DETECT_EVIDENCE_PATH, "--repo", repo, "--pr", String(pr)],
+      buildDetectEvidenceArgv({ repo, pr, baseRefName }),
       { env, cwd, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
         let parsed = null;
@@ -657,7 +660,7 @@ export async function mergePr(options, runtime = {}) {
     { env, ghCommand, runChild },
   )).map((c) => ({ login: c?.user?.login ?? null, body: c?.body ?? "", type: c?.user?.type ?? null }));
 
-  const evidence = await detectEvidence({ repo: options.repo, pr: options.pr, env, cwd });
+  const evidence = await detectEvidence({ repo: options.repo, pr: options.pr, env, cwd, baseRefName });
   const configLoad = await loadConfig({ repoRoot: resolveRepoRoot(cwd) });
 
   // Fail closed on a config load/validation error: an unreadable `.devloops` is
