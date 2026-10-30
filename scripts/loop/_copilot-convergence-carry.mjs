@@ -208,7 +208,7 @@ async function finishCarry({ repo, pr, currentHeadSha, prData, sourceHeadSha, de
   // before the Copilot gate passes; only an operator record on a body-only review does.
   const belowCapUnclean = source === "converged_once" && belowCap && (bodyBlocking || ownThread) && !(await isCopilotGatePassed({ repo, pr }, runtime));
   if (belowCapUnclean && ownThread) {
-    return { carried: false, reason: "the latest Copilot review has findings and the round cap is not reached; re-request Copilot (COPILOT-STATE-CONVERGED-BELOW-CAP)" };
+    return { carried: false, reason: "convergence refused: the latest Copilot review has findings and the round cap is not reached; re-request Copilot (COPILOT-STATE-CONVERGED-BELOW-CAP)" };
   }
   if (!bodyBlocking || ownThread) {
     return carried;
