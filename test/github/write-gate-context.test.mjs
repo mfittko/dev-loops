@@ -8837,7 +8837,26 @@ test("resolveCapRoundFixed accepts a record naming one member of each acted clus
   }
 });
 
-test("resolveCapRoundFixed trusts only a sealed, unmodified delta record (ADR 0208, PRE-PUSH-DELTA-NOT-GATE-EVIDENCE)", async () => {
+test("resolveCapRoundFixed needs one ref per acted cluster when clusters share a fingerprint (fp, fp#2)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 63, gate: "draft_gate", headSha };
+    await seedClosedRounds(repoRoot, 63, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-63", `draft_gate-${baseSha}.json`);
+    const log = JSON.parse(await readFile(ledger, "utf8"));
+    const [a] = log.findings;
+    await writeFile(ledger, JSON.stringify({ ...log, findings: [{ ...a, clusterId: 0 }, { ...a, line: 9, clusterId: 1 }] }), "utf8");
+    const fp = fingerprintFinding(a);
+    await writeDeltaRecord(repoRoot, baseSha, headSha, "push", { items: [{ ref: fp, status: "resolved" }] });
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot }), null, "the second cluster needs fp#2");
+    await writeDeltaRecord(repoRoot, baseSha, headSha, "push", { items: [{ ref: fp, status: "resolved" }, { ref: `${fp}#2`, status: "resolved" }] });
+    assert.ok(await resolveCapRoundFixed(opts, { repoRoot }), "fp and fp#2 cover both clusters");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveCapRoundFixed trusts only a sealed, unmodified delta record (ADR 0208,PRE-PUSH-DELTA-NOT-GATE-EVIDENCE)", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
     const opts = { repo: "owner/repo", pr: 48, gate: "draft_gate", headSha };

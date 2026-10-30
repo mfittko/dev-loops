@@ -58,6 +58,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
+import { clusterFindings, clustersFromStampedIds } from "@dev-loops/core/loop/finding-cluster";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
 import { captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
@@ -2070,14 +2071,16 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   // With no open act item the check is vacuously true: any clearing record then binds, and the cap round rests on the baseline match alone.
   const covers = (record) => {
     const refs = (Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref));
-    // The fixer act list is cluster-deduplicated: a stamped cluster is named by any one member's fingerprint, an unstamped finding by its own.
-    const named = (f) => { const fp = fingerprintFinding(f); return refs.some((r) => r === fp || r.startsWith(`${fp}#`)); };
-    const clusters = new Map();
-    for (const f of listOpenActItems(capRound.log.findings)) {
-      const key = Number.isInteger(f?.clusterId) ? `c:${f.clusterId}` : `f:${fingerprintFinding(f)}`;
-      clusters.set(key, [...(clusters.get(key) ?? []), f]);
-    }
-    return [...clusters.values()].every((members) => members.some(named));
+    // Clusters reduce exactly as judge-pass.mjs does: the stamped grouping only when every finding is stamped, else clusterFindings.
+    const all = capRound.log.findings;
+    const clusters = all.every((f) => Number.isInteger(f?.clusterId)) ? clustersFromStampedIds(all) : clusterFindings(all, { headSha: capHead }).clusters;
+    // The act list keeps one finding per cluster and toDeltaActItems refs repeated fingerprints fp, fp#2, ...: each acted cluster needs its own distinct ref, named by any member's fingerprint.
+    const unused = new Set(refs);
+    return clusters.filter((c) => c.memberIndices.some((i) => isOpenActItem(all[i]))).every((c) => {
+      const fps = new Set(c.memberIndices.map((i) => fingerprintFinding(all[i])));
+      const ref = [...unused].find((r) => fps.has(r.replace(/#\d+$/, "")));
+      return ref !== undefined && unused.delete(ref);
+    });
   };
   return starts.filter(covers).some(reaches) ? capRound : null;
 }
