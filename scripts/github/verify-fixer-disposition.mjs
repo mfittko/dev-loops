@@ -89,7 +89,8 @@ Optional:
   --report-path <path>         Absolute path of the join report. Valid only with --check
                                (refused otherwise, and when it equals the
                                plan's outputRef). The verifier publishes its final result
-                               there once per successful run, last and atomically: the result with outcome
+                               there once per successful run, last and atomically (temp file, then hard link; an existing report is never
+                               replaced and a later run with the same path refuses): the result with outcome
                                "complete" or "incomplete", or on a refusal
                                { ok: false, outcome: "refused", error }. A full-phase order
                                derives it as <outputRef>.report (joinRef).
