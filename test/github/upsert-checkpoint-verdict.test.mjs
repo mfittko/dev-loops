@@ -9613,7 +9613,7 @@ function permissiveVerdictRunChild(headSha) {
     if (a.includes("graphql")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n', stderr: "" };
     if (a.includes("issues/17/comments")) return { code: 0, stdout: "[]\n", stderr: "" };
     if (a.includes("pulls/17/reviews")) return { code: 0, stdout: "[]\n", stderr: "" };
-    if (a.includes("pulls/17/files")) return { code: 0, stdout: "[]" + "\n", stderr: "" };
+    if (a.includes("pulls/17/files")) return { code: 0, stdout: "[]\n", stderr: "" };
     if (a.includes("--json") && a.includes("statusCheckRollup")) return { code: 0, stdout: prJson, stderr: "" };
     if (a.includes("--json") && a.includes("headRefOid") && !a.includes("state")) return { code: 0, stdout: JSON.stringify({ headRefOid: headSha }) + "\n", stderr: "" };
     if (a.includes("--json") && a.includes("files")) return { code: 0, stdout: "src/db.mjs\n", stderr: "" };
@@ -12478,9 +12478,10 @@ test("tick (#2898): a spec id (dod:<n> / ac:<n>) resolves against the pinned spe
   }
   // The pinned spec resolves the id, but no unchecked PR row carries that text (the row is already checked): the whole category is skipped.
   const preChecked = TICK_PR_BODY.replace(`- [ ] ${TICK_ITEMS[12]}`, `- [x] ${TICK_ITEMS[12]}`);
-  await withCompositionRound({ overallVerdict: "findings_present", prBody: preChecked, verifiedItems: TICK_ITEMS.slice(13), findings: [openAct({ judgeCriterion: "dod:0" })] }, async ({ post, editedBodies }) => {
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: preChecked, verifiedItems: TICK_ITEMS.slice(13), findings: [openAct({ judgeCriterion: "dod:0" })] }, async ({ post, editedBodies, calls }) => {
     await post({ specAuthority: pin });
-    for (const item of TICK_ITEMS.slice(13)) unticked(editedBodies[0]?.body ?? `- [ ] ${item}`, item);
+    assert.equal(editedBodies.length, 0);
+    assert.equal(bodyEdits(calls).length, 0);
   });
 });
 
@@ -12495,7 +12496,7 @@ test("tick (#2898): a pinned spec and a PR body without an AC checklist still ti
   });
 });
 
-test("tick (#2898): a review-gate rerun refused for the already-submitted review changes no PR body and no issue body", async () => {
+test("tick (#2898): a review-gate rerun is refused with the already-submitted refusal message", async () => {
   await withTempDir(async (tempDir) => {
     const { body } = await createReviewGateAndCaptureBody(tempDir, { nextAction: "none — informational review, no re-gate required" });
     const submitted = seededSubmittedReview({ id: 982, body });
