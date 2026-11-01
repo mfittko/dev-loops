@@ -484,6 +484,20 @@ test("editPr (#2898): the untick guard counts duplicate labels and reports a rem
   await assert.rejects(() => attempt(live.replace("\n- [x] Docs updated", "")), /untick or remove 1 checked row.*"Docs updated"/s);
 });
 
+test("editPr (#2898): the untick guard ignores fenced rows and scopes labels to their section", async () => {
+  const attempt = (live, body) => editPr(
+    { repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] },
+    { run: stubGh().run, fetchPrContext: async () => ({ headRefName: "x", closingIssuesReferences: [], body: live }) },
+  );
+  const fenced = "```\n- [x] Tests pass\n```";
+  // unticking a real row while adding a fenced checked example: refused
+  await assert.rejects(() => attempt("## AC\n- [x] Tests pass", `## AC\n- [ ] Tests pass\n${fenced}`), /untick or remove 1 checked row.*"Tests pass"/s);
+  // editing a fenced checked example: accepted
+  await attempt(`## AC\n- [x] Tests pass\n${fenced}`, `## AC\n- [x] Tests pass\n${fenced.replace("[x]", "[ ]")}`);
+  // swapping the tick between sections with the same label: refused
+  await assert.rejects(() => attempt("## AC\n- [x] Tests pass\n## Validation\n- [ ] Tests pass", "## AC\n- [ ] Tests pass\n## Validation\n- [x] Tests pass"), /untick or remove 1 checked row.*"Tests pass"/s);
+});
+
 test("editPr (#2898): the untick guard sees every checkbox row form the gate parser reads", async () => {
   const attempt = (live, body) => editPr(
     { repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] },

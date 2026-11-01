@@ -314,14 +314,32 @@ async function buildEditArgs(options) {
 // an optional blockquote prefix, then a [-*+] or N. or N) marker.
 const CHECKBOX_ROW = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[([ xX])\]\s+(.+?)\s*$/u;
 function untickedRows(currentBody, nextBody) {
-  const checked = (body) => body.split(/\r?\n/u).map((l) => CHECKBOX_ROW.exec(l)).filter((m) => m && m[1] !== " ").map((m) => m[2]);
+  // Fence-aware and section-scoped: a checked row counts under its nearest heading; rows inside fenced code do not count.
+  const checked = (body) => {
+    let fence = null;
+    let section = "";
+    const rows = [];
+    for (const line of body.split(/\r?\n/u)) {
+      const f = /^\s*(`{3,}|~{3,})/u.exec(line);
+      if (f) {
+        if (fence === null) fence = f[1][0];
+        else if (f[1][0] === fence) fence = null;
+        continue;
+      }
+      if (fence !== null) continue;
+      if (/^\s{0,3}#{1,6}\s/u.test(line)) section = line.trim();
+      const m = CHECKBOX_ROW.exec(line);
+      if (m && m[1] !== " ") rows.push(`${section}\u0000${m[2]}`);
+    }
+    return rows;
+  };
   const remaining = new Map();
-  for (const label of checked(nextBody)) remaining.set(label, (remaining.get(label) ?? 0) + 1);
-  return checked(currentBody).filter((label) => {
-    const left = remaining.get(label) ?? 0;
-    if (left > 0) remaining.set(label, left - 1);
+  for (const key of checked(nextBody)) remaining.set(key, (remaining.get(key) ?? 0) + 1);
+  return checked(currentBody).filter((key) => {
+    const left = remaining.get(key) ?? 0;
+    if (left > 0) remaining.set(key, left - 1);
     return left === 0;
-  });
+  }).map((key) => key.slice(key.indexOf("\u0000") + 1));
 }
 
 export async function editPr(

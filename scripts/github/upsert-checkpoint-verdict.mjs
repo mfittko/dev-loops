@@ -2359,13 +2359,26 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
   });
   const inSections = (body, options) => {
     const indices = checklistSectionLineIndices(body, options);
-    return (index) => indices.has(index);
+    if (!options?.byCategory) return (index) => indices.has(index);
+    // Per-category labels: an AC row ticks only for an AC label, a DoD row only for a DoD label, so a duplicate label in the other category is unaffected.
+    const acIndices = checklistSectionLineIndices(body, { acOnly: true });
+    return (index, label) => indices.has(index) && (acIndices.has(index) ? options.byCategory.ac : options.byCategory.dod).has(label);
   };
   const tick = async (body, labels, write, liveIssue, options) => {
     const result = await applyTick(body, labels, dryRun, write, inSections(body, options));
     if (dryRun && result.flipped.length > 0) {
-      pendingWrites.push(async () => {
+      // preview=true re-reads the live body and refuses when its ticked checkbox rows differ from the dry-run's (a concurrent row change the clean guards never saw); it writes nothing.
+      const checkboxRows = (b) => b.split(/\r?\n/u).filter((l) => /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s/u.test(l)).map((l) => l.trim());
+      const dryRows = checkboxRows(result.body);
+      pendingWrites.push(async (preview = false) => {
         const live = await fetchIssueBody({ repo, issue: liveIssue }, { env, ghCommand, runChild });
+        if (preview) {
+          const liveRows = checkboxRows((await applyTick(live, labels, true, write, inSections(live, options))).body);
+          if (liveRows.length !== dryRows.length || liveRows.some((row, i) => row !== dryRows[i])) {
+            throw new Error(`The checklist of ${liveIssue === pr ? `PR ${pr}` : `issue ${liveIssue}`} changed after the gate read it; no verdict is posted and nothing was ticked. Re-run the gate against the current body.`);
+          }
+          return undefined;
+        }
         return applyTick(live, labels, false, write, inSections(live, options));
       });
     }
@@ -2391,20 +2404,23 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
     ac: { spec: pinnedSpec.acceptanceCriteria, unchecked: artifact?.prBodyUncheckedAcItems ?? [] },
     dod: { spec: pinnedSpec.definitionOfDone, unchecked: artifact?.prBodyUncheckedDodItems ?? [] },
   };
-  const prSkipped = new Set();
+  // Skips are scoped to the criterion's category: an AC id never suppresses a same-text DoD row.
+  const prSkipped = { ac: new Set(), dod: new Set() };
   for (const c of namedCriteria) {
     for (const [, kind, index] of c.matchAll(/\b(ac|dod):(\d+)\b/giu)) {
       const { spec, unchecked } = categories[kind.toLowerCase()];
       const text = spec[Number(index)] === undefined ? "" : normalizeCriterionText(spec[Number(index)]);
       const row = unchecked.find((label) => normalizeCriterionText(label) === text);
-      for (const label of text && row !== undefined ? [row] : unchecked) prSkipped.add(String(label).trim());
+      for (const label of text && row !== undefined ? [row] : unchecked) prSkipped[kind.toLowerCase()].add(String(label).trim());
     }
   }
-  const prLabels = inList([...(artifact?.prBodyUncheckedAcItems ?? []), ...(artifact?.prBodyUncheckedDodItems ?? [])])
-    .filter((label) => !prSkipped.has(String(label).trim()));
-  const prTick = await tick(prData.body, prLabels, (bodyFile) =>
+  const byCategory = {
+    ac: new Set(inList(artifact?.prBodyUncheckedAcItems).map((l) => String(l).trim()).filter((l) => !prSkipped.ac.has(l))),
+    dod: new Set(inList(artifact?.prBodyUncheckedDodItems).map((l) => String(l).trim()).filter((l) => !prSkipped.dod.has(l))),
+  };
+  const prTick = await tick(prData.body, [...byCategory.ac, ...byCategory.dod], (bodyFile) =>
     editPr({ repo, pr, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
-  pr);
+  pr, { byCategory });
   const issueLabels = inList(artifact?.uncheckedAcItems);
   const tickedIssueBodies = [];
   const flippedIssueLabels = new Set();
@@ -3056,6 +3072,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       summary: (typeof f?.summary === "string" && f.summary.trim()) || "(unparseable)",
       judgeDisposition: typeof f?.judgeDisposition === "string" ? f.judgeDisposition.trim() : f?.judgeDisposition,
       ...(f?.remedyKind ? { remedyKind: f.remedyKind } : {}),
+      // Criterion references survive so the tick exclusion (namedCriteria) sees a reference supplied only in --findings-json.
+      ...(typeof f?.defectKey === "string" ? { defectKey: f.defectKey } : {}),
+      ...(typeof f?.judgeCriterion === "string" ? { judgeCriterion: f.judgeCriterion } : {}),
+      ...(Array.isArray(f?.checkedCriteria) ? { checkedCriteria: f.checkedCriteria } : {}),
       // Cluster and location survive the projection so the next-action count and fingerprints match the ledger's.
       ...(Number.isInteger(f?.clusterId) ? { clusterId: f.clusterId } : {}),
       ...(resolveFindingFile(f) ? { files: [resolveFindingFile(f)] } : {}),
@@ -3651,6 +3671,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   }
   // The last refusal has passed: apply the queued reviewer-verified ticks now, before the first review or comment write, so a refused post leaves no ticked box.
   // A failed write throws before any post. A failed post (HTTP error) after the write keeps the ticks; a rerun is idempotent and re-ticks only the rows still unticked.
+  // Validate every live checklist against its dry-run first, so a concurrent row change refuses before any body write.
+  for (const write of pendingTickWrites) await write(true);
   for (const write of pendingTickWrites) await write();
   const findingSurfaceFields = findingSurface
     ? {
