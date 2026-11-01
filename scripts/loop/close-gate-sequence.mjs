@@ -15,7 +15,7 @@ import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { clearSequenceMarker, readSequenceMarker, sequenceClosurePath, sequenceMarkerPath } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightFieldsSpec, preflightJqFilter } from "../lib/jq-output.mjs";
 import { viewPr } from "../github/view-pr.mjs";
 import { pullReceiptPath } from "../github/_work-order-protocol.mjs";
 import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
@@ -38,6 +38,10 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   if (!marker) return refuse("sequence_absent", `no sequence marker exists for ${head}`, "Nothing to close here; the push block comes from another marker, so rerun with that marker's head.");
   const { executionIdentity, workOrderRef, outputRef } = marker.execution ?? {};
   // Only ENOENT proves the work order was never pulled; any other read or parse failure leaves the pull state unknown.
+  // The receipt as raw text (null = ENOENT, undefined = unreadable): any later difference means a fixer pulled meanwhile.
+  const snapshot = () => { if (!workOrderRef) return null; try { return readFileSync(pullReceiptPath(tmpRoot, workOrderRef), "utf8"); } catch (error) { return error?.code === "ENOENT" ? null : undefined; } };
+  const receiptBefore = snapshot();
+  const pulledMeanwhile = () => snapshot() !== receiptBefore ? refuse("sequence_live", `fixer execution ${executionIdentity} pulled its work order while the PR was read`, "Wait for the fixer to hand back, then rerun.") : null;
   let receipt = null;
   let receiptFound = false; // presence of the file, not its parsed content
   if (workOrderRef) {
@@ -56,6 +60,9 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   if (marker.branch === undefined || !repo || !pr) return refuse("abandonment_unproven", "the PR head cannot be checked without the marker's branch and --repo/--pr", "Pass --repo and --pr of the marker's PR. A marker without a branch cannot be proven abandoned, so ask the operator to delete it.");
   const { pr: facts } = await fetchPr({ repo, pr, fields: "headRefOid,headRefName" });
   if (!/^[0-9a-f]{40,64}$/u.test(facts.headRefOid ?? "")) return refuse("abandonment_unproven", `GitHub returned no valid head sha for PR #${pr}`, "Rerun when the PR head is readable.");
+  // The work order ref `fixer:<owner/name>#<pr>:...` names the marker's PR; a same-named branch in another repo or PR is no proof.
+  const owner = /^fixer:([^#:]+)#([0-9]+):/u.exec(workOrderRef ?? "");
+  if (owner && (owner[1] !== repo || Number(owner[2]) !== pr)) return refuse("abandonment_unproven", `the marker belongs to ${owner[1]}#${owner[2]}, not ${repo}#${pr}`, "Pass the --repo and --pr the marker names.");
   if (facts.headRefName !== marker.branch) return refuse("abandonment_unproven", `PR #${pr} head branch ${facts.headRefName} is not the marker branch ${marker.branch}`, "Pass the --pr whose head branch the marker names.");
   let condition = null;
   if (facts.headRefOid !== head) condition = "HEAD_MOVED";
@@ -68,18 +75,17 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   // A concurrent re-emit rewrote the marker while the PR was read: that is a new sequence, never close it.
   const current = readSequenceMarker(tmpRoot, head);
   if (current?.execution?.executionIdentity !== executionIdentity || mtimeMs(sequenceMarkerPath(tmpRoot, head)) !== markerMtime) return refuse("sequence_live", `the marker for ${head} changed while it was checked`, "Rerun close-sequence; a re-emitted marker starts a live sequence.");
-  // A fixer that pulled during the PR read wrote its receipt after the first read: only ENOENT still proves it never pulled.
-  if (condition === "FIXER_NEVER_PULLED" && workOrderRef) {
-    let absent = false;
-    try { readFileSync(pullReceiptPath(tmpRoot, workOrderRef)); } catch (error) { absent = error?.code === "ENOENT"; }
-    if (!absent) return refuse("sequence_live", `fixer execution ${executionIdentity} pulled its work order while the PR was read`, "Wait for the fixer to hand back, then rerun.");
-  }
+  const pulledAfterRead = pulledMeanwhile();
+  if (pulledAfterRead) return pulledAfterRead;
   // Record first, marker second: a failed write leaves the marker in place.
   const record = { baselineHead: head, executionIdentity: executionIdentity ?? null, condition, actor, closedAt: new Date(now()).toISOString() };
   const file = sequenceClosurePath(tmpRoot, head, executionIdentity);
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(`${file}.tmp`, `${JSON.stringify(record, null, 2)}\n`);
   renameSync(`${file}.tmp`, file);
+  // The last check before the removal: a fixer that pulled during the record write still blocks it.
+  const pulledAtRemoval = pulledMeanwhile();
+  if (pulledAtRemoval) return pulledAtRemoval;
   clearSequenceMarker(tmpRoot, head);
   return { ok: true, ...record, recordPath: file };
 }
@@ -89,10 +95,15 @@ if (isDirectCliRun(import.meta.url)) {
     const { values } = parseArgs({ options: { head: { type: "string" }, repo: { type: "string" }, pr: { type: "string" }, help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS }, strict: true });
     if (values.help) { process.stdout.write(`${USAGE}\n`); process.exit(0); }
     if (!/^[0-9a-f]{40,64}$/u.test(values.head ?? "") || (values.pr !== undefined && !/^[1-9][0-9]*$/u.test(values.pr))) throw new Error(USAGE);
-    const slug = values.repo === undefined ? undefined : parseRepoSlug(values.repo, { errorMessage: USAGE });
-    const result = await closeGateSequence({ tmpRoot: resolveGateArtifactTmpRoot(process.cwd()), head: values.head, repo: slug && `${slug.owner}/${slug.name}`, pr: values.pr && Number(values.pr) });
-    const emitted = emitResult(result, { jq: values.jq, silent: values.silent });
-    process.exitCode = emitted === 2 ? 2 : result.ok ? 0 : 1;
+    // Validate the output flags before the close writes the record and removes the marker.
+    const preflight = preflightJqFilter(values.jq) ?? preflightFieldsSpec(values.fields, { jq: values.jq, silent: values.silent });
+    if (preflight !== undefined) process.exitCode = preflight;
+    else {
+      const slug = values.repo === undefined ? undefined : parseRepoSlug(values.repo, { errorMessage: USAGE });
+      const result = await closeGateSequence({ tmpRoot: resolveGateArtifactTmpRoot(process.cwd()), head: values.head, repo: slug && `${slug.owner}/${slug.name}`, pr: values.pr && Number(values.pr) });
+      const emitted = emitResult(result, { jq: values.jq, silent: values.silent, fields: values.fields });
+      process.exitCode = emitted; // 0/1 by result or --silent predicate, 2 for an invalid output flag
+    }
   } catch (error) {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

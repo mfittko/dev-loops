@@ -291,3 +291,69 @@ test("the close command is registered as a sanctioned command and a gate route",
   assert.equal(SANCTIONED_COMMANDS.lifecycle["close-gate-sequence"], "scripts/loop/close-gate-sequence.mjs");
   assert.equal(SUBCOMMAND_ROUTES.gate["close-sequence"], "scripts/loop/close-gate-sequence.mjs");
 });
+
+test("a marker of another repo or PR is refused even when the branch name matches", async () => {
+  await withTempDir(async (tmpRoot) => {
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: execution(tmpRoot) });
+    assert.equal((await closeGateSequence(base(tmpRoot, { repo: "x/y" }))).refusal, "abandonment_unproven");
+    assert.equal((await closeGateSequence(base(tmpRoot, { pr: 8 }))).refusal, "abandonment_unproven");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("a fixer that pulls during the PR read blocks a HEAD_MOVED close", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    const pullDuring = async () => { pull(tmpRoot, ex, new Date(T0).toISOString()); return pr(MOVED)(); };
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pullDuring }))).refusal, "sequence_live");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("a fixer that pulls just before the marker removal blocks the close", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    let calls = 0;
+    // With HEAD_MOVED the only clock read is the record timestamp, taken after the post-read check.
+    const now = () => { calls += 1; if (calls === 1) pull(tmpRoot, ex, new Date(T0).toISOString()); return T0; };
+    assert.equal((await closeGateSequence(base(tmpRoot, { now }))).refusal, "sequence_live");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("the CLI rejects an invalid --jq or --fields before the marker is touched", async () => {
+  await withTempDir(async (dir) => {
+    mkdirSync(path.join(dir, ".git"));
+    const tmpRoot = path.join(dir, "tmp");
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });
+    for (const flags of [["--jq", "select("], ["--fields", "a,,b"]]) {
+      const run = spawnSync("node", [cli, "--head", HEAD, "--repo", "o/r", "--pr", "7", ...flags], { cwd: dir, encoding: "utf8" });
+      assert.equal(run.status, 2, run.stderr);
+      assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+    }
+  });
+});
+
+test("the CLI forwards --fields and --silent on a successful close", async () => {
+  await withTempDir(async (dir) => {
+    mkdirSync(path.join(dir, ".git"));
+    const bin = path.join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' '{"headRefOid":"${MOVED}","headRefName":"feat"}'\n`, { mode: 0o755 });
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    const args = [cli, "--head", HEAD, "--repo", "o/r", "--pr", "7"];
+    writeSequenceMarker({ tmpRoot: path.join(dir, "tmp"), baselineHead: HEAD, branch: "feat" });
+    const fields = spawnSync("node", [...args, "--fields", "condition"], { cwd: dir, encoding: "utf8", env });
+    assert.equal(fields.status, 0, fields.stderr);
+    assert.equal(fields.stdout, "HEAD_MOVED\n");
+    writeSequenceMarker({ tmpRoot: path.join(dir, "tmp"), baselineHead: HEAD, branch: "feat" });
+    const silent = spawnSync("node", [...args, "--silent"], { cwd: dir, encoding: "utf8", env });
+    assert.equal(silent.status, 0);
+    assert.equal(silent.stdout, "");
+    writeSequenceMarker({ tmpRoot: path.join(dir, "tmp"), baselineHead: HEAD, branch: "feat" });
+    const falsy = spawnSync("node", [...args, "--silent", "--jq", ".condition == \"X\""], { cwd: dir, encoding: "utf8", env });
+    assert.equal(falsy.status, 1);
+  });
+});
