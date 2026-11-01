@@ -291,8 +291,11 @@ export function normalizeRunnerCoordinationState(raw, { repo, pr } = {}) {
   };
 }
 // Foreign-owner refusals name whether the owner is live and the agent-runnable remedy.
-function ownerVerdictSuffix(state, repo, pr, runId) {
-  const { stale, staleReason } = describeRunnerLiveness(state);
+function ownerVerdictSuffix(state, repo, pr, runId, { now, maxAgeMs } = {}) {
+  const { stale, staleReason } = describeRunnerLiveness(state, {
+    now: Number.isFinite(Date.parse(now)) ? Date.parse(now) : Date.now(),
+    maxAgeMs: maxAgeMs ?? resolveStaleRunnerMaxAgeMs(),
+  });
   return stale
     ? ` ${staleReason}. Run: pr-runner-coordination.mjs takeover --repo ${repo} --pr ${pr} --run-id ${runId}.`
     : ` ${staleReason}. Wait for it or ask the operator.`;
@@ -336,6 +339,7 @@ export async function claimRunnerOwnership({
   now = new Date().toISOString(),
   expectPreviousRunId = null,
   expectPreviousClaim = null,
+  maxAgeMs,
 } = {}) {
   const normalizedRepo = normalizeRepoSlug(repo);
   const normalizedPr = normalizePr(pr);
@@ -458,7 +462,7 @@ export async function claimRunnerOwnership({
         activeRun,
         filePath: resolvedPath,
         exitSignals: state.exitSignals,
-        message: `PR ${normalizedRepo}#${normalizedPr} is already owned by run ${activeRun.runId}. Claim failed closed.${ownerVerdictSuffix(state, normalizedRepo, normalizedPr, normalizedRunId)}`,
+        message: `PR ${normalizedRepo}#${normalizedPr} is already owned by run ${activeRun.runId}. Claim failed closed.${ownerVerdictSuffix(state, normalizedRepo, normalizedPr, normalizedRunId, { now, maxAgeMs })}`,
       });
     }
     // A recovery is authorized by evidence read before this lock. Refuse when the
@@ -548,6 +552,7 @@ export async function assertRunnerOwnership({
   filePath = null,
   requireExisting = false,
   now = new Date().toISOString(),
+  maxAgeMs,
 } = {}) {
   const normalizedRepo = normalizeRepoSlug(repo);
   const normalizedPr = normalizePr(pr);
@@ -666,7 +671,7 @@ export async function assertRunnerOwnership({
     filePath: resolvedPath,
     exitSignals: state.exitSignals,
     message: state.activeRun?.runId
-      ? `PR ${normalizedRepo}#${normalizedPr} is now owned by run ${state.activeRun.runId}; run ${normalizedRunId} must stop.${ownerVerdictSuffix(state, normalizedRepo, normalizedPr, normalizedRunId)}`
+      ? `PR ${normalizedRepo}#${normalizedPr} is now owned by run ${state.activeRun.runId}; run ${normalizedRunId} must stop.${ownerVerdictSuffix(state, normalizedRepo, normalizedPr, normalizedRunId, { now, maxAgeMs })}`
       : `PR ${normalizedRepo}#${normalizedPr} no longer has an active runner ownership record; run ${normalizedRunId} must stop.`,
   });
 }

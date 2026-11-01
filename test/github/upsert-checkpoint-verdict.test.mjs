@@ -5404,6 +5404,59 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
   }, { prefix: "dev-loops-upsert-stale-takeover-" });
 });
 
+// #2884 dod:4: a live run R whose claim aged past the max age keeps it through gate upsert-verdict (refresh, never takeover).
+test("upsert-checkpoint-verdict by run R on R's own aged claim succeeds with no takeover history entry", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const claim = await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      runId: "run-R",
+      cwd: tempDir,
+      now: "2020-01-01T00:00:00.000Z",
+    });
+    const ghEnv = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: [],
+        issueComments: [],
+      }),
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: "[]\n",
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
+        stdout: "src/index.ts\n",
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":301,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-301"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+    ], {
+      cwd: tempDir,
+      env: { ...ghEnv, DEVLOOPS_RUN_ID: "run-R" },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const persisted = JSON.parse(await readFile(claim.filePath, "utf8"));
+    assert.equal(persisted.activeRun.runId, "run-R");
+    const types = persisted.history.map((entry) => entry.type);
+    assert.ok(types.includes("refresh"), "the same-run stale claim is refreshed");
+    assert.ok(!types.includes("takeover"), "the same-run stale claim is never recorded as a takeover");
+  }, { prefix: "dev-loops-upsert-own-aged-claim-" });
+});
+
 test("parseUpsertCheckpointVerdictCliArgs defaults executionMode and validates the flag", () => {
   const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--findings-severity-counts", '{"must-fix":0}'];
 

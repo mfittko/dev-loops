@@ -1950,6 +1950,8 @@ test("handoff with an explicit --run-id and no verified identity releases the cl
     const handed = await handoffRunnerOwnership({ ...options, runId: "owner" });
     assert.equal(handed.status, "handoff_recorded");
     assert.equal(handed.activeRun, null);
+    const afterHandoff = await runPrRunnerCoordination({ command: "status", repo: "owner/repo", pr: 17 }, { env: {}, cwd });
+    assert.equal(afterHandoff.state.activeRun, null, "status shows the claim cleared after hand-back");
     const neither = await handoffRunnerOwnership(options);
     assert.equal(neither.error, "run_id_required");
     assert.match(neither.message, /--run-id <the id used at claim>/);
@@ -2029,7 +2031,7 @@ test("status reports stale for an owner with a recorded exit signal, and a live 
 });
 
 test("status reports a corrupt timestamp as corrupt", async () => {
-  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-takeover-pin-"));
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-corrupt-timestamp-"));
   const base = { command: "status", repo: "owner/repo", pr: 17 };
   try {
     const claim = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "owner", cwd });
@@ -2051,5 +2053,61 @@ test("native Codex handoff with an explicit run id and no verified identity is r
     assert.equal(result.error, "run_id_required");
     assert.doesNotMatch(result.message, /Pass --run-id/);
     assert.equal(await readFile(claim.filePath, "utf8"), before);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+// #2884 review: takeover input order, race pin and injected liveness inputs.
+test("takeover with no run id is run_id_required whether the owner is live or absent", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-takeover-no-id-"));
+  const base = { command: "takeover", repo: "Owner/Repo", pr: 17 };
+  try {
+    const absent = await runPrRunnerCoordination(base, { env: {}, cwd });
+    assert.equal(absent.error, "run_id_required");
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "owner", cwd });
+    const live = await runPrRunnerCoordination(base, { env: {}, cwd });
+    assert.equal(live.error, "run_id_required");
+    assert.equal(live.repo, "owner/repo");
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("takeover with no owner at the read claims fresh and never records a takeover", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-takeover-empty-"));
+  try {
+    const result = await runPrRunnerCoordination({ command: "takeover", repo: "owner/repo", pr: 17, runId: "C" }, { env: {}, cwd });
+    assert.equal(result.status, "claimed_new");
+    const types = JSON.parse(await readFile(result.filePath, "utf8")).history.map((entry) => entry.type);
+    assert.deepEqual(types, ["claim"]);
+    // claim mode refuses an owner that appears before the locked write (the race the unlocked read cannot see).
+    const lateOwner = await claimRunnerOwnership({ repo: "owner/repo", pr: 18, runId: "B", cwd });
+    const raced = await claimRunnerOwnership({ repo: "owner/repo", pr: 18, runId: "C", cwd, mode: "claim" });
+    assert.equal(lateOwner.ok, true);
+    assert.equal(raced.error, "active_run_exists");
+    assert.equal(raced.activeRun.runId, "B");
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("takeover of a stale corrupt-timestamp owner pins the owner run id", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-takeover-corrupt-pin-"));
+  try {
+    const claim = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "owner", cwd });
+    const raw = JSON.parse(await readFile(claim.filePath, "utf8"));
+    raw.activeRun.updatedAt = "not-a-date";
+    await writeFile(claim.filePath, JSON.stringify(raw));
+    const taken = await runPrRunnerCoordination({ command: "takeover", repo: "owner/repo", pr: 17, runId: "C" }, { env: {}, cwd });
+    assert.equal(taken.status, "taken_over");
+    assert.equal(taken.previousRun.runId, "owner");
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("claim refusal wording follows the injected clock and max age, not the host", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-injected-liveness-"));
+  const t0 = Date.parse("2026-01-01T00:00:00.000Z");
+  const at = (ms) => new Date(t0 + ms).toISOString();
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "owner", cwd, now: at(0) });
+    const live = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "successor", cwd, now: at(1_000), maxAgeMs: 60_000 });
+    assert.match(live.message, /owner run owner is live .*Wait for it or ask the operator/);
+    const stale = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "successor", cwd, now: at(1_000), maxAgeMs: 500 });
+    assert.match(stale.message, /stale owner run owner .*takeover --repo owner\/repo --pr 17 --run-id successor/);
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });

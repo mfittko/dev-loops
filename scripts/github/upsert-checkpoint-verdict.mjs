@@ -2666,7 +2666,17 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     try {
       const staleCheck = await detectStaleRunner({ repo: options.repo, pr: options.pr, cwd: repoRoot });
       if (staleCheck.status === "stale_runner") {
-        await claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId: envRunId, cwd: repoRoot, mode: "takeover" });
+        // Pin the generation the stale read observed so a heartbeat before the locked write is not displaced.
+        const observed = staleCheck.activeRun;
+        await claimRunnerOwnership({
+          repo: options.repo,
+          pr: options.pr,
+          runId: envRunId,
+          cwd: repoRoot,
+          mode: "takeover",
+          expectPreviousRunId: observed?.runId ?? null,
+          expectPreviousClaim: { claimedAt: observed?.claimedAt ?? null, updatedAt: observed?.updatedAt ?? null },
+        });
       }
     } catch {
       // Non-fatal: stale-runner takeover is best-effort. If it fails, the subsequent

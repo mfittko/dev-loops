@@ -137,23 +137,38 @@ export async function runPrRunnerCoordination(options, { env = process.env, cwd 
     return handoffRunnerOwnership({ repo: options.repo, pr: options.pr, runId: options.runId, env, cwd });
   }
   const runId = resolveRunId(options.runId, env);
+  const maxAgeMs = resolveStaleRunnerMaxAgeMs({}, env);
   if (options.command === "claim") {
-    return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "claim", cwd });
+    return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "claim", cwd, maxAgeMs });
   }
   if (options.command === "takeover") {
+    // A missing run id is refused before the liveness pre-check, so the error does not depend on owner state.
+    if (!runId) {
+      return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "takeover", cwd });
+    }
     // Refuse a live non-stale foreign owner before any write (no history entry).
     const { state } = await loadRunnerCoordinationState({ repo: options.repo, pr: options.pr, cwd });
     const active = state?.activeRun;
     const { stale, staleReason } = describeRunnerLiveness(state, { maxAgeMs: resolveStaleRunnerMaxAgeMs({}, env) });
     if (active && active.runId !== runId && !stale) {
-      return { ok: false, error: "active_run_exists", repo: options.repo, pr: options.pr, runId, activeRun: active,
+      return { ok: false, error: "active_run_exists", repo: options.repo.trim().toLowerCase(), pr: options.pr, runId, activeRun: active,
         message: `Takeover refused: ${staleReason}. Wait for it or ask the operator.` };
     }
-    // A stale pre-read pins the owner generation so a heartbeat before the locked write is not displaced.
-    const pinned = active && active.runId !== runId && typeof active.claimedAt === "string" && typeof active.updatedAt === "string"
-      ? { expectPreviousRunId: active.runId, expectPreviousClaim: { claimedAt: active.claimedAt, updatedAt: active.updatedAt } }
+    // No owner at the pre-read: claim mode refuses an owner that appears before the locked write.
+    if (!active) {
+      return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "claim", cwd, maxAgeMs });
+    }
+    // A stale foreign owner is pinned (run id always, generation when timestamps are strings)
+    // so a heartbeat or a new claim before the locked write is not displaced.
+    const pinned = active.runId !== runId
+      ? {
+        expectPreviousRunId: active.runId,
+        ...(typeof active.claimedAt === "string" && typeof active.updatedAt === "string"
+          ? { expectPreviousClaim: { claimedAt: active.claimedAt, updatedAt: active.updatedAt } }
+          : {}),
+      }
       : {};
-    return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "takeover", cwd, ...pinned });
+    return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "takeover", cwd, maxAgeMs, ...pinned });
   }
   if (options.command === "assert") {
     return assertRunnerOwnership({
@@ -162,6 +177,7 @@ export async function runPrRunnerCoordination(options, { env = process.env, cwd 
       runId,
       requireExisting: options.requireExisting,
       cwd,
+      maxAgeMs,
     });
   }
   if (options.command === "release") {
