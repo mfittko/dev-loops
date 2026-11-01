@@ -51,6 +51,7 @@ import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
+import { clearingChainLastCandidates } from "../github/write-gate-context.mjs";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
@@ -76,7 +77,7 @@ Delta-mode pre-push review checks (skills/docs/pre-pr-review-contract.md).
   --spec-identity <id>    Current spec identity passed to the reviewer (required without --result)
   --site-coverage <path>  The fixer's commit_only handback { headSha, siteCoverage: [...] } (the work order's outputRef)
   --fixer-plan <path>     Canonical current pulled commit_only plan; pair with --site-coverage for ACT/THREAD closure (required for ACT input/result)
-  --findings-log <path>   Required on the act-list route, input mode: the reviewed gate round's findings log (its headSha must equal --baseline);
+  --findings-log <path>   Required on the act-list route, input mode: the reviewed gate round's findings log (its headSha must equal --baseline, or its sealed clearing chain or a base-only merge must reach --baseline: PRE-PUSH-DELTA-INPUT-CAP-CHAIN);
                           its provenance.perAngle angles join the surface hints (PRE-PUSH-DELTA-INPUT). Refused with --threads-file.
   --handback              The fixer handbackCheck run: waives the --findings-log requirement (it validates --site-coverage, no reviewer input is used)
   --result <path>         The reviewer's DeltaPrePushReviewResult JSON
@@ -267,8 +268,9 @@ export function gitStaleSurfaceHits(worktreeArg, baseline, head) {
 }
 
 // The findings log writer stamps `headSha`; the log must be the baseline round's and carry provenance.perAngle.
-// A log at an earlier head is accepted when the baseline is a base-only merge of it (the closure round after a cap round, ADR 0197); any error fails closed.
-async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerge }) {
+// A log at an earlier head is accepted when the baseline is a base-only merge of it (the closure round after a cap round, ADR 0197), equals the end of its sealed clearing chain,
+// or is a base-only merge of the log head or a chain end (PRE-PUSH-DELTA-INPUT-CAP-CHAIN, ADR 0224); any error fails closed.
+async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerge, tmpRoot }) {
   if (!findingsLogPath) return [];
   const log = JSON.parse(readFileSync(findingsLogPath, "utf8"));
   const perAngle = log?.provenance?.perAngle;
@@ -278,10 +280,18 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
     && await Promise.resolve().then(async () => {
       const { config, errors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(worktree) });
       if (errors?.length) throw new Error(`.devloops failed to load (${errors.length} error(s)): the earlier-head findings log fails closed`);
-      return baseOnlyMerge({ fromHead: logHead, head: baseline, mainRef: `origin/${resolveBaseBranch(config, { cwd: worktree })}`, repoRoot: worktree });
+      const baseRefName = resolveBaseBranch(config, { cwd: worktree });
+      const merged = (fromHead) => baseOnlyMerge({ fromHead, head: baseline, mainRef: `origin/${baseRefName}`, repoRoot: worktree });
+      if (await merged(logHead)) return true;
+      const ends = typeof log.repo === "string" && Number.isInteger(log.pr)
+        ? await clearingChainLastCandidates({ tmpRoot, capHead: logHead, repo: log.repo, pr: log.pr, baseRefName, repoRoot: worktree, baseOnlyMerge })
+        : [];
+      if (ends.includes(baseline)) return true;
+      for (const end of ends) if (await merged(end)) return true;
+      return false;
     }).catch(() => false);
   if (!sameHead && !earlierHead) {
-    throw new Error(`--findings-log ${findingsLogPath} records head ${log?.headSha ?? "(none)"}, not the baseline ${baseline}: pass the findings log of the reviewed round`);
+    throw new Error(`--findings-log ${findingsLogPath} records head ${log?.headSha ?? "(none)"}, not the baseline ${baseline}: pass the findings log recorded at the baseline, or the log of the cap round (it must carry repo and pr) whose sealed clearing chain (gate-delta records under the gate tmp root, written by this command) reaches the baseline directly or through a base-only merge of the base branch (PRE-PUSH-DELTA-INPUT-CAP-CHAIN)`);
   }
   // An inline_single_agent round writes no provenance: take the angles of its findings.
   if (log.executionMode === "inline_single_agent" && !Array.isArray(perAngle)) {
@@ -438,7 +448,7 @@ export async function runCli(
       mkdirSync(path.dirname(patchPath), { recursive: true });
       writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead));
     }
-    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree) }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;
