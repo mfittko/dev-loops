@@ -265,6 +265,20 @@ test("the CLI accepts a padded --repo: it passes the usage check and reaches the
   assert.match(run.stdout + run.stderr, /sequence_absent/);
 });
 
+test("a padded --repo reaches fetchPr trimmed: gh is called with the normalized slug", async () => {
+  await withTempDir(async (dir) => {
+    mkdirSync(path.join(dir, ".git"));
+    writeSequenceMarker({ tmpRoot: path.join(dir, "tmp"), baselineHead: HEAD, branch: "feat" });
+    const log = path.join(dir, "gh-args.txt");
+    const bin = path.join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' "$*" > '${log}'\nprintf '%s\\n' '{"headRefOid":"${MOVED}","headRefName":"feat"}'\n`, { mode: 0o755 });
+    const run = spawnSync("node", [cli, "--head", HEAD, "--repo", " o/r ", "--pr", "7"], { cwd: dir, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+    assert.equal(run.status, 0, run.stderr + run.stdout);
+    assert.equal(readFileSync(log, "utf8").trim(), "pr view 7 --repo o/r --json headRefOid,headRefName");
+  });
+});
+
 test("the CLI --help exits 0 and prints usage with the --jq and --silent options", () => {
   const run = spawnSync("node", [cli, "--help"], { encoding: "utf8" });
   assert.equal(run.status, 0);

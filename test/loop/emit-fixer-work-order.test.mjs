@@ -253,6 +253,19 @@ test("an unreadable closure record fails closed as stale_dispatch", async () => 
   });
 });
 
+test("a closure record at the review baseline head retires a full emission whose ref head is the candidate", async () => {
+  await withFixture(async ({ root, head, prepareFull }) => {
+    const f = await prepareFull();
+    const unit = await f.full();
+    assert.notEqual(f.candidate, head);
+    const { sequenceClosurePath } = await import("@dev-loops/core/loop/fix-push-authority");
+    const file = sequenceClosurePath(path.join(root, "tmp"), head, unit.executionIdentity);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "{}");
+    assert.equal(refusal(pull(unit, root)), "stale_dispatch");
+  });
+});
+
 test("THREAD no_commit and head_moved close an authenticated sequence and allow the next push", async () => {
   const { checkFixPushAuthority } = await import("../../scripts/loop/check-fix-push-authority.mjs");
   for (const move of ["none", "descendant", "amended"]) await withFixture(async ({ root, wt, head, files, emit }) => {
