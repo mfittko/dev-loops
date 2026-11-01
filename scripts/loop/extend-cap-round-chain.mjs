@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * extend-cap-round-chain: extend the sealed cap-round clearing chain over later commits that
- * change docs and tests only (GATE-EXEC-ROUND-CAP-CHAIN-EXTEND, ADR 0223). It writes one sealed
+ * change docs and tests only (GATE-EXEC-ROUND-CAP-CHAIN-EXTEND, ADR 0224). It writes one sealed
  * clearing record bound to the chain end E with candidateHead = the PR head, so
  * `resolveCapRoundFixed` reaches the head again. It needs no fixer plan. Any commit in E..HEAD
  * that touches a logic file refuses (`logic_commit_in_range`) and writes nothing.

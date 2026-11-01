@@ -1,4 +1,4 @@
-# 0223. The ADR waiver accepts the cap-round proof, and the cap-round chain extends over docs and tests commits
+# 0224. The ADR waiver accepts the cap-round proof, and the cap-round chain extends over docs and tests commits
 
 ## Status
 
