@@ -7587,7 +7587,7 @@ for (const reason of ["thread_site_changed", "thread_site_unverifiable", "no_com
     const bytes = await readFile(path.resolve(repoRoot, read.path));
     assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"));
     assert.deepEqual(JSON.parse(bytes), [{ threadId: "C19_OPEN", isResolved: false, comments: [{ author: "gate", body: `${reason}: reassess this exact open thread` }] }]);
-    assert.match(await readFile(path.resolve(repoRoot, read.path.replace(/\.known-findings\.json$/, ".briefing-volatile.txt")), "utf8"), /Unresolved recovery threads must be assessed in this full round/);
+    assert.match(await readFile(path.resolve(repoRoot, read.path.replace(/\.known-findings\.json$/, ".briefing-volatile.txt")), "utf8"), /If any listed thread is unresolved, assess it in this full round/);
     assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-delta", `${headSha}.json`)), false);
   } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
