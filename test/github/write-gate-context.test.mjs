@@ -9152,6 +9152,20 @@ test("resolveCapRoundFixed does not discover merge-seeded starts when the direct
   }
 });
 
+// #3002 AC5, PR 2960 shape: a rebase leaves the cap-round head off the current head's history.
+test("resolveCapRoundFixed reports baseline_orphaned when the cap-round head is not an ancestor of the head", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: A, baseRefName: "main" };
+    await seedClosedRounds(repoRoot, 61, ["1".repeat(40), "2".repeat(40), "3".repeat(40), B]);
+    let condition = null;
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot, onFailure: (c) => { condition = c; } }), null);
+    assert.equal(condition, "baseline_orphaned");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapRoundFixed reports unsealed_record for an unsealed or seal-mismatched record at the base-only merge start", async () => {
   const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
   try {
