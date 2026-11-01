@@ -368,7 +368,9 @@ export const DEFAULT_EXPANSION_CAPS = { maxFiles: 6, maxBytes: 98304 };
 // parameter list on one line, without nested parentheses (a multi-line or
 // default-call parameter list is missed). Upgrade path: a real JS parser.
 const DECL_RE = /^(export\s+(?:default\s+)?)?(?:async\s+function\s*\*?\s*|function\s*\*?\s*|const\s+)([A-Za-z_$][\w$]*)(?=\s*(?:\(|=\s*(?:async\s*)?(?:\([^()]*\)\s*=>|function\b|[A-Za-z_$][\w$]*\s*=>)))/;
-const EXPORT_LIST_RE = /^export\s*\{([^}]*)\}/;
+// Group 2 is set for `export { a } from "m"`, which re-exports another module's binding.
+const EXPORT_LIST_RE = /^export\s*\{([^}]*)\}(\s*from\b)?/;
+const listedNames = (m) => m[1].split(",").map((item) => item.trim().split(/\s+/)[0]).filter(Boolean);
 // ponytail: name heuristic for state writers and guards, anchored to the start
 // of the name at a camelCase/underscore boundary; add a marker comment
 // convention if it misfires.
@@ -379,6 +381,8 @@ const WRITER_OR_GUARD_RE = /^(write|save|persist|set|delete|remove|guard|assert|
  * A removal run is credited to the
  * preceding new-side line (a removal at a function tail stays in that function)
  * only when no added line follows it: a replacement is already marked by its added lines.
+ * A run that starts with a column-0 declaration is a whole-declaration removal, not a
+ * tail removal, so it is not credited to the preceding function.
  * Ceiling: a deleted file (`+++ /dev/null`) is skipped; its source is gone.
  */
 function changedLinesByFile(diffText) {
@@ -388,9 +392,10 @@ function changedLinesByFile(diffText) {
   let n = 0;
   const mark = (line) => out.get(file)?.lines.add(line);
   let pending = null; // new-side line a still-open removal run would be credited to
+  let run = []; // removed lines of the open run
   const flush = (next) => {
-    if (pending !== null && !/^[-+\\]/.test(next)) mark(pending);
-    if (!next.startsWith("-") && !next.startsWith("\\")) pending = null;
+    if (pending !== null && !/^[-+\\]/.test(next) && !DECL_RE.test(run[0] ?? "")) mark(pending);
+    if (!next.startsWith("-") && !next.startsWith("\\")) { pending = null; run = []; }
   };
   for (const line of String(diffText ?? "").split("\n")) {
     if (inHunk && file) flush(line.startsWith("@@") || line.startsWith("diff --git ") ? "" : line);
@@ -404,7 +409,7 @@ function changedLinesByFile(diffText) {
     if (hunk) { inHunk = true; n = Number(hunk[1]); continue; }
     if (!inHunk || !file) continue;
     if (line.startsWith("+")) { mark(n); n += 1; }
-    else if (line.startsWith("-")) { pending = n - 1; out.get(file)?.removed.push(line.slice(1)); }
+    else if (line.startsWith("-")) { pending = n - 1; run.push(line.slice(1)); out.get(file)?.removed.push(line.slice(1)); }
     else if (line.startsWith(" ")) n += 1;
   }
   return out;
@@ -416,7 +421,7 @@ function topLevelFunctions(source) {
   const listed = new Set();
   for (const text of lines) {
     const list = EXPORT_LIST_RE.exec(text);
-    if (list) for (const item of list[1].split(",")) listed.add(item.trim().split(/\s+/)[0]);
+    if (list && !list[2]) for (const name of listedNames(list)) listed.add(name);
   }
   const found = [];
   lines.forEach((text, i) => {
@@ -434,7 +439,9 @@ function topLevelFunctions(source) {
 /**
  * Adaptive context expansion: for each changed file whose diff touches an
  * exported function, a state writer or a guard, select its importers and its
- * sibling functions. A removed export declaration or export-list entry also
+ * sibling functions. A touched local export-list entry counts as a change to the
+ * function it lists (an export-from does not). A removed writer or guard declaration
+ * selects the remaining siblings and importers. A removed export declaration or export-list entry also
  * selects the file's importers, with no siblings entry. Then apply the per-round file and byte caps. Candidates
  * are sorted by (kind with siblings first, path), so selection and the dropped
  * list are deterministic. A diff confined to private, non-writer, non-guard
@@ -461,12 +468,24 @@ async function selectExpansion({ changed, diffText, repoRoot, importerIndex, cap
       continue;
     }
     const fns = topLevelFunctions(source);
-    const hit = fns.filter((f) => (f.exported || WRITER_OR_GUARD_RE.test(f.name)) && [...entry.lines].some((l) => l >= f.start && l <= f.end));
+    const srcLines = source.split("\n");
+    // A touched local export-list line marks the functions it lists as changed.
+    const touchedNames = new Set();
+    for (const l of entry.lines) {
+      const m = EXPORT_LIST_RE.exec(srcLines[l - 1] ?? "");
+      if (m && !m[2]) for (const name of listedNames(m)) touchedNames.add(name);
+    }
+    const hit = fns.filter((f) => (f.exported || WRITER_OR_GUARD_RE.test(f.name)) && (touchedNames.has(f.name) || [...entry.lines].some((l) => l >= f.start && l <= f.end)));
     // A removed export is gone from the new-side source; its importers are what it breaks.
     const removedExport = entry.removed.some((t) => DECL_RE.exec(t)?.[1] || EXPORT_LIST_RE.test(t));
-    if (hit.length === 0 && !removedExport) continue;
+    // A removed writer or guard declaration is gone from the new side too; its siblings and importers are what it affects.
+    const removedShared = entry.removed.some((t) => {
+      const m = DECL_RE.exec(t);
+      return m && WRITER_OR_GUARD_RE.test(m[2]);
+    });
+    if (hit.length === 0 && !removedExport && !removedShared) continue;
     const siblings = fns.filter((f) => !hit.includes(f));
-    if (hit.length > 0 && siblings.length > 0) {
+    if ((hit.length > 0 || removedShared) && siblings.length > 0) {
       add(`${file}\0siblings`, { path: file, kind: "siblings", relatedTo: [file], names: siblings.map((f) => f.name).sort(), bytes: siblings.reduce((n, f) => n + f.bytes, 0) });
     }
     for (const imp of importerIndex.get(file) ?? []) {

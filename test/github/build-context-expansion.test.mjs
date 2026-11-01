@@ -320,3 +320,43 @@ test("a multi-line removal at an exported function tail still selects the import
     assert.deepEqual(b.expansion.files.map((f) => f.path), ["src/use.mjs"]);
   });
 });
+
+test("a deleted private function directly after an exported function (no blank separator) adds no expansion", async () => {
+  const src = "export function writeState(x) {\n  return x;\n}\nexport function readState(z) {\n  return z;\n}\n";
+  const diff = [
+    "diff --git a/src/shared.mjs b/src/shared.mjs", "--- a/src/shared.mjs", "+++ b/src/shared.mjs", "@@ -1,7 +1,6 @@",
+    " export function writeState(x) {", "   return x;", " }",
+    "-function helper(y) {", "-  return y + 1;", "-}", " export function readState(z) {", "",
+  ].join("\n");
+  await withRepo({ ...repoFiles, "src/shared.mjs": src }, async (root) => {
+    const b = await buildAdjacentBundle({ changedFiles: ["src/shared.mjs"], repoRoot: root, diffText: diff });
+    assert.deepEqual(b.expansion.files, []);
+  });
+});
+
+test("an export-from statement does not mark a same-named local function exported", async () => {
+  const src = "function f() {\n  return 1;\n}\nfunction g() {\n  return 2;\n}\nexport { f } from \"./other.mjs\";\n";
+  await withRepo({ "src/x.mjs": src, "src/other.mjs": "export function f() {}\n", "src/use.mjs": 'import { f } from "./x.mjs";\nf();\n' }, async (root) => {
+    const b = await buildAdjacentBundle({ changedFiles: ["src/x.mjs"], repoRoot: root, diffText: diffFor("src/x.mjs", 2) });
+    assert.deepEqual(b.expansion.files, []);
+  });
+});
+
+test("adding an export-list entry for an existing private function selects its siblings and importers", async () => {
+  const src = "function f() {\n  return 1;\n}\nfunction g() {\n  return 2;\n}\nexport { f };\n";
+  await withRepo({ "src/x.mjs": src, "src/use.mjs": 'import { f } from "./x.mjs";\nf();\n' }, async (root) => {
+    const b = await buildAdjacentBundle({ changedFiles: ["src/x.mjs"], repoRoot: root, diffText: diffFor("src/x.mjs", 7) });
+    assert.deepEqual(b.expansion.files.map((f) => [f.path, f.kind]), [["src/x.mjs", "siblings"], ["src/use.mjs", "importer"]]);
+    assert.deepEqual(b.expansion.files[0].names, ["g"]);
+  });
+});
+
+test("removing a private writer or guard selects its remaining siblings and importers", async () => {
+  const src = "function p() {\n  return 1;\n}\n";
+  for (const removed of [["function writeState(x) {", "  return x;", "}"], ["const guardX = (x) => {", "  return x;", "};"]]) {
+    await withRepo({ "src/s.mjs": src, "src/use.mjs": 'import { p } from "./s.mjs";\np();\n' }, async (root) => {
+      const b = await buildAdjacentBundle({ changedFiles: ["src/s.mjs"], repoRoot: root, diffText: removalDiff(removed) });
+      assert.deepEqual(b.expansion.files.map((f) => [f.path, f.kind]), [["src/s.mjs", "siblings"], ["src/use.mjs", "importer"]], removed[0]);
+    });
+  }
+});
