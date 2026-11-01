@@ -299,18 +299,19 @@ test("THREAD full --construct builds the report from the threads, the clearing r
   });
 });
 
-test("--report-path is final-on-write: absent until the last step, atomic, complete on success, refused with --construct and with the outputRef", async () => {
+test("--report-path is final-on-write: absent until the last step, atomic, complete on success, refused without --check and with the outputRef", async () => {
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);
     const reportPath = fixerReportPath(f.output);
     const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }];
     const finalMock = () => f.runtimeFor([threadsCallEntry(resolved), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]);
-    await assert.rejects(verifyFixerDisposition({ ...f.options, construct: true, reportPath }, f.runtimeFor([threadsCallEntry([])]).deps), /--report-path applies to normal verification and --check/);
+    await assert.rejects(verifyFixerDisposition({ ...f.options, construct: true, reportPath }, f.runtimeFor([threadsCallEntry([])]).deps), /valid only with --check; pass --check, or drop --report-path/);
+    await assert.rejects(verifyFixerDisposition({ ...f.options, reportPath }, finalMock().deps), /valid only with --check; pass --check, or drop --report-path/);
     await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: f.output }, finalMock().deps), /equals the plan's outputRef.*joinRef/);
     assert.equal(existsSync(reportPath), false, "no report from refused arguments");
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
     assert.equal(existsSync(reportPath), false, "--construct writes the outputRef, never the report");
-    await verifyFixerDisposition({ ...f.options, reportPath }, finalMock().deps);
+    await verifyFixerDisposition({ ...f.options, check: true, reportPath }, finalMock().deps);
     const report = JSON.parse(await readFile(reportPath, "utf8"));
     assert.equal(report.outcome, "complete");
     assert.equal(report.complete, true);
@@ -340,11 +341,12 @@ test("--report-path publishes an incomplete outcome and a refused outcome with t
   });
 });
 
-test("--report-path parses as an absolute path and is refused with --construct", () => {
+test("--report-path parses as an absolute path and is refused without --check", () => {
   const base = ["--repo", REPO, "--pr", String(PR), "--head-sha", HEAD_SHA, "--fixer-plan", "plan.json"];
   assert.equal(parseVerifyFixerDispositionCliArgs([...base, "--check", "--report-path", "/a/b.report"]).reportPath, "/a/b.report");
   assert.throws(() => parseVerifyFixerDispositionCliArgs([...base, "--report-path", "rel.report"]), /absolute path/);
-  assert.throws(() => parseVerifyFixerDispositionCliArgs([...base, "--construct", "--report-path", "/a/b.report"]), /not --construct/);
+  assert.throws(() => parseVerifyFixerDispositionCliArgs([...base, "--construct", "--report-path", "/a/b.report"]), /valid only with --check; pass --check, or drop --report-path/);
+  assert.throws(() => parseVerifyFixerDispositionCliArgs([...base, "--report-path", "/a/b.report"]), /valid only with --check; pass --check, or drop --report-path/);
 });
 
 const repeatedDiffScenarios =["myers", "histogram", "patience"].flatMap((algorithm) =>
@@ -3088,5 +3090,19 @@ test("bounded_out THREAD failed residual POST stays incomplete under --check; cl
     const done = await verifyFixerDisposition({ ...f.options, check: true }, passing.deps);
     assert.equal(done.complete, true);
     assert.equal(passing.residualPosts.length, 0);
+  });
+});
+
+test("--report-path creates a missing parent directory and a failed publish keeps the original refusal error", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+    const nested = path.join(root, "missing", "dir", "x.report");
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: nested }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]).deps), /ci_failed.*lint/);
+    assert.equal(JSON.parse(await readFile(nested, "utf8")).outcome, "refused", "the parent directory is created");
+    const blocked = path.join(root, "blocker");
+    await writeFile(blocked, "a file, so mkdir of a child fails");
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: path.join(blocked, "x.report") }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]).deps), /ci_failed.*lint/, "the original refusal is rethrown, not the publish error");
   });
 });

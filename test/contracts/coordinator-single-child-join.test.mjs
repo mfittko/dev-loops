@@ -31,7 +31,7 @@ test("COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK is registered, follows
   const contract = read("skills/docs/gate-review-sub-loop-contract.md");
   assert.ok(contract.includes(`<!-- rule: ${FALLBACK} -->`));
   assert.ok(contract.indexOf(`rule: ${FALLBACK} -->`) > contract.indexOf("rule: COORDINATOR-SINGLE-CHILD-JOIN -->"));
-  assert.match(contract, /after one `timeout` outcome of the fixer join, the coordinator ends its turn once to receive the fixer's completion notification\. It treats that notification as the join, reads the typed exit code \(`ci_failed`, `ci_pending`, `ci_unknown`\) from the hand-back text, acts on it, and does not repeat the wait/);
+  assert.match(contract, /after one `timeout` outcome of the fixer join, the coordinator ends its turn once to receive the fixer's completion notification\. It treats that notification as the join, reads whatever hand-back text or typed code the notification carries \(for example `ci_failed`, `ci_pending`, `ci_unknown`\), acts on it, and does not repeat the wait/);
   assert.match(contract, /Pi: no fallback is needed\. The child call blocks/);
   assert.ok(JSON.parse(read("skills/docs/required-rules.json")).requiredRules.some((rule) => rule.id === FALLBACK));
   assert.match(read("docs/decisions/0222-single-child-join-final-on-write-and-notification-fallback.md"), /Amends \[0218\]/);
@@ -39,6 +39,7 @@ test("COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK is registered, follows
     const text = read(file);
     assert.ok(text.includes(FALLBACK), file);
     assert.match(text, /Pi child calls block, so Pi needs no fallback/, file);
+    assert.match(text, /any fixer exit before step 6 publishes the report/, file);
   }
 });
 

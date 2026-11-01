@@ -140,7 +140,9 @@ async function checkUnit(unit, { role, receiptTmpRoot, tmpRoot, headSha }) {
   return { scope: unit.scope, executionIdentity: unit.executionIdentity, state, missingAngles };
 }
 
-export const ARTIFACT_TIMEOUT_REMEDY = "Re-run the same command. After three consecutive timeout outcomes, stop and return the typed observation units_stalled. For a full-phase fixer, after one timeout end your turn once to receive the fixer's completion notification (COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK): treat it as the join, read the typed exit code (ci_failed, ci_pending, ci_unknown) from its hand-back text and do not repeat the wait.";
+export const ARTIFACT_TIMEOUT_REMEDY = "Re-run the same command. Delta reviewer: after three consecutive timeout outcomes, stop and return the typed observation units_stalled. Full-phase fixer: after one timeout, end your turn once to receive the fixer's completion notification (COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK), treat it as the join, read the typed exit code or hand-back text it carries, and do not repeat the wait.";
+
+export const ARTIFACT_STALE_REMEDY = "The artifact predates --after, so it is a leftover. Check that --after and the artifact path both come from the current emission (the latest emitted plan and its joinRef); if not, re-emit the work order and join the new path. Otherwise re-run the same command.";
 
 // Any hand-back type, with no writer obligation on the child: the artifact parses as JSON and carries its terminal field
 // (`outcome`, as a DeltaPrePushReviewResult does), or, with no terminal field, stays byte-identical for ARTIFACT_STABLE_MS.
@@ -168,7 +170,7 @@ async function waitForArtifact({ artifact, after, timeoutMs, now, delay }) {
     const elapsedMs = now() - started;
     if (await artifactReady(artifact, seen, now(), afterMs)) return { ok: true, outcome: "all_done", artifact, elapsedMs };
     const remaining = timeoutMs - elapsedMs;
-    if (remaining <= 0) return { ok: true, outcome: "timeout", artifact, elapsedMs, ...(seen.stale ? { stale: true } : {}), remedy: ARTIFACT_TIMEOUT_REMEDY };
+    if (remaining <= 0) return { ok: true, outcome: "timeout", artifact, elapsedMs, ...(seen.stale ? { stale: true } : {}), remedy: seen.stale ? ARTIFACT_STALE_REMEDY : ARTIFACT_TIMEOUT_REMEDY };
     await delay(Math.min(RECHECK_INTERVAL_MS, remaining));
   }
 }

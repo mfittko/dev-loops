@@ -86,10 +86,10 @@ Optional:
                                ok:false (residual_reply_failed, complete:false).
   --check                     Read-only delivery and live-state check; never
                                write a checkpoint or reply/resolve a thread.
-  --report-path <path>         Absolute path of the join report (normal verification and
-                               --check; refused with --construct and when it equals the
+  --report-path <path>         Absolute path of the join report. Valid only with --check
+                               (refused otherwise, and when it equals the
                                plan's outputRef). The verifier publishes its final result
-                               there once, last and atomically: the result with outcome
+                               there once per successful run, last and atomically: the result with outcome
                                "complete" or "incomplete", or on a refusal
                                { ok: false, outcome: "refused", error }. A full-phase order
                                derives it as <outputRef>.report (joinRef).
@@ -204,7 +204,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
   }
   const missing = ["repo", "pr", "headSha", "fixerPlan"].filter((k) => options[k] === undefined);
   if (options.check && options.construct) throw parseError("--construct and --check are mutually exclusive");
-  if (options.reportPath !== undefined && options.construct) throw parseError(CONSTRUCT_REPORT_PATH_ERROR);
+  if (options.reportPath !== undefined && !options.check) throw parseError(REPORT_PATH_NEEDS_CHECK_ERROR);
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
   }
@@ -700,18 +700,19 @@ export async function assertDescendantThreadSites({ repo, pr, candidateHead, hea
   }
 }
 
-const CONSTRUCT_REPORT_PATH_ERROR = "--report-path applies to normal verification and --check, not --construct; drop --report-path from the --construct step";
+const REPORT_PATH_NEEDS_CHECK_ERROR = "--report-path is valid only with --check; pass --check, or drop --report-path";
 
-// Final-on-write join report (ADR 0222): published once, last and atomically, so a file at reportPath is always final.
+// Final-on-write join report (ADR 0222): published once per successful step-6 run, last and atomically, so a file at reportPath is always final.
 async function publishReport(reportPath, report) {
   const temporary = `${reportPath}.tmp-${process.pid}`;
+  await mkdir(path.dirname(reportPath), { recursive: true });
   await writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   await rename(temporary, reportPath);
 }
 
 export async function verifyFixerDisposition(options, deps = {}) {
   if (options.reportPath === undefined) return verifyFixerDispositionCore(options, deps);
-  if (options.construct) throw new Error(CONSTRUCT_REPORT_PATH_ERROR);
+  if (!options.check) throw new Error(REPORT_PATH_NEEDS_CHECK_ERROR);
   const planPath = path.resolve(deps.repoRoot ?? process.cwd(), options.fixerPlan);
   const outputRef = await readFile(planPath, "utf8").then((text) => JSON.parse(text)?.workOrder?.outputRefs?.[0], () => undefined);
   if (typeof outputRef === "string" && path.resolve(outputRef) === path.resolve(options.reportPath)) {
@@ -721,7 +722,8 @@ export async function verifyFixerDisposition(options, deps = {}) {
   try {
     result = await verifyFixerDispositionCore(options, deps);
   } catch (error) {
-    await publishReport(options.reportPath, { ok: false, outcome: "refused", error: error instanceof Error ? error.message : String(error) });
+    // The original refusal always propagates; a failed publish must not replace it.
+    await publishReport(options.reportPath, { ok: false, outcome: "refused", error: error instanceof Error ? error.message : String(error) }).catch(() => {});
     throw error;
   }
   await publishReport(options.reportPath, { ...result, outcome: result.complete ? "complete" : "incomplete" });
