@@ -5472,7 +5472,7 @@ test("upsert-checkpoint-verdict stale takeover refuses when the claim changes af
       return observed;
     };
     await upsertWithCap({ repo: "owner/repo", pr: 17, gate: "draft_gate" }, {
-      env: { ...process.env, DEVLOOPS_RUN_ID: "run-B" },
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "run-B" }),
       repoRoot: tempDir,
       detectStale,
       runChild: async () => { throw new Error("stop after the stale preamble"); },

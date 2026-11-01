@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { test } from "bun:test";
 
 import { runNode } from "../_helpers.mjs";
+import { withStateFileLock } from "../../scripts/loop/_steering-state-file.mjs";
 import {
   assertRunnerOwnership,
   claimRunnerOwnership,
@@ -2055,6 +2056,35 @@ test("native Codex handoff with an explicit run id and no verified identity is r
     assert.equal(result.error, "run_id_required");
     assert.doesNotMatch(result.message, /Pass --run-id/);
     assert.equal(await readFile(claim.filePath, "utf8"), before);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("native Codex handoff with no id at all names the verified thread identity, not --run-id", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-codex-handoff-noid-"));
+  try {
+    const result = await handoffRunnerOwnership({ repo: "owner/repo", pr: 17, cwd, env: { CODEX_THREAD_ID: "t-1", CODEX_HOME: cwd } });
+    assert.equal(result.error, "run_id_required");
+    assert.doesNotMatch(result.message, /Pass --run-id/);
+    assert.match(result.message, /verified thread identity/);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("locked re-check ownership_lost refusal names the owner liveness", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-locked-verdict-"));
+  try {
+    const claim = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-R", cwd });
+    let pending;
+    await withStateFileLock(claim.filePath, async () => {
+      pending = assertRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-R", cwd, requireExisting: true });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const state = JSON.parse(await readFile(claim.filePath, "utf8"));
+      state.activeRun.runId = "run-S";
+      await writeFile(claim.filePath, JSON.stringify(state));
+    });
+    const result = await pending;
+    assert.equal(result.error, "ownership_lost");
+    assert.match(result.message, /now owned by run run-S/);
+    assert.match(result.message, /live|stale/i);
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
 

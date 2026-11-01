@@ -636,7 +636,7 @@ export async function assertRunnerOwnership({
           filePath: resolvedPath,
           exitSignals: lockedState?.exitSignals ?? [],
           message: lockedState?.activeRun?.runId
-            ? `PR ${normalizedRepo}#${normalizedPr} is now owned by run ${lockedState.activeRun.runId}; run ${normalizedRunId} must stop.`
+            ? `PR ${normalizedRepo}#${normalizedPr} is now owned by run ${lockedState.activeRun.runId}; run ${normalizedRunId} must stop.${ownerVerdictSuffix(lockedState, normalizedRepo, normalizedPr, normalizedRunId, { now, maxAgeMs })}`
             : `PR ${normalizedRepo}#${normalizedPr} no longer has an active runner ownership record; run ${normalizedRunId} must stop.`,
         });
       }
@@ -884,7 +884,7 @@ export async function handoffRunnerOwnership({
   const target = { repo: normalizedRepo, pr: normalizedPr, runId: verifiedRunId, filePath: resolvedPath };
   if (verifiedRunId === null) {
     return buildConflict({ ...target, error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED, activeRun: null,
-      message: requestedRunId === null
+      message: resolveRuntimeHarness(env) !== "codex"
         ? "Runner coordination handoff requires a run id (required by RUNNER-HANDOFF-TEARDOWN). Pass --run-id <the id used at claim>."
         : "Runner coordination handoff on native Codex requires the verified thread identity; an explicit --run-id is not accepted." });
   }
