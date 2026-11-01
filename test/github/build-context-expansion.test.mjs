@@ -399,3 +399,11 @@ test("a whole-function removal whose run does not start with the declaration add
     });
   }
 });
+
+test("a removal run that deletes an exported function's tail and a following private function selects the importers", async () => {
+  const lines = [" export function f(a) {", "   return a;", "-  log(a);", "-}", "-", "-function h(b) {", "-  log(b);", " }"];
+  await withRepo({ "src/x.mjs": "export function f(a) {\n  return a;\n}\n", "src/use.mjs": 'import { f } from "./x.mjs";\nf(1);\n' }, async (root) => {
+    const b = await buildAdjacentBundle({ changedFiles: ["src/x.mjs"], repoRoot: root, diffText: hunkDiff(lines) });
+    assert.deepEqual(b.expansion.files.map((f) => f.path), ["src/use.mjs"]);
+  });
+});

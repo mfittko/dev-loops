@@ -381,8 +381,8 @@ const WRITER_OR_GUARD_RE = /^(write|save|persist|set|delete|remove|guard|assert|
  * A removal run is credited to the
  * preceding new-side line (a removal at a function tail stays in that function)
  * only when no added line follows it: a replacement is already marked by its added lines.
- * A run that contains a column-0 declaration is a whole-declaration removal, not a
- * tail removal, so it is not credited to the preceding function.
+ * A run is split at its first column-0 declaration: the declaration part is a whole-declaration removal, not a
+ * tail removal, so only the non-blank part before it (more than a lone `}`) is credited to the preceding function.
  * Ceiling: a deleted file (`+++ /dev/null`) is skipped; its source is gone.
  */
 function changedLinesByFile(diffText) {
@@ -396,10 +396,13 @@ function changedLinesByFile(diffText) {
   let lastText = ""; // text of the latest new-side line
   const flush = (next) => {
     // A removal after an export-list line is credited to it only when the run removes an export list or a declaration.
-    // The decision covers the whole run: a column-0 declaration anywhere in it (even after a blank line or a closing brace) is a whole-declaration removal.
-    const removesDecl = run.some((t) => DECL_RE.test(t));
+    // The run splits at its first column-0 declaration: the declaration part is a whole-declaration removal and is never credited.
+    // The part before it is credited only when it holds a non-blank line other than a lone `}` (the shifted closing brace of the removed function).
+    const declAt = run.findIndex((t) => DECL_RE.test(t));
+    const head = (declAt < 0 ? run : run.slice(0, declAt)).filter((t) => t.trim() !== "");
+    const creditable = declAt < 0 || (head.length > 0 && !(head.length === 1 && head[0] === "}") && !EXPORT_LIST_RE.test(lastText));
     const afterExportList = EXPORT_LIST_RE.test(lastText) && !run.some((t) => EXPORT_LIST_RE.test(t) || DECL_RE.test(t));
-    if (pending !== null && !/^[-+\\]/.test(next) && !removesDecl && !afterExportList) mark(pending);
+    if (pending !== null && !/^[-+\\]/.test(next) && creditable && !afterExportList) mark(pending);
     if (!next.startsWith("-") && !next.startsWith("\\")) { pending = null; run = []; }
   };
   for (const line of String(diffText ?? "").split("\n")) {
