@@ -12,7 +12,7 @@ import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "no
 import { userInfo } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { clearSequenceMarker, readSequenceMarker, sequenceMarkerPath } from "@dev-loops/core/loop/fix-push-authority";
+import { clearSequenceMarker, readSequenceMarker, sequenceClosurePath, sequenceMarkerPath } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, emitResult } from "../lib/jq-output.mjs";
 import { viewPr } from "../github/view-pr.mjs";
@@ -20,18 +20,23 @@ import { pullReceiptPath } from "../github/_work-order-protocol.mjs";
 import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 
 export const FIXER_GRACE_MS = 30 * 60 * 1000; // The runner-lock TTL: a dispatch or a fixer younger than this may be live.
-export const sequenceClosurePath = (tmpRoot, head) => path.join(tmpRoot, "gate-delta", `${head}.sequence-closed.json`);
 
 const refuse = (refusal, reason, remedy) => ({ ok: false, refusal, reason, remedy });
 const mtimeMs = (file) => { try { return statSync(file).mtimeMs; } catch { return null; } };
-const readJson = (file) => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; } };
 
 /** @param {{ tmpRoot: string, head: string, repo?: string, pr?: number, fetchPr?: Function, now?: () => number, actor?: string }} input */
 export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = viewPr, now = Date.now, actor = process.env.DEVLOOPS_RUN_ID ?? userInfo().username }) {
   const marker = readSequenceMarker(tmpRoot, head);
   if (!marker) return refuse("SEQUENCE-ABSENT", `no sequence marker exists for ${head}`, "Nothing to close here; the push block comes from another marker, so rerun with that marker's head.");
   const { executionIdentity, workOrderRef, outputRef } = marker.execution ?? {};
-  const receipt = workOrderRef ? readJson(pullReceiptPath(tmpRoot, workOrderRef)) : null;
+  // Only ENOENT proves the work order was never pulled; any other read or parse failure leaves the pull state unknown.
+  let receipt = null;
+  if (workOrderRef) {
+    try { receipt = JSON.parse(readFileSync(pullReceiptPath(tmpRoot, workOrderRef), "utf8")); } catch (error) {
+      if (error?.code !== "ENOENT") return refuse("FIXER-RUNNING", `the pull receipt of fixer execution ${executionIdentity} is unreadable (${error?.code ?? "invalid JSON"}), so a pull cannot be ruled out`, "Rerun once the receipt is readable, or ask the operator.");
+    }
+  }
+  const markerMtime = mtimeMs(sequenceMarkerPath(tmpRoot, head));
   const pulled = receipt !== null && receipt.executionIdentity === executionIdentity;
   const pulledAt = pulled ? Date.parse(receipt.pulledAt) : NaN;
   // A fixer that pulled its work order and has not handed back (no outputRef) inside the grace is running.
@@ -40,18 +45,22 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   }
   if (marker.branch === undefined || !repo || !pr) return refuse("ABANDONMENT-UNPROVEN", "the PR head cannot be checked without the marker's branch and --repo/--pr", "Pass --repo and --pr of the marker's PR. A marker without a branch cannot be proven abandoned, so ask the operator to delete it.");
   const { pr: facts } = await fetchPr({ repo, pr, fields: "headRefOid,headRefName" });
+  if (!/^[0-9a-f]{40,64}$/u.test(facts.headRefOid ?? "")) return refuse("ABANDONMENT-UNPROVEN", `GitHub returned no valid head sha for PR #${pr}`, "Rerun when the PR head is readable.");
   if (facts.headRefName !== marker.branch) return refuse("ABANDONMENT-UNPROVEN", `PR #${pr} head branch ${facts.headRefName} is not the marker branch ${marker.branch}`, "Pass the --pr whose head branch the marker names.");
   let condition = null;
   if (facts.headRefOid !== head) condition = "HEAD_MOVED";
-  else if (executionIdentity && !receipt && now() - (mtimeMs(sequenceMarkerPath(tmpRoot, head)) ?? now()) >= FIXER_GRACE_MS) condition = "FIXER_NEVER_PULLED";
+  else if (executionIdentity && !receipt && now() - (markerMtime ?? now()) >= FIXER_GRACE_MS) condition = "FIXER_NEVER_PULLED";
   if (condition === null) {
     return executionIdentity
       ? refuse("SEQUENCE-LIVE", `the PR head is still ${head} and the fixer execution ${executionIdentity} is not proven abandoned`, "Finish the sequence with the pre-push delta review, or rerun after the dispatch grace if no fixer ever pulled the work order.")
       : refuse("ABANDONMENT-UNPROVEN", `the PR head is still ${head} and the marker names no fixer execution`, "Finish the sequence with the pre-push delta review, or ask the operator to delete the marker.");
   }
+  // A concurrent re-emit rewrote the marker while the PR was read: that is a new sequence, never close it.
+  const current = readSequenceMarker(tmpRoot, head);
+  if (current?.execution?.executionIdentity !== executionIdentity || mtimeMs(sequenceMarkerPath(tmpRoot, head)) !== markerMtime) return refuse("SEQUENCE-LIVE", `the marker for ${head} changed while it was checked`, "Rerun close-sequence; a re-emitted marker starts a live sequence.");
   // Record first, marker second: a failed write leaves the marker in place.
   const record = { baselineHead: head, executionIdentity: executionIdentity ?? null, condition, actor, closedAt: new Date(now()).toISOString() };
-  const file = sequenceClosurePath(tmpRoot, head);
+  const file = sequenceClosurePath(tmpRoot, head, executionIdentity);
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(`${file}.tmp`, `${JSON.stringify(record, null, 2)}\n`);
   renameSync(`${file}.tmp`, file);
@@ -62,7 +71,7 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
 if (isDirectCliRun(import.meta.url)) {
   try {
     const { values } = parseArgs({ options: { head: { type: "string" }, repo: { type: "string" }, pr: { type: "string" }, ...JQ_OUTPUT_PARSE_OPTIONS }, strict: true });
-    if (!/^[0-9a-f]{40,64}$/u.test(values.head ?? "")) throw new Error("usage: close-gate-sequence.mjs --head <marker baseline sha> --repo <owner/name> --pr <number>");
+    if (!/^[0-9a-f]{40,64}$/u.test(values.head ?? "") || (values.pr !== undefined && !/^[1-9][0-9]*$/u.test(values.pr))) throw new Error("usage: close-gate-sequence.mjs --head <marker baseline sha> --repo <owner/name> --pr <number>");
     const result = await closeGateSequence({ tmpRoot: resolveGateArtifactTmpRoot(process.cwd()), head: values.head, repo: values.repo, pr: values.pr && Number(values.pr) });
     const emitted = emitResult(result, { jq: values.jq, silent: values.silent });
     process.exitCode = emitted === 2 ? 2 : result.ok ? 0 : 1;

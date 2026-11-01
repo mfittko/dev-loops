@@ -11,6 +11,9 @@ import path from "node:path";
 
 export const sequenceMarkerPath = (tmpRoot, baselineHead) => path.join(tmpRoot, "gate-delta", `${baselineHead}.sequence`);
 
+/** The closure record of a sequence closed by close-gate-sequence; keyed by execution so a second close on one head keeps the first. */
+export const sequenceClosurePath = (tmpRoot, baselineHead, executionIdentity) => path.join(tmpRoot, "gate-delta", `${baselineHead}.sequence-closed.${executionIdentity ?? "none"}.json`);
+
 /** Record that a fix sequence is active for a baseline head; a `commit_only` emit writes it ungranted, a `full` emit granted. */
 export function writeSequenceMarker({ tmpRoot, baselineHead, fullGranted = false, branch, execution }) {
   const file = sequenceMarkerPath(tmpRoot, baselineHead);
@@ -25,7 +28,7 @@ export function clearSequenceMarker(tmpRoot, baselineHead) {
 }
 
 /** The recovery pointer the refusal reason carries: the sanctioned close command proves abandonment and records it; a live sequence stays uncloseable. */
-export const recoveryHint = (markerPath) => markerPath ? ` To close an abandoned sequence (the PR head moved, or no fixer ever pulled the work order), run dev-loops gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>; it refuses a live sequence (marker ${markerPath}). A live sequence ends with a clearing delta record (emit-fixer-work-order.mjs --phase full).` : "";
+export const recoveryHint = (markerPath) => markerPath ? ` To close an abandoned sequence (the PR head moved, or no fixer ever pulled the work order), run dev-loops-run scripts/loop/close-gate-sequence.mjs --head <baseline sha> --repo <owner/name> --pr <number>; it refuses a live sequence (marker ${markerPath}). A live sequence ends with a clearing delta record (emit-fixer-work-order.mjs --phase full).` : "";
 
 /** Approximates git check-ref-format for a branch name; an invalid name reads as no branch (fail closed). */
 const isValidBranchName = (b) =>

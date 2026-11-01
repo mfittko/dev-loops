@@ -220,6 +220,19 @@ async function withFixture(fn) {
   }, { prefix: "dev-loops-fixer-" });
 }
 
+test("a sequence closed as abandoned retires its execution: a late pull is stale_dispatch", async () => {
+  const { closeGateSequence } = await import("../../scripts/loop/close-gate-sequence.mjs");
+  const { readSequenceMarker } = await import("@dev-loops/core/loop/fix-push-authority");
+  await withFixture(async ({ root, head, files, emit }) => {
+    const unit = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    const tmpRoot = path.join(root, "tmp");
+    const { branch } = readSequenceMarker(tmpRoot, head);
+    const closed = await closeGateSequence({ tmpRoot, head, repo: REPO, pr: PR, fetchPr: async () => ({ pr: { headRefOid: "b".repeat(40), headRefName: branch } }) });
+    assert.equal(closed.ok, true, closed.reason);
+    assert.equal(refusal(pull(unit, root)), "stale_dispatch");
+  });
+});
+
 test("THREAD no_commit and head_moved close an authenticated sequence and allow the next push", async () => {
   const { checkFixPushAuthority } = await import("../../scripts/loop/check-fix-push-authority.mjs");
   for (const move of ["none", "descendant", "amended"]) await withFixture(async ({ root, wt, head, files, emit }) => {
