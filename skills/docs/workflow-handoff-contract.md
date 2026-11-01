@@ -97,7 +97,7 @@ brief has to restate the boundary:
   (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`): `final_approval` runs a gate round
   but posts no verdict of its own. An `issue_intake` unit reports at `draft_pr_opened`, continues on
   the PR route, and then reports at `gate_verdict_posted`, in order.
-- `resume` names the authoritative re-resolution a resuming coordinator runs (`kind: loop_startup` plus
+- `resume` names the authoritative re-resolution a replacement coordinator runs (`kind: loop_startup` plus
   whichever of the target's `issue`, `pr`, `branch` and `phase` values are set). It is **not** an
   exclusive selector, and no XOR or precedence rule applies to it: `deriveUnitBoundaries` copies
   each of those values the target sets, so a unit with more than one identity carries all of them,
@@ -117,12 +117,12 @@ brief has to restate the boundary:
   validated plan file and a validated spike file, so the label cannot choose between them. The
   shipped re-resolution therefore never reads a mode from this field: no code consumes `resume`
   (the validator only checks that it is present, well-typed and consistent with the envelope's own
-  target) and the resuming coordinator's own `loop
-  startup` invocation is the re-resolution, its mode coming from that resuming coordinator's route input —
+  target) and the replacement coordinator's own `loop
+  startup` invocation is the re-resolution, its mode coming from that replacement's route input —
   the startup-output artifact the previous coordinator's hand-back names and
-  `emit-coordinator-work-order.mjs --input <startup-output>` turns into the resuming coordinator's order,
+  `emit-coordinator-work-order.mjs --input <startup-output>` turns into the replacement's order,
   which selects the relaxed `spike` sub-gate from `spikeIntakeState` on a local-implementation
-  route and never reads `planFileIntakeState`. So the phase is the identity a resuming coordinator
+  route and never reads `planFileIntakeState`. So the phase is the identity a replacement coordinator
   re-resolves, not the mode that resolves it; a consumer holding only the resume could not tell a
   plan-file from a spike, and the envelope deliberately carries no mode field to close that
   (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`). `resume` is derived from the
@@ -131,26 +131,20 @@ brief has to restate the boundary:
 - `resume` has a recorded consumer and acceptance linkage even though no code reads it. Its
   consumers are specified rather than coded: the
   [Main Agent Contract](main-agent-contract.md#unit-coordinator-boundaries-issue-2532-amended-by-issue-2955) and
-  `agents/dev-loop.agent.md` both name `unitBoundaries.resume` as the identity a resuming coordinator
+  `agents/dev-loop.agent.md` both name `unitBoundaries.resume` as the identity a replacement coordinator
   re-resolves, and `docs/decisions/0181-unit-coordinator-handback-boundaries.md` records why the
   field exists. Its acceptance linkage is issue 2532's Scope row ("Startup and the existing
   handoff envelope provide the next brief through the existing tooling producer; the previous
   coordinator never writes or summarizes it") read with its AC/DoD row "The resuming coordinator resumes
-  from authoritative state" / "no field derives from predecessor conversation": a resuming coordinator has
+  from authoritative state" / "no field derives from predecessor conversation": a replacement coordinator has
   to take its unit identity from tooling, never from a previous coordinator's prose, and this field is
   that emission. The same AC/DoD row's `nextAction`, `requiredReads` and `stopRules` evidence
   names the brief's other fields; it is not an exclusive field list, so the row requires an
-  emitted resume identity rather than excluding one. Which entry point a pull-dispatched
-  resuming coordinator then takes stays unsettled and deliberately open here: re-running its own
-  `loop startup` (this document and the Main Agent Contract) and treating the pulled order as its
-  envelope with no new envelope built (`agents/dev-loop.agent.md`) are both stated, and this
-  field's emission and validation depend on neither. No re-resolution step is added for it.
-  At a report point, re-resolving is a read of current state through the resume identity. A
-  pull-dispatched coordinator keeps the pulled work order as its digest-pinned authority and builds
-  no new envelope. After draft PR creation or a verdict, it adopts the new PR identity for state
-  reads and gate calls under the same assigned task.
+  emitted resume identity rather than excluding one. The report-point re-resolve rule for a
+  continuing coordinator lives in the
+  [Main Agent Contract](main-agent-contract.md#unit-coordinator-boundaries-issue-2532-amended-by-issue-2955).
 
-The field is absent where the route has no unit to hand back: a terminal reconciliation envelope
+The field is absent where the route has no unit to report from: a terminal reconciliation envelope
 (`stopRules` are already terminal), a read-only `review` or `ui_review` round (one round, no
 lifecycle gate evidence) and `wait_watch` (no unit runs). Those are exactly the routes the public
 contract classes as pure read/observe, and the envelope builder names them in one explicit

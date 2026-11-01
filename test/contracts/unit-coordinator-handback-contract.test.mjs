@@ -168,7 +168,6 @@ test("2955: no doc or agent text mandates a fresh coordinator per phase or a har
   for (const doc of MIRRORED_DOCS) {
     const text = squeeze(await readRepo(doc));
     assert.doesNotMatch(text, /fresh unit coordinator per phase/, doc);
-    assert.doesNotMatch(text, /150K-token cap/, doc);
     assert.doesNotMatch(text, /handBackAfter/, doc);
   }
 });

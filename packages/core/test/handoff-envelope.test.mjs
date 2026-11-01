@@ -1120,8 +1120,8 @@ test("unitBoundaries: a PR unit reports only after the gate verdict", () => {
 });
 
 test("unitBoundaries: both gate verdict boundaries carry the same report point and resume target", () => {
-  // Draft and pre-approval rounds are separate units; each resumes from the same
-  // authoritative PR target, so neither reads the other's conversation.
+  // Both verdict boundaries are report points of one continuing coordinator; each re-reads the
+  // same authoritative PR target, so neither relies on the other's conversation.
   // "Verdict evidence" is the reviewed head plus the CI status, not only the counts: a producer
   // regression that drops either from the recovered state must fail at BOTH boundaries.
   for (const [gateState, currentGate] of [
