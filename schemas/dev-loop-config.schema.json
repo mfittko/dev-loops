@@ -1237,6 +1237,25 @@
           },
           "additionalProperties": false,
           "description": "Reviewer-diff shaping (global, applies on every gate): excludeGlobs drops matching file blocks from the required filtered diff read."
+        },
+        "contextExpansion": {
+          "type": "object",
+          "properties": {
+            "maxFiles": {
+              "default": 6,
+              "description": "Max files the per-round context expansion adds (importers plus sibling-function files). Default 6; 0 disables the expansion.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxBytes": {
+              "default": 98304,
+              "description": "Max total bytes the per-round context expansion adds, counted from the sibling-function source and the importer file sizes. Default 98304 (96 KiB); 0 disables the expansion.",
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "description": "Adaptive reviewer-context expansion caps (global, applies on every gate): maxFiles and maxBytes bound the importers and sibling functions added per round."
         }
       },
       "additionalProperties": false,

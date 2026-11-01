@@ -50,7 +50,7 @@ import { parseNonNegativeInteger, parsePrNumber, requireTokenValue, runChild } f
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { viewPr } from "./view-pr.mjs";
 import { viewIssue } from "./view-issue.mjs";
-import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
+import { buildAdjacentBundle, decodeGitDiffPathToken, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
@@ -849,43 +849,6 @@ function hasNonTrivialFileHeader(header) {
 }
 
 /**
- * Decode a path token straight out of a unified diff header line. Git quotes a
- * path (wraps it in `"..."`) whenever it carries a `"`, a `\`, a control
- * character, or (under the default `core.quotePath`) a non-ASCII byte, and
- * C-escapes the quoted content: `\"`, `\\`, `\t`, `\n`, and `\ooo` octal
- * per raw byte. A raw string-slice of a quoted token (e.g. `"b/a b.txt"`
- * sliced at a fixed offset) still carries the quotes and escapes verbatim,
- * so a downstream consumer that classifies or displays that string sees the
- * wrong path. Unquoted tokens (the common case) pass through unchanged.
- * @param {string} raw
- * @returns {string}
- */
-function decodeGitDiffPathToken(raw) {
-  const trimmed = typeof raw === "string" ? raw.trim() : "";
-  if (trimmed.length < 2 || !trimmed.startsWith('"') || !trimmed.endsWith('"')) return trimmed;
-  const inner = trimmed.slice(1, -1);
-  const bytes = [];
-  for (let i = 0; i < inner.length; i++) {
-    const ch = inner[i];
-    if (ch !== "\\") {
-      const code = ch.codePointAt(0);
-      if (code > 255) bytes.push(...Buffer.from(ch, "utf8"));
-      else bytes.push(code);
-      continue;
-    }
-    const next = inner[i + 1];
-    if (next === "n") { bytes.push(10); i++; continue; }
-    if (next === "t") { bytes.push(9); i++; continue; }
-    if (next === '"') { bytes.push(34); i++; continue; }
-    if (next === "\\") { bytes.push(92); i++; continue; }
-    const octal = inner.slice(i + 1, i + 4);
-    if (/^[0-7]{3}$/.test(octal)) { bytes.push(parseInt(octal, 8)); i += 3; continue; }
-    bytes.push(ch.charCodeAt(0)); // unrecognized escape — keep the backslash's own byte, fail open
-  }
-  return Buffer.from(bytes).toString("utf8");
-}
-
-/**
  * Split a unified diff into per-file blocks: `{ path, header, hunks }`, where
  * `header` is the file's own preamble (`diff --git`/`index`/`---`/`+++`, and
  * any rename/mode/binary lines) verbatim, and `hunks` is each `@@ ... @@`
@@ -1224,9 +1187,34 @@ function renderTokenDisciplineSection(contextPath) {
     "",
     "- Never `cat`/`head` dev-loops tool or artifact JSON: a dev-loops CLI takes its own `--jq`/`--silent` flags; an on-disk artifact file is read with plain `jq '<filter>' <path>`.",
     `- Read the gate-context artifact that way, e.g. \`jq '{resolvedAngles, scope}' "${contextPathDisplay}"\`.`,
-    "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior you already read there.",
+    "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — never re-read a hunk interior you already read there. Open a source file to widen past a hunk's edges only when your angle needs it, except the files the context artifact's `.adjacentCode.expansion.files` lists (importers and sibling functions of a changed exported function, state writer or guard): reading those files is expected, and the evidence file names any the cap dropped.",
     "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
     "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
+  ].join("\n");
+}
+
+/** Push the expansion's kept and dropped file lines (with sibling names) onto the briefing lines. */
+function pushExpansionLines(lines, expansion) {
+  if (!expansion || (expansion.files.length === 0 && expansion.dropped.length === 0)) return;
+  lines.push(`Expansion files (${expansion.files.length}; cap ${expansion.maxFiles} files, ${expansion.maxBytes} bytes):`);
+  pushPathListLines(lines, expansion.files.map((f) => ({ path: f.path, label: `${f.path} (${f.kind}${f.names ? `: ${f.names.join(", ")}` : ""})` })));
+  if (expansion.dropped.length > 0) {
+    lines.push(`Dropped by the expansion cap (${expansion.dropped.length}):`);
+    pushPathListLines(lines, expansion.dropped.map((f) => ({ path: f.path, label: `${f.path} (${f.kind}${f.names ? `: ${f.names.join(", ")}` : ""})` })));
+  }
+}
+
+/**
+ * Render the "## Reviewer sibling sweep" section: the one sibling-defect
+ * clause owned by GATE-REVIEW-SIBLING-SWEEP in the gate-review sub-loop
+ * contract. Shared by the full prefix and every scoped variant so both emit it
+ * byte-identically.
+ */
+function renderSiblingSweepSection() {
+  return [
+    "## Reviewer sibling sweep",
+    "",
+    "After a finding in a function, check the opposite direction, concurrent invocation and alternate input forms for that function, and check that a fix covers every call site. Rule `GATE-REVIEW-SIBLING-SWEEP` in skills/docs/gate-review-sub-loop-contract.md.",
   ].join("\n");
 }
 
@@ -1332,6 +1320,8 @@ export function renderBriefingPrefix({
   lines.push(renderSourceReadInvariantSection(worktreeRoot));
   lines.push("");
   lines.push(renderTokenDisciplineSection(contextPath));
+  lines.push("");
+  lines.push(renderSiblingSweepSection());
   lines.push("");
   lines.push(renderRequiredReadsSection(requiredReads, worktreeRoot));
   return { text: lines.join("\n") + "\n" };
@@ -1523,6 +1513,7 @@ export function renderBriefingEvidence({
     lines.push(
       `Stripped: ${adjacentCode.stripped?.length ?? 0}, Truncated: ${adjacentCode.truncated?.length ?? 0}, Missing: ${adjacentCode.missing?.length ?? 0}`,
     );
+    pushExpansionLines(lines, adjacentCode.expansion);
   } else {
     lines.push("Adjacent files (0): (no adjacent-code bundle for this briefing)");
   }
@@ -1571,6 +1562,7 @@ export function renderBriefingEvidence({
  * @param {{path: string, reason: "default"|"configured"}[]} [input.excludedFiles] — filterDiffForInline
  *   excludedFiles; rendered as `Excluded from the filtered diff (n):` after the diff pointers, only when non-empty.
  * @param {string|null} [input.validationResultsPath]
+ * @param {object|null} [input.adjacentCode] — buildAdjacentBundle output; its `expansion` files and dropped files are listed
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES; sizes the pointer's disclosure
  * @returns {{ text: string }}
  */
@@ -1579,7 +1571,7 @@ export function renderScopedBriefingVariant(scope, {
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null,
   filteredDiffPath = null, excludedFiles = [],
-  validationResultsPath = null,
+  validationResultsPath = null, adjacentCode = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
   rules = null,
   capRoundResidue = null,
@@ -1605,12 +1597,15 @@ export function renderScopedBriefingVariant(scope, {
   lines.push(`Full diff (byte-exact): ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
   lines.push(`Context artifact: ${contextPath ?? "(context artifact path unavailable)"}`);
   pushExcludedFilesLines(lines, excludedFiles);
+  pushExpansionLines(lines, adjacentCode?.expansion);
   lines.push("");
   if (worktreeRoot) {
     lines.push(renderSourceReadInvariantSection(worktreeRoot));
     lines.push("");
   }
   lines.push(renderTokenDisciplineSection(contextPath));
+  lines.push("");
+  lines.push(renderSiblingSweepSection());
   lines.push("");
   lines.push("## PR body");
   lines.push("");
@@ -2568,7 +2563,7 @@ export function buildGateContextArtifact(options) {
  * @param {{ repoRoot: string }} opts
  * @returns {Promise<{ diffPath: string|null, diffToWrite: object|null, changedFiles: string[], adjacentCode: object|null, diffOutput: string|null }>}
  */
-async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFileBytes }, { repoRoot }) {
+async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFileBytes, expansion }, { repoRoot }) {
   const diffOutput = diff?.diffOutput;
   let diffPath = null;
   const changedFiles = parseChangedFiles(diff?.nameStatusOutput);
@@ -2590,6 +2585,8 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
         changedFiles,
         repoRoot,
         maxFileBytes: typeof maxFileBytes === "number" && maxFileBytes > 0 ? maxFileBytes : DEFAULT_MAX_FILE_BYTES,
+        diffText: typeof diffOutput === "string" ? diffOutput : "",
+        expansion,
       });
     } catch (err) {
       process.stderr.write(`[gate-context] adjacent-code bundle failed (continuing without adjacentCode): ${err?.message ?? err}\n`);
@@ -2974,6 +2971,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           filteredDiffPath: pendingFilteredDiff?.path ?? null,
           excludedFiles: diffFilter?.excludedFiles ?? [],
           validationResultsPath: options.validationResultsPath ?? null,
+          adjacentCode: options.adjacentCode ?? null,
           rules: resolveClassifyRules(options.config),
           capRoundResidue,
         });
@@ -3441,7 +3439,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // scope.changedFiles, and the neutral adjacentCode bundle, all built ONCE by
   // the shared resolveDiffScope helper (also used by the CLI --base path).
   const { diffPath, diffToWrite, changedFiles, adjacentCode, diffOutput } = await resolveDiffScope(
-    { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, maxFileBytes: input.maxFileBytes },
+    { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, maxFileBytes: input.maxFileBytes, expansion: input.config?.gates?.contextExpansion },
     { repoRoot },
   );
 
@@ -3919,7 +3917,7 @@ export async function main(
       }
       diff = captureDiffFromBase(options.base, { repoRoot, paths: closurePaths });
       const scope = await resolveDiffScope(
-        { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" },
+        { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", expansion: options.config?.gates?.contextExpansion },
         { repoRoot },
       );
       // A --base build that resolves an EMPTY change set is degenerate: the
