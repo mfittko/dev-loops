@@ -26,6 +26,12 @@ describe("angleReviewSurface — the pure angle -> surface mapping", () => {
     assert.equal(angleReviewSurface("renderer-security").kind, "always");
   });
 
+  test("state-concurrency reviews code kinds", () => {
+    const surface = angleReviewSurface("state-concurrency");
+    assert.equal(surface.kind, "kinds");
+    assert.deepEqual([...surface.kinds], ["code"]);
+  });
+
   test("explicit alwaysRerun angle -> always", () => {
     assert.equal(angleReviewSurface("scope", { alwaysRerun: ["scope"] }).kind, "always");
   });

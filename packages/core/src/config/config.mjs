@@ -438,6 +438,14 @@ const ReviewDiffConfig = z.strictObject({
   excludeGlobs: z.array(z.string().trim().min(1)).default([]).describe("Globs whose file blocks are dropped from the required filtered reviewer diff on every gate, on top of the built-in defaults (lockfiles, vendored trees). The raw diff keeps them as the optional raw-diff read, and the evidence file lists each excluded path with its reason. Default empty."),
 });
 
+// Adaptive reviewer-context expansion (global, applies on every gate): the
+// per-round caps on the importers and sibling functions added for a changed
+// exported function, state writer or guard.
+const ContextExpansionConfig = z.strictObject({
+  maxFiles: z.number().int().min(0).default(6).describe("Max files the per-round context expansion adds (importers plus sibling-function files). Default 6; 0 disables the expansion."),
+  maxBytes: z.number().int().min(0).default(98304).describe("Max total bytes the per-round context expansion adds, counted from the sibling-function source and the importer file sizes. Default 98304 (96 KiB); 0 disables the expansion."),
+});
+
 /**
  * The reserved synthetic packed-bin name shape. Every bin `packDispatchUnits`
  * generates (including a one-member bin) is named `packed:sha256:<64 lowercase
@@ -564,6 +572,7 @@ const GatesConfig = z.strictObject({
   // GLOBAL, not per-gate — see resolveFanoutGroups.
   fanout: FanoutConfig.superRefine(rejectInvalidFanoutGroupNames).optional(),
   reviewDiff: ReviewDiffConfig.optional(),
+  contextExpansion: ContextExpansionConfig.optional(),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -984,6 +993,7 @@ const FileGatesConfig = z.strictObject({
   rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),
   fanout: FanoutConfig.partial().superRefine(rejectInvalidFanoutGroupNames).describe("Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate).").optional(),
   reviewDiff: ReviewDiffConfig.partial().describe("Reviewer-diff shaping (global, applies on every gate): excludeGlobs drops matching file blocks from the required filtered diff read.").optional(),
+  contextExpansion: ContextExpansionConfig.partial().describe("Adaptive reviewer-context expansion caps (global, applies on every gate): maxFiles and maxBytes bound the importers and sibling functions added per round.").optional(),
 });
 
 // ============================================================================

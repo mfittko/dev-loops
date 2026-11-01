@@ -1361,6 +1361,34 @@ test("buildGateContext attaches a deterministic adjacentCode bundle (imports + i
   }
 });
 
+test("buildGateContext forwards config.gates.contextExpansion to adjacentCode.expansion", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    await mkdir(path.join(repoRoot, "src"), { recursive: true });
+    await writeFile(path.join(repoRoot, "src/changed.mjs"), "export function changed() {\n  return 1;\n}\n", "utf8");
+    await writeFile(path.join(repoRoot, "src/caller.mjs"), 'import { changed } from "./changed.mjs";\nchanged();\n', "utf8");
+    const config = draftConfig({ dynamicAngles: false });
+    config.gates.contextExpansion = { maxFiles: 1 };
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        diff: {
+          nameStatusOutput: "M\tsrc/changed.mjs\n",
+          diffOutput: "diff --git a/src/changed.mjs b/src/changed.mjs\n--- a/src/changed.mjs\n+++ b/src/changed.mjs\n@@ -1,1 +1,1 @@\n-old\n+new\n",
+        },
+        repo: "owner/repo",
+        pr: 31,
+        headSha: "abc1234567890",
+      },
+      { repoRoot },
+    );
+    assert.equal(result.artifact.adjacentCode.expansion.maxFiles, 1);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("buildGateContext omits adjacentCode when there are no changed files (backward-compatible shape)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
   try {
@@ -1472,6 +1500,29 @@ test("CLI --base <ref> produces a full build-once bundle: non-null diffPath, pop
     assert.equal(byPath["src/changed.mjs"].role, "changed");
     assert.equal(byPath["src/dep.mjs"].role, "imports");
     assert.equal(byPath["src/caller.mjs"].role, "importedBy");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --base reads gates.contextExpansion from .devloops into adjacentCode.expansion", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      "version: 1\ngates:\n  contextExpansion:\n    maxFiles: 1\n  draft:\n    angles:\n      - scope\n      - name: link-check\n        scope: docs-only\n",
+      "utf8",
+    );
+    await main([
+      "--repo", "owner/repo", "--pr", "41", "--gate", "draft_gate", "--head-sha", headSha,
+      "--angles", '["scope","link-check"]', "--base", baseSha,
+    ], { repoRoot, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 41, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal(artifact.adjacentCode.expansion.maxFiles, 1);
+    assert.equal(artifact.adjacentCode.expansion.files.length, 1);
+    // The written scoped variant carries the expansion list (pins the adjacentCode wiring into the scoped render).
+    const variantText = await readFile(path.resolve(repoRoot, artifact.briefingVariants["docs-only"]), "utf8");
+    assert.ok(variantText.includes("Expansion files"), "written scoped variant lists the expansion files");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -3076,7 +3127,7 @@ test("renderBriefingPrefix: carries the Reviewer token discipline section, befor
   assert.match(text, /`--jq`\/`--silent`/);
   assert.match(text, /[Nn]ever `cat`\/`head`/);
   assert.match(text, /jq '\{resolvedAngles, scope}' "tmp\/gate-context\/owner-repo\/pr-9\/draft_gate-abc1234567890\.json"/);
-  assert.match(text, /widen PAST a hunk's edges/);
+  assert.match(text, /never re-read a hunk interior/);
   assert.match(text, /cut -c1-200/);
   assert.match(text, /`contextWidened`/);
   assert.match(text, /absence means "not consulted", never "consulted and clean"/);
@@ -3100,6 +3151,31 @@ test("renderBriefingPrefix and renderScopedBriefingVariant: the Reviewer token d
       diffOutput: "diff --git a/docs/a.md b/docs/a.md\nindex 111..222 100644\n--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1 +1 @@\n-old\n+new\n",
     });
     assert.equal(extractSection(text), fullSection, `${scope}: section text matches the full prefix`);
+  }
+});
+
+const SIBLING_SWEEP_CLAUSE = "After a finding in a function, check the opposite direction, concurrent invocation and alternate input forms for that function, and check that a fix covers every call site.";
+
+test("sibling sweep: the clause and its rule ID exist once in the contract and the brief emits them byte-identically in the full prefix and every scoped variant", async () => {
+  const contract = await readFile(path.resolve(import.meta.dirname, "../../skills/docs/gate-review-sub-loop-contract.md"), "utf8");
+  assert.equal(contract.split("<!-- rule: GATE-REVIEW-SIBLING-SWEEP -->").length - 1, 1, "rule marker once");
+  assert.equal(contract.split(SIBLING_SWEEP_CLAUSE).length - 1, 1, "clause text once");
+  const extractSection = (text) => {
+    const start = text.indexOf("## Reviewer sibling sweep");
+    return start < 0 ? "" : text.slice(start, text.indexOf("\n## ", start));
+  };
+  const { text: fullText } = renderBriefingPrefix(renderInput());
+  const fullSection = extractSection(fullText);
+  assert.ok(fullSection.includes(SIBLING_SWEEP_CLAUSE), "full prefix carries the clause");
+  assert.ok(fullSection.includes("GATE-REVIEW-SIBLING-SWEEP"), "full prefix cites the rule ID");
+  for (const scope of GATE_ANGLE_SCOPES.filter((s) => s !== "full")) {
+    const { text } = renderScopedBriefingVariant(scope, {
+      repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+      evidencePath: "tmp/x.briefing-evidence.txt",
+      contextPath: renderInput().contextPath,
+      diffOutput: "diff --git a/docs/a.md b/docs/a.md\nindex 111..222 100644\n--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1 +1 @@\n-old\n+new\n",
+    });
+    assert.equal(extractSection(text), fullSection, `${scope}: sibling sweep matches the full prefix`);
   }
 });
 
@@ -4038,9 +4114,13 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       "- Never `cat`/`head` dev-loops tool or artifact JSON: a dev-loops CLI takes its own `--jq`/`--silent` flags; an on-disk artifact file is read with plain `jq '<filter>' <path>`.",
       "- Read the gate-context artifact that way, e.g. `jq '{resolvedAngles, scope}' \"tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json\"`.",
-      "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior you already read there.",
+      "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — never re-read a hunk interior you already read there. Open a source file to widen past a hunk's edges only when your angle needs it, except the files the context artifact's `.adjacentCode.expansion.files` lists (importers and sibling functions of a changed exported function, state writer or guard): reading those files is expected, and the evidence file names any the cap dropped.",
       "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
       "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
+      "",
+      "## Reviewer sibling sweep",
+      "",
+      `${SIBLING_SWEEP_CLAUSE} Rule \`GATE-REVIEW-SIBLING-SWEEP\` in skills/docs/gate-review-sub-loop-contract.md.`,
       "",
       "## Required reads",
       "",
