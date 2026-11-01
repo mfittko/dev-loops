@@ -205,7 +205,7 @@ through authoritative state, not through the relay: the replacement recovers rou
 evidence and open findings by re-running the detectors at resume.
 
 A child hand-back is a **compact relay packet** only: unit identity, status, `nextAction`, evidence
-links (including the startup-output path that unit ran), and an open question if one is needed. On Claude Code the packet also carries the consumed relayed message under `COORDINATOR-HANDBACK-ONE-REPORT`. On Pi a hand-back sent with a child in flight also carries the child list under `GATE-EXEC-HARNESS-JOIN` in [Gate review sub-loop contract](./gate-review-sub-loop-contract.md). No
+links (including the startup-output path that unit ran), and an open question if one is needed. The packet `status` names the run-ending case from the canonical list in Unit coordinator boundaries, so it is the replacement reason. On Claude Code the packet also carries the consumed relayed message under `COORDINATOR-HANDBACK-ONE-REPORT`. On Pi a hand-back sent with a child in flight also carries the child list under `GATE-EXEC-HARNESS-JOIN` in [Gate review sub-loop contract](./gate-review-sub-loop-contract.md). No
 transcript, tool output or review text. A relay is the dispatch trigger, never the replacement's
 context.
 

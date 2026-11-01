@@ -242,6 +242,16 @@ test("2955: one canonical run-ending list in the shared prose, no harness-specif
   for (const item of RUN_ENDING_CASES) assert.ok(adrList.includes(item), `ADR 0220 run-ending list: ${item}`);
 });
 
+test("2955: the replacement reason is read from the predecessor hand-back status, not an orchestrator note", async () => {
+  for (const base of ["skills/docs", ".claude/skills/docs"]) {
+    const retro = squeeze(await readRepo(`${base}/retrospective-checkpoint-contract.md`));
+    assert.match(retro, /read from the predecessor's hand-back packet `status`, which names the run-ending case, reported as "unknown" when the status is absent/);
+    assert.ok(!/dispatch\s+note/i.test(retro), `${base} retrospective must not cite an orchestrator note`);
+    const main = squeeze(await readRepo(`${base}/main-agent-contract.md`));
+    assert.match(main, /The packet `status` names the run-ending case from the canonical list in Unit coordinator boundaries, so it is the replacement reason\./);
+  }
+});
+
 // AC2 fixtures: a reported peak above 150K and absent telemetry. No runtime code reads peak
 // context, so the emitted boundaries and work order must be identical with or without it.
 // These fixtures pin only that extraneous input is ignored; the advisory policy itself is pinned
