@@ -1768,6 +1768,7 @@ export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPost
   }
   if (knownFindingsRead) {
     lines.push(`Known findings (do not re-raise what an open or resolved thread already covers): ${knownFindingsRead.entries} threads with full bodies, listed in this required read. Read it IN FULL with \`jq\` before judgment; the mandatory sentinel verifies its sha256.`);
+    if (gate === "pre_approval_gate") lines.push("If any listed thread is unresolved, assess it in this full round at the live head instead of excluding or duplicating it; a resolved thread needs no reassessment. No live-baseline delta or carried gate verdict is required for this input.");
     lines.push(renderRequiredReadLine(knownFindingsRead, worktreeRoot));
     lines.push("");
   }
