@@ -351,6 +351,20 @@ test("adding an export-list entry for an existing private function selects its s
   });
 });
 
+test("removing a blank line or comment after a local export list adds no expansion", async () => {
+  const src = "function f() {\n  return 1;\n}\nfunction g() {\n  return 2;\n}\nexport { f, g };\n";
+  for (const removed of ["", "// note"]) {
+    const diff = [
+      "diff --git a/src/x.mjs b/src/x.mjs", "--- a/src/x.mjs", "+++ b/src/x.mjs", "@@ -6,3 +6,2 @@",
+      " }", " export { f, g };", `-${removed}`, "",
+    ].join("\n");
+    await withRepo({ "src/x.mjs": src, "src/use.mjs": 'import { f } from "./x.mjs";\nf();\n' }, async (root) => {
+      const b = await buildAdjacentBundle({ changedFiles: ["src/x.mjs"], repoRoot: root, diffText: diff });
+      assert.deepEqual(b.expansion.files, [], JSON.stringify(removed));
+    });
+  }
+});
+
 test("removing a private writer or guard selects its remaining siblings and importers", async () => {
   const src = "function p() {\n  return 1;\n}\n";
   for (const removed of [["function writeState(x) {", "  return x;", "}"], ["const guardX = (x) => {", "  return x;", "};"]]) {

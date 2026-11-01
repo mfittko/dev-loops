@@ -393,8 +393,11 @@ function changedLinesByFile(diffText) {
   const mark = (line) => out.get(file)?.lines.add(line);
   let pending = null; // new-side line a still-open removal run would be credited to
   let run = []; // removed lines of the open run
+  let lastText = ""; // text of the latest new-side line
   const flush = (next) => {
-    if (pending !== null && !/^[-+\\]/.test(next) && !DECL_RE.test(run[0] ?? "")) mark(pending);
+    // A removal after an export-list line is credited to it only when the run removes an export list or a declaration.
+    const afterExportList = EXPORT_LIST_RE.test(lastText) && !run.some((t) => EXPORT_LIST_RE.test(t) || DECL_RE.test(t));
+    if (pending !== null && !/^[-+\\]/.test(next) && !DECL_RE.test(run[0] ?? "") && !afterExportList) mark(pending);
     if (!next.startsWith("-") && !next.startsWith("\\")) { pending = null; run = []; }
   };
   for (const line of String(diffText ?? "").split("\n")) {
@@ -408,9 +411,9 @@ function changedLinesByFile(diffText) {
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line);
     if (hunk) { inHunk = true; n = Number(hunk[1]); continue; }
     if (!inHunk || !file) continue;
-    if (line.startsWith("+")) { mark(n); n += 1; }
+    if (line.startsWith("+")) { mark(n); n += 1; lastText = line.slice(1); }
     else if (line.startsWith("-")) { pending = n - 1; run.push(line.slice(1)); out.get(file)?.removed.push(line.slice(1)); }
-    else if (line.startsWith(" ")) n += 1;
+    else if (line.startsWith(" ")) { n += 1; lastText = line.slice(1); }
   }
   return out;
 }
