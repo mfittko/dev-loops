@@ -265,16 +265,15 @@ The shipped defaults activate these angles. Additional angles are available as o
 | `yagni` — speculative features | `isp` — Interface Segregation (fat interfaces) |
 | `srp` — Single Responsibility | `dip` — Dependency Inversion (abstractions) |
 | `soc` — Separation of Concerns | `docs` — documentation links, command references, stale docs |
-| `deep` — structural quality / deslop audit | |
+| `deep` — structural quality / deslop audit | `packaging-runtime` — installers, bundles, copied assets, runtime imports |
 | `scope` — scope compliance (draft gate) | `link-check` — Markdown links, anchors, doc paths |
 | `coverage` — test coverage (draft gate) | `config-drift` — config/schema/docs/runtime disagreement |
 | `correctness` — acceptance criteria (draft gate) | `gate-evidence` — missing/stale gate-review PR evidence |
 | `ci-guard` — CI/workflow reproducibility (draft gate) | `no-op` — ineffective tool or command usage |
-| `contract-surface` — schema/runtime/docs plus CLI help/stdout/stderr drift (draft gate) | `input-validation` — CLI/API args, repo slugs, IDs, sentinels |
-| | `packaging-runtime` — installers, bundles, copied assets, runtime imports |
-| | `state-concurrency` — state files, locks, polling/process cleanup |
-| | `renderer-security` — HTML/attribute/URL escaping and user content |
-| | `determinism` — ordering, tie-breakers, strict stubs, env/time independence |
+| `contract-surface` — schema/runtime/docs plus CLI help/stdout/stderr drift (draft gate) | `renderer-security` — HTML/attribute/URL escaping and user content |
+| `input-validation` — CLI/API args, repo slugs, IDs, sentinels | |
+| `state-concurrency` — state files, locks, polling/process cleanup | |
+| `determinism` — ordering, tie-breakers, strict stubs, env/time independence | |
 
 ### Workflow defaults
 

@@ -4003,7 +4003,7 @@ describe("shipped defaults docs and deep angle wiring", () => {
       assert.match(roles["state-concurrency"].prompt, /state-file read\/modify\/write paths/i);
       assert.match(roles["state-concurrency"].prompt, /destructive write[^.]*precondition a concurrent change could have invalidated/i);
       assert.match(roles["state-concurrency"].prompt, /bound to the owning repo, PR or execution/i);
-      assert.match(roles["state-concurrency"].prompt, /Never accept elapsed time as proof that a process stopped/i);
+      assert.match(roles["state-concurrency"].prompt, /Flag code that treats elapsed time as proof that a process stopped/i);
       assert.match(roles["renderer-security"].prompt, /HTML text escaping, URL encoding, attribute encoding/i);
       assert.match(roles.determinism.prompt, /ordering, tie-breakers, localeCompare use/i);
     } finally {
