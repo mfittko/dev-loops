@@ -94,9 +94,9 @@ brief has to restate the boundary:
   report point is unreachable, so its report would never fire before the gate round, leaving
   `gate_verdict_posted` as its only reachable boundary. Two listed paths carry
   `gate_verdict_posted` as a recorded naming approximation
-  (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`), never as a second boundary that
-  unit can reach: a route that posts no verdict of its own while its unit still runs a gate round
-  (`final_approval`), and an `issue_intake` unit whose own draft PR re-targets it to the PR route, which the unit continues past.
+  (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`): `final_approval` runs a gate round
+  but posts no verdict of its own, and an `issue_intake` unit reports at its draft PR, then continues
+  on the PR route, where it reaches `gate_verdict_posted`.
 - `resume` names the authoritative re-resolution a resuming coordinator runs (`kind: loop_startup` plus
   whichever of the target's `issue`, `pr`, `branch` and `phase` values are set). It is **not** an
   exclusive selector, and no XOR or precedence rule applies to it: `deriveUnitBoundaries` copies

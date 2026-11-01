@@ -97,9 +97,9 @@ a unit that already owns a PR reaches `gate_verdict_posted` after posting its ow
 not wait for a report point your own route cannot reach. An envelope with no `unitBoundaries`
 field has no report point: a terminal, read-only (`review`, `ui_review`) or `wait_watch` route
 omits the field entirely rather than sending an empty list, and the validator refuses an empty
-`reportAfter`. Two entries are **recorded naming approximations**, never report points their unit
-can reach: `final_approval` runs a gate round but posts no verdict of its own, and an
-`issue_intake` unit whose draft PR re-targets it to the PR route, which it continues past. Both still carry `gate_verdict_posted`
+`reportAfter`. Two entries are **recorded naming approximations**: `final_approval` runs a gate round but posts
+no verdict of its own, and an `issue_intake` unit reports at its draft PR, then continues on the PR
+route, where it reaches `gate_verdict_posted`. Both still carry `gate_verdict_posted`
 (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`).
 
 Hand back only at the run-ending cases in Unit coordinator boundaries of the
