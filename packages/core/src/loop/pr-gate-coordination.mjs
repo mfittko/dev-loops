@@ -2277,8 +2277,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
         forbiddenActions,
         nextAction: capActions[0],
         reason: capPending
-          ? `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}) and CI at head ${currentHeadSha ?? "unknown"} is ${ciStatus}; wait for CI to settle, then re-run gate-coordination (zero unresolved threads and green CI yield \`run_pre_approval_gate\`).`
-          : `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}) with ${unresolvedThreadCount} unresolved thread(s); no new Copilot cycle is legal past the cap. Address the feedback and reply/resolve the threads, then re-run gate-coordination${ciStatus === "success" ? " (resolved threads and green CI yield `run_pre_approval_gate`)" : ` (CI at the head is ${ciStatus ?? "unknown"}; it must also be green before \`run_pre_approval_gate\`)`}.`,
+          ? `GATE-EXEC-ROUND-CAP-THREAD-ROUTE refuses a new Copilot cycle: the round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}) and CI at head ${currentHeadSha ?? "unknown"} is ${ciStatus}; wait for CI to settle, then re-run gate-coordination (zero unresolved threads and green CI yield \`run_pre_approval_gate\`).`
+          : `GATE-EXEC-ROUND-CAP-THREAD-ROUTE refuses a new Copilot cycle: the round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}) with ${unresolvedThreadCount} unresolved thread(s); no new Copilot cycle is legal past the cap. Address the feedback and reply/resolve the threads, then re-run gate-coordination${ciStatus === "success" ? " (resolved threads and green CI yield `run_pre_approval_gate`)" : ` (CI at the head is ${ciStatus ?? "unknown"}; it must also be green before \`run_pre_approval_gate\`)`}.`,
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,
