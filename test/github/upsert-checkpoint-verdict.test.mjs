@@ -5463,9 +5463,10 @@ test("upsert-checkpoint-verdict stale takeover refuses when the claim changes af
   await withTempDir(async (tempDir) => {
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     const claim = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-A", cwd: tempDir, now: "2020-01-01T00:00:00.000Z" });
+    let observedStatus = null;
     const detectStale = async (args) => {
       const observed = await detectStaleRunner(args);
-      assert.equal(observed.status, "stale_runner");
+      observedStatus = observed.status; // asserted below: the production catch swallows assertions raised here
       await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-A", cwd: tempDir }); // A heartbeats after the read
       return observed;
     };
@@ -5475,6 +5476,7 @@ test("upsert-checkpoint-verdict stale takeover refuses when the claim changes af
       detectStale,
       runChild: async () => { throw new Error("stop after the stale preamble"); },
     }).catch(() => {});
+    assert.equal(observedStatus, "stale_runner", "the stale preamble ran against a stale claim");
     const persisted = JSON.parse(await readFile(claim.filePath, "utf8"));
     assert.equal(persisted.activeRun.runId, "run-A", "A keeps the claim");
     assert.ok(!persisted.history.some((entry) => entry.type === "takeover"), "no takeover is recorded");
