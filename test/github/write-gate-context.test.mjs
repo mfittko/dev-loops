@@ -9117,6 +9117,41 @@ test("resolveCapRoundFixed seeds a chain from the record of a ledgerless base-on
   }
 });
 
+// A cyclic chain A to B to C to B has no valid end: C must not seed a base-only merge of C.
+test("clearingChainLastCandidates returns no end for a cyclic chain and seeds nothing from it", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const C = "8".repeat(40);
+    const M = "7".repeat(40);
+    const D = "9".repeat(40);
+    await seedClosedRounds(repoRoot, 64, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    await writeDeltaRecord(repoRoot, A, B);
+    await writeDeltaRecord(repoRoot, B, C);
+    await writeDeltaRecord(repoRoot, C, B);
+    await writeDeltaRecord(repoRoot, M, D);
+    const merge = async (args) => args.fromHead === C && args.head === M;
+    assert.deepEqual(await clearingChainLastCandidates({ tmpRoot: path.join(repoRoot, "tmp"), capHead: A, repo: "owner/repo", pr: 64, baseRefName: "main", repoRoot, baseOnlyMerge: merge }), []);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// A direct covering chain that reaches the head proves the round fixed without probing unrelated baselines.
+test("resolveCapRoundFixed does not discover merge-seeded starts when the direct chain already proves the round fixed", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    await seedClosedRounds(repoRoot, 65, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    await writeDeltaRecord(repoRoot, A, B);
+    await writeDeltaRecord(repoRoot, "7".repeat(40), "8".repeat(40));
+    const calls = [];
+    const baseOnlyMerge = async (args) => { calls.push(args); return false; };
+    assert.ok(await resolveCapRoundFixed({ repo: "owner/repo", pr: 65, gate: "draft_gate", headSha: B, baseRefName: "main" }, { repoRoot, baseOnlyMerge }));
+    assert.equal(calls.length, 0);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapRoundFixed reports unsealed_record for an unsealed or seal-mismatched record at the base-only merge start", async () => {
   const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
   try {

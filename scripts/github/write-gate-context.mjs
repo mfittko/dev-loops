@@ -2073,7 +2073,8 @@ function clearingChainEnd(tmpRoot, start) {
   let last;
   for (let record = start; record;) {
     const next = normalizeSha(record.candidateHead);
-    if (!next || seen.has(next)) break;
+    // A cycle or an invalid candidate has no valid end: the chain never reaches a head.
+    if (!next || seen.has(next)) return undefined;
     seen.add(next);
     last = next;
     record = clearingDeltaRecord(tmpRoot, next);
@@ -2139,7 +2140,6 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
   const clearing = (headSha) => clearingDeltaRecord(tmpRoot, headSha);
   const capHead = capRound.log.headSha;
-  const { starts, baseOnlyUnsealed } = await capRoundChainStarts({ tmpRoot, capHead, repo: options.repo, pr: options.pr, baseRefName: options.baseRefName, repoRoot, baseOnlyMerge });
   const head = normalizeSha(options.headSha);
   // The chain ends at the last clearing record's candidate B; a head that is a base-only merge since B (ADR 0218) is still covered by the chain.
   const reaches = async (start) => {
@@ -2163,6 +2163,11 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
     const expected = new Set(capRoundActRefs(capRound.log.findings, capHead).values());
     return [...expected].every((r) => refs.has(r));
   };
+  // The direct chain is tried first: merge-seeded starts (a directory scan and Git probes) are discovered only when it does not prove the round fixed.
+  const chainArgs = { tmpRoot, capHead, repo: options.repo, pr: options.pr, repoRoot, baseOnlyMerge };
+  const directStarts = (await capRoundChainStarts({ ...chainArgs, baseRefName: undefined })).starts;
+  for (const start of directStarts.filter(covers)) if (await reaches(start)) return capRound;
+  const { starts, baseOnlyUnsealed } = await capRoundChainStarts({ ...chainArgs, baseRefName: options.baseRefName });
   const covering = starts.filter(covers);
   for (const start of covering) if (await reaches(start)) return capRound;
   // ADR 0218: report the one condition that failed, so the refusal names its own remedy.
