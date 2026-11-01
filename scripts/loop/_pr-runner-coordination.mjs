@@ -880,7 +880,7 @@ export async function handoffRunnerOwnership({
   if (verifiedRunId === null) {
     return buildConflict({ ...target, error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED, activeRun: null,
       message: requestedRunId === null
-        ? "Runner coordination handoff requires a run id. Pass --run-id <the id used at claim>."
+        ? "Runner coordination handoff requires a run id (required by RUNNER-HANDOFF-TEARDOWN). Pass --run-id <the id used at claim>."
         : "Runner coordination handoff on native Codex requires the verified thread identity; an explicit --run-id is not accepted." });
   }
   if (envRunId !== null && requestedRunId !== null && requestedRunId !== envRunId) {
