@@ -623,7 +623,7 @@ export const UNIT_BOUNDARY = Object.freeze({
   GATE_VERDICT_POSTED: "gate_verdict_posted",
 });
 
-// Routes that own no phase to hand back from: `review` and `ui_review` run one
+// Routes that own no phase to report from: `review` and `ui_review` run one
 // read-only round and produce no lifecycle gate evidence, and `wait_watch`
 // produces no unit at all. This is an explicit, named list — the same three
 // read/observe strategies the routing contract's ownership map exempts
@@ -639,10 +639,11 @@ export const STATELESS_UNIT_STRATEGIES = Object.freeze([
 ]);
 
 /**
- * Derive the unit coordinator's hand-back boundaries from the route the envelope
+ * Derive the unit coordinator's report points from the route the envelope
  * already carries. Nothing here comes from a predecessor: `resume` names the
- * sanctioned re-resolution a successor runs against authoritative state.
- * Returns undefined for a route that has no unit to hand back (terminal
+ * sanctioned re-resolution the unit runs at a report point, or a replacement runs
+ * after a real stop, against authoritative state.
+ * Returns undefined for a route that has no unit to report from (terminal
  * reconciliation, read-only review or ui-review, wait) so the field never
  * contradicts the route's own stop rules.
  */
@@ -653,11 +654,11 @@ function deriveUnitBoundaries(strategy, target) {
   // already the PR kind's identity, so the bound-PR arm needs no spelling out; the
   // only linked-PR source the envelope can carry is an issue artifact's `linkedPr`.
   // The local kinds forward no linked PR: no shipped producer puts one on their
-  // artifacts, so every routed local unit stops at the draft PR it opens.
+  // artifacts, so every routed local unit reports at the draft PR it opens.
   const ownsPr = target.kind === DEV_LOOP_TARGET_KIND.PR
     || (Number.isInteger(target.linkedPr) && target.linkedPr > 0);
   if (!ownsPr) boundaries.push(UNIT_BOUNDARY.DRAFT_PR_OPENED);
-  // Every unit that runs a gate round hands back after its verdict is posted.
+  // Every unit that runs a gate round reports after its verdict is posted, then continues.
   boundaries.push(UNIT_BOUNDARY.GATE_VERDICT_POSTED);
   const text = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
   return {
@@ -670,7 +671,7 @@ function deriveUnitBoundaries(strategy, target) {
     // requires only a non-empty, well-typed set. A phase label identifies the artifact — the
     // no-number case when the target carries no issue, pr or branch; which startup mode
     // re-resolves it (`--plan-file`, `--spike`, the lightweight path), like the single identity
-    // flag a successor passes, is that successor's own route input, never something the
+    // flag a replacement passes, is that replacement's own route input, never something the
     // predecessor decides by writing this field.
     resume: {
       kind: "loop_startup",
@@ -678,7 +679,7 @@ function deriveUnitBoundaries(strategy, target) {
       pr: Number.isInteger(target.pr) && target.pr > 0 ? target.pr : null,
       branch: text(target.branch),
       // A phase-only target carries no issue, PR or branch: the phase label IS the identity
-      // of the artifact a successor re-resolves. A `local_phase` target may also keep an
+      // of the artifact a resuming unit re-resolves. A `local_phase` target may also keep an
       // issue (its label is then `issue-<n>`), so this field never implies the others are
       // unset.
       phase: text(target.phase),
@@ -916,7 +917,7 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     envelope.gateConfig = gateConfig;
   }
 
-  // Unit coordinator hand-back boundaries (issue 2532). Target+strategy derived,
+  // Unit coordinator report points (issue 2532, amended by issue 2955). Target+strategy derived,
   // so it is byte-stable across builds for the same route.
   const unitBoundaries = deriveUnitBoundaries(isReconciliation ? null : strategy, target);
   if (unitBoundaries) {
@@ -1307,7 +1308,7 @@ export function validateHandoffEnvelope(envelope) {
     }
   }
 
-  // ----- unitBoundaries (optional — coordinator hand-back boundaries, issue 2532) -----
+  // ----- unitBoundaries (optional — coordinator report points, issue 2532, amended by issue 2955) -----
   if (envelope.unitBoundaries !== undefined) {
     const ub = envelope.unitBoundaries;
     const boundaryNames = Object.values(UNIT_BOUNDARY);
@@ -1317,9 +1318,8 @@ export function validateHandoffEnvelope(envelope) {
       if (!Array.isArray(ub.reportAfter) || ub.reportAfter.length === 0
         || ub.reportAfter.some((b) => !boundaryNames.includes(b))
         || new Set(ub.reportAfter).size !== ub.reportAfter.length
-        // The contract makes the list ordered and first-match, so a reversed list
-        // would stop a unit at a boundary it cannot reach yet. Declaration order is
-        // the canonical order.
+        // The contract makes the list ordered, so a reversed list would report a point
+        // before the unit can reach it. Declaration order is the canonical order.
         || ub.reportAfter.some((b, i) => i > 0 && boundaryNames.indexOf(b) < boundaryNames.indexOf(ub.reportAfter[i - 1]))) {
         errors.push({ field: "unitBoundaries.reportAfter", reason: `must be a non-empty array of distinct boundaries in canonical order: ${boundaryNames.join(" then ")}`, got: ub.reportAfter });
       }
@@ -1364,7 +1364,7 @@ export function validateHandoffEnvelope(envelope) {
           }
           // The mirror arm of the partition `deriveUnitBoundaries` produces: a target that owns a
           // PR already has its draft, so it never opens one. A list carrying that boundary names
-          // a stop the unit can never reach and, being first-match, would end the unit before its
+          // a report point the unit can never reach, whose report would never fire before its
           // gate round — so `gate_verdict_posted` is its only reachable boundary.
           if (ownsPr && ub.reportAfter.includes(UNIT_BOUNDARY.DRAFT_PR_OPENED)) {
             errors.push({

@@ -1100,7 +1100,7 @@ test("cwd: worktreeCwd is canonicalized to the same single spelling", () => {
 });
 
 // ===========================================================================
-// 13. Unit coordinator hand-back boundaries (issue 2532)
+// 13. Unit coordinator report points (issue 2532, amended by issue 2955)
 // ===========================================================================
 
 test("unitBoundaries: a unit without a PR reports at the draft PR and after the gate verdict", () => {
@@ -1119,7 +1119,7 @@ test("unitBoundaries: a PR unit reports only after the gate verdict", () => {
   });
 });
 
-test("unitBoundaries: both gate verdict boundaries carry the same hand-back and resume target", () => {
+test("unitBoundaries: both gate verdict boundaries carry the same report point and resume target", () => {
   // Draft and pre-approval rounds are separate units; each resumes from the same
   // authoritative PR target, so neither reads the other's conversation.
   // "Verdict evidence" is the reviewed head plus the CI status, not only the counts: a producer
@@ -1260,7 +1260,7 @@ test("unitBoundaries: validator rejects a non-object field, a reversed order and
   // Rejected: the field is present but not an object at all.
   assert.equal(withBoundaries([]).ok, false);
   assert.equal(withBoundaries("x").ok, false);
-  // Rejected: the documented ordered/first-match list, reversed.
+  // Rejected: the documented ordered list, reversed.
   assert.equal(withBoundaries({
     reportAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED, UNIT_BOUNDARY.DRAFT_PR_OPENED],
     resume: { kind: "loop_startup", issue: 42, pr: null },
@@ -1363,7 +1363,7 @@ test("unitBoundaries: the validator cross-checks the boundary set against the ta
   assert.equal(omitted.ok, false);
   assert.deepEqual(omitted.errors.map((e) => e.field), ["unitBoundaries.reportAfter"]);
   // Rejected: the mirror direction. A target that already owns its PR never opens a draft, so
-  // this first-match list would stop the unit at a boundary it cannot reach — before its gate
+  // this list names a report point the unit can never reach — before its gate
   // round — while its `gate_verdict_posted` boundary stayed unreached.
   const unreachable = validateHandoffEnvelope({
     ...prOwned,
@@ -1944,7 +1944,7 @@ test("validate: target.local_phase with valid issue but no phase is ok", () => {
 });
 
 test("validate: target.local_phase with valid phase is ok", () => {
-  // The hand-back boundaries are derived FROM the target, so a swapped-target fixture keeps no
+  // The report points are derived FROM the target, so a swapped-target fixture keeps no
   // stale set here: this test pins the target-kind arm, not the boundary/target cross-check.
   const env = {
     ...validEnvelope(),

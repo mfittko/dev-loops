@@ -186,13 +186,14 @@ of the installed binary. No watchdog, harness patch or durable-sleep experiment 
 One coordinator may run a whole cycle. The boundary list is tooling-emitted: the handoff envelope
 carries `unitBoundaries` (`reportAfter` + `resume`, derived from the target and route; see
 [Workflow Handoff Contract](workflow-handoff-contract.md#envelope-schema)). `reportAfter` is an
-ordered, first-match list of **report points**. At the first report point the coordinator records
-status through existing evidence (PR comment or gate ledger), re-resolves authoritative state with
-`unitBoundaries.resume` and **continues**. A report point never forces a successor.
+ordered list of **report points**. At each listed report point it reaches, in order, the coordinator
+records status through existing evidence (PR comment or gate ledger), re-resolves authoritative
+state with `unitBoundaries.resume` and **continues**. A report point never forces a successor.
 
-The coordinator hands back through `SubagentHandback` only at `final_approval_ready`, a stop that
-needs a decision, a lockout, genuine recovery, an unavailable actor, a runtime constraint, or
-explicit operator direction. When the orchestrator dispatches a replacement for one of those
+The following is the one canonical list of run-ending cases (the "run-ending cases"). The coordinator hands
+back only at `final_approval_ready`, a stop that needs a decision, the route's own terminal
+completion, a changed route, a lockout, genuine recovery, an unavailable actor, a runtime
+constraint, or explicit operator direction. When the orchestrator dispatches a replacement for one of those
 reasons, it emits the work order with
 `scripts/loop/emit-coordinator-work-order.mjs --input <startup-output path> --harness <claude|pi|codex> --entry <queue|direct>`
 and dispatches the printed `dispatchPayload` unchanged. The input is the startup-output path a
@@ -225,7 +226,7 @@ The rule binds the coordinator on every harness, so it stays outside the section
 
 - A pause ends the turn with plain text and never calls `SubagentHandback`. The harness "report has not been delivered" prompt after a pause is answered in plain text too.
 - An answer to a question typed into the dev-loop coordinator's thread, and a duplicate child wake, are pauses when a child is in flight and the run state did not change (no dispatch, push, gate result or new stop). With no child in flight, the dev-loop coordinator answers and continues its runnable next step in the same turn.
-- The one `SubagentHandback` call of a run carries its final report: `final_approval_ready`, a stop that needs a caller decision, or the route's own terminal completion (for example a headless standalone `review` that has posted its review).
+- The one `SubagentHandback` call of a run carries its final report at a run-ending case of the Unit coordinator boundaries section (`final_approval_ready`, a stop that needs a caller decision, or the route's own terminal completion, for example a headless standalone `review` that has posted its review).
 - The dev-loop coordinator never calls `SubagentHandback` while a child is in flight. Every report with a child in flight is a plain-text pause.
 - A turn end with no child in flight is never a pause. The dev-loop coordinator never ends silently while its next step is runnable.
 - After a refused `SubagentHandback`, the dev-loop coordinator makes no further call in that run and ends the turn with the full report as plain text.

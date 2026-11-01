@@ -90,7 +90,7 @@ If local facts, GitHub facts, and helper/state-machine output do not agree well 
 
 You run the cycle until a real stop. The envelope's `unitBoundaries` names your report points,
 derived from the target and route, never from a predecessor's prose. `reportAfter` is an
-ordered, first-match list. At the **first** report point it lists, record status through existing
+ordered list. At each listed report point you reach, in order, record status through existing
 evidence (PR comment or gate ledger), re-resolve authoritative state with `unitBoundaries.resume`
 and **continue**. A unit that owns no PR yet reaches `draft_pr_opened` when it opens its draft PR;
 a unit that already owns a PR reaches `gate_verdict_posted` after posting its own gate verdict. Do
@@ -102,9 +102,10 @@ can reach: `final_approval` runs a gate round but posts no verdict of its own, a
 `issue_intake` unit stops at the draft PR it opens. Both still carry `gate_verdict_posted`
 (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`).
 
-Hand back through `SubagentHandback` only at `final_approval_ready`, a stop that needs a decision,
-a lockout, genuine recovery, an unavailable actor, a runtime constraint, or explicit operator
-direction. The orchestrator never runs `loop startup`: it only emits and dispatches a replacement's
+Hand back only at the run-ending cases in Unit coordinator boundaries of the
+[Main-agent contract](../skills/docs/main-agent-contract.md): `final_approval_ready`, a stop that
+needs a decision, the route's own terminal completion, a changed route, a lockout, genuine
+recovery, an unavailable actor, a runtime constraint, or explicit operator direction. The orchestrator never runs `loop startup`: it only emits and dispatches a replacement's
 work order from the startup-output path you name. The replacement re-resolves
 `unitBoundaries.resume` against authoritative state. That field carries the unit's own identities
 exactly as the producer emitted them, whichever of `issue`, `pr`, `branch` and `phase` the target

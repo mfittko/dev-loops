@@ -15,10 +15,10 @@ ADR 0181 forced a fresh unit coordinator per phase and capped peak input at 150K
 - `unitBoundaries.handBackAfter` is renamed `reportAfter`, with the same derivation, ordering, validation and `resume`.
 - At a report point the coordinator records status through existing evidence, re-resolves authoritative state and continues. It no longer ends the run.
 - 150K peak input is an advisory retrospective diagnostic, not a stop. The rule is `COORDINATOR-CONTINUITY-SOFT-CAP` in the main-agent contract.
-- The fresh-dispatch cases stay: a changed route, a stop that needs a caller decision, `final_approval_ready` and terminal completion still end the run and return the final report.
+- The fresh-dispatch cases stay and are the run-ending cases in Unit coordinator boundaries of the main-agent contract, the one canonical list: a changed route, a stop that needs a caller decision, `final_approval_ready`, terminal completion, a lockout, genuine recovery, an unavailable actor, a runtime constraint and explicit operator direction still end the run and return the final report.
 
 Rejected: keeping the hard cap and only raising its value, because any fixed value repeats the same forced restart.
 
 ## Consequences
 
-Coordinators carry context across phases and skip repeated startup reads. Context growth is observed through the advisory diagnostic in retrospectives instead of enforced. The field `handBackAfter` no longer exists. Peak-context compliance remains measured on real runs, and a missing native measurement is reported as unavailable rather than zero.
+Coordinators carry context across phases and skip repeated startup reads. Context growth is observed through the advisory diagnostic in retrospectives instead of enforced. The field `handBackAfter` no longer exists. Peak context remains measured on real runs, and a missing native measurement is reported as unavailable rather than zero.

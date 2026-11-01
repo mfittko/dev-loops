@@ -84,14 +84,14 @@ brief has to restate the boundary:
 - `reportAfter` lists the deterministic report points for this route, in order, from the closed
   set `draft_pr_opened` (a unit that owns no PR yet, so opening the draft PR is its report point) and
   `gate_verdict_posted` (a unit that posts a gate verdict of its own reports after it).
-  **The list is ordered and first-match**: a unit that carries both reports at the draft PR it opens and continues,
-  and the verdict boundary follows once the unit runs its gate round already owning that PR.
-  The validator refuses a list that reverses that order, so the first match is always the draft PR.
+  **The list is ordered and each point is reported when reached**: a unit that carries both reports at the draft PR it opens and continues,
+  and reports at the verdict boundary once the unit runs its gate round already owning that PR.
+  The validator refuses a list that reverses that order, so the draft PR is always reported first.
   It also refuses a set that contradicts the envelope's own target (`deriveTarget`), in both
   directions: a target that owns no PR must carry `draft_pr_opened` first, because opening that
   draft PR is the first boundary at which the unit reports, and a target that already owns its PR must
-  **not** carry `draft_pr_opened` at all, because such a unit never opens a draft PR — as the
-  first match it would stop the unit at a boundary it cannot reach, before its gate round, leaving
+  **not** carry `draft_pr_opened` at all, because such a unit never opens a draft PR — that
+  report point is unreachable, so its report would never fire before the gate round, leaving
   `gate_verdict_posted` as its only reachable boundary. Two listed paths carry
   `gate_verdict_posted` as a recorded naming approximation
   (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`), never as a second boundary that

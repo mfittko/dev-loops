@@ -3,7 +3,7 @@
 // authoritative state instead of inheriting a predecessor's brief, and the hand-back packet
 // stays compact. Both harness mirrors must keep carrying the rule (#1086).
 import { buildCoordinatorWorkOrder } from "@dev-loops/core/loop/coordinator-work-order";
-import { buildDevLoopHandoffEnvelope, STATELESS_UNIT_STRATEGIES } from "@dev-loops/core/loop/handoff-envelope";
+import { buildDevLoopHandoffEnvelope, STATELESS_UNIT_STRATEGIES, validateHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
 import {
   INTERNAL_DEV_LOOP_STRATEGY,
   DEV_LOOP_TARGET_KIND,
@@ -122,12 +122,12 @@ test("hand-back contract carries no harness-specific drift (#1086)", async () =>
   // `.claude/skills/docs` copies: a claim kept only inside a `<!-- pi-only -->` region would
   // otherwise disappear from the Claude baseline while every test stayed green.
   const mirrorClaims = {
-    "agents/dev-loop.agent.md": ["## Unit coordinator report points", "COORDINATOR-CONTINUITY-SOFT-CAP", "ordered, first-match"],
-    ".claude/agents/dev-loop.md": ["## Unit coordinator report points", "COORDINATOR-CONTINUITY-SOFT-CAP", "ordered, first-match"],
+    "agents/dev-loop.agent.md": ["## Unit coordinator report points", "COORDINATOR-CONTINUITY-SOFT-CAP", "ordered list"],
+    ".claude/agents/dev-loop.md": ["## Unit coordinator report points", "COORDINATOR-CONTINUITY-SOFT-CAP", "ordered list"],
     "skills/docs/main-agent-contract.md": ["## Unit coordinator boundaries", "COORDINATOR-CONTINUITY-SOFT-CAP", "at most 10% empty wakeups, measured against root turns rather than wait duration"],
     ".claude/skills/docs/main-agent-contract.md": ["## Unit coordinator boundaries", "COORDINATOR-CONTINUITY-SOFT-CAP", "at most 10% empty wakeups, measured against root turns rather than wait duration"],
-    "skills/docs/workflow-handoff-contract.md": ["## Unit coordinator boundaries", "reportAfter", "ordered and first-match"],
-    ".claude/skills/docs/workflow-handoff-contract.md": ["## Unit coordinator boundaries", "reportAfter", "ordered and first-match"],
+    "skills/docs/workflow-handoff-contract.md": ["## Unit coordinator boundaries", "reportAfter", "each point is reported when reached"],
+    ".claude/skills/docs/workflow-handoff-contract.md": ["## Unit coordinator boundaries", "reportAfter", "each point is reported when reached"],
   };
   for (const [doc, claims] of Object.entries(mirrorClaims)) {
     const normalized = squeeze((await readRepo(doc)).replace(/\r\n/g, "\n"));
@@ -186,4 +186,89 @@ test("2955: every harness mirror carries the soft-cap rule, unknown-never-zero r
   for (const doc of ["agents/dev-loop.agent.md", ".claude/agents/dev-loop.md"]) {
     assert.match(squeeze(await readRepo(doc)), /Crossing it never stops or relaunches you/);
   }
+});
+
+// Review round fixes (issue 2955): the hard-cap guard rejects every spelling, and one canonical
+// run-ending list is stated once and matched by the other surfaces.
+const HARD_CAP = /150K(-token)? cap/i;
+
+test("2955: the hard-cap guard rejects every cap spelling and accepts the advisory wording", () => {
+  for (const rejected of ["150K-token cap", "hard 150K cap", "150K cap", "150k-Token Cap"]) {
+    assert.match(rejected, HARD_CAP, rejected);
+  }
+  for (const accepted of [
+    "150K peak input is an advisory retrospective diagnostic",
+    "Crossing 150K never stops, relaunches or blocks a coordinator",
+  ]) {
+    assert.doesNotMatch(accepted, HARD_CAP, accepted);
+  }
+});
+
+test("2955: no mirrored contract doc mandates a hard 150K cap", async () => {
+  for (const doc of MIRRORED_DOCS) {
+    assert.doesNotMatch(squeeze(await readRepo(doc)), HARD_CAP, doc);
+  }
+});
+
+const RUN_ENDING_CASES = [
+  "final_approval_ready", "decision", "terminal completion", "changed route", "lockout",
+  "genuine recovery", "unavailable actor", "runtime constraint", "operator direction",
+];
+const between = (text, from, to) => {
+  const start = text.indexOf(from);
+  assert.ok(start >= 0, `missing ${from}`);
+  const end = text.indexOf(to, start);
+  assert.ok(end > start, `missing ${to}`);
+  return text.slice(start, end);
+};
+
+test("2955: one canonical run-ending list in the shared prose, no harness-specific tool name", async () => {
+  for (const doc of ["skills/docs/main-agent-contract.md", ".claude/skills/docs/main-agent-contract.md"]) {
+    const text = squeeze(await readRepo(doc));
+    const list = between(text, "the one canonical list of run-ending cases", "When the orchestrator dispatches");
+    for (const item of RUN_ENDING_CASES) assert.ok(list.includes(item), `${doc} run-ending list: ${item}`);
+    assert.ok(!list.includes("SubagentHandback"), `${doc} shared paragraph must not name SubagentHandback`);
+    // The Claude Code one-report rule cites the list rather than restating a third one.
+    assert.match(text, /final report at a run-ending case of the Unit coordinator boundaries section/);
+  }
+  for (const doc of ["agents/dev-loop.agent.md", ".claude/agents/dev-loop.md"]) {
+    const text = squeeze(await readRepo(doc));
+    const list = between(text, "Hand back only at the run-ending cases", "The orchestrator never runs");
+    for (const item of RUN_ENDING_CASES) assert.ok(list.includes(item), `${doc} run-ending list: ${item}`);
+    assert.ok(!list.includes("SubagentHandback"), `${doc} shared paragraph must not name SubagentHandback`);
+  }
+  const adr = squeeze(await readRepo("docs/decisions/0220-coordinator-report-points-replace-per-phase-handback.md"));
+  const adrList = between(adr, "The fresh-dispatch cases stay", "Rejected:");
+  for (const item of RUN_ENDING_CASES) assert.ok(adrList.includes(item), `ADR 0220 run-ending list: ${item}`);
+});
+
+// AC2 fixtures: a reported peak above 150K and absent telemetry. No runtime code reads peak
+// context, so the emitted boundaries and work order must be identical with or without it.
+test("2955: a reported peak above 150K stops, relaunches and blocks nothing", () => {
+  const target = bundle({ kind: DEV_LOOP_TARGET_KIND.ISSUE, id: 42, linkedPr: 7 });
+  const baseline = envelopeFor(target);
+  const heavy = envelopeFor(
+    { bundle: { ...target.bundle, telemetry: { peakContextTokens: 200000 } } },
+    { peakContextTokens: 200000 },
+  );
+  assert.deepEqual(heavy.unitBoundaries, baseline.unitBoundaries);
+  assert.equal(validateHandoffEnvelope(heavy).ok, true);
+  const order = buildCoordinatorWorkOrder({ envelope: heavy }).workOrder;
+  assert.deepEqual(order.handoff.unitBoundaries, baseline.unitBoundaries);
+  assert.ok(!/stop|relaunch|block/i.test(JSON.stringify(heavy.unitBoundaries)));
+});
+
+test("2955: null peak telemetry emits no stop and no zero measurement", () => {
+  const target = bundle({ kind: DEV_LOOP_TARGET_KIND.ISSUE, id: 42, linkedPr: 7 });
+  const baseline = envelopeFor(target);
+  const unknown = envelopeFor(
+    { bundle: { ...target.bundle, telemetry: { peakContextTokens: null } } },
+    { peakContextTokens: null },
+  );
+  assert.deepEqual(unknown.unitBoundaries, baseline.unitBoundaries);
+  assert.equal(validateHandoffEnvelope(unknown).ok, true);
+  const order = buildCoordinatorWorkOrder({ envelope: unknown }).workOrder;
+  assert.deepEqual(order.handoff.unitBoundaries, baseline.unitBoundaries);
+  // Unknown is never reported as zero: no peak figure appears at all.
+  assert.ok(!/peak/i.test(JSON.stringify(order)), "unknown telemetry must not surface a peak value, zero or otherwise");
 });
