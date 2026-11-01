@@ -20,7 +20,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { capRoundCovers, clearingChainLastCandidates, resolveCapRound, resolveCapRoundFixed } from "../github/write-gate-context.mjs";
-import { gateDeltaRecordPath, readGateDeltaRecord, writeSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
+import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord, readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { defaultFetchOrigin } from "./standing-authorization.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
@@ -32,7 +32,7 @@ logic file, when no cap-round chain exists, or when the proof does not reach the
 Output (stdout, JSON): { "ok": true, "action": "chain_extended" | "already_proven", "chainEnd" (null for already_proven), "candidateHead", "files" }
 Refusal (stderr, JSON, exit 1): { "ok": false, "refused": true, "reason": "<code>", "detail": "..." }
 Reasons: pr_state_unreadable, base_fetch_failed, head_mismatch, no_cap_round_chain, baseline_orphaned,
-logic_commit_in_range, record_exists, proof_not_reached; a thrown gh or git failure is "writer_error".
+logic_commit_in_range, record_exists, record_not_clearing, proof_not_reached; a thrown gh or git failure is "writer_error".
 ${JQ_OUTPUT_USAGE}`.trim();
 const parseError = buildParseError(USAGE);
 
@@ -83,6 +83,13 @@ export async function extendCapRoundChain(options, {
   const head = git(cwd, ["rev-parse", "HEAD"]).toLowerCase();
   if (head !== prHead) return refuse("head_mismatch", `the worktree HEAD ${head.slice(0, 7)} is not the PR head ${prHead.slice(0, 7)}; check out and push the PR head, then rerun`);
 
+  // The proof, the chain-end discovery and the range all read origin/<base>: fetch it fresh (bounded, prompt-free) first or refuse.
+  try {
+    fetchBaseBranch(baseRefName, { repoRoot });
+  } catch {
+    return refuse("base_fetch_failed", `git fetch origin ${baseRefName} failed; cannot trust the local origin/${baseRefName} ref. Run \`git fetch origin ${baseRefName}\` and rerun`);
+  }
+
   const proofArgs = { repo, pr, headSha: head, baseRefName };
   const reached = await resolveProof(proofArgs, { repoRoot });
   if (reached) return { ok: true, action: "already_proven", chainEnd: null, candidateHead: head, files: [] };
@@ -96,15 +103,12 @@ export async function extendCapRoundChain(options, {
   const chainEnd = ancestorEnds.find((end) => ancestorEnds.every((other) => reaches(other, end)));
   if (!chainEnd) {
     // A rebase leaves the cap-round head outside the head's history: no extension can bind, so name the replacement-PR restart.
-    if (cap && !isAncestor(cap.log.headSha)) return refuse("baseline_orphaned", CAP_ROUND_REFUSAL.baseline_orphaned);
+    // Same probe as resolveCapRoundFixed: only merge-base exit 1 with both commits present proves it; the head itself or an unfetched commit (exit 128) does not.
+    const capHead = cap?.log?.headSha;
+    const present = (sha) => { try { git(repoRoot, ["cat-file", "-e", `${sha}^{commit}`]); return true; } catch { return false; } };
+    const proveOrphan = () => { try { git(repoRoot, ["merge-base", "--is-ancestor", capHead, head]); return false; } catch (error) { return error?.status === 1 && present(capHead) && present(head); } };
+    if (capHead && capHead.toLowerCase() !== head && proveOrphan()) return refuse("baseline_orphaned", CAP_ROUND_REFUSAL.baseline_orphaned);
     return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}. Complete the cap round's fixer pass and run check-pre-push-delta.mjs --result for the cap-round baseline, or run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
-  }
-
-  // The range excludes origin/<base> and the merge check reads it: fetch it fresh (bounded, prompt-free) or refuse.
-  try {
-    fetchBaseBranch(baseRefName, { repoRoot });
-  } catch {
-    return refuse("base_fetch_failed", `git fetch origin ${baseRefName} failed; cannot trust the local origin/${baseRefName} ref. Run \`git fetch origin ${baseRefName}\` and rerun`);
   }
 
   // Only commits in E..HEAD that the base does not hold count: a base-only merge after E brings base commits, not PR logic.
@@ -120,7 +124,12 @@ export async function extendCapRoundChain(options, {
     return refuse("logic_commit_in_range", `GATE-EXEC-ROUND-CAP-CHAIN-EXTEND: commits after the chain end ${chainEnd.slice(0, 7)} change logic files: ${logic.join(", ")}. Run the fixer plan and the pre-push delta route for them, since no draft_gate round runs past the cap: ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} names the next action. If the baseline is orphaned, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`);
   }
   const recordExists = () => refuse("record_exists", `a delta record for ${chainEnd.slice(0, 7)} already exists and is never overwritten; run ${CLI} loop gate-coordination --repo ${repo} --pr ${pr} for the failed proof condition`);
-  if (readGateDeltaRecord(tmpRoot, chainEnd) !== null) return recordExists();
+  if (readGateDeltaRecord(tmpRoot, chainEnd) !== null) {
+    let clearing = false;
+    try { clearing = DELTA_CLEARING_NEXT_STEPS.includes(readSealedGateDeltaRecord(tmpRoot, chainEnd)?.nextStep); } catch { /* unreadable: not a clearing record */ }
+    if (clearing) return recordExists();
+    return refuse("record_not_clearing", `the delta record for ${chainEnd.slice(0, 7)} exists but is not a sealed clearing record and is never overwritten; complete its open items, then rerun check-pre-push-delta.mjs --result for baseline ${chainEnd}`);
+  }
 
   const record = { reviewBaselineHead: chainEnd, candidateHead: head, outcome: "locally_clear", nextStep: "push_to_gate", items: [], extension: "docs_tests_only" };
   // Exclusive create: a record another writer lands between the read above and this write is never replaced.

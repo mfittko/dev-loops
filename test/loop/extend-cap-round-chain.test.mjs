@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import { test } from "bun:test";
 
 import { resolveCapRoundFixed } from "../../scripts/github/write-gate-context.mjs";
 import { readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
-import { extendCapRoundChain, parseExtendCapRoundChainCliArgs } from "../../scripts/loop/extend-cap-round-chain.mjs";
+import { extendCapRoundChain, parseExtendCapRoundChainCliArgs, runCli } from "../../scripts/loop/extend-cap-round-chain.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 
 const REPO = "owner/repo";
@@ -170,6 +170,38 @@ test("a rebase that orphans the cap-round head refuses with the replacement-PR r
   }
 });
 
+test("the cap-round head equal to the head, or an unfetched cap-round head, refuses no_cap_round_chain, never baseline_orphaned", async () => {
+  const { root, A } = await capFixture();
+  try {
+    runGitFixture(root, ["checkout", "-q", A]);
+    assert.equal((await extend(root, A)).reason, "no_cap_round_chain");
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    const gone = "a".repeat(40);
+    const dir = path.join(root, "tmp", "gate-findings", "owner-repo", `pr-${PR}`);
+    await writeFile(path.join(dir, `draft_gate-${gone}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: gone, verdict: "findings_present", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
+    assert.equal((await extend(root, D)).reason, "no_cap_round_chain");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("runCli maps a refusal and a thrown failure to a stderr JSON with exit 1", async () => {
+  const { root } = await capFixture();
+  try {
+    const sink = () => { const chunks = []; return { chunks, write: (s) => { chunks.push(s); } }; };
+    const stdout = sink();
+    const stderr = sink();
+    const code = await runCli(["--repo", REPO, "--pr", String(PR), "--worktree", root], { stdout, stderr, fetchPr: async () => { throw new Error("gh down"); } });
+    assert.equal(code, 1);
+    assert.deepEqual(JSON.parse(stderr.chunks.join("")), { ok: false, refused: true, reason: "writer_error", detail: "gh down" });
+    const refusedErr = sink();
+    assert.equal(await runCli(["--repo", REPO, "--pr", String(PR), "--worktree", root], { stdout, stderr: refusedErr, fetchPr: async () => ({}) }), 1);
+    assert.equal(JSON.parse(refusedErr.chunks.join("")).reason, "pr_state_unreadable");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 const gitSha = (root) => String(runGitFixture(root, ["rev-parse", "HEAD"])).trim();
 
 test("a non-base-only merge whose resolution changes logic refuses and writes no record", async () => {
@@ -211,8 +243,10 @@ test("a failing base fetch refuses base_fetch_failed naming git fetch origin and
   const { root, B } = await capFixture();
   try {
     const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
-    const refused = await extend(root, D, { fetchBaseBranch: () => { throw new Error("offline"); } });
+    let proofCalls = 0;
+    const refused = await extend(root, D, { fetchBaseBranch: () => { throw new Error("offline"); }, resolveProof: async () => { proofCalls++; return null; } });
     assert.equal(refused.reason, "base_fetch_failed");
+    assert.equal(proofCalls, 0, "the proof reads origin/<base>, so it never runs before the fetch");
     assert.match(refused.detail, /git fetch origin main/);
     assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), B), null);
   } finally {
@@ -231,15 +265,20 @@ test("pr_state_unreadable names the gh auth remedy", async () => {
   }
 });
 
-test("an existing record at the chain end refuses record_exists and keeps its bytes", async () => {
+test("a non-clearing or unsealed record at the chain end refuses record_not_clearing and keeps its bytes (a clearing one moves the chain end; the race test covers record_exists)", async () => {
   const { root, B } = await capFixture();
   try {
     const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
     const tmp = path.join(root, "tmp");
     writeSealedGateDeltaRecord(tmp, B, { reviewBaselineHead: B, candidateHead: "f".repeat(40), outcome: "needs_fix", nextStep: "fix", items: [] });
     const before = readSealedGateDeltaRecord(tmp, B);
-    assert.equal((await extend(root, D)).reason, "record_exists");
+    const refused = await extend(root, D);
+    assert.equal(refused.reason, "record_not_clearing");
+    assert.doesNotMatch(refused.detail, /extend-cap-round-chain|gate-coordination/);
+    assert.match(refused.detail, /check-pre-push-delta\.mjs --result/);
     assert.deepEqual(readSealedGateDeltaRecord(tmp, B), before);
+    rmSync(path.join(tmp, "gate-delta", `${B}.json.seal`));
+    assert.equal((await extend(root, D)).reason, "record_not_clearing");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

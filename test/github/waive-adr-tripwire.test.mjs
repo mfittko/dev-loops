@@ -223,6 +223,12 @@ test("cap-round-fixed proof with a stale ledger digest refuses spec_digest_misma
   await assertRefusal({ ...NO_VERDICT, resolveCapRoundFixed: async () => ({ log: {} }) }, "spec_digest_unrecorded");
 });
 
+test("a clean verdict with a stale digest never falls through to the cap-round proof", async () => {
+  let proofCalls = 0;
+  await assertRefusal({ readRecordedSpecDigest: async () => "sha256:stale", resolveCapRoundFixed: async () => { proofCalls++; return capProof()(); } }, "spec_digest_mismatch");
+  assert.equal(proofCalls, 0);
+});
+
 test("no verdict and no proof refuses naming the runnable chain-extension remedy", async () => {
   const result = await assertRefusal({ ...NO_VERDICT, resolveCapRoundFixed: async () => null }, "no_clean_draft_gate");
   assert.match(result.detail, /node <dev-loops-package-root>\/cli\/index\.mjs gate extend-cap-round-chain --repo o\/n --pr 9/);
