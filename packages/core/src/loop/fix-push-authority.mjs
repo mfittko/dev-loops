@@ -27,8 +27,15 @@ export function clearSequenceMarker(tmpRoot, baselineHead) {
   rmSync(sequenceMarkerPath(tmpRoot, baselineHead), { force: true });
 }
 
-/** The recovery pointer the refusal reason carries: the sanctioned close command proves abandonment and records it; a live sequence stays uncloseable. */
-export const recoveryHint = (markerPath) => markerPath ? ` To close an abandoned sequence (the PR head moved, or no fixer ever pulled the work order), run dev-loops-run scripts/loop/close-gate-sequence.mjs --head <baseline sha> --repo <owner/name> --pr <number>; it refuses a live sequence (marker ${markerPath}). A live sequence ends with a clearing delta record (emit-fixer-work-order.mjs --phase full).` : "";
+/**
+ * The recovery pointer the refusal reason carries (ADR 0218): the sanctioned no-commit close of the sequence. A `commit_only` fixer that handed back with no commit closes with the authenticated
+ * `check-pre-push-delta.mjs` input-only run (`--fixer-plan` and `--site-coverage`, outcome `no_commit`; the marker records no route, so the hint names both the `--act-list` and the `--threads-file` form), which removes the marker. A fix commit keeps the marker and takes the normal delta review.
+ * A marker that names no branch (unreadable or malformed) cannot be authenticated by that close, which requires the matching branch marker, so its hint names no close command and no deletion and points to the PRE-PUSH-DELTA-PUSH-AUTHORITY rule, which owns that recovery.
+ */
+const noCommitHint = (baselineHead, markerPath, branch) => !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(baselineHead) ? ` The sequence marker is ${markerPath}. The marker names a baseline head that is not a full lowercase hex SHA, so no close command is rendered; the PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery.` : !branch ? ` The sequence marker is ${markerPath}. The marker is unreadable or names no branch, so the no-commit close cannot authenticate it; the PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery.` : ` The sequence marker is ${markerPath}. To close a commit_only sequence whose fixer made no commit, run \`check-pre-push-delta.mjs (--act-list <act-list> --findings-log <findings-log> | --threads-file <threads-file> --repo <owner/name> --pr <n>) --baseline ${baselineHead} --spec-identity <id> --fixer-plan <fixer-plan> --site-coverage <handback> --worktree <dir>\` (outcome no_commit); a fix commit takes the delta review and the full-phase push.`;
+
+/** Adds the close-sequence recovery for an abandoned sequence (the PR head moved, or no fixer ever pulled the work order); a live sequence stays uncloseable (#2999). */
+export const recoveryHint = (baselineHead, markerPath, branch) => noCommitHint(baselineHead, markerPath, branch) + (markerPath ? ` To close an abandoned sequence instead, run dev-loops-run scripts/loop/close-gate-sequence.mjs --head <baseline sha> --repo <owner/name> --pr <number>; it refuses a live sequence.` : "");
 
 /** Approximates git check-ref-format for a branch name; an invalid name reads as no branch (fail closed). */
 const isValidBranchName = (b) =>

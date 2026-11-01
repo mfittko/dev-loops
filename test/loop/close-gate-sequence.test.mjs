@@ -189,7 +189,7 @@ test("unproven abandonment is refused: no execution, no branch, no PR, wrong bra
 });
 
 test("recoveryHint names the close command", () => {
-  assert.match(recoveryHint("/x/gate-delta/h.sequence"), /close-gate-sequence\.mjs/);
+  assert.match(recoveryHint("a".repeat(40), "/x/gate-delta/h.sequence", "feat"), /close-gate-sequence\.mjs/);
 });
 
 test("pulled and handed back with the head unchanged stays sequence_live", async () => {

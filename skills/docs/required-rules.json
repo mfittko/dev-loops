@@ -98,6 +98,10 @@
       "enforcementNote": "Whether a turn end is a pause is coordinator judgment; no hook classifies it."
     },
     {
+      "id": "COORDINATOR-SINGLE-CHILD-JOIN",
+      "enforcement": "doc"
+    },
+    {
       "id": "COORDINATOR-VERIFY-BOUNDARY",
       "enforcement": "runtime"
     },
