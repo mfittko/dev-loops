@@ -2633,7 +2633,7 @@ export async function assertGateValidationArtifact({ repo, pr, gate, headSha, re
   );
 }
 
-export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget } = {}) {
+export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner } = {}) {
   const gh = { env, ghCommand, repoRoot, runChild };
   // Optional --spec-authority stamps the RETURNED result (this script's
   // durable verdict record — it posts no file of its own) with the pinned
@@ -2664,7 +2664,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const envRunId = resolveRunId(env) ?? "";
   if (envRunId) {
     try {
-      const staleCheck = await detectStaleRunner({ repo: options.repo, pr: options.pr, cwd: repoRoot });
+      const staleCheck = await detectStale({ repo: options.repo, pr: options.pr, cwd: repoRoot });
       if (staleCheck.status === "stale_runner") {
         // Pin the generation the stale read observed so a heartbeat before the locked write is not displaced.
         const observed = staleCheck.activeRun;
