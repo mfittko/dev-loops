@@ -89,8 +89,8 @@ if (isDirectCliRun(import.meta.url)) {
     const { values } = parseArgs({ options: { head: { type: "string" }, repo: { type: "string" }, pr: { type: "string" }, help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS }, strict: true });
     if (values.help) { process.stdout.write(`${USAGE}\n`); process.exit(0); }
     if (!/^[0-9a-f]{40,64}$/u.test(values.head ?? "") || (values.pr !== undefined && !/^[1-9][0-9]*$/u.test(values.pr))) throw new Error(USAGE);
-    if (values.repo !== undefined) parseRepoSlug(values.repo, { errorMessage: USAGE });
-    const result = await closeGateSequence({ tmpRoot: resolveGateArtifactTmpRoot(process.cwd()), head: values.head, repo: values.repo, pr: values.pr && Number(values.pr) });
+    const slug = values.repo === undefined ? undefined : parseRepoSlug(values.repo, { errorMessage: USAGE });
+    const result = await closeGateSequence({ tmpRoot: resolveGateArtifactTmpRoot(process.cwd()), head: values.head, repo: slug && `${slug.owner}/${slug.name}`, pr: values.pr && Number(values.pr) });
     const emitted = emitResult(result, { jq: values.jq, silent: values.silent });
     process.exitCode = emitted === 2 ? 2 : result.ok ? 0 : 1;
   } catch (error) {

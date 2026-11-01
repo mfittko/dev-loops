@@ -44,7 +44,8 @@ test("an old marker without an execution still closes on a moved head", async ()
 test("a live sequence (head unchanged, fixer dispatched recently) is refused and keeps its marker", async () => {
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: execution(tmpRoot) });
-    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) }));
+    const mtime = statSync(sequenceMarkerPath(tmpRoot, HEAD)).mtimeMs;
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: () => mtime + 60_000 }));
     assert.equal(result.refusal, "sequence_live");
     assert.ok(result.remedy);
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
@@ -255,6 +256,13 @@ test("the CLI refuses a malformed --repo with the usage error", () => {
     assert.equal(run.status, 1, `--repo ${JSON.stringify(repo)}`);
     assert.match(run.stderr, /usage/);
   }
+});
+
+test("the CLI accepts a padded --repo: it passes the usage check and reaches the sequence lookup", () => {
+  const run = spawnSync("node", [cli, "--head", HEAD, "--repo", " o/r ", "--pr", "7"], { encoding: "utf8" });
+  assert.equal(run.status, 1);
+  assert.doesNotMatch(run.stderr, /usage/);
+  assert.match(run.stdout + run.stderr, /sequence_absent/);
 });
 
 test("the CLI --help exits 0 and prints usage with the --jq and --silent options", () => {
