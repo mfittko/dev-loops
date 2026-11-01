@@ -1442,6 +1442,9 @@ function assertFullPhaseSteps(text, { push }) {
     assert.ok(match, `step ${marker} missing or out of order`);
     from += match.index + match[0].length;
   }
+  // COORDINATOR-SINGLE-CHILD-JOIN: the joined outputRef is written once, by the one --construct step.
+  assert.equal(text.match(/\d\. Run `[^`]* --construct`/g).length, 1);
+  assert.doesNotMatch(text, /\.staging/);
   assert.match(text, /If CI is red \(`failure`\), resolve no thread, run no verifier step, and hand back `ci_failed` with the failing check names/);
   assert.match(text, /If it exits 2 \(not settled\), run it exactly once more\./);
   assert.match(text, /reports `stuck` or `changed`, or exits 1 with an error, resolve no thread, run no verifier step, and hand back `ci_pending` \(`ci_unknown` when the checks cannot be read\)/);
@@ -1595,7 +1598,10 @@ test("commit_only rendering matches the approved base renderer byte for byte and
     const [commitOnly, full] = [await emit(), await (await prepareFull()).full()];
     for (const unit of [commitOnly, full]) {
       delete unit.workOrder.operation;
-      assert.equal(renderWorkOrder(unit.workOrder) === baseline(unit.workOrder), unit === commitOnly);
+      // COORDINATOR-SINGLE-CHILD-JOIN: the commit_only record goes to a staging path first; that sentence is the one deliberate difference from the base.
+      const [out] = unit.workOrder.outputRefs;
+      const staged = baseline(unit.workOrder).replace(`to \`${out}\`, one entry per act item that has a siteQuery.`, `to the staging path \`${out}.staging\`, one entry per act item that has a siteQuery. The joined outputRef \`${out}\` receives the final record once (COORDINATOR-SINGLE-CHILD-JOIN): after the check passes, move the staging file onto it with \`mv ${JSON.stringify(`${out}.staging`)} ${JSON.stringify(out)}\`, and write nothing to the outputRef before that.`);
+      assert.equal(renderWorkOrder(unit.workOrder) === staged, unit === commitOnly);
     }
     // The full-phase task is the only region that differs: the numbered steps and the edit rule (issue 2787 C1, C4).
     const split = (text) => [text.slice(0, text.indexOf("\n") + 1), text.slice(text.indexOf("\nWhen a `delta-result` read")), text.slice(text.indexOf("\n") + 1, text.indexOf("\nWhen a `delta-result` read"))];
@@ -2295,7 +2301,13 @@ test("commit_only work order carries a siteCoverage skeleton built from the act 
     assert.match(query.noSitesReason, /^FILL:/);
     assert.match(await readFile(promptPath, "utf8"), /Start from the `siteCoverage` skeleton/);
     assert.match(await readFile(promptPath, "utf8"), /run the work order's `handbackCheck` command/);
-    assert.equal(workOrder.handbackCheck, `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(files.actList)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(workOrder.outputRefs[0])}`);
+    assert.equal(workOrder.handbackCheck, `dev-loops-run scripts/loop/check-pre-push-delta.mjs --act-list ${JSON.stringify(files.actList)} --baseline ${workOrder.headSha} --spec-identity fixer-handback --handback --site-coverage ${JSON.stringify(`${workOrder.outputRefs[0]}.staging`)}`);
+    // COORDINATOR-SINGLE-CHILD-JOIN: the commit_only record is written at the staging path and moved onto the outputRef once, after the check passes.
+    const prompt = await readFile(promptPath, "utf8");
+    const [out] = workOrder.outputRefs;
+    assert.ok(prompt.includes(`to the staging path \`${out}.staging\``));
+    assert.ok(prompt.includes(`mv ${JSON.stringify(`${out}.staging`)} ${JSON.stringify(out)}`));
+    assert.ok(prompt.includes("after the check passes, move the staging file onto it"));
     const threads = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
     assert.equal(threads.workOrder.siteCoverage, undefined);
     const threadsPrompt = await readFile(threads.promptPath, "utf8");

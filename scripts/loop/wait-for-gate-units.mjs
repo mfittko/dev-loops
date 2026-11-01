@@ -26,7 +26,6 @@ import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 export const DEFAULT_TIMEOUT_MS = 540000;
 export const MAX_TIMEOUT_MS = 570000;
 export const RECHECK_INTERVAL_MS = 2000;
-export const ARTIFACT_STABLE_MS = 10000;
 const EXIT = { all_done: 0, timeout: 2, round_retired: 3 };
 
 const USAGE = `Usage: wait-for-gate-units.mjs (--emit-plan <path> [--unit <scope>]... | --judge-plan <path>) --tmp-root <worktree>/tmp [--timeout <seconds>]
@@ -36,7 +35,7 @@ Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), round_retired (e
   --emit-plan <path>   the round's <gate>-<headSha>.emit-plan.json; waits on every unit unless --unit narrows it
   --unit <scope>       repeatable; restrict the wait to these unit scopes
   --judge-plan <path>  the round's judge-emit-plan.json; waits on the one judge unit
-  --artifact <path>    single-unit join (COORDINATOR-SINGLE-CHILD-JOIN): waits until this file parses as JSON and carries its terminal field (outcome), or, with no terminal field, stays unchanged for ${ARTIFACT_STABLE_MS / 1000} seconds; excludes the plan flags and --tmp-root
+  --artifact <path>    single-unit join (COORDINATOR-SINGLE-CHILD-JOIN): waits until this file exists and parses as JSON; excludes the plan flags and --tmp-root
   --tmp-root <dir>     worktree-local tmp root with the sentinels and retirement records
   --timeout <seconds>  0 to ${MAX_TIMEOUT_MS / 1000} (default ${DEFAULT_TIMEOUT_MS / 1000}; 0 = single immediate check)
   --timeout-ms <n>     Deprecated alias for --timeout (milliseconds); warns on stderr. Passing both fails closed.`;
@@ -138,24 +137,17 @@ async function checkUnit(unit, { role, receiptTmpRoot, tmpRoot, headSha }) {
 
 export const ARTIFACT_TIMEOUT_REMEDY = "Re-run the same command. After three consecutive timeout outcomes, stop and return the typed observation units_stalled.";
 
-// Final hand-back only, with no writer obligation on the child: the artifact parses as JSON and carries its terminal field
-// (`outcome`, as a DeltaPrePushReviewResult does), or, with no terminal field, stays byte-identical for ARTIFACT_STABLE_MS.
-// A missing, empty or non-JSON file is pending (a partial write reads as not done on this tick); any other read failure propagates.
-async function artifactReady(file, seen, at) {
-  let raw;
-  let parsed;
-  try { raw = await readFile(file, "utf8"); parsed = JSON.parse(raw); } catch (error) { if (error?.code === "ENOENT" || error instanceof SyntaxError) { seen.raw = undefined; return false; } throw error; }
-  if (typeof parsed?.outcome === "string" && parsed.outcome !== "") return true;
-  if (seen.raw !== raw) { seen.raw = raw; seen.since = at; return false; }
-  return at - seen.since >= ARTIFACT_STABLE_MS;
+// Done when the file exists and parses as JSON; the writer makes every hand-back final on first write (it renames the finished record onto the path).
+// A missing, empty or non-JSON file is pending; any other read failure propagates.
+async function artifactReady(file) {
+  try { JSON.parse(await readFile(file, "utf8")); return true; } catch (error) { if (error?.code === "ENOENT" || error instanceof SyntaxError) return false; throw error; }
 }
 
 async function waitForArtifact({ artifact, timeoutMs, now, delay }) {
   const started = now();
-  const seen = {};
   for (;;) {
     const elapsedMs = now() - started;
-    if (await artifactReady(artifact, seen, now())) return { ok: true, outcome: "all_done", artifact, elapsedMs };
+    if (await artifactReady(artifact)) return { ok: true, outcome: "all_done", artifact, elapsedMs };
     const remaining = timeoutMs - elapsedMs;
     if (remaining <= 0) return { ok: true, outcome: "timeout", artifact, elapsedMs, remedy: ARTIFACT_TIMEOUT_REMEDY };
     await delay(Math.min(RECHECK_INTERVAL_MS, remaining));

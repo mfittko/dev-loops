@@ -1511,7 +1511,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        reason: `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but the cap round's fixer pass is not proven landed with a cleared pre-push delta. ${CAP_ROUND_REFUSAL[input.draftCapRoundFailure] ?? CAP_ROUND_REFUSAL.cap_round_unresolved} Round N+1 never runs.`,
+        reason: `The PR is still draft and the next \`draft_gate\` round is past the round cap (\`round_cap_reached\`, ADR 0208), but the cap round's fixer pass is not proven landed with a cleared pre-push delta. ${Object.hasOwn(CAP_ROUND_REFUSAL, input.draftCapRoundFailure) ? CAP_ROUND_REFUSAL[input.draftCapRoundFailure] : CAP_ROUND_REFUSAL.cap_round_unresolved} Round N+1 never runs.`,
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,

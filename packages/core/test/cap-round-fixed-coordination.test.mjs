@@ -78,6 +78,14 @@ test("no source file contains the catch-all 'legacy unsealed delta record' refus
   assert.deepEqual(hits, []);
 });
 
+test("a cap-round refusal with an inherited or unknown condition falls back to cap_round_unresolved", () => {
+  for (const condition of ["constructor", "toString", "", "unknown_condition"]) {
+    const { reason } = draftAt({ draftRoundRefused: true, draftCapRoundFailure: condition });
+    assert.ok(reason.includes("Condition cap_round_unresolved:"), JSON.stringify(condition));
+    assert.ok(!reason.includes("native code"), JSON.stringify(condition));
+  }
+});
+
 test("a cap-round refusal with no reported condition names cap_round_unresolved, never no_clearing_record", () => {
   const { reason } = draftAt({ draftRoundRefused: true, draftCapRoundFailure: null });
   assert.ok(reason.includes("Condition cap_round_unresolved:"));

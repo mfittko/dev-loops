@@ -1438,6 +1438,8 @@ const fixer = (targetPath, over = {}) => decideFixerWriteGuard({ agentType: "fix
 
 test("decideFixerWriteGuard allows the outputRef and in-authority paths of a current pull", () => {
   assert.equal(fixer(FX_OUTPUT).decision, "allow");
+  assert.equal(fixer(`${FX_OUTPUT}.staging`).decision, "allow", "the commit_only staging path of the outputRef");
+  assert.equal(fixer(`${FX_OUTPUT}.other`).decision, "deny");
   assert.equal(fixer(`${FX_WT}/src/x.mjs`).decision, "allow");
   assert.equal(fixer(`${FX_WT}/test/a.test.mjs`).decision, "allow");
   assert.equal(fixer(`${FX_WT}/src/x.mjs`, { agentType: "dev-loops:fixer" }).decision, "allow");

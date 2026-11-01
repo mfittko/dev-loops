@@ -10,9 +10,12 @@ test("COORDINATOR-SINGLE-CHILD-JOIN is registered and carries the no-turn-end an
   assert.ok(contract.includes("<!-- rule: COORDINATOR-SINGLE-CHILD-JOIN -->"));
   assert.ok(contract.indexOf("COORDINATOR-SINGLE-CHILD-JOIN -->") > contract.indexOf("rule: GATE-EXEC-HARNESS-JOIN"));
   assert.match(contract, /The hand-back path must not exist at dispatch: each fixer emission and each delta review invocation gets its own path, and the coordinator never reuses a hand-back path\./);
-  assert.match(contract, /only for a final hand-back, and the child writes no extra marker: the file parses as JSON and carries the terminal field its schema requires/);
-  assert.doesNotMatch(contract, /\.done/);
-  assert.match(read("docs/decisions/0218-slice-a-cap-round-chain-and-single-child-join.md"), /only for a final hand-back/);
+  assert.match(contract, /returns `all_done` \(exit 0\) when the file exists and parses as JSON, and the child writes no extra marker/);
+  assert.match(contract, /Every joined hand-back is final on first write: the writer builds the record at a staging path/);
+  assert.doesNotMatch(contract, /\.done|10 seconds/);
+  const adr = read("docs/decisions/0218-slice-a-cap-round-chain-and-single-child-join.md");
+  assert.match(adr, /returns `all_done` when the file exists and parses as JSON/);
+  assert.doesNotMatch(adr, /10 seconds/);
   assert.match(contract, /A coordinator never ends its turn while a single child runs, before the `--artifact` join returns\./);
   assert.match(contract, /Pi: the coordinator joins the child with a blocking dispatch \(`async: false`\), `runs\.all` or `bg_wait`.*`extension\/index\.ts` runs the foreground `async: false` child/);
   assert.ok(JSON.parse(read("skills/docs/required-rules.json")).requiredRules.some((rule) => rule.id === "COORDINATOR-SINGLE-CHILD-JOIN"));
@@ -21,6 +24,17 @@ test("COORDINATOR-SINGLE-CHILD-JOIN is registered and carries the no-turn-end an
 test("the routed fixer and delta reviewer dispatch prose names the --artifact join command", () => {
   for (const file of ["skills/docs/gate-review-sub-loop-contract.md", "skills/docs/pre-pr-review-contract.md", "skills/local-implementation/SKILL.md", "skills/copilot-pr-followup/SKILL.md", "skills/dev-loop/SKILL.md", "agents/dev-loop.agent.md"]) {
     assert.ok(read(file).includes(JOIN), file);
+  }
+});
+
+test("each routed sentence that gives the --artifact join carries the Claude Code qualifier", () => {
+  for (const file of ["skills/docs/pre-pr-review-contract.md", "skills/local-implementation/SKILL.md", "skills/copilot-pr-followup/SKILL.md", "skills/dev-loop/SKILL.md", "agents/dev-loop.agent.md", ".claude/skills/dev-loop/SKILL.md", ".claude/agents/dev-loop.md"]) {
+    const text = read(file);
+    let at = text.indexOf(JOIN);
+    assert.ok(at >= 0, file);
+    for (; at >= 0; at = text.indexOf(JOIN, at + 1)) {
+      assert.match(text.slice(Math.max(0, at - 400), at), /Claude Code/, `${file} at ${at}`);
+    }
   }
 });
 
