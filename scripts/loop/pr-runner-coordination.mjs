@@ -13,6 +13,7 @@ import {
   loadRunnerCoordinationState,
   releaseRunnerOwnership,
 } from "./_pr-runner-coordination.mjs";
+import { describeRunnerLiveness, resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
 const USAGE = `Usage:
   pr-runner-coordination.mjs status --repo <owner/name> --pr <number>
   pr-runner-coordination.mjs claim --repo <owner/name> --pr <number> [--run-id <id>]
@@ -23,7 +24,11 @@ const USAGE = `Usage:
 Durable one-runner-per-PR coordination helper.
 If --run-id is omitted for claim/assert/release/takeover, DEVLOOPS_RUN_ID is used
 (via DEVLOOPS_RUN_ID).
-handoff requires verified runtime identity; --run-id only asserts that identity.
+status reports stale (true|false) and staleReason for the active owner.
+takeover refuses a live (non-stale) foreign owner.
+handoff uses the verified runtime identity when one exists (a mismatching --run-id is
+ownership_lost). Without one, --run-id <the id used at claim> is the identity and
+releases the claim only when it equals the active owner.
 Output:
   stdout: { "ok": true, ... }
   stderr: { "ok": false, "error": "...", ... }
@@ -116,6 +121,7 @@ function resolveRunId(explicitRunId, env) {
 export async function runPrRunnerCoordination(options, { env = process.env, cwd = process.cwd() } = {}) {
   if (options.command === "status") {
     const { filePath, state } = await loadRunnerCoordinationState({ repo: options.repo, pr: options.pr, cwd });
+    const { stale, staleReason } = describeRunnerLiveness(state, { maxAgeMs: resolveStaleRunnerMaxAgeMs({}, env) });
     return {
       ok: true,
       command: "status",
@@ -123,6 +129,8 @@ export async function runPrRunnerCoordination(options, { env = process.env, cwd 
       pr: options.pr,
       filePath,
       state,
+      stale,
+      staleReason,
     };
   }
   if (options.command === "handoff") {
@@ -133,6 +141,14 @@ export async function runPrRunnerCoordination(options, { env = process.env, cwd 
     return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "claim", cwd });
   }
   if (options.command === "takeover") {
+    // Refuse a live non-stale foreign owner before any write (no history entry).
+    const { state } = await loadRunnerCoordinationState({ repo: options.repo, pr: options.pr, cwd });
+    const active = state?.activeRun;
+    const { stale, staleReason } = describeRunnerLiveness(state, { maxAgeMs: resolveStaleRunnerMaxAgeMs({}, env) });
+    if (active && active.runId !== runId && !stale) {
+      return { ok: false, error: "active_run_exists", repo: options.repo, pr: options.pr, runId, activeRun: active,
+        message: `Takeover refused: ${staleReason}. Wait for it or ask the operator.` };
+    }
     return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "takeover", cwd });
   }
   if (options.command === "assert") {

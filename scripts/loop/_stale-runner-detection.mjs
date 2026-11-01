@@ -138,3 +138,16 @@ export async function detectStaleRunner({ repo, pr, now = Date.now(), maxAgeMs, 
     maxAgeMs: effectiveMaxAgeMs,
   };
 }
+/** Pure live/stale verdict for the active claim, with a reason naming the owner run. */
+export function describeRunnerLiveness(state, { now = Date.now(), maxAgeMs = resolveStaleRunnerMaxAgeMs() } = {}) {
+  const active = state?.activeRun;
+  if (!active?.runId) return { stale: false, staleReason: "no active owner" };
+  if ((state.exitSignals || []).some((entry) => isExitSignalForClaim(entry, active))) {
+    return { stale: true, staleReason: `owner run ${active.runId} recorded an exit signal` };
+  }
+  const match = findStaleRunnerMatch(state, { now, maxAgeMs });
+  if (match !== null) {
+    return { stale: true, staleReason: `stale owner run ${active.runId} (last updated ${match.updatedAgeMs}ms ago, max age ${maxAgeMs}ms)` };
+  }
+  return { stale: false, staleReason: `owner run ${active.runId} is live (updated ${now - Date.parse(active.updatedAt)}ms ago)` };
+}

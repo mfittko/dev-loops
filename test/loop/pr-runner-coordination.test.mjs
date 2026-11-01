@@ -80,7 +80,7 @@ test("handoff refuses unverified, mismatched and foreign identities without writ
     const claim = await claimRunnerOwnership({ ...options, runId: "owner" });
     const before = await readFile(claim.filePath, "utf8");
     for (const [env, runId, error] of [
-      [{}, "owner", "run_id_required"],
+      [{}, undefined, "run_id_required"],
       [{ DEVLOOPS_RUN_ID: "owner" }, "foreign", "ownership_lost"],
       [{ DEVLOOPS_RUN_ID: "foreign" }, undefined, "ownership_lost"],
     ]) {
@@ -1937,4 +1937,49 @@ test("two sibling native Pi children of one parent session cannot both claim the
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+// #2884: hand-back teardown and owner liveness (RUNNER-HANDOFF-TEARDOWN).
+test("handoff with an explicit --run-id and no verified identity releases the claim", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-handoff-explicit-"));
+  const options = { repo: "owner/repo", pr: 17, cwd, env: {} };
+  try {
+    await claimRunnerOwnership({ ...options, runId: "owner" });
+    const foreign = await handoffRunnerOwnership({ ...options, runId: "foreign" });
+    assert.equal(foreign.error, "ownership_lost");
+    const handed = await handoffRunnerOwnership({ ...options, runId: "owner" });
+    assert.equal(handed.status, "handoff_recorded");
+    assert.equal(handed.activeRun, null);
+    const neither = await handoffRunnerOwnership(options);
+    assert.equal(neither.error, "run_id_required");
+    assert.match(neither.message, /--run-id <the id used at claim>/);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("status reports stale with a reason and takeover refuses a live owner without history", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-liveness-"));
+  const base = { command: "status", repo: "owner/repo", pr: 17 };
+  try {
+    const claim = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "owner", cwd });
+    const live = await runPrRunnerCoordination(base, { env: {}, cwd });
+    assert.equal(live.stale, false);
+    assert.match(live.staleReason, /owner run owner is live/);
+    const before = await readFile(claim.filePath, "utf8");
+    const refused = await runPrRunnerCoordination({ ...base, command: "takeover", runId: "successor" }, { env: {}, cwd });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.error, "active_run_exists");
+    assert.equal(await readFile(claim.filePath, "utf8"), before, "a refused takeover writes no history");
+    const claimConflict = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "successor", cwd });
+    assert.match(claimConflict.message, /owner run owner is live .*takeover --repo owner\/repo --pr 17 --run-id successor/);
+
+    const raw = JSON.parse(before);
+    raw.activeRun.claimedAt = raw.activeRun.updatedAt = "2020-01-01T00:00:00.000Z";
+    await writeFile(claim.filePath, JSON.stringify(raw));
+    const stale = await runPrRunnerCoordination(base, { env: {}, cwd });
+    assert.equal(stale.stale, true);
+    assert.match(stale.staleReason, /stale owner run owner/);
+    const taken = await runPrRunnerCoordination({ ...base, command: "takeover", runId: "successor" }, { env: {}, cwd });
+    assert.equal(taken.status, "taken_over");
+    assert.equal(taken.previousRun.runId, "owner");
+  } finally { await rm(cwd, { recursive: true, force: true }); }
 });

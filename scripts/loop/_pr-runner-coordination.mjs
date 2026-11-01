@@ -9,7 +9,7 @@ import {
   saveStateFile as saveSharedStateFile,
   withStateFileLock as withSharedStateFileLock,
 } from "./_steering-state-file.mjs";
-import { detectStaleRunner, resolveStaleRunnerMaxAgeMs, STALE_RUNNER_ERROR } from "./_stale-runner-detection.mjs";
+import { describeRunnerLiveness, detectStaleRunner, resolveStaleRunnerMaxAgeMs, STALE_RUNNER_ERROR } from "./_stale-runner-detection.mjs";
 export const RUNNER_COORDINATION_SCHEMA_VERSION = 2;
 export const RUNNER_COORDINATION_SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1, 2]);
 export const RUNNER_COORDINATION_HISTORY_LIMIT = 50; // cap audit trail; heartbeats append per-round, keep the most recent 50 events
@@ -290,6 +290,11 @@ export function normalizeRunnerCoordinationState(raw, { repo, pr } = {}) {
     exitSignals: normalizeExitSignals(raw.exitSignals),
   };
 }
+// Foreign-owner refusals name whether the owner is live and the agent-runnable remedy.
+function ownerVerdictSuffix(state, repo, pr, runId) {
+  const { staleReason } = describeRunnerLiveness(state);
+  return ` ${staleReason}. If the owner is dead, run: pr-runner-coordination.mjs takeover --repo ${repo} --pr ${pr} --run-id ${runId}.`;
+}
 function buildConflict({ error, repo, pr, runId, activeRun, filePath, message, exitSignals = null }) {
   const payload = {
     ok: false,
@@ -451,7 +456,7 @@ export async function claimRunnerOwnership({
         activeRun,
         filePath: resolvedPath,
         exitSignals: state.exitSignals,
-        message: `PR ${normalizedRepo}#${normalizedPr} is already owned by run ${activeRun.runId}. Claim failed closed.`,
+        message: `PR ${normalizedRepo}#${normalizedPr} is already owned by run ${activeRun.runId}. Claim failed closed.${ownerVerdictSuffix(state, normalizedRepo, normalizedPr, normalizedRunId)}`,
       });
     }
     // A recovery is authorized by evidence read before this lock. Refuse when the
@@ -659,7 +664,7 @@ export async function assertRunnerOwnership({
     filePath: resolvedPath,
     exitSignals: state.exitSignals,
     message: state.activeRun?.runId
-      ? `PR ${normalizedRepo}#${normalizedPr} is now owned by run ${state.activeRun.runId}; run ${normalizedRunId} must stop.`
+      ? `PR ${normalizedRepo}#${normalizedPr} is now owned by run ${state.activeRun.runId}; run ${normalizedRunId} must stop.${ownerVerdictSuffix(state, normalizedRepo, normalizedPr, normalizedRunId)}`
       : `PR ${normalizedRepo}#${normalizedPr} no longer has an active runner ownership record; run ${normalizedRunId} must stop.`,
   });
 }
@@ -863,15 +868,18 @@ export async function handoffRunnerOwnership({
 } = {}) {
   const normalizedRepo = normalizeRepoSlug(repo);
   const normalizedPr = normalizePr(pr);
-  const verifiedRunId = normalizeRunId(resolveRunId(env));
+  const envRunId = normalizeRunId(resolveRunId(env));
   const requestedRunId = normalizeRunId(runId);
+  // RUNNER-HANDOFF-TEARDOWN: without a verified identity the explicit run id is the identity (owner-only below).
+  // Native Codex keeps its verified-identity requirement.
+  const verifiedRunId = envRunId ?? (resolveRuntimeHarness(env) === "codex" ? null : requestedRunId);
   const resolvedPath = filePath ?? defaultRunnerCoordinationFilePathForTarget({ repo: normalizedRepo, pr: normalizedPr }, cwd);
   const target = { repo: normalizedRepo, pr: normalizedPr, runId: verifiedRunId, filePath: resolvedPath };
   if (verifiedRunId === null) {
     return buildConflict({ ...target, error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED, activeRun: null,
-      message: "Runner coordination handoff requires a verified runtime run id." });
+      message: "Runner coordination handoff requires a run id. Pass --run-id <the id used at claim>." });
   }
-  if (requestedRunId !== null && requestedRunId !== verifiedRunId) {
+  if (envRunId !== null && requestedRunId !== null && requestedRunId !== envRunId) {
     return buildConflict({ ...target, error: RUNNER_OWNERSHIP_ERROR.OWNERSHIP_LOST, activeRun: null,
       message: "Requested handoff run id does not match the verified runtime identity." });
   }

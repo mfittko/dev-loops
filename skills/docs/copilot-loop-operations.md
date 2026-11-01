@@ -218,6 +218,11 @@ or local notes to determine "where we left off."
 
 Helper-owned sleep inside `run-watch-cycle.mjs`, `probe-copilot-review.mjs`, or `watch-initial-copilot-pr.mjs` is allowed and is not a blocker. Agent-authored shell polling (`sleep`, `for`, `while`, `timeout` wrappers around tool invocations) is a contract breach. This rule applies to ALL repos using the dev-loop workflow.
 
+## Runner handoff teardown
+
+<!-- rule: RUNNER-HANDOFF-TEARDOWN -->
+`RUNNER-HANDOFF-TEARDOWN`: A coordinator that owns a PR runner claim MUST release it at hand-back with `pr-runner-coordination.mjs handoff --repo <owner/name> --pr <number> --run-id <the id used at claim>`. When a verified runtime run id exists, `handoff` uses it and a mismatching `--run-id` is `ownership_lost`. When none exists (for example on Claude Code), the explicit `--run-id` is accepted as the identity and the handoff succeeds only when it equals the active owner; any other owner gives `ownership_lost`. With neither id, `handoff` refuses with `run_id_required` and a message that names the remedy. `status` reports `stale` and `staleReason`, and `takeover` refuses a live non-stale owner.
+
 ## Hard rule: no inline interpreters
 
 <!-- rule: OPS-NO-INLINE-INTERPRETER -->
