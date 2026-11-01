@@ -260,3 +260,20 @@ test("a dropped siblings entry keeps its names and the briefing renders them", a
     assert.match(text, /src\/shared\.mjs \(siblings: helper, readState\)/);
   });
 });
+
+test("two changed exported-function files sharing one importer yield a single importer entry with merged relatedTo", async () => {
+  const fn = (n) => `export function ${n}(a) {\n  return a;\n}\n`;
+  const files = {
+    "src/a.mjs": fn("fa"),
+    "src/b.mjs": fn("fb"),
+    "src/use.mjs": 'import { fa } from "./a.mjs";\nimport { fb } from "./b.mjs";\nfa(fb(1));\n',
+  };
+  await withRepo(files, async (root) => {
+    const bundle = await buildAdjacentBundle({
+      changedFiles: ["src/a.mjs", "src/b.mjs"], repoRoot: root, diffText: `${diffFor("src/a.mjs", 2)}${diffFor("src/b.mjs", 2)}`,
+    });
+    const importers = bundle.expansion.files.filter((f) => f.kind === "importer");
+    assert.deepEqual(importers.map((f) => f.path), ["src/use.mjs"]);
+    assert.deepEqual(importers[0].relatedTo, ["src/a.mjs", "src/b.mjs"]);
+  });
+});

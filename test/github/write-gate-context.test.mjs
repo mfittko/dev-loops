@@ -1508,14 +1508,21 @@ test("CLI --base <ref> produces a full build-once bundle: non-null diffPath, pop
 test("CLI --base reads gates.contextExpansion from .devloops into adjacentCode.expansion", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
-    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  contextExpansion:\n    maxFiles: 1\n", "utf8");
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      "version: 1\ngates:\n  contextExpansion:\n    maxFiles: 1\n  draft:\n    angles:\n      - scope\n      - name: link-check\n        scope: docs-only\n",
+      "utf8",
+    );
     await main([
       "--repo", "owner/repo", "--pr", "41", "--gate", "draft_gate", "--head-sha", headSha,
-      "--angles", '["scope"]', "--base", baseSha,
+      "--angles", '["scope","link-check"]', "--base", baseSha,
     ], { repoRoot, run: stubGhRun });
     const artifact = await readGateContext({ repo: "owner/repo", pr: 41, gate: "draft_gate", headSha }, { repoRoot });
     assert.equal(artifact.adjacentCode.expansion.maxFiles, 1);
     assert.equal(artifact.adjacentCode.expansion.files.length, 1);
+    // The written scoped variant carries the expansion list (pins the adjacentCode wiring into the scoped render).
+    const variantText = await readFile(path.resolve(repoRoot, artifact.briefingVariants["docs-only"]), "utf8");
+    assert.ok(variantText.includes("Expansion files"), "written scoped variant lists the expansion files");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
