@@ -2131,10 +2131,16 @@ test("assert refusal wording names live or stale from the injected clock and max
 test("claim refusal with a NaN maxAgeMs falls back to the default like the detector", async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-nan-max-age-"));
   const t0 = Date.parse("2026-01-01T00:00:00.000Z");
+  const savedEnv = process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+  delete process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS; // the NaN fallback reads the host env before the default
   try {
     await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "A", cwd, now: new Date(t0).toISOString() });
     const later = new Date(t0 + STALE_RUNNER_DEFAULT_MAX_AGE_MS + 60_000).toISOString();
     const refused = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "B", cwd, now: later, maxAgeMs: NaN });
     assert.match(refused.message, /stale owner run A/);
-  } finally { await rm(cwd, { recursive: true, force: true }); }
+  } finally {
+    if (savedEnv === undefined) delete process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+    else process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = savedEnv;
+    await rm(cwd, { recursive: true, force: true });
+  }
 });
