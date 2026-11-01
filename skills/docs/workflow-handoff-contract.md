@@ -76,16 +76,16 @@ duplicate the map into prose — reference the module.
 A contract test (`test/contracts/sanctioned-commands-exist.test.mjs`) asserts
 every mapped wrapper exists on disk and fails closed if one is renamed/removed.
 
-## Unit coordinator boundaries (issue 2532)
+## Unit coordinator boundaries (issue 2532, amended by issue 2955)
 
-One coordinator runs one phase. `unitBoundaries` tells it where its unit ends, so no orchestrator
+A coordinator continues past a report point. `unitBoundaries` tells it where to report, so no orchestrator
 brief has to restate the boundary:
 
-- `handBackAfter` lists the deterministic hand-back points for this route, in order, from the closed
-  set `draft_pr_opened` (a unit that owns no PR yet, so opening the draft PR ends its phase) and
-  `gate_verdict_posted` (a unit that posts a gate verdict of its own hands back after it).
-  **The list is ordered and first-match**: a unit that carries both stops at the draft PR it opens,
-  and the remaining verdict boundary belongs to its successor, which resumes already owning that PR.
+- `reportAfter` lists the deterministic report points for this route, in order, from the closed
+  set `draft_pr_opened` (a unit that owns no PR yet, so opening the draft PR is its report point) and
+  `gate_verdict_posted` (a unit that posts a gate verdict of its own reports after it).
+  **The list is ordered and first-match**: a unit that carries both reports at the draft PR it opens and continues,
+  and the verdict boundary follows once the unit runs its gate round already owning that PR.
   The validator refuses a list that reverses that order, so the first match is always the draft PR.
   It also refuses a set that contradicts the envelope's own target (`deriveTarget`), in both
   directions: a target that owns no PR must carry `draft_pr_opened` first, because opening that
@@ -232,11 +232,11 @@ interface HandoffEnvelope {
   cwd: string | null;
   worktreeRequired: boolean;
 
-  // issue 2532: the deterministic points at which THIS unit coordinator stops and
-  // the orchestrator dispatches a fresh successor. Target+strategy derived, so it is
+  // issue 2532: the deterministic points at which THIS unit coordinator reports status and continues;
+  // it hands back only at a real stop. Target+strategy derived, so it is
   // byte-stable; absent on a terminal reconciliation envelope (its stopRules are terminal).
   unitBoundaries?: {
-    handBackAfter: Array<"draft_pr_opened" | "gate_verdict_posted">;
+    reportAfter: Array<"draft_pr_opened" | "gate_verdict_posted">;
     resume: { kind: "loop_startup"; issue: number | null; pr: number | null; branch: string | null; phase: string | null };
   };
 

@@ -1106,7 +1106,7 @@ test("cwd: worktreeCwd is canonicalized to the same single spelling", () => {
 test("unitBoundaries: a unit without a PR hands back at the draft PR and after the gate verdict", () => {
   const env = buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, {}, defaultOptions);
   assert.deepEqual(env.unitBoundaries, {
-    handBackAfter: [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED],
+    reportAfter: [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED],
     resume: { kind: "loop_startup", issue: 42, pr: null, branch: null, phase: null },
   });
 });
@@ -1114,7 +1114,7 @@ test("unitBoundaries: a unit without a PR hands back at the draft PR and after t
 test("unitBoundaries: a PR unit hands back only after the gate verdict", () => {
   const env = buildDevLoopHandoffEnvelope(prBundle(99), defaultSettings, {}, defaultOptions);
   assert.deepEqual(env.unitBoundaries, {
-    handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED],
+    reportAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED],
     resume: { kind: "loop_startup", issue: null, pr: 99, branch: null, phase: null },
   });
 });
@@ -1133,7 +1133,7 @@ test("unitBoundaries: both gate verdict boundaries carry the same hand-back and 
   ]) {
     const env = buildDevLoopHandoffEnvelope(prBundle(99), defaultSettings, gateState, defaultOptions);
     assert.equal(env.currentGate, currentGate);
-    assert.deepEqual(env.unitBoundaries.handBackAfter, [UNIT_BOUNDARY.GATE_VERDICT_POSTED]);
+    assert.deepEqual(env.unitBoundaries.reportAfter, [UNIT_BOUNDARY.GATE_VERDICT_POSTED]);
     assert.deepEqual(env.unitBoundaries.resume, { kind: "loop_startup", issue: null, pr: 99, branch: null, phase: null });
     assert.equal(env.gateState.copilotRoundCount, gateState.copilotRoundCount ?? 0);
     assert.equal(env.gateState.unresolvedThreadCount, gateState.unresolvedThreadCount ?? 0);
@@ -1184,7 +1184,7 @@ test("unitBoundaries: a routed local target receives the draft-PR boundary from 
   assert.equal(bundle.activeArtifact.kind, DEV_LOOP_TARGET_KIND.LOCAL_PHASE, "the routed local target is a phase unit");
   assert.equal(bundle.activeArtifact.linkedPr, undefined, "the producer emits no local linked PR");
   const env = buildDevLoopHandoffEnvelope(bundle, defaultSettings, {}, defaultOptions);
-  assert.deepEqual(env.unitBoundaries.handBackAfter, [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED]);
+  assert.deepEqual(env.unitBoundaries.reportAfter, [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED]);
   assert.deepEqual(env.unitBoundaries.resume, {
     kind: "loop_startup", issue: 2335, pr: null, branch: null, phase: "issue-2335",
   });
@@ -1229,7 +1229,7 @@ test("unitBoundaries: an issue with a linked PR routes to the PR unit, never a d
   assert.equal(bundle.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
   const env = buildDevLoopHandoffEnvelope(bundle, defaultSettings, {}, defaultOptions);
   // Owning the PR drops the draft-PR boundary and resumes on the PR identity it already has.
-  assert.deepEqual(env.unitBoundaries.handBackAfter, [UNIT_BOUNDARY.GATE_VERDICT_POSTED]);
+  assert.deepEqual(env.unitBoundaries.reportAfter, [UNIT_BOUNDARY.GATE_VERDICT_POSTED]);
   assert.deepEqual(env.unitBoundaries.resume, { kind: "loop_startup", issue: 2335, pr: 77, branch: null, phase: null });
 });
 
@@ -1254,7 +1254,7 @@ test("unitBoundaries: validator rejects a non-object field, a reversed order and
 
   // Accepted form: both boundaries in canonical (declaration) order.
   assert.equal(withBoundaries({
-    handBackAfter: [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED],
+    reportAfter: [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED],
     resume: { kind: "loop_startup", issue: 42, pr: null },
   }).ok, true);
   // Rejected: the field is present but not an object at all.
@@ -1262,17 +1262,17 @@ test("unitBoundaries: validator rejects a non-object field, a reversed order and
   assert.equal(withBoundaries("x").ok, false);
   // Rejected: the documented ordered/first-match list, reversed.
   assert.equal(withBoundaries({
-    handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED, UNIT_BOUNDARY.DRAFT_PR_OPENED],
+    reportAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED, UNIT_BOUNDARY.DRAFT_PR_OPENED],
     resume: { kind: "loop_startup", issue: 42, pr: null },
   }).ok, false);
   // Rejected: a present-but-invalid issue, even though a phase identity is also present —
   // the builder only ever emits a positive integer or null.
   assert.equal(withBoundaries({
-    handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED],
+    reportAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED],
     resume: { kind: "loop_startup", issue: "42", pr: null, phase: "x" },
   }).ok, false);
   assert.equal(withBoundaries({
-    handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED],
+    reportAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED],
     resume: { kind: "loop_startup", issue: -5, pr: null, phase: "x" },
   }).ok, false);
   // Accepted: a valid issue plus the phase identity its own target carries.
@@ -1280,7 +1280,7 @@ test("unitBoundaries: validator rejects a non-object field, a reversed order and
   assert.equal(validateHandoffEnvelope({
     ...phaseWithIssue,
     unitBoundaries: {
-      handBackAfter: [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED],
+      reportAfter: [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED],
       resume: { kind: "loop_startup", issue: 42, pr: null, phase: "x" },
     },
   }).ok, true);
@@ -1339,11 +1339,11 @@ test("unitBoundaries: validator rejects a foreign boundary name or a resume with
   const withBoundaries = (unitBoundaries) => validateHandoffEnvelope({ ...base, unitBoundaries });
 
   assert.equal(withBoundaries(base.unitBoundaries).ok, true);
-  assert.equal(withBoundaries({ handBackAfter: ["merged"], resume: { kind: "loop_startup", issue: 42, pr: null } }).ok, false);
-  assert.equal(withBoundaries({ handBackAfter: [], resume: { kind: "loop_startup", issue: 42, pr: null } }).ok, false);
-  assert.equal(withBoundaries({ handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED, UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "loop_startup", issue: 42, pr: null } }).ok, false);
-  assert.equal(withBoundaries({ handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "loop_startup", issue: null, pr: null } }).ok, false);
-  assert.equal(withBoundaries({ handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "webhook", issue: 42, pr: null } }).ok, false);
+  assert.equal(withBoundaries({ reportAfter: ["merged"], resume: { kind: "loop_startup", issue: 42, pr: null } }).ok, false);
+  assert.equal(withBoundaries({ reportAfter: [], resume: { kind: "loop_startup", issue: 42, pr: null } }).ok, false);
+  assert.equal(withBoundaries({ reportAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED, UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "loop_startup", issue: 42, pr: null } }).ok, false);
+  assert.equal(withBoundaries({ reportAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "loop_startup", issue: null, pr: null } }).ok, false);
+  assert.equal(withBoundaries({ reportAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "webhook", issue: 42, pr: null } }).ok, false);
 });
 
 // A boundary set that contradicts the envelope's OWN target is not authoritative state: the
@@ -1358,19 +1358,19 @@ test("unitBoundaries: the validator cross-checks the boundary set against the ta
   // Rejected: a PR-less target whose list omits the draft PR it must open.
   const omitted = validateHandoffEnvelope({
     ...prLess,
-    unitBoundaries: { ...prLess.unitBoundaries, handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED] },
+    unitBoundaries: { ...prLess.unitBoundaries, reportAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED] },
   });
   assert.equal(omitted.ok, false);
-  assert.deepEqual(omitted.errors.map((e) => e.field), ["unitBoundaries.handBackAfter"]);
+  assert.deepEqual(omitted.errors.map((e) => e.field), ["unitBoundaries.reportAfter"]);
   // Rejected: the mirror direction. A target that already owns its PR never opens a draft, so
   // this first-match list would stop the unit at a boundary it cannot reach — before its gate
   // round — while its `gate_verdict_posted` boundary stayed unreached.
   const unreachable = validateHandoffEnvelope({
     ...prOwned,
-    unitBoundaries: { ...prOwned.unitBoundaries, handBackAfter: [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED] },
+    unitBoundaries: { ...prOwned.unitBoundaries, reportAfter: [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED] },
   });
   assert.equal(unreachable.ok, false);
-  assert.deepEqual(unreachable.errors.map((e) => e.field), ["unitBoundaries.handBackAfter"]);
+  assert.deepEqual(unreachable.errors.map((e) => e.field), ["unitBoundaries.reportAfter"]);
 });
 
 // `resume` is copied FROM the target, so an identity the target does not carry resumes a
@@ -1387,12 +1387,12 @@ test("unitBoundaries: the validator rejects a resume identity the target does no
   }
   const rejected = [
     // The judge's failing case: a PR-less issue target whose resume names issue 7 and no PR.
-    [prLess, { handBackAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "loop_startup", issue: 7, pr: null } }],
+    [prLess, { reportAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED], resume: { kind: "loop_startup", issue: 7, pr: null } }],
     // A resume naming a different issue or PR than the target carries.
-    [prLess, { handBackAfter: prLess.unitBoundaries.handBackAfter, resume: { kind: "loop_startup", issue: 42, pr: 7 } }],
-    [prOwned, { handBackAfter: prOwned.unitBoundaries.handBackAfter, resume: { kind: "loop_startup", issue: null, pr: 100 } }],
-    [phaseOnly, { handBackAfter: phaseOnly.unitBoundaries.handBackAfter, resume: { kind: "loop_startup", issue: null, pr: null, phase: "tmp/other.md" } }],
-    [branchUnit, { handBackAfter: branchUnit.unitBoundaries.handBackAfter, resume: { kind: "loop_startup", issue: 42, branch: "feature/y" } }],
+    [prLess, { reportAfter: prLess.unitBoundaries.reportAfter, resume: { kind: "loop_startup", issue: 42, pr: 7 } }],
+    [prOwned, { reportAfter: prOwned.unitBoundaries.reportAfter, resume: { kind: "loop_startup", issue: null, pr: 100 } }],
+    [phaseOnly, { reportAfter: phaseOnly.unitBoundaries.reportAfter, resume: { kind: "loop_startup", issue: null, pr: null, phase: "tmp/other.md" } }],
+    [branchUnit, { reportAfter: branchUnit.unitBoundaries.reportAfter, resume: { kind: "loop_startup", issue: 42, branch: "feature/y" } }],
   ];
   for (const [base, unitBoundaries] of rejected) {
     const verdict = validateHandoffEnvelope({ ...base, unitBoundaries });

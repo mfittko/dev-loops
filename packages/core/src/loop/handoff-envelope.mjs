@@ -612,9 +612,9 @@ function buildWorktreeSlug(artifact, kind) {
 // ---------------------------------------------------------------------------
 
 /**
- * Deterministic hand-back boundaries for one unit coordinator. A unit runs one
- * phase and stops at the next boundary; the orchestrator only emits and dispatches
- * the successor's work order, and the successor re-resolves startup against
+ * Deterministic report points for one unit coordinator. A unit reports status at
+ * the first point and continues; a replacement is dispatched only at a real stop, the orchestrator only emits and dispatches
+ * its work order, and it re-resolves startup against
  * authoritative state (never a brief authored by the predecessor).
  * The vocabulary is closed so a fixture can assert the exact set.
  */
@@ -661,7 +661,7 @@ function deriveUnitBoundaries(strategy, target) {
   boundaries.push(UNIT_BOUNDARY.GATE_VERDICT_POSTED);
   const text = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
   return {
-    handBackAfter: boundaries,
+    reportAfter: boundaries,
     // A resume carries every identity the target carries, not an exclusive one: each field
     // below is copied independently, so the dominant issue-plus-linked-PR route emits both
     // `issue` and `pr` (the router re-targets that target to the PR route in
@@ -1314,14 +1314,14 @@ export function validateHandoffEnvelope(envelope) {
     if (!ub || typeof ub !== "object" || Array.isArray(ub)) {
       errors.push({ field: "unitBoundaries", reason: "if present, must be a non-array object", got: ub });
     } else {
-      if (!Array.isArray(ub.handBackAfter) || ub.handBackAfter.length === 0
-        || ub.handBackAfter.some((b) => !boundaryNames.includes(b))
-        || new Set(ub.handBackAfter).size !== ub.handBackAfter.length
+      if (!Array.isArray(ub.reportAfter) || ub.reportAfter.length === 0
+        || ub.reportAfter.some((b) => !boundaryNames.includes(b))
+        || new Set(ub.reportAfter).size !== ub.reportAfter.length
         // The contract makes the list ordered and first-match, so a reversed list
         // would stop a unit at a boundary it cannot reach yet. Declaration order is
         // the canonical order.
-        || ub.handBackAfter.some((b, i) => i > 0 && boundaryNames.indexOf(b) < boundaryNames.indexOf(ub.handBackAfter[i - 1]))) {
-        errors.push({ field: "unitBoundaries.handBackAfter", reason: `must be a non-empty array of distinct boundaries in canonical order: ${boundaryNames.join(" then ")}`, got: ub.handBackAfter });
+        || ub.reportAfter.some((b, i) => i > 0 && boundaryNames.indexOf(b) < boundaryNames.indexOf(ub.reportAfter[i - 1]))) {
+        errors.push({ field: "unitBoundaries.reportAfter", reason: `must be a non-empty array of distinct boundaries in canonical order: ${boundaryNames.join(" then ")}`, got: ub.reportAfter });
       }
       const resume = ub.resume;
       // The builder only ever emits a positive integer or null, so a present-but-invalid
@@ -1354,23 +1354,23 @@ export function validateHandoffEnvelope(envelope) {
       if (target && typeof target === "object" && !Array.isArray(target)) {
         const ownsPr = target.kind === DEV_LOOP_TARGET_KIND.PR
           || (Number.isInteger(target.linkedPr) && target.linkedPr > 0);
-        if (Array.isArray(ub.handBackAfter) && ub.handBackAfter.length > 0) {
-          if (!ownsPr && ub.handBackAfter[0] !== UNIT_BOUNDARY.DRAFT_PR_OPENED) {
+        if (Array.isArray(ub.reportAfter) && ub.reportAfter.length > 0) {
+          if (!ownsPr && ub.reportAfter[0] !== UNIT_BOUNDARY.DRAFT_PR_OPENED) {
             errors.push({
-              field: "unitBoundaries.handBackAfter",
-              reason: `a target that owns no PR must hand back at ${UNIT_BOUNDARY.DRAFT_PR_OPENED} first, because opening that draft PR ends its phase`,
-              got: ub.handBackAfter,
+              field: "unitBoundaries.reportAfter",
+              reason: `a target that owns no PR must report at ${UNIT_BOUNDARY.DRAFT_PR_OPENED} first, because opening that draft PR ends its phase`,
+              got: ub.reportAfter,
             });
           }
           // The mirror arm of the partition `deriveUnitBoundaries` produces: a target that owns a
           // PR already has its draft, so it never opens one. A list carrying that boundary names
           // a stop the unit can never reach and, being first-match, would end the unit before its
           // gate round — so `gate_verdict_posted` is its only reachable boundary.
-          if (ownsPr && ub.handBackAfter.includes(UNIT_BOUNDARY.DRAFT_PR_OPENED)) {
+          if (ownsPr && ub.reportAfter.includes(UNIT_BOUNDARY.DRAFT_PR_OPENED)) {
             errors.push({
-              field: "unitBoundaries.handBackAfter",
-              reason: `a target that already owns its PR must not hand back at ${UNIT_BOUNDARY.DRAFT_PR_OPENED}: that unit never opens a draft, so ${UNIT_BOUNDARY.GATE_VERDICT_POSTED} is its only boundary`,
-              got: ub.handBackAfter,
+              field: "unitBoundaries.reportAfter",
+              reason: `a target that already owns its PR must not report at ${UNIT_BOUNDARY.DRAFT_PR_OPENED}: that unit never opens a draft, so ${UNIT_BOUNDARY.GATE_VERDICT_POSTED} is its only boundary`,
+              got: ub.reportAfter,
             });
           }
         }
