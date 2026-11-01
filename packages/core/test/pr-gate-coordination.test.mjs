@@ -4602,3 +4602,15 @@ test("carried draft_gate marker with failing CI reports blocked and forbids mark
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
   assert.match(result.reason, /mark-ready/u);
 });
+
+test("round_cap_reached with failing or credibly green required CI and zero threads names a fact-matched remedy (#3002 AC3)", () => {
+  for (const [ciStatus, remedy] of [["failure", /fix the failing required check/], ["crediblyGreen", /wait-pr-checks\.mjs/]]) {
+    const result = evaluatePrGateCoordination({ ...capBase, ciStatus, unresolvedThreadCount: 0 });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    assert.match(result.reason, /round_cap_reached/);
+    assert(result.reason.includes("8bc050da9deadbeef"));
+    assert.match(result.reason, remedy);
+    assert.doesNotMatch(result.reason, /loop startup/);
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  }
+});

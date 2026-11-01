@@ -2277,6 +2277,35 @@ function evaluatePrGateCoordinationCore(input = {}) {
         copilotReviewRoundCount,
       });
     }
+
+    // Zero threads with failing or unconfirmed required CI: keep report_blocked
+    // but name the fact-matched remedy (a bare re-resolve would loop).
+    if (preApprovalRequireCi && unresolvedThreadCount === 0 && (ciStatus === "failure" || ciStatus === "crediblyGreen")) {
+      pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
+      pushUnique(forbiddenActions, postDraftForbidden);
+      pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE]);
+      return buildResult({
+        repo: input.repo ?? null,
+        pr: Number.isInteger(input.pr) ? input.pr : null,
+        currentHeadSha,
+        lifecycleState: effectiveLifecycleState,
+        loopDisposition: loopDisposition ?? DISPOSITION.BLOCKED,
+        gateBoundary: PR_CHECKPOINT.BLOCKED,
+        draftGateAlreadySatisfied,
+        draftGate,
+        preApprovalGate,
+        allowedNextActions,
+        forbiddenActions,
+        nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        reason: ciStatus === "failure"
+          ? `round_cap_reached at ${copilotReviewRoundCount}/${maxCopilotRounds} with required CI failing at head ${currentHeadSha ?? "unknown"} and zero unresolved threads: fix the failing required check at the head and push, then re-run gate-coordination.`
+          : `round_cap_reached at ${copilotReviewRoundCount}/${maxCopilotRounds} with required CI only credibly green (unconfirmed) at head ${currentHeadSha ?? "unknown"} and zero unresolved threads: run wait-pr-checks.mjs for the head to confirm CI, then re-run gate-coordination.`,
+        mergeStateStatus,
+        conflictFiles,
+        refinementArtifact,
+        copilotReviewRoundCount,
+      });
+    }
   }
 
   if (effectiveLifecycleState === STATE.LOW_SIGNAL_CONVERGED) {
