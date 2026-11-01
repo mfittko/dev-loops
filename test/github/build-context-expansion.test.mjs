@@ -374,3 +374,28 @@ test("removing a private writer or guard selects its remaining siblings and impo
     });
   }
 });
+
+const hunkDiff = (lines) => ["diff --git a/src/x.mjs b/src/x.mjs", "--- a/src/x.mjs", "+++ b/src/x.mjs", "@@ -1,9 +1,6 @@", ...lines, ""].join("\n");
+
+test("a whole-function removal whose run does not start with the declaration adds no expansion", async () => {
+  const cases = {
+    "trailing private function with its leading blank line": [
+      "export function f(a) {\n  return a;\n}\n",
+      [" export function f(a) {", "   return a;", " }", "-", "-function h(b) {", "-  return b;", "-}"],
+    ],
+    "run starting with a closing brace then a declaration": [
+      "export function f(a) {\n  return a;\n}\n",
+      [" export function f(a) {", "   return a;", "-}", "-function h(b) {", "-  return b;", " }"],
+    ],
+    "blank line then declaration after a local export list": [
+      "function f(a) {\n  return a;\n}\nexport { f };\n",
+      [" function f(a) {", "   return a;", " }", " export { f };", "-", "-function h(b) {", "-  return b;", "-}"],
+    ],
+  };
+  for (const [name, [src, lines]] of Object.entries(cases)) {
+    await withRepo({ "src/x.mjs": src, "src/use.mjs": 'import { f } from "./x.mjs";\nf(1);\n' }, async (root) => {
+      const b = await buildAdjacentBundle({ changedFiles: ["src/x.mjs"], repoRoot: root, diffText: hunkDiff(lines) });
+      assert.deepEqual(b.expansion.files, [], name);
+    });
+  }
+});
