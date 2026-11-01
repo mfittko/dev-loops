@@ -1345,8 +1345,8 @@ export function validateHandoffEnvelope(envelope) {
       }
       // A boundary set and a resume that contradict the envelope's OWN target are not
       // authoritative state: `deriveUnitBoundaries` derives both from that target, so a PR-less
-      // unit whose list omits the draft PR stops nowhere (the snowball this field exists to
-      // prevent), a PR-owning unit whose list carries the draft PR stops at a boundary it can
+      // unit whose list omits the draft PR reports nowhere (the snowball this field exists to
+      // prevent), a PR-owning unit whose list carries the draft PR names a report point it can
       // never reach, and a resume naming another issue or PR resumes a different unit (issue
       // 2532). Only well-typed identities are compared; the type errors above already cover a
       // malformed one, and a target error above already covers a missing/invalid target.
