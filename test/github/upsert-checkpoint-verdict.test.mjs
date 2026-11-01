@@ -9613,7 +9613,7 @@ function permissiveVerdictRunChild(headSha) {
     if (a.includes("graphql")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n', stderr: "" };
     if (a.includes("issues/17/comments")) return { code: 0, stdout: "[]\n", stderr: "" };
     if (a.includes("pulls/17/reviews")) return { code: 0, stdout: "[]\n", stderr: "" };
-    if (a.includes("pulls/17/files")) return { code: 0, stdout: "[]\n", stderr: "" };
+    if (a.includes("pulls/17/files")) return { code: 0, stdout: "[]" + "\n", stderr: "" };
     if (a.includes("--json") && a.includes("statusCheckRollup")) return { code: 0, stdout: prJson, stderr: "" };
     if (a.includes("--json") && a.includes("headRefOid") && !a.includes("state")) return { code: 0, stdout: JSON.stringify({ headRefOid: headSha }) + "\n", stderr: "" };
     if (a.includes("--json") && a.includes("files")) return { code: 0, stdout: "src/db.mjs\n", stderr: "" };
@@ -9816,6 +9816,7 @@ function makeAcRunChild({
   issueComments = [],
   ciSuccess = true,
   prBody = DEFAULT_TEST_PR_BODY,
+  prFiles = [],
   // true fails every body edit; "pr" or "issue" fails only that kind. Mutable
   // through the returned `control` so a second run can succeed.
   failBodyEdit = false,
@@ -9874,7 +9875,7 @@ function makeAcRunChild({
     if (a.includes("graphql")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n', stderr: "" };
     if (a.includes("issues/17/comments")) return { code: 0, stdout: JSON.stringify(issueComments) + "\n", stderr: "" };
     if (a.includes("pulls/17/reviews")) return { code: 0, stdout: JSON.stringify(reviews) + "\n", stderr: "" };
-    if (a.includes("pulls/17/files")) return { code: 0, stdout: "[]\n", stderr: "" };
+    if (a.includes("pulls/17/files")) return { code: 0, stdout: JSON.stringify(prFiles) + "\n", stderr: "" };
     // Dispatch pr view --json <fields> on the exact --json field list, so the
     // full pr view (which lists `files` among many fields) is not mistaken for
     // the dedicated `--json files` files-list call.
@@ -10704,13 +10705,14 @@ const COMPOSITION_UNCHECKED_AC_PR_BODY = [
   "- none", "",
 ].join("\n");
 
-function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKED_AC_ISSUE_BODY, failBodyEdit = false, failIssueViewAfter = null, failIssueViewCount, closingIssues = [900], extraIssueBodies = {} } = {}) {
+function makeCompositionRunChild(prBody, extraComments = [], { prFiles, issueBody = TICKED_AC_ISSUE_BODY, failBodyEdit = false, failIssueViewAfter = null, failIssueViewCount, closingIssues = [900], extraIssueBodies = {} } = {}) {
   return makeAcRunChild({
     isDraft: false,
     // Only issue 900 has a body; any other linked issue fails every fetch.
     closingIssues: closingIssues.map((number) => ({ number })),
     issueBodyByNumber: { 900: issueBody, ...extraIssueBodies },
     prBody,
+    prFiles,
     failBodyEdit,
     failIssueViewAfter,
     failIssueViewCount,
@@ -10735,14 +10737,14 @@ function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKE
 // fresh acceptance-criteria (or pr-checklist) review.
 const TICK_PROVENANCE = { distinctReviewers: 1, perAngle: [{ angle: "acceptance-criteria", reviewer: "reviewer-ac" }] };
 
-async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [], verifiedItems, provenance = verifiedItems === undefined ? undefined : TICK_PROVENANCE, issueBody, failBodyEdit, failIssueViewAfter, failIssueViewCount, closingIssues, extraIssueBodies, findings }, fn) {
+async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [], verifiedItems, provenance = verifiedItems === undefined ? undefined : TICK_PROVENANCE, issueBody, failBodyEdit, failIssueViewAfter, failIssueViewCount, closingIssues, extraIssueBodies, findings, prFiles }, fn) {
   const repoRoot = await stageConfigRepoRoot(requireFanoutEvidence);
   try {
     const ledgerPath = await writeVerdictLedger(repoRoot, { overallVerdict, gate, verifiedItems, provenance, findings });
     const ledgerBefore = await readFile(ledgerPath, "utf8");
     const { runChild, calls, editedBodies, control } = gate === "draft_gate"
       ? makeAcRunChild({ isDraft: true, prBody })
-      : makeCompositionRunChild(prBody, extraComments, { issueBody, failBodyEdit, failIssueViewAfter, failIssueViewCount, closingIssues, extraIssueBodies });
+      : makeCompositionRunChild(prBody, extraComments, { prFiles, issueBody, failBodyEdit, failIssueViewAfter, failIssueViewCount, closingIssues, extraIssueBodies });
     const post = (overrides = {}) => upsertCheckpointVerdict({
       repo: "owner/repo", pr: 17, gate, headSha: GATE_FULL_HEAD,
       findingsSummary: "review round summary",
@@ -12516,6 +12518,17 @@ test("tick (#2898): a review-gate rerun refused for the already-submitted review
     );
     assert.equal(bodyEdits(calls).length, 0);
   }, { prefix: "dev-loops-upsert-review-refused-no-tick-" });
+});
+
+test("tick (#2898): an issue id in a locatable finding summary is refused before any PR or issue body edit", async () => {
+  const finding = { angle: "correctness", severity: "medium", summary: "see 1234 and #1234", files: ["src/db.mjs"], line: 2, recommendation: "fix it" };
+  await withCompositionRound({
+    overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [finding],
+    prFiles: [{ filename: "src/db.mjs", patch: SINGLE_SURFACE_PATCH }],
+  }, async ({ post, calls }) => {
+    await assert.rejects(post({ verdict: "findings_present" }), /issue\/PR|#1234/i);
+    assert.equal(bodyEdits(calls).length, 0);
+  });
 });
 
 test("tick (#2898): an open act item carrying checkedCriteria and no judgeCriterion keeps the named category unticked", async () => {

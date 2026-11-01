@@ -2327,7 +2327,8 @@ function anglesPassCoverage(entries, config, gate) {
 
 // ACCEPT-CRITERIA-VERIFY-AND-REFLECT automatic tick (pre_approval_gate with a
 // trusted --findings-ledger only): tick the ledger's reviewer-verified labels
-// in the PR body's AC/DoD boxes and, for each linked issue whose unticked AC
+// in the PR body's AC/DoD boxes (dry run first; writes are deferred until after
+// every refusal) and, for each linked issue whose unticked AC
 // items the coordination load read, in that issue body. A label outside those
 // unchecked lists is dropped; an issue whose body the coordination load could
 // not fetch is skipped (it stays spec-of-record unavailable). Exact-label
@@ -3090,7 +3091,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
     }
   }
-  // Tick the reviewer-verified AC/DoD labels BEFORE composing, then read the
+  // Dry-run the reviewer-verified AC/DoD ticks before composing (writes are queued and applied after the last refusal), then read the
   // reloaded artifact everywhere below (blocker collection and the clean guards).
   // Only a ledger whose provenance records a fresh acceptance-criteria or
   // pr-checklist review is trusted to tick. In fanout_fanin mode the ledger
@@ -3644,8 +3645,12 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       + `comments to a submitted review. Re-run with --new-round to post a fresh review round that carries the new inline comment(s).`,
     );
   }
+  // createGateReview refuses an inline finding comment that carries a raw issue/PR id; run that guard here so the refusal precedes the ticks.
+  for (const finding of findingSurface ? mergeSameDefectFindings(findingSurface.locatable) : []) {
+    guardCommentBodyNoIssuePrIds(renderInlineCommentBody(finding, { round: findingSurface.round }), { ref: "gate review inline finding comment", allowedRefs: options.allowedRefs });
+  }
   // The last refusal has passed: apply the queued reviewer-verified ticks now, before the first review or comment write, so a refused post leaves no ticked box.
-  // A failed write throws before any post; a rerun re-ticks only the rows still unticked.
+  // A failed write throws before any post. A failed post (HTTP error) after the write keeps the ticks; a rerun is idempotent and re-ticks only the rows still unticked.
   for (const write of pendingTickWrites) await write();
   const findingSurfaceFields = findingSurface
     ? {
@@ -3657,7 +3662,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       }
     : {};
   if (ownSubmitted) {
-    {
       const reviewBaseResult = {
         ok: true,
         repo: options.repo,
@@ -3710,7 +3714,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         ...((updatedReview.reviewUrl ?? ownSubmitted.commentUrl) ? { commentUrl: updatedReview.reviewUrl ?? ownSubmitted.commentUrl } : {}),
         ...(verificationWarning ? { verificationWarning } : {}),
       };
-    }
   }
   const desiredExecutionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
   const compositionResultFields = checkpointComposition
