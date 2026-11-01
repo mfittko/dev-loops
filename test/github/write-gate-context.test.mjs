@@ -1477,6 +1477,22 @@ test("CLI --base <ref> produces a full build-once bundle: non-null diffPath, pop
   }
 });
 
+test("CLI --base reads gates.contextExpansion from .devloops into adjacentCode.expansion", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  contextExpansion:\n    maxFiles: 1\n", "utf8");
+    await main([
+      "--repo", "owner/repo", "--pr", "41", "--gate", "draft_gate", "--head-sha", headSha,
+      "--angles", '["scope"]', "--base", baseSha,
+    ], { repoRoot, run: stubGhRun });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 41, gate: "draft_gate", headSha }, { repoRoot });
+    assert.equal(artifact.adjacentCode.expansion.maxFiles, 1);
+    assert.equal(artifact.adjacentCode.expansion.files.length, 1);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI without --base emits an explicit thin-briefing posture, not a silent full-looking bundle", async () => {
   const { repoRoot, headSha } = await makeBaseDiffRepo();
   try {
@@ -4063,7 +4079,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       "- Never `cat`/`head` dev-loops tool or artifact JSON: a dev-loops CLI takes its own `--jq`/`--silent` flags; an on-disk artifact file is read with plain `jq '<filter>' <path>`.",
       "- Read the gate-context artifact that way, e.g. `jq '{resolvedAngles, scope}' \"tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json\"`.",
-      "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — never re-read a hunk interior you already read there. Open a source file to widen past a hunk's edges only when your angle needs it, except the files the context artifact's `.adjacentCode.expansion` lists (importers and sibling functions of a changed exported function, state writer or guard): reading those files is expected, and the evidence file names any the cap dropped.",
+      "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — never re-read a hunk interior you already read there. Open a source file to widen past a hunk's edges only when your angle needs it, except the files the context artifact's `.adjacentCode.expansion.files` lists (importers and sibling functions of a changed exported function, state writer or guard): reading those files is expected, and the evidence file names any the cap dropped.",
       "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
       "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
       "",

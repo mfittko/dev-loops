@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -114,9 +114,101 @@ test("the brief says expansion reading is expected and narrows the widening word
     }).text);
   }
   for (const text of texts) {
-    assert.match(text, /`\.adjacentCode\.expansion`/);
+    assert.match(text, /`\.adjacentCode\.expansion\.files`/);
     assert.match(text, /reading those files is expected/);
     assert.match(text, /never re-read a hunk interior/);
     assert.doesNotMatch(text, /open a source file only to widen PAST a hunk's edges/);
   }
+});
+
+const FNS = (names) => names.map((n) => `export function ${n}(a) {\n  return a;\n}\n`).join("\n");
+
+test("a zero cap disables expansion: no files and no dropped list", async () => {
+  await withRepo(repoFiles, async (root) => {
+    for (const expansion of [{ maxFiles: 0 }, { maxBytes: 0 }]) {
+      const bundle = await buildAdjacentBundle({ changedFiles: ["src/shared.mjs"], repoRoot: root, diffText: diffFor("src/shared.mjs", 2), expansion });
+      assert.deepEqual([bundle.expansion.files, bundle.expansion.dropped], [[], []]);
+    }
+  });
+});
+
+test("the changed file's siblings entry is kept ahead of importers under a tight cap", async () => {
+  await withRepo({ ...repoFiles, "a/early.mjs": 'import { writeState } from "../src/shared.mjs";\n' }, async (root) => {
+    const bundle = await buildAdjacentBundle({ changedFiles: ["src/shared.mjs"], repoRoot: root, diffText: diffFor("src/shared.mjs", 2), expansion: { maxFiles: 1 } });
+    assert.deepEqual(bundle.expansion.files.map((f) => f.kind), ["siblings"]);
+  });
+});
+
+test("a private resetX / formatOffset change selects nothing; a writeX / set_x change does", async () => {
+  const src = "function resetX() {\n  return 1;\n}\nfunction formatOffset() {\n  return 2;\n}\nfunction settings() {\n  return 3;\n}\nfunction isRequired() {\n  return 4;\n}\nfunction set_x() {\n  return 5;\n}\n";
+  await withRepo({ "src/p.mjs": src }, async (root) => {
+    for (const line of [2, 5, 8, 11]) {
+      const b = await buildAdjacentBundle({ changedFiles: ["src/p.mjs"], repoRoot: root, diffText: diffFor("src/p.mjs", line) });
+      assert.deepEqual(b.expansion.files, [], `line ${line}`);
+    }
+    const b = await buildAdjacentBundle({ changedFiles: ["src/p.mjs"], repoRoot: root, diffText: diffFor("src/p.mjs", 14) });
+    assert.equal(b.expansion.files.length, 1);
+  });
+});
+
+test("export lists and export default function mark functions exported", async () => {
+  const src = "function a() {\n  return 1;\n}\nfunction b() {\n  return 2;\n}\nexport default function c() {\n  return 3;\n}\nexport { a };\n";
+  await withRepo({ "src/e.mjs": src }, async (root) => {
+    for (const line of [2, 8]) {
+      const b = await buildAdjacentBundle({ changedFiles: ["src/e.mjs"], repoRoot: root, diffText: diffFor("src/e.mjs", line) });
+      assert.equal(b.expansion.files.length, 1, `line ${line}`);
+    }
+    const priv = await buildAdjacentBundle({ changedFiles: ["src/e.mjs"], repoRoot: root, diffText: diffFor("src/e.mjs", 5) });
+    assert.deepEqual(priv.expansion.files, []);
+  });
+});
+
+test("module-level code after an exported function is not attributed to it", async () => {
+  const src = "export function f() {\n  return 1;\n}\nconst table = {\n  a: 1,\n};\n";
+  await withRepo({ "src/m.mjs": src }, async (root) => {
+    const b = await buildAdjacentBundle({ changedFiles: ["src/m.mjs"], repoRoot: root, diffText: diffFor("src/m.mjs", 5) });
+    assert.deepEqual(b.expansion.files, []);
+  });
+});
+
+test("a removal at a function tail is credited to that function, not the next one", async () => {
+  const src = "function p() {\n  return 1;\n}\nexport function q() {\n  return 2;\n}\n";
+  const diff = ["diff --git a/src/t.mjs b/src/t.mjs", "--- a/src/t.mjs", "+++ b/src/t.mjs", "@@ -1,5 +1,4 @@", " function p() {", "   return 1;", " }", "-", " export function q() {", ""].join("\n");
+  await withRepo({ "src/t.mjs": src }, async (root) => {
+    const b = await buildAdjacentBundle({ changedFiles: ["src/t.mjs"], repoRoot: root, diffText: diff });
+    assert.deepEqual(b.expansion.files, []);
+  });
+});
+
+test("a quoted non-ASCII diff path is decoded", async () => {
+  const diff = ['diff --git "a/src/\\303\\244.mjs" "b/src/\\303\\244.mjs"', '--- "a/src/\\303\\244.mjs"', '+++ "b/src/\\303\\244.mjs"', "@@ -1,1 +1,1 @@", "-old", "+new", ""].join("\n");
+  await withRepo({ "src/\u00e4.mjs": FNS(["writeState", "other"]) }, async (root) => {
+    const b = await buildAdjacentBundle({ changedFiles: ["src/\u00e4.mjs"], repoRoot: root, diffText: diff });
+    assert.deepEqual(b.expansion.files.map((f) => f.path), ["src/\u00e4.mjs"]);
+  });
+});
+
+test("importers that are generated or symlinks are never selected", async () => {
+  await withRepo({ ...repoFiles, "dist/gen.mjs": 'import { writeState } from "../src/shared.mjs";\n' }, async (root) => {
+    await symlink("use-a.mjs", path.join(root, "src/link.mjs"));
+    const bundle = await buildAdjacentBundle({ changedFiles: ["src/shared.mjs"], repoRoot: root, diffText: diffFor("src/shared.mjs", 2) });
+    const paths = bundle.expansion.files.map((f) => f.path);
+    assert.ok(!paths.includes("dist/gen.mjs"));
+    assert.ok(!paths.includes("src/link.mjs"));
+  });
+});
+
+test("a scoped variant lists the expansion files and the dropped files", async () => {
+  await withRepo(repoFiles, async (root) => {
+    const adjacentCode = await buildAdjacentBundle({ changedFiles: ["src/shared.mjs"], repoRoot: root, diffText: diffFor("src/shared.mjs", 2), expansion: { maxFiles: 2, maxBytes: 1000 } });
+    for (const scope of GATE_ANGLE_SCOPES.filter((s) => s !== "full")) {
+      const { text } = renderScopedBriefingVariant(scope, {
+        repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", evidencePath: "tmp/x.txt", adjacentCode,
+        diffOutput: "diff --git a/docs/a.md b/docs/a.md\n--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1 +1 @@\n-old\n+new\n",
+      });
+      assert.match(text, /Dropped by the expansion cap \(1\)/);
+      assert.match(text, /src\/use-b\.mjs \(importer\)/);
+      assert.match(text, /src\/use-a\.mjs \(importer\)/);
+    }
+  });
 });

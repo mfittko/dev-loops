@@ -21,7 +21,7 @@
  * not contamination. Output shape and role/relatedTo semantics are documented
  * on {@link buildAdjacentBundle} below.
  */
-import { open, readFile, readdir, stat } from "node:fs/promises";
+import { lstat, open, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 /** Default per-file byte cap before truncation. */
@@ -320,19 +320,63 @@ async function readGuardedFile(repoRoot, relPath, maxFileBytes) {
   }
 }
 
+/**
+ * Decode a path token straight out of a unified diff header line. Git quotes a
+ * path (wraps it in `"..."`) whenever it carries a `"`, a `\`, a control
+ * character, or (under the default `core.quotePath`) a non-ASCII byte, and
+ * C-escapes the quoted content: `\"`, `\\`, `\t`, `\n`, and `\ooo` octal
+ * per raw byte. A raw string-slice of a quoted token (e.g. `"b/a b.txt"`
+ * sliced at a fixed offset) still carries the quotes and escapes verbatim,
+ * so a downstream consumer that classifies or displays that string sees the
+ * wrong path. Unquoted tokens (the common case) pass through unchanged.
+ * @param {string} raw
+ * @returns {string}
+ */
+export function decodeGitDiffPathToken(raw) {
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (trimmed.length < 2 || !trimmed.startsWith('"') || !trimmed.endsWith('"')) return trimmed;
+  const inner = trimmed.slice(1, -1);
+  const bytes = [];
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch !== "\\") {
+      const code = ch.codePointAt(0);
+      if (code > 255) bytes.push(...Buffer.from(ch, "utf8"));
+      else bytes.push(code);
+      continue;
+    }
+    const next = inner[i + 1];
+    if (next === "n") { bytes.push(10); i++; continue; }
+    if (next === "t") { bytes.push(9); i++; continue; }
+    if (next === '"') { bytes.push(34); i++; continue; }
+    if (next === "\\") { bytes.push(92); i++; continue; }
+    const octal = inner.slice(i + 1, i + 4);
+    if (/^[0-7]{3}$/.test(octal)) { bytes.push(parseInt(octal, 8)); i += 3; continue; }
+    bytes.push(ch.charCodeAt(0)); // unrecognized escape — keep the backslash's own byte, fail open
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
 /** Default per-round caps for the adaptive context expansion (gates.contextExpansion). */
 export const DEFAULT_EXPANSION_CAPS = { maxFiles: 6, maxBytes: 98304 };
 
 // ponytail: line-regex scan, not a parser. Ceiling: top-level function and
-// arrow-const declarations only; a function ends where the next one starts, so
-// a trailing doc comment counts toward its predecessor. Upgrade path: a real
-// JS parser if class methods or nested exports matter.
-const DECL_RE = /^(export\s+)?(?:async\s+function\s*\*?\s*|function\s*\*?\s*|const\s+)([A-Za-z_$][\w$]*)(?=\s*(?:\(|=\s*(?:async\s*)?(?:\(|function\b|[A-Za-z_$][\w$]*\s*=>)))/;
-// ponytail: name heuristic for state writers and guards; add a marker comment
+// arrow-const declarations only; a function ends at the next column-0 line that
+// is not a closing `}`/`)`/`]` (class methods, nested exports and column-0 lines
+// inside template literals are not understood). `export { a, b }` lists and
+// `export default function name` are covered. Upgrade path: a real JS parser.
+const DECL_RE = /^(export\s+(?:default\s+)?)?(?:async\s+function\s*\*?\s*|function\s*\*?\s*|const\s+)([A-Za-z_$][\w$]*)(?=\s*(?:\(|=\s*(?:async\s*)?(?:\(|function\b|[A-Za-z_$][\w$]*\s*=>)))/;
+const EXPORT_LIST_RE = /^export\s*\{([^}]*)\}/;
+// ponytail: name heuristic for state writers and guards, anchored to the start
+// of the name at a camelCase/underscore boundary; add a marker comment
 // convention if it misfires.
-const WRITER_OR_GUARD_RE = /write|save|persist|set|delete|remove|guard|assert|ensure|require|refuse|validate/i;
+const WRITER_OR_GUARD_RE = /^(write|save|persist|set|delete|remove|guard|assert|ensure|require|refuse|validate)(?![a-z])/;
 
-/** New-side line numbers touched per file; a removal maps to the next new line. */
+/**
+ * New-side line numbers touched per file. A removal is credited to the
+ * preceding new-side line (a removal at a function tail stays in that function).
+ * Ceiling: a deleted file (`+++ /dev/null`) is skipped; its source is gone.
+ */
 function changedLinesByFile(diffText) {
   const out = new Map();
   let file = null;
@@ -342,7 +386,7 @@ function changedLinesByFile(diffText) {
   for (const line of String(diffText ?? "").split("\n")) {
     if (line.startsWith("diff --git ")) { inHunk = false; file = null; continue; }
     if (!inHunk && line.startsWith("+++ ")) {
-      file = line.startsWith("+++ b/") ? line.slice(6) : null;
+      file = line.includes("/dev/null") ? null : decodeGitDiffPathToken(line.slice(4)).replace(/^.\//, "");
       if (file) out.set(file, new Set());
       continue;
     }
@@ -350,7 +394,7 @@ function changedLinesByFile(diffText) {
     if (hunk) { inHunk = true; n = Number(hunk[1]); continue; }
     if (!inHunk || !file) continue;
     if (line.startsWith("+")) { mark(n); n += 1; }
-    else if (line.startsWith("-")) mark(n);
+    else if (line.startsWith("-")) mark(n - 1);
     else if (line.startsWith(" ")) n += 1;
   }
   return out;
@@ -359,26 +403,35 @@ function changedLinesByFile(diffText) {
 /** Top-level declarations of a source text: [{ name, exported, start, end, bytes }] (1-based lines). */
 function topLevelFunctions(source) {
   const lines = source.split("\n");
+  const listed = new Set();
+  for (const text of lines) {
+    const list = EXPORT_LIST_RE.exec(text);
+    if (list) for (const item of list[1].split(",")) listed.add(item.trim().split(/\s+/)[0]);
+  }
   const found = [];
   lines.forEach((text, i) => {
     const m = DECL_RE.exec(text);
-    if (m) found.push({ name: m[2], exported: Boolean(m[1]), start: i + 1 });
+    if (!m) return;
+    let end = i + 1;
+    while (end < lines.length && (lines[end] === "" || /^[\s})\]]/.test(lines[end]))) end += 1;
+    // `end` is a 0-based index of the first non-member line, i.e. the 1-based last member line.
+    found.push({ name: m[2], exported: Boolean(m[1]) || listed.has(m[2]), start: i + 1, end });
   });
-  return found.map((f, i) => {
-    const end = i + 1 < found.length ? found[i + 1].start - 1 : lines.length;
-    return { ...f, end, bytes: Buffer.byteLength(lines.slice(f.start - 1, end).join("\n"), "utf8") };
-  });
+  return found.map((f) => ({ ...f, bytes: Buffer.byteLength(lines.slice(f.start - 1, f.end).join("\n"), "utf8") }));
 }
 
 /**
  * Adaptive context expansion: for each changed file whose diff touches an
  * exported function, a state writer or a guard, select its importers and its
  * sibling functions, then apply the per-round file and byte caps. Candidates
- * are sorted by (path, kind), so selection and the dropped list are
- * deterministic. A diff confined to private, non-writer, non-guard functions
- * selects nothing.
+ * are sorted by (kind with siblings first, path), so selection and the dropped
+ * list are deterministic. A diff confined to private, non-writer, non-guard
+ * functions selects nothing. Files absent from the repo or stripped by
+ * classifyStripReason (and symlink importers) are never selected. Ceiling:
+ * gates.reviewDiff.excludeGlobs is not applied here.
  */
-async function selectExpansion({ changed, diffText, repoRoot, importerIndex, caps }) {
+async function selectExpansion({ changed, diffText, repoRoot, importerIndex, caps, existing }) {
+  if (caps.maxFiles <= 0 || caps.maxBytes <= 0) return { maxFiles: caps.maxFiles, maxBytes: caps.maxBytes, files: [], dropped: [] };
   const touched = changedLinesByFile(diffText);
   const candidates = new Map();
   const add = (key, entry) => {
@@ -388,7 +441,7 @@ async function selectExpansion({ changed, diffText, repoRoot, importerIndex, cap
   };
   for (const file of changed) {
     const lines = touched.get(file);
-    if (!lines || !isSourceFile(file)) continue;
+    if (!lines || !isSourceFile(file) || !existing.has(file) || classifyStripReason(file)) continue;
     let source;
     try {
       source = await readFile(path.resolve(repoRoot, file), "utf8");
@@ -403,10 +456,12 @@ async function selectExpansion({ changed, diffText, repoRoot, importerIndex, cap
       add(`${file}\0siblings`, { path: file, kind: "siblings", relatedTo: [file], names: siblings.map((f) => f.name).sort(), bytes: siblings.reduce((n, f) => n + f.bytes, 0) });
     }
     for (const imp of importerIndex.get(file) ?? []) {
-      if (changed.includes(imp)) continue;
+      if (changed.includes(imp) || !existing.has(imp) || classifyStripReason(imp)) continue;
       let bytes = 0;
       try {
-        bytes = (await stat(path.resolve(repoRoot, imp))).size;
+        const info = await lstat(path.resolve(repoRoot, imp));
+        if (info.isSymbolicLink()) continue;
+        bytes = info.size;
       } catch {
         continue;
       }
@@ -416,8 +471,8 @@ async function selectExpansion({ changed, diffText, repoRoot, importerIndex, cap
   const files = [];
   const dropped = [];
   let total = 0;
-  for (const key of Array.from(candidates.keys()).sort()) {
-    const c = candidates.get(key);
+  const ordered = Array.from(candidates.values()).sort((a, b) => (a.kind === b.kind ? (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) : a.kind === "siblings" ? -1 : 1));
+  for (const c of ordered) {
     if (files.length < caps.maxFiles && total + c.bytes <= caps.maxBytes) {
       files.push(c);
       total += c.bytes;
@@ -549,6 +604,6 @@ export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd
     stripped,
     truncated: truncatedList,
     missing: missing.sort(),
-    expansion: await selectExpansion({ changed, diffText, repoRoot, importerIndex, caps }),
+    expansion: await selectExpansion({ changed, diffText, repoRoot, importerIndex, caps, existing }),
   };
 }

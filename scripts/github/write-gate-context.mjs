@@ -50,7 +50,7 @@ import { parseNonNegativeInteger, parsePrNumber, requireTokenValue, runChild } f
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { viewPr } from "./view-pr.mjs";
 import { viewIssue } from "./view-issue.mjs";
-import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
+import { buildAdjacentBundle, decodeGitDiffPathToken, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
@@ -849,43 +849,6 @@ function hasNonTrivialFileHeader(header) {
 }
 
 /**
- * Decode a path token straight out of a unified diff header line. Git quotes a
- * path (wraps it in `"..."`) whenever it carries a `"`, a `\`, a control
- * character, or (under the default `core.quotePath`) a non-ASCII byte, and
- * C-escapes the quoted content: `\"`, `\\`, `\t`, `\n`, and `\ooo` octal
- * per raw byte. A raw string-slice of a quoted token (e.g. `"b/a b.txt"`
- * sliced at a fixed offset) still carries the quotes and escapes verbatim,
- * so a downstream consumer that classifies or displays that string sees the
- * wrong path. Unquoted tokens (the common case) pass through unchanged.
- * @param {string} raw
- * @returns {string}
- */
-function decodeGitDiffPathToken(raw) {
-  const trimmed = typeof raw === "string" ? raw.trim() : "";
-  if (trimmed.length < 2 || !trimmed.startsWith('"') || !trimmed.endsWith('"')) return trimmed;
-  const inner = trimmed.slice(1, -1);
-  const bytes = [];
-  for (let i = 0; i < inner.length; i++) {
-    const ch = inner[i];
-    if (ch !== "\\") {
-      const code = ch.codePointAt(0);
-      if (code > 255) bytes.push(...Buffer.from(ch, "utf8"));
-      else bytes.push(code);
-      continue;
-    }
-    const next = inner[i + 1];
-    if (next === "n") { bytes.push(10); i++; continue; }
-    if (next === "t") { bytes.push(9); i++; continue; }
-    if (next === '"') { bytes.push(34); i++; continue; }
-    if (next === "\\") { bytes.push(92); i++; continue; }
-    const octal = inner.slice(i + 1, i + 4);
-    if (/^[0-7]{3}$/.test(octal)) { bytes.push(parseInt(octal, 8)); i += 3; continue; }
-    bytes.push(ch.charCodeAt(0)); // unrecognized escape — keep the backslash's own byte, fail open
-  }
-  return Buffer.from(bytes).toString("utf8");
-}
-
-/**
  * Split a unified diff into per-file blocks: `{ path, header, hunks }`, where
  * `header` is the file's own preamble (`diff --git`/`index`/`---`/`+++`, and
  * any rename/mode/binary lines) verbatim, and `hunks` is each `@@ ... @@`
@@ -1224,7 +1187,7 @@ function renderTokenDisciplineSection(contextPath) {
     "",
     "- Never `cat`/`head` dev-loops tool or artifact JSON: a dev-loops CLI takes its own `--jq`/`--silent` flags; an on-disk artifact file is read with plain `jq '<filter>' <path>`.",
     `- Read the gate-context artifact that way, e.g. \`jq '{resolvedAngles, scope}' "${contextPathDisplay}"\`.`,
-    "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — never re-read a hunk interior you already read there. Open a source file to widen past a hunk's edges only when your angle needs it, except the files the context artifact's `.adjacentCode.expansion` lists (importers and sibling functions of a changed exported function, state writer or guard): reading those files is expected, and the evidence file names any the cap dropped.",
+    "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — never re-read a hunk interior you already read there. Open a source file to widen past a hunk's edges only when your angle needs it, except the files the context artifact's `.adjacentCode.expansion.files` lists (importers and sibling functions of a changed exported function, state writer or guard): reading those files is expected, and the evidence file names any the cap dropped.",
     "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
     "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
   ].join("\n");
@@ -1236,6 +1199,16 @@ function renderTokenDisciplineSection(contextPath) {
  * contract. Shared by the full prefix and every scoped variant so both emit it
  * byte-identically.
  */
+function pushExpansionLines(lines, expansion) {
+  if (!expansion || (expansion.files.length === 0 && expansion.dropped.length === 0)) return;
+  lines.push(`Expansion files (${expansion.files.length}; cap ${expansion.maxFiles} files, ${expansion.maxBytes} bytes):`);
+  pushPathListLines(lines, expansion.files.map((f) => ({ path: f.path, label: `${f.path} (${f.kind}${f.names ? `: ${f.names.join(", ")}` : ""})` })));
+  if (expansion.dropped.length > 0) {
+    lines.push(`Dropped by the expansion cap (${expansion.dropped.length}):`);
+    pushPathListLines(lines, expansion.dropped.map((f) => ({ path: f.path, label: `${f.path} (${f.kind})` })));
+  }
+}
+
 function renderSiblingSweepSection() {
   return [
     "## Reviewer sibling sweep",
@@ -1539,15 +1512,7 @@ export function renderBriefingEvidence({
     lines.push(
       `Stripped: ${adjacentCode.stripped?.length ?? 0}, Truncated: ${adjacentCode.truncated?.length ?? 0}, Missing: ${adjacentCode.missing?.length ?? 0}`,
     );
-    const expansion = adjacentCode.expansion;
-    if (expansion && (expansion.files.length > 0 || expansion.dropped.length > 0)) {
-      lines.push(`Expansion files (${expansion.files.length}; cap ${expansion.maxFiles} files, ${expansion.maxBytes} bytes):`);
-      pushPathListLines(lines, expansion.files.map((f) => ({ path: f.path, label: `${f.path} (${f.kind}${f.names ? `: ${f.names.join(", ")}` : ""})` })));
-      if (expansion.dropped.length > 0) {
-        lines.push(`Dropped by the expansion cap (${expansion.dropped.length}):`);
-        pushPathListLines(lines, expansion.dropped.map((f) => ({ path: f.path, label: `${f.path} (${f.kind})` })));
-      }
-    }
+    pushExpansionLines(lines, adjacentCode.expansion);
   } else {
     lines.push("Adjacent files (0): (no adjacent-code bundle for this briefing)");
   }
@@ -1596,6 +1561,7 @@ export function renderBriefingEvidence({
  * @param {{path: string, reason: "default"|"configured"}[]} [input.excludedFiles] — filterDiffForInline
  *   excludedFiles; rendered as `Excluded from the filtered diff (n):` after the diff pointers, only when non-empty.
  * @param {string|null} [input.validationResultsPath]
+ * @param {object|null} [input.adjacentCode] — buildAdjacentBundle output; its `expansion` files and dropped files are listed
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES; sizes the pointer's disclosure
  * @returns {{ text: string }}
  */
@@ -1604,7 +1570,7 @@ export function renderScopedBriefingVariant(scope, {
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null,
   filteredDiffPath = null, excludedFiles = [],
-  validationResultsPath = null,
+  validationResultsPath = null, adjacentCode = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
   rules = null,
   capRoundResidue = null,
@@ -1630,6 +1596,7 @@ export function renderScopedBriefingVariant(scope, {
   lines.push(`Full diff (byte-exact): ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
   lines.push(`Context artifact: ${contextPath ?? "(context artifact path unavailable)"}`);
   pushExcludedFilesLines(lines, excludedFiles);
+  pushExpansionLines(lines, adjacentCode?.expansion);
   lines.push("");
   if (worktreeRoot) {
     lines.push(renderSourceReadInvariantSection(worktreeRoot));
@@ -3003,6 +2970,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           filteredDiffPath: pendingFilteredDiff?.path ?? null,
           excludedFiles: diffFilter?.excludedFiles ?? [],
           validationResultsPath: options.validationResultsPath ?? null,
+          adjacentCode: options.adjacentCode ?? null,
           rules: resolveClassifyRules(options.config),
           capRoundResidue,
         });
