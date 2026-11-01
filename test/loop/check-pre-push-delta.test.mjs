@@ -337,7 +337,7 @@ test("baseline equality refuses invocations that cannot authenticate input-only 
   for (const extra of [[], ["--fixer-plan", "missing.json"], ["--fixer-plan", "missing.json", "--site-coverage", "missing.json", "--result", result, "--invocation", "1"]]) {
     const seam = headAt(A);
     const marker = writeSequenceMarker({ tmpRoot: seam.tmpRoot, baselineHead: A, branch: "issue-1" });
-    await assert.rejects(runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", A, "--spec-identity", "s", ...extra], seam), /equals the baseline/);
+    await assert.rejects(runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", A, "--spec-identity", "s", ...extra], seam), /no delta review applies \(worktree HEAD \w+, baseline \w+, \d+ item\(s\)\)/);
     assert.equal(fs.existsSync(marker), true);
     assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`)), false);
     assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}-${A}.patch`)), false);

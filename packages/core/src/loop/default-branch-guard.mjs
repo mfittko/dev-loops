@@ -159,7 +159,7 @@ else
     [ -z "$advanced" ] && sequence_marker="$marker_file"
   done
   if [ -n "$sequence_marker" ]; then
-    echo "dev-loops: PRE-PUSH-DELTA-PUSH-AUTHORITY a gate fix sequence marker exists ($sequence_marker) and the push-authority check script is missing; refusing the push (fail closed). Re-run ensure-worktree to reinstall the hooks, or delete the marker if the sequence was abandoned." >&2
+    echo "dev-loops: PRE-PUSH-DELTA-PUSH-AUTHORITY a gate fix sequence marker exists ($sequence_marker) and the push-authority check script is missing; refusing the push (fail closed). Re-run ensure-worktree to reinstall the hooks. A commit_only fixer that made no commit closes the sequence with check-pre-push-delta.mjs (outcome no_commit)." >&2
     exit 1
   fi
 fi

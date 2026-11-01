@@ -701,6 +701,8 @@ test("pre-push refuses a push under an ungranted sequence marker, allows it once
       missing = String(err.stderr ?? "");
     }
     assert.match(missing, /check script is missing/);
+    assert.doesNotMatch(missing, /delete the marker/);
+    assert.match(missing, /check-pre-push-delta\.mjs \(outcome no_commit\)/);
     // A branchless marker (unreadable or malformed) is open too.
     fs.writeFileSync(openMarker, `${JSON.stringify({ baselineHead: openBaseline, fullGranted: false })}\n`);
     let branchless = "";
