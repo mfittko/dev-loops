@@ -11,7 +11,7 @@ import path from "node:path";
 
 export const sequenceMarkerPath = (tmpRoot, baselineHead) => path.join(tmpRoot, "gate-delta", `${baselineHead}.sequence`);
 
-/** The closure record of a sequence closed by close-gate-sequence; keyed by execution so a second close on one head keeps the first. */
+/** The closure record of a sequence closed by close-gate-sequence; keyed by execution so a second close with another execution on one head keeps the first. An execution-less close writes `.none.json` and overwrites a prior execution-less record on the same head. */
 export const sequenceClosurePath = (tmpRoot, baselineHead, executionIdentity) => path.join(tmpRoot, "gate-delta", `${baselineHead}.sequence-closed.${executionIdentity ?? "none"}.json`);
 
 /** Record that a fix sequence is active for a baseline head; a `commit_only` emit writes it ungranted, a `full` emit granted. */
@@ -37,6 +37,12 @@ const isValidBranchName = (b) =>
   !b.includes("..") && !b.includes("@{") && !b.includes("//") &&
   !/^[/.-]|[/.]$|\.lock(\/|$)|(^|\/)\./.test(b);
 
+const EXECUTION_IDENTITY = /^f[0-9]+-[0-9a-f]{8}$/u;
+const isNonEmptyString = (v) => typeof v === "string" && v !== "";
+
+/** The marker's fixer execution only when well formed (identity of the emitter's shape, non-empty refs); else undefined, so it proves nothing and names no path. */
+const validExecution = (e) => e && typeof e === "object" && typeof e.executionIdentity === "string" && EXECUTION_IDENTITY.test(e.executionIdentity) && isNonEmptyString(e.workOrderRef) && isNonEmptyString(e.outputRef) ? e : undefined;
+
 /** The marker for a baseline head, or null when none exists (ENOENT only). A malformed or unreadable marker reads as active, not granted (fail closed). */
 export function readSequenceMarker(tmpRoot, baselineHead) {
   let text;
@@ -47,7 +53,7 @@ export function readSequenceMarker(tmpRoot, baselineHead) {
   }
   try {
     const marker = JSON.parse(text);
-    if (marker?.baselineHead === baselineHead) return { baselineHead, fullGranted: marker.fullGranted === true, branch: isValidBranchName(marker.branch) ? marker.branch : undefined, execution: marker.execution && typeof marker.execution === "object" ? marker.execution : undefined };
+    if (marker?.baselineHead === baselineHead) return { baselineHead, fullGranted: marker.fullGranted === true, branch: isValidBranchName(marker.branch) ? marker.branch : undefined, execution: validExecution(marker.execution) };
   } catch {
     // Falls through to the fail-closed reading.
   }

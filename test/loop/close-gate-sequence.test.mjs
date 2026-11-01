@@ -1,12 +1,14 @@
 // close-gate-sequence: a sanctioned close of an abandoned fix sequence; a live sequence is never closable.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { test } from "bun:test";
 import { readSequenceMarker, recoveryHint, sequenceClosurePath, sequenceMarkerPath, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
-import { FIXER_GRACE_MS, closeGateSequence } from "../../scripts/loop/close-gate-sequence.mjs";
+import { SUBCOMMAND_ROUTES } from "../../cli/index.mjs";
+import { FIXER_GRACE_MS, closeGateSequence, defaultActor } from "../../scripts/loop/close-gate-sequence.mjs";
+import { SANCTIONED_COMMANDS } from "../../scripts/loop/sanctioned-commands.mjs";
 import { withTempDir } from "../_helpers.mjs";
 
 const HEAD = "a".repeat(40);
@@ -56,7 +58,82 @@ test("a running fixer is refused even when the head moved", async () => {
     pull(tmpRoot, ex, new Date(T0 - 60_000).toISOString());
     const result = await closeGateSequence(base(tmpRoot));
     assert.equal(result.refusal, "fixer_running");
+    assert.ok(result.remedy);
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("FIXER_NEVER_PULLED boundary: grace minus 1s is sequence_live, grace plus 1s closes", async () => {
+  await withTempDir(async (tmpRoot) => {
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: execution(tmpRoot) });
+    const mtime = statSync(sequenceMarkerPath(tmpRoot, HEAD)).mtimeMs;
+    const young = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: () => mtime + FIXER_GRACE_MS - 1000 }));
+    assert.equal(young.refusal, "sequence_live");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: () => mtime + FIXER_GRACE_MS + 1000 }))).condition, "FIXER_NEVER_PULLED");
+  });
+});
+
+test("a pull receipt older than the grace blocks FIXER_NEVER_PULLED: sequence_live, marker kept", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    const mtime = statSync(sequenceMarkerPath(tmpRoot, HEAD)).mtimeMs;
+    pull(tmpRoot, ex, new Date(mtime - FIXER_GRACE_MS - 1000).toISOString());
+    writeFileSync(ex.outputRef, "{}");
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: () => mtime + FIXER_GRACE_MS + 1000 }));
+    assert.equal(result.refusal, "sequence_live");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("a receipt file that parses to null reads as a running fixer, never FIXER_NEVER_PULLED", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    const file = pullReceiptPath(tmpRoot, ex.workOrderRef);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, "null");
+    const mtime = statSync(sequenceMarkerPath(tmpRoot, HEAD)).mtimeMs;
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD), now: () => mtime + FIXER_GRACE_MS + 1000 }));
+    assert.equal(result.refusal, "fixer_running");
+    assert.ok(result.remedy);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("a failed closure record write keeps the marker (record first, marker second)", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    mkdirSync(sequenceClosurePath(tmpRoot, HEAD, ex.executionIdentity), { recursive: true }); // renameSync onto a directory throws
+    await assert.rejects(closeGateSequence(base(tmpRoot)));
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+  });
+});
+
+test("defaultActor prefers DEVLOOPS_RUN_ID and falls back to unknown when userInfo throws", () => {
+  const throwing = () => { throw new Error("no passwd entry"); };
+  assert.equal(defaultActor({ DEVLOOPS_RUN_ID: "run-1" }, throwing), "run-1");
+  assert.equal(defaultActor({}, throwing), "unknown");
+  assert.equal(defaultActor({}, () => ({ username: "me" })), "me");
+});
+
+test("readSequenceMarker accepts a well-formed execution and rejects malformed ones", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const good = { executionIdentity: "f1793537149889-09e1d637", workOrderRef: "fixer:o/r#7:draft_gate:abc:f1793537149889-09e1d637", outputRef: "/abs/tmp/out.json" };
+    const bad = [
+      { executionIdentity: "x/../../../evil", workOrderRef: "w", outputRef: "o" },
+      { executionIdentity: "f1793537149889-09e1d637" },
+      { executionIdentity: 42, workOrderRef: "w", outputRef: "o" },
+      { executionIdentity: "f1793537149889-09e1d637", workOrderRef: "", outputRef: "o" },
+    ];
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: good });
+    assert.deepEqual(readSequenceMarker(tmpRoot, HEAD).execution, good);
+    for (const execution of bad) {
+      writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution });
+      assert.equal(readSequenceMarker(tmpRoot, HEAD).execution, undefined);
+    }
   });
 });
 
@@ -71,17 +148,23 @@ test("a work order never pulled past the dispatch grace closes as FIXER_NEVER_PU
 test("unproven abandonment is refused: no execution, no branch, no PR, wrong branch, absent marker", async () => {
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });
-    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) }))).refusal, "abandonment_unproven");
-    assert.equal((await closeGateSequence(base(tmpRoot, { pr: undefined }))).refusal, "abandonment_unproven");
-    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(MOVED, "other") }))).refusal, "abandonment_unproven");
-    assert.equal((await closeGateSequence(base(tmpRoot, { head: MOVED }))).refusal, "sequence_absent");
+    const refusals = [
+      [await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) })), "abandonment_unproven"],
+      [await closeGateSequence(base(tmpRoot, { pr: undefined })), "abandonment_unproven"],
+      [await closeGateSequence(base(tmpRoot, { fetchPr: pr(MOVED, "other") })), "abandonment_unproven"],
+      [await closeGateSequence(base(tmpRoot, { head: MOVED })), "sequence_absent"],
+    ];
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD });
-    assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "abandonment_unproven");
+    refusals.push([await closeGateSequence(base(tmpRoot)), "abandonment_unproven"]);
+    for (const [result, code] of refusals) {
+      assert.equal(result.refusal, code);
+      assert.ok(typeof result.remedy === "string" && result.remedy !== "");
+    }
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
 });
 
-test("the hook refusal text names the close command", () => {
+test("recoveryHint names the close command", () => {
   assert.match(recoveryHint("/x/gate-delta/h.sequence"), /close-gate-sequence\.mjs/);
 });
 
@@ -146,9 +229,31 @@ test("a second close on the same head keeps the first closure record", async () 
   });
 });
 
+const cli = path.join(import.meta.dir, "../../scripts/loop/close-gate-sequence.mjs");
+
 test("the CLI refuses a non-numeric --pr", () => {
-  const cli = path.join(import.meta.dir, "../../scripts/loop/close-gate-sequence.mjs");
   const run = spawnSync("node", [cli, "--head", HEAD, "--repo", "o/r", "--pr", "12abc"], { encoding: "utf8" });
   assert.equal(run.status, 1);
   assert.match(run.stderr, /usage/);
+});
+
+test("the CLI refuses a malformed --repo with the usage error", () => {
+  for (const repo of ["o", "", "o/r/x", "/r"]) {
+    const run = spawnSync("node", [cli, "--head", HEAD, "--repo", repo, "--pr", "7"], { encoding: "utf8" });
+    assert.equal(run.status, 1, `--repo ${JSON.stringify(repo)}`);
+    assert.match(run.stderr, /usage/);
+  }
+});
+
+test("the CLI --help exits 0 and prints usage with the --jq and --silent options", () => {
+  const run = spawnSync("node", [cli, "--help"], { encoding: "utf8" });
+  assert.equal(run.status, 0);
+  assert.match(run.stdout, /usage: close-gate-sequence/);
+  assert.match(run.stdout, /--jq/);
+  assert.match(run.stdout, /--silent/);
+});
+
+test("the close command is registered as a sanctioned command and a gate route", () => {
+  assert.equal(SANCTIONED_COMMANDS.lifecycle["close-gate-sequence"], "scripts/loop/close-gate-sequence.mjs");
+  assert.equal(SUBCOMMAND_ROUTES.gate["close-sequence"], "scripts/loop/close-gate-sequence.mjs");
 });

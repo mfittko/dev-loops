@@ -462,6 +462,10 @@ test("renderGuardHook emits a runnable script that names what it refused", () =>
   }
 });
 
+test("the pre-push fallback refusal names the runnable close-sequence invocation", () => {
+  assert.ok(renderGuardHook("pre-push", "main").includes("dev-loops-run scripts/loop/close-gate-sequence.mjs --head <baseline sha> --repo <owner/name> --pr <number>"));
+});
+
 // renderGuardHook is the function that actually interpolates the branch name
 // into shell, so it — not just its installDefaultBranchGuard caller — is the
 // trust boundary: it must refuse on its own, since nothing stops a direct
