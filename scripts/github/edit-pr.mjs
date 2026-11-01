@@ -329,17 +329,32 @@ function untickedRows(currentBody, nextBody) {
       if (fence !== null) continue;
       if (/^\s{0,3}#{1,6}\s/u.test(line)) section = line.trim();
       const m = CHECKBOX_ROW.exec(line);
-      if (m && m[1] !== " ") rows.push(`${section}\u0000${m[2]}`);
+      if (m) rows.push({ key: `${section}\u0000${m[2]}`, label: m[2], on: m[1] !== " " });
     }
     return rows;
   };
+  const labelOf = (key) => key.slice(key.indexOf("\u0000") + 1);
+  const nextRows = checked(nextBody);
+  const currentRows = checked(currentBody);
   const remaining = new Map();
-  for (const key of checked(nextBody)) remaining.set(key, (remaining.get(key) ?? 0) + 1);
-  return checked(currentBody).filter((key) => {
-    const left = remaining.get(key) ?? 0;
-    if (left > 0) remaining.set(key, left - 1);
+  for (const r of nextRows.filter((x) => x.on)) remaining.set(r.key, (remaining.get(r.key) ?? 0) + 1);
+  const lost = currentRows.filter((r) => r.on).filter((r) => {
+    const left = remaining.get(r.key) ?? 0;
+    if (left > 0) remaining.set(r.key, left - 1);
     return left === 0;
-  }).map((key) => key.slice(key.indexOf("\u0000") + 1));
+  });
+  // A heading rename or a move to another section changes the key. A lost row is a move when the next body carries
+  // the label checked under a (section, label) key the current body lacks; a tick swapped onto an existing row is not.
+  const existing = new Set(currentRows.map((r) => r.key));
+  const moved = new Map();
+  for (const r of nextRows) {
+    if (r.on && !existing.has(r.key)) moved.set(r.label, (moved.get(r.label) ?? 0) + 1);
+  }
+  return lost.filter((r) => {
+    const left = moved.get(r.label) ?? 0;
+    if (left > 0) moved.set(r.label, left - 1);
+    return left === 0;
+  }).map((r) => labelOf(r.key));
 }
 
 export async function editPr(

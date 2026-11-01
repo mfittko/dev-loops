@@ -498,6 +498,21 @@ test("editPr (#2898): the untick guard ignores fenced rows and scopes labels to 
   await assert.rejects(() => attempt("## AC\n- [x] Tests pass\n## Validation\n- [ ] Tests pass", "## AC\n- [ ] Tests pass\n## Validation\n- [x] Tests pass"), /untick or remove 1 checked row.*"Tests pass"/s);
 });
 
+test("editPr (#2898): the untick guard tolerates a heading rename and a section move, still refuses a real untick", async () => {
+  const attempt = (live, body) => editPr(
+    { repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] },
+    { run: stubGh().run, fetchPrContext: async () => ({ headRefName: "x", closingIssuesReferences: [], body: live }) },
+  );
+  // heading renamed: accepted
+  await attempt("## AC\n- [x] Tests pass", "## Acceptance criteria\n- [x] Tests pass");
+  // checked row moved to another section: accepted
+  await attempt("## AC\n- [x] Tests pass\n## DoD\n- [ ] Docs", "## AC\n## DoD\n- [ ] Docs\n- [x] Tests pass");
+  // rename plus a real untick of a second label: refused
+  await assert.rejects(() => attempt("## AC\n- [x] Tests pass\n- [x] Docs", "## Criteria\n- [x] Tests pass\n- [ ] Docs"), /untick or remove 1 checked row.*"Docs"/s);
+  // moved under a new heading but unticked there: refused
+  await assert.rejects(() => attempt("## AC\n- [x] Tests pass", "## Criteria\n- [ ] Tests pass"), /untick or remove 1 checked row.*"Tests pass"/s);
+});
+
 test("editPr (#2898): the untick guard sees every checkbox row form the gate parser reads", async () => {
   const attempt = (live, body) => editPr(
     { repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] },
