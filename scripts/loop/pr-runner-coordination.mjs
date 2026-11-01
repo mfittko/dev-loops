@@ -167,18 +167,21 @@ export async function runPrRunnerCoordination(options, { env = process.env, cwd 
     if (!active) {
       return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "claim", cwd, maxAgeMs });
     }
-    // A stale foreign owner is pinned (run id and generation; a missing timestamp pins as null)
+    // The observed owner (foreign or own) is pinned (run id and generation; a missing timestamp pins as null)
     // so a heartbeat or a new claim before the locked write is not displaced.
-    const pinned = active.runId !== runId
-      ? {
-        expectPreviousRunId: active.runId,
-        expectPreviousClaim: {
-          claimedAt: typeof active.claimedAt === "string" ? active.claimedAt : null,
-          updatedAt: typeof active.updatedAt === "string" ? active.updatedAt : null,
-        },
-      }
-      : {};
-    return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "takeover", cwd, maxAgeMs, ...pinned });
+    return claimRunnerOwnership({
+      repo: options.repo,
+      pr: options.pr,
+      runId,
+      mode: "takeover",
+      cwd,
+      maxAgeMs,
+      expectPreviousRunId: active.runId,
+      expectPreviousClaim: {
+        claimedAt: typeof active.claimedAt === "string" ? active.claimedAt : null,
+        updatedAt: typeof active.updatedAt === "string" ? active.updatedAt : null,
+      },
+    });
   }
   if (options.command === "assert") {
     return assertRunnerOwnership({

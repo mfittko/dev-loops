@@ -2174,3 +2174,17 @@ test("claim refusal with a NaN maxAgeMs falls back to the default like the detec
     await rm(cwd, { recursive: true, force: true });
   }
 });
+
+// Review fix: an own-claim takeover pins the observed claim, so a rival that took over meanwhile is not displaced.
+test("claimRunnerOwnership takeover pinned to an own aged claim refuses once a rival owns the PR", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-own-pin-"));
+  const options = { repo: "owner/repo", pr: 17, cwd };
+  try {
+    const own = await claimRunnerOwnership({ ...options, runId: "run-r" });
+    const pin = { expectPreviousRunId: "run-r", expectPreviousClaim: { claimedAt: own.activeRun.claimedAt, updatedAt: own.activeRun.updatedAt } };
+    await claimRunnerOwnership({ ...options, runId: "run-s", mode: "takeover", ...pin });
+    const refused = await claimRunnerOwnership({ ...options, runId: "run-r", mode: "takeover", ...pin });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.activeRun.runId, "run-s");
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
