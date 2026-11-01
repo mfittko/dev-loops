@@ -4149,7 +4149,7 @@ test("round_cap_reached with failing CI and unresolved threads still routes to t
   assert.equal(result.loopDisposition, DISPOSITION.UNRESOLVED_FEEDBACK);
   assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
   assert.match(result.reason, /CI at the head is failure; it must also be green/);
-  assert.doesNotMatch(result.reason, /resolved threads and green CI yield/);
+  assert.doesNotMatch(result.reason, /resolved threads and green CI open the/);
 });
 
 test("round_cap_reached with threads resolved and green CI allows run_pre_approval_gate (#3002 AC2)", () => {
@@ -4197,7 +4197,7 @@ test("the unmappable-state remedy for unresolved threads names the thread route 
 test("round_cap_reached with CI not required takes the thread route on pending CI and does not demand green CI (#3002)", () => {
   const result = evaluatePrGateCoordination({ ...capBase, preApprovalRequireCi: false, ciStatus: "pending", unresolvedThreadCount: 2 });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
-  assert.match(result.reason, /resolved threads yield `run_pre_approval_gate`; CI is not required/);
+  assert.match(result.reason, /Copilot convergence, or no current-head Copilot review, open the `run_pre_approval_gate` route; CI is not required/);
   assert.doesNotMatch(result.reason, /must also be green/);
 });
 
@@ -4208,6 +4208,8 @@ test("the unmappable-state remedy matches the failing fact (#3002)", () => {
   const body = evaluatePrGateCoordination({ ...unmapped, ciStatus: "success", unresolvedThreadCount: 0, copilotConvergenceOk: false });
   assert.match(body.reason, /GATE-EXEC-COPILOT-BODY-TO-JUDGE/);
   assert.doesNotMatch(body.reason, /wait-pr-checks/);
+  const credible = evaluatePrGateCoordination({ ...unmapped, ciStatus: "crediblyGreen", unresolvedThreadCount: 0, copilotConvergenceOk: true });
+  assert.match(credible.reason, /wait-pr-checks/);
 });
 
 test("round_cap_reached with non-green CI stays blocked exactly as today even with zero unresolved threads (#1472)", () => {
