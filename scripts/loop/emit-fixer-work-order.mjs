@@ -18,7 +18,7 @@ import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement"
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { deltaCoverageBinding, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { normalizeFixerDispositionHandoff } from "@dev-loops/core/loop/fixer-disposition";
-import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { sequenceClosurePath, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
@@ -498,7 +498,7 @@ export async function emitFixerWorkOrder({
   await rename(tempPath, planPath);
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: written last so a refused emit never grants the push; only a full work order grants the fixer.
   // Always under the canonical gate-artifact root (the location the push-authority check reads), whatever --tmp-root says.
-  writeSequenceMarker({ tmpRoot: resolveGateArtifactTmpRoot(cwd), baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName });
+  writeSequenceMarker({ tmpRoot: resolveGateArtifactTmpRoot(cwd), baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
   return { ...plan, planPath };
   } finally { await capture.release(); }
 }
@@ -641,7 +641,16 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
     execFileSync("git", ["merge-base", "--is-ancestor", headSha, `refs/heads/${branch}`], { cwd, stdio: "ignore", env: gitEnvNoDirOverrides() });
     contained = true;
   } catch { /* missing branch or head, or a reset/rewritten branch: stale authority */ }
-  const stale = (changed.length > 0 && `required fixer source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`)
+  // A sequence closed as abandoned retires its execution: a late pull of its work order is refused.
+  // The record sits at the marker baseline, which is the ref head or the review baseline head; only ENOENT means not closed.
+  let sequenceClosed = false;
+  if (!closureOnly) {
+    for (const head of new Set([headSha, ...(baseline ? [baseline.reviewBaselineHead] : [])])) {
+      sequenceClosed ||= await readFile(sequenceClosurePath(resolveGateArtifactTmpRoot(cwd), head, executionIdentity)).then(() => true, (error) => error?.code !== "ENOENT");
+    }
+  }
+  const stale = (sequenceClosed && `fixer execution ${executionIdentity} belongs to a gate fix sequence that was closed as abandoned`)
+    || (changed.length > 0 && `required fixer source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`)
     || (retired && `fixer execution ${executionIdentity} belongs to a ${order.gate} round at ${headSha} retired as ${retired}`)
     || (!contained && !closureOnly && `authority branch ${branch} no longer contains head ${headSha}; refresh the PR state and re-emit`);
   // The integrity hash is recomputed from the order, never the plan's copied field (as the judge adapter does).
