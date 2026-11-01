@@ -1157,6 +1157,36 @@ test("round_cap_clean_fallback blocks on crediblyGreen CI — unconfirmed CI is 
   assert.match(result.reason, /unconfirmed/i);
 });
 
+test("interpreter-derived round_cap_clean_fallback with crediblyGreen CI names the wait-pr-checks remedy (GATE-EXEC-ROUND-CAP-THREAD-ROUTE)", () => {
+  const interpretation = interpretLoopState({
+    prExists: true,
+    prNumber: 892,
+    copilotReviewRequestStatus: "none",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: false,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    copilotReviewRoundCount: 2,
+    ciStatus: "crediblyGreen",
+  }, { maxCopilotRounds: 2 });
+  assert.equal(interpretation.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  const result = evaluatePrGateCoordination({
+    pr: 892,
+    currentHeadSha: "ef84bca2deadbeef",
+    prDraft: false,
+    lifecycleState: interpretation.state,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    ciStatus: "crediblyGreen",
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 2,
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(result.reason, /wait-pr-checks\.mjs/);
+  assert.match(result.reason, /ef84bca2deadbeef/);
+});
+
 // #896: the formal-request guard must not fire for a round-cap clean fallback —
 // a post-cap clean head Copilot will not re-review. sameHeadCleanConverged is false
 // here (Copilot did not review THIS head), so the pre-#896 escape would not apply;

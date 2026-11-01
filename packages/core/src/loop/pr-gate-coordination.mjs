@@ -1984,7 +1984,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
         reason: ciStatus === "crediblyGreen"
-          ? "The Copilot round cap is exhausted, but the current head has unconfirmed CI (credibly green), so gate progression remains blocked until CI is confirmed green."
+          ? `The Copilot round cap is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), but the current head ${currentHeadSha ?? "unknown"} has unconfirmed CI (credibly green) and zero unresolved threads: run wait-pr-checks.mjs for the head to confirm CI, then re-run gate-coordination.`
           : "The Copilot round cap is exhausted, but the current head still has failing CI, so gate progression remains blocked until the failing checks are fixed and revalidated.",
         mergeStateStatus,
         conflictFiles,
