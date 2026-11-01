@@ -4,7 +4,7 @@
 
 Accepted — 2026-11-02 ([issue 2462](https://github.com/mfittko/dev-loops/issues/2462), follow-up slice B deferred from PR 2998).
 
-Amends [0218](0218-slice-a-cap-round-chain-and-single-child-join.md) and [0197](0197-cap-round-fixed-and-closure-round.md) for the pre-push delta input seam. Accepted records remain unchanged.
+Amends [0218](0218-slice-a-cap-round-chain-and-single-child-join.md) and [0197](0197-closure-round-survives-a-base-only-merge.md) for the pre-push delta input seam. Accepted records remain unchanged.
 
 ## Context
 
