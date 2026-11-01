@@ -138,7 +138,7 @@ async function checkUnit(unit, { role, receiptTmpRoot, tmpRoot, headSha }) {
 
 export const ARTIFACT_TIMEOUT_REMEDY = "Re-run the same command. After three consecutive timeout outcomes, stop and return the typed observation units_stalled.";
 
-// Final hand-back only, with no writer obligation on the child: the artifact parses as JSON and carries its terminal field
+// Any hand-back type, with no writer obligation on the child: the artifact parses as JSON and carries its terminal field
 // (`outcome`, as a DeltaPrePushReviewResult does), or, with no terminal field, stays byte-identical for ARTIFACT_STABLE_MS.
 // A missing, empty or non-JSON file is pending (a partial write reads as not done on this tick); any other read failure propagates.
 async function artifactReady(file, seen, at) {

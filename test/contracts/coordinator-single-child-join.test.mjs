@@ -10,7 +10,7 @@ test("COORDINATOR-SINGLE-CHILD-JOIN is registered and carries the no-turn-end an
   assert.ok(contract.includes("<!-- rule: COORDINATOR-SINGLE-CHILD-JOIN -->"));
   assert.ok(contract.indexOf("COORDINATOR-SINGLE-CHILD-JOIN -->") > contract.indexOf("rule: GATE-EXEC-HARNESS-JOIN"));
   assert.match(contract, /The hand-back path must not exist at dispatch: each fixer emission and each delta review invocation gets its own path, and the coordinator never reuses a hand-back path\./);
-  assert.match(contract, /when the child writes no extra marker: the file parses as JSON and carries the terminal field its schema requires/);
+  assert.match(contract, /, and the child writes no extra marker, when the file parses as JSON and carries the terminal field its schema requires/);
   assert.doesNotMatch(contract, /\.done|staging|never satisfies the join/);
   assert.match(contract, /satisfies the join after 10 unchanged seconds, for every hand-back type, including a full-phase fixer outputRef/);
   const adr = read("docs/decisions/0218-slice-a-cap-round-chain-and-single-child-join.md");

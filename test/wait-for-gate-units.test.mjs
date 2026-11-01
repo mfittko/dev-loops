@@ -318,7 +318,7 @@ test("wait-for-gate-units warns on stderr for deprecated --timeout-ms", () => {
 });
 
 // COORDINATOR-SINGLE-CHILD-JOIN: --artifact joins one child by its hand-back file.
-test("--artifact: an existing JSON artifact gives all_done; absent, empty and non-JSON files stay pending with the remedy", async () => {
+test("--artifact: a JSON write with the terminal field gives all_done at once; absent, empty, non-JSON and fresh interim writes stay pending with the remedy", async () => {
   await withDir(async (root) => {
     const file = path.join(root, "handback.json");
     const wait = (timeoutMs = 0) => waitForUnits({ artifact: file, timeoutMs, ...fakeClock() });
