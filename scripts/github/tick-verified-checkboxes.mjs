@@ -62,7 +62,7 @@ const CHECKBOX_RE = /^(\s*)((?:>\s*)*)([-*+]|\d+[.)])\s+\[([ xX])\]\s+(.*?)(\r?)
 // an already-`[x]` verified label is neither flipped nor reported as unmatched.
 // Returns { body, flipped, unmatched } where flipped = labels changed this call
 // and unmatched = verified labels absent from the body's checklist. An optional
-// `lineInScope(index)` limits the flip to the lines it accepts; the CLI omits it.
+// `lineInScope(index, label)` limits the flip to the lines it accepts; the CLI omits it.
 export function tickVerifiedCheckboxes(body, verifiedLabels, lineInScope = () => true) {
   const verified = new Set(
     (verifiedLabels ?? []).map((l) => String(l).trim()).filter((l) => l.length > 0),
@@ -71,11 +71,11 @@ export function tickVerifiedCheckboxes(body, verifiedLabels, lineInScope = () =>
   const found = new Set();
   const lines = String(body).split("\n");
   const nextLines = lines.map((line, index) => {
-    if (!lineInScope(index)) return line;
     const m = line.match(CHECKBOX_RE);
     if (!m) return line;
     const [, indent, quote, marker, mark, rest, cr] = m;
     const label = rest.trim();
+    if (!lineInScope(index, label)) return line;
     if (!verified.has(label)) return line;
     found.add(label);
     if (mark !== " ") return line; // already checked — leave it, idempotent
