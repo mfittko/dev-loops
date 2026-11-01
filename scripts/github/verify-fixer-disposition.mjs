@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { link, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -704,8 +704,8 @@ export async function assertDescendantThreadSites({ repo, pr, candidateHead, hea
 const REPORT_PATH_NEEDS_CHECK_ERROR = "--report-path is valid only with --check; pass --check, or drop --report-path";
 
 // Final-on-write join report (ADR 0222): published once per successful step-6 run, last and atomically, so a file at reportPath is always final.
-async function publishReport(reportPath, report) {
-  const temporary = `${reportPath}.tmp-${process.pid}`;
+export async function publishReport(reportPath, report) {
+  const temporary = `${reportPath}.tmp-${process.pid}-${randomUUID()}`;
   await mkdir(path.dirname(reportPath), { recursive: true });
   try {
     await writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`, "utf8");

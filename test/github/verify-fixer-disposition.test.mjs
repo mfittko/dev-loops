@@ -16,6 +16,7 @@ import {
   parseVerifyFixerDispositionCliArgs,
   verifyFixerDisposition,
   assertDescendantThreadSites,
+  publishReport,
 } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { selectActThreadBinding } from "../../scripts/github/_fixer-act-thread-bindings.mjs";
@@ -3149,5 +3150,19 @@ test("--report-path creates a missing parent directory and a failed publish keep
     const blocked = path.join(root, "blocker");
     await writeFile(blocked, "a file, so mkdir of a child fails");
     await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: path.join(blocked, "x.report") }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]).deps), /ci_failed.*lint/, "the original refusal is rethrown, not the publish error");
+  });
+});
+
+test("concurrent publishReport calls on one report path never truncate the published report", async () => {
+  await withRepoRoot(async (root) => {
+    for (let round = 0; round < 20; round += 1) {
+      const reportPath = path.join(root, `r${round}`, "x.report");
+      const reports = ["A", "B"].map((tag) => ({ tag, pad: tag.repeat(200000 + (tag === "A" ? 0 : 50000)) }));
+      const results = await Promise.allSettled(reports.map((report) => publishReport(reportPath, report)));
+      assert.equal(results.filter((r) => r.status === "fulfilled").length, 1, "exactly one publish wins");
+      assert.match(results.find((r) => r.status === "rejected").reason.message, /already holds the final report/);
+      const winner = reports[results.findIndex((r) => r.status === "fulfilled")];
+      assert.equal(await readFile(reportPath, "utf8"), `${JSON.stringify(winner, null, 2)}\n`, "the winner's report is intact");
+    }
   });
 });

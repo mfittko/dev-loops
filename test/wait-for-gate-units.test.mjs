@@ -1,7 +1,7 @@
 // dev-loops gate wait-for-units: the read-only join for a gate round's dispatched units.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, open, readFile, readdir, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { link, mkdir, open, readFile, readdir, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
@@ -448,4 +448,38 @@ test("--artifact rejects an empty or relative path with exit 1 and an absolute-p
     assert.equal(run.status, 1, JSON.stringify(value));
     assert.match(run.stdout, /absolute path/);
   }
+});
+
+test("--artifact and --after that are the same file by symlink or hard link are refused", async () => {
+  await withDir(async (root) => {
+    const after = path.join(root, "plan.json");
+    await writeFile(after, "{}");
+    const symlinked = path.join(root, "sym.json");
+    const hardLinked = path.join(root, "hard.json");
+    await symlink(after, symlinked);
+    await link(after, hardLinked);
+    for (const artifact of [symlinked, hardLinked]) {
+      await assert.rejects(waitForUnits({ artifact, after, timeoutMs: 0, ...fakeClock() }), /are the same file/, artifact);
+    }
+  });
+});
+
+test("--after is re-read on every poll: a reference replaced mid-wait makes an older artifact stale", async () => {
+  await withDir(async (root) => {
+    const file = path.join(root, "report.json");
+    const after = path.join(root, "plan.json");
+    await writeFile(after, "{}");
+    await writeFile(file, JSON.stringify({ interim: true }));
+    await setMtime(after, 1000);
+    await setMtime(file, 2000);
+    const clock = fakeClock();
+    let replaced = false;
+    const delay = async (ms) => {
+      if (!replaced) { replaced = true; await setMtime(after, 3000); }
+      await clock.delay(ms);
+    };
+    const result = await waitForUnits({ artifact: file, after, timeoutMs: 4000, now: clock.now, delay });
+    assert.equal(result.outcome, "timeout");
+    assert.equal(result.stale, true, "the newer reference made the artifact stale");
+  });
 });

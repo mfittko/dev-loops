@@ -149,12 +149,16 @@ export const ARTIFACT_STALE_REMEDY = "The artifact predates --after, so it is a 
 // (`outcome`, as a DeltaPrePushReviewResult does), or, with no terminal field, stays byte-identical for ARTIFACT_STABLE_MS.
 // A missing, empty or non-JSON file is pending (a partial write reads as not done on this tick); any other read failure propagates.
 // A file strictly older than the dispatch reference (`afterMs`) is a stale leftover and is pending.
-async function artifactReady(file, seen, at, afterMs) {
+async function artifactReady(file, seen, at, after) {
   let raw;
   let parsed;
   seen.stale = false;
   try {
+    // Re-stat --after each tick: a new emission replaces the plan, so a cached mtime would go stale.
+    const afterInfo = await stat(after);
+    const afterMs = afterInfo.mtimeMs;
     const info = await stat(file);
+    if (info.dev === afterInfo.dev && info.ino === afterInfo.ino) throw new Error(`--artifact ${file} and --after ${after} are the same file (symlink or hard link); pass the artifact the child writes and the emitted plan separately`);
     if (info.mtimeMs < afterMs) { seen.raw = undefined; seen.stale = true; return false; }
     raw = await readFile(file, "utf8"); parsed = JSON.parse(raw);
   } catch (error) { if (error?.code === "ENOENT" || error instanceof SyntaxError) { seen.raw = undefined; return false; } throw error; }
@@ -166,12 +170,11 @@ async function artifactReady(file, seen, at, afterMs) {
 async function waitForArtifact({ artifact, after, timeoutMs, now, delay }) {
   const afterInfo = await stat(after).catch(() => { throw new Error(`--after ${after} does not exist; pass a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath)`); });
   if (!afterInfo.isFile()) throw new Error(`--after ${after} is not a regular file; pass a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath)`);
-  const afterMs = afterInfo.mtimeMs;
   const started = now();
   const seen = {};
   for (;;) {
     const elapsedMs = now() - started;
-    if (await artifactReady(artifact, seen, now(), afterMs)) return { ok: true, outcome: "all_done", artifact, elapsedMs };
+    if (await artifactReady(artifact, seen, now(), after)) return { ok: true, outcome: "all_done", artifact, elapsedMs };
     const remaining = timeoutMs - elapsedMs;
     if (remaining <= 0) return { ok: true, outcome: "timeout", artifact, elapsedMs, ...(seen.stale ? { stale: true } : {}), remedy: seen.stale ? ARTIFACT_STALE_REMEDY : ARTIFACT_TIMEOUT_REMEDY };
     await delay(Math.min(RECHECK_INTERVAL_MS, remaining));
