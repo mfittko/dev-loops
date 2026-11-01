@@ -145,6 +145,18 @@ test("a work order never pulled past the dispatch grace closes as FIXER_NEVER_PU
   });
 });
 
+test("a fixer that pulls while the PR is read is sequence_live: marker kept, no closure record", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    const pullsDuringFetch = async () => { pull(tmpRoot, ex, new Date().toISOString()); return pr(HEAD)(); };
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: pullsDuringFetch, now: () => Date.now() + FIXER_GRACE_MS + 1000 }));
+    assert.equal(result.refusal, "sequence_live");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+    assert.equal(existsSync(sequenceClosurePath(tmpRoot, HEAD, ex.executionIdentity)), false);
+  });
+});
+
 test("unproven abandonment is refused: no execution, no branch, no PR, wrong branch, absent marker", async () => {
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });

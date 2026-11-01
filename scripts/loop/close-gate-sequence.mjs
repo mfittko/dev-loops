@@ -68,6 +68,12 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   // A concurrent re-emit rewrote the marker while the PR was read: that is a new sequence, never close it.
   const current = readSequenceMarker(tmpRoot, head);
   if (current?.execution?.executionIdentity !== executionIdentity || mtimeMs(sequenceMarkerPath(tmpRoot, head)) !== markerMtime) return refuse("sequence_live", `the marker for ${head} changed while it was checked`, "Rerun close-sequence; a re-emitted marker starts a live sequence.");
+  // A fixer that pulled during the PR read wrote its receipt after the first read: only ENOENT still proves it never pulled.
+  if (condition === "FIXER_NEVER_PULLED" && workOrderRef) {
+    let absent = false;
+    try { readFileSync(pullReceiptPath(tmpRoot, workOrderRef)); } catch (error) { absent = error?.code === "ENOENT"; }
+    if (!absent) return refuse("sequence_live", `fixer execution ${executionIdentity} pulled its work order while the PR was read`, "Wait for the fixer to hand back, then rerun.");
+  }
   // Record first, marker second: a failed write leaves the marker in place.
   const record = { baselineHead: head, executionIdentity: executionIdentity ?? null, condition, actor, closedAt: new Date(now()).toISOString() };
   const file = sequenceClosurePath(tmpRoot, head, executionIdentity);
