@@ -509,8 +509,8 @@ test("editPr (#2898): a heading rename inside one scope is accepted; a heading-o
   await attemptEdit("## AC\n- [x] Tests pass", "## Acceptance criteria\n- [x] Tests pass");
   // heading-only edit: the AC heading becomes a plain heading, the checked row leaves the AC scope
   await assert.rejects(() => attemptEdit("## AC\n- [x] Tests pass", "## Criteria\n- [x] Tests pass"), /untick or remove 1 checked row.*"Tests pass"/s);
-  // a plain heading nested into the AC scope is no loss of the other rows
-  await attemptEdit("## AC\n- [x] A\n## Notes\n- [x] B", "## AC\n- [x] A\n## Notes\n- [x] B");
+  // a plain heading nested into the AC scope moves its checked row into AC: its scope key changes, so it is refused
+  await assert.rejects(() => attemptEdit("## AC\n- [x] A\n## Notes\n- [x] B", "## AC\n- [x] A\n### Notes\n- [x] B"), /untick or remove 1 checked row.*"B"/s);
 });
 
 test("editPr (#2898): a four-backtick fence holding a three-backtick line hides its checked rows", async () => {
@@ -531,6 +531,8 @@ test("editPr (#2898): a Definition of done nested under Acceptance criteria is i
 
 test("editPr (#2898): a heading rename plus a real untick is refused naming the unticked row", async () => {
   await assert.rejects(() => attemptEdit("## AC\n- [x] Tests pass\n- [x] Docs", "## Acceptance criteria\n- [x] Tests pass\n- [ ] Docs"), /untick or remove 1 checked row.*"Docs"/s);
+  // a same-label checked row outside AC must not absorb the renamed row's credit
+  await assert.rejects(() => attemptEdit("## AC\n- [x] Tests pass\n- [x] Docs\n## Notes\n- [x] Tests pass", "## Acceptance criteria\n- [x] Tests pass\n- [ ] Docs\n## Notes\n- [x] Tests pass"), /untick or remove 1 checked row.*"Docs"/s);
 });
 
 test("editPr (#2898): renaming both AC and DoD headings with a swap moves every checked row out of its scope", async () => {

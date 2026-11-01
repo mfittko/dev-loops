@@ -12579,6 +12579,26 @@ test("tick (#2898): an ac id skips only the AC row of a label the DoD repeats; t
   });
 });
 
+test("tick (#2898): an open dod id keeps a Definition of done nested under Acceptance criteria unticked", async () => {
+  const body = ["## Acceptance criteria", "", "- [ ] Shared label", "", "### Definition of done", "", "- [ ] Shared label", ""].join("\n");
+  const pin = await writeTickPin("pinned.json", computeSpecDigest(extractSpecFromBody(body)));
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: body, verifiedItems: ["Shared label"], findings: [openAct({ judgeCriterion: "dod:0" })] }, async ({ post, editedBodies }) => {
+    await post({ specAuthority: pin });
+    const [acPart, dodPart] = editedBodies[0].body.split("### Definition of done");
+    assert.match(acPart, /- \[x\] Shared label/);
+    assert.doesNotMatch(dodPart, /- \[x\]/);
+  });
+});
+
+test("tick (#2898): a concurrent heading edit that moves a row into the AC scope refuses before any body write", async () => {
+  const withValidation = (heading) => TICK_PR_BODY.replace("## Definition of done\n", `${heading}\n\n- [ ] an unverified row\n\n## Definition of done\n`);
+  await withCompositionRound({ overallVerdict: "clean", prBody: withValidation("## Validation"), verifiedItems: TICK_ITEMS }, async ({ post, editedBodies, control }) => {
+    control.concurrentPrBody = withValidation("### Validation");
+    await assert.rejects(() => post({ findingsSeverityCounts: CLEAN_COUNTS }), /checklist of PR 17 changed after the gate read it/);
+    assert.equal(editedBodies.length, 0);
+  });
+});
+
 test("tick (#2898): a criterion supplied only through --findings-json keeps its row unticked next to a trusted ledger", async () => {
   await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS }, async ({ post, editedBodies }) => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-tick-findings-"));
