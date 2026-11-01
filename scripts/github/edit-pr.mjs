@@ -350,7 +350,10 @@ function untickedRows(currentBody, nextBody) {
   for (const r of nextRows) {
     if (r.on && !existing.has(r.key)) moved.set(r.label, (moved.get(r.label) ?? 0) + 1);
   }
+  // Only a row whose own key vanished from the next body can have moved; an unticked row that stays put is a plain untick.
+  const nextKeys = new Set(nextRows.map((r) => r.key));
   return lost.filter((r) => {
+    if (nextKeys.has(r.key)) return true;
     const left = moved.get(r.label) ?? 0;
     if (left > 0) moved.set(r.label, left - 1);
     return left === 0;

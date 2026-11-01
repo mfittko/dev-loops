@@ -509,6 +509,8 @@ test("editPr (#2898): the untick guard tolerates a heading rename and a section 
   await attempt("## AC\n- [x] Tests pass\n## DoD\n- [ ] Docs", "## AC\n## DoD\n- [ ] Docs\n- [x] Tests pass");
   // rename plus a real untick of a second label: refused
   await assert.rejects(() => attempt("## AC\n- [x] Tests pass\n- [x] Docs", "## Criteria\n- [x] Tests pass\n- [ ] Docs"), /untick or remove 1 checked row.*"Docs"/s);
+  // row unticked in place while a checked row with the same label is added under a new heading: refused
+  await assert.rejects(() => attempt("## AC\n- [x] Tests pass", "## AC\n- [ ] Tests pass\n## Extra\n- [x] Tests pass"), /untick or remove 1 checked row.*"Tests pass"/s);
   // moved under a new heading but unticked there: refused
   await assert.rejects(() => attempt("## AC\n- [x] Tests pass", "## Criteria\n- [ ] Tests pass"), /untick or remove 1 checked row.*"Tests pass"/s);
 });
