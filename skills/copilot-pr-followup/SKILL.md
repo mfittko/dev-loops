@@ -539,7 +539,7 @@ A fresh claim heartbeat alone is insufficient; a completed/control run may have 
 A takeover driven by the `copilot-pr-handoff` pre-flight (`supersedeStale: true`) reports which
 evidence authorized it as `recovery: { evidence: "exit_signal" | "stale_max_age", displacedRunId,
 maxAgeMs }` on the `runnerOwnership` result. The explicit `takeover` subcommand below carries no
-`recovery` field: it takes over on your instruction and reads no detector verdict. A result that
+`recovery` field: it takes over on your instruction, and the CLI refuses a live non-stale owner. A result that
 displaced nobody carries no `recovery` field either, so a
 handback records a recovery only when that field is present — a plain fresh claim is never
 reported as a recovery.
@@ -550,25 +550,24 @@ run the owner-only handoff before returning its handback and record its status t
 
 ```sh
 node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs handoff \
-  --repo <owner/name> --pr <number>
+  --repo <owner/name> --pr <number> --run-id <the id used at claim>
 ```
 
 `handoff` appends the exit signal and clears the claim in one locked write, so the successor's
 pre-flight finds no claim to recover: it takes the `no_owner_record` path, claims fresh and returns
 `claimed_new` with a `previousRun` naming the handed-off owner and no `recovery` field, without
 waiting out the stale window. A `recovery` field appears only when the successor actually displaces
-a claim. It adds no
-identity override: the run id comes from the verified runtime context, and `ownership_lost` or
+a claim. `ownership_lost` or
 `run_id_required` exits 1 with no state write.
 
 If a stale claim still blocks the merge because the completing run could not release it (crash, killed process, or a pre-#1109 run), the sanctioned recovery for a lock held by a COMPLETED run is an explicit takeover by the merge run:
 
 ```sh
 node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover \
-  --repo <owner/name> --pr <number>
+  --repo <owner/name> --pr <number> --run-id <the merge run's id>
 ```
 
-`takeover` seizes ownership for the current run id and records the displaced run under `previousRun`. Only take over when the prior owner is genuinely completed/dead. A genuinely active (non-stale) run must still be allowed to block — do not take over to race a live run.
+`takeover` seizes ownership for the given run id and records the displaced run under `previousRun`. It succeeds only once `status` reports `stale: true` (exit signal or max age); otherwise it refuses with `active_run_exists`, and a missing run id is `run_id_required`. Only take over when the prior owner is genuinely completed/dead. A genuinely active (non-stale) run must still be allowed to block — do not take over to race a live run.
 
 ### Mandatory post-merge retrospective checkpoint write
 

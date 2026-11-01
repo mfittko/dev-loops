@@ -113,6 +113,10 @@ reads, concise tool output and evidence reuse, and delegate heavy reading to nar
 Codex root, keep empty wakeups at most 10% of root turns and use the runtime's supported bounded
 join while child work is outstanding — a longest-timeout assumption is not a join.
 
+### Keeping the PR claim live through gate writers
+
+Prefix every `gate ...` writer call (`gate upsert-verdict`, `gate detect-evidence` and the rest) with `DEVLOOPS_RUN_ID=<the id used at claim>`. Without it the gate writer has no owner identity on Claude Code. Your claim then goes stale during a long child wait and the next writer call refuses it. With it, the writer heartbeats your claim and never needs a `takeover`.
+
 ### Releasing the PR claim before the hand-back
 
 A unit that owns a PR claim and returns its hand-back before a terminal stop must not leave that
@@ -120,14 +124,14 @@ claim to the stale window. Once you have verified with native evidence that your
 are joined, run the owner-only handoff and record its status in the hand-back:
 
 ```sh
-node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs handoff --repo <owner/name> --pr <number>
+node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs handoff --repo <owner/name> --pr <number> --run-id <the id used at claim>
 ```
 
 It appends your exit signal and clears the claim in one locked write, so the successor's pre-flight
 finds no claim to recover: it claims fresh with no `recovery` field. A `recovery` field appears only
 when the successor actually displaces a claim. Statuses: `handoff_recorded` (signal written, claim cleared),
 `handoff_noop` (nothing to hand off — no state write), `ownership_lost` and `run_id_required` (exit
-1, no state write). It adds no identity override; the run id comes from the verified runtime context.
+1, no state write). The verified runtime run id is the identity when one exists. Without one, the explicit `--run-id` is the identity, and the handoff succeeds only when it equals the active owner (`RUNNER-HANDOFF-TEARDOWN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
 
 Your successor's recovery is evidence-gated and typed: the handoff `runnerOwnership` result carries
 `recovery: { evidence: "exit_signal" | "stale_max_age", displacedRunId, maxAgeMs }` when a competing

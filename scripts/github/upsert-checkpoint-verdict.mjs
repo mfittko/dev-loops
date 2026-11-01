@@ -23,7 +23,7 @@ import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "./detect-check
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
-import { claimRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
+import { assertRunnerOwnership, claimRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
@@ -2633,7 +2633,7 @@ export async function assertGateValidationArtifact({ repo, pr, gate, headSha, re
   );
 }
 
-export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget } = {}) {
+export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner } = {}) {
   const gh = { env, ghCommand, repoRoot, runChild };
   // Optional --spec-authority stamps the RETURNED result (this script's
   // durable verdict record — it posts no file of its own) with the pinned
@@ -2664,9 +2664,22 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const envRunId = resolveRunId(env) ?? "";
   if (envRunId) {
     try {
-      const staleCheck = await detectStaleRunner({ repo: options.repo, pr: options.pr, cwd: repoRoot });
+      const staleCheck = await detectStale({ repo: options.repo, pr: options.pr, cwd: repoRoot });
       if (staleCheck.status === "stale_runner") {
-        await claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId: envRunId, cwd: repoRoot, mode: "takeover" });
+        // Pin the generation the stale read observed so a heartbeat before the locked write is not displaced.
+        const observed = staleCheck.activeRun;
+        if (observed?.runId === envRunId) {
+          // The owner refreshes its own aged claim with a heartbeat, never a takeover.
+          await assertRunnerOwnership({ repo: options.repo, pr: options.pr, runId: envRunId, cwd: repoRoot, requireExisting: true });
+        } else await claimRunnerOwnership({
+          repo: options.repo,
+          pr: options.pr,
+          runId: envRunId,
+          cwd: repoRoot,
+          mode: "takeover",
+          expectPreviousRunId: observed?.runId ?? null,
+          expectPreviousClaim: { claimedAt: observed?.claimedAt ?? null, updatedAt: observed?.updatedAt ?? null },
+        });
       }
     } catch {
       // Non-fatal: stale-runner takeover is best-effort. If it fails, the subsequent

@@ -24,6 +24,7 @@ import {
   upsertCheckpointVerdict as upsertWithCap,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
+import { detectStaleRunner } from "../../scripts/loop/_stale-runner-detection.mjs";
 import { buildFanoutEnforcement, buildPreMergeGateCheck, deriveEvidenceState, detectCheckpointEvidence, EVIDENCE_STATE, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { buildLogPath, writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../../scripts/github/_gate-artifact-paths.mjs";
@@ -5402,6 +5403,85 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
     assert.equal(payload.gate, "draft_gate");
     assert.equal(payload.commentId, 300);
   }, { prefix: "dev-loops-upsert-stale-takeover-" });
+});
+
+// #2884 dod:4: a live run R whose claim aged past the max age keeps it through gate upsert-verdict (refresh, never takeover).
+test("upsert-checkpoint-verdict by run R on R's own aged claim succeeds with no takeover history entry", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const claim = await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      runId: "run-R",
+      cwd: tempDir,
+      now: "2020-01-01T00:00:00.000Z",
+    });
+    const ghEnv = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: [],
+        issueComments: [],
+      }),
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: "[]\n",
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
+        stdout: "src/index.ts\n",
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":301,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-301"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+    ], {
+      cwd: tempDir,
+      env: { ...ghEnv, DEVLOOPS_RUN_ID: "run-R" },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const persisted = JSON.parse(await readFile(claim.filePath, "utf8"));
+    assert.equal(persisted.activeRun.runId, "run-R");
+    const types = persisted.history.map((entry) => entry.type);
+    assert.ok(types.includes("heartbeat"), "the same-run stale claim records a heartbeat");
+    assert.ok(!types.includes("refresh"), "the same-run stale claim is not refreshed through a takeover-mode claim");
+    assert.ok(!types.includes("takeover"), "the same-run stale claim is never recorded as a takeover");
+  }, { prefix: "dev-loops-upsert-own-aged-claim-" });
+});
+
+// #2884 ac:2: a heartbeat between the stale read and the locked write keeps the owner (the takeover pins the observed generation).
+test("upsert-checkpoint-verdict stale takeover refuses when the claim changes after the stale read", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const claim = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-A", cwd: tempDir, now: "2020-01-01T00:00:00.000Z" });
+    let observedStatus = null;
+    const detectStale = async (args) => {
+      const observed = await detectStaleRunner(args);
+      observedStatus = observed.status; // asserted below: the production catch swallows assertions raised here
+      await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-A", cwd: tempDir }); // A heartbeats after the read
+      return observed;
+    };
+    await upsertWithCap({ repo: "owner/repo", pr: 17, gate: "draft_gate" }, {
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "run-B" }),
+      repoRoot: tempDir,
+      detectStale,
+      runChild: async () => { throw new Error("stop after the stale preamble"); },
+    }).catch(() => {});
+    assert.equal(observedStatus, "stale_runner", "the stale preamble ran against a stale claim");
+    const persisted = JSON.parse(await readFile(claim.filePath, "utf8"));
+    assert.equal(persisted.activeRun.runId, "run-A", "A keeps the claim");
+    assert.ok(!persisted.history.some((entry) => entry.type === "takeover"), "no takeover is recorded");
+  }, { prefix: "dev-loops-upsert-stale-race-" });
 });
 
 test("parseUpsertCheckpointVerdictCliArgs defaults executionMode and validates the flag", () => {
