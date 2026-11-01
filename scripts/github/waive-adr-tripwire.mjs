@@ -27,6 +27,7 @@ import { fetchIssueBody as realFetchIssueBody } from "../loop/detect-issue-refin
 import { fetchDraftGateEvidence as realFetchDraftGateEvidence } from "./_gate-finding-surface.mjs";
 import { buildLogPath } from "./_gate-artifact-paths.mjs";
 import { editPr as realEditPr } from "./edit-pr.mjs";
+import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
 
 const USAGE = `Usage: waive-adr-tripwire.mjs --repo <owner/name> --pr <number>
 Write the head-pinned ADR tripwire waiver into the PR body (ADR-TRIPWIRE-STANDING-WAIVER).
@@ -39,8 +40,10 @@ create-pr.mjs refuse a hand-written one. It applies the waiver only when:
     lightweight pr_body path;
   - the ADR tripwire blocks, and every trigger is a skills/docs/*-contract.md path;
   - every triggering path appears, backticked, in a row of the linked issue's AC / DoD matrix;
-  - the current head has a clean draft_gate or pre_approval_gate verdict whose
-    recorded specDigest equals the specDigest of the linked issue's current body.
+  - the current head has a clean draft_gate or pre_approval_gate verdict, or the
+    cap-round-fixed proof (GATE-EXEC-ROUND-CAP-WAIVER-PROOF, the predicate
+    ready-for-review.mjs uses), whose recorded specDigest equals the specDigest of
+    the linked issue's current body.
 Otherwise it refuses with a typed reason and leaves the body unchanged. It never
 waives an extension-defaults.yaml trigger, a rule-modality reversal or removal,
 an unresolvable scan, a standingAuthorizations change, or any other approval.
@@ -122,6 +125,7 @@ export async function waiveAdrTripwire(options, {
   evaluateAdrTripwire = realEvaluateAdrTripwire,
   fetchDraftGateEvidence = realFetchDraftGateEvidence,
   readRecordedSpecDigest = defaultReadRecordedSpecDigest,
+  resolveCapRoundFixed = realResolveCapRoundFixed,
   editPr = realEditPr,
 } = {}) {
   const { repo, pr } = options;
@@ -189,9 +193,15 @@ export async function waiveAdrTripwire(options, {
   const gate = await fetchDraftGateEvidence({ repo, pr, headSha }, gh);
   // A post-ready push gets only a pre_approval_gate round, so that verdict is the alternative.
   // Every clean current-head gate is tried in order; the first matching digest wins.
-  const cleanGates = [gate?.currentHeadClean && "draft_gate", gate?.preApprovalCurrentHeadClean && "pre_approval_gate"].filter(Boolean);
-  if (cleanGates.length === 0) {
-    return refuse("no_clean_draft_gate", `no clean draft_gate or pre_approval_gate checkpoint verdict on the current head ${headSha.slice(0, 7)}`);
+  const sources = [gate?.currentHeadClean && "draft_gate", gate?.preApprovalCurrentHeadClean && "pre_approval_gate"].filter(Boolean)
+    .map((name) => ({ name, read: () => readRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate: name }) }));
+  // GATE-EXEC-ROUND-CAP-WAIVER-PROOF: with no clean verdict, the cap-round-fixed proof that ready-for-review.mjs accepts also qualifies.
+  if (sources.length === 0) {
+    const capRound = await resolveCapRoundFixed({ repo, pr, headSha, baseRefName: prState.baseRefName }, { repoRoot }).catch(() => null);
+    if (capRound) sources.push({ name: "cap-round-fixed proof", read: async () => (typeof capRound.log?.specAuthority?.specDigest === "string" ? capRound.log.specAuthority.specDigest : null) });
+  }
+  if (sources.length === 0) {
+    return refuse("no_clean_draft_gate", `no clean draft_gate or pre_approval_gate checkpoint verdict and no cap-round-fixed proof on the current head ${headSha.slice(0, 7)}. For a cap-round PR whose later commits are docs and tests only, run: dev-loops gate extend-cap-round-chain --repo ${repo} --pr ${pr}. Otherwise run: dev-loops loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
   }
   let currentSpecDigest;
   try {
@@ -201,12 +211,12 @@ export async function waiveAdrTripwire(options, {
   }
   let digestRefusal = null;
   let matched = false;
-  for (const gateName of cleanGates) {
-    const recorded = await readRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate: gateName });
+  for (const { name, read } of sources) {
+    const recorded = await read();
     if (recorded === currentSpecDigest) { matched = true; break; }
     // A recorded-but-stale digest outranks an unrecorded one in the refusal.
-    if (recorded !== null) digestRefusal = refuse("spec_digest_mismatch", `the ${gateName} recorded specDigest ${recorded}, but issue #${issue} now yields ${currentSpecDigest}`);
-    else digestRefusal ??= refuse("spec_digest_unrecorded", `the ${gateName} for head ${headSha.slice(0, 7)} recorded no specDigest`);
+    if (recorded !== null) digestRefusal = refuse("spec_digest_mismatch", `the ${name} recorded specDigest ${recorded}, but issue #${issue} now yields ${currentSpecDigest}`);
+    else digestRefusal ??= refuse("spec_digest_unrecorded", `the ${name} for head ${headSha.slice(0, 7)} recorded no specDigest`);
   }
   if (!matched) return digestRefusal;
 
