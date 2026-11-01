@@ -545,10 +545,10 @@ If a stale claim still blocks the merge because the completing run could not rel
 
 ```sh
 node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover \
-  --repo <owner/name> --pr <number>
+  --repo <owner/name> --pr <number> --run-id <the merge run's id>
 ```
 
-`takeover` seizes ownership for the current run id and records the displaced run under `previousRun`. Only take over when the prior owner is genuinely completed/dead. A genuinely active (non-stale) run must still be allowed to block — do not take over to race a live run.
+`takeover` seizes ownership for the given run id and records the displaced run under `previousRun`. It succeeds only once `status` reports `stale: true` (exit signal or max age); otherwise it refuses with `active_run_exists`, and a missing run id is `run_id_required`. Only take over when the prior owner is genuinely completed/dead. A genuinely active (non-stale) run must still be allowed to block — do not take over to race a live run.
 
 ### Mandatory post-merge retrospective checkpoint write
 

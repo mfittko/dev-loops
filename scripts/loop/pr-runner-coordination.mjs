@@ -8,6 +8,7 @@ import { resolveRunId as resolveEnvRunId } from "@dev-loops/core/loop/run-contex
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import {
   assertRunnerOwnership,
+  buildConflict,
   claimRunnerOwnership,
   handoffRunnerOwnership,
   loadRunnerCoordinationState,
@@ -147,12 +148,20 @@ export async function runPrRunnerCoordination(options, { env = process.env, cwd 
       return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "takeover", cwd });
     }
     // Refuse a live non-stale foreign owner before any write (no history entry).
-    const { state } = await loadRunnerCoordinationState({ repo: options.repo, pr: options.pr, cwd });
+    const { state, filePath } = await loadRunnerCoordinationState({ repo: options.repo, pr: options.pr, cwd });
     const active = state?.activeRun;
     const { stale, staleReason } = describeRunnerLiveness(state, { maxAgeMs: resolveStaleRunnerMaxAgeMs({}, env) });
     if (active && active.runId !== runId && !stale) {
-      return { ok: false, error: "active_run_exists", repo: options.repo.trim().toLowerCase(), pr: options.pr, runId, activeRun: active,
-        message: `Takeover refused: ${staleReason}. Wait for it or ask the operator.` };
+      return buildConflict({
+        error: "active_run_exists",
+        repo: state.target.repo,
+        pr: state.target.pr,
+        runId,
+        activeRun: active,
+        filePath,
+        exitSignals: state.exitSignals,
+        message: `Takeover refused: ${staleReason}. Wait for it or ask the operator.`,
+      });
     }
     // No owner at the pre-read: claim mode refuses an owner that appears before the locked write.
     if (!active) {

@@ -5453,7 +5453,7 @@ test("upsert-checkpoint-verdict by run R on R's own aged claim succeeds with no 
     const persisted = JSON.parse(await readFile(claim.filePath, "utf8"));
     assert.equal(persisted.activeRun.runId, "run-R");
     const types = persisted.history.map((entry) => entry.type);
-    assert.ok(types.includes("refresh"), "the same-run stale claim is refreshed");
+    assert.ok(types.includes("heartbeat"), "the same-run stale claim records a heartbeat");
     assert.ok(!types.includes("takeover"), "the same-run stale claim is never recorded as a takeover");
   }, { prefix: "dev-loops-upsert-own-aged-claim-" });
 });

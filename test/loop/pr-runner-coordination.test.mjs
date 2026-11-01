@@ -1970,8 +1970,10 @@ test("status reports stale with a reason and takeover refuses a live owner witho
     const refused = await runPrRunnerCoordination({ ...base, command: "takeover", runId: "successor" }, { env: {}, cwd });
     assert.equal(refused.ok, false);
     assert.equal(refused.error, "active_run_exists");
+    assert.equal(refused.filePath, claim.filePath, "the takeover refusal has the same shape as the claim refusal");
+    assert.equal(refused.repo, "owner/repo");
     assert.equal(await readFile(claim.filePath, "utf8"), before, "a refused takeover writes no history");
-    const claimConflict = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "successor", cwd });
+    const claimConflict = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "successor", cwd, maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS });
     assert.match(claimConflict.message, /owner run owner is live .*Wait for it or ask the operator/);
 
     const raw = JSON.parse(before);
@@ -1995,10 +1997,10 @@ test("owner run heartbeats a claim past the max age without a takeover", async (
     const raw = JSON.parse(await readFile(claim.filePath, "utf8"));
     raw.activeRun.claimedAt = raw.activeRun.updatedAt = new Date(Date.now() - STALE_RUNNER_DEFAULT_MAX_AGE_MS - 60_000).toISOString();
     await writeFile(claim.filePath, JSON.stringify(raw));
-    assert.equal((await detectStaleRunner({ repo: "owner/repo", pr: 17, cwd })).ok, false);
+    assert.equal((await detectStaleRunner({ repo: "owner/repo", pr: 17, cwd, maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS })).ok, false);
     const owned = await ensureAsyncRunnerOwnership({ ...options, claimIfMissing: false });
     assert.equal(owned.ok, true);
-    assert.equal((await detectStaleRunner({ repo: "owner/repo", pr: 17, cwd })).ok, true);
+    assert.equal((await detectStaleRunner({ repo: "owner/repo", pr: 17, cwd, maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS })).ok, true);
     const types = JSON.parse(await readFile(claim.filePath, "utf8")).history.map((entry) => entry.type);
     assert.ok(types.includes("heartbeat"));
     assert.ok(!types.includes("takeover"));
@@ -2020,7 +2022,7 @@ test("status reports stale for an owner with a recorded exit signal, and a live 
   const base = { command: "status", repo: "owner/repo", pr: 17 };
   try {
     await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "owner", cwd });
-    const live = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "successor", cwd });
+    const live = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "successor", cwd, maxAgeMs: STALE_RUNNER_DEFAULT_MAX_AGE_MS });
     assert.match(live.message, /Wait for it or ask the operator/);
     assert.doesNotMatch(live.message, /takeover --repo/);
     await recordExitSignalForRunner({ repo: "owner/repo", pr: 17, runId: "owner", cwd });
@@ -2109,5 +2111,30 @@ test("claim refusal wording follows the injected clock and max age, not the host
     assert.match(live.message, /owner run owner is live .*Wait for it or ask the operator/);
     const stale = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "successor", cwd, now: at(1_000), maxAgeMs: 500 });
     assert.match(stale.message, /stale owner run owner .*takeover --repo owner\/repo --pr 17 --run-id successor/);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("assert refusal wording names live or stale from the injected clock and max age", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-assert-liveness-"));
+  const t0 = Date.parse("2026-01-01T00:00:00.000Z");
+  const at = (ms) => new Date(t0 + ms).toISOString();
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "A", cwd, now: at(0) });
+    const live = await assertRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "B", cwd, now: at(1_000), maxAgeMs: 60_000 });
+    assert.equal(live.error, "ownership_lost");
+    assert.match(live.message, /owner run A is live .*Wait for it or ask the operator/);
+    const stale = await assertRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "B", cwd, now: at(1_000), maxAgeMs: 500 });
+    assert.match(stale.message, /stale owner run A .*takeover --repo owner\/repo --pr 17 --run-id B/);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("claim refusal with a NaN maxAgeMs falls back to the default like the detector", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-nan-max-age-"));
+  const t0 = Date.parse("2026-01-01T00:00:00.000Z");
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "A", cwd, now: new Date(t0).toISOString() });
+    const later = new Date(t0 + STALE_RUNNER_DEFAULT_MAX_AGE_MS + 60_000).toISOString();
+    const refused = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "B", cwd, now: later, maxAgeMs: NaN });
+    assert.match(refused.message, /stale owner run A/);
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });

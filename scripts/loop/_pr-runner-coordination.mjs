@@ -294,13 +294,13 @@ export function normalizeRunnerCoordinationState(raw, { repo, pr } = {}) {
 function ownerVerdictSuffix(state, repo, pr, runId, { now, maxAgeMs } = {}) {
   const { stale, staleReason } = describeRunnerLiveness(state, {
     now: Number.isFinite(Date.parse(now)) ? Date.parse(now) : Date.now(),
-    maxAgeMs: maxAgeMs ?? resolveStaleRunnerMaxAgeMs(),
+    maxAgeMs: resolveStaleRunnerMaxAgeMs({ staleRunnerMaxAgeMs: maxAgeMs }),
   });
   return stale
     ? ` ${staleReason}. Run: pr-runner-coordination.mjs takeover --repo ${repo} --pr ${pr} --run-id ${runId}.`
     : ` ${staleReason}. Wait for it or ask the operator.`;
 }
-function buildConflict({ error, repo, pr, runId, activeRun, filePath, message, exitSignals = null }) {
+export function buildConflict({ error, repo, pr, runId, activeRun, filePath, message, exitSignals = null }) {
   const payload = {
     ok: false,
     error,

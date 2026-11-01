@@ -23,7 +23,7 @@ import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "./detect-check
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
-import { claimRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
+import { assertRunnerOwnership, claimRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
@@ -2668,7 +2668,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       if (staleCheck.status === "stale_runner") {
         // Pin the generation the stale read observed so a heartbeat before the locked write is not displaced.
         const observed = staleCheck.activeRun;
-        await claimRunnerOwnership({
+        if (observed?.runId === envRunId) {
+          // The owner refreshes its own aged claim with a heartbeat, never a takeover.
+          await assertRunnerOwnership({ repo: options.repo, pr: options.pr, runId: envRunId, cwd: repoRoot, requireExisting: true });
+        } else await claimRunnerOwnership({
           repo: options.repo,
           pr: options.pr,
           runId: envRunId,
