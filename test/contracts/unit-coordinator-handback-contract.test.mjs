@@ -229,7 +229,7 @@ test("2955: one canonical run-ending list in the shared prose, no harness-specif
     for (const item of RUN_ENDING_CASES) assert.ok(list.includes(item), `${doc} run-ending list: ${item}`);
     assert.ok(!list.includes("SubagentHandback"), `${doc} shared paragraph must not name SubagentHandback`);
     // The Claude Code one-report rule cites the list rather than restating a third one.
-    assert.match(text, /final report at a run-ending case of the Unit coordinator boundaries section/);
+    assert.match(text, /final report at one of the run-ending cases in the Unit coordinator boundaries section, the one canonical list\./);
   }
   for (const doc of ["agents/dev-loop.agent.md", ".claude/agents/dev-loop.md"]) {
     const text = squeeze(await readRepo(doc));

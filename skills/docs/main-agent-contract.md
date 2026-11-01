@@ -226,7 +226,7 @@ The rule binds the coordinator on every harness, so it stays outside the section
 
 - A pause ends the turn with plain text and never calls `SubagentHandback`. The harness "report has not been delivered" prompt after a pause is answered in plain text too.
 - An answer to a question typed into the dev-loop coordinator's thread, and a duplicate child wake, are pauses when a child is in flight and the run state did not change (no dispatch, push, gate result or new stop). With no child in flight, the dev-loop coordinator answers and continues its runnable next step in the same turn.
-- The one `SubagentHandback` call of a run carries its final report at a run-ending case of the Unit coordinator boundaries section (`final_approval_ready`, a stop that needs a caller decision, or the route's own terminal completion, for example a headless standalone `review` that has posted its review).
+- The one `SubagentHandback` call of a run carries its final report at one of the run-ending cases in the Unit coordinator boundaries section, the one canonical list.
 - The dev-loop coordinator never calls `SubagentHandback` while a child is in flight. Every report with a child in flight is a plain-text pause.
 - A turn end with no child in flight is never a pause. The dev-loop coordinator never ends silently while its next step is runnable.
 - After a refused `SubagentHandback`, the dev-loop coordinator makes no further call in that run and ends the turn with the full report as plain text.
