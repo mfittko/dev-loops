@@ -19,14 +19,14 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightFieldsSpec, preflightJqFilter } from "../lib/jq-output.mjs";
 import { viewPr } from "../github/view-pr.mjs";
 import { pullReceiptPath } from "../github/_work-order-protocol.mjs";
-import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
+import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 
 export const FIXER_GRACE_MS = 30 * 60 * 1000; // The runner-lock TTL: a dispatch or a fixer younger than this may be live.
 
 const USAGE = `usage: close-gate-sequence.mjs --head <marker baseline sha> --repo <owner/name> --pr <number> [--help]\n\n${JQ_OUTPUT_USAGE}`;
 const refuse =(refusal, reason, remedy) => ({ ok: false, refusal, reason, remedy });
 /** True when the sha is a commit object in the local repository. */
-export const localCommitExists = (sha) => spawnSync("git", ["cat-file", "-e", `${sha}^{commit}`], { stdio: "ignore" }).status === 0;
+export const localCommitExists = (sha) => spawnSync("git", ["cat-file", "-e", `${sha}^{commit}`], { stdio: "ignore", env: gitEnvNoDirOverrides() }).status === 0;
 const mtimeMs = (file) => { try { return statSync(file).mtimeMs; } catch { return null; } };
 
 /** The recorded actor: DEVLOOPS_RUN_ID, else the OS user; a uid without a passwd entry makes userInfo throw, so fall back to "unknown". */
@@ -54,7 +54,7 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
     if (receiptFound && (receipt === null || typeof receipt !== "object" || Array.isArray(receipt))) return refuse("fixer_running", `the pull receipt of fixer execution ${executionIdentity} is not a JSON object, so a pull cannot be ruled out`, "Rerun once the receipt is readable, or ask the operator.");
   }
   const markerMtime = mtimeMs(sequenceMarkerPath(tmpRoot, head));
-  const pulled = receipt !== null && receipt.executionIdentity === executionIdentity;
+  const pulled = receiptFound; // any receipt object at the work order ref proves a pull, whatever its content
   const pulledAt = pulled ? Date.parse(receipt.pulledAt) : NaN;
   // A fixer that pulled its work order and has not handed back (no outputRef) inside the grace is running.
   if (pulled && !(Number.isFinite(pulledAt) && now() - pulledAt >= FIXER_GRACE_MS) && mtimeMs(outputRef) === null) {

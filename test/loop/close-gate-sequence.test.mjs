@@ -7,7 +7,7 @@ import { test } from "bun:test";
 import { readSequenceMarker, recoveryHint, sequenceClosurePath, sequenceMarkerPath, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../../cli/index.mjs";
-import { FIXER_GRACE_MS, closeGateSequence, defaultActor } from "../../scripts/loop/close-gate-sequence.mjs";
+import { FIXER_GRACE_MS, closeGateSequence, defaultActor, localCommitExists } from "../../scripts/loop/close-gate-sequence.mjs";
 import { SANCTIONED_COMMANDS } from "../../scripts/loop/sanctioned-commands.mjs";
 import { withTempDir } from "../_helpers.mjs";
 
@@ -367,5 +367,32 @@ test("the CLI forwards --fields and --silent on a successful close", async () =>
     writeSequenceMarker({ tmpRoot: path.join(dir, "tmp"), baselineHead: HEAD, branch: "feat", execution: execution(dir) });
     const falsy = spawnSync("node", [...args, "--silent", "--jq", ".condition == \"X\""], { cwd: dir, encoding: "utf8", env });
     assert.equal(falsy.status, 1);
+  });
+});
+
+test("a receipt that is an empty object or names another execution still reads as a running fixer", async () => {
+  for (const content of [{}, { executionIdentity: "other", pulledAt: new Date(T0 - 60_000).toISOString() }]) {
+    await withTempDir(async (tmpRoot) => {
+      const ex = execution(tmpRoot);
+      writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+      const file = pullReceiptPath(tmpRoot, ex.workOrderRef);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, JSON.stringify(content));
+      assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "fixer_running");
+    });
+  }
+});
+
+test("localCommitExists ignores an inherited GIT_DIR that points at another repository", async () => {
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
+  await withTempDir(async (other) => {
+    spawnSync("git", ["init", "-q", other]);
+    const saved = process.env.GIT_DIR;
+    process.env.GIT_DIR = path.join(other, ".git");
+    try {
+      assert.equal(localCommitExists(head), true);
+    } finally {
+      if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved;
+    }
   });
 });
