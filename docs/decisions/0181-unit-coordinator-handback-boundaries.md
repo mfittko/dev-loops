@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-24 ([issue 2532](https://github.com/mfittko/dev-loops/issues/2532), [efficiency epic 2268](https://github.com/mfittko/dev-loops/issues/2268)).
 
+Superseded in part by [0220](0220-coordinator-report-points-replace-per-phase-handback.md): the forced hand-back at the unit boundary and the hard 150K cap.
+
 ## Context
 
 One coordinator ran a whole dev-loop cycle and its context snowballed: the real-run
@@ -104,13 +106,3 @@ The field adds no authority. It names when a coordinator stops; it does not gran
 GitHub writes, merge, tagging or publishing, and it does not replace human approval.
 Peak-context compliance remains measured on real runs, and a missing native
 measurement is reported as unavailable rather than zero.
-
-## Superseded in part by issue 2955
-
-Issue 2955 removes the mandatory fresh unit coordinator per phase and the hard 150K cap.
-`unitBoundaries.handBackAfter` is renamed `reportAfter` with the same derivation, ordering,
-validation and `resume`. At a report point the coordinator records status through existing
-evidence, re-resolves authoritative state and continues. 150K peak input is an advisory
-retrospective diagnostic (`COORDINATOR-CONTINUITY-SOFT-CAP` in the main-agent contract). The
-route-derived boundary decision above still stands; only the forced hand-back and the cap are
-superseded.

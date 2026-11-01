@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-26 ([issue 2611](https://github.com/mfittko/dev-loops/issues/2611), slice 1).
 
+Superseded in part by [0220](0220-coordinator-report-points-replace-per-phase-handback.md): the final report no longer includes a hand-back at the first `unitBoundaries.handBackAfter` boundary.
+
 Amends [0056](0056-bounded-parallel-gate-dispatch.md). The body of 0056 is unchanged. On Claude Code, the dev-loop coordinator may end its turn as a plain-text pause while a child runs, so the "No mid-chain turn-ending" bullet of 0056 no longer binds that coordinator there. Pi is unchanged. Related: [0069](0069-claude-harness-fanout-concurrency-clamp.md), [0095](0095-single-wave-gate-fanout.md), [0112](0112-gate-coordinator-agent-joins-the-agent-taxonomy.md).
 
 ## Context
@@ -16,7 +18,7 @@ Issue 2579 already replaced the universal blocking join with a harness-scoped jo
 
 On Claude Code the report path has three parts.
 
-1. A dev-loop coordinator run makes one `SubagentHandback` call. It carries the final report: `final_approval_ready`, a stop that needs a caller decision, or the route's own terminal completion (for example a headless standalone `review` that has posted its review).
+1. A dev-loop coordinator run makes one `SubagentHandback` call. It carries the final report: the hand-back at the first `unitBoundaries.handBackAfter` boundary, `final_approval_ready`, a stop that needs a caller decision, or the route's own terminal completion (for example a headless standalone `review` that has posted its review).
 2. A pause is a turn end while the run is not finished. It ends the turn with plain text and never calls `SubagentHandback`. After a refused `SubagentHandback` the coordinator makes no further call and ends the turn with the full report as plain text.
 3. The orchestrator reads the last assistant message of the coordinator's output file before it resumes or re-asks the coordinator. It sends all decisions for one block in one message.
 
