@@ -188,7 +188,10 @@ carries `unitBoundaries` (`reportAfter` + `resume`, derived from the target and 
 [Workflow Handoff Contract](workflow-handoff-contract.md#envelope-schema)). `reportAfter` is an
 ordered list of **report points**. At each listed report point it reaches, in order, the coordinator
 records status through existing evidence (PR comment or gate ledger), re-resolves authoritative
-state with `unitBoundaries.resume` and **continues**. A report point never forces a successor.
+state with `unitBoundaries.resume` and **continues**. Re-resolving is a read of current state through
+the resume identity. A pull-dispatched coordinator keeps the pulled work order as its digest-pinned
+authority and builds no new envelope. After draft PR creation or a verdict, it adopts the new PR
+identity for state reads and gate calls under the same assigned task. A report point never forces a successor.
 
 The following is the one canonical list of run-ending cases (the "run-ending cases"). The coordinator hands
 back only at `final_approval_ready`, a stop that needs a decision, the route's own terminal

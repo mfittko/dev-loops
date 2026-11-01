@@ -77,7 +77,10 @@ You run the cycle until a real stop. The envelope's `unitBoundaries` names your 
 derived from the target and route, never from a predecessor's prose. `reportAfter` is an
 ordered list. At each listed report point you reach, in order, record status through existing
 evidence (PR comment or gate ledger), re-resolve authoritative state with `unitBoundaries.resume`
-and **continue**. A unit that owns no PR yet reaches `draft_pr_opened` when it opens its draft PR;
+and **continue**. Re-resolving is a read of current state through the resume identity. A
+pull-dispatched coordinator keeps the pulled work order as its digest-pinned authority and builds no
+new envelope. After draft PR creation or a verdict, it adopts the new PR identity for state reads
+and gate calls under the same assigned task. A unit that owns no PR yet reaches `draft_pr_opened` when it opens its draft PR;
 a unit that already owns a PR reaches `gate_verdict_posted` after posting its own gate verdict. Do
 not wait for a report point your own route cannot reach. An envelope with no `unitBoundaries`
 field has no report point: a terminal, read-only (`review`, `ui_review`) or `wait_watch` route

@@ -96,6 +96,9 @@ const RULE_PROSE = {
     "and an open question if one is needed",
     // Only final_approval is a recorded naming approximation; issue_intake reaches both points.
     "recorded naming approximation",
+    // A pull-dispatched coordinator keeps its pulled order and adopts the new PR identity.
+    "builds no new envelope",
+    "adopts the new PR identity for state reads and gate calls under the same assigned task",
   ],
   "skills/docs/main-agent-contract.md": [
     "never writes or summarizes the next brief",
@@ -105,6 +108,7 @@ const RULE_PROSE = {
     // The packet's closed field list also carries the optional open question (dod:8).
     "and an open question if one is needed",
     "at most 10% empty wakeups, measured against root turns rather than wait duration",
+    "adopts the new PR identity for state reads and gate calls under the same assigned task",
   ],
 };
 

@@ -145,6 +145,10 @@ brief has to restate the boundary:
   `loop startup` (this document and the Main Agent Contract) and treating the pulled order as its
   envelope with no new envelope built (`agents/dev-loop.agent.md`) are both stated, and this
   field's emission and validation depend on neither. No re-resolution step is added for it.
+  At a report point, re-resolving is a read of current state through the resume identity. A
+  pull-dispatched coordinator keeps the pulled work order as its digest-pinned authority and builds
+  no new envelope. After draft PR creation or a verdict, it adopts the new PR identity for state
+  reads and gate calls under the same assigned task.
 
 The field is absent where the route has no unit to hand back: a terminal reconciliation envelope
 (`stopRules` are already terminal), a read-only `review` or `ui_review` round (one round, no
