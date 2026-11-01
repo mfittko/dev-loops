@@ -318,10 +318,48 @@ test("wait-for-gate-units warns on stderr for deprecated --timeout-ms", () => {
 });
 
 // COORDINATOR-SINGLE-CHILD-JOIN: --artifact joins one child by its hand-back file.
+// The dispatch reference (--after): a file written before dispatch, here dated to the epoch's first second.
+const referenceFile = async (root) => { const file = path.join(root, "dispatch.ref"); await writeFile(file, ""); await setMtime(file, 1); return file; };
+
+test("--artifact: a file older than the --after reference is pending and reports stale: true; a newer one is done", async () => {
+  await withDir(async (root) => {
+    const file = path.join(root, "report.json");
+    const after = path.join(root, "plan.json");
+    await writeFile(after, "{}");
+    await writeFile(file, JSON.stringify({ outcome: "complete" }));
+    await setMtime(after, 2000);
+    await setMtime(file, 1000);
+    const stale = await waitForUnits({ artifact: file, after, timeoutMs: 0, ...fakeClock() });
+    assert.equal(stale.outcome, "timeout");
+    assert.equal(stale.stale, true);
+    await setMtime(file, 3000);
+    assert.equal((await waitForUnits({ artifact: file, after, timeoutMs: 0, ...fakeClock() })).outcome, "all_done");
+    await setMtime(file, 2000);
+    assert.equal((await waitForUnits({ artifact: file, after, timeoutMs: 0, ...fakeClock() })).outcome, "all_done", "an equal mtime is not stale");
+    await assert.rejects(waitForUnits({ artifact: file, after: path.join(root, "missing.ref"), timeoutMs: 0, ...fakeClock() }), /--after .* does not exist/);
+  });
+});
+
+test("--artifact requires an absolute --after with exit 1 and a remedy", () => {
+  for (const extra of [[], ["--after", "rel.ref"], ["--after", ""]]) {
+    assert.throws(() => parseWaitArgs(["--artifact", "/a.json", ...extra]), /--artifact requires --after <absolute path>.*Re-run with --after/, JSON.stringify(extra));
+    const run = spawnSync(process.execPath, [SCRIPT, "--artifact", "/a.json", ...extra], { encoding: "utf8" });
+    assert.equal(run.status, 1);
+    assert.match(run.stdout, /Re-run with --after/);
+  }
+  assert.throws(() => parseWaitArgs(["--after", "/a.ref", "--emit-plan", "p", "--tmp-root", "t"]), /--after applies only to --artifact/);
+});
+
+test("the artifact timeout remedy names the notification fallback", () => {
+  return waitForUnits({ artifact: "/nonexistent/x.json", after: process.execPath, timeoutMs: 0, ...fakeClock() }).then((result) => {
+    assert.match(result.remedy, /end your turn once.*COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK.*do not repeat the wait/);
+  });
+});
 test("--artifact: a JSON write with the terminal field gives all_done at once; absent, empty, non-JSON and fresh interim writes stay pending with the remedy", async () => {
   await withDir(async (root) => {
     const file = path.join(root, "handback.json");
-    const wait = (timeoutMs = 0) => waitForUnits({ artifact: file, timeoutMs, ...fakeClock() });
+    const after = await referenceFile(root);
+    const wait = (timeoutMs = 0) => waitForUnits({ artifact: file, after, timeoutMs, ...fakeClock() });
     const absent = await wait();
     assert.equal(absent.outcome, "timeout");
     assert.match(absent.remedy, /Re-run the same command.*three consecutive timeout.*units_stalled/);
@@ -340,7 +378,8 @@ test("--artifact: a hand-back with no terminal field is done only after it stays
   await withDir(async (root) => {
     const file = path.join(root, "record.json");
     await writeFile(file, JSON.stringify({ headSha: HEAD, siteCoverage: [] }));
-    const wait = (timeoutMs, clock = fakeClock()) => waitForUnits({ artifact: file, timeoutMs, ...clock });
+    const after = await referenceFile(root);
+    const wait = (timeoutMs, clock = fakeClock()) => waitForUnits({ artifact: file, after, timeoutMs, ...clock });
     assert.equal((await wait(9000)).outcome, "timeout", "unchanged for under 10 seconds is pending");
     assert.equal((await wait(15000)).outcome, "all_done", "unchanged for 10 seconds is final");
     // A rewrite at t=8000 restarts the stability window, so the join is still pending at t=15000.
@@ -351,10 +390,10 @@ test("--artifact: a hand-back with no terminal field is done only after it stays
 });
 
 test("--artifact is a mode of its own: combined with --emit-plan, --judge-plan, --unit or --tmp-root it fails with exit 1", () => {
-  assert.deepEqual(Object.keys(parseWaitArgs(["--artifact", "/a.json", "--timeout", "0"])).slice(0, 2), ["artifact", "timeoutMs"]);
+  assert.deepEqual(Object.keys(parseWaitArgs(["--artifact", "/a.json", "--after", "/b.json", "--timeout", "0"])).slice(0, 3), ["artifact", "after", "timeoutMs"]);
   for (const extra of [["--emit-plan", "p"], ["--judge-plan", "p"], ["--unit", "u"], ["--tmp-root", "t"]]) {
-    assert.throws(() => parseWaitArgs(["--artifact", "a.json", ...extra]), /--artifact excludes/, extra[0]);
-    const run = spawnSync(process.execPath, [SCRIPT, "--artifact", "a.json", ...extra], { encoding: "utf8" });
+    assert.throws(() => parseWaitArgs(["--artifact", "a.json", "--after", "/b.json", ...extra]), /--artifact excludes/, extra[0]);
+    const run = spawnSync(process.execPath, [SCRIPT, "--artifact", "a.json", "--after", "/b.json", ...extra], { encoding: "utf8" });
     assert.equal(run.status, 1, extra[0]);
   }
 });

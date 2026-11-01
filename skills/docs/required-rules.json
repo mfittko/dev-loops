@@ -111,6 +111,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK",
+      "enforcement": "doc"
+    },
+    {
       "id": "COORDINATOR-VERIFY-BOUNDARY",
       "enforcement": "runtime"
     },

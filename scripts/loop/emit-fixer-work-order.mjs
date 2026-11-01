@@ -21,7 +21,7 @@ import { normalizeFixerDispositionHandoff } from "@dev-loops/core/loop/fixer-dis
 import { sequenceClosurePath, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
-import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
+import { WorkOrderRefusal, buildDispatchPointer, fixerReportPath, materializationHash, registerWorkOrderRole, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { OperatorFocusRefusal, bindOperatorFocusItems, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
@@ -51,7 +51,8 @@ the PR's own head branch (gh pr view headRefName) and the --allowed-path selecto
 An --act-list-file source also refuses with verdict_not_posted until the --gate verdict review for --head-sha is posted on the PR (GATE-EXEC-POST-BEFORE-FIX; post it with dev-loops gate upsert-verdict --findings-ledger).
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
 (default: the main checkout's tmp/; an explicit --tmp-root inside a linked worktree is refused) and prints
-{ ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath }.
+{ ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef }.
+joinRef is the path for gate wait-for-units --artifact (with --after <planPath>): a full-phase fixer's final-on-write report (<outputRef>.report), else the outputRef.
 Each run supersedes the previous emission for this PR. Dispatch the printed
 dispatchPayload (the --harness adapter call carrying only dispatchPrompt) unchanged; an
 unsupported harness refuses. The only operator input is --operator-focus-file, a JSON file { round?: string, items?: [{ fingerprint, decision }] }
@@ -157,7 +158,7 @@ function fullPhaseSteps(workOrder, verifier, { push }) {
 3. Run \`${wait}\` once. If it exits 2 (not settled), run it exactly once more. If CI is red (\`failure\`), resolve no thread, run no verifier step, and hand back \`ci_failed\` with the failing check names. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, resolve no thread, run no verifier step, and hand back \`ci_pending\` (\`ci_unknown\` when the checks cannot be read).
 4. Run \`${verifier} --construct\`. If it fails because the output exists, go to step 5. If step 5 refuses the report as hand-written, rm only this execution's refused outputRef and its corresponding stale \`<outputRef>.constructed\` marker, then re-run step 4. Preserve accepted construction evidence and unrelated files.
 5. Run \`${verifier}\`.
-6. Run \`${verifier} --check\`.
+6. Run \`${verifier} --check --report-path ${shellQuote(fixerReportPath(workOrder.outputRefs[0]))}\`. It publishes the final join report there, last; no earlier step writes it.
 ${EDIT_RULE}`;
 }
 
@@ -499,7 +500,8 @@ export async function emitFixerWorkOrder({
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: written last so a refused emit never grants the push; only a full work order grants the fixer.
   // Always under the canonical gate-artifact root (the location the push-authority check reads), whatever --tmp-root says.
   writeSequenceMarker({ tmpRoot: resolveGateArtifactTmpRoot(cwd), baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
-  return { ...plan, planPath };
+  // The coordinator's gate wait-for-units --artifact path: a full-phase fixer's final-on-write report (ADR 0222), else the hand-back itself.
+  return { ...plan, planPath, joinRef: phase === "full" ? fixerReportPath(outputRef) : outputRef };
   } finally { await capture.release(); }
 }
 
@@ -713,9 +715,9 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
       ...(values["tmp-root"] ? { tmpRoot: path.resolve(cwd, values["tmp-root"]) } : {}),
       ...(fetchPr ? { fetchPr } : {}),
     });
-    const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
+    const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath, joinRef } = plan;
     const dispatchPayload = buildFixerDispatchPayload({ harness: values.harness, plan, cwd });
-    return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, dispatchPayload, planPath });
+    return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef });
   } catch (err) {
     if (!(err instanceof Refusal || err instanceof WorkOrderRefusal || err instanceof OperatorFocusRefusal)) throw err;
     return emit({ ok: false, ...(err.refusal ? { refusal: err.refusal } : {}), error: err.message });

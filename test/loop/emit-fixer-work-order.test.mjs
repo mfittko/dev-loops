@@ -1481,7 +1481,7 @@ const writeMarked = async (file, text) => { await writeFile(file, text); await w
 // Issue 2787 C1/C2/C4: the six numbered steps in order, the red-CI hand-back and the Edit/Write-only rule.
 function assertFullPhaseSteps(text, { push }) {
   const markers = [push, /2\. Confirm the remote head equals the candidate/, /3\. Run `[^`]*wait-pr-checks\.mjs[^`]* --timeout \d+`/,
-    /4\. Run `[^`]*verify-fixer-disposition\.mjs[^`]* --construct`/, /5\. Run `[^`]*verify-fixer-disposition\.mjs[^`]*`\./, /6\. Run `[^`]* --check`/];
+    /4\. Run `[^`]*verify-fixer-disposition\.mjs[^`]* --construct`/, /5\. Run `[^`]*verify-fixer-disposition\.mjs[^`]*`\./, /6\. Run `[^`]* --check --report-path '[^']*fixer-disposition\.json\.report'`/];
   let from = 0;
   for (const marker of markers) {
     const match = marker.exec(text.slice(from));
@@ -2238,8 +2238,11 @@ test("issue 2787: a THREAD full order has the numbered steps, runs --construct a
   await withFixture(async ({ emit, files, writeRecord }) => {
     await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "PRRT_T1" }] }));
     await writeRecord({ items: [{ ref: "PRRT_T1", status: "resolved" }] });
-    const { promptPath } = await emit({ ...threadsOnly, threadsFile: files.threads });
+    const plan = await emit({ ...threadsOnly, threadsFile: files.threads });
+    const { promptPath } = plan;
     const text = await readFile(promptPath, "utf8");
+    assert.equal(plan.joinRef, `${plan.workOrder.outputRefs[0]}.report`, "a full-phase order joins on the final-on-write report");
+    assert.ok(text.includes(`--check --report-path '${plan.joinRef}'`));
     assertFullPhaseSteps(text, { push: /1\. Push exactly the delta-reviewed candidate/ });
     assert.doesNotMatch(text, /Apply and commit/);
     assert.match(text, /Make no further commit/);
@@ -2251,7 +2254,9 @@ test("issue 2787: a THREAD full order has the numbered steps, runs --construct a
 
 test("issue 2787: the ordinary commit_only render carries neither the numbered steps nor the edit rule", async () => {
   await withFixture(async ({ emit }) => {
-    assert.doesNotMatch(renderWorkOrder((await emit()).workOrder), /Edit rule|wait-pr-checks/);
+    const plan = await emit();
+    assert.doesNotMatch(renderWorkOrder(plan.workOrder), /Edit rule|wait-pr-checks|--report-path/);
+    assert.equal(plan.joinRef, plan.workOrder.outputRefs[0], "a commit_only order joins on its hand-back itself");
   });
 });
 

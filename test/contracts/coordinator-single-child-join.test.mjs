@@ -12,7 +12,9 @@ test("COORDINATOR-SINGLE-CHILD-JOIN is registered and carries the no-turn-end an
   assert.match(contract, /The hand-back path must not exist at dispatch: each fixer emission and each delta review invocation gets its own path, and the coordinator never reuses a hand-back path\./);
   assert.match(contract, /, and the child writes no extra marker, when the file parses as JSON and carries the terminal field its schema requires/);
   assert.doesNotMatch(contract, /\.done|staging|never satisfies the join/);
-  assert.match(contract, /satisfies the join after 10 unchanged seconds, for every hand-back type, including a full-phase fixer outputRef/);
+  assert.match(contract, /a parseable write without it satisfies the join after 10 unchanged seconds\. A full-phase fixer is final on write \(ADR 0222\)/);
+  assert.match(contract, /the stability window does not apply to the full phase/);
+  assert.match(contract, /an artifact whose mtime is older than the reference is pending and the result reports `stale: true`, and a missing or relative `--after` exits 1/);
   const adr = read("docs/decisions/0218-slice-a-cap-round-chain-and-single-child-join.md");
   assert.match(adr, /satisfies the join after 10 unchanged seconds, for every hand-back type/);
   assert.doesNotMatch(adr, /leaves the join pending|only for a final hand-back/);
@@ -21,6 +23,32 @@ test("COORDINATOR-SINGLE-CHILD-JOIN is registered and carries the no-turn-end an
   assert.match(contract, /A coordinator never ends its turn while a single child runs, before the `--artifact` join returns\./);
   assert.match(contract, /Pi: the coordinator joins the child with a blocking dispatch \(`async: false`\), `runs\.all` or `bg_wait`.*`extension\/index\.ts` runs the foreground `async: false` child/);
   assert.ok(JSON.parse(read("skills/docs/required-rules.json")).requiredRules.some((rule) => rule.id === "COORDINATOR-SINGLE-CHILD-JOIN"));
+});
+
+const FALLBACK = "COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK";
+
+test("COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK is registered, follows the join rule and names the Pi equivalent", () => {
+  const contract = read("skills/docs/gate-review-sub-loop-contract.md");
+  assert.ok(contract.includes(`<!-- rule: ${FALLBACK} -->`));
+  assert.ok(contract.indexOf(`rule: ${FALLBACK} -->`) > contract.indexOf("rule: COORDINATOR-SINGLE-CHILD-JOIN -->"));
+  assert.match(contract, /after one `timeout` outcome of the fixer join, the coordinator ends its turn once to receive the fixer's completion notification\. It treats that notification as the join, reads the typed exit code \(`ci_failed`, `ci_pending`, `ci_unknown`\) from the hand-back text, acts on it, and does not repeat the wait/);
+  assert.match(contract, /Pi: no fallback is needed\. The child call blocks/);
+  assert.ok(JSON.parse(read("skills/docs/required-rules.json")).requiredRules.some((rule) => rule.id === FALLBACK));
+  assert.match(read("docs/decisions/0222-single-child-join-final-on-write-and-notification-fallback.md"), /Amends \[0218\]/);
+  for (const file of ["skills/dev-loop/SKILL.md", "agents/dev-loop.agent.md", ".claude/skills/dev-loop/SKILL.md", ".claude/agents/dev-loop.md"]) {
+    const text = read(file);
+    assert.ok(text.includes(FALLBACK), file);
+    assert.match(text, /Pi child calls block, so Pi needs no fallback/, file);
+  }
+});
+
+test("each routed --artifact join command carries the --after reference", () => {
+  for (const file of ["skills/docs/gate-review-sub-loop-contract.md", "skills/docs/pre-pr-review-contract.md", "skills/local-implementation/SKILL.md", "skills/copilot-pr-followup/SKILL.md", "skills/dev-loop/SKILL.md", "agents/dev-loop.agent.md"]) {
+    const text = read(file);
+    for (let at = text.indexOf("gate wait-for-units --artifact"); at >= 0; at = text.indexOf("gate wait-for-units --artifact", at + 1)) {
+      assert.match(text.slice(at, at + 160), /--after /, `${file} at ${at}`);
+    }
+  }
 });
 
 test("the routed fixer and delta reviewer dispatch prose names the --artifact join command", () => {
@@ -63,5 +91,5 @@ test("the Copilot follow-up THREAD-route delta reviewer dispatch sentence names 
   const text = read("skills/copilot-pr-followup/SKILL.md");
   const at = text.indexOf("Otherwise run the delta reviewer");
   assert.ok(at >= 0);
-  assert.ok(text.slice(at, at + 400).includes("gate wait-for-units --artifact <the delta reviewer's `--result` path>"));
+  assert.ok(text.slice(at, at + 400).includes("gate wait-for-units --artifact <the delta reviewer's --result path> --after <the input run's input.patchPath>"));
 });

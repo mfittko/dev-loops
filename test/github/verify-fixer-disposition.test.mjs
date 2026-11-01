@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
@@ -19,7 +19,7 @@ import {
 } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { selectActThreadBinding } from "../../scripts/github/_fixer-act-thread-bindings.mjs";
-import { materializationHash, pullReceiptPath, pullWorkOrder, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { fixerReportPath, materializationHash, pullReceiptPath, pullWorkOrder, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitFixerWorkOrder, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { gitEnvNoDirOverrides } from "../../scripts/loop/_repo-root-resolver.mjs";
@@ -299,7 +299,55 @@ test("THREAD full --construct builds the report from the threads, the clearing r
   });
 });
 
-const repeatedDiffScenarios = ["myers", "histogram", "patience"].flatMap((algorithm) =>
+test("--report-path is final-on-write: absent until the last step, atomic, complete on success, refused with --construct and with the outputRef", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    const reportPath = fixerReportPath(f.output);
+    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }];
+    const finalMock = () => f.runtimeFor([threadsCallEntry(resolved), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]);
+    await assert.rejects(verifyFixerDisposition({ ...f.options, construct: true, reportPath }, f.runtimeFor([threadsCallEntry([])]).deps), /--report-path applies to normal verification and --check/);
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: f.output }, finalMock().deps), /equals the plan's outputRef.*joinRef/);
+    assert.equal(existsSync(reportPath), false, "no report from refused arguments");
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    assert.equal(existsSync(reportPath), false, "--construct writes the outputRef, never the report");
+    await verifyFixerDisposition({ ...f.options, reportPath }, finalMock().deps);
+    const report = JSON.parse(await readFile(reportPath, "utf8"));
+    assert.equal(report.outcome, "complete");
+    assert.equal(report.complete, true);
+    assert.deepEqual(readdirSync(path.dirname(f.output)).filter((name) => name.includes(".tmp-")), [], "the temp file is renamed away");
+    assert.equal(JSON.parse(await readFile(f.output, "utf8")).outcome, undefined, "the outputRef is left unchanged");
+    await rm(reportPath);
+    await verifyFixerDisposition({ ...f.options, check: true, reportPath }, finalMock().deps);
+    assert.equal(JSON.parse(await readFile(reportPath, "utf8")).outcome, "complete");
+  });
+});
+
+test("--report-path publishes an incomplete outcome and a refused outcome with the error text", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    const reportPath = fixerReportPath(f.output);
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]).deps), /ci_failed.*lint/);
+    const refused = JSON.parse(await readFile(reportPath, "utf8"));
+    assert.equal(refused.ok, false);
+    assert.equal(refused.outcome, "refused");
+    assert.match(refused.error, /ci_failed.*lint/);
+    await rm(reportPath);
+    const incomplete = await verifyFixerDisposition({ ...f.options, check: true, reportPath }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]).deps);
+    assert.equal(incomplete.complete, false);
+    assert.equal(JSON.parse(await readFile(reportPath, "utf8")).outcome, "incomplete");
+  });
+});
+
+test("--report-path parses as an absolute path and is refused with --construct", () => {
+  const base = ["--repo", REPO, "--pr", String(PR), "--head-sha", HEAD_SHA, "--fixer-plan", "plan.json"];
+  assert.equal(parseVerifyFixerDispositionCliArgs([...base, "--check", "--report-path", "/a/b.report"]).reportPath, "/a/b.report");
+  assert.throws(() => parseVerifyFixerDispositionCliArgs([...base, "--report-path", "rel.report"]), /absolute path/);
+  assert.throws(() => parseVerifyFixerDispositionCliArgs([...base, "--construct", "--report-path", "/a/b.report"]), /not --construct/);
+});
+
+const repeatedDiffScenarios =["myers", "histogram", "patience"].flatMap((algorithm) =>
   ["true", "false"].flatMap((heuristic) => ["miss", "touch"].map((change) => `${change}-repeated-${algorithm}-${heuristic}`)));
 for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-diff-opts", "miss-inter-hunk", "touch", "touch-diff-opts", "touch-inter-hunk", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source", ...repeatedDiffScenarios]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
   await withRepoRoot(async (root) => {
