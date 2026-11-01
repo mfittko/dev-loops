@@ -9184,6 +9184,13 @@ test("resolveCapRoundFixed reports baseline_orphaned for a sibling cap-round hea
     // The fixer pass sealed a record at the cap-round head before the rebase: the chain cannot reach the rewritten head, so it is still an orphan.
     await writeDeltaRecord(repoRoot, B, "9".repeat(40), "push_to_gate");
     assert.equal(await conditionFor(68, B), "baseline_orphaned");
+    // A whitespace-padded ledger headSha of a real sibling cap-round head is normalized before the probe, so it is still an orphan.
+    await seedClosedRounds(repoRoot, 70, ["1".repeat(40), "2".repeat(40), "3".repeat(40), B]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-70", `draft_gate-${B}.json`);
+    await writeFile(ledger, (await readFile(ledger, "utf8")).replace(`"headSha":"${B}"`, `"headSha":" ${B}\\n"`), "utf8");
+    let padded = null;
+    assert.equal(await resolveCapRoundFixed({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: rebased, baseRefName: "main" }, { repoRoot, onFailure: (c) => { padded = c; } }), null);
+    assert.equal(padded, "baseline_orphaned", "a whitespace-padded sibling cap-round head is normalized before the probe");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
