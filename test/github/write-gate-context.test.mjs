@@ -7466,6 +7466,18 @@ test("renderBriefingVolatile: a prior-dispositions read renders only its entry c
   assert.ok(text.indexOf("validationPosture:") < text.indexOf("Prior-round dispositions"));
 });
 
+test("renderBriefingVolatile: the known-findings line keeps the open-or-resolved wording on every gate and the reassessment line renders only on pre_approval_gate", () => {
+  const read = { kind: "known-findings", path: "tmp/x.known-findings.json", sha256: "b".repeat(64), bytes: 10, entries: 2, required: true };
+  const render = (gate) => renderBriefingVolatile({ gate, headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z", knownFindingsRead: read, worktreeRoot: "/wt" });
+  for (const gate of ["draft_gate", "pre_approval_gate"]) {
+    const text = render(gate);
+    assert.match(text, /Known findings \(do not re-raise what an open or resolved thread already covers\): 2 threads/);
+    assert.doesNotMatch(text, /see below/);
+  }
+  assert.doesNotMatch(render("draft_gate"), /assess it in this full round/);
+  assert.match(render("pre_approval_gate"), /assess it in this full round/);
+});
+
 test("writeGateContext: an oversized prior findings-log is written in full to a hash-bound prior-dispositions read, never truncated", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-oversized-"));
   try {
