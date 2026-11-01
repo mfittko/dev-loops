@@ -15,6 +15,7 @@ import { initGitFixture, makeGhMock, runIdFreeEnv } from "../_helpers.mjs";
 import {
   parseVerifyFixerDispositionCliArgs,
   verifyFixerDisposition,
+  assertDescendantThreadSites,
 } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { selectActThreadBinding } from "../../scripts/github/_fixer-act-thread-bindings.mjs";
@@ -25,11 +26,53 @@ import { gitEnvNoDirOverrides } from "../../scripts/loop/_repo-root-resolver.mjs
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import * as legacyOwner from "../../scripts/github/_legacy-fixer-revalidation.mjs";
+import { main as buildGateContext, readGateContext } from "../../scripts/github/write-gate-context.mjs";
 
 const REPO = "owner/repo";
 const PR = 1975;
 const HEAD_SHA = "a".repeat(40);
 const FIX_SHA = "b".repeat(40);
+
+for (const change of ["miss", "metadata-text", "mode", "offset", "offset-touch", "multi-hunk", "multiline", "overlap", "revert", "rename", "delete", "binary", "left", "missing", "foreign", "unknown", "merge"]) test(`C19 historical root proof: ${change}`, async () => {
+  await withRepoRoot(async (root) => {
+    initGitFixture(root, { branch: "issue-1" });
+    const git = (...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+    const file = path.join(root, "site.txt"), original = "one\ntwo\nthree\nfour\nfive\n";
+    const commit = async (text) => { await writeFile(file, text); git("add", "-A"); git("commit", "-qm", "site change"); return git("rev-parse", "HEAD"); };
+    const origin = await commit(original);
+    const candidate = await commit(original.replace("three", "fixed"));
+    if (["offset", "offset-touch"].includes(change)) { await commit(`before\n${original.replace("three", "fixed")}`); if (change === "offset-touch") await commit(`before\n${original.replace("three", "changed")}`); }
+    else if (change === "multi-hunk") await commit(`before\n${original.replace("three", "changed")}`);
+    else if (change === "multiline") await commit(original.replace("two", "changed").replace("three", "fixed"));
+    else if (change === "rename") { git("mv", "site.txt", "renamed.txt"); git("commit", "-qm", "rename"); }
+    else if (change === "delete") { git("rm", "site.txt"); git("commit", "-qm", "delete"); }
+    else if (change === "binary") await commit("\0binary\n");
+    else if (change === "metadata-text") {
+      await commit(original.replace("three", "fixed") + "// use the new model\nBinary files a and b differ\nGIT binary patch\ndeleted file mode 100644\nnew file mode 100644\nold mode 100644\nnew mode 100755\n");
+      await commit(original.replace("three", "fixed"));
+    }
+    else if (change === "mode") { git("update-index", "--chmod=+x", "site.txt"); git("commit", "-qm", "mode change"); }
+    else if (change === "merge") { git("checkout", "-qb", "other"); await commit(original.replace("three", "changed")); git("checkout", "issue-1"); git("merge", "--no-ff", "other", "-m", "merge"); }
+    else { await commit(original.replace("three", ["overlap", "revert"].includes(change) ? "changed" : "fixed").replace("five", "elsewhere")); }
+    if (change === "revert") await commit(original.replace("three", "fixed"));
+    const head = git("rev-parse", "HEAD");
+    const comment = { id: 1, node_id: "root", pull_request_url: `https://api.github.com/repos/${REPO}/pulls/${PR}`, path: "site.txt", original_commit_id: origin,
+      original_start_line: 2, original_line: 3, side: change === "left" ? "LEFT" : "RIGHT", start_side: "RIGHT" };
+    if (change === "missing") comment.original_line = null;
+    if (change === "foreign") comment.node_id = "foreign";
+    if (change === "unknown") comment.original_commit_id = "d".repeat(40);
+    const deps = { env: runIdFreeEnv(), ghCommand: "gh", runChild: async (cmd, args) => {
+      if (cmd === "gh") return { code: 0, stdout: JSON.stringify(comment), stderr: "" };
+      const result = spawnSync(cmd, args, { cwd: root, env: gitEnvNoDirOverrides(), encoding: "utf8" });
+      return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+    } };
+    const proof = () => assertDescendantThreadSites({ repo: REPO, pr: PR, candidateHead: candidate, headSha: head,
+      handoff: { dispositions: [{ threadId: "t", disposition: "tackled" }] },
+      parsed: { comments: [{ threadId: "t", id: "root", databaseId: "1" }] }, repoRoot: root }, deps);
+    if (["miss", "offset", "metadata-text"].includes(change)) await proof();
+    else await assert.rejects(proof, change === "overlap" || change === "revert" ? /thread_site_changed.*t/ : /thread_site_(changed|unverifiable).*t/);
+  });
+});
 
 function threadsPayload(threads) {
   return `${JSON.stringify({
@@ -215,24 +258,32 @@ test("emitted and pulled THREAD full binds missing output without an execution d
 });
 
 // An emitted and pulled THREAD full plan whose pushed head is the baseline head (issue 2787 C3, C4).
-async function threadConstructFixture(root, recordOver) {
+async function threadConstructFixture(root, recordOver, site = false, commitCandidate = false) {
   root = await realpath(root);
   initGitFixture(root, { branch: "issue-1" });
+  if (site) {
+    await writeFile(path.join(root, "site.txt"), typeof site === "string" ? site : "one\ntwo\nthree\nfour\nfive\n");
+    execFileSync("git", ["-C", root, "add", "site.txt"]);
+    execFileSync("git", ["-C", root, "commit", "-qm", "site"]);
+  }
   const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+  if (commitCandidate) execFileSync("git", ["-C", root, "commit", "-q", "--allow-empty", "-m", "fix"], { env: gitEnvNoDirOverrides() });
+  const candidate = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
   const tmpRoot = path.join(root, "tmp"), threadsFile = path.join(tmpRoot, "threads.json");
   const recordPath = path.join(tmpRoot, "gate-delta", `${head}.json`);
   await mkdir(path.dirname(recordPath), { recursive: true });
   await writeFile(threadsFile, JSON.stringify({ ok: true, repo: REPO, pr: PR, threads: [{ threadId: "PRRT_T1", isResolved: false }] }));
-  const record = { reviewBaselineHead: head, candidateHead: head, actSetId: "0".repeat(16),
-    invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "PRRT_T1", status: "resolved" }] };
+  const record = { reviewBaselineHead: head, candidateHead: candidate, actSetId: "0".repeat(16),
+    invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "PRRT_T1", status: "resolved" }],
+    ...(recordOver?.outcome === "bounded_out" ? recordOver : {}) };
   await writeFile(recordPath, JSON.stringify(record));
   const plan = await emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", threadsFile, cwd: root,
     fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
   await pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: root, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
-  // A variant record replaces the clearing one after emission and pull, which need the clearing record.
-  if (recordOver) await (recordOver.missing ? rm(recordPath) : writeFile(recordPath, JSON.stringify({ ...record, ...recordOver })));
+  // Negative variants corrupt the authenticated record only after emission and pull.
+  if (recordOver && recordOver.outcome !== "bounded_out") await (recordOver.missing ? rm(recordPath) : writeFile(recordPath, JSON.stringify({ ...record, ...recordOver })));
   const options = { repo: REPO, pr: PR, headSha: head, fixerPlan: plan.planPath };
-  return { plan, options, head, output: plan.workOrder.outputRefs[0], root, runtimeFor: (entries, rollup, extra = {}) => runtime([liveHeadEntry(head, rollup), ...entries], root, { live: false, ...extra }) };
+  return { plan, options, head, candidate, output: plan.workOrder.outputRefs[0], root, runtimeFor: (entries, rollup, extra = {}) => runtime([liveHeadEntry(head, rollup), ...entries], root, { live: false, ...extra }) };
 }
 
 test("THREAD full --construct builds the report from the threads, the clearing record and the pushed head, then normal and --check pass", async () => {
@@ -245,6 +296,99 @@ test("THREAD full --construct builds the report from the threads, the clearing r
       const mock = f.runtimeFor([threadsCallEntry([{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }]), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]);
       assert.equal((await verifyFixerDisposition({ ...f.options, check }, mock.deps)).complete, true);
     }
+  });
+});
+
+const repeatedDiffScenarios = ["myers", "histogram", "patience"].flatMap((algorithm) =>
+  ["true", "false"].flatMap((heuristic) => ["miss", "touch"].map((change) => `${change}-repeated-${algorithm}-${heuristic}`)));
+for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-diff-opts", "miss-inter-hunk", "touch", "touch-diff-opts", "touch-inter-hunk", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source", ...repeatedDiffScenarios]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
+  await withRepoRoot(async (root) => {
+    root = await realpath(root);
+    const repeated = scenario.includes("-repeated-");
+    const site = repeated ? "start\na\nb\nc\na\nb\nc\nend\n" : true;
+    const f = route === "THREAD" ? await threadConstructFixture(root, undefined, site) : await completionFixture(root, "resolved", { site });
+    const candidate = f.head ?? f.candidate, fixerPlan = f.options?.fixerPlan ?? f.fixerPlan;
+    if (route === "THREAD") await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    const output = f.output ?? f.plan.workOrder.outputRefs[0], before = await readFile(output);
+    const git = (...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+    const interHunk = scenario.endsWith("inter-hunk");
+    if (repeated) {
+      const [, , algorithm, heuristic] = scenario.split("-");
+      git("config", "diff.algorithm", algorithm);
+      git("config", "diff.indentHeuristic", heuristic);
+      await writeFile(path.join(root, "site.txt"), "start\na\nb\nc\nend\na\nb\nc\n");
+      git("add", "site.txt"); git("commit", "-qm", "shift repeated block");
+    }
+    if (interHunk) git("config", "diff.interHunkContext", "100");
+    const text = scenario.startsWith("touch") ? "one\ntwo\nchanged\nfour\nfive\n" : "one\ntwo\nthree\nfour\nelsewhere\n";
+    // Myers maps the original line 6 to 7; touching line 6 must pass and line 7 must refuse.
+    const repeatedText = scenario.startsWith("touch") ? "start\na\nb\nc\nend\na\nchanged\nc\n" : "start\na\nb\nc\nend\nelsewhere\nb\nc\n";
+    await writeFile(path.join(root, "site.txt"), repeated ? repeatedText : interHunk ? text.replace("one", "before").replace("five", "after") : text);
+    git("add", "site.txt"); git("commit", "-qm", "developer");
+    if (scenario.startsWith("touch-color")) git("config", scenario === "touch-color-diff" ? "color.diff" : "color.ui", "always");
+    let head = git("rev-parse", "HEAD");
+    const ids = route === "THREAD" ? ["PRRT_T1"] : ["PRRT_MERGED", "PRRT_SHARED"];
+    const nodes = route === "THREAD" ? [{ id: ids[0], isResolved: false, comments: { nodes: [{ id: "root0", databaseId: 1, body: "open", author: { login: "bot" } }] } }] : structuredClone(f.nodes);
+    nodes.forEach((node, index) => { node.isResolved = false; node.comments.nodes[0].id = `root${index}`; node.comments.nodes[0].body = node.comments.nodes[0].body.replace(/Fixed in commit [a-f0-9]+\./, ""); });
+    if (scenario === "missing-report") await rm(output);
+    if (scenario === "forged-source") await writeFile(f.plan.workOrder.requiredReads[0].path, "[]");
+    let resolved = false, reads = 0; const posts = [];
+    const deps = { env: runIdFreeEnv(scenario.endsWith("diff-opts") ? { GIT_DIFF_OPTS: "-u100" } : {}), ghCommand: "gh", repoRoot: root, runChild: async (cmd, args, env, stdin) => {
+      if (cmd === "git") { const r = spawnSync(cmd, args, { cwd: root, env, encoding: "utf8" }); return { code: r.status, stdout: r.stdout, stderr: r.stderr }; }
+      if (args[0] === "pr") return { code: 0, stdout: JSON.stringify({ headRefOid: scenario === "head-race" && reads++ ? candidate : head, statusCheckRollup: ["red", "pending"].includes(scenario) ? [{ name: "unit" }] : [] }) };
+      if (args[1] === "user") return { code: 0, stdout: JSON.stringify({ login: "gate" }) };
+      if (args[1]?.includes("/compare/")) return { code: 0, stdout: JSON.stringify({ status: ["behind", "diverged"].includes(scenario) && args[1].endsWith(`${candidate}...${head}`) ? scenario : "ahead" }) };
+      if (args[1]?.includes("/pulls/comments/")) {
+        const index = Number(args[1].split("/").at(-1)) - 1;
+        return { code: 0, stdout: JSON.stringify({ id: index + 1, node_id: `root${index}`, pull_request_url: `https://api.github.com/repos/${REPO}/pulls/${PR}`, path: "site.txt", original_commit_id: candidate, original_line: repeated ? 6 : 3, side: scenario === "left" ? "LEFT" : "RIGHT" }) };
+      }
+      if (args.includes("POST")) { posts.push(stdin); return { code: 0, stdout: JSON.stringify({ id: 9, html_url: "https://example.com/9" }) }; }
+      if (args[1] === "graphql" && args.some((arg) => arg.includes("resolveReviewThread"))) { resolved = true; return { code: 0, stdout: JSON.stringify({ data: { resolveReviewThread: { thread: { id: args.find((arg) => arg.startsWith("threadId="))?.slice(9) ?? ids[0], isResolved: true } } } }) }; }
+      if (args[1] === "graphql") {
+        if (resolved) nodes.forEach((node) => { node.isResolved = true; node.comments.nodes.push({ id: "reply", databaseId: 99, body: `Fixed in commit ${candidate}.`, author: { login: "bot" } }); });
+        return { code: 0, stdout: threadsPayload(nodes) };
+      }
+      if (args[1]?.includes("/check-runs")) return { code: 0, stdout: JSON.stringify({ check_runs: ["red", "pending"].includes(scenario) ? [{ name: "unit", status: scenario === "red" ? "completed" : "in_progress", conclusion: scenario === "red" ? "failure" : null }] : [] }) };
+      if (args[1]?.includes("/status?")) return { code: 0, stdout: JSON.stringify({ state: "pending", statuses: [] }) };
+      throw new Error(`unexpected call ${cmd} ${args.join(" ")}`);
+    } };
+    const options = { repo: REPO, pr: PR, headSha: head, fixerPlan };
+    if (scenario !== "miss" && !scenario.startsWith("miss-")) {
+      const expected = repeated ? /thread_site_changed/ : { touch: /thread_site_changed/, "touch-diff-opts": /thread_site_changed/, "touch-inter-hunk": /thread_site_changed/, "touch-color-diff": /thread_site_changed/, "touch-color-ui": /thread_site_changed/, left: /thread_site_unverifiable/, behind: /not contained/, diverged: /not contained/, red: /ci_failed/, pending: /ci_pending/, "head-race": /live head changed/, "missing-report": /result_missing/, "forged-source": /differ|Invalid fixer review baseline/ }[scenario];
+      await assert.rejects(verifyFixerDisposition(options, deps), expected); assert.deepEqual(posts, []);
+      assert.equal(resolved, false);
+      assert.deepEqual(await checkpointFiles(root), []);
+      if (!["touch", "left"].includes(scenario)) return;
+      const capture = path.join(root, "tmp", "open-thread.json");
+      await writeFile(capture, JSON.stringify(parseReviewThreads(JSON.parse(threadsPayload(nodes)))));
+      const deltaPath = path.join(root, "tmp", "gate-delta", `${head}.json`);
+      assert.equal(existsSync(deltaPath), false);
+      await buildGateContext(["--repo", REPO, "--pr", String(PR), "--gate", "pre_approval_gate", "--head-sha", head, "--base", candidate,
+        "--angles", '["correctness"]', "--known-findings", capture, "--silent"], { repoRoot: root,
+        run: async () => ({ code: 0, stdout: JSON.stringify({ body: "review recovery", closingIssuesReferences: [], baseRefName: "main" }) }),
+        checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }),
+        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true, draftGate: { verdict: "clean", headSha: candidate } } }) });
+      const context = await readGateContext({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: head }, { repoRoot: root });
+      const read = context.requiredReads.find((entry) => entry.kind === "known-findings"), bytes = await readFile(path.resolve(root, read.path));
+      assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"));
+      assert.deepEqual(JSON.parse(bytes).map((thread) => thread.threadId), ids);
+      assert.equal(existsSync(deltaPath), false);
+    }
+    else {
+      const result = await verifyFixerDisposition(options, deps);
+      assert.equal(result.complete, true, JSON.stringify(result));
+      assert.ok(posts.length); assert.ok(posts.every((body) => body.includes(candidate)));
+      const count = posts.length;
+      assert.equal((await verifyFixerDisposition({ ...options, check: true }, deps)).complete, true);
+      assert.equal(posts.length, count);
+      await writeFile(path.join(root, "later.txt"), "another developer change\n");
+      git("add", "later.txt"); git("commit", "-qm", "later developer");
+      head = git("rev-parse", "HEAD");
+      assert.equal((await verifyFixerDisposition({ ...options, headSha: head }, deps)).complete, true, "H -> H2 re-enters delivery with the original report and Delta");
+      assert.equal(posts.length, count);
+      assert.equal(existsSync(path.join(root, "tmp", "gate-delta", `${head}.json`)), false);
+    }
+    assert.deepEqual(await readFile(output), before);
   });
 });
 
@@ -369,11 +513,8 @@ for (const [label, over] of [
 
 test("THREAD full --construct with a pushed candidate later than the order head names the candidate; normal and --check pass", async () => {
   await withRepoRoot(async (root) => {
-    const f = await threadConstructFixture(root);
-    execFileSync("git", ["-C", f.root, "commit", "-q", "--allow-empty", "-m", "fix"], { env: gitEnvNoDirOverrides() });
-    const pushed = execFileSync("git", ["-C", f.root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
-    const recordPath = path.join(f.root, "tmp", "gate-delta", `${f.head}.json`);
-    await writeFile(recordPath, JSON.stringify({ ...JSON.parse(await readFile(recordPath, "utf8")), candidateHead: pushed }));
+    const f = await threadConstructFixture(root, undefined, false, true);
+    const pushed = f.candidate;
     const options = { ...f.options, headSha: pushed };
     const mockFor = (entries) => runtime(entries, f.root, { live: false });
     const ahead = compareEntry(f.head, "ahead", pushed);
@@ -1514,6 +1655,7 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   repoRoot = await realpath(repoRoot);
   initGitFixture(repoRoot, { branch: "issue-1" });
   const git = (...args) => execFileSync("git", ["-C", repoRoot, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+  if (settings.site) { await writeFile(path.join(repoRoot, "site.txt"), typeof settings.site === "string" ? settings.site : "one\ntwo\nthree\nfour\nfive\n"); git("add", "site.txt"); git("commit", "-qm", "site"); }
   await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
   git("add", ".gitignore");
   git("commit", "-qm", "ignore evidence");

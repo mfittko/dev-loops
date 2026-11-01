@@ -7466,6 +7466,18 @@ test("renderBriefingVolatile: a prior-dispositions read renders only its entry c
   assert.ok(text.indexOf("validationPosture:") < text.indexOf("Prior-round dispositions"));
 });
 
+test("renderBriefingVolatile: the known-findings line keeps the open-or-resolved wording on every gate and the reassessment line renders only on pre_approval_gate", () => {
+  const read = { kind: "known-findings", path: "tmp/x.known-findings.json", sha256: "b".repeat(64), bytes: 10, entries: 2, required: true };
+  const render = (gate) => renderBriefingVolatile({ gate, headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z", knownFindingsRead: read, worktreeRoot: "/wt" });
+  for (const gate of ["draft_gate", "pre_approval_gate"]) {
+    const text = render(gate);
+    assert.match(text, /Known findings \(do not re-raise what an open or resolved thread already covers\): 2 threads/);
+    assert.doesNotMatch(text, /see below/);
+  }
+  assert.doesNotMatch(render("draft_gate"), /assess it in this full round/);
+  assert.match(render("pre_approval_gate"), /assess it in this full round/);
+});
+
 test("writeGateContext: an oversized prior findings-log is written in full to a hash-bound prior-dispositions read, never truncated", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-oversized-"));
   try {
@@ -7567,6 +7579,29 @@ test("writeGateContext REFUSES a same-head rebuild that would rewrite the prior 
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+for (const reason of ["thread_site_changed", "thread_site_unverifiable", "no_commit"]) test(`C19 ${reason} admits pre_approval_gate with the open thread and no live-baseline delta`, async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const { interpretFixLoopState } = await import("@dev-loops/core/loop/fix-loop-state");
+    const state = interpretFixLoopState({ headMoved: reason !== "no_commit", noCommit: reason === "no_commit", sequenceClosed: true });
+    assert.equal(state.state, "full_gate_round");
+    const capturePath = path.join(repoRoot, "open-thread.json"), id = { repo: "owner/repo", pr: 2787, headSha, gate: "pre_approval_gate" };
+    await writeFile(capturePath, JSON.stringify({ threads: [{ id: "C19_OPEN", isResolved: false }], comments: [{ threadId: "C19_OPEN", author: { login: "gate" }, body: `${reason}: reassess this exact open thread` }] }));
+    let admitted = false;
+    await main(["--repo", id.repo, "--pr", String(id.pr), "--gate", id.gate, "--head-sha", headSha, "--base", baseSha,
+      "--angles", '["correctness"]', "--known-findings", capturePath, "--silent"], { repoRoot, run: stubGhRun,
+      loadCoordination: async () => { admitted = true; return { prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true, draftGate: { verdict: "clean", headSha: baseSha } } }; } });
+    assert.equal(admitted, true, "the actual CLI admission path observes the historical draft boundary");
+    const context = await readGateContext(id, { repoRoot });
+    const read = context.requiredReads.find((entry) => entry.kind === "known-findings");
+    const bytes = await readFile(path.resolve(repoRoot, read.path));
+    assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"));
+    assert.deepEqual(JSON.parse(bytes), [{ threadId: "C19_OPEN", isResolved: false, comments: [{ author: "gate", body: `${reason}: reassess this exact open thread` }] }]);
+    assert.match(await readFile(path.resolve(repoRoot, read.path.replace(/\.known-findings\.json$/, ".briefing-volatile.txt")), "utf8"), /If any listed thread is unresolved, assess it in this full round/);
+    assert.equal(existsSync(path.join(repoRoot, "tmp", "gate-delta", `${headSha}.json`)), false);
+  } finally { await rm(repoRoot, { recursive: true, force: true }); }
 });
 
 test("writeGateContext --known-findings: full thread bodies go to a hash-bound required read, never the prefix; no threads means no read; a live-sentinel rewrite is refused", async () => {
