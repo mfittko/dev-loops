@@ -51,7 +51,7 @@ import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { fixerPlanPath, locateFixerUnit } from "./emit-fixer-work-order.mjs";
-import { clearingChainLastCandidates } from "../github/write-gate-context.mjs";
+import { clearingChainHeads, clearingChainLastCandidates } from "../github/write-gate-context.mjs";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
@@ -271,7 +271,7 @@ export function gitStaleSurfaceHits(worktreeArg, baseline, head) {
 // The findings log writer stamps `headSha`; the log must be the baseline round's and carry provenance.perAngle.
 // A log at an earlier head is accepted when the baseline is a base-only merge of it (the closure round after a cap round, ADR 0197), equals the end of its sealed clearing chain,
 // or is a base-only merge of the log head or a chain end (PRE-PUSH-DELTA-INPUT-CAP-CHAIN, ADR 0224); any error fails closed.
-async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerge, tmpRoot }) {
+async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerge, tmpRoot, target }) {
   if (!findingsLogPath) return [];
   const log = JSON.parse(readFileSync(findingsLogPath, "utf8"));
   const perAngle = log?.provenance?.perAngle;
@@ -284,12 +284,14 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
       const baseRefName = resolveBaseBranch(config, { cwd: worktree });
       const merged = (fromHead) => baseOnlyMerge({ fromHead, head: baseline, mainRef: `origin/${baseRefName}`, repoRoot: worktree });
       if (await merged(logHead)) return true;
-      const ends = typeof log.repo === "string" && Number.isInteger(log.pr)
-        ? await clearingChainLastCandidates({ tmpRoot, capHead: logHead, repo: log.repo, pr: log.pr, baseRefName, repoRoot: worktree, baseOnlyMerge })
-        : [];
-      // A draft_gate findings log at the baseline means a later full round superseded this one.
-      if (typeof log.repo !== "string" || !Number.isInteger(log.pr)
-        || existsSync(buildLogPath({ repo: log.repo, pr: log.pr, gate: "draft_gate", headSha: baseline, tmpRoot }))) return false;
+      if (typeof log.repo !== "string" || !Number.isInteger(log.pr)) return false;
+      // The probes read repo and pr from the log: they must be the authenticated plan target's.
+      if (target && (log.repo !== target.repo || log.pr !== target.pr)) return false;
+      const chainArgs = { tmpRoot, capHead: logHead, repo: log.repo, pr: log.pr, baseRefName, repoRoot: worktree, baseOnlyMerge };
+      const ends = await clearingChainLastCandidates(chainArgs);
+      // A draft_gate findings log at the baseline or at any head the chain visits means a later full round superseded this one.
+      const roundAt = (headSha) => existsSync(buildLogPath({ repo: log.repo, pr: log.pr, gate: "draft_gate", headSha, tmpRoot }));
+      if ([baseline, ...await clearingChainHeads(chainArgs)].some(roundAt)) return false;
       if (ends.includes(baseline)) return true;
       for (const end of ends) if (await merged(end)) return true;
       return false;
@@ -452,7 +454,10 @@ export async function runCli(
       mkdirSync(path.dirname(patchPath), { recursive: true });
       writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead));
     }
-    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree) }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
+    // The authenticated fixer plan target binds the log's repo and pr; without a plan, --repo and --pr do.
+    const planTarget = options.fixerPlan && existsSync(options.fixerPlan) ? JSON.parse(readFileSync(options.fixerPlan, "utf8")).workOrder?.target : undefined;
+    const target = planTarget ?? (options.repo && options.pr ? { repo: options.repo, pr: options.pr } : undefined);
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;

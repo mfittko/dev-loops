@@ -15,6 +15,8 @@ export const A = git(coverageRepo, "rev-parse", "HEAD");
 // M is a real commit for the cap-round chain tests; the seams, not the topology, decide the base-only merge.
 git(coverageRepo, "-c", "user.name=T", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "base-only merge");
 export const M = git(coverageRepo, "rev-parse", "HEAD");
+git(coverageRepo, "-c", "user.name=T", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "chain end");
+export const C = git(coverageRepo, "rev-parse", "HEAD");
 git(coverageRepo, "-c", "user.name=T", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "candidate");
 export const B = git(coverageRepo, "rev-parse", "HEAD");
 let next = 0;

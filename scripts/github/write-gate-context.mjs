@@ -2121,6 +2121,23 @@ export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, 
   return starts.map((start) => clearingChainEnd(tmpRoot, start)).filter(Boolean);
 }
 
+/** Every head the sealed clearing chains of the cap round `capHead` visit after it: each seeded merge, each record candidate head and each chain end. */
+export async function clearingChainHeads({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
+  const { starts } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
+  const heads = new Set();
+  for (const start of starts) {
+    const seededFrom = normalizeSha(start.reviewBaselineHead);
+    if (seededFrom && seededFrom !== normalizeSha(capHead)) heads.add(seededFrom);
+    for (let record = start; record;) {
+      const next = normalizeSha(record.candidateHead);
+      if (!next || heads.has(next)) break;
+      heads.add(next);
+      record = clearingDeltaRecord(tmpRoot, next);
+    }
+  }
+  return [...heads];
+}
+
 /**
  * "Cap round fixed" (ADR 0208): the cap round exists, and a sealed pre-push delta record bound to the cap-round head cleared (or bounded out) the current head.
  * No full draft_gate round runs after it. Fails closed on an unreadable, unsealed or hand-edited delta record.
