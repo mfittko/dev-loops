@@ -63,8 +63,10 @@ Required:
                         fingerprint?, validation? }; threadId, fixingCommitSha
                         and disposition are required on every entry.
                         The handoff counts only with a matching fixer pull receipt,
-                        when written at or after that pull, and when its headSha is
-                        the observed --head-sha.
+                        when written at or after that pull. Its candidate head X
+                        may precede live --head-sha H only after containment and
+                        per-commit historical thread-site checks; uncertainty
+                        names the thread for pre_approval_gate --known-findings.
 Optional:
   --construct                 Construct the full worker's canonical report (ACT: from
                                authenticated completion input; THREAD: from the threads
@@ -324,11 +326,13 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       || sha256Hex(completion).slice(7) !== order.authority.completionInputDigest) {
       throw new Error("completion input differs from its semantic or exact-byte authority");
     }
-    if (!completion || completion.headSha !== options.headSha || !normalizeFullHeadSha(completion.headSha)
+    if (!completion || !normalizeFullHeadSha(completion.headSha)
       || normalizeFullHeadSha(completion.fixingCommitSha) !== completion.fixingCommitSha
       || !Array.isArray(completion.siteCoverage) || !Array.isArray(completion.threadBindings)) {
       throw new Error("completion input requires the actual full candidate/fixing heads, coverage and thread bindings");
     }
+    const decision = readGateDeltaRecord(receiptTmpRoot, baselineAuthority?.reviewBaselineHead ?? order.headSha);
+    if (decision && decision.candidateHead !== completion.headSha) throw new Error("completion input requires the actual full candidate/fixing heads from its clearing decision");
     const subject = receipt.receipt.subject;
     if (!/^f\d+-[a-f0-9]{8}$/.test(plan.executionIdentity) || plan.workOrderRef !== `fixer:${options.repo}#${options.pr}:${order.headSha}:${plan.executionIdentity}`
       || subject.repo !== options.repo || subject.pr !== options.pr || subject.headSha !== order.headSha
@@ -337,7 +341,20 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     }
   }
   if (options.construct && !completion && order.source !== "threads") throw new Error("--construct requires authenticated ACT completion input or a THREAD plan");
-  let raw = options.construct ? { headSha: options.headSha, dispositions: [], ...(completion ? { siteCoverage: completion.siteCoverage } : {}) } : null;
+  const observedHead = options.headSha;
+  let threadDelta;
+  if (order.source === "threads") {
+    const read = order.requiredReads.find((read) => read.kind === "delta-result");
+    if (read) {
+      const bytes = await readFile(read.path).catch(() => { throw new Error("THREAD needs a clearing delta record matching its authenticated emission"); });
+      threadDelta = JSON.parse(bytes);
+      if (createHash("sha256").update(bytes).digest("hex") !== read.sha256
+        || sha256Hex(threadDelta).slice(7) !== order.authority.deltaResultDigest) throw new Error("THREAD needs a clearing delta record matching its authenticated emission");
+    }
+  }
+  const constructionHead = completion?.headSha ?? (order.source === "threads" && !complete
+    ? threadDelta?.candidateHead ?? observedHead : observedHead);
+  let raw = options.construct ? { headSha: constructionHead, dispositions: [], ...(completion ? { siteCoverage: completion.siteCoverage } : {}) } : null;
   try {
     if (!options.construct) {
       const text = await readFile(handoffPath, "utf8");
@@ -351,9 +368,12 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     if (error.handWritten) throw error;
     throw new Error(`Fixer disposition handoff ${handoffPath} is not valid JSON`);
   }
-  if (raw?.headSha !== options.headSha) {
+  if (raw?.headSha !== observedHead && (!order.source || !normalizeFullHeadSha(raw?.headSha))) {
     throw new Error(`Fixer disposition handoff claims head ${raw?.headSha}, not the observed head ${options.headSha}; refresh the PR state before verifying`);
   }
+  // Keep every existing report/Delta authority at X; only live observation and delivery run at H.
+  options = { ...options, headSha: raw.headSha };
+  if (completion && completion.headSha !== options.headSha) throw new Error("completion input candidate differs from the constructed report");
   if (order.headSha !== options.headSha) {
     const contained = await isCommitContainedByHead({ repo: options.repo, commitSha: order.headSha, headSha: options.headSha }, runtime);
     if (!contained.contained) throw new Error(`the work order head ${order.headSha} is not contained by the observed head ${options.headSha}: ${contained.reason}`);
@@ -373,7 +393,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       throw new Error(`the work order's threads ${threadsRead.path} have invalid thread IDs`);
     }
   }
-  if (options.construct && !completion) {
+  if (!completion && order.source === "threads" && (options.construct || options.headSha !== observedHead)) {
     // THREAD route: the clearing delta record bound to the pushed head decides each thread. An ordinary order's head is
     // the review baseline; a complete order's head is the pushed candidate, so its record is found by candidateHead.
     // A record decides only when it clears the pushed head and its items cover the pinned thread IDs: an ACT-route or
@@ -394,7 +414,10 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       throw new Error(`--construct needs a clearing delta record ${complete ? "" : `for baseline ${order.headSha} `}whose candidateHead is the pushed head ${options.headSha} and whose items cover the pinned threads; push the reviewed candidate first`);
     }
     const resolved = new Set((record.items ?? []).filter((item) => item?.status === "resolved").map((item) => item.ref));
-    raw.dispositions = source.threads.map(({ threadId }) => ({ threadId, fixingCommitSha: options.headSha, disposition: resolved.has(threadId) ? "tackled" : "deferred" }));
+    const dispositions = source.threads.map(({ threadId }) => ({ threadId, fixingCommitSha: options.headSha, disposition: resolved.has(threadId) ? "tackled" : "deferred" }));
+    if (options.construct) raw.dispositions = dispositions;
+    else if (raw.dispositions.length !== dispositions.length || dispositions.some((expected) => !raw.dispositions.some((entry) => entry.threadId === expected.threadId
+      && entry.fixingCommitSha === expected.fixingCommitSha && entry.disposition === expected.disposition))) throw new Error("THREAD report differs from the clearing candidate dispositions");
   }
   let handoff = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
   if (threadsRead) {
@@ -605,6 +628,63 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, delta
   }
 }
 
+// Historical coordinates belong to the authenticated root, never the live (possibly shifted) line.
+export async function assertDescendantThreadSites({ repo, pr, candidateHead, headSha, handoff, parsed, repoRoot }, { env, ghCommand, runChild }) {
+  const gitEnv = { ...env };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_DIFF_OPTS"]) delete gitEnv[key];
+  for (const entry of handoff.dispositions.filter((entry) => entry.disposition === "tackled")) {
+    const refuse = (reason, changed = false) => { throw new Error(`thread_site_${changed ? "changed" : "unverifiable"}: ${entry.threadId} (${candidateHead} -> ${headSha}): ${reason}; run pre_approval_gate with this open thread in --known-findings`); };
+    const git = async (...args) => {
+      const result = await runChild("git", ["-C", repoRoot, "--literal-pathspecs", ...args], gitEnv).catch(() => refuse("history unavailable"));
+      if (result.code !== 0) refuse("history unavailable");
+      return result.stdout.trim();
+    };
+    const root = parsed.comments.filter((comment) => comment.threadId === entry.threadId)
+      .sort((a, b) => Number(a.databaseId) - Number(b.databaseId))[0];
+    if (!root || !/^\d+$/.test(String(root.databaseId))) refuse("root identity unavailable");
+    const response = await runChild(ghCommand, ["api", `repos/${repo}/pulls/comments/${root.databaseId}`], env).catch(() => refuse("historical root unreadable"));
+    let site;
+    try { site = JSON.parse(response.stdout); } catch { refuse("historical root unreadable"); }
+    if (response.code !== 0 || !site || String(site.id) !== String(root.databaseId) || site.node_id !== root.id || site.in_reply_to_id
+      || site.pull_request_url !== `https://api.github.com/repos/${repo}/pulls/${pr}`) refuse("historical root identity mismatch");
+    let start = site.original_start_line ?? site.original_line, end = site.original_line;
+    if (site.side !== "RIGHT" || site.original_start_line != null && site.start_side !== "RIGHT"
+      || !Number.isSafeInteger(start) || start < 1 || !Number.isSafeInteger(end) || end < start
+      || !normalizeFullHeadSha(site.original_commit_id) || typeof site.path !== "string" || !site.path
+      || path.isAbsolute(site.path) || site.path.split("/").includes("..")) refuse("unsupported historical coordinates");
+    const walk = async (from, to, rejectOverlap) => {
+      if (from === to) return;
+      await git("merge-base", "--is-ancestor", from, to);
+      const commits = (await git("rev-list", "--reverse", "--ancestry-path", `${from}..${to}`)).split("\n").filter(Boolean);
+      let parent = from;
+      for (const commit of commits) {
+        const parents = (await git("rev-list", "--parents", "-n", "1", commit)).split(" ");
+        if (parents.length !== 2 || parents[1] !== parent) refuse("nonlinear history");
+        const patch = await git("diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=0", "--inter-hunk-context=0", parent, commit, "--", site.path);
+        if (/^(?:Binary files |GIT binary patch$|(?:deleted file mode|new file mode|old mode|new mode) \d+$)/m.test(patch)) refuse("site file replaced, deleted or binary");
+        let offset = 0;
+        for (const hunk of patch.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) {
+          const oldStart = Number(hunk[1]) + offset, oldCount = Number(hunk[2] ?? 1), newCount = Number(hunk[4] ?? 1);
+          const delta = newCount - oldCount;
+          const overlap = oldCount ? oldStart <= end && oldStart + oldCount - 1 >= start : oldStart >= start && oldStart < end;
+          if (overlap) {
+            if (rejectOverlap) refuse("later commit overlaps the thread range", true);
+            if (!newCount) refuse("fix removed the historical range");
+            start = Math.min(start, Number(hunk[3]));
+            end = Math.max(Number(hunk[3]) + newCount - 1, end + delta);
+          } else if (oldStart < start) { start += delta; end += delta; }
+          offset += delta;
+        }
+        parent = commit;
+      }
+      if (parent !== to) refuse("incomplete history");
+    };
+    await git("cat-file", "-e", `${site.original_commit_id}:${site.path}`);
+    await walk(site.original_commit_id, candidateHead, false);
+    await walk(candidateHead, headSha, true);
+  }
+}
+
 export async function verifyFixerDisposition(
   options,
   { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot = process.cwd() } = {},
@@ -632,6 +712,15 @@ export async function verifyFixerDisposition(
   if (Array.isArray(actList)) {
     gateLogin = await resolveAuthenticatedLogin({ env, ghCommand, runChild });
     assertActItemThreadsDisposed(actList, handoff, initialSnapshot, gateLogin, deltaStatuses, completion);
+  }
+  if (handoff.headSha !== options.headSha) {
+    if (source === "act-list" && !completion) throw new Error("thread_site_unverifiable: descendant ACT delivery needs authenticated completion input; run pre_approval_gate with the open threads in --known-findings");
+    const contained = await isCommitContainedByHead({ repo: options.repo, commitSha: handoff.headSha, headSha: options.headSha }, runtime);
+    if (!contained.contained) throw new Error(`candidate is not contained by the observed head: ${contained.reason}; run a full gate round`);
+    await assertDescendantThreadSites({ ...options, candidateHead: handoff.headSha, handoff, parsed: initialSnapshot, repoRoot }, runtime);
+    // Catch movement during the historical proof before construction, checkpoints or GitHub writes.
+    const current = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
+    if (current.code !== 0 || JSON.parse(current.stdout).headRefOid !== options.headSha) throw new Error("live head changed during thread-site proof; refresh and run a full gate round");
   }
   if (options.construct) {
     await mkdir(path.dirname(handoffPath), { recursive: true });
@@ -691,7 +780,7 @@ export async function verifyFixerDisposition(
   }
   if (!options.check) {
     await mkdir(path.dirname(fullPath), { recursive: true });
-    await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery }, null, 2)}\n`, "utf8");
+    await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery, headSha: options.headSha }, null, 2)}\n`, "utf8");
   }
 
   const tackledShas = [...new Set(
@@ -834,7 +923,7 @@ export async function verifyFixerDisposition(
     : entry));
   const activeFixer = evaluation.ok ? undefined : await bindActiveFixer(false);
   if (!options.check && evaluation.ok && residualFailures.length === 0) {
-    await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery, complete: true }, null, 2)}\n`, "utf8");
+    await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery, headSha: options.headSha, complete: true }, null, 2)}\n`, "utf8");
   }
   return {
     // A failed residual-status reply is not delivered: nonzero exit naming the thread.
