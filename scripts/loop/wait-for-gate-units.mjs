@@ -30,13 +30,14 @@ export const ARTIFACT_STABLE_MS = 10000;
 const EXIT = { all_done: 0, timeout: 2, round_retired: 3 };
 
 const USAGE = `Usage: wait-for-gate-units.mjs (--emit-plan <path> [--unit <scope>]... | --judge-plan <path>) --tmp-root <worktree>/tmp [--timeout <seconds>]
-       wait-for-gate-units.mjs --artifact <path> [--timeout <seconds>]
+       wait-for-gate-units.mjs --artifact <path> --after <path> [--timeout <seconds>]
 Block in one foreground process until the round's dispatched units are done.
 Outcomes (JSON on stdout): all_done (exit 0), timeout (exit 2), round_retired (exit 3). Invalid input: ok false, exit 1.
   --emit-plan <path>   the round's <gate>-<headSha>.emit-plan.json; waits on every unit unless --unit narrows it
   --unit <scope>       repeatable; restrict the wait to these unit scopes
   --judge-plan <path>  the round's judge-emit-plan.json; waits on the one judge unit
-  --artifact <path>    single-unit join (COORDINATOR-SINGLE-CHILD-JOIN): waits until this file parses as JSON and carries its terminal field (outcome), or, with no terminal field, stays unchanged for ${ARTIFACT_STABLE_MS / 1000} seconds; excludes the plan flags and --tmp-root
+  --artifact <path>    single-unit join (COORDINATOR-SINGLE-CHILD-JOIN): waits until this file parses as JSON and carries its terminal field (outcome), or, with no terminal field, stays unchanged for ${ARTIFACT_STABLE_MS / 1000} seconds; excludes the plan flags and --tmp-root. For a full-phase fixer pass its joinRef (the final-on-write report).
+  --after <path>       required with --artifact: an absolute path to a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath). An --artifact older than it is pending and the result reports stale: true.
   --tmp-root <dir>     worktree-local tmp root with the sentinels and retirement records
   --timeout <seconds>  0 to ${MAX_TIMEOUT_MS / 1000} (default ${DEFAULT_TIMEOUT_MS / 1000}; 0 = single immediate check)
   --timeout-ms <n>     Deprecated alias for --timeout (milliseconds); warns on stderr. Passing both fails closed.`;
@@ -50,6 +51,7 @@ export function parseWaitArgs(argv) {
       unit: { type: "string", multiple: true },
       "judge-plan": { type: "string" },
       artifact: { type: "string" },
+      after: { type: "string" },
       "tmp-root": { type: "string" },
       timeout: { type: "string" },
       "timeout-ms": { type: "string" },
@@ -61,10 +63,13 @@ export function parseWaitArgs(argv) {
   if (values.help) return { help: true };
   const timeoutMs = resolveTimeoutMs({ timeout: values.timeout, timeoutMs: values["timeout-ms"] }) ?? DEFAULT_TIMEOUT_MS;
   if (timeoutMs > MAX_TIMEOUT_MS) throw new Error(`--timeout must be at most ${MAX_TIMEOUT_MS / 1000} seconds`);
+  if (values.after !== undefined && values.artifact === undefined) throw new Error("--after applies only to --artifact; drop --after, or pass --artifact <absolute hand-back path>");
   if (values.artifact !== undefined) {
     if (values["emit-plan"] !== undefined || values["judge-plan"] !== undefined || values.unit !== undefined || values["tmp-root"] !== undefined) throw new Error("--artifact excludes --emit-plan, --judge-plan, --unit and --tmp-root");
     if (values.artifact.trim() === "" || values.artifact !== values.artifact.trim() || !path.isAbsolute(values.artifact)) throw new Error("--artifact must be a non-empty absolute path; pass the child's absolute hand-back path");
-    return { artifact: values.artifact, timeoutMs, jq: values.jq, fields: values.fields, silent: values.silent };
+    if (values.after === undefined || values.after.trim() === "" || values.after !== values.after.trim() || !path.isAbsolute(values.after)) throw new Error("--artifact requires --after <absolute path> of a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath); a stale hand-back from an earlier dispatch would otherwise read as done. Re-run with --after");
+    if (path.resolve(values.after) === path.resolve(values.artifact)) throw new Error("--after must differ from --artifact: the hand-back would always look current. Pass --after <absolute path> of a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath)");
+    return { artifact: values.artifact, after: values.after, timeoutMs, jq: values.jq, fields: values.fields, silent: values.silent };
   }
   if ((values["emit-plan"] === undefined) === (values["judge-plan"] === undefined)) throw new Error("pass exactly one of --emit-plan, --judge-plan and --artifact");
   if (values["judge-plan"] !== undefined && values.unit !== undefined) throw new Error("--unit applies only to --emit-plan");
@@ -136,34 +141,48 @@ async function checkUnit(unit, { role, receiptTmpRoot, tmpRoot, headSha }) {
   return { scope: unit.scope, executionIdentity: unit.executionIdentity, state, missingAngles };
 }
 
-export const ARTIFACT_TIMEOUT_REMEDY = "Re-run the same command. After three consecutive timeout outcomes, stop and return the typed observation units_stalled.";
+export const ARTIFACT_TIMEOUT_REMEDY = "Delta reviewer and commit_only fixer: re-run the same command; after three consecutive timeout outcomes, stop and return the typed observation units_stalled. Full-phase fixer: after one timeout, end your turn once to receive the fixer's completion notification (COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK; an interim or not-reported-yet notification is not the join, so end your turn again), then, only after the final notification, run the same command once with --timeout 0; if it returns all_done, act on the published report, otherwise act on the typed exit code or hand-back text the notification carries, and do not repeat the wait.";
+
+export const ARTIFACT_STALE_REMEDY = "The artifact predates --after, so it is a leftover. Fixer: check that --after and the artifact path both come from the current emission (the latest emitted plan and its joinRef); if not, re-emit the work order and join the new joinRef. Delta reviewer: use a fresh --result path and pass the current input.patchPath as --after. Otherwise re-run the same command; after three consecutive timeout outcomes, stop and return the typed observation units_stalled. Full-phase fixer: follow COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK instead of re-running.";
 
 // Any hand-back type, with no writer obligation on the child: the artifact parses as JSON and carries its terminal field
 // (`outcome`, as a DeltaPrePushReviewResult does), or, with no terminal field, stays byte-identical for ARTIFACT_STABLE_MS.
 // A missing, empty or non-JSON file is pending (a partial write reads as not done on this tick); any other read failure propagates.
-async function artifactReady(file, seen, at) {
+// A file strictly older than the dispatch reference (`afterMs`) is a stale leftover and is pending.
+async function artifactReady(file, seen, at, after) {
   let raw;
   let parsed;
-  try { raw = await readFile(file, "utf8"); parsed = JSON.parse(raw); } catch (error) { if (error?.code === "ENOENT" || error instanceof SyntaxError) { seen.raw = undefined; return false; } throw error; }
+  seen.stale = false;
+  try {
+    // Re-stat --after each tick: a new emission replaces the plan, so a cached mtime would go stale.
+    const afterInfo = await stat(after);
+    const afterMs = afterInfo.mtimeMs;
+    const info = await stat(file);
+    if (info.dev === afterInfo.dev && info.ino === afterInfo.ino) throw new Error(`--artifact ${file} and --after ${after} are the same file (symlink or hard link); pass the artifact the child writes and the emitted plan separately`);
+    if (info.mtimeMs < afterMs) { seen.raw = undefined; seen.stale = true; return false; }
+    raw = await readFile(file, "utf8"); parsed = JSON.parse(raw);
+  } catch (error) { if (error?.code === "ENOENT" || error instanceof SyntaxError) { seen.raw = undefined; return false; } throw error; }
   if (typeof parsed?.outcome === "string" && parsed.outcome !== "") return true;
   if (seen.raw !== raw) { seen.raw = raw; seen.since = at; return false; }
   return at - seen.since >= ARTIFACT_STABLE_MS;
 }
 
-async function waitForArtifact({ artifact, timeoutMs, now, delay }) {
+async function waitForArtifact({ artifact, after, timeoutMs, now, delay }) {
+  const afterInfo = await stat(after).catch(() => { throw new Error(`--after ${after} does not exist; pass a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath)`); });
+  if (!afterInfo.isFile()) throw new Error(`--after ${after} is not a regular file; pass a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath)`);
   const started = now();
   const seen = {};
   for (;;) {
     const elapsedMs = now() - started;
-    if (await artifactReady(artifact, seen, now())) return { ok: true, outcome: "all_done", artifact, elapsedMs };
+    if (await artifactReady(artifact, seen, now(), after)) return { ok: true, outcome: "all_done", artifact, elapsedMs };
     const remaining = timeoutMs - elapsedMs;
-    if (remaining <= 0) return { ok: true, outcome: "timeout", artifact, elapsedMs, remedy: ARTIFACT_TIMEOUT_REMEDY };
+    if (remaining <= 0) return { ok: true, outcome: "timeout", artifact, elapsedMs, ...(seen.stale ? { stale: true } : {}), remedy: seen.stale ? ARTIFACT_STALE_REMEDY : ARTIFACT_TIMEOUT_REMEDY };
     await delay(Math.min(RECHECK_INTERVAL_MS, remaining));
   }
 }
 
-export async function waitForUnits({ artifact, emitPlan, judgePlan, units: wanted, tmpRoot, timeoutMs = DEFAULT_TIMEOUT_MS, receiptTmpRoot, now = Date.now, delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
-  if (artifact !== undefined) return waitForArtifact({ artifact, timeoutMs, now, delay });
+export async function waitForUnits({ artifact, after, emitPlan, judgePlan, units: wanted, tmpRoot, timeoutMs = DEFAULT_TIMEOUT_MS, receiptTmpRoot, now = Date.now, delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
+  if (artifact !== undefined) return waitForArtifact({ artifact, after, timeoutMs, now, delay });
   const planPath = emitPlan ?? judgePlan;
   const planStat = await stat(planPath).catch(() => { throw new Error(`plan ${planPath} does not exist`); });
   const { gate, headSha, role, units } = selectUnits({ plan: await readPlan(planPath), judge: judgePlan !== undefined, wanted });
