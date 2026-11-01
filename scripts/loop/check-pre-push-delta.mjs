@@ -286,7 +286,7 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
       if (await merged(logHead)) return true;
       if (typeof log.repo !== "string" || !Number.isInteger(log.pr)) return false;
       // The probes read repo and pr from the log: they must be the authenticated plan target's.
-      if (target && (log.repo !== target.repo || log.pr !== target.pr)) return false;
+      if (!target || log.repo !== target.repo || log.pr !== target.pr) return false;
       const chainArgs = { tmpRoot, capHead: logHead, repo: log.repo, pr: log.pr, baseRefName, repoRoot: worktree, baseOnlyMerge };
       const ends = await clearingChainLastCandidates(chainArgs);
       // A draft_gate findings log at the baseline or at any head the chain visits means a later full round superseded this one.
