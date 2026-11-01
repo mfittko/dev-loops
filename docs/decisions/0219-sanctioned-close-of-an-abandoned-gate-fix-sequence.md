@@ -19,7 +19,7 @@ Under `PRE-PUSH-DELTA-PUSH-AUTHORITY`, a gate fix sequence writes the marker `tm
 
 The 30 minute grace equals the runner-lock TTL. A dispatch or a fixer younger than the grace may be live.
 
-A live sequence is never cleared. The command refuses `sequence_live`, `fixer_running`, `abandonment_unproven` and `sequence_absent`, and each refusal names a remedy. A fixer that pulled its work order and has not handed back within the grace reads as running. An unreadable pull receipt also reads as running. A marker rewritten while the PR head is read starts a new sequence and is refused.
+A live sequence is never cleared. The command refuses `sequence_live`, `fixer_running`, `abandonment_unproven`, `baseline_unknown` and `sequence_absent`, and each refusal names a remedy. `baseline_unknown` applies to a marker that names no work order ref when its baseline is not a commit in the local repository. The remedy is to run the close from a checkout of the marker's repository, or to ask the operator to delete the marker. A fixer that pulled its work order and has not handed back within the grace reads as running. An unreadable pull receipt also reads as running. A marker rewritten while the PR head is read starts a new sequence and is refused.
 
 The command writes the closure record `gate-delta/<baseline>.sequence-closed.<execution|none>.json` before it removes the marker. A failed write leaves the marker in place. A marker without an execution writes the suffix `none`, and a later execution-less close on the same head overwrites that record. The record names the baseline, the execution, the condition, the actor and the time. `emit-fixer-work-order.mjs` reads the record, so a later pull of the closed execution's work order is refused as `stale_dispatch`. The marker now carries the fixer execution identity so the command can bind the receipt and the record to one execution.
 
@@ -35,4 +35,5 @@ Residuals:
 
 - A fixer that pulled its work order and then died leaves a receipt. With the PR head unchanged, the command refuses that marker. It clears only after the head moves, or when the operator deletes the marker.
 - A never-pulled dispatch blocks pushes for up to 30 minutes before the command can close it.
+- A fork that shares git objects with the marker's repository can satisfy the local commit check of `baseline_unknown`. That check guards against a wrong checkout and does not prove repository identity.
 - A marker that names no branch cannot be proven abandoned, so the operator deletes it. A marker that names no execution clears only through a moved head.
