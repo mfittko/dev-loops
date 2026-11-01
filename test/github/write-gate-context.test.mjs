@@ -9017,7 +9017,7 @@ test("resolveCapRoundFixed starts the chain at a ledgerless base-only merge of t
   }
 });
 
-// ADR 0216, PR 2992 shape: cap round at head A, fixer commit B with a sealed clearing record A to B, base merge M on B.
+// ADR 0218, PR 2992 shape: cap round at head A, fixer commit B with a sealed clearing record A to B, base merge M on B.
 test("resolveCapRoundFixed accepts a base-only merge M of the chain's last clearing candidate B, and reports the failed condition otherwise", async () => {
   const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
   try {

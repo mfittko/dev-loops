@@ -2509,28 +2509,28 @@ test("ADR 0197: a base-only merge after the cap round does not consume the closu
   });
 });
 
-test("ADR 0216: a base-only merge of the chain's last clearing candidate is still the cap round (PR 2992 shape)", async () => {
+test("ADR 0218: a base-only merge of the chain's last clearing candidate is still the cap round (PR 2992 shape)", async () => {
   await withFixture(async (fx) => {
     const { over } = await capRoundThenBaseMerge(fx, { fixerCommitBeforeMerge: true });
     assert.equal((await fx.emit(over)).workOrder.source, "act-list");
   });
 });
 
-test("ADR 0216: a chain that starts at a ledgerless base-only merge M0 of the cap-round head is still the cap round at a later base merge M", async () => {
+test("ADR 0218: a chain that starts at a ledgerless base-only merge M0 of the cap-round head is still the cap round at a later base merge M", async () => {
   await withFixture(async (fx) => {
     const { over } = await capRoundThenBaseMerge(fx, { baseMergeBeforeFixer: true });
     assert.equal((await fx.emit(over)).workOrder.source, "act-list");
   });
 });
 
-test("ADR 0216: only the chain's last candidate counts; a base merge on an earlier candidate B1 of chain A->B1->B2 keeps the refusal", async () => {
+test("ADR 0218: only the chain's last candidate counts; a base merge on an earlier candidate B1 of chain A->B1->B2 keeps the refusal", async () => {
   await withFixture(async (fx) => {
     const { over } = await capRoundThenBaseMerge(fx, { fixerCommitBeforeMerge: true, secondCandidate: true });
     await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
   });
 });
 
-test("ADR 0216: a PR-own change after the chain's last candidate keeps the round_cap_reached refusal", async () => {
+test("ADR 0218: a PR-own change after the chain's last candidate keeps the round_cap_reached refusal", async () => {
   await withFixture(async (fx) => {
     const { over } = await capRoundThenBaseMerge(fx, { fixerCommitBeforeMerge: true, ownChangeAfterMerge: true });
     await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");

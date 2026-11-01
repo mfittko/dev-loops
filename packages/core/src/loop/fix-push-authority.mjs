@@ -25,7 +25,7 @@ export function clearSequenceMarker(tmpRoot, baselineHead) {
 }
 
 /**
- * The recovery pointer the refusal reason carries (ADR 0216): the sanctioned no-commit close of the sequence. A `commit_only` fixer that handed back with no commit closes with the authenticated
+ * The recovery pointer the refusal reason carries (ADR 0218): the sanctioned no-commit close of the sequence. A `commit_only` fixer that handed back with no commit closes with the authenticated
  * `check-pre-push-delta.mjs` input-only run (`--fixer-plan` and `--site-coverage`, outcome `no_commit`; the marker records no route, so the hint names both the `--act-list` and the `--threads-file` form), which removes the marker. A fix commit keeps the marker and takes the normal delta review.
  * A marker that names no branch (unreadable or malformed) cannot be authenticated by that close, which requires the matching branch marker, so its hint names no close command and no deletion and points to the PRE-PUSH-DELTA-PUSH-AUTHORITY rule, which owns that recovery.
  */

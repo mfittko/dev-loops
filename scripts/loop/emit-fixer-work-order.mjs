@@ -315,7 +315,7 @@ export async function emitFixerWorkOrder({
         // An unreadable ledger counts toward the cap but is dropped above, so the cap-round authority could be an earlier round: fail closed.
         if (unreadable > 0) throw new Error("unreadable prior ledger");
         const baseRefName = (await fetchPr({ repo, pr }))?.baseRefName;
-        // ADR 0216: the chain's last clearing candidate (the fixer commit that followed the cap round) counts as a base of the merge as well.
+        // ADR 0218: the chain's last clearing candidate (the fixer commit that followed the cap round) counts as a base of the merge as well.
         let baseOnly = false;
         if (typeof baseRefName === "string" && baseRefName) {
           const ends = await clearingChainLastCandidates({ tmpRoot: resolveGateArtifactTmpRoot(cwd), capHead: fromHead, repo, pr, baseRefName, repoRoot: cwd });

@@ -4299,8 +4299,8 @@ for (const { name, isDraft, seal, expected } of [
   });
 }
 
-// ADR 0216: a rejecting resolveCapRoundFixed (injected through the runtime) reaches the detector rejection handler, which reports cap_round_unresolved.
-test("detect-pr-gate-coordination-state (ADR 0216): a rejecting resolveCapRoundFixed reports cap_round_unresolved", async () => {
+// ADR 0218: a rejecting resolveCapRoundFixed (injected through the runtime) reaches the detector rejection handler, which reports cap_round_unresolved.
+test("detect-pr-gate-coordination-state (ADR 0218): a rejecting resolveCapRoundFixed reports cap_round_unresolved", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-throws-"));
   try {
     const headSha = "abc1234567".repeat(4);
@@ -4343,8 +4343,8 @@ for (const { name, chained, expected } of [
   });
 }
 
-// ADR 0216: an unreadable in-range cap-round ledger still counts toward the cap, so the refusal stands, but it names cap_round_unresolved and not a clearing record that was never evaluated.
-test("detect-pr-gate-coordination-state (ADR 0216): an unreadable cap-round ledger reports cap_round_unresolved, not no_clearing_record", async () => {
+// ADR 0218: an unreadable in-range cap-round ledger still counts toward the cap, so the refusal stands, but it names cap_round_unresolved and not a clearing record that was never evaluated.
+test("detect-pr-gate-coordination-state (ADR 0218): an unreadable cap-round ledger reports cap_round_unresolved, not no_clearing_record", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-unresolved-"));
   try {
     const headSha = "abc1234567".repeat(4);

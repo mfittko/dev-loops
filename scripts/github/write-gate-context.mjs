@@ -2067,7 +2067,7 @@ const isUnsealedDeltaRecord = (tmpRoot, head) => {
 };
 
 /**
- * The clearing chain starts of a cap round (ADR 0216): the clearing record bound to the cap-round head, else the record of every ledgerless base-only merge of it
+ * The clearing chain starts of a cap round (ADR 0218): the clearing record bound to the cap-round head, else the record of every ledgerless base-only merge of it
  * (needs `baseRefName`). Shared by resolveCapRoundFixed and the fixer emitter so the two seams cannot disagree on a chain start.
  * `baseOnlyUnsealed` is set when such a merge carries an unsealed record.
  */
@@ -2090,7 +2090,7 @@ async function capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, re
   return { starts, baseOnlyUnsealed };
 }
 
-/** The last candidate head of every sealed clearing chain of the cap round `capHead` (ADR 0216), seeded as resolveCapRoundFixed seeds them; empty when no chain starts. */
+/** The last candidate head of every sealed clearing chain of the cap round `capHead` (ADR 0218), seeded as resolveCapRoundFixed seeds them; empty when no chain starts. */
 export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
   const { starts } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
   const ends = [];
@@ -2125,7 +2125,7 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   const capHead = capRound.log.headSha;
   const { starts, baseOnlyUnsealed } = await capRoundChainStarts({ tmpRoot, capHead, repo: options.repo, pr: options.pr, baseRefName: options.baseRefName, repoRoot, baseOnlyMerge });
   const head = normalizeSha(options.headSha);
-  // The chain ends at the last clearing record's candidate B; a head that is a base-only merge since B (ADR 0216) is still covered by the chain.
+  // The chain ends at the last clearing record's candidate B; a head that is a base-only merge since B (ADR 0218) is still covered by the chain.
   const reaches = async (start) => {
     const seen = new Set();
     for (let record = start; record;) {
@@ -2149,7 +2149,7 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   };
   const covering = starts.filter(covers);
   for (const start of covering) if (await reaches(start)) return capRound;
-  // ADR 0216: report the one condition that failed, so the refusal names its own remedy.
+  // ADR 0218: report the one condition that failed, so the refusal names its own remedy.
   const unsealed = starts.length === 0 && (isUnsealedDeltaRecord(tmpRoot, capHead) || baseOnlyUnsealed);
   onFailure(starts.length === 0 ? (unsealed ?"unsealed_record" : "no_clearing_record") : covering.length === 0 ? "items_do_not_cover" : "chain_does_not_reach_head");
   return null;

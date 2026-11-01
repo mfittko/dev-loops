@@ -851,7 +851,7 @@ export const ADR_TRIPWIRE_REMEDIES = Object.freeze([
   "add an `adr-tripwire:allow <reason>` line to the PR body",
 ]);
 
-/** The one failed cap-round-fixed condition (`resolveCapRoundFixed` `onFailure`, ADR 0216) and its remedy. */
+/** The one failed cap-round-fixed condition (`resolveCapRoundFixed` `onFailure`, ADR 0218) and its remedy. */
 const CAP_ROUND_REFUSAL = Object.freeze({
   no_clearing_record: "Condition no_clearing_record: no sealed clearing delta record exists for the cap-round baseline. Remedy: complete the cap round's fixer pass and run `check-pre-push-delta.mjs --result` for that baseline.",
   unsealed_record: "Condition unsealed_record: the delta record for the cap-round baseline carries no valid seal. Remedy: rerun `check-pre-push-delta.mjs --result` for that baseline so the writer seals it; never edit the record.",

@@ -1005,8 +1005,8 @@ test("the restore path never accepts the cap round fixed proof and its refusal n
   } finally { await rm(tempDir, { recursive: true, force: true }); }
 });
 
-// ADR 0216: the real cap-round resolver, called with the head M of a base-only merge since the chain's last clearing candidate B.
-test("ready-for-review accepts a base-only merge M of the chain's last clearing candidate through the real resolver, and refuses a merge that is not base-only (ADR 0216)", async () => {
+// ADR 0218: the real cap-round resolver, called with the head M of a base-only merge since the chain's last clearing candidate B.
+test("ready-for-review accepts a base-only merge M of the chain's last clearing candidate through the real resolver, and refuses a merge that is not base-only (ADR 0218)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-chain-"));
   try {
     const [A, B, M] = ["a", "b", "c"].map((c) => c.repeat(40));

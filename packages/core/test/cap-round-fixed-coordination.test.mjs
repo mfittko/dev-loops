@@ -53,7 +53,7 @@ test("a draft PR past the round cap without a fixed cap round reports blocked, n
   assert.equal(draftAt({ draftRoundRefused: true, draftCapRoundFixed: true }).nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW, "a fixed cap round wins");
 });
 
-// ADR 0216: the refusal names the one failed condition and its own remedy.
+// ADR 0218: the refusal names the one failed condition and its own remedy.
 test("the cap-round refusal names its failed condition and the remedy for that condition", () => {
   const table = [
     ["no_clearing_record", /no sealed clearing delta record exists.*Remedy: complete the cap round's fixer pass and run `check-pre-push-delta.mjs --result`/],

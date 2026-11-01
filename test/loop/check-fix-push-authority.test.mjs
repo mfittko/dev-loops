@@ -109,7 +109,7 @@ test("only the PR branch's remote ref ends the sequence; a stacked remote ref of
   });
 });
 
-test("the refusal names the no-commit close command with the baseline head, and never marker deletion (ADR 0216)", async () => {
+test("the refusal names the no-commit close command with the baseline head, and never marker deletion (ADR 0218)", async () => {
   await withRepo(async (root, head) => {
     writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head, branch: "issue-a" });
     const refused = checkFixPushAuthority(root);

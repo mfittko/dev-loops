@@ -48,7 +48,7 @@ test("authenticated no_commit and foreign-head exits close only their own sequen
     assert.equal(readSequenceMarker(fixture.tmpRoot, A), null);
     assert.equal(checkFixPushAuthority(cwd).ok, true);
     if (outcome === "no_commit") {
-      // PR 2992 shape (ADR 0216): after the close, the push of a base-refresh merge on the baseline is allowed.
+      // PR 2992 shape (ADR 0218): after the close, the push of a base-refresh merge on the baseline is allowed.
       git(cwd, "branch", "base-side", A);
       git(cwd, "checkout", "-q", "base-side");
       git(cwd, "commit", "--allow-empty", "-m", "base moves");
