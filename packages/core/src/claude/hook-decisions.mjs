@@ -68,6 +68,7 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
 
 /** Agent types denied scripts/github/unresolve-review-thread.mjs (issue 2577). */
 const UNRESOLVE_DENIED_AGENT_TYPES = new Set(["fixer", "review", "judge"]);
+const UNRESOLVE_INVOCATION = /(?:^|[\s;&|(])(?:node|dev-loops-run|bun)\s+(?:\S+\s+)*?\S*unresolve-review-thread\.mjs(?=$|[\s;&|)])/;
 
 /** The gate-round capsule agent (GATE-EXEC-GATE-COORDINATOR, ADR 0112). */
 export const GATE_COORDINATOR_AGENT_TYPE = "gate-coordinator";
@@ -179,7 +180,8 @@ export function decideBashGate({
   enforceCoordinator = false,
 }) {
   // Unresolve is owned by the orchestrator and the dev-loop coordinator (issue 2577).
-  if (UNRESOLVE_DENIED_AGENT_TYPES.has(normalizeAgentType(agentType)) && String(command).includes("unresolve-review-thread")) {
+  // ponytail: token match only. Quote splitting, globs or variable expansion bypass it; this is a guardrail for cooperative agents.
+  if (UNRESOLVE_DENIED_AGENT_TYPES.has(normalizeAgentType(agentType)) && UNRESOLVE_INVOCATION.test(String(command))) {
     return {
       decision: "deny",
       reason:

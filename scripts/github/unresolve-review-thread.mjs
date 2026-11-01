@@ -40,8 +40,20 @@ async function ghRun(args) {
   return (await execFileAsync("gh", args, { env: process.env })).stdout;
 }
 
-const gql = async (run, query, id) =>
-  JSON.parse(await run(["api", "graphql", "--field", `id=${id}`, "--field", `query=${query}`]));
+async function gql(run, query, id) {
+  let out;
+  try {
+    out = await run(["api", "graphql", "--raw-field", `id=${id}`, "--raw-field", `query=${query}`]);
+  } catch (err) {
+    if (/Could not resolve to a node/.test(`${err?.stderr ?? ""}${err?.message ?? ""}`)) return { data: { node: null } };
+    throw err;
+  }
+  try {
+    return JSON.parse(out);
+  } catch (err) {
+    throw new Error(`Malformed gh JSON for thread ${id} (${query.trim().split("(")[0]}): ${err.message}`);
+  }
+}
 
 export async function unresolveReviewThread({ repo, pr, threadId }, { run = ghRun } = {}) {
   const thread = (await gql(run, THREAD_QUERY, threadId))?.data?.node;
@@ -58,6 +70,7 @@ export async function unresolveReviewThread({ repo, pr, threadId }, { run = ghRu
     throw new UnresolveRefusal("thread_not_resolved",
       `thread ${threadId} is already unresolved. Dispatch the fixer on it; no unresolve is needed.`);
   }
+  // ponytail: a human review pasting a gate marker passes this author check; acceptable for a coordinator-only undo.
   const first = thread.comments?.nodes?.[0];
   const reviewBody = first?.pullRequestReview?.body ?? "";
   if (!isCopilotLogin(first?.author?.login) && !isGateMachineArtifactBody(reviewBody) && matchGateReviewCommentHeader(reviewBody) === null) {

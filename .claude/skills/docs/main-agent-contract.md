@@ -43,8 +43,9 @@ subagent routes them to the orchestrator:
 - Board status transitions, through `scripts/projects/sync-item-status.mjs` or `scripts/projects/move-queue-item.mjs`.
 - Issue creation, through `scripts/github/create-issue.mjs`.
 - Board-item removal, through `scripts/projects/remove-queue-item.mjs` (undo of a wrong queue add only).
-- Review-thread unresolve, through `scripts/github/unresolve-review-thread.mjs` (shared with the `dev-loop` coordinator; the fixer, review and judge agents are denied; see `COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER`).
 - ADR tripwire waiver, through `scripts/github/waive-adr-tripwire.mjs` (`dev-loops-run cli/index.mjs pr waive-adr-tripwire`).
+
+Review-thread unresolve, through `scripts/github/unresolve-review-thread.mjs`, is shared with the `dev-loop` coordinator and listed under lifecycle. The fixer, review and judge agents are denied (see `COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER`).
 
 Known gaps outside this contract's current scope still create issues directly with raw
 `gh issue create`. They include the epic-decomposition step in `skills/docs/issue-intake-procedure.md`,

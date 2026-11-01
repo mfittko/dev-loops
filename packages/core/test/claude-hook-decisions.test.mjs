@@ -994,6 +994,16 @@ test("decideBashGate scopes unresolve-review-thread to the orchestrator and coor
   }
 });
 
+test("decideBashGate allows non-executing mentions of unresolve-review-thread for the fixer (issue 2577)", () => {
+  for (const command of [
+    "git diff -- scripts/github/unresolve-review-thread.mjs",
+    "grep -rn unresolve-review-thread scripts",
+    "bun test test/github/unresolve-review-thread.test.mjs",
+  ]) {
+    assert.equal(decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "fixer" }).decision, "allow", command);
+  }
+});
+
 test("decideBashGate denies Copilot review-request bypasses naming COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY", () => {
   const api = decideBashGate({ command: "gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers -f reviewers[]=copilot-swe-agent", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
   assert.equal(api.decision, "deny");

@@ -29,6 +29,25 @@ test("unresolves a resolved Copilot thread and reports the new state", async () 
   assert.ok(mutated(calls));
 });
 
+test("a null node maps to thread_not_on_pr", async () => {
+  const run = async () => JSON.stringify({ data: { node: null } });
+  await assert.rejects(unresolveReviewThread(target, { run }), (e) => e.reason === "thread_not_on_pr");
+});
+
+test("a gh 'Could not resolve to a node' failure maps to thread_not_on_pr", async () => {
+  const run = async () => { throw Object.assign(new Error("exit 1"), { stderr: "Could not resolve to a node with the global id of 'T1'" }); };
+  await assert.rejects(unresolveReviewThread(target, { run }), (e) => e.reason === "thread_not_on_pr");
+});
+
+test("a CLOSED PR is refused with pr_closed_or_merged", async () => {
+  const { run } = fakeRun({ state: "CLOSED" });
+  await assert.rejects(unresolveReviewThread(target, { run }), (e) => e.reason === "pr_closed_or_merged");
+});
+
+test("malformed gh JSON names the thread id", async () => {
+  await assert.rejects(unresolveReviewThread(target, { run: async () => "not json" }), /Malformed gh JSON for thread T1/);
+});
+
 test("unresolves a gate-review thread", async () => {
   const { run } = fakeRun({ login: "mfittko", reviewBody: "<!-- dev-loops:gate-findings-review -->\nfindings" });
   assert.equal((await unresolveReviewThread(target, { run })).isResolved, false);
