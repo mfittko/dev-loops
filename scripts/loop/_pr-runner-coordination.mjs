@@ -292,8 +292,10 @@ export function normalizeRunnerCoordinationState(raw, { repo, pr } = {}) {
 }
 // Foreign-owner refusals name whether the owner is live and the agent-runnable remedy.
 function ownerVerdictSuffix(state, repo, pr, runId) {
-  const { staleReason } = describeRunnerLiveness(state);
-  return ` ${staleReason}. If the owner is dead, run: pr-runner-coordination.mjs takeover --repo ${repo} --pr ${pr} --run-id ${runId}.`;
+  const { stale, staleReason } = describeRunnerLiveness(state);
+  return stale
+    ? ` ${staleReason}. Run: pr-runner-coordination.mjs takeover --repo ${repo} --pr ${pr} --run-id ${runId}.`
+    : ` ${staleReason}. Wait for it or ask the operator.`;
 }
 function buildConflict({ error, repo, pr, runId, activeRun, filePath, message, exitSignals = null }) {
   const payload = {
@@ -877,7 +879,9 @@ export async function handoffRunnerOwnership({
   const target = { repo: normalizedRepo, pr: normalizedPr, runId: verifiedRunId, filePath: resolvedPath };
   if (verifiedRunId === null) {
     return buildConflict({ ...target, error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED, activeRun: null,
-      message: "Runner coordination handoff requires a run id. Pass --run-id <the id used at claim>." });
+      message: requestedRunId === null
+        ? "Runner coordination handoff requires a run id. Pass --run-id <the id used at claim>."
+        : "Runner coordination handoff on native Codex requires the verified thread identity; an explicit --run-id is not accepted." });
   }
   if (envRunId !== null && requestedRunId !== null && requestedRunId !== envRunId) {
     return buildConflict({ ...target, error: RUNNER_OWNERSHIP_ERROR.OWNERSHIP_LOST, activeRun: null,

@@ -149,7 +149,11 @@ export async function runPrRunnerCoordination(options, { env = process.env, cwd 
       return { ok: false, error: "active_run_exists", repo: options.repo, pr: options.pr, runId, activeRun: active,
         message: `Takeover refused: ${staleReason}. Wait for it or ask the operator.` };
     }
-    return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "takeover", cwd });
+    // A stale pre-read pins the owner generation so a heartbeat before the locked write is not displaced.
+    const pinned = active && active.runId !== runId && typeof active.claimedAt === "string" && typeof active.updatedAt === "string"
+      ? { expectPreviousRunId: active.runId, expectPreviousClaim: { claimedAt: active.claimedAt, updatedAt: active.updatedAt } }
+      : {};
+    return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "takeover", cwd, ...pinned });
   }
   if (options.command === "assert") {
     return assertRunnerOwnership({

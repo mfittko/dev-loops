@@ -147,7 +147,7 @@ export function describeRunnerLiveness(state, { now = Date.now(), maxAgeMs = res
   }
   const match = findStaleRunnerMatch(state, { now, maxAgeMs });
   if (match !== null) {
-    return { stale: true, staleReason: `stale owner run ${active.runId} (last updated ${match.updatedAgeMs}ms ago, max age ${maxAgeMs}ms)` };
+    return { stale: true, staleReason: `stale owner run ${active.runId} (${match.corruptedTimestamp ? "corrupt timestamp" : `last updated ${match.updatedAgeMs}ms ago`}, max age ${maxAgeMs}ms)` };
   }
   return { stale: false, staleReason: `owner run ${active.runId} is live (updated ${now - Date.parse(active.updatedAt)}ms ago)` };
 }
