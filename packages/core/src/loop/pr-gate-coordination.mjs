@@ -861,7 +861,7 @@ export const ADR_TRIPWIRE_REMEDIES = Object.freeze([
 ]);
 
 /** The one failed cap-round-fixed condition (`resolveCapRoundFixed` `onFailure`, ADR 0218) and its remedy. */
-const CAP_ROUND_REFUSAL = Object.freeze({
+export const CAP_ROUND_REFUSAL = Object.freeze({
   baseline_orphaned: "Condition baseline_orphaned: the cap-round baseline is not an ancestor of the current head (a rebase rewrote it), so no clearing record can bind to this head. Remedy: push the head to a new branch that keeps the issue slug (`git push origin HEAD:<new-branch>`), record a pre-PR review on the new branch head (`node <dev-loops-package-root>/cli/index.mjs loop pre-pr-review ...`) before `pr create`, run `node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number>` while this PR is still open, then close this PR (gate history restarts at round 1); do not rebase a PR that reached the cap round, merge the base instead.",
   no_clearing_record: "Condition no_clearing_record: no sealed clearing delta record exists for the cap-round baseline. Remedy: complete the cap round's fixer pass and run `check-pre-push-delta.mjs --result` for that baseline. When the later commits are docs and tests only, run `dev-loops gate extend-cap-round-chain --repo <owner/name> --pr <number>` instead.",
   unsealed_record: "Condition unsealed_record: the delta record for the cap-round baseline carries no valid seal. Remedy: rerun `check-pre-push-delta.mjs --result` for that baseline so the writer seals it; never edit the record.",

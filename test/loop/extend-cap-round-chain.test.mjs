@@ -23,7 +23,7 @@ const commit = async (root, files, message) => {
 };
 
 /** Cap round at A, sealed clearing record A to B (the fixer commit), the checkout at B. */
-async function capFixture() {
+async function capFixture({ findings = [] } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "extend-cap-chain-"));
   initGitFixture(root, { commit: null });
   const A = await commit(root, { ".gitignore": "tmp/\n", "src/a.mjs": "export const a = 1;\n" }, "base");
@@ -32,9 +32,10 @@ async function capFixture() {
   await mkdir(dir, { recursive: true });
   for (const [i, head] of ["1".repeat(40), "2".repeat(40), "3".repeat(40), A].entries()) {
     await writeFile(path.join(dir, `draft_gate-${head}.json`), JSON.stringify({
-      repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: [],
+      repo: REPO, pr: PR, gate: "draft_gate", headSha: head, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: head === A ? findings : [],
     }), "utf8");
   }
+  runGitFixture(root, ["update-ref", "refs/remotes/origin/main", A]);
   writeSealedGateDeltaRecord(path.join(root, "tmp"), A, { reviewBaselineHead: A, candidateHead: B, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
   return { root, A, B };
 }
@@ -102,5 +103,66 @@ test("refuses a PR head that is not the worktree HEAD and a PR with no cap-round
     assert.match(refused.detail, /gate-coordination/);
   } finally {
     await rm(bare, { recursive: true, force: true });
+  }
+});
+
+test("a logic commit refuses even with diff.relative set and the worktree in a subdirectory", async () => {
+  const { root } = await capFixture();
+  try {
+    await commit(root, { "docs/y.md": "y\n" }, "docs");
+    runGitFixture(root, ["config", "diff.relative", "true"]);
+    const L = await commit(root, { "src/b.mjs": "export const b = 1;\n" }, "logic");
+    const refused = await extend(path.join(root, "docs"), L);
+    assert.equal(refused.reason, "logic_commit_in_range");
+    assert.match(refused.detail, /dev-loops loop gate-coordination --repo owner\/repo --pr 70/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a non-covering chain end is not picked and nothing is written", async () => {
+  const act = { severity: "medium", summary: "guard missing", files: ["src/a.mjs"], line: 1, judgeDisposition: "act", judgeTitle: "Guard", judgeFix: "add" };
+  const { root, B } = await capFixture({ findings: [act] });
+  try {
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    const refused = await extend(root, D);
+    assert.equal(refused.reason, "no_cap_round_chain");
+    assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), B), null);
+    assert.equal(await proof(root, D), null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a base-only merge after the chain end does not block", async () => {
+  const { root, A, B } = await capFixture();
+  try {
+    runGitFixture(root, ["checkout", "-q", "-b", "base-side", A]);
+    const X = await commit(root, { "src/base.mjs": "export const base = 1;\n" }, "base logic");
+    runGitFixture(root, ["update-ref", "refs/remotes/origin/main", X]);
+    runGitFixture(root, ["checkout", "-q", "-"]);
+    runGitFixture(root, ["checkout", "-q", B]);
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    runGitFixture(root, ["merge", "-q", "--no-ff", "-m", "merge base", X]);
+    const M = String(runGitFixture(root, ["rev-parse", "HEAD"])).trim();
+    const result = await extend(root, M);
+    assert.equal(result.action, "chain_extended");
+    assert.deepEqual(result.files, ["docs/d.md"]);
+    assert.ok(D);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a rebase that orphans the cap-round head refuses with the replacement-PR restart", async () => {
+  const { root } = await capFixture();
+  try {
+    runGitFixture(root, ["checkout", "-q", "--orphan", "rebased"]);
+    const R = await commit(root, { "docs/r.md": "r\n" }, "rebased");
+    const refused = await extend(root, R);
+    assert.equal(refused.reason, "baseline_orphaned");
+    assert.match(refused.detail, /--allow-replacement-pr/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

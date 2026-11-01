@@ -29,12 +29,11 @@ import { buildLogPath } from "./_gate-artifact-paths.mjs";
 import { editPr as realEditPr } from "./edit-pr.mjs";
 import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
 
-// Declared before USAGE: the rule-ownership scan strips from the first slash-star in a string, and USAGE holds one.
 function noProofRefusal({ repo, pr, headSha }) {
   return refuse("no_clean_draft_gate", `GATE-EXEC-ROUND-CAP-WAIVER-PROOF: no clean draft_gate or pre_approval_gate checkpoint verdict and no cap-round-fixed proof on the current head ${headSha.slice(0, 7)}. For a cap-round PR whose later commits are docs and tests only, run: dev-loops gate extend-cap-round-chain --repo ${repo} --pr ${pr}. Otherwise run: dev-loops loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
 }
 
-const USAGE =`Usage: waive-adr-tripwire.mjs --repo <owner/name> --pr <number>
+const USAGE = `Usage: waive-adr-tripwire.mjs --repo <owner/name> --pr <number>
 Write the head-pinned ADR tripwire waiver into the PR body (ADR-TRIPWIRE-STANDING-WAIVER).
 The only sanctioned writer of an \`adr-tripwire:allow\` line: edit-pr.mjs and
 create-pr.mjs refuse a hand-written one. It applies the waiver only when:

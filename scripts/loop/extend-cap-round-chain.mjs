@@ -7,6 +7,7 @@
  * that touches a logic file refuses (`logic_commit_in_range`) and writes nothing.
  */
 import { execFileSync } from "node:child_process";
+import { rmSync } from "node:fs";
 import { parseArgs } from "node:util";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -14,10 +15,12 @@ import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfigStrict, resolveClassifyRules } from "@dev-loops/core/config";
 import { ghJson } from "@dev-loops/core/github/gh";
+import { CAP_ROUND_REFUSAL } from "@dev-loops/core/loop/pr-gate-coordination";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { clearingChainLastCandidates, resolveCapRound, resolveCapRoundFixed } from "../github/write-gate-context.mjs";
-import { readGateDeltaRecord, writeSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
+import { capRoundCovers, clearingChainLastCandidates, resolveCapRound, resolveCapRoundFixed } from "../github/write-gate-context.mjs";
+import { gateDeltaRecordPath, readGateDeltaRecord, writeSealedGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: extend-cap-round-chain.mjs --repo <owner/name> --pr <number> [--worktree <path>]
@@ -74,26 +77,37 @@ export async function extendCapRoundChain(options, { env = process.env, ghComman
   if (reached) return { ok: true, action: "already_proven", chainEnd: head, candidateHead: head, files: [] };
   const cap = await resolveCapRound(proofArgs, { repoRoot });
   const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
-  const ends = cap ? await clearingChainLastCandidates({ tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot }) : [];
-  const isAncestor = (sha) => { try { git(cwd, ["merge-base", "--is-ancestor", sha, head]); return sha !== head; } catch { return false; } };
+  const ends = cap ? await clearingChainLastCandidates({ tmpRoot, capHead: cap.log.headSha, repo, pr, baseRefName, repoRoot, covering: capRoundCovers(cap) }) : [];
+  const isAncestor = (sha) => { try { git(repoRoot, ["merge-base", "--is-ancestor", sha, head]); return sha !== head; } catch { return false; } };
   const chainEnd = ends.find(isAncestor);
   if (!chainEnd) {
-    return refuse("no_cap_round_chain", `PR #${pr} has no sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}. Complete the cap round's fixer pass and run check-pre-push-delta.mjs --result for the cap-round baseline, or run dev-loops loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
+    // A rebase leaves the cap-round head outside the head's history: no extension can bind, so name the replacement-PR restart.
+    if (cap && !isAncestor(cap.log.headSha)) return refuse("baseline_orphaned", CAP_ROUND_REFUSAL.baseline_orphaned);
+    return refuse("no_cap_round_chain", `PR #${pr} has no covering sealed cap-round clearing chain ending at an ancestor of ${head.slice(0, 7)}. Complete the cap round's fixer pass and run check-pre-push-delta.mjs --result for the cap-round baseline, or run dev-loops loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
   }
 
+  // Only commits in E..HEAD that the base does not hold count: a base-only merge after E brings base commits, not PR logic.
+  const range = [`${chainEnd}..${head}`, `^origin/${baseRefName}`];
   const rules = resolveClassifyRules((await loadDevLoopConfigStrict({ repoRoot })).config);
-  const files = git(cwd, ["diff", "--name-only", "--no-renames", `${chainEnd}..${head}`]).split("\n").filter(Boolean);
+  const files = [...new Set(git(repoRoot, ["log", "--no-merges", "--no-renames", "--no-relative", "--name-only", "--format=", ...range]).split("\n").filter(Boolean))];
   const logic = files.filter((f) => !["docs", "test"].includes(classifyFile(f, rules)));
-  if (logic.length > 0) {
-    return refuse("logic_commit_in_range", `GATE-EXEC-ROUND-CAP-CHAIN-EXTEND: commits after the chain end ${chainEnd.slice(0, 7)} change logic files: ${logic.join(", ")}. Run the normal fixer plan and the pre-push delta route for them; a draft_gate round is not available past the cap`);
+  for (const merge of git(repoRoot, ["rev-list", "--merges", ...range]).split("\n").filter(Boolean)) {
+    const fromHead = git(repoRoot, ["rev-parse", `${merge}^1`]);
+    if (!await isBaseOnlyMergeSince({ fromHead, head: merge, mainRef: `origin/${baseRefName}`, repoRoot })) logic.push(`(merge ${merge.slice(0, 7)} is not a base-only merge)`);
   }
-  if (readGateDeltaRecord(tmpRoot, chainEnd) !== null) return refuse("record_exists", `a delta record for ${chainEnd.slice(0, 7)} already exists and is never overwritten`);
+  if (logic.length > 0) {
+    return refuse("logic_commit_in_range", `GATE-EXEC-ROUND-CAP-CHAIN-EXTEND: commits after the chain end ${chainEnd.slice(0, 7)} change logic files: ${logic.join(", ")}. Run the fixer plan and the pre-push delta route for them, since no draft_gate round runs past the cap: dev-loops loop gate-coordination --repo ${repo} --pr ${pr} names the next action. If the baseline is orphaned, restart on a replacement PR: ${CAP_ROUND_REFUSAL.baseline_orphaned}`);
+  }
+  if (readGateDeltaRecord(tmpRoot, chainEnd) !== null) return refuse("record_exists", `a delta record for ${chainEnd.slice(0, 7)} already exists and is never overwritten; run dev-loops loop gate-coordination --repo ${repo} --pr ${pr} for the failed proof condition`);
 
   writeSealedGateDeltaRecord(tmpRoot, chainEnd, {
     reviewBaselineHead: chainEnd, candidateHead: head, outcome: "locally_clear", nextStep: "push_to_gate", items: [], extension: "docs_tests_only",
   });
   if (!await resolveCapRoundFixed(proofArgs, { repoRoot })) {
-    return refuse("proof_not_reached", `the extension record for ${chainEnd.slice(0, 7)} was written, but the cap-round-fixed proof still does not reach ${head.slice(0, 7)}; run dev-loops loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`);
+    const recordPath = gateDeltaRecordPath(tmpRoot, chainEnd);
+    rmSync(recordPath, { force: true });
+    rmSync(`${recordPath}.seal`, { force: true });
+    return refuse("proof_not_reached", `the cap-round-fixed proof does not reach ${head.slice(0, 7)} after the extension for ${chainEnd.slice(0, 7)}; the record was removed. Run dev-loops loop gate-coordination --repo ${repo} --pr ${pr} for the failed condition`);
   }
   return { ok: true, action: "chain_extended", chainEnd, candidateHead: head, files };
 }
