@@ -104,14 +104,14 @@ for (const route of ["ACT", "THREAD"]) test(`detector carries only a complete au
     const directory = path.join(root, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
     const checkpoint = path.join(directory, `fixer-disposition-${candidate}.json`);
     await mkdir(directory, { recursive: true });
-    for (const defect of ["none", "behind", "diverged", "identical", "incomplete", "unstamped", "unresolved", "uncontained", "malformed-current"]) {
+    for (const defect of ["none", "behind", "diverged", "identical", "incomplete", "unstamped", "unresolved", "uncontained", "current-checkpoint-live-verification-refused"]) {
       await writeFile(checkpoint, JSON.stringify({ ...handoff, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, executionIdentity: unit.executionIdentity, ...(defect === "unstamped" ? {} : { complete: defect !== "incomplete" }) }));
       const current = path.join(directory, `fixer-disposition-${live}.json`);
-      if (defect === "malformed-current") await writeFile(current, "{");
+      if (defect === "current-checkpoint-live-verification-refused") await writeFile(current, "{");
       const compare = (sha, target = live) => ["api", `repos/${REPO}/compare/${sha}...${target}`];
       const relation = ["behind", "diverged", "identical"].includes(defect) ? defect : "ahead";
       const expected = [{ args: compare(unit.workOrder.headSha), status: route === "ACT" ? relation : "ahead" }];
-      const authenticatesAncestor = !["incomplete", "unstamped", "malformed-current"].includes(defect)
+      const authenticatesAncestor = !["incomplete", "unstamped", "current-checkpoint-live-verification-refused"].includes(defect)
         && (route === "THREAD" || !["behind", "diverged"].includes(defect));
       if (authenticatesAncestor) {
         expected.push({ args: compare(head, candidate), status: "ahead" });
@@ -119,13 +119,21 @@ for (const route of ["ACT", "THREAD"]) test(`detector carries only a complete au
         expected.push({ args: compare(candidate), status: relation });
         if (["none", "unresolved", "uncontained"].includes(defect)) expected.push({ args: compare(fixing), status: defect === "uncontained" ? "behind" : "ahead" });
       }
+      if (defect === "current-checkpoint-live-verification-refused") {
+        // A current checkpoint uses live verification, which authenticates the candidate before observing the PR.
+        expected.push({ args: compare(head, candidate), status: "ahead" });
+        if (route === "ACT") {
+          expected.push({ args: compare(fixing, candidate), status: "ahead" });
+          expected.push({ args: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid,statusCheckRollup"], payload: { headRefOid: null } });
+        }
+      }
       const calls = [];
       const runtime = { repoRoot: wt, env: gitFreeEnv(), runChild: async (command, args) => {
         const entry = expected[calls.length];
         calls.push({ command, args });
         assert.equal(command, "gh");
-        assert.deepEqual(args, entry?.args, `${defect}: unexpected containment call`);
-        return { code: 0, stdout: JSON.stringify({ status: entry.status }), stderr: "" };
+        assert.deepEqual(args, entry?.args, `${defect}: unexpected verification call`);
+        return { code: 0, stdout: JSON.stringify(entry.payload ?? { status: entry.status }), stderr: "" };
       } };
       const result = await resolveFixerDispositionInput({ repo: REPO, pr: PR, currentHeadSha: live, parsedThreads: {
         threads: [{ id: threadId, isResolved: defect !== "unresolved" }], comments: [{ threadId, body: `Fixed in ${fixing}` }],
@@ -133,8 +141,11 @@ for (const route of ["ACT", "THREAD"]) test(`detector carries only a complete au
       assert.deepEqual(calls, expected.map(({ args }) => ({ command: "gh", args })), `${defect}: exact expected calls consumed`);
       assert.equal(result?.complete === true, defect === "none", `${defect}: ${JSON.stringify(result)}`);
       if (defect === "none") assert.equal(result.carriedFromHead, candidate);
+      if (defect === "current-checkpoint-live-verification-refused") assert.match(result.incomplete[0].failedStep, route === "ACT"
+        ? /unverified_active_fixer: --head-sha .* is not the live PR head/
+        : /unverified_active_fixer: THREAD report differs from the clearing candidate dispositions/);
       assert.equal(result?.gateVerdict, undefined);
-      if (defect === "malformed-current") await rm(current);
+      if (defect === "current-checkpoint-live-verification-refused") await rm(current);
     }
     assert.notEqual(head, live);
   });
@@ -2446,7 +2457,7 @@ for (const form of ["foreign-route", "two-matching"]) test(`complete THREAD --co
 });
 
 // ADR 0197 (#2937 S4b): the cap round (cap 2) ran at `head`; origin/main then moved and the branch merged it.
-async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfterMerge = false } = {}) {
+async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfterMerge = false, fixerCommitBeforeMerge = false, secondCandidate = false, baseMergeBeforeFixer = false } = {}) {
   await writeFile(path.join(wt, ".devloops.json"), JSON.stringify({ version: 1, gates: { draft: { maxReviewRounds: 2 } } }));
   const medium = withFp({ ...ACT[0], severity: "medium", judgeFix: "guard the deref" });
   await writeFile(files.actList, JSON.stringify([medium]));
@@ -2454,6 +2465,38 @@ async function capRoundThenBaseMerge({ root, wt, head, files }, { ownChangeAfter
   await mkdir(dir, { recursive: true });
   for (const [sha, loggedAt] of [["d".repeat(40), "2026-11-01T00:00:00.000Z"], [head, "2026-11-02T00:00:00.000Z"]]) {
     await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt, findings: sha === head ? [medium] : [] }));
+  }
+  let ledgerlessBase;
+  if (baseMergeBeforeFixer) {
+    // Chain starts at a ledgerless base-only merge M0 of the cap-round head: A -> M0 -> B (sealed M0 -> B) -> M.
+    await writeFile(path.join(root, "first-main.md"), "first main content\n");
+    git(root, "add", "first-main.md");
+    git(root, "commit", "-q", "-m", "main moves first");
+    git(root, "update-ref", "refs/remotes/origin/main", "main");
+    git(wt, "merge", "-q", "--no-ff", "-m", "merge origin/main first", "origin/main");
+    ledgerlessBase = git(wt, "rev-parse", "HEAD");
+  }
+  if (fixerCommitBeforeMerge || baseMergeBeforeFixer) {
+    // PR 2992 shape: the cap-round fixer commit B carries a sealed clearing record head -> B, and the base merge M follows B.
+    await writeFile(path.join(wt, "fixer.md"), "fixer change\n");
+    git(wt, "add", "fixer.md");
+    git(wt, "commit", "-q", "-m", "fixer commit");
+    const seal = async (from, to) => {
+      const text = JSON.stringify({ reviewBaselineHead: from, candidateHead: to, nextStep: "push_to_gate", outcome: "locally_clear", items: [] });
+      await mkdir(path.join(root, "tmp", "gate-delta"), { recursive: true });
+      await writeFile(path.join(root, "tmp", "gate-delta", `${from}.json`), text);
+      await writeFile(path.join(root, "tmp", "gate-delta", `${from}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
+    };
+    const b1 = git(wt, "rev-parse", "HEAD");
+    await seal(ledgerlessBase ?? head, b1);
+    if (secondCandidate) {
+      // Chain A -> B1 -> B2: B2 sits on a side branch, so the merge M below is a base-only merge since B1 but not since the chain's last candidate B2.
+      git(wt, "checkout", "-q", "-b", "side-b2");
+      git(wt, "commit", "-q", "--allow-empty", "-m", "second fixer commit");
+      const b2 = git(wt, "rev-parse", "HEAD");
+      git(wt, "checkout", "-q", "issue-1");
+      await seal(b1, b2);
+    }
   }
   await writeFile(path.join(root, "main-only.md"), "main content\n");
   git(root, "add", "main-only.md");
@@ -2474,6 +2517,34 @@ test("ADR 0197: a base-only merge after the cap round does not consume the closu
     const { over } = await capRoundThenBaseMerge(fx, {});
     const result = await fx.emit(over);
     assert.equal(result.workOrder.source, "act-list");
+  });
+});
+
+test("ADR 0218: a base-only merge of the chain's last clearing candidate is still the cap round (PR 2992 shape)", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, { fixerCommitBeforeMerge: true });
+    assert.equal((await fx.emit(over)).workOrder.source, "act-list");
+  });
+});
+
+test("ADR 0218: a chain that starts at a ledgerless base-only merge M0 of the cap-round head is still the cap round at a later base merge M", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, { baseMergeBeforeFixer: true });
+    assert.equal((await fx.emit(over)).workOrder.source, "act-list");
+  });
+});
+
+test("ADR 0218: only the chain's last candidate counts; a base merge on an earlier candidate B1 of chain A->B1->B2 keeps the refusal", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, { fixerCommitBeforeMerge: true, secondCandidate: true });
+    await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
+  });
+});
+
+test("ADR 0218: a PR-own change after the chain's last candidate keeps the round_cap_reached refusal", async () => {
+  await withFixture(async (fx) => {
+    const { over } = await capRoundThenBaseMerge(fx, { fixerCommitBeforeMerge: true, ownChangeAfterMerge: true });
+    await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
   });
 });
 
@@ -2568,5 +2639,17 @@ test("operator focus CLI: a refusing focus file exits 1 with ok false and a GATE
     assert.equal(code, 1);
     assert.equal(body.ok, false);
     assert.match(body.error, /^GATE-EXEC-OPERATOR-FOCUS:/);
+  });
+});
+
+test("ADR 0218: a clearing chain that ends at the head itself does not read as a base-only merge (round_cap_reached)", async () => {
+  await withFixture(async (fx) => {
+    const { merged, over } = await capRoundThenBaseMerge(fx, { ownChangeAfterMerge: true });
+    // A sealed record head -> merged makes the chain end equal to the head; a PR-own change sits in that range, so the refusal stands.
+    const text = JSON.stringify({ reviewBaselineHead: fx.head, candidateHead: merged, nextStep: "push_to_gate", outcome: "locally_clear", items: [] });
+    await mkdir(path.join(fx.root, "tmp", "gate-delta"), { recursive: true });
+    await writeFile(path.join(fx.root, "tmp", "gate-delta", `${fx.head}.json`), text);
+    await writeFile(path.join(fx.root, "tmp", "gate-delta", `${fx.head}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
+    await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
   });
 });
