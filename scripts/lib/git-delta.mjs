@@ -38,11 +38,11 @@ export function runGitCommand(args, { repoRoot, env = gitEnvWithoutDirOverrides(
     child.stdout?.on("data", (chunk) => { stdout += stdoutDecoder.write(chunk); });
     child.stderr?.on("data", (chunk) => { stderr += stderrDecoder.write(chunk); });
     child.once("error", (error) => { spawnError = error; });
-    child.once("close", (code) => {
+    child.once("close", (code, signal) => {
       stdout += stdoutDecoder.end();
       stderr += stderrDecoder.end();
       if (spawnError) return reject(spawnError);
-      resolve({ code: code ?? 1, stdout, stderr });
+      resolve({ code: code ?? 1, signal, stdout, stderr });
     });
   });
 }

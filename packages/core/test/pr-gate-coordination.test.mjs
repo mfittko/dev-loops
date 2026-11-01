@@ -1157,6 +1157,72 @@ test("round_cap_clean_fallback blocks on crediblyGreen CI — unconfirmed CI is 
   assert.match(result.reason, /unconfirmed/i);
 });
 
+test("interpreter-derived round_cap_clean_fallback with crediblyGreen CI names the wait-pr-checks remedy (GATE-EXEC-ROUND-CAP-THREAD-ROUTE)", () => {
+  const interpretation = interpretLoopState({
+    prExists: true,
+    prNumber: 892,
+    copilotReviewRequestStatus: "none",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: false,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    copilotReviewRoundCount: 2,
+    ciStatus: "crediblyGreen",
+  }, { maxCopilotRounds: 2 });
+  assert.equal(interpretation.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  const result = evaluatePrGateCoordination({
+    pr: 892,
+    currentHeadSha: "ef84bca2deadbeef",
+    prDraft: false,
+    lifecycleState: interpretation.state,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    ciStatus: "crediblyGreen",
+    copilotReviewRoundCount: 2,
+    maxCopilotRounds: 2,
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(result.reason, /wait-pr-checks\.mjs/);
+  assert.match(result.reason, /ef84bca2deadbeef/);
+});
+
+test("interpreter-derived round_cap_clean_fallback with failing CI names the failing-CI remedy (GATE-EXEC-ROUND-CAP-THREAD-ROUTE)", () => {
+  const interpretation = interpretLoopState({
+    prExists: true,
+    prNumber: 892,
+    copilotReviewRequestStatus: "none",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: false,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    copilotReviewRoundCount: 2,
+    ciStatus: "failure",
+  }, { maxCopilotRounds: 2 });
+  assert.equal(interpretation.state, STATE.ROUND_CAP_REACHED);
+  const result = evaluatePrGateCoordination({
+    pr: 892,
+    currentHeadSha: "ef84bca2deadbeef",
+    prDraft: false,
+    lifecycleState: interpretation.state,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    ciStatus: "failure",
+    copilotReviewRoundCount: 2,
+    copilotConvergenceOk: true,
+    unresolvedThreadCount: 0,
+    copilotReviewOnCurrentHead: true,
+    maxCopilotRounds: 2,
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+  assert.match(result.reason, /failing CI/i);
+  assert.match(result.reason, /round_cap_reached/);
+  assert.match(result.reason, /2\/2/);
+  assert.match(result.reason, /ef84bca2deadbeef/);
+  assert.match(result.reason, /fix the failing required check/);
+});
+
 // #896: the formal-request guard must not fire for a round-cap clean fallback —
 // a post-cap clean head Copilot will not re-review. sameHeadCleanConverged is false
 // here (Copilot did not review THIS head), so the pre-#896 escape would not apply;
@@ -4115,24 +4181,90 @@ test("round_cap_reached reaching final_approval_ready (not the window shape) sti
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL));
 });
 
-test("round_cap_reached with unresolved threads present stays blocked exactly as today (#1472)", () => {
+const capBase = {
+  draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
+  draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
+  pr: 3000,
+  currentHeadSha: "8bc050da9deadbeef",
+  prDraft: false,
+  lifecycleState: STATE.ROUND_CAP_REACHED,
+  loopDisposition: DISPOSITION.BLOCKED,
+  copilotReviewRoundCount: 2,
+  maxCopilotRounds: 2,
+  preApprovalGate: gate({ visible: false }),
+  preApprovalGateMarker: gate({ visible: false }),
+};
+
+// GATE-EXEC-ROUND-CAP-THREAD-ROUTE: past the cap, unresolved threads route to fix/reply-resolve, never a new Copilot cycle.
+test("round_cap_reached with unresolved threads routes to feedback fix and reply/resolve (#3002 AC1)", () => {
+  const result = evaluatePrGateCoordination({ ...capBase, ciStatus: "success", unresolvedThreadCount: 4 });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK));
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS));
+  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.match(result.reason, /no new Copilot cycle/);
+  assert.equal(result.loopDisposition, DISPOSITION.UNRESOLVED_FEEDBACK);
+});
+
+test("round_cap_reached with failing CI and unresolved threads still routes to the thread fix without claiming pre_approval follows (#3002)", () => {
+  const result = evaluatePrGateCoordination({ ...capBase, ciStatus: "failure", unresolvedThreadCount: 2 });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+  assert.equal(result.loopDisposition, DISPOSITION.UNRESOLVED_FEEDBACK);
+  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
+  assert.match(result.reason, /CI at the head is failure; it must also be green/);
+  assert.doesNotMatch(result.reason, /green CI and Copilot convergence/);
+});
+
+test("round_cap_reached with threads resolved and green CI allows run_pre_approval_gate (pre-existing grant check, passes pre-fix; not #3002 regression evidence)", () => {
   const result = evaluatePrGateCoordination({
-    pr: 1460,
-    currentHeadSha: "29aa40b7deadbeef",
-    prDraft: false,
-    lifecycleState: STATE.ROUND_CAP_REACHED,
-    loopDisposition: DISPOSITION.BLOCKED,
+    ...capBase,
     ciStatus: "success",
-    copilotReviewRoundCount: 2,
-    maxCopilotRounds: 2,
-    unresolvedThreadCount: 1,
-    preApprovalGate: gate({ visible: false }),
-    preApprovalGateMarker: gate({ visible: false }),
+    unresolvedThreadCount: 0,
+    copilotConvergenceOk: true,
+    draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
+  });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+});
+
+for (const ciStatus of ["pending", "none"]) {
+  test(`round_cap_reached with ${ciStatus} CI and zero threads waits for CI instead of report_blocked (#3002)`, () => {
+    const result = evaluatePrGateCoordination({ ...capBase, ciStatus, unresolvedThreadCount: 0 });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_CI);
+    assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
+    assert(result.reason.includes("8bc050da9deadbeef") && result.reason.includes(ciStatus));
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
   });
 
+  test(`round_cap_reached with ${ciStatus} CI and unresolved threads routes to the thread fix and keeps wait_for_ci allowed (#3002 PR 3000 shape)`, () => {
+    const result = evaluatePrGateCoordination({ ...capBase, ciStatus, unresolvedThreadCount: 4 });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+    assert.equal(result.loopDisposition, DISPOSITION.UNRESOLVED_FEEDBACK);
+    assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK));
+    assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS));
+    assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.WAIT_FOR_CI));
+    assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+  });
+}
+
+test("the unmappable-state default names the lifecycle state and an agent-runnable action (#3002 AC3)", () => {
+  const result = evaluatePrGateCoordination({ ...capBase, lifecycleState: "no_such_state", ciStatus: "success", unresolvedThreadCount: 0, copilotConvergenceOk: true });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
-  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
-  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.match(result.reason, /no_such_state/);
+  assert.match(result.reason, /cli\/index\.mjs loop startup --pr /);
+});
+
+test("round_cap_reached with CI not required takes the thread route on pending CI and does not demand green CI (#3002)", () => {
+  const result = evaluatePrGateCoordination({ ...capBase, preApprovalRequireCi: false, ciStatus: "pending", unresolvedThreadCount: 2 });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+  assert.match(result.reason, /Copilot convergence, or no current-head Copilot review, open the `run_pre_approval_gate` route; CI is not required/);
+  assert.doesNotMatch(result.reason, /must also be green/);
 });
 
 test("round_cap_reached with non-green CI stays blocked exactly as today even with zero unresolved threads (#1472)", () => {
@@ -4547,4 +4679,16 @@ test("carried draft_gate marker with failing CI reports blocked and forbids mark
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
   assert.match(result.reason, /mark-ready/u);
+});
+
+test("round_cap_reached with failing or credibly green required CI and zero threads names a fact-matched remedy (#3002 AC3)", () => {
+  for (const [ciStatus, remedy] of [["failure", /fix the failing required check/], ["crediblyGreen", /wait-pr-checks\.mjs/]]) {
+    const result = evaluatePrGateCoordination({ ...capBase, ciStatus, unresolvedThreadCount: 0 });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    assert.match(result.reason, /round_cap_reached/);
+    assert(result.reason.includes("8bc050da9deadbeef"));
+    assert.match(result.reason, remedy);
+    assert.doesNotMatch(result.reason, /loop startup/);
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  }
 });
