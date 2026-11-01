@@ -126,6 +126,10 @@ boundary exists to prevent. On a Codex root, keep empty wakeups at most 10% of r
 the runtime's supported bounded join while child work is outstanding — a longest-timeout
 assumption is not a join.
 
+### Keeping the PR claim live through gate writers
+
+Prefix every `gate ...` writer call (`gate upsert-verdict`, `gate detect-evidence` and the rest) with `DEVLOOPS_RUN_ID=<the id used at claim>`. Without it the gate writer has no owner identity on Claude Code. Your claim then goes stale during a long child wait and the next writer call refuses it. With it, the writer heartbeats your claim and never needs a `takeover`.
+
 ### Releasing the PR claim before the hand-back
 
 A unit that owns a PR claim and returns its hand-back before a terminal stop must not leave that

@@ -1983,3 +1983,27 @@ test("status reports stale with a reason and takeover refuses a live owner witho
     assert.equal(taken.previousRun.runId, "owner");
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
+
+// #2884: a live owner keeps its claim through a long child wait (heartbeat, no takeover).
+test("owner run heartbeats a claim past the max age without a takeover", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-heartbeat-"));
+  const options = { repo: "owner/repo", pr: 17, cwd, env: { DEVLOOPS_RUN_ID: "R" } };
+  try {
+    const claim = await claimRunnerOwnership({ ...options, runId: "R" });
+    const raw = JSON.parse(await readFile(claim.filePath, "utf8"));
+    raw.activeRun.claimedAt = raw.activeRun.updatedAt = new Date(Date.now() - STALE_RUNNER_DEFAULT_MAX_AGE_MS - 60_000).toISOString();
+    await writeFile(claim.filePath, JSON.stringify(raw));
+    assert.equal((await detectStaleRunner({ repo: "owner/repo", pr: 17, cwd })).ok, false);
+    const owned = await ensureAsyncRunnerOwnership({ ...options, claimIfMissing: false });
+    assert.equal(owned.ok, true);
+    assert.equal((await detectStaleRunner({ repo: "owner/repo", pr: 17, cwd })).ok, true);
+    const types = JSON.parse(await readFile(claim.filePath, "utf8")).history.map((entry) => entry.type);
+    assert.ok(types.includes("heartbeat"));
+    assert.ok(!types.includes("takeover"));
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("the coordinator prompt sets the run id for every gate writer call", async () => {
+  const prompt = await readFile(new URL("../../agents/dev-loop.agent.md", import.meta.url), "utf8");
+  assert.match(prompt, /Prefix every `gate \.\.\.` writer call .*with `DEVLOOPS_RUN_ID=<the id used at claim>`/);
+});
