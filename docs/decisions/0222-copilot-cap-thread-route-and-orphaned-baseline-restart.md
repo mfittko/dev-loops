@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-11-01 ([issue 3002](https://github.com/mfittko/dev-loops/issues/3002), [PR 3008](https://github.com/mfittko/dev-loops/pull/3008)).
+Accepted, 2026-11-01 ([issue 3002](https://github.com/mfittko/dev-loops/issues/3002)).
 
 ## Context
 

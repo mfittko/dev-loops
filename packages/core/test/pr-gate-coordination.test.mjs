@@ -4171,6 +4171,8 @@ for (const ciStatus of ["pending", "none"]) {
       assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_CI);
       assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
       assert(result.reason.includes("8bc050da9deadbeef") && result.reason.includes(ciStatus));
+      assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+      assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
     }
   });
 }

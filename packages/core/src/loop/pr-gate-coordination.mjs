@@ -2119,15 +2119,17 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // (it also accepts `crediblyGreen`): whenever this branch's narrower
   // predicate and zero unresolved threads hold, the interpreter has already
   // classified the snapshot ROUND_CAP_CLEAN_FALLBACK, never ROUND_CAP_REACHED
-  // (see the equivalence test in pr-gate-coordination.test.mjs). This branch
-  // is therefore unreachable through the shipped callers — it is pure
+  // (see the equivalence test in pr-gate-coordination.test.mjs). The grant
+  // sub-branch below (zero threads plus confirmed-green CI) is therefore
+  // unreachable through the shipped callers — it is pure
   // defense-in-depth, demanded by the corrected AC so the three
   // fields can never disagree if a future caller hands the evaluator a
   // round_cap_reached label alongside facts that satisfy the grant. The
   // predicate intentionally mirrors every other pre-approval CI boundary in
   // this file (success, or CI not required) — `crediblyGreen` is unconfirmed
   // CI and stays blocked here exactly as it does everywhere else. Any
-  // other combination falls to GATE-EXEC-ROUND-CAP-THREAD-ROUTE below
+  // other combination, which IS reachable (wait_for_ci, thread route, failure
+  // routes), falls to GATE-EXEC-ROUND-CAP-THREAD-ROUTE below
   // (pending CI waits; unresolved threads take the fix route, whatever the
   // CI state), and the rest to the generic default.
   if (effectiveLifecycleState === STATE.ROUND_CAP_REACHED && roundCapReached) {
