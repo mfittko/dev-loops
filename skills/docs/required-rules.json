@@ -520,6 +520,11 @@
       "enforcementNote": "Enforced by waive-adr-tripwire.mjs, which calls resolveCapRoundFixed from write-gate-context.mjs as ready-for-review.mjs does; the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
+      "id": "GATE-EXEC-ROUND-CAP-CHAIN-EXTEND",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by extend-cap-round-chain.mjs, which refuses any commit after the chain end that is not docs or tests and verifies the extension with resolveCapRoundFixed; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+    },
+    {
       "id": "GATE-EXEC-ROUND-CAP-THREAD-ROUTE",
       "enforcement": "runtime",
       "enforcementNote": "Enforced by pr-gate-coordination.mjs in packages/core/src/loop and resolveCapRoundFixed in write-gate-context.mjs (the baseline_orphaned condition); the rule body in gate-review-sub-loop-contract.md owns the clauses"

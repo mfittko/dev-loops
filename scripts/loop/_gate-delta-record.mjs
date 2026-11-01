@@ -78,7 +78,12 @@ export function writeGateDeltaRecord({ tmpRoot, sequence, candidateHead, invocat
     nextStep: decision.nextStep,
     items,
   };
-  const recordPath = gateDeltaRecordPath(tmpRoot, sequence.reviewBaselineHead);
+  return writeSealedGateDeltaRecord(tmpRoot, sequence.reviewBaselineHead, record);
+}
+
+/** Write one record and its seal for a baseline head. Returns the record path. */
+export function writeSealedGateDeltaRecord(tmpRoot, reviewBaselineHead, record) {
+  const recordPath = gateDeltaRecordPath(tmpRoot, reviewBaselineHead);
   mkdirSync(path.dirname(recordPath), { recursive: true });
   const tempPath = `${recordPath}.tmp-${process.pid}`;
   const text = `${JSON.stringify(record, null, 2)}\n`;

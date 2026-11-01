@@ -40,7 +40,7 @@ The operator records a standing authorization in `.devloops` under `standingAuth
 - the PR body links exactly one tracker issue (`Closes`/`Fixes`) and the PR is not on the lightweight `pr_body` path;
 - the tripwire at `origin/<baseRefName>...<headRefOid>` blocks, and every trigger is a `skills/docs/*-contract.md` path;
 - every triggering path appears, as a backticked repo path, in a row of the linked issue's valid `## AC / DoD matrix`;
-- the current head has a clean `draft_gate` or `pre_approval_gate` verdict, or the cap-round-fixed proof (`GATE-EXEC-ROUND-CAP-WAIVER-PROOF` in the [gate review sub-loop contract](gate-review-sub-loop-contract.md)), whose recorded `specDigest` equals the digest of the linked issue's current body.
+- the current head has a clean `draft_gate` or `pre_approval_gate` verdict whose recorded `specDigest` equals the digest of the linked issue's current body. With neither verdict, the cap-round-fixed proof (`GATE-EXEC-ROUND-CAP-WAIVER-PROOF` in the [gate review sub-loop contract](gate-review-sub-loop-contract.md)) qualifies, and its findings ledger supplies the recorded `specDigest`.
 
 `merge-pr` runs the same writer in-process when the tripwire blocks only because the standing waiver line is stale (pinned to an older head, expired, or missing a current trigger from `paths=`), and quotes a refusal. ADR 0132 amends ADR 0119 for both rules.
 
