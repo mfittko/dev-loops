@@ -2240,6 +2240,42 @@ function evaluatePrGateCoordinationCore(input = {}) {
         copilotReviewRoundCount,
       });
     }
+
+    // GATE-EXEC-ROUND-CAP-THREAD-ROUTE: the grant did not hold, so name the
+    // agent-runnable remedy instead of falling through to a remedy-less
+    // report_blocked. Pending CI waits; unresolved threads go through the
+    // fix/reply-resolve route. No new Copilot cycle is legal past the cap.
+    const capPending = preApprovalRequireCi && (ciStatus === "pending" || ciStatus === "none");
+    const capThreads = !capPending && unresolvedThreadCount > 0;
+    if (capPending || capThreads) {
+      const capActions = capPending
+        ? [PR_CHECKPOINT_ACTION.WAIT_FOR_CI]
+        : [PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS];
+      pushUnique(allowedNextActions, capActions);
+      pushUnique(forbiddenActions, postDraftForbidden);
+      pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW]);
+      return buildResult({
+        repo: input.repo ?? null,
+        pr: Number.isInteger(input.pr) ? input.pr : null,
+        currentHeadSha,
+        lifecycleState: capPending ? STATE.WAITING_FOR_CI : effectiveLifecycleState,
+        loopDisposition: capPending ? DISPOSITION.PENDING : (loopDisposition ?? DISPOSITION.UNRESOLVED_FEEDBACK),
+        gateBoundary: capPending ? PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW : PR_CHECKPOINT.FEEDBACK_RESOLUTION,
+        draftGateAlreadySatisfied,
+        draftGate,
+        preApprovalGate,
+        allowedNextActions,
+        forbiddenActions,
+        nextAction: capActions[0],
+        reason: capPending
+          ? `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}) and CI at head ${currentHeadSha ?? "unknown"} is ${ciStatus}; wait for CI to settle, then re-run gate-coordination (zero unresolved threads and green CI yield \`run_pre_approval_gate\`).`
+          : `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}) with ${unresolvedThreadCount} unresolved thread(s); no new Copilot cycle is legal past the cap. Address the feedback and reply/resolve the threads; once they are resolved and CI is green the result becomes \`run_pre_approval_gate\`.`,
+        mergeStateStatus,
+        conflictFiles,
+        refinementArtifact,
+        copilotReviewRoundCount,
+      });
+    }
   }
 
   if (effectiveLifecycleState === STATE.LOW_SIGNAL_CONVERGED) {
@@ -2394,7 +2430,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     allowedNextActions,
     forbiddenActions,
     nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-    reason: "The PR gate-boundary evaluator could not map this lifecycle state to a legal gate transition; reconcile before continuing.",
+    reason: `The PR gate-boundary evaluator could not map lifecycle state \`${effectiveLifecycleState}\` to a legal gate transition. Run \`wait-pr-checks.mjs\` for the head, then re-run \`dev-loops loop gate-coordination\`; if the state persists, report it with this state name.`,
     mergeStateStatus,
     conflictFiles,
       refinementArtifact,
