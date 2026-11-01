@@ -68,6 +68,7 @@ export function parseWaitArgs(argv) {
     if (values["emit-plan"] !== undefined || values["judge-plan"] !== undefined || values.unit !== undefined || values["tmp-root"] !== undefined) throw new Error("--artifact excludes --emit-plan, --judge-plan, --unit and --tmp-root");
     if (values.artifact.trim() === "" || values.artifact !== values.artifact.trim() || !path.isAbsolute(values.artifact)) throw new Error("--artifact must be a non-empty absolute path; pass the child's absolute hand-back path");
     if (values.after === undefined || values.after.trim() === "" || values.after !== values.after.trim() || !path.isAbsolute(values.after)) throw new Error("--artifact requires --after <absolute path> of a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath); a stale hand-back from an earlier dispatch would otherwise read as done. Re-run with --after");
+    if (path.resolve(values.after) === path.resolve(values.artifact)) throw new Error("--after must differ from --artifact: the hand-back would always look current. Pass --after <absolute path> of a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath)");
     return { artifact: values.artifact, after: values.after, timeoutMs, jq: values.jq, fields: values.fields, silent: values.silent };
   }
   if ((values["emit-plan"] === undefined) === (values["judge-plan"] === undefined)) throw new Error("pass exactly one of --emit-plan, --judge-plan and --artifact");
@@ -140,9 +141,9 @@ async function checkUnit(unit, { role, receiptTmpRoot, tmpRoot, headSha }) {
   return { scope: unit.scope, executionIdentity: unit.executionIdentity, state, missingAngles };
 }
 
-export const ARTIFACT_TIMEOUT_REMEDY = "Delta reviewer and commit_only fixer: re-run the same command; after three consecutive timeout outcomes, stop and return the typed observation units_stalled. Full-phase fixer: after one timeout, end your turn once to receive the fixer's completion notification (COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK), then run the same command once with --timeout 0; if it returns all_done, act on the published report, otherwise act on the typed exit code or hand-back text the notification carries, and do not repeat the wait.";
+export const ARTIFACT_TIMEOUT_REMEDY = "Delta reviewer and commit_only fixer: re-run the same command; after three consecutive timeout outcomes, stop and return the typed observation units_stalled. Full-phase fixer: after one timeout, end your turn once to receive the fixer's completion notification (COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK; an interim or not-reported-yet notification is not the join, so end your turn again), then, only after the final notification, run the same command once with --timeout 0; if it returns all_done, act on the published report, otherwise act on the typed exit code or hand-back text the notification carries, and do not repeat the wait.";
 
-export const ARTIFACT_STALE_REMEDY = "The artifact predates --after, so it is a leftover. Fixer: check that --after and the artifact path both come from the current emission (the latest emitted plan and its joinRef); if not, re-emit the work order and join the new joinRef. Delta reviewer: use a fresh --result path and pass the current input.patchPath as --after. Otherwise re-run the same command.";
+export const ARTIFACT_STALE_REMEDY = "The artifact predates --after, so it is a leftover. Fixer: check that --after and the artifact path both come from the current emission (the latest emitted plan and its joinRef); if not, re-emit the work order and join the new joinRef. Delta reviewer: use a fresh --result path and pass the current input.patchPath as --after. Otherwise re-run the same command; after three consecutive timeout outcomes, stop and return the typed observation units_stalled. Full-phase fixer: follow COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK instead of re-running.";
 
 // Any hand-back type, with no writer obligation on the child: the artifact parses as JSON and carries its terminal field
 // (`outcome`, as a DeltaPrePushReviewResult does), or, with no terminal field, stays byte-identical for ARTIFACT_STABLE_MS.
@@ -163,7 +164,9 @@ async function artifactReady(file, seen, at, afterMs) {
 }
 
 async function waitForArtifact({ artifact, after, timeoutMs, now, delay }) {
-  const afterMs = (await stat(after).catch(() => { throw new Error(`--after ${after} does not exist; pass a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath)`); })).mtimeMs;
+  const afterInfo = await stat(after).catch(() => { throw new Error(`--after ${after} does not exist; pass a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath)`); });
+  if (!afterInfo.isFile()) throw new Error(`--after ${after} is not a regular file; pass a file written before the dispatch (the emitted fixer plan, or the delta reviewer's input.patchPath)`);
+  const afterMs = afterInfo.mtimeMs;
   const started = now();
   const seen = {};
   for (;;) {

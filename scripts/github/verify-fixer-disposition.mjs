@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { link, lstat, mkdir, mkdtemp, open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -708,10 +708,13 @@ async function publishReport(reportPath, report) {
   await mkdir(path.dirname(reportPath), { recursive: true });
   try {
     await writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-    await rename(temporary, reportPath);
-  } catch (error) {
+    // First write wins: link refuses on EEXIST, so a later --check run cannot replace a report that a join may already have consumed.
+    await link(temporary, reportPath).catch((error) => {
+      if (error?.code === "EEXIST") throw new Error(`--report-path ${reportPath} already holds the final report of an earlier run and is never replaced; the join already consumed it. Read that report, or re-emit the work order for a new joinRef`);
+      throw error;
+    });
+  } finally {
     await rm(temporary, { force: true });
-    throw error;
   }
 }
 
@@ -719,7 +722,8 @@ export async function verifyFixerDisposition(options, deps = {}) {
   if (options.reportPath === undefined) return verifyFixerDispositionCore(options, deps);
   if (!options.check) throw new Error(REPORT_PATH_NEEDS_CHECK_ERROR);
   const planPath = path.resolve(deps.repoRoot ?? process.cwd(), options.fixerPlan);
-  const outputRef = await readFile(planPath, "utf8").then((text) => JSON.parse(text)?.workOrder?.outputRefs?.[0], () => undefined);
+  const outputRef = await readFile(planPath, "utf8").then((text) => JSON.parse(text)?.workOrder?.outputRefs?.[0]).catch(() => undefined);
+  if (typeof outputRef !== "string" || outputRef === "") throw new Error(`--report-path needs the emitted fixer plan ${planPath} to be readable JSON with a string workOrder.outputRefs[0]; pass --fixer-plan <the emitted fixer plan> and --report-path <outputRef>.report`);
   if (!path.isAbsolute(options.reportPath)) throw new Error("--report-path must be an absolute path; pass <outputRef>.report from the emitted fixer plan (joinRef)");
   // Compare through the real parent directory so a symlinked alias (macOS /tmp vs /private/tmp) cannot name a protected file.
   const canonical = (file) => path.join(realpathNearestExisting(path.dirname(file)), path.basename(file));

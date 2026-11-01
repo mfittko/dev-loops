@@ -364,8 +364,18 @@ test("the artifact timeout remedy is split by hand-back type and a stale artifac
     const stale = await waitForUnits({ artifact: file, after, timeoutMs: 0, ...fakeClock() });
     assert.equal(stale.stale, true);
     assert.match(stale.remedy, /predates --after.*Fixer:.*current emission.*re-emit.*new joinRef.*Delta reviewer: use a fresh --result path.*input\.patchPath as --after/);
-    assert.doesNotMatch(stale.remedy, /units_stalled/);
+    assert.match(stale.remedy, /Otherwise re-run the same command; after three consecutive timeout outcomes.*units_stalled.*Full-phase fixer: follow COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK/);
   });
+});
+
+test("--after equal to --artifact, a directory, or a missing path is refused", async () => {
+  assert.throws(() => parseWaitArgs(["--artifact", "/x/a.json", "--after", "/x/a.json"]), /--after must differ from --artifact.*emitted fixer plan.*input\.patchPath/);
+  assert.throws(() => parseWaitArgs(["--artifact", "/x/a.json", "--after", "/x/../x/a.json"]), /--after must differ from --artifact/);
+  await withDir(async (root) => {
+    await assert.rejects(waitForUnits({ artifact: path.join(root, "a.json"), after: root, timeoutMs: 0, ...fakeClock() }), /--after .* is not a regular file.*emitted fixer plan.*input\.patchPath/);
+    await assert.rejects(waitForUnits({ artifact: path.join(root, "a.json"), after: path.join(root, "missing.ref"), timeoutMs: 0, ...fakeClock() }), /--after .* does not exist/);
+  });
+  assert.equal(parseWaitArgs(["--artifact", "/x/a.json", "--after", "/x/plan.json"]).after, "/x/plan.json");
 });
 
 test("a stale artifact that the child rewrites fresh within one wait no longer reports stale", async () => {

@@ -333,6 +333,37 @@ test("--report-path is final-on-write: absent until the last step, atomic, compl
   });
 });
 
+test("--report-path is first-write-wins: a second --check run refuses and leaves the first report unchanged", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    const reportPath = fixerReportPath(f.output);
+    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }];
+    const finalMock = () => f.runtimeFor([threadsCallEntry(resolved), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]);
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    await verifyFixerDisposition({ ...f.options, check: true, reportPath }, finalMock().deps);
+    const first = await readFile(reportPath, "utf8");
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath }, finalMock().deps), /already holds the final report.*never replaced/);
+    assert.equal(await readFile(reportPath, "utf8"), first);
+    assert.deepEqual(readdirSync(path.dirname(f.output)).filter((name) => name.includes(".tmp-")), []);
+  });
+});
+
+test("--report-path is refused when the plan yields no string outputRef, and no file is written", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    const reportPath = fixerReportPath(f.output);
+    const planAbsolute = path.resolve(root, f.options.fixerPlan);
+    for (const content of ["not json", JSON.stringify({ workOrder: {} })]) {
+      await writeFile(planAbsolute, content);
+      await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath }, f.runtimeFor([]).deps), /string workOrder\.outputRefs\[0\].*emitted fixer plan/, content);
+      assert.equal(existsSync(reportPath), false);
+    }
+    await rm(planAbsolute);
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath }, f.runtimeFor([]).deps), /emitted fixer plan/);
+    assert.equal(existsSync(reportPath), false);
+  });
+});
+
 test("--report-path publishes an incomplete outcome and a refused outcome with the error text", async () => {
   await withRepoRoot(async (root) => {
     const f = await threadConstructFixture(root);

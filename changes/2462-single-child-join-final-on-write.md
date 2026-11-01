@@ -1,3 +1,3 @@
 ### Fixed
 
-- The fixer join is final on write, a notification fallback covers early fixer exits, and `gate wait-for-units --artifact` needs `--after` so a stale file is no finished child (#2462)
+- Fixer join is final on write; a notification fallback waits for the final notification; `wait-for-units --artifact` needs `--after` to reject a stale file (#2462)
