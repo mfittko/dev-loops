@@ -1,4 +1,4 @@
-# 0222. Single-child join: final-on-write report, stale-artifact check and notification fallback
+# 0223. Single-child join: final-on-write report, stale-artifact check and notification fallback
 
 ## Status
 

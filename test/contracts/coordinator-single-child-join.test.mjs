@@ -12,7 +12,7 @@ test("COORDINATOR-SINGLE-CHILD-JOIN is registered and carries the no-turn-end an
   assert.match(contract, /The hand-back path must not exist at dispatch: each fixer emission and each delta review invocation gets its own path, and the coordinator never reuses a hand-back path\./);
   assert.match(contract, /, and the child writes no extra marker, when the file parses as JSON and carries the terminal field its schema requires/);
   assert.doesNotMatch(contract, /\.done|staging|never satisfies the join/);
-  assert.match(contract, /a parseable write without it satisfies the join after 10 unchanged seconds\. A full-phase fixer is final on write \(ADR 0222\)/);
+  assert.match(contract, /a parseable write without it satisfies the join after 10 unchanged seconds\. A full-phase fixer is final on write \(ADR 0223\)/);
   assert.match(contract, /the stability window does not apply to the full phase/);
   assert.match(contract, /an artifact whose mtime is older than the reference is pending and the result reports `stale: true`, and a missing or relative `--after` exits 1/);
   const adr = read("docs/decisions/0218-slice-a-cap-round-chain-and-single-child-join.md");
@@ -40,7 +40,7 @@ test("COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK is registered, follows
   assert.match(contract, /except that a full-phase fixer follows `COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK` after one `timeout`/);
   assert.match(read("skills/docs/anti-patterns.md"), /The one Claude Code exception is the single turn end that `COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK` sanctions/);
   assert.ok(JSON.parse(read("skills/docs/required-rules.json")).requiredRules.some((rule) => rule.id === FALLBACK));
-  assert.match(read("docs/decisions/0222-single-child-join-final-on-write-and-notification-fallback.md"), /Amends \[0218\]/);
+  assert.match(read("docs/decisions/0223-single-child-join-final-on-write-and-notification-fallback.md"), /Amends \[0218\]/);
   for (const file of ["skills/dev-loop/SKILL.md", "agents/dev-loop.agent.md", ".claude/skills/dev-loop/SKILL.md", ".claude/agents/dev-loop.md"]) {
     const text = read(file);
     assert.ok(text.includes(FALLBACK), file);

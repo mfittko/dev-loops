@@ -703,7 +703,7 @@ export async function assertDescendantThreadSites({ repo, pr, candidateHead, hea
 
 const REPORT_PATH_NEEDS_CHECK_ERROR = "--report-path is valid only with --check; pass --check, or drop --report-path";
 
-// Final-on-write join report (ADR 0222): published once per successful step-6 run, last and atomically, so a file at reportPath is always final.
+// Final-on-write join report (ADR 0223): published once per successful step-6 run, last and atomically, so a file at reportPath is always final.
 export async function publishReport(reportPath, report) {
   const temporary = `${reportPath}.tmp-${process.pid}-${randomUUID()}`;
   await mkdir(path.dirname(reportPath), { recursive: true });

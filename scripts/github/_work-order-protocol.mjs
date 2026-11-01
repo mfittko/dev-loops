@@ -20,7 +20,7 @@ export { DISPATCH_POINTER_MAX_BYTES, EXECUTION_IDENTITY_RE, canonicalizeWorkOrde
 
 export const materializationHash = sha256Hex;
 
-/** The full-phase fixer join report (ADR 0222): published once per successful step-6 run, last, by verify-fixer-disposition --report-path. */
+/** The full-phase fixer join report (ADR 0223): published once per successful step-6 run, last, by verify-fixer-disposition --report-path. */
 export const fixerReportPath = (outputRef) => `${outputRef}.report`;
 
 // The compact dispatch envelope, the ONLY text relayed to a worker: a self-describing pull instruction

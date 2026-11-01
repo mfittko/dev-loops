@@ -500,7 +500,7 @@ export async function emitFixerWorkOrder({
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: written last so a refused emit never grants the push; only a full work order grants the fixer.
   // Always under the canonical gate-artifact root (the location the push-authority check reads), whatever --tmp-root says.
   writeSequenceMarker({ tmpRoot: resolveGateArtifactTmpRoot(cwd), baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
-  // The coordinator's gate wait-for-units --artifact path: a full-phase fixer's final-on-write report (ADR 0222), else the hand-back itself.
+  // The coordinator's gate wait-for-units --artifact path: a full-phase fixer's final-on-write report (ADR 0223), else the hand-back itself.
   return { ...plan, planPath, joinRef: phase === "full" ? fixerReportPath(outputRef) : outputRef };
   } finally { await capture.release(); }
 }
