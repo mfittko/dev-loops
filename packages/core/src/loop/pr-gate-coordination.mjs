@@ -82,14 +82,6 @@ export const PR_CHECKPOINT_ACTION = Object.freeze({
   COMPLETE_FIXER_DISPOSITION: COMPLETE_FIXER_DISPOSITION_ACTION,
 });
 
-// Remedy for the generic unmappable default: name the action that matches the failing fact.
-function unmappableRemedy({ ciStatus, unresolvedThreadCount }) {
-  if (ciStatus === "pending" || ciStatus === "none" || ciStatus === "crediblyGreen") return "Run `wait-pr-checks.mjs` for the head.";
-  if (unresolvedThreadCount > 0) return `${ciStatus === "failure" ? "Fix the failing check at the head, then " : ""}address the unresolved review feedback (\`address_review_feedback\`) and reply/resolve the threads (\`reply_resolve_review_threads\`).`;
-  if (ciStatus === "failure" && unresolvedThreadCount === 0) return "Fix the failing check at the head, or re-run it if the failure is transient, then run `wait-pr-checks.mjs`.";
-  return "Re-resolve the state with `dev-loops loop gate-coordination` input from `detect-pr-gate-coordination-state.mjs`; route any current-head Copilot body feedback (`copilotBodyJudgeFinding`) to the judge (`GATE-EXEC-COPILOT-BODY-TO-JUDGE`).";
-}
-
 function normalizeGateComment(summary = null) {
   if (!summary || typeof summary !== "object") {
     return {
@@ -2439,7 +2431,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     allowedNextActions,
     forbiddenActions,
     nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-    reason: `The PR gate-boundary evaluator could not map lifecycle state \`${effectiveLifecycleState}\` to a legal gate transition. ${unmappableRemedy({ ciStatus, unresolvedThreadCount })} Then re-run \`dev-loops loop gate-coordination\`; if the state persists, report it with this state name.`,
+    reason: `The PR gate-boundary evaluator could not map lifecycle state \`${effectiveLifecycleState}\` to a legal gate transition. Re-resolve with \`node <dev-loops-package-root>/cli/index.mjs loop startup --pr ${Number.isInteger(input.pr) ? input.pr : "<n>"}\` and follow its nextAction.`,
     mergeStateStatus,
     conflictFiles,
       refinementArtifact,
