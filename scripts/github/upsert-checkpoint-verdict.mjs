@@ -15,7 +15,7 @@ import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/
 import { minimizeSupersededGateReviews } from "./_minimize-superseded-verdicts.mjs";
 import { loadPrGateCoordinationContext, loadRefinementArtifact } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
-import { checklistSectionLineIndices, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { checklistLineScopes, checklistSectionLineIndices, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { applyTick } from "./tick-verified-checkboxes.mjs";
 import { editPr } from "./edit-pr.mjs";
 import { editIssue } from "./edit-issue.mjs";
@@ -2361,14 +2361,19 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
     const indices = checklistSectionLineIndices(body, options);
     if (!options?.byCategory) return (index) => indices.has(index);
     // Per-category labels: an AC row ticks only for an AC label, a DoD row only for a DoD label, so a duplicate label in the other category is unaffected.
-    const acIndices = checklistSectionLineIndices(body, { acOnly: true });
-    return (index, label) => indices.has(index) && (acIndices.has(index) ? options.byCategory.ac : options.byCategory.dod).has(label);
+    // The nearest-heading scope puts a DoD section nested under Acceptance criteria in the DoD category.
+    const scopes = checklistLineScopes(body);
+    return (index, label) => indices.has(index) && options.byCategory[scopes[index]]?.has(label) === true;
   };
   const tick = async (body, labels, write, liveIssue, options) => {
     const result = await applyTick(body, labels, dryRun, write, inSections(body, options));
     if (dryRun && result.flipped.length > 0) {
       // preview=true re-reads the live body and refuses when its ticked checkbox rows differ from the dry-run's (a concurrent row change the clean guards never saw); it writes nothing.
-      const checkboxRows = (b) => b.split(/\r?\n/u).filter((l) => /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s/u.test(l)).map((l) => l.trim());
+      // Each row carries its checklist scope, so a concurrent heading edit that moves rows into or out of AC/DoD also refuses.
+      const checkboxRows = (b) => {
+        const scopes = checklistLineScopes(b);
+        return b.split(/\r?\n/u).flatMap((l, i) => /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s/u.test(l) ? [`${scopes[i]}\u0000${l.trim()}`] : []);
+      };
       const dryRows = checkboxRows(result.body);
       pendingWrites.push(async (preview = false) => {
         const live = await fetchIssueBody({ repo, issue: liveIssue }, { env, ghCommand, runChild });

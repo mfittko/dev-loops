@@ -2,7 +2,7 @@
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, resolveBodyOrFile, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { checklistLineScopes, detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
 import {
   detectClosingKeyword,
   resolveExpectedIssueFromPrContext,
@@ -314,50 +314,23 @@ async function buildEditArgs(options) {
 // an optional blockquote prefix, then a [-*+] or N. or N) marker.
 const CHECKBOX_ROW = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[([ xX])\]\s+(.+?)\s*$/u;
 function untickedRows(currentBody, nextBody) {
-  // Fence-aware and section-scoped: a checked row counts under its nearest heading; rows inside fenced code do not count.
+  // Fence-aware and scope-keyed (CHECKLIST-SCOPE-ONE-MODEL): the key is the row's AC/DoD/other scope plus its label, from the
+  // same checklistLineScopes the tick path uses. A rename inside one scope keeps the row; a heading edit that moves a
+  // checked row into or out of a scope loses it. Rows inside fenced code have no scope and do not count.
   const checked = (body) => {
-    let fence = null;
-    let section = "";
-    const rows = [];
-    for (const line of body.split(/\r?\n/u)) {
-      const f = /^\s*(`{3,}|~{3,})/u.exec(line);
-      if (f) {
-        if (fence === null) fence = f[1][0];
-        else if (f[1][0] === fence) fence = null;
-        continue;
-      }
-      if (fence !== null) continue;
-      if (/^\s{0,3}#{1,6}\s/u.test(line)) section = line.trim();
-      const m = CHECKBOX_ROW.exec(line);
-      if (m) rows.push({ key: `${section}\u0000${m[2]}`, label: m[2], on: m[1] !== " " });
-    }
-    return rows;
+    const scopes = checklistLineScopes(body);
+    return body.split(/\r?\n/u).flatMap((line, i) => {
+      const m = scopes[i] === undefined ? null : CHECKBOX_ROW.exec(line);
+      return m && m[1] !== " " ? [{ key: `${scopes[i]}\u0000${m[2]}`, label: m[2] }] : [];
+    });
   };
-  const labelOf = (key) => key.slice(key.indexOf("\u0000") + 1);
-  const nextRows = checked(nextBody);
-  const currentRows = checked(currentBody);
   const remaining = new Map();
-  for (const r of nextRows.filter((x) => x.on)) remaining.set(r.key, (remaining.get(r.key) ?? 0) + 1);
-  const lost = currentRows.filter((r) => r.on).filter((r) => {
+  for (const r of checked(nextBody)) remaining.set(r.key, (remaining.get(r.key) ?? 0) + 1);
+  return checked(currentBody).filter((r) => {
     const left = remaining.get(r.key) ?? 0;
     if (left > 0) remaining.set(r.key, left - 1);
     return left === 0;
-  });
-  // A heading rename or a move to another section changes the key. A lost row is a move when the next body carries
-  // the label checked under a (section, label) key the current body lacks; a tick swapped onto an existing row is not.
-  const existing = new Set(currentRows.map((r) => r.key));
-  const moved = new Map();
-  for (const r of nextRows) {
-    if (r.on && !existing.has(r.key)) moved.set(r.label, (moved.get(r.label) ?? 0) + 1);
-  }
-  // Only a row whose own key vanished from the next body can have moved; an unticked row that stays put is a plain untick.
-  const nextKeys = new Set(nextRows.map((r) => r.key));
-  return lost.filter((r) => {
-    if (nextKeys.has(r.key)) return true;
-    const left = moved.get(r.label) ?? 0;
-    if (left > 0) moved.set(r.label, left - 1);
-    return left === 0;
-  }).map((r) => labelOf(r.key));
+  }).map((r) => r.label);
 }
 
 export async function editPr(

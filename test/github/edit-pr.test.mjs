@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseEditPrCliArgs, editPr as editPrRaw, runCli } from "../../scripts/github/edit-pr.mjs";
+import { checklistLineScopes } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { captureStream, makeGhStub } from "../_helpers.mjs";
 
 // A body edit reads the PR's current body (waiver-line baseline) through
@@ -498,21 +499,46 @@ test("editPr (#2898): the untick guard ignores fenced rows and scopes labels to 
   await assert.rejects(() => attempt("## AC\n- [x] Tests pass\n## Validation\n- [ ] Tests pass", "## AC\n- [ ] Tests pass\n## Validation\n- [x] Tests pass"), /untick or remove 1 checked row.*"Tests pass"/s);
 });
 
-test("editPr (#2898): the untick guard tolerates a heading rename and a section move, still refuses a real untick", async () => {
-  const attempt = (live, body) => editPr(
-    { repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] },
-    { run: stubGh().run, fetchPrContext: async () => ({ headRefName: "x", closingIssuesReferences: [], body: live }) },
-  );
-  // heading renamed: accepted
-  await attempt("## AC\n- [x] Tests pass", "## Acceptance criteria\n- [x] Tests pass");
-  // checked row moved to another section: accepted
-  await attempt("## AC\n- [x] Tests pass\n## DoD\n- [ ] Docs", "## AC\n## DoD\n- [ ] Docs\n- [x] Tests pass");
-  // rename plus a real untick of a second label: refused
-  await assert.rejects(() => attempt("## AC\n- [x] Tests pass\n- [x] Docs", "## Criteria\n- [x] Tests pass\n- [ ] Docs"), /untick or remove 1 checked row.*"Docs"/s);
-  // row unticked in place while a checked row with the same label is added under a new heading: refused
-  await assert.rejects(() => attempt("## AC\n- [x] Tests pass", "## AC\n- [ ] Tests pass\n## Extra\n- [x] Tests pass"), /untick or remove 1 checked row.*"Tests pass"/s);
-  // moved under a new heading but unticked there: refused
-  await assert.rejects(() => attempt("## AC\n- [x] Tests pass", "## Criteria\n- [ ] Tests pass"), /untick or remove 1 checked row.*"Tests pass"/s);
+const attemptEdit = (live, body) => editPr(
+  { repo: "o/n", pr: 5, body, addAssignees: [], removeAssignees: [] },
+  { run: stubGh().run, fetchPrContext: async () => ({ headRefName: "x", closingIssuesReferences: [], body: live }) },
+);
+
+test("editPr (#2898): a heading rename inside one scope is accepted; a heading-only edit that leaves the scope is refused", async () => {
+  // rename inside the AC scope: accepted
+  await attemptEdit("## AC\n- [x] Tests pass", "## Acceptance criteria\n- [x] Tests pass");
+  // heading-only edit: the AC heading becomes a plain heading, the checked row leaves the AC scope
+  await assert.rejects(() => attemptEdit("## AC\n- [x] Tests pass", "## Criteria\n- [x] Tests pass"), /untick or remove 1 checked row.*"Tests pass"/s);
+  // a plain heading nested into the AC scope is no loss of the other rows
+  await attemptEdit("## AC\n- [x] A\n## Notes\n- [x] B", "## AC\n- [x] A\n## Notes\n- [x] B");
+});
+
+test("editPr (#2898): a four-backtick fence holding a three-backtick line hides its checked rows", async () => {
+  const fenced = "````\n```\n- [x] Hidden\n````";
+  await attemptEdit(`## AC\n- [x] Tests pass\n${fenced}`, `## AC\n- [x] Tests pass\n${fenced.replace("[x]", "[ ]")}`);
+  await assert.rejects(() => attemptEdit(`## AC\n- [x] Tests pass\n${fenced}`, `## AC\n- [ ] Tests pass\n${fenced}`), /untick or remove 1 checked row.*"Tests pass"/s);
+  // the row after the closed four-backtick fence is a real row
+  await assert.rejects(() => attemptEdit(`${fenced}\n- [x] Real`, `${fenced}\n- [ ] Real`), /"Real"/);
+});
+
+test("editPr (#2898): a Definition of done nested under Acceptance criteria is its own scope", async () => {
+  const body = "## Acceptance criteria\n- [x] A\n### Definition of done\n- [x] A\n### Notes\n- [x] A";
+  const scopes = checklistLineScopes(body);
+  assert.deepEqual([scopes[1], scopes[3], scopes[5]], ["ac", "dod", "ac"]);
+  // unticking the nested DoD copy is a loss of a dod row, not an ac row
+  await assert.rejects(() => attemptEdit(body, body.replace("### Definition of done\n- [x] A", "### Definition of done\n- [ ] A")), /untick or remove 1 checked row.*"A"/s);
+});
+
+test("editPr (#2898): a heading rename plus a real untick is refused naming the unticked row", async () => {
+  await assert.rejects(() => attemptEdit("## AC\n- [x] Tests pass\n- [x] Docs", "## Acceptance criteria\n- [x] Tests pass\n- [ ] Docs"), /untick or remove 1 checked row.*"Docs"/s);
+});
+
+test("editPr (#2898): renaming both AC and DoD headings with a swap moves every checked row out of its scope", async () => {
+  const live = "## AC\n- [x] A\n## DoD\n- [x] D";
+  // the headings swap names, so each row changes scope
+  await assert.rejects(() => attemptEdit(live, "## DoD\n- [x] A\n## AC\n- [x] D"), /untick or remove 2 checked row/s);
+  // both renamed within their own scope: accepted
+  await attemptEdit(live, "## Acceptance criteria\n- [x] A\n## Definition of done\n- [x] D");
 });
 
 test("editPr (#2898): the untick guard sees every checkbox row form the gate parser reads", async () => {
