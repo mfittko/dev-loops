@@ -307,7 +307,17 @@ test("--report-path is final-on-write: absent until the last step, atomic, compl
     const finalMock = () => f.runtimeFor([threadsCallEntry(resolved), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]);
     await assert.rejects(verifyFixerDisposition({ ...f.options, construct: true, reportPath }, f.runtimeFor([threadsCallEntry([])]).deps), /valid only with --check; pass --check, or drop --report-path/);
     await assert.rejects(verifyFixerDisposition({ ...f.options, reportPath }, finalMock().deps), /valid only with --check; pass --check, or drop --report-path/);
-    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: f.output }, finalMock().deps), /equals the plan's outputRef.*joinRef/);
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: f.output }, finalMock().deps), /equals the fixer plan or its outputRef.*joinRef/);
+    const planAbsolute = path.resolve(root, f.options.fixerPlan);
+    const aliasDir = path.join(root, "alias-dir");
+    await mkdir(path.dirname(f.output), { recursive: true });
+    await symlink(path.dirname(f.output), aliasDir);
+    const planBefore = await readFile(planAbsolute, "utf8");
+    for (const rejected of [path.join(aliasDir, path.basename(f.output)), planAbsolute, `${f.output}.constructed`]) {
+      await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: rejected }, finalMock().deps), /equals the fixer plan or its outputRef.*joinRef/, rejected);
+    }
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: "rel.report" }, finalMock().deps), /absolute path/);
+    assert.equal(await readFile(planAbsolute, "utf8"), planBefore, "the plan is not overwritten");
     assert.equal(existsSync(reportPath), false, "no report from refused arguments");
     await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
     assert.equal(existsSync(reportPath), false, "--construct writes the outputRef, never the report");
@@ -349,7 +359,7 @@ test("--report-path parses as an absolute path and is refused without --check", 
   assert.throws(() => parseVerifyFixerDispositionCliArgs([...base, "--report-path", "/a/b.report"]), /valid only with --check; pass --check, or drop --report-path/);
 });
 
-const repeatedDiffScenarios =["myers", "histogram", "patience"].flatMap((algorithm) =>
+const repeatedDiffScenarios = ["myers", "histogram", "patience"].flatMap((algorithm) =>
   ["true", "false"].flatMap((heuristic) => ["miss", "touch"].map((change) => `${change}-repeated-${algorithm}-${heuristic}`)));
 for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-diff-opts", "miss-inter-hunk", "touch", "touch-diff-opts", "touch-inter-hunk", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source", ...repeatedDiffScenarios]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
   await withRepoRoot(async (root) => {
@@ -3101,6 +3111,10 @@ test("--report-path creates a missing parent directory and a failed publish keep
     const nested = path.join(root, "missing", "dir", "x.report");
     await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: nested }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]).deps), /ci_failed.*lint/);
     assert.equal(JSON.parse(await readFile(nested, "utf8")).outcome, "refused", "the parent directory is created");
+    const dirTarget = path.join(root, "dir-target.report");
+    await mkdir(path.join(dirTarget, "child"), { recursive: true });
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: dirTarget }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]).deps), /ci_failed.*lint/);
+    assert.deepEqual(readdirSync(root).filter((name) => name.startsWith("dir-target.report.tmp-")), [], "a failed rename leaves no temp file");
     const blocked = path.join(root, "blocker");
     await writeFile(blocked, "a file, so mkdir of a child fails");
     await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: path.join(blocked, "x.report") }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]).deps), /ci_failed.*lint/, "the original refusal is rethrown, not the publish error");

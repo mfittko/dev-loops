@@ -63,7 +63,7 @@ export function parseWaitArgs(argv) {
   if (values.help) return { help: true };
   const timeoutMs = resolveTimeoutMs({ timeout: values.timeout, timeoutMs: values["timeout-ms"] }) ?? DEFAULT_TIMEOUT_MS;
   if (timeoutMs > MAX_TIMEOUT_MS) throw new Error(`--timeout must be at most ${MAX_TIMEOUT_MS / 1000} seconds`);
-  if (values.after !== undefined && values.artifact === undefined) throw new Error("--after applies only to --artifact");
+  if (values.after !== undefined && values.artifact === undefined) throw new Error("--after applies only to --artifact; drop --after, or pass --artifact <absolute hand-back path>");
   if (values.artifact !== undefined) {
     if (values["emit-plan"] !== undefined || values["judge-plan"] !== undefined || values.unit !== undefined || values["tmp-root"] !== undefined) throw new Error("--artifact excludes --emit-plan, --judge-plan, --unit and --tmp-root");
     if (values.artifact.trim() === "" || values.artifact !== values.artifact.trim() || !path.isAbsolute(values.artifact)) throw new Error("--artifact must be a non-empty absolute path; pass the child's absolute hand-back path");
@@ -140,9 +140,9 @@ async function checkUnit(unit, { role, receiptTmpRoot, tmpRoot, headSha }) {
   return { scope: unit.scope, executionIdentity: unit.executionIdentity, state, missingAngles };
 }
 
-export const ARTIFACT_TIMEOUT_REMEDY = "Re-run the same command. Delta reviewer: after three consecutive timeout outcomes, stop and return the typed observation units_stalled. Full-phase fixer: after one timeout, end your turn once to receive the fixer's completion notification (COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK), treat it as the join, read the typed exit code or hand-back text it carries, and do not repeat the wait.";
+export const ARTIFACT_TIMEOUT_REMEDY = "Delta reviewer and commit_only fixer: re-run the same command; after three consecutive timeout outcomes, stop and return the typed observation units_stalled. Full-phase fixer: after one timeout, end your turn once to receive the fixer's completion notification (COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK), then run the same command once with --timeout 0; if it returns all_done, act on the published report, otherwise act on the typed exit code or hand-back text the notification carries, and do not repeat the wait.";
 
-export const ARTIFACT_STALE_REMEDY = "The artifact predates --after, so it is a leftover. Check that --after and the artifact path both come from the current emission (the latest emitted plan and its joinRef); if not, re-emit the work order and join the new path. Otherwise re-run the same command.";
+export const ARTIFACT_STALE_REMEDY = "The artifact predates --after, so it is a leftover. Fixer: check that --after and the artifact path both come from the current emission (the latest emitted plan and its joinRef); if not, re-emit the work order and join the new joinRef. Delta reviewer: use a fresh --result path and pass the current input.patchPath as --after. Otherwise re-run the same command.";
 
 // Any hand-back type, with no writer obligation on the child: the artifact parses as JSON and carries its terminal field
 // (`outcome`, as a DeltaPrePushReviewResult does), or, with no terminal field, stays byte-identical for ARTIFACT_STABLE_MS.

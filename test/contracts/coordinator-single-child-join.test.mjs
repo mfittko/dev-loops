@@ -31,7 +31,10 @@ test("COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK is registered, follows
   const contract = read("skills/docs/gate-review-sub-loop-contract.md");
   assert.ok(contract.includes(`<!-- rule: ${FALLBACK} -->`));
   assert.ok(contract.indexOf(`rule: ${FALLBACK} -->`) > contract.indexOf("rule: COORDINATOR-SINGLE-CHILD-JOIN -->"));
-  assert.match(contract, /after one `timeout` outcome of the fixer join, the coordinator ends its turn once to receive the fixer's completion notification\. It treats that notification as the join, reads whatever hand-back text or typed code the notification carries \(for example `ci_failed`, `ci_pending`, `ci_unknown`\), acts on it, and does not repeat the wait/);
+  assert.match(contract, /after one `timeout` outcome of the fixer join, the coordinator ends its turn once to receive the fixer's completion notification\. It treats that notification as the join, re-runs the same `--artifact` join once with `--timeout 0`/);
+  assert.match(contract, /Only when no report exists does it act on the hand-back text or typed code the notification carries \(for example `ci_failed`, `ci_pending`, `ci_unknown`\)\. It does not repeat the wait/);
+  assert.match(contract, /re-runs the same `--artifact` join once with `--timeout 0` and acts on the published report when it returns `all_done`\. Only when no report exists does it act on the hand-back text or typed code/);
+  assert.match(contract, /for a delta reviewer or a `commit_only` fixer, re-run the same command\. After three consecutive `timeout` outcomes every `--artifact` join except the full-phase fixer stops and returns the typed observation `units_stalled`/);
   assert.match(contract, /Pi: no fallback is needed\. The child call blocks/);
   assert.ok(JSON.parse(read("skills/docs/required-rules.json")).requiredRules.some((rule) => rule.id === FALLBACK));
   assert.match(read("docs/decisions/0222-single-child-join-final-on-write-and-notification-fallback.md"), /Amends \[0218\]/);

@@ -706,8 +706,13 @@ const REPORT_PATH_NEEDS_CHECK_ERROR = "--report-path is valid only with --check;
 async function publishReport(reportPath, report) {
   const temporary = `${reportPath}.tmp-${process.pid}`;
   await mkdir(path.dirname(reportPath), { recursive: true });
-  await writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  await rename(temporary, reportPath);
+  try {
+    await writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    await rename(temporary, reportPath);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
 }
 
 export async function verifyFixerDisposition(options, deps = {}) {
@@ -715,8 +720,12 @@ export async function verifyFixerDisposition(options, deps = {}) {
   if (!options.check) throw new Error(REPORT_PATH_NEEDS_CHECK_ERROR);
   const planPath = path.resolve(deps.repoRoot ?? process.cwd(), options.fixerPlan);
   const outputRef = await readFile(planPath, "utf8").then((text) => JSON.parse(text)?.workOrder?.outputRefs?.[0], () => undefined);
-  if (typeof outputRef === "string" && path.resolve(outputRef) === path.resolve(options.reportPath)) {
-    throw new Error(`--report-path ${options.reportPath} equals the plan's outputRef, which --construct writes early; pass ${fixerReportPath(outputRef)} (the emitted joinRef)`);
+  if (!path.isAbsolute(options.reportPath)) throw new Error("--report-path must be an absolute path; pass <outputRef>.report from the emitted fixer plan (joinRef)");
+  // Compare through the real parent directory so a symlinked alias (macOS /tmp vs /private/tmp) cannot name a protected file.
+  const canonical = (file) => path.join(realpathNearestExisting(path.dirname(file)), path.basename(file));
+  const protectedFiles = [planPath, ...(typeof outputRef === "string" ? [outputRef, `${outputRef}.constructed`] : [])];
+  if (protectedFiles.some((file) => canonical(file) === canonical(options.reportPath))) {
+    throw new Error(`--report-path ${options.reportPath} equals the fixer plan or its outputRef, which --construct writes early; pass ${typeof outputRef === "string" ? fixerReportPath(outputRef) : "<outputRef>.report"} (the emitted joinRef)`);
   }
   let result;
   try {
