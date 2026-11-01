@@ -224,9 +224,17 @@ test("cap-round-fixed proof with a stale ledger digest refuses spec_digest_misma
 });
 
 test("no verdict and no proof refuses naming the runnable chain-extension remedy", async () => {
-  const result = await assertRefusal({ ...NO_VERDICT, resolveCapRoundFixed: async () => { throw new Error("boom"); } }, "no_clean_draft_gate");
-  assert.match(result.detail, /dev-loops gate extend-cap-round-chain --repo o\/n --pr 9/);
-  assert.match(result.detail, /dev-loops loop gate-coordination --repo o\/n --pr 9/);
+  const result = await assertRefusal({ ...NO_VERDICT, resolveCapRoundFixed: async () => null }, "no_clean_draft_gate");
+  assert.match(result.detail, /node <dev-loops-package-root>\/cli\/index\.mjs gate extend-cap-round-chain --repo o\/n --pr 9/);
+  assert.match(result.detail, /node <dev-loops-package-root>\/cli\/index\.mjs loop gate-coordination --repo o\/n --pr 9/);
+});
+
+test("a thrown cap-round-fixed predicate refuses cap_round_unresolved with its remedy and leaves the body unchanged", async () => {
+  const { edits, run } = harness({ ...NO_VERDICT, resolveCapRoundFixed: async () => { throw new Error("boom"); } });
+  const result = await run();
+  assert.equal(result.reason, "cap_round_unresolved");
+  assert.match(result.detail, /boom.*Condition cap_round_unresolved.*Remedy: repair or quarantine/);
+  assert.equal(edits.length, 0);
 });
 
 test("the waiver and ready-for-review.mjs share one cap-round-fixed predicate", async () => {

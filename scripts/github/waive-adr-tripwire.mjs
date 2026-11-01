@@ -15,6 +15,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { detectRepoSlug, parseRepoSlug, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
+import { CAP_ROUND_REFUSAL } from "@dev-loops/core/loop/pr-gate-coordination";
 import { extractClosingIssueNumbers } from "@dev-loops/core/github/closing-ref-guard";
 import { detectAcDodMatrix } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { computeSpecDigest, requireSpecFromBody } from "@dev-loops/core/loop/spec-authority";
@@ -30,7 +31,7 @@ import { editPr as realEditPr } from "./edit-pr.mjs";
 import { resolveCapRoundFixed as realResolveCapRoundFixed } from "./write-gate-context.mjs";
 
 function noProofRefusal({ repo, pr, headSha }) {
-  return refuse("no_clean_draft_gate", `GATE-EXEC-ROUND-CAP-WAIVER-PROOF: no clean draft_gate or pre_approval_gate checkpoint verdict and no cap-round-fixed proof on the current head ${headSha.slice(0, 7)}. For a cap-round PR whose later commits are docs and tests only, run: dev-loops gate extend-cap-round-chain --repo ${repo} --pr ${pr}. Otherwise run: dev-loops loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
+  return refuse("no_clean_draft_gate", `GATE-EXEC-ROUND-CAP-WAIVER-PROOF: no clean draft_gate or pre_approval_gate checkpoint verdict and no cap-round-fixed proof on the current head ${headSha.slice(0, 7)}. For a cap-round PR whose later commits are docs and tests only, run: node <dev-loops-package-root>/cli/index.mjs gate extend-cap-round-chain --repo ${repo} --pr ${pr}. Otherwise run: node <dev-loops-package-root>/cli/index.mjs loop gate-coordination --repo ${repo} --pr ${pr} and follow its next action`);
 }
 
 const USAGE = `Usage: waive-adr-tripwire.mjs --repo <owner/name> --pr <number>
@@ -201,7 +202,13 @@ export async function waiveAdrTripwire(options, {
     .map((name) => ({ name, read: () => readRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate: name }) }));
   // GATE-EXEC-ROUND-CAP-WAIVER-PROOF: with no clean verdict, the cap-round-fixed proof that ready-for-review.mjs accepts also qualifies.
   if (sources.length === 0) {
-    const capRound = await resolveCapRoundFixed({ repo, pr, headSha, baseRefName: prState.baseRefName }, { repoRoot }).catch(() => null);
+    // A config or ledger error is a typed refusal, as ready-for-review.mjs reports it; only a null proof means "no proof".
+    let capRound;
+    try {
+      capRound = await resolveCapRoundFixed({ repo, pr, headSha, baseRefName: prState.baseRefName }, { repoRoot });
+    } catch (error) {
+      return refuse("cap_round_unresolved", `${error instanceof Error ? error.message : String(error)}. ${CAP_ROUND_REFUSAL.cap_round_unresolved}`);
+    }
     if (capRound) sources.push({ name: "cap-round-fixed proof", read: async () => (typeof capRound.log?.specAuthority?.specDigest === "string" ? capRound.log.specAuthority.specDigest : null) });
   }
   if (sources.length === 0) {

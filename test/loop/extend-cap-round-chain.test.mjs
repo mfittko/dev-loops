@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { test } from "bun:test";
 
 import { resolveCapRoundFixed } from "../../scripts/github/write-gate-context.mjs";
 import { readSealedGateDeltaRecord, writeSealedGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
-import { extendCapRoundChain } from "../../scripts/loop/extend-cap-round-chain.mjs";
+import { extendCapRoundChain, parseExtendCapRoundChainCliArgs } from "../../scripts/loop/extend-cap-round-chain.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 
 const REPO = "owner/repo";
@@ -40,7 +41,7 @@ async function capFixture({ findings = [] } = {}) {
   return { root, A, B };
 }
 
-const extend = (root, head) => extendCapRoundChain({ repo: REPO, pr: PR, worktree: root }, { fetchPr: async () => ({ headRefOid: head, baseRefName: "main" }) });
+const extend = (root, head, deps = {}) => extendCapRoundChain({ repo: REPO, pr: PR, worktree: root }, { fetchPr: async () => ({ headRefOid: head, baseRefName: "main" }), fetchBaseBranch: () => {}, ...deps });
 const proof = (root, head) => resolveCapRoundFixed({ repo: REPO, pr: PR, headSha: head, baseRefName: "main" }, { repoRoot: root });
 
 test("a docs-only commit on top of the sealed chain is proven only after the extension", async () => {
@@ -53,7 +54,9 @@ test("a docs-only commit on top of the sealed chain is proven only after the ext
     assert.ok(await proof(root, D));
     const record = readSealedGateDeltaRecord(path.join(root, "tmp"), B);
     assert.equal(record.extension, "docs_tests_only");
-    assert.equal((await extend(root, D)).action, "already_proven");
+    const again = await extend(root, D);
+    assert.equal(again.action, "already_proven");
+    assert.equal(again.chainEnd, null);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -114,7 +117,7 @@ test("a logic commit refuses even with diff.relative set and the worktree in a s
     const L = await commit(root, { "src/b.mjs": "export const b = 1;\n" }, "logic");
     const refused = await extend(path.join(root, "docs"), L);
     assert.equal(refused.reason, "logic_commit_in_range");
-    assert.match(refused.detail, /dev-loops loop gate-coordination --repo owner\/repo --pr 70/);
+    assert.match(refused.detail, /node <dev-loops-package-root>\/cli\/index\.mjs loop gate-coordination --repo owner\/repo --pr 70/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -164,5 +167,158 @@ test("a rebase that orphans the cap-round head refuses with the replacement-PR r
     assert.match(refused.detail, /--allow-replacement-pr/);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+const gitSha = (root) => String(runGitFixture(root, ["rev-parse", "HEAD"])).trim();
+
+test("a non-base-only merge whose resolution changes logic refuses and writes no record", async () => {
+  const { root, B } = await capFixture();
+  try {
+    runGitFixture(root, ["checkout", "-q", "-b", "side", B]);
+    await commit(root, { "docs/side.md": "s\n" }, "side docs");
+    runGitFixture(root, ["checkout", "-q", B]);
+    await commit(root, { "docs/d.md": "d\n" }, "docs");
+    runGitFixture(root, ["merge", "-q", "--no-ff", "--no-commit", "side"]);
+    const M = await commit(root, { "src/a.mjs": "export const a = 99;\n" }, "evil merge");
+    const refused = await extend(root, M);
+    assert.equal(refused.reason, "logic_commit_in_range");
+    assert.match(refused.detail, /is not a base-only merge/);
+    assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), B), null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a stale origin/<base> is refreshed by the fetch before the range is computed", async () => {
+  const { root, A, B } = await capFixture();
+  try {
+    runGitFixture(root, ["checkout", "-q", "-b", "base-side", A]);
+    const X = await commit(root, { "src/base.mjs": "export const base = 1;\n" }, "base logic");
+    runGitFixture(root, ["checkout", "-q", B]);
+    await commit(root, { "docs/d.md": "d\n" }, "docs");
+    runGitFixture(root, ["merge", "-q", "--no-ff", "-m", "merge base", X]);
+    const M = gitSha(root);
+    assert.equal((await extend(root, M)).reason, "logic_commit_in_range", "origin/main still at the old tip");
+    const fetchBaseBranch = (branch) => { assert.equal(branch, "main"); runGitFixture(root, ["update-ref", "refs/remotes/origin/main", X]); };
+    assert.equal((await extend(root, M, { fetchBaseBranch })).action, "chain_extended");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a failing base fetch refuses base_fetch_failed naming git fetch origin and writes nothing", async () => {
+  const { root, B } = await capFixture();
+  try {
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    const refused = await extend(root, D, { fetchBaseBranch: () => { throw new Error("offline"); } });
+    assert.equal(refused.reason, "base_fetch_failed");
+    assert.match(refused.detail, /git fetch origin main/);
+    assert.equal(readSealedGateDeltaRecord(path.join(root, "tmp"), B), null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("pr_state_unreadable names the gh auth remedy", async () => {
+  const { root } = await capFixture();
+  try {
+    const refused = await extend(root, "", { fetchPr: async () => ({}) });
+    assert.equal(refused.reason, "pr_state_unreadable");
+    assert.match(refused.detail, /gh auth status.*--repo owner\/repo --pr 70/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an existing record at the chain end refuses record_exists and keeps its bytes", async () => {
+  const { root, B } = await capFixture();
+  try {
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    const tmp = path.join(root, "tmp");
+    writeSealedGateDeltaRecord(tmp, B, { reviewBaselineHead: B, candidateHead: "f".repeat(40), outcome: "needs_fix", nextStep: "fix", items: [] });
+    const before = readSealedGateDeltaRecord(tmp, B);
+    assert.equal((await extend(root, D)).reason, "record_exists");
+    assert.deepEqual(readSealedGateDeltaRecord(tmp, B), before);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a record that lands between the read and the write is not overwritten", async () => {
+  const { root, B } = await capFixture();
+  try {
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    const tmp = path.join(root, "tmp");
+    const other = { reviewBaselineHead: B, candidateHead: "f".repeat(40), outcome: "bounded_out", nextStep: "push_to_gate", items: [] };
+    const writeRecord = (tmpRoot, end, record, opts) => { writeSealedGateDeltaRecord(tmpRoot, end, other); return writeSealedGateDeltaRecord(tmpRoot, end, record, opts); };
+    assert.equal((await extend(root, D, { writeRecord })).reason, "record_exists");
+    assert.deepEqual(readSealedGateDeltaRecord(tmp, B), other);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed or throwing post-write proof removes the record and its seal", async () => {
+  const { root, B } = await capFixture();
+  try {
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    const tmp = path.join(root, "tmp");
+    const recordPath = path.join(tmp, "gate-delta", `${B}.json`);
+    const refused = await extend(root, D, { resolveProof: async () => null });
+    assert.equal(refused.reason, "proof_not_reached");
+    assert.equal(existsSync(recordPath) || existsSync(`${recordPath}.seal`), false);
+    let calls = 0;
+    await assert.rejects(extend(root, D, { resolveProof: async (...a) => { if (calls++ === 0) return resolveCapRoundFixed(...a); throw new Error("ledger read"); } }), /ledger read/);
+    assert.equal(existsSync(recordPath) || existsSync(`${recordPath}.seal`), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the rollback leaves a record another writer replaced", async () => {
+  const { root, B } = await capFixture();
+  try {
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    const tmp = path.join(root, "tmp");
+    const other = { reviewBaselineHead: B, candidateHead: "f".repeat(40), outcome: "bounded_out", nextStep: "push_to_gate", items: [] };
+    let calls = 0;
+    const resolveProof = async () => { if (calls++ > 0) writeSealedGateDeltaRecord(tmp, B, other); return null; };
+    const refused = await extend(root, D, { resolveProof });
+    assert.equal(refused.reason, "proof_not_reached");
+    assert.match(refused.detail, /changed since this run wrote it/);
+    assert.deepEqual(readSealedGateDeltaRecord(tmp, B), other);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the latest ancestor chain end is chosen when a merge-seeded chain follows the direct one", async () => {
+  const { root, A, B } = await capFixture();
+  try {
+    runGitFixture(root, ["checkout", "-q", "-b", "base-side", A]);
+    const X = await commit(root, { "src/base.mjs": "export const base = 1;\n" }, "base logic");
+    runGitFixture(root, ["update-ref", "refs/remotes/origin/main", X]);
+    runGitFixture(root, ["checkout", "-q", B]);
+    runGitFixture(root, ["merge", "-q", "--no-ff", "-m", "merge base", X]);
+    const M = gitSha(root);
+    const C = await commit(root, { "src/a.mjs": "export const a = 3;\n" }, "fixer 2");
+    writeSealedGateDeltaRecord(path.join(root, "tmp"), M, { reviewBaselineHead: M, candidateHead: C, outcome: "locally_clear", nextStep: "push_to_gate", items: [] });
+    const D = await commit(root, { "docs/d.md": "d\n" }, "docs");
+    const result = await extend(root, D);
+    assert.equal(result.action, "chain_extended", JSON.stringify(result));
+    assert.equal(result.chainEnd, C);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("--worktree accepts a path in both forms and may be omitted; a blank value is a parse error", () => {
+  const base = ["--repo", "o/n", "--pr", "1"];
+  assert.equal(parseExtendCapRoundChainCliArgs([...base, "--worktree", "/abs/path"]).worktree, "/abs/path");
+  assert.equal(parseExtendCapRoundChainCliArgs([...base, "--worktree=/abs/path"]).worktree, "/abs/path");
+  assert.equal(parseExtendCapRoundChainCliArgs(base).worktree, undefined);
+  for (const blank of [["--worktree", ""], ["--worktree", "   "], ["--worktree= "]]) {
+    assert.throws(() => parseExtendCapRoundChainCliArgs([...base, ...blank]), /worktree/);
   }
 });
