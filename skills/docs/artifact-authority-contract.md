@@ -156,7 +156,7 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/github/resolve-tracker-local-spec.mjs` | Not a gate decision: default tracker adapter |
 | `scripts/loop/_loop-evidence.mjs` | Fail closed: library module that throws `ConfigLoadFailedError` to its caller |
 | `scripts/loop/_pre-pr-review-record.mjs` | Fail closed: uses `loadDevLoopConfigStrict`, so a malformed `.devloops` makes the pre-PR review guard refuse |
-| `scripts/github/waive-adr-tripwire.mjs` | Fail closed: a config or ledger error from the shared `resolveCapRoundFixed` predicate refuses `cap_round_unresolved`, as `ready-for-review.mjs` reports it |
+| `scripts/github/waive-adr-tripwire.mjs` | Fail closed: a config or ledger error from the shared `resolveCapRoundFixed` predicate refuses `cap_round_unresolved`; `ready-for-review.mjs` also fails closed on the same error |
 | `scripts/loop/detect-agent-stall.mjs` | Not a gate decision: stall detection setting |
 | `scripts/loop/inspect-run-viewer/server.mjs` | Not a gate decision: read-only viewer |
 | `scripts/loop/inspect-run.mjs` | Not a gate decision: read-only report; a `config_load_failed` from Copilot evidence drops that evidence and is named in the report missing marker, with no default fallback |

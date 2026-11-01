@@ -202,7 +202,7 @@ export async function waiveAdrTripwire(options, {
     .map((name) => ({ name, read: () => readRecordedSpecDigest({ repo, pr, headSha, repoRoot, gate: name }) }));
   // GATE-EXEC-ROUND-CAP-WAIVER-PROOF: with no clean verdict, the cap-round-fixed proof that ready-for-review.mjs accepts also qualifies.
   if (sources.length === 0) {
-    // A config or ledger error is a typed refusal, as ready-for-review.mjs reports it; only a null proof means "no proof".
+    // A config or ledger error fails closed here and in ready-for-review.mjs; only a null proof means "no proof".
     let capRound;
     try {
       capRound = await resolveCapRoundFixed({ repo, pr, headSha, baseRefName: prState.baseRefName }, { repoRoot });
