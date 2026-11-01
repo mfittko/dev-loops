@@ -81,6 +81,10 @@
       "enforcementNote": "Path assumptions are agent behavior."
     },
     {
+      "id": "CHECKLIST-SCOPE-ONE-MODEL",
+      "enforcement": "runtime"
+    },
+    {
       "id": "CLOSING-REF-BRANCH-MISMATCH",
       "enforcement": "runtime"
     },
