@@ -861,7 +861,7 @@ export const ADR_TRIPWIRE_REMEDIES = Object.freeze([
 
 /** The one failed cap-round-fixed condition (`resolveCapRoundFixed` `onFailure`, ADR 0218) and its remedy. */
 const CAP_ROUND_REFUSAL = Object.freeze({
-  baseline_orphaned: "Condition baseline_orphaned: the cap-round baseline is not an ancestor of the current head (a rebase rewrote it), so no clearing record can bind to this head. Remedy: open a fresh PR from the branch with `dev-loops pr create --allow-replacement-pr <this PR number>` (gate history restarts at round 1); do not rebase a PR that reached the cap round, merge the base instead.",
+  baseline_orphaned: "Condition baseline_orphaned: the cap-round baseline is not an ancestor of the current head (a rebase rewrote it), so no clearing record can bind to this head. Remedy: open a fresh PR from the branch with `pr create --allow-replacement-pr <this PR number>` (gate history restarts at round 1); do not rebase a PR that reached the cap round, merge the base instead.",
   no_clearing_record: "Condition no_clearing_record: no sealed clearing delta record exists for the cap-round baseline. Remedy: complete the cap round's fixer pass and run `check-pre-push-delta.mjs --result` for that baseline.",
   unsealed_record: "Condition unsealed_record: the delta record for the cap-round baseline carries no valid seal. Remedy: rerun `check-pre-push-delta.mjs --result` for that baseline so the writer seals it; never edit the record.",
   items_do_not_cover: "Condition items_do_not_cover: the clearing record's items do not cover the cap round's act refs (it may belong to another route). Remedy: rerun the pre-push delta on the cap round's act list so every act ref is resolved.",
