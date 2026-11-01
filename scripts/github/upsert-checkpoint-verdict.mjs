@@ -2797,7 +2797,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         `\`dev-loops pr reconcile-draft --repo ${options.repo} --pr ${options.pr}\`.`,
       );
     }
-    if (gateActionForbidden) {
+    // A --converged-json update only amends the existing draft_gate comment, so the cap-fixed RUN_DRAFT_GATE ban does not apply to it; its own validation still runs.
+    // The waiver holds only when the cap-fixed proof is the sole reason: without it, coordination would not forbid the action.
+    const forbidOnlyByCapFixed = options.convergedJson && draftCapRoundFixed && requestedGateAction === PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE
+      && !evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
+        draftCapRoundFixed: false, coordinationContext, maxCopilotRounds, draftGateConfig, preApprovalGateConfig, reviewMode,
+      })).forbiddenActions.includes(requestedGateAction);
+    if (gateActionForbidden && !forbidOnlyByCapFixed) {
       throw new Error(buildGateEntryRefusalError({ options, coordination }));
     }
     // Post-time fan-out evidence enforcement: refuse an under-qualified inline

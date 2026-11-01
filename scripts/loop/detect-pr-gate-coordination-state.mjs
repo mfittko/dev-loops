@@ -1182,6 +1182,8 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     reviewThreads: parsedThreads.threads,
     requireCopilotConvergenceAtLatestHead: resolveRequireCopilotConvergenceAtLatestHead(interpreterConfigResult.config),
     rules: resolveClassifyRules(interpreterConfigResult.config),
+    copilotReviewRoundCount: snapshot.copilotReviewRoundCount,
+    effectiveCap: interpreterRefinementConfig.maxCopilotRounds,
   };
   // ponytail: the carry predicate re-reads the disposition comment stream the
   // body-feedback resolver above already read; share the result if gh call

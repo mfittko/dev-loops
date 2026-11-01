@@ -37,6 +37,7 @@ import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpo
 import {
   parseDetectCheckpointEvidenceCliArgs,
   buildPreMergeGateCheck,
+  capRoundThreadsResolved,
   buildFanoutEnforcement,
   detectCheckpointEvidence,
   deriveEvidenceState,
@@ -50,6 +51,8 @@ import { STATE, DISPOSITION } from "@dev-loops/core/loop/copilot-loop-state";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
+import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { writeGateDeltaRecord } from "../../scripts/loop/_gate-delta-record.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { consolidateGateFanin } from "../../scripts/loop/consolidate-fanin.mjs";
 import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
@@ -1258,6 +1261,18 @@ test("detect-checkpoint-evidence fails pre-merge when graphql review-thread fetc
   }
 });
 
+
+test("buildPreMergeGateCheck accepts the sealed cap-round-fixed proof in place of a clean draft_gate comment and stays fail-closed otherwise", () => {
+  const evidence = (preHead = "abc1234") => ({
+    currentHeadSha: "abc1234",
+    draftGate: { visible: true, verdict: "findings_present" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: preHead, sizeOutcome: "pass", sizeTouchesT1: false },
+  });
+  assert.equal(buildPreMergeGateCheck(evidence(), 0, null, null, { capRoundFixed: true }).ok, true, "proof, no clean draft_gate");
+  assert.deepEqual(buildPreMergeGateCheck(evidence(), 0).failures, ["missing visible clean draft_gate comment"], "no proof");
+  assert.deepEqual(buildPreMergeGateCheck(evidence("old5678"), 0, null, null, { capRoundFixed: true }).failures, ["missing visible clean current-head pre_approval_gate comment"], "stale pre_approval_gate head");
+  assert.deepEqual(buildPreMergeGateCheck(evidence(), 2, null, null, { capRoundFixed: true }).failures, ["unresolved review threads present (2); must resolve all threads before merge"], "unresolved threads");
+});
 
 test("buildPreMergeGateCheck fails with non-zero unresolved thread count", () => {
   const evidence = {
@@ -4745,3 +4760,69 @@ test("detectCheckpointEvidence carries clean gate markers from an earlier head a
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("capRoundThreadsResolved is true only for a cap-round marker with every cap-round thread resolved", () => {
+  const thread = (round, isResolved) => ({ isResolved, comments: { nodes: [{ body: `<!-- dev-loops:finding 0123456789abcdef severity=low angle=scope round=${round} -->` }] } });
+  assert.equal(capRoundThreadsResolved(3, [thread(3, true), thread(2, false)]), true, "earlier-round thread may stay open");
+  assert.equal(capRoundThreadsResolved(3, [thread(3, true), thread(3, false)]), false, "unresolved cap-round thread");
+  assert.equal(capRoundThreadsResolved(null, [thread(3, true)]), false, "no cap-round marker (lower round)");
+  assert.equal(capRoundThreadsResolved(3, null), false, "unreadable threads fail closed");
+});
+
+test("deriveEvidenceState: a cap-fixed PR with a visible findings_present draft_gate is decided by preMergeGateCheck, not a violation", () => {
+  const evidence = { draftGate: { visible: true, verdict: "findings_present" }, preApprovalGateMarker: { visible: true, verdict: "clean", contractComplete: true } };
+  assert.equal(deriveEvidenceState(evidence, { ok: true, failures: [] }, true), EVIDENCE_STATE.SATISFIED);
+  assert.equal(deriveEvidenceState(evidence, { ok: false, failures: ["x"] }, true), EVIDENCE_STATE.VIOLATION);
+  assert.equal(deriveEvidenceState(evidence, { ok: true, failures: [] }), EVIDENCE_STATE.VIOLATION, "without the proof stays fail-closed");
+});
+
+test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate follows cap-round marker, thread resolution and pre_approval head", async () => {
+  const headSha = "abc1234";
+  const finding = (round, isResolved) => ({ id: `t${round}${isResolved}`, isResolved, comments: { nodes: [{ body: `<!-- dev-loops:finding 0123456789abcdef severity=low angle=scope round=${round} -->` }] } });
+  const verdict = (gate, head, v) => ["Gate review: " + gate, `Reviewed head SHA: ${head}`, `Verdict: ${v}`, "Findings summary: x", "Next action: y"].join("\n");
+  const run = async ({ round, rounds = [round], cap, threads, preHead, seedProof = false, baseRefName }) => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-capfixed-"));
+    try {
+      await writeFile(path.join(tempDir, ".devloops"), `version: 1\ngates:\n  requireFanoutEvidence: false\n${cap === undefined ? "" : `  draft:\n    maxReviewRounds: ${cap}\n`}`, "utf8");
+      if (seedProof) {
+        // Four closed cap-round ledgers plus a sealed clearing record bound to the cap-round head (GATE-EXEC-ROUND-CAP).
+        const dir = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-17");
+        await mkdir(dir, { recursive: true });
+        const items = [{ severity: "low", angle: "correctness", summary: "low finding", judgeDisposition: "act", judgeRationale: "r" }];
+        const capHead = "a".repeat(40);
+        for (const [i, sha] of ["1", "2", "3"].map((c) => c.repeat(40)).concat(capHead).entries()) {
+          await writeFile(path.join(dir, `draft_gate-${sha}.json`), JSON.stringify({ repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: sha, verdict: "findings_present", loggedAt: `2026-11-0${i + 1}T00:00:00.000Z`, findings: sha === capHead ? items : [] }), "utf8");
+        }
+        writeGateDeltaRecord({ tmpRoot: path.join(tempDir, "tmp"), sequence: { reviewBaselineHead: capHead, actSetId: "0123456789abcdef" }, candidateHead: "b".repeat(40), invocation: 1, decision: { outcome: "locally_clear", nextStep: "push" }, result: { actionableItems: items.map((f) => ({ ref: fingerprintFinding(f), status: "resolved" })) } });
+      }
+      const env = await writeGhStub(tempDir, [
+        { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `{"headRefOid":"${headSha}"}\n` },
+        { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: `${JSON.stringify([
+          { id: 1, body: verdict("draft_gate", "bcd5678", "findings_present"), updated_at: "2026-05-29T21:00:00Z" },
+          { id: 2, body: renderGateReviewCommentBody({ gate: "pre_approval_gate", headSha: preHead, repo: "owner/repo", verdict: "clean", findingsSummary: "x", nextAction: "y", sizeOutcome: "pass", sizeTouchesT1: false, sizeWaiverGranted: false }), updated_at: "2026-05-29T22:00:00Z" },
+        ])}\n` },
+        { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: `${JSON.stringify([
+          ...rounds.map((r, i) => ({ id: 900 + i, body: `Gate findings\n<!-- dev-loops:gate-findings-review draft_gate bcd5678 round=${r} -->`, submitted_at: `2026-05-29T20:0${i}:00Z` })),
+        ])}\n` },
+        { assertArgs: ["api", "graphql"], stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: threads } } } } }) + "\n" },
+      ]);
+      const result = await runNode(["--repo", "owner/repo", "--pr", "17", ...(baseRefName ? ["--base-ref-name", baseRefName] : [])], { env, cwd: tempDir });
+      return JSON.parse(result.code === 0 ? result.stdout : result.stderr).evidenceState;
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  };
+  assert.equal(await run({ round: 4, threads: [finding(4, true)], preHead: headSha }), "satisfied", "cap round, resolved, clean current-head pre_approval");
+  assert.equal(await run({ round: 4, threads: [finding(4, false)], preHead: headSha }), "violation", "unresolved cap-round thread");
+  assert.equal(await run({ round: 3, threads: [finding(3, true)], preHead: headSha }), "violation", "round below the cap");
+  assert.notEqual(await run({ round: 4, threads: [finding(4, true)], preHead: "old5678" }), "satisfied", "stale pre_approval head");
+  // The cap round marker is found even when a later post-cap header exists (the PR 2976 shape).
+  assert.equal(await run({ rounds: [4, 5], threads: [finding(4, true)], preHead: headSha }), "satisfied", "round=4 and round=5 headers");
+  assert.equal(await run({ rounds: [4, 5], threads: [finding(4, false)], preHead: headSha }), "violation", "round=4 and round=5 headers, unresolved cap-round thread");
+  assert.equal(await run({ rounds: [3, 2], threads: [finding(3, true)], preHead: headSha }), "violation", "only headers below the cap");
+  assert.equal(await run({ rounds: [], threads: [], preHead: headSha }), "violation", "no draft_gate header");
+  assert.equal(await run({ round: 4, cap: 0, threads: [finding(4, true)], preHead: headSha }), "violation", "cap of 0 is no cap round");
+  // --base-ref-name wires resolveCapRoundFixed: a sealed clearing record passes with the flag and not without it.
+  assert.equal(await run({ rounds: [], threads: [], preHead: headSha, seedProof: true, baseRefName: "main" }), "satisfied", "sealed proof with --base-ref-name");
+  assert.equal(await run({ rounds: [], threads: [], preHead: headSha, seedProof: true }), "violation", "sealed proof without --base-ref-name");
+}, 60000);

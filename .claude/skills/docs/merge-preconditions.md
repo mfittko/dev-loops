@@ -58,7 +58,7 @@ Before merge, ALL of the following MUST hold:
    exception never substitutes for this: `evaluatePrGateCoordination` fails it closed
    identically to a real CI failure at the pre-approval and final-approval boundaries
    (#552). It only extends the draft-gate wait until CI actually settles green.
-3. ✅ Draft gate satisfied — clean `draft_gate` verdict per `GATE-COMMENT-VERDICT-VALUES` ([Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md))
+3. ✅ Draft gate satisfied — clean `draft_gate` verdict per `GATE-COMMENT-VERDICT-VALUES` ([Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md)), or the "cap round fixed" state owned by `GATE-EXEC-ROUND-CAP` ([Gate review sub-loop contract](./gate-review-sub-loop-contract.md)) in its place
 4. ✅ Pre-approval gate satisfied — clean `pre_approval_gate` verdict on the current head, same rule. `merge-pr` accepts a carried verdict only when the posted carried-heads record holds an entry for the current head and re-classifying the bound heads reproduces that entry's evidence ([`GATE-EXEC-BASE-MERGE-VERDICT-CARRY`](./gate-review-sub-loop-contract.md))
 5. ✅ All review threads resolved
 6. ✅ Merge authorization from the operator — explicit for the active scope, or a recorded standing authorization (see [Merge authorization](#merge-authorization))
@@ -122,7 +122,8 @@ draft_gate / current-head pre_approval_gate / threads / runner-lock / fan-out-pr
 
 ### Items 3 and 4 apply to every path, not just the dev-loop tooling
 
-Items 3 and 4 (clean `draft_gate` / current-head `pre_approval_gate` verdicts) are
+Items 3 and 4 (clean `draft_gate` / current-head `pre_approval_gate` verdicts; item 3
+also accepts the "cap round fixed" state owned by `GATE-EXEC-ROUND-CAP`) are
 enforced two ways, and both must be closed for the precondition to hold in
 practice:
 
