@@ -3130,7 +3130,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (options.gate === "pre_approval_gate" && preloadedFindingsLedger?.verifiedItems?.length > 0 && ledgerVerifiesChecklist(preloadedFindingsLedger) && tickCoverageOk) {
     // Dry run: the composition and clean guards read the would-be ticked artifact; the edits run after the last refusal (pendingTickWrites).
     // An open act item names a row by its label text or by a spec id (`ac:<n>` / `dod:<n>`); see tickReviewerVerifiedItems.
-    const namedCriteria = listOpenActItems([...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems])
+    // An evidence_only act item also holds its row: its remedy is evidence, but the judge still says the row is unproven.
+    const namedCriteria = [...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems, ...jsonUnactedFindings]
+      .filter((f) => f?.judgeDisposition === "act")
       .flatMap((f) => [f.defectKey, f.judgeCriterion, ...(Array.isArray(f.checkedCriteria) ? f.checkedCriteria : [])])
       .filter((c) => typeof c === "string").map((c) => c.trim()).filter(Boolean);
     coordinationContext.refinementArtifact = await tickReviewerVerifiedItems({

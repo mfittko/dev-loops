@@ -12454,6 +12454,12 @@ test("tick (#2898): a spec id (dod:<n> / ac:<n>) resolves against the pinned spe
       for (const item of TICK_ITEMS.filter((_, i) => i !== 13)) ticked(editedBodies[0].body, item);
     });
   }
+  // An evidence_only act item holds its row too.
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion: "dod:1", remedyKind: "evidence_only" })] }, async ({ post, editedBodies }) => {
+    await post({ specAuthority: pin });
+    unticked(editedBodies[0].body, TICK_ITEMS[13]);
+    for (const item of TICK_ITEMS.filter((_, i) => i !== 13)) ticked(editedBodies[0].body, item);
+  });
   // AC row 0 is "criterion number 1".
   await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion: "ac:0" })] }, async ({ post, editedBodies }) => {
     await post({ specAuthority: pin });
