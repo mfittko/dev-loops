@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.9-pre.2
+
+### Changed
+
+- Coordinators now continue across phase transitions: the unit-boundary field is `reportAfter`, and the 150K peak-context figure is an advisory retrospective diagnostic, not a cap (#2955)
+
+### Fixed
+
+- Cap-round blockers: a base merge after the cleared fix reaches ready, refusals name one condition and remedy, no-commit sequences close, and `wait-for-units --artifact` joins one child (#2462)
+- Deliver unchanged thread sites at descendant heads; identify changed sites for full-gate input. Unresolved gate-thread recovery admission is deferred until PR #2990 merges (#2787)
+- `upsert-checkpoint-verdict` ticks verified rows after all refusal checks, leaves act-named rows unticked; `edit-pr` refuses a silent untick without `--allow-untick` (#2898)
+- `dev-loops gate close-sequence` closes an abandoned gate fix sequence marker with a recorded condition, so a push is no longer locked out until the operator deletes a file (#2999)
+
 ## 1.0.9-pre.1
 
 ### Added
