@@ -277,3 +277,23 @@ test("two changed exported-function files sharing one importer yield a single im
     assert.deepEqual(importers[0].relatedTo, ["src/a.mjs", "src/b.mjs"]);
   });
 });
+
+test("a replaced private declaration line after an exported function adds no expansion", async () => {
+  await withRepo(repoFiles, async (root) => {
+    const b = await buildAdjacentBundle({ changedFiles: ["src/shared.mjs"], repoRoot: root, diffText: diffFor("src/shared.mjs", 5) });
+    assert.deepEqual(b.expansion.files, []);
+  });
+});
+
+test("a deleted private function after an exported function adds no expansion", async () => {
+  const src = "export function writeState(x) {\n  return x;\n}\n\nexport function readState(z) {\n  return z;\n}\n";
+  const diff = [
+    "diff --git a/src/shared.mjs b/src/shared.mjs", "--- a/src/shared.mjs", "+++ b/src/shared.mjs", "@@ -1,8 +1,4 @@",
+    " export function writeState(x) {", "   return x;", " }", " ",
+    "-function helper(y) {", "-  return y + 1;", "-}", "-", " export function readState(z) {", "",
+  ].join("\n");
+  await withRepo({ ...repoFiles, "src/shared.mjs": src }, async (root) => {
+    const b = await buildAdjacentBundle({ changedFiles: ["src/shared.mjs"], repoRoot: root, diffText: diff });
+    assert.deepEqual(b.expansion.files, []);
+  });
+});

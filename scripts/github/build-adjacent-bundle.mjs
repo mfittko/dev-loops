@@ -376,8 +376,9 @@ const WRITER_OR_GUARD_RE = /^(write|save|persist|set|delete|remove|guard|assert|
 
 /**
  * Per file: the new-side line numbers touched and the text of removed lines.
- * A removal is credited to the
- * preceding new-side line (a removal at a function tail stays in that function).
+ * A removal run is credited to the
+ * preceding new-side line (a removal at a function tail stays in that function)
+ * only when no added line follows it: a replacement is already marked by its added lines.
  * Ceiling: a deleted file (`+++ /dev/null`) is skipped; its source is gone.
  */
 function changedLinesByFile(diffText) {
@@ -386,7 +387,13 @@ function changedLinesByFile(diffText) {
   let inHunk = false;
   let n = 0;
   const mark = (line) => out.get(file)?.lines.add(line);
+  let pending = null; // new-side line a still-open removal run would be credited to
+  const flush = (next) => {
+    if (pending !== null && !next.startsWith("+") && !next.startsWith("\\")) mark(pending);
+    if (!next.startsWith("-") && !next.startsWith("\\")) pending = null;
+  };
   for (const line of String(diffText ?? "").split("\n")) {
+    if (inHunk && file) flush(line.startsWith("@@") || line.startsWith("diff --git ") ? "" : line);
     if (line.startsWith("diff --git ")) { inHunk = false; file = null; continue; }
     if (!inHunk && line.startsWith("+++ ")) {
       file = line.includes("/dev/null") ? null : decodeGitDiffPathToken(line.slice(4)).replace(/^.\//, "");
@@ -397,7 +404,7 @@ function changedLinesByFile(diffText) {
     if (hunk) { inHunk = true; n = Number(hunk[1]); continue; }
     if (!inHunk || !file) continue;
     if (line.startsWith("+")) { mark(n); n += 1; }
-    else if (line.startsWith("-")) { mark(n - 1); out.get(file)?.removed.push(line.slice(1)); }
+    else if (line.startsWith("-")) { pending = n - 1; out.get(file)?.removed.push(line.slice(1)); }
     else if (line.startsWith(" ")) n += 1;
   }
   return out;
@@ -417,6 +424,7 @@ function topLevelFunctions(source) {
     if (!m) return;
     let end = i + 1;
     while (end < lines.length && (lines[end] === "" || /^[\s})\]]/.test(lines[end]))) end += 1;
+    while (end > i + 1 && lines[end - 1].trim() === "") end -= 1; // a function ends at its last non-blank line
     // `end` is a 0-based index of the first non-member line, i.e. the 1-based last member line.
     found.push({ name: m[2], exported: Boolean(m[1]) || listed.has(m[2]), start: i + 1, end });
   });
@@ -426,7 +434,8 @@ function topLevelFunctions(source) {
 /**
  * Adaptive context expansion: for each changed file whose diff touches an
  * exported function, a state writer or a guard, select its importers and its
- * sibling functions, then apply the per-round file and byte caps. Candidates
+ * sibling functions. A removed export declaration or export-list entry also
+ * selects the file's importers, with no siblings entry. Then apply the per-round file and byte caps. Candidates
  * are sorted by (kind with siblings first, path), so selection and the dropped
  * list are deterministic. A diff confined to private, non-writer, non-guard
  * functions selects nothing. Files absent from the repo or stripped by
