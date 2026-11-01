@@ -6,6 +6,8 @@ Accepted — 2026-10-30 ([issue 2462](https://github.com/mfittko/dev-loops/issue
 
 Builds on ADR 0197, ADR 0208 and ADR 0213. Accepted records remain unchanged.
 
+Numbering and scope deviation from the issue's Slice A rows: the rows name ADR 0216, but open PR 2997 uses 0217 and the record was renumbered to 0218 to keep the sequence collision-free. The rows also say `--artifact` returns `all_done` when the file parses as JSON. Decision 4 supersedes that wording: the join requires the terminal field or 10 unchanged seconds, and the final-on-write replacement is the follow-up slice on #2462.
+
 ## Context
 
 PR 2992 reached four blockers. A base merge after the cap-round fixer commit read as round cap+1. The cap-round refusal named one catch-all remedy for four different conditions. A `commit_only` fixer without a commit left a stale sequence marker that the push refusal told the operator to delete by hand. A coordinator ended its turn while a single child ran.
