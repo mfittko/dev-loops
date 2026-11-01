@@ -6,7 +6,7 @@ Accepted, 2026-11-01 ([issue 3002](https://github.com/mfittko/dev-loops/issues/3
 
 ## Context
 
-[ADR 0185](./0185-draft-gate-round-cap-and-post-convergence-no-code-commit.md) set the Copilot round cap. [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md) made the cap round's fixer pass the last draft step. At the cap, gate coordination returned `report_blocked` with no remedy when the run_pre_approval_gate grant did not hold. A PR with pending CI or unresolved threads then had no legal next action. A rebased cap-round baseline also left no clearing record that could bind to the head.
+[ADR 0012](./0012-copilot-round-cap.md) set the Copilot round cap (`maxCopilotRounds`). [ADR 0185](./0185-draft-gate-round-cap-and-post-convergence-no-code-commit.md) set the draft_gate round cap that the cap-round proof depends on. [ADR 0208](./0208-draft-cap-round-fixed-goes-ready.md) made the cap round's fixer pass the last draft step. At the cap, gate coordination returned `report_blocked` with no remedy when the run_pre_approval_gate grant did not hold. A PR with pending CI or unresolved threads then had no legal next action. A rebased cap-round baseline also left no clearing record that could bind to the head.
 
 ## Decision
 

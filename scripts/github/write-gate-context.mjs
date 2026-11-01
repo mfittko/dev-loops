@@ -2171,7 +2171,8 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   // Only merge-base exit 1 with both commits present locally proves it: a commit this clone never fetched (exit 128) is not a rebase, and the probe then keeps the pre-existing condition.
   const gitProbe = (args) => runGitCommand([...DIFF_ISOLATION_FLAGS, ...args], { repoRoot }).catch(() => ({ code: 128 }));
   const probeCapHead = normalizeSha(capHead);
-  const orphaned = Boolean(probeCapHead && head) && (await gitProbe(["merge-base", "--is-ancestor", probeCapHead, head])).code === 1
+  const mergeBase = Boolean(probeCapHead && head) ? await gitProbe(["merge-base", "--is-ancestor", probeCapHead, head]) : null;
+  const orphaned = mergeBase?.code === 1 && !mergeBase.signal
     && (await gitProbe(["cat-file", "-e", `${probeCapHead}^{commit}`])).code === 0 && (await gitProbe(["cat-file", "-e", `${head}^{commit}`])).code === 0;
   onFailure(orphaned ? "baseline_orphaned" : starts.length === 0 ? (unsealed ?"unsealed_record" : "no_clearing_record") : covering.length === 0 ? "items_do_not_cover" : "chain_does_not_reach_head");
   return null;
