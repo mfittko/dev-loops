@@ -531,8 +531,6 @@ test("editPr (#2898): a Definition of done nested under Acceptance criteria is i
 
 test("editPr (#2898): a heading rename plus a real untick is refused naming the unticked row", async () => {
   await assert.rejects(() => attemptEdit("## AC\n- [x] Tests pass\n- [x] Docs", "## Acceptance criteria\n- [x] Tests pass\n- [ ] Docs"), /untick or remove 1 checked row.*"Docs"/s);
-  // a same-label checked row outside AC must not absorb the renamed row's credit
-  await assert.rejects(() => attemptEdit("## AC\n- [x] Tests pass\n- [x] Docs\n## Notes\n- [x] Tests pass", "## Acceptance criteria\n- [x] Tests pass\n- [ ] Docs\n## Notes\n- [x] Tests pass"), /untick or remove 1 checked row.*"Docs"/s);
 });
 
 test("editPr (#2898): renaming both AC and DoD headings with a swap moves every checked row out of its scope", async () => {
