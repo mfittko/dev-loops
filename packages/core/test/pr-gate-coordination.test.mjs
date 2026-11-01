@@ -4152,7 +4152,7 @@ test("round_cap_reached with failing CI and unresolved threads still routes to t
   assert.doesNotMatch(result.reason, /green CI and Copilot convergence/);
 });
 
-test("round_cap_reached with threads resolved and green CI allows run_pre_approval_gate (#3002 AC2)", () => {
+test("round_cap_reached with threads resolved and green CI allows run_pre_approval_gate (pre-existing grant check, passes pre-fix; not #3002 regression evidence)", () => {
   const result = evaluatePrGateCoordination({
     ...capBase,
     ciStatus: "success",
