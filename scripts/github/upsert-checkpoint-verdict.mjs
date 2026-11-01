@@ -2338,7 +2338,7 @@ function anglesPassCoverage(entries, config, gate) {
 // labels no reviewer verified stay unchecked in it and still block. Only lines
 // inside the AC/DoD sections (the AC section for an issue body) are flipped, so
 // the same label under another heading stays unchecked.
-// dryRun computes the ticked artifact without editing and queues each edit in
+// The tick computes the ticked artifact without editing and queues each edit in
 // pendingWrites; each queued write re-fetches the live body and re-applies the
 // tick to it, so a concurrent body edit is kept and the edit guards compare
 // against the live body. namedCriteria (open act item criterion texts) are never
@@ -2347,7 +2347,7 @@ function anglesPassCoverage(entries, config, gate) {
 // spec, resolved only when the PR body's spec digest equals the pinned specDigest.
 // Only an id the pinned spec cannot resolve (no pin, a different pinned spec, no such
 // row), or whose text matches no unchecked PR row, skips every PR-body row of its category.
-async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified, coordinationContext, dryRun = false, pendingWrites = [], namedCriteria = [], pinnedSpecDigest }, { env, ghCommand, runChild }) {
+async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified, coordinationContext, pendingWrites, namedCriteria = [], pinnedSpecDigest }, { env, ghCommand, runChild }) {
   // A label is skipped when a normalized criterion equals it or contains it bounded by non-word characters or the string edge.
   const flat = (t) => normalizeCriterionText(String(t).replaceAll("`", "")).toLowerCase().replace(/\.+$/u, "");
   const normalizedCriteria = namedCriteria.map(flat);
@@ -2366,8 +2366,8 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
     return (index, label) => indices.has(index) && options.byCategory[scopes[index]]?.has(label) === true;
   };
   const tick = async (body, labels, write, liveIssue, options) => {
-    const result = await applyTick(body, labels, dryRun, write, inSections(body, options));
-    if (dryRun && result.flipped.length > 0) {
+    const result = await applyTick(body, labels, true, write, inSections(body, options));
+    if (result.flipped.length > 0) {
       // preview=true re-reads the live body and refuses when its ticked checkbox rows differ from the dry-run's (a concurrent row change the clean guards never saw); it writes nothing.
       // Each row carries its checklist scope, so a concurrent heading edit that moves rows into or out of AC/DoD also refuses.
       const checkboxRows = (b) => {
@@ -2453,16 +2453,14 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified,
   // A dry run edited nothing, so the reload's issue rows still carry the labels this tick would flip: drop those, keep the rest.
   // A linked issue only the reload read keeps its own unticked rows, even when they share a label this tick flips elsewhere.
   const reloadOnlyLabels = new Set();
-  if (dryRun) {
-    const fetchedIssues = new Set(artifact.uncheckedAcIssues ?? []);
-    for (const issue of (reloaded.uncheckedAcIssues ?? []).filter((n) => !fetchedIssues.has(n))) {
-      const body = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
-      detectIssueRefinementArtifact({ body }).uncheckedAcItems.forEach((label) => reloadOnlyLabels.add(String(label).trim()));
-    }
+  const fetchedIssues = new Set(artifact.uncheckedAcIssues ?? []);
+  for (const issue of (reloaded.uncheckedAcIssues ?? []).filter((n) => !fetchedIssues.has(n))) {
+    const body = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
+    detectIssueRefinementArtifact({ body }).uncheckedAcItems.forEach((label) => reloadOnlyLabels.add(String(label).trim()));
   }
   const reloadedItems = (reloaded.uncheckedAcItems ?? []).filter((label) => {
     const text = String(label).trim();
-    return !(dryRun && flippedIssueLabels.has(text) && !reloadOnlyLabels.has(text));
+    return !(flippedIssueLabels.has(text) && !reloadOnlyLabels.has(text));
   });
   const uncheckedAcItems = [...new Set([...reloadedItems, ...local])];
   return { ...reloaded, uncheckedAcItems };
@@ -3140,7 +3138,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       pr: options.pr,
       verifiedItems: preloadedFindingsLedger.verifiedItems,
       coordinationContext,
-      dryRun: true,
       pendingWrites: pendingTickWrites,
       namedCriteria,
       pinnedSpecDigest: specAuthorityIdentity?.specDigest,
