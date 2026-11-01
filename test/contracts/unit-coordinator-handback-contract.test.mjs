@@ -94,8 +94,8 @@ const RULE_PROSE = {
     "including the startup-output path your unit ran",
     // The packet's closed field list also carries the optional open question (dod:8).
     "and an open question if one is needed",
-    // Both listed-but-unreachable verdict entries are recorded naming approximations.
-    "recorded naming approximations",
+    // Only final_approval is a recorded naming approximation; issue_intake reaches both points.
+    "recorded naming approximation",
   ],
   "skills/docs/main-agent-contract.md": [
     "never writes or summarizes the next brief",

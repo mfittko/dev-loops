@@ -613,7 +613,7 @@ function buildWorktreeSlug(artifact, kind) {
 
 /**
  * Deterministic report points for one unit coordinator. A unit reports status at
- * the first point and continues; a replacement is dispatched only at a real stop, the orchestrator only emits and dispatches
+ * each listed point it reaches, in order, and continues; a replacement is dispatched only at a real stop, the orchestrator only emits and dispatches
  * its work order, and it re-resolves startup against
  * authoritative state (never a brief authored by the predecessor).
  * The vocabulary is closed so a fixture can assert the exact set.

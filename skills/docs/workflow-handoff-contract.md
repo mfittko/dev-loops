@@ -92,11 +92,11 @@ brief has to restate the boundary:
   draft PR is the first boundary at which the unit reports, and a target that already owns its PR must
   **not** carry `draft_pr_opened` at all, because such a unit never opens a draft PR — that
   report point is unreachable, so its report would never fire before the gate round, leaving
-  `gate_verdict_posted` as its only reachable boundary. Two listed paths carry
+  `gate_verdict_posted` as its only reachable boundary. One listed path carries
   `gate_verdict_posted` as a recorded naming approximation
   (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`): `final_approval` runs a gate round
-  but posts no verdict of its own, and an `issue_intake` unit reports at its draft PR, then continues
-  on the PR route, where it reaches `gate_verdict_posted`.
+  but posts no verdict of its own. An `issue_intake` unit reports at `draft_pr_opened`, continues on
+  the PR route, and then reports at `gate_verdict_posted`, in order.
 - `resume` names the authoritative re-resolution a resuming coordinator runs (`kind: loop_startup` plus
   whichever of the target's `issue`, `pr`, `branch` and `phase` values are set). It is **not** an
   exclusive selector, and no XOR or precedence rule applies to it: `deriveUnitBoundaries` copies
