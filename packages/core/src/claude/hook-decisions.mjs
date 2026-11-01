@@ -920,8 +920,7 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
   if (symlinked) return deny("the target crosses a symlink");
   const roots = checkouts.filter((c) => typeof c?.root === "string" && c.root.startsWith("/"));
   if (roots.length === 0) return deny("no listed checkout could be resolved");
-  // The commit_only record is staged at `<outputRef>.staging` and moved onto the outputRef when final (COORDINATOR-SINGLE-CHILD-JOIN).
-  if (grants.some((g) => g?.outputRef === targetPath || (typeof g?.outputRef === "string" && `${g.outputRef}.staging` === targetPath))) return ALLOW;
+  if (grants.some((g) => g?.outputRef === targetPath)) return ALLOW;
   // The most specific checkout owns the target (linked worktrees nest under the main checkout).
   const checkout = roots.filter((c) => isInsidePath(targetPath, c.root)).sort((a, b) => b.root.length - a.root.length)[0];
   if (!checkout) return ALLOW;

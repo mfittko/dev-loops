@@ -10,12 +10,12 @@ test("COORDINATOR-SINGLE-CHILD-JOIN is registered and carries the no-turn-end an
   assert.ok(contract.includes("<!-- rule: COORDINATOR-SINGLE-CHILD-JOIN -->"));
   assert.ok(contract.indexOf("COORDINATOR-SINGLE-CHILD-JOIN -->") > contract.indexOf("rule: GATE-EXEC-HARNESS-JOIN"));
   assert.match(contract, /The hand-back path must not exist at dispatch: each fixer emission and each delta review invocation gets its own path, and the coordinator never reuses a hand-back path\./);
-  assert.match(contract, /returns `all_done` \(exit 0\) when the file exists and parses as JSON, and the child writes no extra marker/);
-  assert.match(contract, /Every joined hand-back is final on first write: the writer builds the record at a staging path/);
-  assert.doesNotMatch(contract, /\.done|10 seconds/);
+  assert.match(contract, /only for a final hand-back, and the child writes no extra marker: the file parses as JSON and carries the terminal field its schema requires/);
+  assert.doesNotMatch(contract, /\.done|staging/);
   const adr = read("docs/decisions/0218-slice-a-cap-round-chain-and-single-child-join.md");
-  assert.match(adr, /returns `all_done` when the file exists and parses as JSON/);
-  assert.doesNotMatch(adr, /10 seconds/);
+  assert.match(adr, /only for a final hand-back/);
+  assert.match(adr, /v1\.0\.9 follow-up slice on #2462 \(`--report-path`\), with a deadline of Tuesday 2026-11-03 evening/);
+  assert.doesNotMatch(adr, /staging/);
   assert.match(contract, /A coordinator never ends its turn while a single child runs, before the `--artifact` join returns\./);
   assert.match(contract, /Pi: the coordinator joins the child with a blocking dispatch \(`async: false`\), `runs\.all` or `bg_wait`.*`extension\/index\.ts` runs the foreground `async: false` child/);
   assert.ok(JSON.parse(read("skills/docs/required-rules.json")).requiredRules.some((rule) => rule.id === "COORDINATOR-SINGLE-CHILD-JOIN"));

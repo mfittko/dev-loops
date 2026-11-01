@@ -1436,15 +1436,8 @@ const FX_OUTPUT = `${FX_MAIN}/tmp/gate-fixer/o-r/pr-1/f1-0000abcd/fixer-disposit
 const FX_GRANT = { branch: "issue-1", allowedPaths: ["src", "test/a.test.mjs"], outputRef: FX_OUTPUT };
 const fixer = (targetPath, over = {}) => decideFixerWriteGuard({ agentType: "fixer", targetPath, checkouts: FX_CHECKOUTS, grants: [FX_GRANT], ...over });
 
-test("decideBashGate allows the fixer's commit_only `command mv -f` of the staging record onto the outputRef", () => {
-  const command = `command mv -f "${FX_OUTPUT}.staging" "${FX_OUTPUT}"`;
-  assert.equal(decideBashGate({ command, agentType: "fixer", inManagedContext: true, managedRepoSlug: "o/r", repoSlug: "o/r" }).decision, "allow");
-});
-
 test("decideFixerWriteGuard allows the outputRef and in-authority paths of a current pull", () => {
   assert.equal(fixer(FX_OUTPUT).decision, "allow");
-  assert.equal(fixer(`${FX_OUTPUT}.staging`).decision, "allow", "the commit_only staging path of the outputRef");
-  assert.equal(fixer(`${FX_OUTPUT}.other`).decision, "deny");
   assert.equal(fixer(`${FX_WT}/src/x.mjs`).decision, "allow");
   assert.equal(fixer(`${FX_WT}/test/a.test.mjs`).decision, "allow");
   assert.equal(fixer(`${FX_WT}/src/x.mjs`, { agentType: "dev-loops:fixer" }).decision, "allow");
