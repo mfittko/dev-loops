@@ -38,14 +38,17 @@ test("COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK is registered, follows
   assert.match(contract, /Pi: no fallback is needed\. The child call blocks/);
   assert.match(contract, /An interim or "has not reported yet" notification is not the join: the coordinator ends its turn again and runs the `--timeout 0` join only after the final completion notification/);
   assert.match(contract, /except that a full-phase fixer follows `COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK` after one `timeout`/);
-  assert.match(read("skills/docs/anti-patterns.md"), /The one Claude Code exception is the single turn end that `COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK` sanctions/);
+  assert.match(contract, /A full-phase fixer that exits before step 6 publishes the report/);
+  const antiPattern = read("skills/docs/anti-patterns.md");
+  assert.ok(antiPattern.includes("`GATE-EXEC-HARNESS-JOIN`") && antiPattern.includes(`\`${FALLBACK}\``));
+  assert.doesNotMatch(antiPattern, /The one Claude Code exception/);
+  assert.match(read("skills/dev-loop/SKILL.md"), new RegExp(`do not end the turn to await it, except the single turn end that \`${FALLBACK}\` sanctions`));
   assert.ok(JSON.parse(read("skills/docs/required-rules.json")).requiredRules.some((rule) => rule.id === FALLBACK));
   assert.match(read("docs/decisions/0223-single-child-join-final-on-write-and-notification-fallback.md"), /Amends \[0218\]/);
   for (const file of ["skills/dev-loop/SKILL.md", "agents/dev-loop.agent.md", ".claude/skills/dev-loop/SKILL.md", ".claude/agents/dev-loop.md"]) {
     const text = read(file);
     assert.ok(text.includes(FALLBACK), file);
-    assert.match(text, /Pi child calls block, so Pi needs no fallback/, file);
-    assert.match(text, /any fixer exit before step 6 publishes the report/, file);
+    assert.doesNotMatch(text, /any fixer exit before step 6 publishes the report/, file);
   }
 });
 
