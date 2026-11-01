@@ -343,6 +343,15 @@ function describeAcceptedCiState(ciStatus, preApprovalRequireCi) {
   return "CI not required by config";
 }
 
+// Shared remedy text for a capped PR with zero threads and failing or unconfirmed required CI.
+function buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha }) {
+  const prefix = `round_cap_reached at ${copilotReviewRoundCount}/${maxCopilotRounds}`;
+  const head = `at head ${currentHeadSha ?? "unknown"} and zero unresolved threads`;
+  return ciStatus === "failure"
+    ? `${prefix} with failing CI (required) ${head}: fix the failing required check at the head and push, then re-run gate-coordination.`
+    : `${prefix} with required CI only credibly green (unconfirmed) ${head}: run wait-pr-checks.mjs for the head to confirm CI, then re-run gate-coordination.`;
+}
+
 function buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi, ciDescriptor }) {
   // One rule serves both the reason string and this note. A branch whose CI
   // acceptance differs from describeAcceptedCiState (the strict-green grant
@@ -1983,9 +1992,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        reason: ciStatus === "crediblyGreen"
-          ? `round_cap_reached: the Copilot round cap is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), but the current head ${currentHeadSha ?? "unknown"} has unconfirmed CI (credibly green) and zero unresolved threads: run wait-pr-checks.mjs for the head to confirm CI, then re-run gate-coordination.`
-          : `round_cap_reached at ${copilotReviewRoundCount}/${maxCopilotRounds} with failing CI at head ${currentHeadSha ?? "unknown"} and zero unresolved threads: fix the failing required check at the head and push, then re-run gate-coordination.`,
+        reason: buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha }),
         mergeStateStatus,
         conflictFiles,
           refinementArtifact,
@@ -2248,12 +2255,14 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // agent-runnable remedy instead of falling through to a remedy-less
     // report_blocked. Pending CI waits; unresolved threads go through the
     // fix/reply-resolve route. No new Copilot cycle is legal past the cap.
-    const capPending = preApprovalRequireCi && (ciStatus === "pending" || ciStatus === "none");
-    const capThreads = !capPending && unresolvedThreadCount > 0;
+    // Unresolved threads take precedence; wait_for_ci stays allowed alongside them.
+    const capThreads = unresolvedThreadCount > 0;
+    const ciUnsettled = preApprovalRequireCi && (ciStatus === "pending" || ciStatus === "none");
+    const capPending = !capThreads && ciUnsettled;
     if (capPending || capThreads) {
-      const capActions = capPending
-        ? [PR_CHECKPOINT_ACTION.WAIT_FOR_CI]
-        : [PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS];
+      const capActions = capThreads
+        ? [PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS, ...(ciUnsettled ? [PR_CHECKPOINT_ACTION.WAIT_FOR_CI] : [])]
+        : [PR_CHECKPOINT_ACTION.WAIT_FOR_CI];
       pushUnique(allowedNextActions, capActions);
       pushUnique(forbiddenActions, postDraftForbidden);
       pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW]);
@@ -2299,9 +2308,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        reason: ciStatus === "failure"
-          ? `round_cap_reached at ${copilotReviewRoundCount}/${maxCopilotRounds} with required CI failing at head ${currentHeadSha ?? "unknown"} and zero unresolved threads: fix the failing required check at the head and push, then re-run gate-coordination.`
-          : `round_cap_reached at ${copilotReviewRoundCount}/${maxCopilotRounds} with required CI only credibly green (unconfirmed) at head ${currentHeadSha ?? "unknown"} and zero unresolved threads: run wait-pr-checks.mjs for the head to confirm CI, then re-run gate-coordination.`,
+        reason: buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha }),
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,

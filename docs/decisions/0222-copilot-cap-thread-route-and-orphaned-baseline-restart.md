@@ -10,10 +10,10 @@ Accepted, 2026-11-01 ([issue 3002](https://github.com/mfittko/dev-loops/issues/3
 
 ## Decision
 
-Rule `GATE-EXEC-ROUND-CAP-THREAD-ROUTE` in `skills/docs/gate-review-sub-loop-contract.md` governs the cap states when the grant does not hold:
+Rule `GATE-EXEC-ROUND-CAP-THREAD-ROUTE` in [`skills/docs/gate-review-sub-loop-contract.md`](../../skills/docs/gate-review-sub-loop-contract.md) governs the cap states when the grant does not hold:
 
-1. Required CI `pending` or `none` returns `wait_for_ci`.
-2. Unresolved threads return the thread route (`unresolved_feedback`, allowing `address_review_feedback` and `reply_resolve_review_threads`) and forbid `request_copilot_review` and `rerequest_copilot_review`. No new Copilot cycle is legal past the cap.
+1. Required CI `pending` or `none` with zero unresolved threads returns `wait_for_ci`.
+2. Unresolved threads take precedence over CI. They return the thread route (`unresolved_feedback`, allowing `address_review_feedback` and `reply_resolve_review_threads`, plus `wait_for_ci` when required CI is `pending` or `none`) and forbid `request_copilot_review` and `rerequest_copilot_review`. No new Copilot cycle is legal past the cap.
 3. Required CI `failure` or `crediblyGreen` with zero unresolved threads returns `report_blocked` with a reason that names `round_cap_reached`, the head SHA, the CI state and a runnable remedy.
 4. Every other state returns `report_blocked` with a reason that names the state and one instruction: re-resolve with `loop startup --pr <n>`.
 

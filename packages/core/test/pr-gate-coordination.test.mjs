@@ -4231,15 +4231,25 @@ test("round_cap_reached with threads resolved and green CI allows run_pre_approv
 });
 
 for (const ciStatus of ["pending", "none"]) {
-  test(`round_cap_reached with ${ciStatus} CI waits for CI instead of report_blocked (#3002 PR 3000 shape)`, () => {
-    for (const unresolvedThreadCount of [0, 4]) {
-      const result = evaluatePrGateCoordination({ ...capBase, ciStatus, unresolvedThreadCount });
-      assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_CI);
-      assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
-      assert(result.reason.includes("8bc050da9deadbeef") && result.reason.includes(ciStatus));
-      assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
-      assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
-    }
+  test(`round_cap_reached with ${ciStatus} CI and zero threads waits for CI instead of report_blocked (#3002)`, () => {
+    const result = evaluatePrGateCoordination({ ...capBase, ciStatus, unresolvedThreadCount: 0 });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_CI);
+    assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
+    assert(result.reason.includes("8bc050da9deadbeef") && result.reason.includes(ciStatus));
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+  });
+
+  test(`round_cap_reached with ${ciStatus} CI and unresolved threads routes to the thread fix and keeps wait_for_ci allowed (#3002 PR 3000 shape)`, () => {
+    const result = evaluatePrGateCoordination({ ...capBase, ciStatus, unresolvedThreadCount: 4 });
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+    assert.equal(result.loopDisposition, DISPOSITION.UNRESOLVED_FEEDBACK);
+    assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK));
+    assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS));
+    assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.WAIT_FOR_CI));
+    assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
   });
 }
 
