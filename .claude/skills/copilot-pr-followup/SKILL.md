@@ -272,6 +272,7 @@ question is likewise unresolved feedback.
    - use a body file under `tmp/` rather than inline shell text for the single-thread reply body (via `--message` or stdin); the batch helper takes its per-thread bodies from `--message-map <path>` — a JSON file, never stdin — so there is no separate stdin body file to prefer there
    - when the intent is GitHub linkability, keep commit SHAs and issue/PR refs as plain text (for example 3ee82fcb9d4a1f0c6e5b7a8d2c1f4e9a0b3d5c7e and owner/repo#70) and do not wrap them in backticks
    - keep backticks for actual code/path/CLI literals only
+   - to reopen a wrongly or prematurely resolved Copilot or gate thread, the orchestrator or the dev-loop coordinator runs `unresolve-review-thread.mjs --repo <owner/name> --pr <n> --thread-id <id>`; the fixer, review and judge agents are denied, and a raw `unresolveReviewThread` mutation stays denied for every caller. It refuses with `thread_not_resolved`, `thread_not_on_pr`, `pr_closed_or_merged` or `thread_author_not_reviewer`
    - if either helper was newly added or recently changed, smoke-check it against one real thread before assuming the rest of the loop can rely on it
 9. <!-- rule: COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE --> `COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE`: before resolving an addressed review thread, run a post-fix verification checkpoint
    - confirm the GitHub reply actually exists on the intended thread/comment, not only in local notes or helper stdout

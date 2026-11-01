@@ -976,6 +976,24 @@ test("decideBashGate denies thread-reply bypasses naming COPILOT-FOLLOWUP-REPLY-
   assert.equal(decideBashGate({ command: "node scripts/github/reply-resolve-review-thread.mjs --thread 5", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
 });
 
+test("decideBashGate scopes unresolve-review-thread to the orchestrator and coordinator (issue 2577)", () => {
+  const command = "dev-loops-run scripts/github/unresolve-review-thread.mjs --repo mfittko/dev-loops --pr 5 --thread-id T1";
+  const gate = (agentType) => decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType });
+  assert.equal(gate(null).decision, "allow");
+  assert.equal(gate("dev-loop").decision, "allow");
+  for (const agentType of ["fixer", "review", "judge", "dev-loops:fixer"]) {
+    const d = gate(agentType);
+    assert.equal(d.decision, "deny", agentType);
+    assert.match(d.reason, /orchestrator.*dev-loop coordinator/);
+  }
+  const raw = "gh api graphql -f query='mutation { unresolveReviewThread(input:{threadId:\"T1\"}) { thread { id } } }'";
+  for (const agentType of [null, "dev-loop", "fixer"]) {
+    const d = decideBashGate({ command: raw, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType });
+    assert.equal(d.decision, "deny");
+    assert.match(d.reason, /unresolve-review-thread\.mjs/);
+  }
+});
+
 test("decideBashGate denies Copilot review-request bypasses naming COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY", () => {
   const api = decideBashGate({ command: "gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers -f reviewers[]=copilot-swe-agent", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
   assert.equal(api.decision, "deny");

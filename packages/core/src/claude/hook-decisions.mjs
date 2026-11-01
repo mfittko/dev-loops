@@ -66,6 +66,9 @@ function commandContainsEvidenceWrite(command) {
  */
 export const DEV_LOOP_AGENT_TYPE = "dev-loop";
 
+/** Agent types denied scripts/github/unresolve-review-thread.mjs (issue 2577). */
+const UNRESOLVE_DENIED_AGENT_TYPES = new Set(["fixer", "review", "judge"]);
+
 /** The gate-round capsule agent (GATE-EXEC-GATE-COORDINATOR, ADR 0112). */
 export const GATE_COORDINATOR_AGENT_TYPE = "gate-coordinator";
 /** Callers that hold the coordinator write and verify boundaries: the gate coordinator never loosens them. */
@@ -175,6 +178,15 @@ export function decideBashGate({
   humanMergeOnly = false,
   enforceCoordinator = false,
 }) {
+  // Unresolve is owned by the orchestrator and the dev-loop coordinator (issue 2577).
+  if (UNRESOLVE_DENIED_AGENT_TYPES.has(normalizeAgentType(agentType)) && String(command).includes("unresolve-review-thread")) {
+    return {
+      decision: "deny",
+      reason:
+        `The ${normalizeAgentType(agentType)} agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs ` +
+        "is owned by the orchestrator (main agent) and the dev-loop coordinator. Report the wrongly resolved thread in your hand-back and let the owner run it.",
+    };
+  }
   if (normalizeAgentType(agentType) === JUDGE_AGENT_TYPE) {
     return parseSanctionedPullLine(command) || isJudgeDecisionCheckLine(command) ? ALLOW : {
       decision: "deny",
@@ -305,7 +317,9 @@ export function decideBashGate({
       reason:
         "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER: ad-hoc thread-reply mutations are blocked. Resolve review " +
         "threads via scripts/github/reply-resolve-review-thread.mjs (one thread) or " +
-        "reply-resolve-review-threads.mjs (multiple threads, --message-map), not raw gh api/graphql.",
+        "reply-resolve-review-threads.mjs (multiple threads, --message-map), not raw gh api/graphql. " +
+        "To reopen a wrongly resolved thread, the orchestrator or dev-loop coordinator runs " +
+        "scripts/github/unresolve-review-thread.mjs (never raw unresolveReviewThread).",
     };
   }
 
