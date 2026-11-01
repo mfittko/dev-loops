@@ -1,4 +1,4 @@
-# 0216. Sanctioned close of an abandoned gate fix sequence
+# 0219. Sanctioned close of an abandoned gate fix sequence
 
 ## Status
 
@@ -19,7 +19,7 @@ Under `PRE-PUSH-DELTA-PUSH-AUTHORITY`, a gate fix sequence writes the marker `tm
 
 The 30 minute grace equals the runner-lock TTL. A dispatch or a fixer younger than the grace may be live.
 
-A live sequence is never cleared. The command refuses `SEQUENCE-LIVE`, `FIXER-RUNNING`, `ABANDONMENT-UNPROVEN` and `SEQUENCE-ABSENT`, and each refusal names a remedy. A fixer that pulled its work order and has not handed back within the grace reads as running. An unreadable pull receipt also reads as running. A marker rewritten while the PR head is read starts a new sequence and is refused.
+A live sequence is never cleared. The command refuses `sequence_live`, `fixer_running`, `abandonment_unproven` and `sequence_absent`, and each refusal names a remedy. A fixer that pulled its work order and has not handed back within the grace reads as running. An unreadable pull receipt also reads as running. A marker rewritten while the PR head is read starts a new sequence and is refused.
 
 The command writes the closure record `gate-delta/<baseline>.sequence-closed.<execution>.json` before it removes the marker. A failed write leaves the marker in place. The record names the baseline, the execution, the condition, the actor and the time. `emit-fixer-work-order.mjs` reads the record, so a later pull of the closed execution's work order is refused as `stale_dispatch`. The marker now carries the fixer execution identity so the command can bind the receipt and the record to one execution.
 

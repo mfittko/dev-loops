@@ -43,7 +43,7 @@ test("a live sequence (head unchanged, fixer dispatched recently) is refused and
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: execution(tmpRoot) });
     const result = await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) }));
-    assert.equal(result.refusal, "SEQUENCE-LIVE");
+    assert.equal(result.refusal, "sequence_live");
     assert.ok(result.remedy);
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
@@ -55,7 +55,7 @@ test("a running fixer is refused even when the head moved", async () => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
     pull(tmpRoot, ex, new Date(T0 - 60_000).toISOString());
     const result = await closeGateSequence(base(tmpRoot));
-    assert.equal(result.refusal, "FIXER-RUNNING");
+    assert.equal(result.refusal, "fixer_running");
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
 });
@@ -71,12 +71,12 @@ test("a work order never pulled past the dispatch grace closes as FIXER_NEVER_PU
 test("unproven abandonment is refused: no execution, no branch, no PR, wrong branch, absent marker", async () => {
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });
-    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) }))).refusal, "ABANDONMENT-UNPROVEN");
-    assert.equal((await closeGateSequence(base(tmpRoot, { pr: undefined }))).refusal, "ABANDONMENT-UNPROVEN");
-    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(MOVED, "other") }))).refusal, "ABANDONMENT-UNPROVEN");
-    assert.equal((await closeGateSequence(base(tmpRoot, { head: MOVED }))).refusal, "SEQUENCE-ABSENT");
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) }))).refusal, "abandonment_unproven");
+    assert.equal((await closeGateSequence(base(tmpRoot, { pr: undefined }))).refusal, "abandonment_unproven");
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(MOVED, "other") }))).refusal, "abandonment_unproven");
+    assert.equal((await closeGateSequence(base(tmpRoot, { head: MOVED }))).refusal, "sequence_absent");
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD });
-    assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "ABANDONMENT-UNPROVEN");
+    assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "abandonment_unproven");
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
 });
@@ -85,13 +85,13 @@ test("the hook refusal text names the close command", () => {
   assert.match(recoveryHint("/x/gate-delta/h.sequence"), /close-gate-sequence\.mjs/);
 });
 
-test("pulled and handed back with the head unchanged stays SEQUENCE-LIVE", async () => {
+test("pulled and handed back with the head unchanged stays sequence_live", async () => {
   await withTempDir(async (tmpRoot) => {
     const ex = execution(tmpRoot);
     writeFileSync(ex.outputRef, "{}");
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
     pull(tmpRoot, ex, new Date(T0 - 60_000).toISOString());
-    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) }))).refusal, "SEQUENCE-LIVE");
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr(HEAD) }))).refusal, "sequence_live");
   });
 });
 
@@ -109,28 +109,28 @@ test("an unparseable pulledAt or a garbage receipt reads as a running fixer", as
     const ex = execution(tmpRoot);
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
     pull(tmpRoot, ex, "not a date");
-    assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "FIXER-RUNNING");
+    assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "fixer_running");
     writeFileSync(pullReceiptPath(tmpRoot, ex.workOrderRef), "{garbage");
-    assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "FIXER-RUNNING");
+    assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "fixer_running");
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
 });
 
-test("a malformed marker or an invalid PR head sha is ABANDONMENT-UNPROVEN", async () => {
+test("a malformed marker or an invalid PR head sha is abandonment_unproven", async () => {
   await withTempDir(async (tmpRoot) => {
     mkdirSync(path.dirname(sequenceMarkerPath(tmpRoot, HEAD)), { recursive: true });
     writeFileSync(sequenceMarkerPath(tmpRoot, HEAD), "{not json");
-    assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "ABANDONMENT-UNPROVEN");
+    assert.equal((await closeGateSequence(base(tmpRoot))).refusal, "abandonment_unproven");
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });
-    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr("HEAD~1") }))).refusal, "ABANDONMENT-UNPROVEN");
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr("HEAD~1") }))).refusal, "abandonment_unproven");
   });
 });
 
-test("a marker re-emitted while the PR is read is SEQUENCE-LIVE and survives", async () => {
+test("a marker re-emitted while the PR is read is sequence_live and survives", async () => {
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: execution(tmpRoot) });
     const reemit = async () => { writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: { ...execution(tmpRoot), executionIdentity: "f1-ffff0000" } }); return pr(MOVED)(); };
-    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: reemit }))).refusal, "SEQUENCE-LIVE");
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: reemit }))).refusal, "sequence_live");
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
 });
