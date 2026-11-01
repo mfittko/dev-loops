@@ -37,7 +37,18 @@ test("a moved PR head closes: the record is written, then the marker is removed"
 test("an old marker without an execution still closes on a moved head", async () => {
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });
-    assert.equal((await closeGateSequence(base(tmpRoot))).condition, "HEAD_MOVED");
+    assert.equal((await closeGateSequence(base(tmpRoot, { hasCommit: () => true }))).condition, "HEAD_MOVED");
+  });
+});
+
+test("a marker without a work order ref closes on a moved head only when its baseline is a local commit", async () => {
+  await withTempDir(async (tmpRoot) => {
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });
+    const foreign = await closeGateSequence(base(tmpRoot, { hasCommit: () => false }));
+    assert.equal(foreign.refusal, "baseline_unknown");
+    assert.ok(foreign.remedy);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+    assert.equal((await closeGateSequence(base(tmpRoot, { hasCommit: (sha) => sha === HEAD }))).ok, true);
   });
 });
 
@@ -268,7 +279,7 @@ test("the CLI accepts a padded --repo: it passes the usage check and reaches the
 test("a padded --repo reaches fetchPr trimmed: gh is called with the normalized slug", async () => {
   await withTempDir(async (dir) => {
     mkdirSync(path.join(dir, ".git"));
-    writeSequenceMarker({ tmpRoot: path.join(dir, "tmp"), baselineHead: HEAD, branch: "feat" });
+    writeSequenceMarker({ tmpRoot: path.join(dir, "tmp"), baselineHead: HEAD, branch: "feat", execution: execution(dir) });
     const log = path.join(dir, "gh-args.txt");
     const bin = path.join(dir, "bin");
     mkdirSync(bin);
@@ -319,6 +330,7 @@ test("a fixer that pulls just before the marker removal blocks the close", async
     // With HEAD_MOVED the only clock read is the record timestamp, taken after the post-read check.
     const now = () => { calls += 1; if (calls === 1) pull(tmpRoot, ex, new Date(T0).toISOString()); return T0; };
     assert.equal((await closeGateSequence(base(tmpRoot, { now }))).refusal, "sequence_live");
+    assert.equal(existsSync(sequenceClosurePath(tmpRoot, HEAD, ex.executionIdentity)), false);
     assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
   });
 });
@@ -344,15 +356,15 @@ test("the CLI forwards --fields and --silent on a successful close", async () =>
     writeFileSync(path.join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' '{"headRefOid":"${MOVED}","headRefName":"feat"}'\n`, { mode: 0o755 });
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
     const args = [cli, "--head", HEAD, "--repo", "o/r", "--pr", "7"];
-    writeSequenceMarker({ tmpRoot: path.join(dir, "tmp"), baselineHead: HEAD, branch: "feat" });
+    writeSequenceMarker({ tmpRoot: path.join(dir, "tmp"), baselineHead: HEAD, branch: "feat", execution: execution(dir) });
     const fields = spawnSync("node", [...args, "--fields", "condition"], { cwd: dir, encoding: "utf8", env });
     assert.equal(fields.status, 0, fields.stderr);
     assert.equal(fields.stdout, "HEAD_MOVED\n");
-    writeSequenceMarker({ tmpRoot: path.join(dir, "tmp"), baselineHead: HEAD, branch: "feat" });
+    writeSequenceMarker({ tmpRoot: path.join(dir, "tmp"), baselineHead: HEAD, branch: "feat", execution: execution(dir) });
     const silent = spawnSync("node", [...args, "--silent"], { cwd: dir, encoding: "utf8", env });
     assert.equal(silent.status, 0);
     assert.equal(silent.stdout, "");
-    writeSequenceMarker({ tmpRoot: path.join(dir, "tmp"), baselineHead: HEAD, branch: "feat" });
+    writeSequenceMarker({ tmpRoot: path.join(dir, "tmp"), baselineHead: HEAD, branch: "feat", execution: execution(dir) });
     const falsy = spawnSync("node", [...args, "--silent", "--jq", ".condition == \"X\""], { cwd: dir, encoding: "utf8", env });
     assert.equal(falsy.status, 1);
   });

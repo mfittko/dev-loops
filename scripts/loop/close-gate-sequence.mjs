@@ -6,8 +6,9 @@
  * Conditions: HEAD_MOVED (the marker's PR head differs from the marker baseline, so the baseline is
  * obsolete) and FIXER_NEVER_PULLED (the marker names a fixer execution whose work order was never
  * pulled within the dispatch grace, so no fixer ran and no commit on the branch is the fixer's).
- * A live sequence is never closed. Refusals: sequence_absent, sequence_live, fixer_running, abandonment_unproven.
+ * A live sequence is never closed. Refusals: sequence_absent, baseline_unknown, sequence_live, fixer_running, abandonment_unproven.
  */
+import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import path from "node:path";
@@ -24,6 +25,8 @@ export const FIXER_GRACE_MS = 30 * 60 * 1000; // The runner-lock TTL: a dispatch
 
 const USAGE = `usage: close-gate-sequence.mjs --head <marker baseline sha> --repo <owner/name> --pr <number> [--help]\n\n${JQ_OUTPUT_USAGE}`;
 const refuse =(refusal, reason, remedy) => ({ ok: false, refusal, reason, remedy });
+/** True when the sha is a commit object in the local repository. */
+export const localCommitExists = (sha) => spawnSync("git", ["cat-file", "-e", `${sha}^{commit}`], { stdio: "ignore" }).status === 0;
 const mtimeMs = (file) => { try { return statSync(file).mtimeMs; } catch { return null; } };
 
 /** The recorded actor: DEVLOOPS_RUN_ID, else the OS user; a uid without a passwd entry makes userInfo throw, so fall back to "unknown". */
@@ -33,7 +36,7 @@ export const defaultActor = (env = process.env, lookup = userInfo) => {
 };
 
 /** @param {{ tmpRoot: string, head: string, repo?: string, pr?: number, fetchPr?: Function, now?: () => number, actor?: string }} input */
-export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = viewPr, now = Date.now, actor = defaultActor() }) {
+export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = viewPr, now = Date.now, actor = defaultActor(), hasCommit = localCommitExists }) {
   const marker = readSequenceMarker(tmpRoot, head);
   if (!marker) return refuse("sequence_absent", `no sequence marker exists for ${head}`, "Nothing to close here; the push block comes from another marker, so rerun with that marker's head.");
   const { executionIdentity, workOrderRef, outputRef } = marker.execution ?? {};
@@ -64,6 +67,8 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   const owner = /^fixer:([^#:]+)#([0-9]+):/u.exec(workOrderRef ?? "");
   if (owner && (owner[1] !== repo || Number(owner[2]) !== pr)) return refuse("abandonment_unproven", `the marker belongs to ${owner[1]}#${owner[2]}, not ${repo}#${pr}`, "Pass the --repo and --pr the marker names.");
   if (facts.headRefName !== marker.branch) return refuse("abandonment_unproven", `PR #${pr} head branch ${facts.headRefName} is not the marker branch ${marker.branch}`, "Pass the --pr whose head branch the marker names.");
+  // Without a work order ref nothing ties the marker to this repo, so the baseline sha must be a commit here.
+  if (!owner && facts.headRefOid !== head && !hasCommit(head)) return refuse("baseline_unknown", `the marker names no work order ref and its baseline ${head} is not a commit in this repository`, "Run the close from a checkout of the marker's repository, or ask the operator to delete the marker.");
   let condition = null;
   if (facts.headRefOid !== head) condition = "HEAD_MOVED";
   else if (executionIdentity && !receiptFound && now() - (markerMtime ?? now()) >= FIXER_GRACE_MS) condition = "FIXER_NEVER_PULLED";
@@ -75,17 +80,15 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   // A concurrent re-emit rewrote the marker while the PR was read: that is a new sequence, never close it.
   const current = readSequenceMarker(tmpRoot, head);
   if (current?.execution?.executionIdentity !== executionIdentity || mtimeMs(sequenceMarkerPath(tmpRoot, head)) !== markerMtime) return refuse("sequence_live", `the marker for ${head} changed while it was checked`, "Rerun close-sequence; a re-emitted marker starts a live sequence.");
+  const record = { baselineHead: head, executionIdentity: executionIdentity ?? null, condition, actor, closedAt: new Date(now()).toISOString() };
+  // The last pull receipt recheck precedes the record write, so a refused close leaves no record.
   const pulledAfterRead = pulledMeanwhile();
   if (pulledAfterRead) return pulledAfterRead;
   // Record first, marker second: a failed write leaves the marker in place.
-  const record = { baselineHead: head, executionIdentity: executionIdentity ?? null, condition, actor, closedAt: new Date(now()).toISOString() };
   const file = sequenceClosurePath(tmpRoot, head, executionIdentity);
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(`${file}.tmp`, `${JSON.stringify(record, null, 2)}\n`);
   renameSync(`${file}.tmp`, file);
-  // The last check before the removal: a fixer that pulled during the record write still blocks it.
-  const pulledAtRemoval = pulledMeanwhile();
-  if (pulledAtRemoval) return pulledAtRemoval;
   clearSequenceMarker(tmpRoot, head);
   return { ok: true, ...record, recordPath: file };
 }
