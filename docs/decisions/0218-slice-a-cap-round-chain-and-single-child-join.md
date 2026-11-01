@@ -6,7 +6,7 @@ Accepted — 2026-10-30 ([issue 2462](https://github.com/mfittko/dev-loops/issue
 
 Builds on ADR 0197, ADR 0208 and ADR 0213. Accepted records remain unchanged.
 
-Numbering and scope deviation from the issue's Slice A rows: the rows name ADR 0216, but open PR 2997 uses 0217 and the record was renumbered to 0218 to keep the sequence collision-free. The rows also say `--artifact` returns `all_done` when the file parses as JSON. Decision 4 supersedes that wording: the join requires the terminal field or 10 unchanged seconds, and the final-on-write replacement is the follow-up slice on #2462.
+Numbering and scope deviation from the issue's Slice A rows: the rows name ADR 0216, but open PR 2997 uses 0217 and the record was renumbered to 0218 to keep the sequence collision-free. Git and gh show no 0216 record on origin/main and no open PR that uses 0216, so no repository fact explains the skipped number. The number 0218 was set by operator decision on 2026-11-01. The rows also say `--artifact` returns `all_done` when the file parses as JSON. Decision 4 supersedes that wording: the join requires the terminal field or 10 unchanged seconds, and the final-on-write replacement is the follow-up slice on #2462.
 
 ## Context
 
