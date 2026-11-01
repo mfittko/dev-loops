@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { link, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -17,7 +17,7 @@ import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "
 import { captureParsedReviewThreads, findDeltaBlockedFixedReply, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
 import { planBatchReplyTargets } from "./reply-resolve-review-threads.mjs";
 import { buildContainmentMap, isCommitContainedByHead } from "./_commit-containment.mjs";
-import { EXECUTION_IDENTITY_RE, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
+import { EXECUTION_IDENTITY_RE, fixerReportPath, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
@@ -86,6 +86,14 @@ Optional:
                                ok:false (residual_reply_failed, complete:false).
   --check                     Read-only delivery and live-state check; never
                                write a checkpoint or reply/resolve a thread.
+  --report-path <path>         Absolute path of the join report. Valid only with --check
+                               (refused otherwise, and when it equals the
+                               plan's outputRef). The verifier publishes its final result
+                               there once per successful run, last and atomically (temp file, then hard link; an existing report is never
+                               replaced and a later run with the same path refuses): the result with outcome
+                               "complete" or "incomplete", or on a refusal
+                               { ok: false, outcome: "refused", error }. A full-phase order
+                               derives it as <outputRef>.report (joinRef).
   --tmp-root <path>            Root tmp directory for the checkpoint and the pull
                                receipts (default: the main git worktree's tmp/, so
                                a prune of a linked worktree never takes the
@@ -128,6 +136,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
       "head-sha": { type: "string" },
       "fixer-plan": { type: "string" },
       "tmp-root": { type: "string" },
+      "report-path": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -143,6 +152,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
     headSha: undefined,
     fixerPlan: undefined,
     tmpRoot: undefined,
+    reportPath: undefined,
   };
   for (const token of tokens) {
     if (token.kind === "positional") {
@@ -185,11 +195,17 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
     }
+    if (token.name === "report-path") {
+      options.reportPath = requireTokenValue(token, parseError).trim();
+      if (!path.isAbsolute(options.reportPath)) throw parseError("--report-path must be an absolute path; pass <outputRef>.report from the emitted fixer plan (joinRef)");
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const missing = ["repo", "pr", "headSha", "fixerPlan"].filter((k) => options[k] === undefined);
   if (options.check && options.construct) throw parseError("--construct and --check are mutually exclusive");
+  if (options.reportPath !== undefined && !options.check) throw parseError(REPORT_PATH_NEEDS_CHECK_ERROR);
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
   }
@@ -685,7 +701,50 @@ export async function assertDescendantThreadSites({ repo, pr, candidateHead, hea
   }
 }
 
-export async function verifyFixerDisposition(
+const REPORT_PATH_NEEDS_CHECK_ERROR = "--report-path is valid only with --check; pass --check, or drop --report-path";
+
+// Final-on-write join report (ADR 0223): published once per successful step-6 run, last and atomically, so a file at reportPath is always final.
+export async function publishReport(reportPath, report) {
+  const temporary = `${reportPath}.tmp-${process.pid}-${randomUUID()}`;
+  await mkdir(path.dirname(reportPath), { recursive: true });
+  try {
+    await writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    // First write wins: link refuses on EEXIST, so a later --check run cannot replace a report that a join may already have consumed.
+    await link(temporary, reportPath).catch((error) => {
+      if (error?.code === "EEXIST") throw new Error(`--report-path ${reportPath} already holds the final report of an earlier run and is never replaced; the join already consumed it. Read that report, or re-emit the work order for a new joinRef`);
+      throw error;
+    });
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+export async function verifyFixerDisposition(options, deps = {}) {
+  if (options.reportPath === undefined) return verifyFixerDispositionCore(options, deps);
+  if (!options.check) throw new Error(REPORT_PATH_NEEDS_CHECK_ERROR);
+  const planPath = path.resolve(deps.repoRoot ?? process.cwd(), options.fixerPlan);
+  const outputRef = await readFile(planPath, "utf8").then((text) => JSON.parse(text)?.workOrder?.outputRefs?.[0]).catch(() => undefined);
+  if (typeof outputRef !== "string" || outputRef === "") throw new Error(`--report-path needs the emitted fixer plan ${planPath} to be readable JSON with a string workOrder.outputRefs[0]; pass --fixer-plan <the emitted fixer plan> and --report-path <outputRef>.report`);
+  if (!path.isAbsolute(options.reportPath)) throw new Error("--report-path must be an absolute path; pass <outputRef>.report from the emitted fixer plan (joinRef)");
+  // Compare through the real parent directory so a symlinked alias (macOS /tmp vs /private/tmp) cannot name a protected file.
+  const canonical = (file) => path.join(realpathNearestExisting(path.dirname(file)), path.basename(file));
+  const protectedFiles = [planPath, ...(typeof outputRef === "string" ? [outputRef, `${outputRef}.constructed`] : [])];
+  if (protectedFiles.some((file) => canonical(file) === canonical(options.reportPath))) {
+    throw new Error(`--report-path ${options.reportPath} equals the fixer plan or its outputRef, which --construct writes early; pass ${typeof outputRef === "string" ? fixerReportPath(outputRef) : "<outputRef>.report"} (the emitted joinRef)`);
+  }
+  let result;
+  try {
+    result = await verifyFixerDispositionCore(options, deps);
+  } catch (error) {
+    // The original refusal always propagates; a failed publish must not replace it.
+    await publishReport(options.reportPath, { ok: false, outcome: "refused", error: error instanceof Error ? error.message : String(error) }).catch(() => {});
+    throw error;
+  }
+  await publishReport(options.reportPath, { ...result, outcome: result.complete ? "complete" : "incomplete" });
+  return result;
+}
+
+async function verifyFixerDispositionCore(
   options,
   { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot = process.cwd() } = {},
 ) {
