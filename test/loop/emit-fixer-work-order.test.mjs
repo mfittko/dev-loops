@@ -244,6 +244,15 @@ test("a sequence closed as abandoned retires its execution: a late pull is stale
   });
 });
 
+test("an unreadable closure record fails closed as stale_dispatch", async () => {
+  await withFixture(async ({ root, head, files, emit }) => {
+    const unit = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    const { sequenceClosurePath } = await import("@dev-loops/core/loop/fix-push-authority");
+    await mkdir(sequenceClosurePath(path.join(root, "tmp"), head, unit.workOrderRef.split(":").at(-1)), { recursive: true });
+    assert.equal(refusal(pull(unit, root)), "stale_dispatch");
+  });
+});
+
 test("THREAD no_commit and head_moved close an authenticated sequence and allow the next push", async () => {
   const { checkFixPushAuthority } = await import("../../scripts/loop/check-fix-push-authority.mjs");
   for (const move of ["none", "descendant", "amended"]) await withFixture(async ({ root, wt, head, files, emit }) => {

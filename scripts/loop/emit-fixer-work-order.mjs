@@ -633,7 +633,13 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
     contained = true;
   } catch { /* missing branch or head, or a reset/rewritten branch: stale authority */ }
   // A sequence closed as abandoned retires its execution: a late pull of its work order is refused.
-  const sequenceClosed = !closureOnly && await readFile(sequenceClosurePath(resolveGateArtifactTmpRoot(cwd), headSha, executionIdentity)).then(() => true, () => false);
+  // The record sits at the marker baseline, which is the ref head or the review baseline head; only ENOENT means not closed.
+  let sequenceClosed = false;
+  if (!closureOnly) {
+    for (const head of new Set([headSha, ...(baseline ? [baseline.reviewBaselineHead] : [])])) {
+      sequenceClosed ||= await readFile(sequenceClosurePath(resolveGateArtifactTmpRoot(cwd), head, executionIdentity)).then(() => true, (error) => error?.code !== "ENOENT");
+    }
+  }
   const stale = (sequenceClosed && `fixer execution ${executionIdentity} belongs to a gate fix sequence that was closed as abandoned`)
     || (changed.length > 0 && `required fixer source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`)
     || (retired && `fixer execution ${executionIdentity} belongs to a ${order.gate} round at ${headSha} retired as ${retired}`)
