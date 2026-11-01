@@ -443,7 +443,7 @@ const ReviewDiffConfig = z.strictObject({
 // exported function, state writer or guard.
 const ContextExpansionConfig = z.strictObject({
   maxFiles: z.number().int().min(0).default(6).describe("Max files the per-round context expansion adds (importers plus sibling-function files). Default 6; 0 disables the expansion."),
-  maxBytes: z.number().int().min(0).default(98304).describe("Max total bytes the per-round context expansion adds, counted from the sibling-function source and the importer file sizes. Default 98304 (96 KiB)."),
+  maxBytes: z.number().int().min(0).default(98304).describe("Max total bytes the per-round context expansion adds, counted from the sibling-function source and the importer file sizes. Default 98304 (96 KiB); 0 disables the expansion."),
 });
 
 /**

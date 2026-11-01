@@ -260,17 +260,28 @@ The shipped defaults activate these angles. Additional angles are available as o
 
 | Default (active) | Opt-in (add to gates) |
 |---|---|
-| `dry` — duplication | `ocp` — Open/Closed (extension over modification) |
-| `kiss` — over-engineering | `lsp` — Liskov Substitution (subtype contracts) |
-| `yagni` — speculative features | `isp` — Interface Segregation (fat interfaces) |
-| `srp` — Single Responsibility | `dip` — Dependency Inversion (abstractions) |
-| `soc` — Separation of Concerns | `docs` — documentation links, command references, stale docs |
-| `deep` — structural quality / deslop audit | `packaging-runtime` — installers, bundles, copied assets, runtime imports |
-| `scope` — scope compliance (draft gate) | `link-check` — Markdown links, anchors, doc paths |
-| `coverage` — test coverage (draft gate) | `config-drift` — config/schema/docs/runtime disagreement |
-| `correctness` — acceptance criteria (draft gate) | `gate-evidence` — missing/stale gate-review PR evidence |
-| `ci-guard` — CI/workflow reproducibility (draft gate) | `no-op` — ineffective tool or command usage |
-| `contract-surface` — schema/runtime/docs plus CLI help/stdout/stderr drift (draft gate) | `renderer-security` — HTML/attribute/URL escaping and user content |
+| `dry` — duplication | |
+| `kiss` — over-engineering | |
+| `yagni` — speculative features | |
+| `srp` — Single Responsibility | |
+| `soc` — Separation of Concerns | |
+| `deep` — structural quality / deslop audit | |
+| `ocp` — Open/Closed (extension over modification) | |
+| `lsp` — Liskov Substitution (subtype contracts) | |
+| `isp` — Interface Segregation (fat interfaces) | |
+| `dip` — Dependency Inversion (abstractions) | |
+| `docs` — documentation links, command references, stale docs | |
+| `scope` — scope compliance (draft gate) | |
+| `coverage` — test coverage (draft gate) | |
+| `correctness` — acceptance criteria (draft gate) | |
+| `ci-guard` — CI/workflow reproducibility (draft gate) | |
+| `contract-surface` — schema/runtime/docs plus CLI help/stdout/stderr drift (draft gate) | |
+| `link-check` — Markdown links, anchors, doc paths | |
+| `config-drift` — config/schema/docs/runtime disagreement | |
+| `gate-evidence` — missing/stale gate-review PR evidence | |
+| `no-op` — ineffective tool or command usage | |
+| `packaging-runtime` — installers, bundles, copied assets, runtime imports | |
+| `renderer-security` — HTML/attribute/URL escaping and user content | |
 | `input-validation` — CLI/API args, repo slugs, IDs, sentinels | |
 | `state-concurrency` — state files, locks, polling/process cleanup | |
 | `determinism` — ordering, tie-breakers, strict stubs, env/time independence | |

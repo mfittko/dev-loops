@@ -442,7 +442,7 @@ test("resolveDynamicAngles: catalog angles + ALWAYS_INCLUDE unchanged when consu
 test("resolveDynamicAngles: adding state-concurrency to LOGIC_CHANGE does not add a fan-out unit", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "dyn-angles-units-"));
   try {
-    const { config } = await loadDevLoopConfigStrict({ cwd: dir });
+    const { config } = await loadDevLoopConfigStrict({ repoRoot: dir });
     const pool = config.gates.draft.angles.map((a) => a.name);
     const { recommendedAngles } = resolveDynamicAngles({ configuredAngles: pool, changeCategories: [ChangeCategory.LOGIC_CHANGE] });
     assert.ok(recommendedAngles.includes("state-concurrency"));

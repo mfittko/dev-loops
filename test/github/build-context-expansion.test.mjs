@@ -188,13 +188,13 @@ test("a quoted non-ASCII diff path is decoded", async () => {
   });
 });
 
-test("importers that are generated or symlinks are never selected", async () => {
+test("generated importers are never selected; symlinked importers are excluded by the repo listing", async () => {
   await withRepo({ ...repoFiles, "dist/gen.mjs": 'import { writeState } from "../src/shared.mjs";\n' }, async (root) => {
     await symlink("use-a.mjs", path.join(root, "src/link.mjs"));
     const bundle = await buildAdjacentBundle({ changedFiles: ["src/shared.mjs"], repoRoot: root, diffText: diffFor("src/shared.mjs", 2) });
     const paths = bundle.expansion.files.map((f) => f.path);
     assert.ok(!paths.includes("dist/gen.mjs"));
-    assert.ok(!paths.includes("src/link.mjs"));
+    assert.ok(!paths.includes("src/link.mjs"), "symlink excluded by the repo listing (the lstat guard is defense in depth)");
   });
 });
 
@@ -210,5 +210,53 @@ test("a scoped variant lists the expansion files and the dropped files", async (
       assert.match(text, /src\/use-b\.mjs \(importer\)/);
       assert.match(text, /src\/use-a\.mjs \(importer\)/);
     }
+  });
+});
+
+const declDiff = (src, line) => ({ src, diff: diffFor("src/d.mjs", line) });
+
+test("DECL_RE accepts function and arrow-const declaration forms and rejects parenthesized constants", async () => {
+  const accepted = [
+    "export const f = (a, b) => a + b;",
+    "export const g = async (x) => x;",
+    "export function h(x) {",
+    "export const k = function (x) {",
+    "export const m = x => x;",
+  ];
+  const rejected = ["export const LIMIT = (1 << 20);", "export const r = (await f());"];
+  for (const [forms, expected] of [[accepted, 1], [rejected, 0]]) {
+    for (const form of forms) {
+      const { src, diff } = declDiff(`${form}\n  body\n}\n`, 1);
+      await withRepo({ "src/d.mjs": src, "src/use.mjs": 'import { x } from "./d.mjs";\n' }, async (root) => {
+        const b = await buildAdjacentBundle({ changedFiles: ["src/d.mjs"], repoRoot: root, diffText: diff });
+        assert.equal(b.expansion.files.filter((f) => f.kind === "importer").length, expected, form);
+      });
+    }
+  }
+});
+
+const removalDiff = (removed) => [
+  "diff --git a/src/s.mjs b/src/s.mjs", "--- a/src/s.mjs", "+++ b/src/s.mjs", "@@ -1,7 +1,3 @@",
+  " function p() {", "   return 1;", " }", ...removed.map((l) => `-${l}`), "",
+].join("\n");
+
+test("removing an exported function or an export-list entry selects the importers", async () => {
+  const files = { "src/s.mjs": "function p() {\n  return 1;\n}\n", "src/use.mjs": 'import { gone } from "./s.mjs";\ngone();\n' };
+  for (const removed of [["", "export function gone() {", "  return 2;", "}"], ["export { gone };"]]) {
+    await withRepo(files, async (root) => {
+      const b = await buildAdjacentBundle({ changedFiles: ["src/s.mjs"], repoRoot: root, diffText: removalDiff(removed) });
+      assert.deepEqual(b.expansion.files.map((f) => f.path), ["src/use.mjs"], removed.join("|"));
+    });
+  }
+});
+
+test("a dropped siblings entry keeps its names and the briefing renders them", async () => {
+  await withRepo(repoFiles, async (root) => {
+    const adjacentCode = await buildAdjacentBundle({ changedFiles: ["src/shared.mjs"], repoRoot: root, diffText: diffFor("src/shared.mjs", 2), expansion: { maxFiles: 6, maxBytes: 20 } });
+    assert.deepEqual(adjacentCode.expansion.files, []);
+    const siblings = adjacentCode.expansion.dropped.find((d) => d.kind === "siblings");
+    assert.deepEqual(siblings.names, ["helper", "readState"]);
+    const text = renderBriefingEvidence({ repo: "o/r", pr: 1, gate: "draft_gate", headSha: "abc1234", prBody: "", changedFiles: ["src/shared.mjs"], adjacentCode }).text;
+    assert.match(text, /src\/shared\.mjs \(siblings: helper, readState\)/);
   });
 });

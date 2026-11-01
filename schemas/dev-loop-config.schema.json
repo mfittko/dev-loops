@@ -1249,7 +1249,7 @@
             },
             "maxBytes": {
               "default": 98304,
-              "description": "Max total bytes the per-round context expansion adds, counted from the sibling-function source and the importer file sizes. Default 98304 (96 KiB).",
+              "description": "Max total bytes the per-round context expansion adds, counted from the sibling-function source and the importer file sizes. Default 98304 (96 KiB); 0 disables the expansion.",
               "type": "integer",
               "minimum": 0
             }

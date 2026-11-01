@@ -364,8 +364,10 @@ export const DEFAULT_EXPANSION_CAPS = { maxFiles: 6, maxBytes: 98304 };
 // arrow-const declarations only; a function ends at the next column-0 line that
 // is not a closing `}`/`)`/`]` (class methods, nested exports and column-0 lines
 // inside template literals are not understood). `export { a, b }` lists and
-// `export default function name` are covered. Upgrade path: a real JS parser.
-const DECL_RE = /^(export\s+(?:default\s+)?)?(?:async\s+function\s*\*?\s*|function\s*\*?\s*|const\s+)([A-Za-z_$][\w$]*)(?=\s*(?:\(|=\s*(?:async\s*)?(?:\(|function\b|[A-Za-z_$][\w$]*\s*=>)))/;
+// `export default function name` are covered. An arrow const needs its whole
+// parameter list on one line, without nested parentheses (a multi-line or
+// default-call parameter list is missed). Upgrade path: a real JS parser.
+const DECL_RE = /^(export\s+(?:default\s+)?)?(?:async\s+function\s*\*?\s*|function\s*\*?\s*|const\s+)([A-Za-z_$][\w$]*)(?=\s*(?:\(|=\s*(?:async\s*)?(?:\([^()]*\)\s*=>|function\b|[A-Za-z_$][\w$]*\s*=>)))/;
 const EXPORT_LIST_RE = /^export\s*\{([^}]*)\}/;
 // ponytail: name heuristic for state writers and guards, anchored to the start
 // of the name at a camelCase/underscore boundary; add a marker comment
@@ -373,7 +375,8 @@ const EXPORT_LIST_RE = /^export\s*\{([^}]*)\}/;
 const WRITER_OR_GUARD_RE = /^(write|save|persist|set|delete|remove|guard|assert|ensure|require|refuse|validate)(?![a-z])/;
 
 /**
- * New-side line numbers touched per file. A removal is credited to the
+ * Per file: the new-side line numbers touched and the text of removed lines.
+ * A removal is credited to the
  * preceding new-side line (a removal at a function tail stays in that function).
  * Ceiling: a deleted file (`+++ /dev/null`) is skipped; its source is gone.
  */
@@ -382,19 +385,19 @@ function changedLinesByFile(diffText) {
   let file = null;
   let inHunk = false;
   let n = 0;
-  const mark = (line) => out.get(file)?.add(line);
+  const mark = (line) => out.get(file)?.lines.add(line);
   for (const line of String(diffText ?? "").split("\n")) {
     if (line.startsWith("diff --git ")) { inHunk = false; file = null; continue; }
     if (!inHunk && line.startsWith("+++ ")) {
       file = line.includes("/dev/null") ? null : decodeGitDiffPathToken(line.slice(4)).replace(/^.\//, "");
-      if (file) out.set(file, new Set());
+      if (file) out.set(file, { lines: new Set(), removed: [] });
       continue;
     }
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line);
     if (hunk) { inHunk = true; n = Number(hunk[1]); continue; }
     if (!inHunk || !file) continue;
     if (line.startsWith("+")) { mark(n); n += 1; }
-    else if (line.startsWith("-")) mark(n - 1);
+    else if (line.startsWith("-")) { mark(n - 1); out.get(file)?.removed.push(line.slice(1)); }
     else if (line.startsWith(" ")) n += 1;
   }
   return out;
@@ -440,8 +443,8 @@ async function selectExpansion({ changed, diffText, repoRoot, importerIndex, cap
     else candidates.set(key, entry);
   };
   for (const file of changed) {
-    const lines = touched.get(file);
-    if (!lines || !isSourceFile(file) || !existing.has(file) || classifyStripReason(file)) continue;
+    const entry = touched.get(file);
+    if (!entry || !isSourceFile(file) || !existing.has(file) || classifyStripReason(file)) continue;
     let source;
     try {
       source = await readFile(path.resolve(repoRoot, file), "utf8");
@@ -449,10 +452,12 @@ async function selectExpansion({ changed, diffText, repoRoot, importerIndex, cap
       continue;
     }
     const fns = topLevelFunctions(source);
-    const hit = fns.filter((f) => (f.exported || WRITER_OR_GUARD_RE.test(f.name)) && [...lines].some((l) => l >= f.start && l <= f.end));
-    if (hit.length === 0) continue;
+    const hit = fns.filter((f) => (f.exported || WRITER_OR_GUARD_RE.test(f.name)) && [...entry.lines].some((l) => l >= f.start && l <= f.end));
+    // A removed export is gone from the new-side source; its importers are what it breaks.
+    const removedExport = entry.removed.some((t) => DECL_RE.exec(t)?.[1] || EXPORT_LIST_RE.test(t));
+    if (hit.length === 0 && !removedExport) continue;
     const siblings = fns.filter((f) => !hit.includes(f));
-    if (siblings.length > 0) {
+    if (hit.length > 0 && siblings.length > 0) {
       add(`${file}\0siblings`, { path: file, kind: "siblings", relatedTo: [file], names: siblings.map((f) => f.name).sort(), bytes: siblings.reduce((n, f) => n + f.bytes, 0) });
     }
     for (const imp of importerIndex.get(file) ?? []) {
@@ -477,7 +482,7 @@ async function selectExpansion({ changed, diffText, repoRoot, importerIndex, cap
       files.push(c);
       total += c.bytes;
     } else {
-      dropped.push({ path: c.path, kind: c.kind, bytes: c.bytes });
+      dropped.push({ path: c.path, kind: c.kind, ...(c.names ? { names: c.names } : {}), bytes: c.bytes });
     }
   }
   return { maxFiles: caps.maxFiles, maxBytes: caps.maxBytes, files, dropped };
@@ -498,9 +503,14 @@ async function selectExpansion({ changed, diffText, repoRoot, importerIndex, cap
  *                 relatedTo: [..] }],                          // sorted by path
  *     truncated: [{ path, bytes, includedBytes }],            // sorted by path
  *     missing: [string],                                      // sorted
+ *     expansion: { maxFiles, maxBytes,                        // always emitted
+ *                  files: [{ path, kind: "siblings"|"importer", relatedTo: [..],
+ *                            names?, bytes }],
+ *                  dropped: [{ path, kind, names?, bytes }] }, // over the caps
  *   }
  *
- * Deterministic: same (repoRoot contents + changedFiles) → identical bundle.
+ * Deterministic: same (repoRoot contents + changedFiles + diffText + expansion
+ * caps) → identical bundle.
  *
  * @param {object} input
  * @param {string[]} input.changedFiles — repo-relative paths from the diff

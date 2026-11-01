@@ -1361,6 +1361,34 @@ test("buildGateContext attaches a deterministic adjacentCode bundle (imports + i
   }
 });
 
+test("buildGateContext forwards config.gates.contextExpansion to adjacentCode.expansion", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
+  try {
+    await mkdir(path.join(repoRoot, "src"), { recursive: true });
+    await writeFile(path.join(repoRoot, "src/changed.mjs"), "export function changed() {\n  return 1;\n}\n", "utf8");
+    await writeFile(path.join(repoRoot, "src/caller.mjs"), 'import { changed } from "./changed.mjs";\nchanged();\n', "utf8");
+    const config = draftConfig({ dynamicAngles: false });
+    config.gates.contextExpansion = { maxFiles: 1 };
+    const result = await buildGateContext(
+      {
+        config,
+        gate: "draft_gate",
+        diff: {
+          nameStatusOutput: "M\tsrc/changed.mjs\n",
+          diffOutput: "diff --git a/src/changed.mjs b/src/changed.mjs\n--- a/src/changed.mjs\n+++ b/src/changed.mjs\n@@ -1,1 +1,1 @@\n-old\n+new\n",
+        },
+        repo: "owner/repo",
+        pr: 31,
+        headSha: "abc1234567890",
+      },
+      { repoRoot },
+    );
+    assert.equal(result.artifact.adjacentCode.expansion.maxFiles, 1);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("buildGateContext omits adjacentCode when there are no changed files (backward-compatible shape)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-"));
   try {

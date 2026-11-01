@@ -1193,22 +1193,23 @@ function renderTokenDisciplineSection(contextPath) {
   ].join("\n");
 }
 
-/**
- * Render the "## Reviewer sibling sweep" section: the one sibling-defect
- * clause owned by GATE-REVIEW-SIBLING-SWEEP in the gate-review sub-loop
- * contract. Shared by the full prefix and every scoped variant so both emit it
- * byte-identically.
- */
+/** Push the expansion's kept and dropped file lines (with sibling names) onto the briefing lines. */
 function pushExpansionLines(lines, expansion) {
   if (!expansion || (expansion.files.length === 0 && expansion.dropped.length === 0)) return;
   lines.push(`Expansion files (${expansion.files.length}; cap ${expansion.maxFiles} files, ${expansion.maxBytes} bytes):`);
   pushPathListLines(lines, expansion.files.map((f) => ({ path: f.path, label: `${f.path} (${f.kind}${f.names ? `: ${f.names.join(", ")}` : ""})` })));
   if (expansion.dropped.length > 0) {
     lines.push(`Dropped by the expansion cap (${expansion.dropped.length}):`);
-    pushPathListLines(lines, expansion.dropped.map((f) => ({ path: f.path, label: `${f.path} (${f.kind})` })));
+    pushPathListLines(lines, expansion.dropped.map((f) => ({ path: f.path, label: `${f.path} (${f.kind}${f.names ? `: ${f.names.join(", ")}` : ""})` })));
   }
 }
 
+/**
+ * Render the "## Reviewer sibling sweep" section: the one sibling-defect
+ * clause owned by GATE-REVIEW-SIBLING-SWEEP in the gate-review sub-loop
+ * contract. Shared by the full prefix and every scoped variant so both emit it
+ * byte-identically.
+ */
 function renderSiblingSweepSection() {
   return [
     "## Reviewer sibling sweep",
