@@ -513,17 +513,20 @@ Failure behavior:
 Durable one-runner-per-PR coordination helper.
 
 Subcommands:
-- `status` — inspect current ownership record for one PR
+- `status` — inspect current ownership record for one PR; also emits `stale` (boolean) and `staleReason` (string) for the active owner
 - `claim` — claim ownership when no active runner exists; otherwise fail closed with machine-readable conflict details
-- `takeover` — explicit replacement path that records prior/new run ids; it reads no detector verdict, so its `taken_over` result carries no `recovery` field
+- `takeover` — explicit replacement path that records prior/new run ids. It reads liveness first and refuses a live non-stale foreign owner with `active_run_exists` (exit 1, JSON on stderr, no state write). It pins the stale claim it read (owner run id and claim generation), so an owner that heartbeats before the locked write is not displaced. It reads no detector verdict, so its `taken_over` result carries no `recovery` field. A missing run id gives `run_id_required` regardless of owner state
 - `assert` — verify the current run still owns the PR; `--require-existing` fails closed when async pre-merge ownership proof is missing
 - `release` — clear ownership when the active run is done
 - `handoff` — atomically record the verified owner's exit signal and clear its claim
 
 Explicit completion handoff:
-- `handoff --repo <owner/name> --pr <number> [--run-id <id>]` requires the existing
-  runtime identity: Pi/Claude run context or a verified native Codex child session. An
-  explicit `--run-id` only asserts that identity; it cannot substitute for missing evidence.
+- `handoff --repo <owner/name> --pr <number> [--run-id <id>]` uses the verified runtime
+  identity when one exists (Pi/Claude run context or a verified native Codex child session);
+  a mismatching `--run-id` is `ownership_lost`. With no verified id, `--run-id <the id used at
+  claim>` is the identity and releases the claim only when it equals the active owner. Native
+  Codex still requires its verified thread identity; an explicit `--run-id` alone is refused
+  with `run_id_required`. With neither id, `run_id_required` names the remedy.
 - Returns `handoff_recorded`, or `handoff_noop` without a state write when no active owner
   remains. Both exit 0 with JSON stdout containing `repo`, `pr`, `runId`, `activeRun: null`,
   `previousRun`, `exitSignals` and `filePath`. Unverified identity (`run_id_required`) or

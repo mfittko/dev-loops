@@ -8,11 +8,13 @@ import { resolveRunId as resolveEnvRunId } from "@dev-loops/core/loop/run-contex
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import {
   assertRunnerOwnership,
+  buildConflict,
   claimRunnerOwnership,
   handoffRunnerOwnership,
   loadRunnerCoordinationState,
   releaseRunnerOwnership,
 } from "./_pr-runner-coordination.mjs";
+import { describeRunnerLiveness, resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
 const USAGE = `Usage:
   pr-runner-coordination.mjs status --repo <owner/name> --pr <number>
   pr-runner-coordination.mjs claim --repo <owner/name> --pr <number> [--run-id <id>]
@@ -23,7 +25,11 @@ const USAGE = `Usage:
 Durable one-runner-per-PR coordination helper.
 If --run-id is omitted for claim/assert/release/takeover, DEVLOOPS_RUN_ID is used
 (via DEVLOOPS_RUN_ID).
-handoff requires verified runtime identity; --run-id only asserts that identity.
+status reports stale (true|false) and staleReason for the active owner.
+takeover refuses a live (non-stale) foreign owner.
+handoff uses the verified runtime identity when one exists (a mismatching --run-id is
+ownership_lost). Without one, --run-id <the id used at claim> is the identity and
+releases the claim only when it equals the active owner.
 Output:
   stdout: { "ok": true, ... }
   stderr: { "ok": false, "error": "...", ... }
@@ -116,6 +122,7 @@ function resolveRunId(explicitRunId, env) {
 export async function runPrRunnerCoordination(options, { env = process.env, cwd = process.cwd() } = {}) {
   if (options.command === "status") {
     const { filePath, state } = await loadRunnerCoordinationState({ repo: options.repo, pr: options.pr, cwd });
+    const { stale, staleReason } = describeRunnerLiveness(state, { maxAgeMs: resolveStaleRunnerMaxAgeMs({}, env) });
     return {
       ok: true,
       command: "status",
@@ -123,17 +130,58 @@ export async function runPrRunnerCoordination(options, { env = process.env, cwd 
       pr: options.pr,
       filePath,
       state,
+      stale,
+      staleReason,
     };
   }
   if (options.command === "handoff") {
     return handoffRunnerOwnership({ repo: options.repo, pr: options.pr, runId: options.runId, env, cwd });
   }
   const runId = resolveRunId(options.runId, env);
+  const maxAgeMs = resolveStaleRunnerMaxAgeMs({}, env);
   if (options.command === "claim") {
-    return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "claim", cwd });
+    return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "claim", cwd, maxAgeMs });
   }
   if (options.command === "takeover") {
-    return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "takeover", cwd });
+    // A missing run id is refused before the liveness pre-check, so the error does not depend on owner state.
+    if (!runId) {
+      return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "takeover", cwd });
+    }
+    // Refuse a live non-stale foreign owner before any write (no history entry).
+    const { state, filePath } = await loadRunnerCoordinationState({ repo: options.repo, pr: options.pr, cwd });
+    const active = state?.activeRun;
+    const { stale, staleReason } = describeRunnerLiveness(state, { maxAgeMs: resolveStaleRunnerMaxAgeMs({}, env) });
+    if (active && active.runId !== runId && !stale) {
+      return buildConflict({
+        error: "active_run_exists",
+        repo: state.target.repo,
+        pr: state.target.pr,
+        runId,
+        activeRun: active,
+        filePath,
+        exitSignals: state.exitSignals,
+        message: `Takeover refused: ${staleReason}. Wait for it or ask the operator.`,
+      });
+    }
+    // No owner at the pre-read: claim mode refuses an owner that appears before the locked write.
+    if (!active) {
+      return claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId, mode: "claim", cwd, maxAgeMs });
+    }
+    // The observed owner (foreign or own) is pinned (run id and generation; a missing timestamp pins as null)
+    // so a heartbeat or a new claim before the locked write is not displaced.
+    return claimRunnerOwnership({
+      repo: options.repo,
+      pr: options.pr,
+      runId,
+      mode: "takeover",
+      cwd,
+      maxAgeMs,
+      expectPreviousRunId: active.runId,
+      expectPreviousClaim: {
+        claimedAt: typeof active.claimedAt === "string" ? active.claimedAt : null,
+        updatedAt: typeof active.updatedAt === "string" ? active.updatedAt : null,
+      },
+    });
   }
   if (options.command === "assert") {
     return assertRunnerOwnership({
@@ -142,6 +190,7 @@ export async function runPrRunnerCoordination(options, { env = process.env, cwd 
       runId,
       requireExisting: options.requireExisting,
       cwd,
+      maxAgeMs,
     });
   }
   if (options.command === "release") {
