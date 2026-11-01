@@ -3103,6 +3103,31 @@ test("renderBriefingPrefix and renderScopedBriefingVariant: the Reviewer token d
   }
 });
 
+const SIBLING_SWEEP_CLAUSE = "After a finding in a function, check the opposite direction, concurrent invocation and alternate input forms for that function, and check that a fix covers every call site.";
+
+test("sibling sweep: the clause and its rule ID exist once in the contract and the brief emits them byte-identically in the full prefix and every scoped variant", async () => {
+  const contract = await readFile(path.resolve(import.meta.dirname, "../../skills/docs/gate-review-sub-loop-contract.md"), "utf8");
+  assert.equal(contract.split("<!-- rule: GATE-REVIEW-SIBLING-SWEEP -->").length - 1, 1, "rule marker once");
+  assert.equal(contract.split(SIBLING_SWEEP_CLAUSE).length - 1, 1, "clause text once");
+  const extractSection = (text) => {
+    const start = text.indexOf("## Reviewer sibling sweep");
+    return start < 0 ? "" : text.slice(start, text.indexOf("\n## ", start));
+  };
+  const { text: fullText } = renderBriefingPrefix(renderInput());
+  const fullSection = extractSection(fullText);
+  assert.ok(fullSection.includes(SIBLING_SWEEP_CLAUSE), "full prefix carries the clause");
+  assert.ok(fullSection.includes("GATE-REVIEW-SIBLING-SWEEP"), "full prefix cites the rule ID");
+  for (const scope of GATE_ANGLE_SCOPES.filter((s) => s !== "full")) {
+    const { text } = renderScopedBriefingVariant(scope, {
+      repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
+      evidencePath: "tmp/x.briefing-evidence.txt",
+      contextPath: renderInput().contextPath,
+      diffOutput: "diff --git a/docs/a.md b/docs/a.md\nindex 111..222 100644\n--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1 +1 @@\n-old\n+new\n",
+    });
+    assert.equal(extractSection(text), fullSection, `${scope}: sibling sweep matches the full prefix`);
+  }
+});
+
 test("renderBriefingEvidence and renderScopedBriefingVariant: the Cap-round residue section is byte-identical across the full evidence file and every scoped variant, and absent without residue", () => {
   const capRoundResidue = [{ fingerprint: "abc123", disposition: "act", file: "src/a.mjs", line: 4, title: "Guard\nis missing" }];
   const extractSection = (text) => {
@@ -4041,6 +4066,10 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior you already read there.",
       "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
       "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
+      "",
+      "## Reviewer sibling sweep",
+      "",
+      `${SIBLING_SWEEP_CLAUSE} Rule \`GATE-REVIEW-SIBLING-SWEEP\` in skills/docs/gate-review-sub-loop-contract.md.`,
       "",
       "## Required reads",
       "",

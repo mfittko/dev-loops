@@ -1231,6 +1231,20 @@ function renderTokenDisciplineSection(contextPath) {
 }
 
 /**
+ * Render the "## Reviewer sibling sweep" section: the one sibling-defect
+ * clause owned by GATE-REVIEW-SIBLING-SWEEP in the gate-review sub-loop
+ * contract. Shared by the full prefix and every scoped variant so both emit it
+ * byte-identically.
+ */
+function renderSiblingSweepSection() {
+  return [
+    "## Reviewer sibling sweep",
+    "",
+    "After a finding in a function, check the opposite direction, concurrent invocation and alternate input forms for that function, and check that a fix covers every call site. Rule `GATE-REVIEW-SIBLING-SWEEP` in skills/docs/gate-review-sub-loop-contract.md.",
+  ].join("\n");
+}
+
+/**
  * Render the "## Validation results at this head" section appended to a
  * rendered briefing (full prefix or scoped variant) when a validation-results
  * path was threaded in. Extracted so both renderers emit byte-identical text
@@ -1332,6 +1346,8 @@ export function renderBriefingPrefix({
   lines.push(renderSourceReadInvariantSection(worktreeRoot));
   lines.push("");
   lines.push(renderTokenDisciplineSection(contextPath));
+  lines.push("");
+  lines.push(renderSiblingSweepSection());
   lines.push("");
   lines.push(renderRequiredReadsSection(requiredReads, worktreeRoot));
   return { text: lines.join("\n") + "\n" };
@@ -1611,6 +1627,8 @@ export function renderScopedBriefingVariant(scope, {
     lines.push("");
   }
   lines.push(renderTokenDisciplineSection(contextPath));
+  lines.push("");
+  lines.push(renderSiblingSweepSection());
   lines.push("");
   lines.push("## PR body");
   lines.push("");

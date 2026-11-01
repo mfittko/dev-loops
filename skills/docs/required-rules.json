@@ -534,6 +534,11 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-REVIEW-SIBLING-SWEEP",
+      "enforcement": "runtime",
+      "enforcementNote": "write-gate-context.mjs emits the clause as the Reviewer sibling sweep section of the full prefix and every scoped variant; a test pins the byte-identical text"
+    },
+    {
       "id": "GATE-SELF-HOST-EXPAND-CONTRACT",
       "enforcement": "doc"
     },
