@@ -343,6 +343,15 @@ function describeAcceptedCiState(ciStatus, preApprovalRequireCi) {
   return "CI not required by config";
 }
 
+// Shared remedy text for a capped PR with zero threads and failing or unconfirmed required CI.
+function buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha }) {
+  const prefix = `round_cap_reached at ${copilotReviewRoundCount}/${maxCopilotRounds}`;
+  const head = `at head ${currentHeadSha ?? "unknown"} and zero unresolved threads`;
+  return ciStatus === "failure"
+    ? `${prefix} with failing CI (required) ${head}: fix the failing required check at the head and push, then re-run gate-coordination.`
+    : `${prefix} with required CI only credibly green (unconfirmed) ${head}: run wait-pr-checks.mjs for the head to confirm CI, then re-run gate-coordination.`;
+}
+
 function buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciStatus, preApprovalRequireCi, ciDescriptor }) {
   // One rule serves both the reason string and this note. A branch whose CI
   // acceptance differs from describeAcceptedCiState (the strict-green grant
@@ -853,6 +862,7 @@ export const ADR_TRIPWIRE_REMEDIES = Object.freeze([
 
 /** The one failed cap-round-fixed condition (`resolveCapRoundFixed` `onFailure`, ADR 0218) and its remedy. */
 const CAP_ROUND_REFUSAL = Object.freeze({
+  baseline_orphaned: "Condition baseline_orphaned: the cap-round baseline is not an ancestor of the current head (a rebase rewrote it), so no clearing record can bind to this head. Remedy: push the head to a new branch that keeps the issue slug (`git push origin HEAD:<new-branch>`), record a pre-PR review on the new branch head (`node <dev-loops-package-root>/cli/index.mjs loop pre-pr-review ...`) before `pr create`, run `node <dev-loops-package-root>/cli/index.mjs pr create --head <new-branch> --allow-replacement-pr <this PR number>` while this PR is still open, then close this PR (gate history restarts at round 1); do not rebase a PR that reached the cap round, merge the base instead.",
   no_clearing_record: "Condition no_clearing_record: no sealed clearing delta record exists for the cap-round baseline. Remedy: complete the cap round's fixer pass and run `check-pre-push-delta.mjs --result` for that baseline.",
   unsealed_record: "Condition unsealed_record: the delta record for the cap-round baseline carries no valid seal. Remedy: rerun `check-pre-push-delta.mjs --result` for that baseline so the writer seals it; never edit the record.",
   items_do_not_cover: "Condition items_do_not_cover: the clearing record's items do not cover the cap round's act refs (it may belong to another route). Remedy: rerun the pre-push delta on the cap round's act list so every act ref is resolved.",
@@ -1982,9 +1992,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-        reason: ciStatus === "crediblyGreen"
-          ? "The Copilot round cap is exhausted, but the current head has unconfirmed CI (credibly green), so gate progression remains blocked until CI is confirmed green."
-          : "The Copilot round cap is exhausted, but the current head still has failing CI, so gate progression remains blocked until the failing checks are fixed and revalidated.",
+        reason: buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha }),
         mergeStateStatus,
         conflictFiles,
           refinementArtifact,
@@ -2118,17 +2126,19 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // (it also accepts `crediblyGreen`): whenever this branch's narrower
   // predicate and zero unresolved threads hold, the interpreter has already
   // classified the snapshot ROUND_CAP_CLEAN_FALLBACK, never ROUND_CAP_REACHED
-  // (see the equivalence test in pr-gate-coordination.test.mjs). This branch
-  // is therefore unreachable through the shipped callers — it is pure
+  // (see the equivalence test in pr-gate-coordination.test.mjs). The grant
+  // sub-branch below (zero threads plus confirmed-green CI) is therefore
+  // unreachable through the shipped callers — it is pure
   // defense-in-depth, demanded by the corrected AC so the three
   // fields can never disagree if a future caller hands the evaluator a
   // round_cap_reached label alongside facts that satisfy the grant. The
   // predicate intentionally mirrors every other pre-approval CI boundary in
   // this file (success, or CI not required) — `crediblyGreen` is unconfirmed
   // CI and stays blocked here exactly as it does everywhere else. Any
-  // other combination (threads still unresolved, an unknown thread count, or
-  // CI not confirmed green) falls through unchanged to the generic default
-  // below, preserving today's blocked behavior exactly.
+  // other combination, which IS reachable (wait_for_ci, thread route, failure
+  // routes), falls to GATE-EXEC-ROUND-CAP-THREAD-ROUTE below
+  // (pending CI waits; unresolved threads take the fix route, whatever the
+  // CI state), and the rest to the generic default.
   if (effectiveLifecycleState === STATE.ROUND_CAP_REACHED && roundCapReached) {
     const ciConfirmedGreen = ciStatus === "success" || !preApprovalRequireCi;
     // ciConfirmedGreen above is only true when ciStatus is literally "success"
@@ -2237,6 +2247,71 @@ function evaluatePrGateCoordinationCore(input = {}) {
         conflictFiles,
         refinementArtifact,
         gateEvidenceNote: buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopilotRounds, ciDescriptor: ciClause }),
+        copilotReviewRoundCount,
+      });
+    }
+
+    // GATE-EXEC-ROUND-CAP-THREAD-ROUTE: the grant did not hold, so name the
+    // agent-runnable remedy instead of falling through to a remedy-less
+    // report_blocked. Pending CI waits; unresolved threads go through the
+    // fix/reply-resolve route. No new Copilot cycle is legal past the cap.
+    // Unresolved threads take precedence; wait_for_ci stays allowed alongside them.
+    const capThreads = unresolvedThreadCount > 0;
+    const ciUnsettled = preApprovalRequireCi && (ciStatus === "pending" || ciStatus === "none");
+    const capPending = !capThreads && ciUnsettled;
+    if (capPending || capThreads) {
+      const capActions = capThreads
+        ? [PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS, ...(ciUnsettled ? [PR_CHECKPOINT_ACTION.WAIT_FOR_CI] : [])]
+        : [PR_CHECKPOINT_ACTION.WAIT_FOR_CI];
+      pushUnique(allowedNextActions, capActions);
+      pushUnique(forbiddenActions, postDraftForbidden);
+      pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW]);
+      return buildResult({
+        repo: input.repo ?? null,
+        pr: Number.isInteger(input.pr) ? input.pr : null,
+        currentHeadSha,
+        lifecycleState: capPending ? STATE.WAITING_FOR_CI : effectiveLifecycleState,
+        loopDisposition: capPending ? DISPOSITION.PENDING : DISPOSITION.UNRESOLVED_FEEDBACK,
+        gateBoundary: capPending ? PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW : PR_CHECKPOINT.FEEDBACK_RESOLUTION,
+        draftGateAlreadySatisfied,
+        draftGate,
+        preApprovalGate,
+        allowedNextActions,
+        forbiddenActions,
+        nextAction: capActions[0],
+        reason: capPending
+          ? `GATE-EXEC-ROUND-CAP-THREAD-ROUTE refuses a new Copilot cycle: the round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}) and CI at head ${currentHeadSha ?? "unknown"} is ${ciStatus}; wait for CI to settle, then re-run gate-coordination (zero unresolved threads, green CI and Copilot convergence, or no current-head Copilot review, open the \`run_pre_approval_gate\` route).`
+          : `GATE-EXEC-ROUND-CAP-THREAD-ROUTE refuses a new Copilot cycle: the round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}) with ${unresolvedThreadCount} unresolved thread(s); no new Copilot cycle is legal past the cap. Address the feedback and reply/resolve the threads, then re-run gate-coordination${ciStatus === "success" ? " (resolved threads, green CI and Copilot convergence, or no current-head Copilot review, open the `run_pre_approval_gate` route)" : !preApprovalRequireCi ? " (resolved threads and Copilot convergence, or no current-head Copilot review, open the `run_pre_approval_gate` route; CI is not required)" :` (CI at the head is ${ciStatus ?? "unknown"}; it must also be green before \`run_pre_approval_gate\`)`}.`,
+        mergeStateStatus,
+        conflictFiles,
+        refinementArtifact,
+        copilotReviewRoundCount,
+      });
+    }
+
+    // Zero threads with failing or unconfirmed required CI: keep report_blocked
+    // but name the fact-matched remedy (a bare re-resolve would loop).
+    if (preApprovalRequireCi && unresolvedThreadCount === 0 && (ciStatus === "failure" || ciStatus === "crediblyGreen")) {
+      pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPORT_BLOCKED]);
+      pushUnique(forbiddenActions, postDraftForbidden);
+      pushUnique(forbiddenActions, [PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE]);
+      return buildResult({
+        repo: input.repo ?? null,
+        pr: Number.isInteger(input.pr) ? input.pr : null,
+        currentHeadSha,
+        lifecycleState: effectiveLifecycleState,
+        loopDisposition: loopDisposition ?? DISPOSITION.BLOCKED,
+        gateBoundary: PR_CHECKPOINT.BLOCKED,
+        draftGateAlreadySatisfied,
+        draftGate,
+        preApprovalGate,
+        allowedNextActions,
+        forbiddenActions,
+        nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
+        reason: buildRoundCapCiRemedyReason({ ciStatus, copilotReviewRoundCount, maxCopilotRounds, currentHeadSha }),
+        mergeStateStatus,
+        conflictFiles,
+        refinementArtifact,
         copilotReviewRoundCount,
       });
     }
@@ -2394,7 +2469,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     allowedNextActions,
     forbiddenActions,
     nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-    reason: "The PR gate-boundary evaluator could not map this lifecycle state to a legal gate transition; reconcile before continuing.",
+    reason: `The PR gate-boundary evaluator could not map lifecycle state \`${effectiveLifecycleState}\` to a legal gate transition. Re-resolve with \`node <dev-loops-package-root>/cli/index.mjs loop startup --pr ${Number.isInteger(input.pr) ? input.pr : "<n>"}\` and follow its nextAction.`,
     mergeStateStatus,
     conflictFiles,
       refinementArtifact,

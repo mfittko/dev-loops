@@ -61,7 +61,7 @@ import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readGateDeltaRecord, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
-import { captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
+import { captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince, runGitCommand } from "../lib/git-delta.mjs";
 import { existsSync } from "node:fs";
 
 /**
@@ -2167,7 +2167,14 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   for (const start of covering) if (await reaches(start)) return capRound;
   // ADR 0218: report the one condition that failed, so the refusal names its own remedy.
   const unsealed = starts.length === 0 && (isUnsealedDeltaRecord(tmpRoot, capHead) || baseOnlyUnsealed);
-  onFailure(starts.length === 0 ? (unsealed ?"unsealed_record" : "no_clearing_record") : covering.length === 0 ? "items_do_not_cover" : "chain_does_not_reach_head");
+  // A rebase orphans the baseline: with the cap-round head no longer an ancestor of the head, no clearing record can ever be rebound, so name the restart.
+  // Only merge-base exit 1 with both commits present locally proves it: a commit this clone never fetched (exit 128) is not a rebase, and the probe then keeps the pre-existing condition.
+  const gitProbe = (args) => runGitCommand([...DIFF_ISOLATION_FLAGS, ...args], { repoRoot }).catch(() => ({ code: 128 }));
+  const probeCapHead = normalizeSha(capHead);
+  const mergeBase = Boolean(probeCapHead && head) ? await gitProbe(["merge-base", "--is-ancestor", probeCapHead, head]) : null;
+  const orphaned = mergeBase?.code === 1 && !mergeBase.signal
+    && (await gitProbe(["cat-file", "-e", `${probeCapHead}^{commit}`])).code === 0 && (await gitProbe(["cat-file", "-e", `${head}^{commit}`])).code === 0;
+  onFailure(orphaned ? "baseline_orphaned" : starts.length === 0 ? (unsealed ?"unsealed_record" : "no_clearing_record") : covering.length === 0 ? "items_do_not_cover" : "chain_does_not_reach_head");
   return null;
 }
 

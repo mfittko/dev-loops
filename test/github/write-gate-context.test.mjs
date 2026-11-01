@@ -9232,6 +9232,66 @@ test("resolveCapRoundFixed does not discover merge-seeded starts when the direct
   }
 });
 
+// #3002 AC5, PR 2960 shape: a rebase leaves the cap-round head off the current head's history.
+test("resolveCapRoundFixed reports baseline_orphaned when the cap-round head is not an ancestor of the head", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: A, baseRefName: "main" };
+    await seedClosedRounds(repoRoot, 61, ["1".repeat(40), "2".repeat(40), "3".repeat(40), B]);
+    let condition = null;
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot, onFailure: (c) => { condition = c; } }), null);
+    assert.equal(condition, "baseline_orphaned");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// A real rebase: the cap-round head is a sibling of the head (not an ancestor). An object this repository never fetched is not proof of a rebase.
+test("resolveCapRoundFixed reports baseline_orphaned for a sibling cap-round head, also when a sealed record exists at it, and not for an absent object", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["checkout", "-q", "-b", "rebased", A]);
+    git(repoRoot, ["commit", "-q", "--allow-empty", "-m", "rebased"]);
+    const rebased = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    const conditionFor = async (pr, capHead) => {
+      await seedClosedRounds(repoRoot, pr, ["1".repeat(40), "2".repeat(40), "3".repeat(40), capHead]);
+      let condition = null;
+      assert.equal(await resolveCapRoundFixed({ repo: "owner/repo", pr, gate: "draft_gate", headSha: rebased, baseRefName: "main" }, { repoRoot, onFailure: (c) => { condition = c; } }), null);
+      return condition;
+    };
+    assert.equal(await conditionFor(66, B), "baseline_orphaned");
+    assert.equal(await conditionFor(67, "f".repeat(40)), "no_clearing_record", "an unfetched cap-round object is not a rebase");
+    // The fixer pass sealed a record at the cap-round head before the rebase: the chain cannot reach the rewritten head, so it is still an orphan.
+    await writeDeltaRecord(repoRoot, B, "9".repeat(40), "push_to_gate");
+    assert.equal(await conditionFor(68, B), "baseline_orphaned");
+    // A whitespace-padded ledger headSha of a real sibling cap-round head is normalized before the probe, so it is still an orphan.
+    await seedClosedRounds(repoRoot, 70, ["1".repeat(40), "2".repeat(40), "3".repeat(40), B]);
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-70", `draft_gate-${B}.json`);
+    await writeFile(ledger, (await readFile(ledger, "utf8")).replace(`"headSha":"${B}"`, `"headSha":" ${B}\\n"`), "utf8");
+    let padded = null;
+    assert.equal(await resolveCapRoundFixed({ repo: "owner/repo", pr: 70, gate: "draft_gate", headSha: rebased, baseRefName: "main" }, { repoRoot, onFailure: (c) => { padded = c; } }), null);
+    assert.equal(padded, "baseline_orphaned", "a whitespace-padded sibling cap-round head is normalized before the probe");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// The negative case: a real ancestor cap-round head (merge-base exit 0) is no orphan, also when the ledger headSha carries whitespace.
+test("resolveCapRoundFixed keeps no_clearing_record for a real ancestor cap-round head, padded or not", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 69, gate: "draft_gate", headSha: B, baseRefName: "main" };
+    await seedClosedRounds(repoRoot, 69, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    const failure = async () => { let condition = null; await resolveCapRoundFixed(opts, { repoRoot, onFailure: (c) => { condition = c; } }); return condition; };
+    assert.equal(await failure(), "no_clearing_record");
+    const ledger = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-69", `draft_gate-${A}.json`);
+    await writeFile(ledger, (await readFile(ledger, "utf8")).replace(`"headSha":"${A}"`, `"headSha":" ${A}\\n"`), "utf8");
+    assert.equal(await failure(), "no_clearing_record", "a whitespace-padded ledger headSha is normalized before the probe");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapRoundFixed reports unsealed_record for an unsealed or seal-mismatched record at the base-only merge start", async () => {
   const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
   try {
