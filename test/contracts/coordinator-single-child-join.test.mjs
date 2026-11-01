@@ -49,6 +49,16 @@ test("the harness-join bullet and the dev-loop agent no longer join the fixer th
   }
 });
 
+test("the delta reviewer is told to write its result to the absolute --result path", () => {
+  const sentence = "the delta reviewer writes its `DeltaPrePushReviewResult` to that path with the file-write tool.";
+  for (const file of ["skills/docs/pre-pr-review-contract.md", "skills/docs/gate-review-sub-loop-contract.md"]) {
+    assert.ok(read(file).includes(sentence), file);
+  }
+  for (const file of ["agents/review.agent.md", ".claude/agents/review.md"]) {
+    assert.ok(read(file).includes("Write your `DeltaPrePushReviewResult` to that path with the file-write tool."), file);
+  }
+});
+
 test("the Copilot follow-up THREAD-route delta reviewer dispatch sentence names the --artifact join", () => {
   const text = read("skills/copilot-pr-followup/SKILL.md");
   const at = text.indexOf("Otherwise run the delta reviewer");
