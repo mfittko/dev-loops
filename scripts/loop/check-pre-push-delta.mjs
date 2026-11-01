@@ -28,7 +28,7 @@
  * Pure result checks live in @dev-loops/core/loop/pre-push-delta-review.
  */
 import { execFile, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
@@ -58,6 +58,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { writeGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { createGitClient, main as validateChangelog } from "../docs/validate-changelog-completeness.mjs";
+import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
 
 const USAGE = `Usage: check-pre-push-delta.mjs --act-list <path> --baseline <sha> --spec-identity <id> --findings-log <path> --fixer-plan <path> --site-coverage <path> [--worktree <dir>]
@@ -286,6 +287,9 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
       const ends = typeof log.repo === "string" && Number.isInteger(log.pr)
         ? await clearingChainLastCandidates({ tmpRoot, capHead: logHead, repo: log.repo, pr: log.pr, baseRefName, repoRoot: worktree, baseOnlyMerge })
         : [];
+      // A draft_gate findings log at the baseline means a later full round superseded this one.
+      if (typeof log.repo !== "string" || !Number.isInteger(log.pr)
+        || existsSync(buildLogPath({ repo: log.repo, pr: log.pr, gate: "draft_gate", headSha: baseline, tmpRoot }))) return false;
       if (ends.includes(baseline)) return true;
       for (const end of ends) if (await merged(end)) return true;
       return false;
