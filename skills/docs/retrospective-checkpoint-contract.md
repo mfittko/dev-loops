@@ -32,7 +32,7 @@ The retrospective reports coordinator cost from existing records only. It adds n
 
 - Coordinator peak context (largest single-response input count) against the advisory 150K diagnostic in `COORDINATOR-CONTINUITY-SOFT-CAP`.
 - Total input, cached and output token traffic, when the harness provides it.
-- Coordinator launches and the reason for each, as the existing dispatch records show.
+- Coordinator launches and the reason for each, stated in the orchestrator's dispatch note (no dispatch record carries a replacement-reason field), reported as "unknown" when the note omits it.
 - Avoidable repeated reads, bootstrap and review work, with the evidence for each.
 
 A value the record does not carry is reported as "unknown", never zero. The report keeps context size, token traffic and billing apart: they are three different quantities. Crossing 150K is a finding to reduce, never a failure of the cycle.

@@ -1103,7 +1103,7 @@ test("cwd: worktreeCwd is canonicalized to the same single spelling", () => {
 // 13. Unit coordinator hand-back boundaries (issue 2532)
 // ===========================================================================
 
-test("unitBoundaries: a unit without a PR hands back at the draft PR and after the gate verdict", () => {
+test("unitBoundaries: a unit without a PR reports at the draft PR and after the gate verdict", () => {
   const env = buildDevLoopHandoffEnvelope(issueBundle(42), defaultSettings, {}, defaultOptions);
   assert.deepEqual(env.unitBoundaries, {
     reportAfter: [UNIT_BOUNDARY.DRAFT_PR_OPENED, UNIT_BOUNDARY.GATE_VERDICT_POSTED],
@@ -1111,7 +1111,7 @@ test("unitBoundaries: a unit without a PR hands back at the draft PR and after t
   });
 });
 
-test("unitBoundaries: a PR unit hands back only after the gate verdict", () => {
+test("unitBoundaries: a PR unit reports only after the gate verdict", () => {
   const env = buildDevLoopHandoffEnvelope(prBundle(99), defaultSettings, {}, defaultOptions);
   assert.deepEqual(env.unitBoundaries, {
     reportAfter: [UNIT_BOUNDARY.GATE_VERDICT_POSTED],
@@ -1142,7 +1142,7 @@ test("unitBoundaries: both gate verdict boundaries carry the same hand-back and 
   }
 });
 
-test("unitBoundaries: absent where the route has no unit to hand back", () => {
+test("unitBoundaries: absent where the route has no unit to report", () => {
   const reconcile = {
     bundleKind: "needs_reconcile",
     selectedStrategy: "none",

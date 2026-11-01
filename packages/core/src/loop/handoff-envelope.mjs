@@ -649,7 +649,7 @@ export const STATELESS_UNIT_STRATEGIES = Object.freeze([
 function deriveUnitBoundaries(strategy, target) {
   if (strategy === null || STATELESS_UNIT_STRATEGIES.includes(strategy)) return undefined;
   const boundaries = [];
-  // A unit that owns no PR yet ends its phase by opening the draft PR. `target.pr` is
+  // A unit that owns no PR yet reports at the draft PR it opens, then may continue. `target.pr` is
   // already the PR kind's identity, so the bound-PR arm needs no spelling out; the
   // only linked-PR source the envelope can carry is an issue artifact's `linkedPr`.
   // The local kinds forward no linked PR: no shipped producer puts one on their
@@ -1358,7 +1358,7 @@ export function validateHandoffEnvelope(envelope) {
           if (!ownsPr && ub.reportAfter[0] !== UNIT_BOUNDARY.DRAFT_PR_OPENED) {
             errors.push({
               field: "unitBoundaries.reportAfter",
-              reason: `a target that owns no PR must report at ${UNIT_BOUNDARY.DRAFT_PR_OPENED} first, because opening that draft PR ends its phase`,
+              reason: `a target that owns no PR must report at ${UNIT_BOUNDARY.DRAFT_PR_OPENED} first, because the draft PR it opens is its first report boundary`,
               got: ub.reportAfter,
             });
           }
