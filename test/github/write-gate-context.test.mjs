@@ -46,6 +46,7 @@ import {
   resolveClosureRound,
   resolveCapRound,
   resolveCapRoundFixed,
+  clearingChainLastCandidates,
   readGateContext,
   renderBriefingEvidence,
   renderBriefingPrefix,
@@ -9077,6 +9078,40 @@ test("resolveCapRoundFixed accepts a base-only merge M of the chain's last clear
     // Fail closed: a merge that changes the PR-own patch, and a missing baseRefName.
     assert.equal((await failure(opts, { baseOnlyMerge: async () => false })).condition, "chain_does_not_reach_head");
     assert.equal((await failure({ ...opts, baseRefName: undefined }, { baseOnlyMerge: merge })).result, null);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ADR 0218: the fixer pass at a base-only merge M of the chain end B writes a record keyed on M; it starts a chain of its own.
+test("resolveCapRoundFixed seeds a chain from the record of a ledgerless base-only merge M of the chain end B", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const M = "7".repeat(40);
+    const C = "8".repeat(40);
+    const opts = { repo: "owner/repo", pr: 63, gate: "draft_gate", headSha: C, baseRefName: "main" };
+    await seedClosedRounds(repoRoot, 63, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    await writeDeltaRecord(repoRoot, A, B, "push_to_gate", { items: [] });
+    const merge = async (args) => args.fromHead === B && args.head === M;
+    const failure = async (o, deps = { baseOnlyMerge: merge }) => { let condition = null; const result = await resolveCapRoundFixed(o, { repoRoot, ...deps, onFailure: (c) => { condition = c; } }); return { result, condition }; };
+    assert.equal((await failure(opts)).condition, "items_do_not_cover", "no record at M: the non-covering A to B record is all there is");
+    await writeDeltaRecord(repoRoot, M, C, "push_to_gate", { items: [] });
+    assert.equal((await failure(opts)).condition, "items_do_not_cover", "an M to C record that does not cover the act refs reports items_do_not_cover");
+    await writeDeltaRecord(repoRoot, M, C, "push_to_gate");
+    const accepted = await failure(opts);
+    assert.equal(accepted.result.log.headSha, A, "a covering M to C record gives the cap round at C");
+    assert.equal(accepted.condition, null);
+    assert.equal((await failure(opts, { baseOnlyMerge: async () => false })).condition, "items_do_not_cover", "a merge that changes the PR-own patch seeds nothing");
+    assert.equal((await failure({ ...opts, baseRefName: undefined })).condition, "items_do_not_cover", "without baseRefName nothing is seeded");
+    await rm(path.join(repoRoot, "tmp", "gate-delta", `${M}.json.seal`));
+    assert.equal((await failure(opts)).condition, "items_do_not_cover", "an unsealed M record seeds nothing");
+    await writeDeltaRecord(repoRoot, M, C, "push_to_gate");
+    await writeFile(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-63", `draft_gate-${M}.json`), JSON.stringify({ repo: "owner/repo", pr: 63, gate: "draft_gate", headSha: M, verdict: "blocked", loggedAt: "2026-11-09T00:00:00.000Z", findings: [] }), "utf8");
+    assert.equal((await failure(opts)).condition, "items_do_not_cover", "a head with its own ledger seeds nothing");
+    await rm(path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-63", `draft_gate-${M}.json`));
+    const selfMerge = async (args) => args.head === args.fromHead || merge(args);
+    assert.ok((await failure(opts, { baseOnlyMerge: selfMerge })).result, "the covering record still holds with a permissive merge probe");
+    assert.deepEqual(await clearingChainLastCandidates({ tmpRoot: path.join(repoRoot, "tmp"), capHead: A, repo: "owner/repo", pr: 63, baseRefName: "main", repoRoot, baseOnlyMerge: merge }), [B, C], "the emitter seam lists both chain ends");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

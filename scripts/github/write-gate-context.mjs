@@ -2067,47 +2067,62 @@ const isUnsealedDeltaRecord = (tmpRoot, head) => {
   try { return readSealedGateDeltaRecord(tmpRoot, sha) === null; } catch { return true; }
 };
 
+/** The last candidate head of the sealed clearing chain that begins at `start`. */
+function clearingChainEnd(tmpRoot, start) {
+  const seen = new Set();
+  let last;
+  for (let record = start; record;) {
+    const next = normalizeSha(record.candidateHead);
+    if (!next || seen.has(next)) break;
+    seen.add(next);
+    last = next;
+    record = clearingDeltaRecord(tmpRoot, next);
+  }
+  return last;
+}
+
 /**
- * The clearing chain starts of a cap round (ADR 0218): the clearing record bound to the cap-round head, else the record of every ledgerless base-only merge of it
- * (needs `baseRefName`). Shared by resolveCapRoundFixed and the fixer emitter so the two seams cannot disagree on a chain start.
+ * The clearing chain starts of a cap round (ADR 0218): the clearing record bound to the cap-round head, plus the record of every ledgerless base-only merge of it
+ * (needs `baseRefName`). The same seeding repeats from the end E of each chain, so the record of a fixer pass at a base-only merge of E (a cap-round order the emitter admits) starts a chain too.
+ * Shared by resolveCapRoundFixed and the fixer emitter so the two seams cannot disagree on a chain start.
  * `baseOnlyUnsealed` is set when such a merge carries an unsealed record.
  */
 async function capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge }) {
   const direct = clearingDeltaRecord(tmpRoot, capHead);
-  if (direct) return { starts: [direct], baseOnlyUnsealed: false };
-  const starts = [];
+  const starts = direct ? [direct] : [];
   let baseOnlyUnsealed = false;
-  if (typeof baseRefName === "string" && baseRefName) {
-    // Sorted, and every candidate tried: the proof never depends on directory enumeration order.
-    for (const { reviewBaselineHead: raw } of listGateDeltaRecords(tmpRoot).sort((a, b) => (String(a.reviewBaselineHead) < String(b.reviewBaselineHead) ? -1 : 1))) {
+  if (typeof baseRefName !== "string" || !baseRefName) return { starts, baseOnlyUnsealed };
+  const records = listGateDeltaRecords(tmpRoot).sort((a, b) => (String(a.reviewBaselineHead) < String(b.reviewBaselineHead) ? -1 : 1));
+  const seeded = new Set(direct ? [capHead] : []);
+  const fromHeads = [capHead];
+  // Sorted, and every candidate tried: the proof never depends on directory enumeration order.
+  for (let i = 0; i < fromHeads.length; i += 1) {
+    const fromHead = fromHeads[i];
+    // A direct record at the cap-round head already makes it a start; base-only seeding of the cap-round head applies only without one.
+    if (i === 0 && direct) { const end = clearingChainEnd(tmpRoot, direct); if (end && !fromHeads.includes(end)) fromHeads.push(end); continue; }
+    for (const { reviewBaselineHead: raw } of records) {
       const merged = normalizeSha(raw);
-      if (!merged || merged === capHead || existsSync(buildLogPath({ repo, pr, gate: "draft_gate", headSha: merged, tmpRoot }))) continue;
-      const isBaseOnly = () => baseOnlyMerge({ fromHead: capHead, head: merged, mainRef: `origin/${baseRefName}`, repoRoot }).catch(() => false);
+      if (!merged || merged === fromHead || seeded.has(merged) || existsSync(buildLogPath({ repo, pr, gate: "draft_gate", headSha: merged, tmpRoot }))) continue;
+      const isBaseOnly = () => baseOnlyMerge({ fromHead, head: merged, mainRef: `origin/${baseRefName}`, repoRoot }).catch(() => false);
       const candidate = clearingDeltaRecord(tmpRoot, merged);
       if (!candidate) { if (isUnsealedDeltaRecord(tmpRoot, merged) && await isBaseOnly()) baseOnlyUnsealed = true; continue; }
-      if (await isBaseOnly()) starts.push(candidate);
+      if (!await isBaseOnly()) continue;
+      seeded.add(merged);
+      starts.push(candidate);
+      const end = clearingChainEnd(tmpRoot, candidate);
+      if (end && !fromHeads.includes(end)) fromHeads.push(end);
     }
   }
   return { starts, baseOnlyUnsealed };
 }
 
-/** The last candidate head of every sealed clearing chain of the cap round `capHead` (ADR 0218), seeded as resolveCapRoundFixed seeds them; empty when no chain starts. */
+/**
+ * The last candidate head of every sealed clearing chain of the cap round `capHead` (ADR 0218), seeded as resolveCapRoundFixed seeds them; empty when no chain starts.
+ * The emitter seam skips the `covers` filter on purpose: it must admit a base-only merge M of a chain end before the fixer's record for M exists.
+ */
 export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
   const { starts } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
-  const ends = [];
-  for (const start of starts) {
-    const seen = new Set();
-    let last;
-    for (let record = start; record;) {
-      const next = normalizeSha(record.candidateHead);
-      if (!next || seen.has(next)) break;
-      seen.add(next);
-      last = next;
-      record = clearingDeltaRecord(tmpRoot, next);
-    }
-    if (last) ends.push(last);
-  }
-  return ends;
+  return starts.map((start) => clearingChainEnd(tmpRoot, start)).filter(Boolean);
 }
 
 /**
