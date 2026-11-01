@@ -231,6 +231,41 @@ async function withFixture(fn) {
   }, { prefix: "dev-loops-fixer-" });
 }
 
+test("a sequence closed as abandoned retires its execution: a late pull is stale_dispatch", async () => {
+  const { closeGateSequence } = await import("../../scripts/loop/close-gate-sequence.mjs");
+  const { readSequenceMarker } = await import("@dev-loops/core/loop/fix-push-authority");
+  await withFixture(async ({ root, head, files, emit }) => {
+    const unit = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    const tmpRoot = path.join(root, "tmp");
+    const { branch } = readSequenceMarker(tmpRoot, head);
+    const closed = await closeGateSequence({ tmpRoot, head, repo: REPO, pr: PR, fetchPr: async () => ({ pr: { headRefOid: "b".repeat(40), headRefName: branch } }) });
+    assert.equal(closed.ok, true, closed.reason);
+    assert.equal(refusal(pull(unit, root)), "stale_dispatch");
+  });
+});
+
+test("an unreadable closure record fails closed as stale_dispatch", async () => {
+  await withFixture(async ({ root, head, files, emit }) => {
+    const unit = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    const { sequenceClosurePath } = await import("@dev-loops/core/loop/fix-push-authority");
+    await mkdir(sequenceClosurePath(path.join(root, "tmp"), head, unit.workOrderRef.split(":").at(-1)), { recursive: true });
+    assert.equal(refusal(pull(unit, root)), "stale_dispatch");
+  });
+});
+
+test("a closure record at the review baseline head retires a full emission whose ref head is the candidate", async () => {
+  await withFixture(async ({ root, head, prepareFull }) => {
+    const f = await prepareFull();
+    const unit = await f.full();
+    assert.notEqual(f.candidate, head);
+    const { sequenceClosurePath } = await import("@dev-loops/core/loop/fix-push-authority");
+    const file = sequenceClosurePath(path.join(root, "tmp"), head, unit.executionIdentity);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "{}");
+    assert.equal(refusal(pull(unit, root)), "stale_dispatch");
+  });
+});
+
 test("THREAD no_commit and head_moved close an authenticated sequence and allow the next push", async () => {
   const { checkFixPushAuthority } = await import("../../scripts/loop/check-fix-push-authority.mjs");
   for (const move of ["none", "descendant", "amended"]) await withFixture(async ({ root, wt, head, files, emit }) => {
@@ -747,11 +782,11 @@ test("push authority: commit_only writes the sequence marker ungranted and the f
   await withFixture(async ({ head, root, emit, prepareFull }) => {
     const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
     await emit({ deltaResult: undefined, phase: "commit_only" });
-    assert.deepEqual(JSON.parse(await readFile(marker, "utf8")), { baselineHead: head, fullGranted: false, branch: "issue-1" });
+    assert.deepEqual(stripExecution(JSON.parse(await readFile(marker, "utf8"))), { baselineHead: head, fullGranted: false, branch: "issue-1" });
     await assert.rejects(emit({ phase: "full", deltaResult: undefined }), /needs --delta-result/);
     assert.equal(JSON.parse(await readFile(marker, "utf8")).fullGranted, false, "a full emit without a delta result does not grant");
     await (await prepareFull()).full();
-    assert.deepEqual(JSON.parse(await readFile(marker, "utf8")), { baselineHead: head, fullGranted: true, branch: "issue-1" });
+    assert.deepEqual(stripExecution(JSON.parse(await readFile(marker, "utf8"))), { baselineHead: head, fullGranted: true, branch: "issue-1" });
     await emit({ deltaResult: undefined, phase: "commit_only" });
     assert.equal(JSON.parse(await readFile(marker, "utf8")).fullGranted, false, "a new commit_only round revokes the grant");
   });
@@ -761,7 +796,7 @@ test("push authority: a custom --tmp-root still writes the marker under the cano
   await withFixture(async ({ head, root, emit }) => {
     const custom = path.join(path.dirname(root), "custom-tmp");
     await emit({ deltaResult: undefined, phase: "commit_only", tmpRoot: custom });
-    assert.deepEqual(JSON.parse(await readFile(path.join(root, "tmp", "gate-delta", `${head}.sequence`), "utf8")), { baselineHead: head, fullGranted: false, branch: "issue-1" });
+    assert.deepEqual(stripExecution(JSON.parse(await readFile(path.join(root, "tmp", "gate-delta", `${head}.sequence`), "utf8"))), { baselineHead: head, fullGranted: false, branch: "issue-1" });
     assert.equal(existsSync(path.join(custom, "gate-delta", `${head}.sequence`)), false);
   });
 });
@@ -2641,6 +2676,13 @@ test("operator focus CLI: a refusing focus file exits 1 with ok false and a GATE
     assert.match(body.error, /^GATE-EXEC-OPERATOR-FOCUS:/);
   });
 });
+
+// The marker also records the fixer execution (read by close-gate-sequence).
+function stripExecution({ execution, ...marker }) {
+  assert.match(execution.executionIdentity, /^f/);
+  assert.ok(execution.workOrderRef && execution.outputRef);
+  return marker;
+}
 
 test("ADR 0218: a clearing chain that ends at the head itself does not read as a base-only merge (round_cap_reached)", async () => {
   await withFixture(async (fx) => {
