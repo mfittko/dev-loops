@@ -1,2 +1,2 @@
 ### Fixed
-- Gate coordination at the Copilot round cap returns `wait_for_ci` or the thread route, not a remedy-less `report_blocked`; an orphaned cap-round baseline names the restart (#3002)
+- Gate coordination at the Copilot round cap returns `wait_for_ci` or the thread route, not a remedy-less `report_blocked`; the unmappable-state remedy matches the failing fact; an orphaned cap-round baseline (`baseline_orphaned`, probed only on a locally present, non-ancestor cap-round head) names the replacement-PR restart `dev-loops pr create --allow-replacement-pr <this PR number>` and the rule to merge the base instead of rebasing a capped PR (#3002)

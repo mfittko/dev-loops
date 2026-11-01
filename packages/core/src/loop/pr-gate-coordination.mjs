@@ -85,9 +85,9 @@ export const PR_CHECKPOINT_ACTION = Object.freeze({
 // Remedy for the generic unmappable default: name the action that matches the failing fact.
 function unmappableRemedy({ ciStatus, unresolvedThreadCount, copilotConvergenceOk }) {
   if (ciStatus === "pending" || ciStatus === "none") return "Run `wait-pr-checks.mjs` for the head.";
+  if (unresolvedThreadCount > 0) return `${ciStatus === "failure" ? "Fix the failing check at the head, then " : ""}address the unresolved review feedback (\`address_review_feedback\`) and reply/resolve the threads (\`reply_resolve_review_threads\`).`;
   if (ciStatus === "failure" && unresolvedThreadCount === 0) return "Fix the failing check at the head, or re-run it if the failure is transient, then run `wait-pr-checks.mjs`.";
-  if (unresolvedThreadCount === null || !copilotConvergenceOk) return "Re-resolve the state with `dev-loops loop gate-coordination` input from `detect-pr-gate-coordination-state.mjs`; route any current-head Copilot body feedback (`copilotBodyJudgeFinding`) to the judge (`GATE-EXEC-COPILOT-BODY-TO-JUDGE`).";
-  return "Run `wait-pr-checks.mjs` for the head.";
+  return "Re-resolve the state with `dev-loops loop gate-coordination` input from `detect-pr-gate-coordination-state.mjs`; route any current-head Copilot body feedback (`copilotBodyJudgeFinding`) to the judge (`GATE-EXEC-COPILOT-BODY-TO-JUDGE`).";
 }
 
 function normalizeGateComment(summary = null) {
@@ -861,7 +861,7 @@ export const ADR_TRIPWIRE_REMEDIES = Object.freeze([
 
 /** The one failed cap-round-fixed condition (`resolveCapRoundFixed` `onFailure`, ADR 0218) and its remedy. */
 const CAP_ROUND_REFUSAL = Object.freeze({
-  baseline_orphaned: "Condition baseline_orphaned: the cap-round baseline is not an ancestor of the current head (a rebase rewrote it), so no clearing record can bind to this head. Remedy: open a fresh PR from the branch with `dev-loops pr create --allow-replacement-pr` (gate history restarts at round 1); do not rebase a PR that reached the cap round, merge the base instead.",
+  baseline_orphaned: "Condition baseline_orphaned: the cap-round baseline is not an ancestor of the current head (a rebase rewrote it), so no clearing record can bind to this head. Remedy: open a fresh PR from the branch with `dev-loops pr create --allow-replacement-pr <this PR number>` (gate history restarts at round 1); do not rebase a PR that reached the cap round, merge the base instead.",
   no_clearing_record: "Condition no_clearing_record: no sealed clearing delta record exists for the cap-round baseline. Remedy: complete the cap round's fixer pass and run `check-pre-push-delta.mjs --result` for that baseline.",
   unsealed_record: "Condition unsealed_record: the delta record for the cap-round baseline carries no valid seal. Remedy: rerun `check-pre-push-delta.mjs --result` for that baseline so the writer seals it; never edit the record.",
   items_do_not_cover: "Condition items_do_not_cover: the clearing record's items do not cover the cap round's act refs (it may belong to another route). Remedy: rerun the pre-push delta on the cap round's act list so every act ref is resolved.",
@@ -2278,7 +2278,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         nextAction: capActions[0],
         reason: capPending
           ? `GATE-EXEC-ROUND-CAP-THREAD-ROUTE refuses a new Copilot cycle: the round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}) and CI at head ${currentHeadSha ?? "unknown"} is ${ciStatus}; wait for CI to settle, then re-run gate-coordination (zero unresolved threads and green CI yield \`run_pre_approval_gate\`).`
-          : `GATE-EXEC-ROUND-CAP-THREAD-ROUTE refuses a new Copilot cycle: the round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}) with ${unresolvedThreadCount} unresolved thread(s); no new Copilot cycle is legal past the cap. Address the feedback and reply/resolve the threads, then re-run gate-coordination${ciStatus === "success" ? " (resolved threads and green CI yield `run_pre_approval_gate`)" : ` (CI at the head is ${ciStatus ?? "unknown"}; it must also be green before \`run_pre_approval_gate\`)`}.`,
+          : `GATE-EXEC-ROUND-CAP-THREAD-ROUTE refuses a new Copilot cycle: the round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}) with ${unresolvedThreadCount} unresolved thread(s); no new Copilot cycle is legal past the cap. Address the feedback and reply/resolve the threads, then re-run gate-coordination${ciStatus === "success" ? " (resolved threads and green CI yield `run_pre_approval_gate`)" : !preApprovalRequireCi ? " (resolved threads yield `run_pre_approval_gate`; CI is not required)" :` (CI at the head is ${ciStatus ?? "unknown"}; it must also be green before \`run_pre_approval_gate\`)`}.`,
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,

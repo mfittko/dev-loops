@@ -2173,12 +2173,11 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   // ADR 0218: report the one condition that failed, so the refusal names its own remedy.
   const unsealed = starts.length === 0 && (isUnsealedDeltaRecord(tmpRoot, capHead) || baseOnlyUnsealed);
   // A rebase orphans the baseline: with the cap-round head no longer an ancestor of the head, no clearing record can ever be rebound, so name the restart.
-  // Exit 128 with the cap-round head absent from the repository is the same orphan (a rebased-away SHA is not an object here).
-  const gitProbe = (args) => runGitCommand([...DIFF_ISOLATION_FLAGS, ...args], { repoRoot }).catch(() => ({ code: 0 }));
-  const orphaned = starts.length === 0 && !unsealed && head && await (async () => {
-    const { code } = await gitProbe(["merge-base", "--is-ancestor", capHead, head]);
-    return code === 1 || (code === 128 && (await gitProbe(["cat-file", "-e", `${capHead}^{commit}`])).code !== 0);
-  })();
+  // Only merge-base exit 1 with both commits present locally proves it: a commit this clone never fetched (exit 128) is not a rebase, and the probe then keeps the pre-existing condition.
+  const gitProbe = (args) => runGitCommand([...DIFF_ISOLATION_FLAGS, ...args], { repoRoot }).catch(() => ({ code: 128 }));
+  const probeCapHead = normalizeSha(capHead);
+  const orphaned = Boolean(probeCapHead && head) && (await gitProbe(["merge-base", "--is-ancestor", probeCapHead, head])).code === 1
+    && (await gitProbe(["cat-file", "-e", `${probeCapHead}^{commit}`])).code === 0 && (await gitProbe(["cat-file", "-e", `${head}^{commit}`])).code === 0;
   onFailure(orphaned ? "baseline_orphaned" : starts.length === 0 ? (unsealed ?"unsealed_record" : "no_clearing_record") : covering.length === 0 ? "items_do_not_cover" : "chain_does_not_reach_head");
   return null;
 }

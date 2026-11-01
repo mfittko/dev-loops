@@ -517,7 +517,7 @@
     {
       "id": "GATE-EXEC-ROUND-CAP-THREAD-ROUTE",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by pr-gate-coordination.mjs in packages/core/src/loop; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+      "enforcementNote": "Enforced by pr-gate-coordination.mjs in packages/core/src/loop and resolveCapRoundFixed in write-gate-context.mjs (the baseline_orphaned condition); the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-ROUND-RETIREMENT",
