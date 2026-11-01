@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import { loadDevLoopConfigStrict, resolveFanoutGroups } from "../src/config/config.mjs";
 import { ALWAYS_INCLUDE, ChangeCategory, resolveDynamicAngles } from "../src/analysis/change-classifier.mjs";
 
 const DRAFT_ANGLES = [
@@ -103,11 +108,11 @@ test("resolveDynamicAngles: LOGIC_CHANGE resolves to core subset, not all angles
   // Core review subset (∩ DRAFT_ANGLES) + always-include gate-evidence.
   // input-validation is part of the core subset (#1336): entrypoint/input drift
   // is reviewed for every logic change, not only when hand-picked.
-  for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface", "gate-evidence", "input-validation"]) {
+  for (const a of ["scope", "correctness", "coverage", "determinism", "contract-surface", "gate-evidence", "input-validation", "state-concurrency"]) {
     assert.ok(result.recommendedAngles.includes(a), `expected ${a} in core subset`);
   }
   // Peripheral lenses are dropped, not run for logic alone.
-  for (const a of ["link-check", "packaging-runtime", "config-drift", "ci-guard", "state-concurrency", "no-op"]) {
+  for (const a of ["link-check", "packaging-runtime", "config-drift", "ci-guard", "no-op"]) {
     assert.ok(result.skippedAngles.includes(a), `expected ${a} skipped`);
     assert.ok(typeof result.reasons[a] === "string");
   }
@@ -432,4 +437,20 @@ test("resolveDynamicAngles: catalog angles + ALWAYS_INCLUDE unchanged when consu
   assert.ok(withDecl.recommendedAngles.includes("scope"));
   assert.ok(withDecl.recommendedAngles.includes("correctness"));
   assert.ok(withDecl.recommendedAngles.includes("gate-evidence"));
+});
+
+test("resolveDynamicAngles: adding state-concurrency to LOGIC_CHANGE does not add a fan-out unit", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "dyn-angles-units-"));
+  try {
+    const { config } = await loadDevLoopConfigStrict({ cwd: dir });
+    const pool = config.gates.draft.angles.map((a) => a.name);
+    const { recommendedAngles } = resolveDynamicAngles({ configuredAngles: pool, changeCategories: [ChangeCategory.LOGIC_CHANGE] });
+    assert.ok(recommendedAngles.includes("state-concurrency"));
+    const withAngle = resolveFanoutGroups(config, "draft", recommendedAngles);
+    const without = resolveFanoutGroups(config, "draft", recommendedAngles.filter((a) => a !== "state-concurrency"));
+    assert.equal(withAngle.length, without.length);
+    assert.deepEqual(withAngle.map((g) => g.name), without.map((g) => g.name));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
