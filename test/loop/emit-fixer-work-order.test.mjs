@@ -736,11 +736,11 @@ test("push authority: commit_only writes the sequence marker ungranted and the f
   await withFixture(async ({ head, root, emit, prepareFull }) => {
     const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
     await emit({ deltaResult: undefined, phase: "commit_only" });
-    assert.deepEqual(JSON.parse(await readFile(marker, "utf8")), { baselineHead: head, fullGranted: false, branch: "issue-1" });
+    assert.deepEqual(stripExecution(JSON.parse(await readFile(marker, "utf8"))), { baselineHead: head, fullGranted: false, branch: "issue-1" });
     await assert.rejects(emit({ phase: "full", deltaResult: undefined }), /needs --delta-result/);
     assert.equal(JSON.parse(await readFile(marker, "utf8")).fullGranted, false, "a full emit without a delta result does not grant");
     await (await prepareFull()).full();
-    assert.deepEqual(JSON.parse(await readFile(marker, "utf8")), { baselineHead: head, fullGranted: true, branch: "issue-1" });
+    assert.deepEqual(stripExecution(JSON.parse(await readFile(marker, "utf8"))), { baselineHead: head, fullGranted: true, branch: "issue-1" });
     await emit({ deltaResult: undefined, phase: "commit_only" });
     assert.equal(JSON.parse(await readFile(marker, "utf8")).fullGranted, false, "a new commit_only round revokes the grant");
   });
@@ -750,7 +750,7 @@ test("push authority: a custom --tmp-root still writes the marker under the cano
   await withFixture(async ({ head, root, emit }) => {
     const custom = path.join(path.dirname(root), "custom-tmp");
     await emit({ deltaResult: undefined, phase: "commit_only", tmpRoot: custom });
-    assert.deepEqual(JSON.parse(await readFile(path.join(root, "tmp", "gate-delta", `${head}.sequence`), "utf8")), { baselineHead: head, fullGranted: false, branch: "issue-1" });
+    assert.deepEqual(stripExecution(JSON.parse(await readFile(path.join(root, "tmp", "gate-delta", `${head}.sequence`), "utf8"))), { baselineHead: head, fullGranted: false, branch: "issue-1" });
     assert.equal(existsSync(path.join(custom, "gate-delta", `${head}.sequence`)), false);
   });
 });
@@ -2570,3 +2570,10 @@ test("operator focus CLI: a refusing focus file exits 1 with ok false and a GATE
     assert.match(body.error, /^GATE-EXEC-OPERATOR-FOCUS:/);
   });
 });
+
+// The marker also records the fixer execution (read by close-gate-sequence).
+function stripExecution({ execution, ...marker }) {
+  assert.match(execution.executionIdentity, /^f/);
+  assert.ok(execution.workOrderRef && execution.outputRef);
+  return marker;
+}

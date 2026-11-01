@@ -109,13 +109,13 @@ test("only the PR branch's remote ref ends the sequence; a stacked remote ref of
   });
 });
 
-test("the refusal names the marker file and the delete recovery", async () => {
+test("the refusal names the marker file and the close-sequence recovery", async () => {
   await withRepo(async (root, head) => {
     const file = writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
     const refused = checkFixPushAuthority(root);
     assert.equal(refused.ok, false);
     assert.ok(refused.reason.includes(file), refused.reason);
-    assert.match(refused.reason, /delete the marker/);
+    assert.match(refused.reason, /gate close-sequence/);
     clearSequenceMarker(path.join(root, "tmp"), head);
     assert.deepEqual(checkFixPushAuthority(root), { ok: true }, "a cleared marker (a commit_only round without a fix commit) guards nothing");
   });

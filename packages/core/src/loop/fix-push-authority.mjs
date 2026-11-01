@@ -12,10 +12,10 @@ import path from "node:path";
 export const sequenceMarkerPath = (tmpRoot, baselineHead) => path.join(tmpRoot, "gate-delta", `${baselineHead}.sequence`);
 
 /** Record that a fix sequence is active for a baseline head; a `commit_only` emit writes it ungranted, a `full` emit granted. */
-export function writeSequenceMarker({ tmpRoot, baselineHead, fullGranted = false, branch }) {
+export function writeSequenceMarker({ tmpRoot, baselineHead, fullGranted = false, branch, execution }) {
   const file = sequenceMarkerPath(tmpRoot, baselineHead);
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify({ baselineHead, fullGranted, ...(typeof branch === "string" && branch ? { branch } : {}) })}\n`);
+  writeFileSync(file, `${JSON.stringify({ baselineHead, fullGranted, ...(typeof branch === "string" && branch ? { branch } : {}), ...(execution ? { execution } : {}) })}\n`);
   return file;
 }
 
@@ -24,8 +24,8 @@ export function clearSequenceMarker(tmpRoot, baselineHead) {
   rmSync(sequenceMarkerPath(tmpRoot, baselineHead), { force: true });
 }
 
-/** The recovery pointer the refusal reason carries. `--phase full` works only after a clearing delta record, so deleting the marker is the general recovery. */
-export const recoveryHint = (markerPath) => markerPath ? ` To recover an abandoned sequence, delete the marker ${markerPath} (emit-fixer-work-order.mjs --phase full grants the push only after a clearing delta record).` : "";
+/** The recovery pointer the refusal reason carries: the sanctioned close command proves abandonment and records it; a live sequence stays uncloseable. */
+export const recoveryHint = (markerPath) => markerPath ? ` To close an abandoned sequence (the PR head moved, or no fixer ever pulled the work order), run dev-loops gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>; it refuses a live sequence (marker ${markerPath}). A live sequence ends with a clearing delta record (emit-fixer-work-order.mjs --phase full).` : "";
 
 /** Approximates git check-ref-format for a branch name; an invalid name reads as no branch (fail closed). */
 const isValidBranchName = (b) =>
@@ -44,7 +44,7 @@ export function readSequenceMarker(tmpRoot, baselineHead) {
   }
   try {
     const marker = JSON.parse(text);
-    if (marker?.baselineHead === baselineHead) return { baselineHead, fullGranted: marker.fullGranted === true, branch: isValidBranchName(marker.branch) ? marker.branch : undefined };
+    if (marker?.baselineHead === baselineHead) return { baselineHead, fullGranted: marker.fullGranted === true, branch: isValidBranchName(marker.branch) ? marker.branch : undefined, execution: marker.execution && typeof marker.execution === "object" ? marker.execution : undefined };
   } catch {
     // Falls through to the fail-closed reading.
   }
