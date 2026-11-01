@@ -82,6 +82,14 @@ export const PR_CHECKPOINT_ACTION = Object.freeze({
   COMPLETE_FIXER_DISPOSITION: COMPLETE_FIXER_DISPOSITION_ACTION,
 });
 
+// Remedy for the generic unmappable default: name the action that matches the failing fact.
+function unmappableRemedy({ ciStatus, unresolvedThreadCount, copilotConvergenceOk }) {
+  if (ciStatus === "pending" || ciStatus === "none") return "Run `wait-pr-checks.mjs` for the head.";
+  if (ciStatus === "failure" && unresolvedThreadCount === 0) return "Fix the failing check at the head, or re-run it if the failure is transient, then run `wait-pr-checks.mjs`.";
+  if (unresolvedThreadCount === null || !copilotConvergenceOk) return "Re-resolve the state with `dev-loops loop gate-coordination` input from `detect-pr-gate-coordination-state.mjs`; route any current-head Copilot body feedback (`copilotBodyJudgeFinding`) to the judge (`GATE-EXEC-COPILOT-BODY-TO-JUDGE`).";
+  return "Run `wait-pr-checks.mjs` for the head.";
+}
+
 function normalizeGateComment(summary = null) {
   if (!summary || typeof summary !== "object") {
     return {
@@ -2127,9 +2135,9 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // predicate intentionally mirrors every other pre-approval CI boundary in
   // this file (success, or CI not required) — `crediblyGreen` is unconfirmed
   // CI and stays blocked here exactly as it does everywhere else. Any
-  // other combination (threads still unresolved, an unknown thread count, or
-  // CI not confirmed green) falls through unchanged to the generic default
-  // below, preserving today's blocked behavior exactly.
+  // other combination falls to GATE-EXEC-ROUND-CAP-THREAD-ROUTE below
+  // (pending CI waits; unresolved threads take the fix route, whatever the
+  // CI state), and the rest to the generic default.
   if (effectiveLifecycleState === STATE.ROUND_CAP_REACHED && roundCapReached) {
     const ciConfirmedGreen = ciStatus === "success" || !preApprovalRequireCi;
     // ciConfirmedGreen above is only true when ciStatus is literally "success"
@@ -2260,7 +2268,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         pr: Number.isInteger(input.pr) ? input.pr : null,
         currentHeadSha,
         lifecycleState: capPending ? STATE.WAITING_FOR_CI : effectiveLifecycleState,
-        loopDisposition: capPending ? DISPOSITION.PENDING : (loopDisposition ?? DISPOSITION.UNRESOLVED_FEEDBACK),
+        loopDisposition: capPending ? DISPOSITION.PENDING : DISPOSITION.UNRESOLVED_FEEDBACK,
         gateBoundary: capPending ? PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW : PR_CHECKPOINT.FEEDBACK_RESOLUTION,
         draftGateAlreadySatisfied,
         draftGate,
@@ -2270,7 +2278,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         nextAction: capActions[0],
         reason: capPending
           ? `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}) and CI at head ${currentHeadSha ?? "unknown"} is ${ciStatus}; wait for CI to settle, then re-run gate-coordination (zero unresolved threads and green CI yield \`run_pre_approval_gate\`).`
-          : `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}) with ${unresolvedThreadCount} unresolved thread(s); no new Copilot cycle is legal past the cap. Address the feedback and reply/resolve the threads; once they are resolved and CI is green the result becomes \`run_pre_approval_gate\`.`,
+          : `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}) with ${unresolvedThreadCount} unresolved thread(s); no new Copilot cycle is legal past the cap. Address the feedback and reply/resolve the threads, then re-run gate-coordination${ciStatus === "success" ? " (resolved threads and green CI yield `run_pre_approval_gate`)" : ` (CI at the head is ${ciStatus ?? "unknown"}; it must also be green before \`run_pre_approval_gate\`)`}.`,
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,
@@ -2431,7 +2439,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     allowedNextActions,
     forbiddenActions,
     nextAction: PR_CHECKPOINT_ACTION.REPORT_BLOCKED,
-    reason: `The PR gate-boundary evaluator could not map lifecycle state \`${effectiveLifecycleState}\` to a legal gate transition. Run \`wait-pr-checks.mjs\` for the head, then re-run \`dev-loops loop gate-coordination\`; if the state persists, report it with this state name.`,
+    reason: `The PR gate-boundary evaluator could not map lifecycle state \`${effectiveLifecycleState}\` to a legal gate transition. ${unmappableRemedy({ ciStatus, unresolvedThreadCount, copilotConvergenceOk })} Then re-run \`dev-loops loop gate-coordination\`; if the state persists, report it with this state name.`,
     mergeStateStatus,
     conflictFiles,
       refinementArtifact,

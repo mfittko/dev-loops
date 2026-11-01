@@ -9166,6 +9166,24 @@ test("resolveCapRoundFixed reports baseline_orphaned when the cap-round head is 
   }
 });
 
+// A real rebase: the cap-round head is a sibling of the head (not an ancestor), or an object this repository never had.
+test("resolveCapRoundFixed reports baseline_orphaned for a sibling cap-round head and for an absent cap-round object", async () => {
+  const { repoRoot, baseSha: A } = await makeBaseDiffRepo();
+  try {
+    git(repoRoot, ["checkout", "-q", "-b", "rebased", A]);
+    git(repoRoot, ["commit", "-q", "--allow-empty", "-m", "rebased"]);
+    const rebased = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    for (const [pr, capHead] of [[66, git(repoRoot, ["rev-parse", "main"]).trim()], [67, "f".repeat(40)]]) {
+      await seedClosedRounds(repoRoot, pr, ["1".repeat(40), "2".repeat(40), "3".repeat(40), capHead]);
+      let condition = null;
+      assert.equal(await resolveCapRoundFixed({ repo: "owner/repo", pr, gate: "draft_gate", headSha: rebased, baseRefName: "main" }, { repoRoot, onFailure: (c) => { condition = c; } }), null);
+      assert.equal(condition, "baseline_orphaned");
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapRoundFixed reports unsealed_record for an unsealed or seal-mismatched record at the base-only merge start", async () => {
   const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
   try {

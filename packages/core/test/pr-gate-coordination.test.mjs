@@ -4140,6 +4140,16 @@ test("round_cap_reached with unresolved threads routes to feedback fix and reply
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
   assert.match(result.reason, /no new Copilot cycle/);
+  assert.equal(result.loopDisposition, DISPOSITION.UNRESOLVED_FEEDBACK);
+});
+
+test("round_cap_reached with failing CI and unresolved threads still routes to the thread fix without claiming pre_approval follows (#3002)", () => {
+  const result = evaluatePrGateCoordination({ ...capBase, ciStatus: "failure", unresolvedThreadCount: 2 });
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK);
+  assert.equal(result.loopDisposition, DISPOSITION.UNRESOLVED_FEEDBACK);
+  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
+  assert.match(result.reason, /CI at the head is failure; it must also be green/);
+  assert.doesNotMatch(result.reason, /resolved threads and green CI yield/);
 });
 
 test("round_cap_reached with threads resolved and green CI allows run_pre_approval_gate (#3002 AC2)", () => {
@@ -4166,10 +4176,19 @@ for (const ciStatus of ["pending", "none"]) {
 }
 
 test("the unmappable-state default names the lifecycle state and an agent-runnable action (#3002 AC3)", () => {
-  const result = evaluatePrGateCoordination({ ...capBase, lifecycleState: "no_such_state", ciStatus: "success" });
+  const result = evaluatePrGateCoordination({ ...capBase, lifecycleState: "no_such_state", ciStatus: "success", unresolvedThreadCount: 0, copilotConvergenceOk: true });
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
   assert.match(result.reason, /no_such_state/);
   assert.match(result.reason, /wait-pr-checks\.mjs/);
+});
+
+test("the unmappable-state remedy matches the failing fact (#3002)", () => {
+  const unmapped = { ...capBase, lifecycleState: "no_such_state" };
+  const failing = evaluatePrGateCoordination({ ...unmapped, ciStatus: "failure", unresolvedThreadCount: 0, copilotConvergenceOk: true });
+  assert.match(failing.reason, /Fix the failing check at the head, or re-run it/);
+  const body = evaluatePrGateCoordination({ ...unmapped, ciStatus: "success", unresolvedThreadCount: 0, copilotConvergenceOk: false });
+  assert.match(body.reason, /GATE-EXEC-COPILOT-BODY-TO-JUDGE/);
+  assert.doesNotMatch(body.reason, /wait-pr-checks/);
 });
 
 test("round_cap_reached with non-green CI stays blocked exactly as today even with zero unresolved threads (#1472)", () => {
