@@ -193,7 +193,7 @@ state with `unitBoundaries.resume` and **continues**. A report point never force
 The following is the one canonical list of run-ending cases (the "run-ending cases"). The coordinator hands
 back only at `final_approval_ready`, a stop that needs a decision, the route's own terminal
 completion, a changed route, a lockout, genuine recovery, an unavailable actor, a runtime
-constraint, or explicit operator direction. When the orchestrator dispatches a replacement for one of those
+constraint, or explicit operator direction. The issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route. When the orchestrator dispatches a replacement for one of those
 reasons, it emits the work order with
 `scripts/loop/emit-coordinator-work-order.mjs --input <startup-output path> --harness <claude|pi|codex> --entry <queue|direct>`
 and dispatches the printed `dispatchPayload` unchanged. The input is the startup-output path a

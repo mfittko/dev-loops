@@ -99,13 +99,13 @@ field has no report point: a terminal, read-only (`review`, `ui_review`) or `wai
 omits the field entirely rather than sending an empty list, and the validator refuses an empty
 `reportAfter`. Two entries are **recorded naming approximations**, never report points their unit
 can reach: `final_approval` runs a gate round but posts no verdict of its own, and an
-`issue_intake` unit stops at the draft PR it opens. Both still carry `gate_verdict_posted`
+`issue_intake` unit whose draft PR re-targets it to the PR route, which it continues past. Both still carry `gate_verdict_posted`
 (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`).
 
 Hand back only at the run-ending cases in Unit coordinator boundaries of the
 [Main-agent contract](../skills/docs/main-agent-contract.md): `final_approval_ready`, a stop that
 needs a decision, the route's own terminal completion, a changed route, a lockout, genuine
-recovery, an unavailable actor, a runtime constraint, or explicit operator direction. The orchestrator never runs `loop startup`: it only emits and dispatches a replacement's
+recovery, an unavailable actor, a runtime constraint, or explicit operator direction. The issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route. The orchestrator never runs `loop startup`: it only emits and dispatches a replacement's
 work order from the startup-output path you name. The replacement re-resolves
 `unitBoundaries.resume` against authoritative state. That field carries the unit's own identities
 exactly as the producer emitted them, whichever of `issue`, `pr`, `branch` and `phase` the target

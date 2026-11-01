@@ -96,7 +96,7 @@ brief has to restate the boundary:
   `gate_verdict_posted` as a recorded naming approximation
   (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`), never as a second boundary that
   unit can reach: a route that posts no verdict of its own while its unit still runs a gate round
-  (`final_approval`), and an `issue_intake` unit that stops at the draft PR it opens.
+  (`final_approval`), and an `issue_intake` unit whose own draft PR re-targets it to the PR route, which the unit continues past.
 - `resume` names the authoritative re-resolution a resuming coordinator runs (`kind: loop_startup` plus
   whichever of the target's `issue`, `pr`, `branch` and `phase` values are set). It is **not** an
   exclusive selector, and no XOR or precedence rule applies to it: `deriveUnitBoundaries` copies

@@ -244,7 +244,9 @@ test("2955: one canonical run-ending list in the shared prose, no harness-specif
 
 // AC2 fixtures: a reported peak above 150K and absent telemetry. No runtime code reads peak
 // context, so the emitted boundaries and work order must be identical with or without it.
-test("2955: a reported peak above 150K stops, relaunches and blocks nothing", () => {
+// These fixtures pin only that extraneous input is ignored; the advisory policy itself is pinned
+// by the contract-prose tests above.
+test("2955: envelope and work order are unchanged by a reported peak above 150K", () => {
   const target = bundle({ kind: DEV_LOOP_TARGET_KIND.ISSUE, id: 42, linkedPr: 7 });
   const baseline = envelopeFor(target);
   const heavy = envelopeFor(
@@ -258,7 +260,7 @@ test("2955: a reported peak above 150K stops, relaunches and blocks nothing", ()
   assert.ok(!/stop|relaunch|block/i.test(JSON.stringify(heavy.unitBoundaries)));
 });
 
-test("2955: null peak telemetry emits no stop and no zero measurement", () => {
+test("2955: envelope and work order are unchanged by unknown peak telemetry", () => {
   const target = bundle({ kind: DEV_LOOP_TARGET_KIND.ISSUE, id: 42, linkedPr: 7 });
   const baseline = envelopeFor(target);
   const unknown = envelopeFor(
@@ -271,4 +273,11 @@ test("2955: null peak telemetry emits no stop and no zero measurement", () => {
   assert.deepEqual(order.handoff.unitBoundaries, baseline.unitBoundaries);
   // Unknown is never reported as zero: no peak figure appears at all.
   assert.ok(!/peak/i.test(JSON.stringify(order)), "unknown telemetry must not surface a peak value, zero or otherwise");
+});
+
+test("2955: the issue-to-PR re-target caused by the unit's own draft PR is a continuation", async () => {
+  const phrase = /issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route/;
+  for (const doc of ["skills/docs/main-agent-contract.md", ".claude/skills/docs/main-agent-contract.md", "agents/dev-loop.agent.md", ".claude/agents/dev-loop.md", "docs/decisions/0220-coordinator-report-points-replace-per-phase-handback.md"]) {
+    assert.match(squeeze(await readRepo(doc)), phrase, doc);
+  }
 });
