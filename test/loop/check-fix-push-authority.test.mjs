@@ -167,9 +167,10 @@ test("a force-push of a non-descendant sha to the marked branch is refused; anot
 
 test("recoveryHint renders the close command only for a 40 or 64 char lowercase hex baseline head", () => {
   for (const ok of ["a".repeat(40), "0123456789abcdef".repeat(4)]) assert.match(recoveryHint(ok, "/m", "issue-a"), new RegExp(`check-pre-push-delta\\.mjs .*--baseline ${ok} `));
-  for (const bad of ["A".repeat(40), "a".repeat(39), "a".repeat(41), "a".repeat(40) + "; rm -rf /", "$(id)", "a".repeat(63)]) {
+  for (const bad of ["A".repeat(40), "a".repeat(39), "a".repeat(41), "a".repeat(40) + "; rm -rf /", "$(id)", "a".repeat(63), ""]) {
     const hint = recoveryHint(bad, "/m", "issue-a");
     assert.doesNotMatch(hint, /check-pre-push-delta/, bad);
     assert.match(hint, /PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery/);
+    assert.match(hint, /sequence marker is \/m/);
   }
 });
