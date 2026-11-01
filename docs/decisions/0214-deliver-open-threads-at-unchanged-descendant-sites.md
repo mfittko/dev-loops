@@ -18,13 +18,13 @@ Before any checkpoint write, reply or resolution, it binds historical REST coord
 
 Both refusals name the open thread and direct a full `pre_approval_gate` round to receive its full bodies through the existing hash-bound `--known-findings` input. Recovery assesses the thread under its existing ID. Authenticated `head_moved` and `no_commit` sequence closures use the same full-round input without requiring a Delta whose baseline equals the live head. Existing draft-boundary admission and gate ordering still apply.
 
-The state graph includes `head_moved` exits from `pushed`, `ci_red`, `ci_green`, `delivery_incomplete` and `disposition_complete`. C19 replay evidence promotes only `head_moved -> full_gate_round` and `no_commit -> full_gate_round` from known gaps. CI-source intake, delta residue intake and completion re-entry remain later-slice gaps.
+The state graph includes `head_moved` exits from `pushed`, `ci_red`, `ci_green`, `delivery_incomplete` and `disposition_complete`. C19 replay evidence covers descendant delivery and known-findings intake under a satisfied draft boundary. It does not prove recovery admission with unresolved gate-authored threads, so `head_moved -> full_gate_round` and `no_commit -> full_gate_round` remain `known_gap`, alongside CI-source intake, delta residue intake and completion re-entry. Recovery admission is deferred until PR 2990 merges, per [the operator decision on issue 2787](https://github.com/mfittko/dev-loops/issues/2787#issuecomment-6513403927).
 
 Requiring a new live-head-baseline Delta would recreate the recovery cycle. Rewriting the authenticated candidate to H would discard the provenance being checked. Comparing only the final file contents would miss a touch followed by a revert. A new recovery protocol is unnecessary because the existing full-gate input supplies the fallback authority.
 
 ## Consequences
 
-Open threads can complete at a descendant head when every intervening change leaves their sites intact; uncertain or changed sites remain visible to a full gate without operator intervention. Site-history checks are conservative and may require the full-round fallback for histories they cannot verify.
+Open threads can complete at a descendant head when every intervening change leaves their sites intact; uncertain or changed sites are named for a full gate round through the hash-bound input. Until recovery admission lands, unresolved gate-authored threads can still prevent that round from starting and may need operator action. Site-history checks are conservative and may require the full-round fallback for histories they cannot verify.
 
 Disposition delivery never supplies or carries a gate verdict. This slice does not re-arm the advisory disposition boundary, claim whole-loop liveness, change cap-round behavior, add emitter authority, or implement slices 4 to 6 or abandoned-marker recovery.
 
