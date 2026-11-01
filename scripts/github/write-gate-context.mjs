@@ -1224,7 +1224,7 @@ function renderTokenDisciplineSection(contextPath) {
     "",
     "- Never `cat`/`head` dev-loops tool or artifact JSON: a dev-loops CLI takes its own `--jq`/`--silent` flags; an on-disk artifact file is read with plain `jq '<filter>' <path>`.",
     `- Read the gate-context artifact that way, e.g. \`jq '{resolvedAngles, scope}' "${contextPathDisplay}"\`.`,
-    "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior you already read there.",
+    "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — never re-read a hunk interior you already read there. Open a source file to widen past a hunk's edges only when your angle needs it, except the files the context artifact's `.adjacentCode.expansion` lists (importers and sibling functions of a changed exported function, state writer or guard): reading those files is expected, and the evidence file names any the cap dropped.",
     "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
     "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
   ].join("\n");
@@ -1539,6 +1539,15 @@ export function renderBriefingEvidence({
     lines.push(
       `Stripped: ${adjacentCode.stripped?.length ?? 0}, Truncated: ${adjacentCode.truncated?.length ?? 0}, Missing: ${adjacentCode.missing?.length ?? 0}`,
     );
+    const expansion = adjacentCode.expansion;
+    if (expansion && (expansion.files.length > 0 || expansion.dropped.length > 0)) {
+      lines.push(`Expansion files (${expansion.files.length}; cap ${expansion.maxFiles} files, ${expansion.maxBytes} bytes):`);
+      pushPathListLines(lines, expansion.files.map((f) => ({ path: f.path, label: `${f.path} (${f.kind}${f.names ? `: ${f.names.join(", ")}` : ""})` })));
+      if (expansion.dropped.length > 0) {
+        lines.push(`Dropped by the expansion cap (${expansion.dropped.length}):`);
+        pushPathListLines(lines, expansion.dropped.map((f) => ({ path: f.path, label: `${f.path} (${f.kind})` })));
+      }
+    }
   } else {
     lines.push("Adjacent files (0): (no adjacent-code bundle for this briefing)");
   }
@@ -2586,7 +2595,7 @@ export function buildGateContextArtifact(options) {
  * @param {{ repoRoot: string }} opts
  * @returns {Promise<{ diffPath: string|null, diffToWrite: object|null, changedFiles: string[], adjacentCode: object|null, diffOutput: string|null }>}
  */
-async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFileBytes }, { repoRoot }) {
+async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFileBytes, expansion }, { repoRoot }) {
   const diffOutput = diff?.diffOutput;
   let diffPath = null;
   const changedFiles = parseChangedFiles(diff?.nameStatusOutput);
@@ -2608,6 +2617,8 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
         changedFiles,
         repoRoot,
         maxFileBytes: typeof maxFileBytes === "number" && maxFileBytes > 0 ? maxFileBytes : DEFAULT_MAX_FILE_BYTES,
+        diffText: typeof diffOutput === "string" ? diffOutput : "",
+        expansion,
       });
     } catch (err) {
       process.stderr.write(`[gate-context] adjacent-code bundle failed (continuing without adjacentCode): ${err?.message ?? err}\n`);
@@ -3459,7 +3470,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // scope.changedFiles, and the neutral adjacentCode bundle, all built ONCE by
   // the shared resolveDiffScope helper (also used by the CLI --base path).
   const { diffPath, diffToWrite, changedFiles, adjacentCode, diffOutput } = await resolveDiffScope(
-    { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, maxFileBytes: input.maxFileBytes },
+    { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, maxFileBytes: input.maxFileBytes, expansion: input.config?.gates?.contextExpansion },
     { repoRoot },
   );
 
@@ -3937,7 +3948,7 @@ export async function main(
       }
       diff = captureDiffFromBase(options.base, { repoRoot, paths: closurePaths });
       const scope = await resolveDiffScope(
-        { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" },
+        { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", expansion: options.config?.gates?.contextExpansion },
         { repoRoot },
       );
       // A --base build that resolves an EMPTY change set is degenerate: the

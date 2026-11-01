@@ -5710,6 +5710,37 @@ describe("gates.reviewDiff.excludeGlobs", () => {
   });
 });
 
+describe("gates.contextExpansion", () => {
+  async function loadWith(gates) {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-context-expansion-"));
+    try {
+      await writeFile(path.join(tmpDir, ".devloops"), JSON.stringify({ version: 1, gates }));
+      return await loadDevLoopConfig({ repoRoot: tmpDir });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  test("ships maxFiles 6 and maxBytes 98304 by default", async () => {
+    const result = await loadWith({});
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.config.gates.contextExpansion.maxFiles, 6);
+    assert.equal(result.config.gates.contextExpansion.maxBytes, 98304);
+  });
+
+  test("a repo overrides the caps", async () => {
+    const result = await loadWith({ contextExpansion: { maxFiles: 2, maxBytes: 4096 } });
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.config.gates.contextExpansion.maxFiles, 2);
+    assert.equal(result.config.gates.contextExpansion.maxBytes, 4096);
+  });
+
+  test("a negative or non-integer cap yields a validation error", async () => {
+    assert.ok((await loadWith({ contextExpansion: { maxFiles: -1 } })).errors.length > 0);
+    assert.ok((await loadWith({ contextExpansion: { maxBytes: 1.5 } })).errors.length > 0);
+  });
+});
+
 test("parseGitNumstat skips excluded paths, counts binaries as 0 lines, and fails closed on renames", async () => {
   const { parseGitNumstat } = await import("../../../scripts/loop/detect-change-scope.mjs");
   assert.deepEqual(parseGitNumstat(""), { filesChanged: 0, linesChanged: 0, rawFilesChanged: 0, rawLinesChanged: 0 });

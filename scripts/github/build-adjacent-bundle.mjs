@@ -320,6 +320,114 @@ async function readGuardedFile(repoRoot, relPath, maxFileBytes) {
   }
 }
 
+/** Default per-round caps for the adaptive context expansion (gates.contextExpansion). */
+export const DEFAULT_EXPANSION_CAPS = { maxFiles: 6, maxBytes: 98304 };
+
+// ponytail: line-regex scan, not a parser. Ceiling: top-level function and
+// arrow-const declarations only; a function ends where the next one starts, so
+// a trailing doc comment counts toward its predecessor. Upgrade path: a real
+// JS parser if class methods or nested exports matter.
+const DECL_RE = /^(export\s+)?(?:async\s+function\s*\*?\s*|function\s*\*?\s*|const\s+)([A-Za-z_$][\w$]*)(?=\s*(?:\(|=\s*(?:async\s*)?(?:\(|function\b|[A-Za-z_$][\w$]*\s*=>)))/;
+// ponytail: name heuristic for state writers and guards; add a marker comment
+// convention if it misfires.
+const WRITER_OR_GUARD_RE = /write|save|persist|set|delete|remove|guard|assert|ensure|require|refuse|validate/i;
+
+/** New-side line numbers touched per file; a removal maps to the next new line. */
+function changedLinesByFile(diffText) {
+  const out = new Map();
+  let file = null;
+  let inHunk = false;
+  let n = 0;
+  const mark = (line) => out.get(file)?.add(line);
+  for (const line of String(diffText ?? "").split("\n")) {
+    if (line.startsWith("diff --git ")) { inHunk = false; file = null; continue; }
+    if (!inHunk && line.startsWith("+++ ")) {
+      file = line.startsWith("+++ b/") ? line.slice(6) : null;
+      if (file) out.set(file, new Set());
+      continue;
+    }
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line);
+    if (hunk) { inHunk = true; n = Number(hunk[1]); continue; }
+    if (!inHunk || !file) continue;
+    if (line.startsWith("+")) { mark(n); n += 1; }
+    else if (line.startsWith("-")) mark(n);
+    else if (line.startsWith(" ")) n += 1;
+  }
+  return out;
+}
+
+/** Top-level declarations of a source text: [{ name, exported, start, end, bytes }] (1-based lines). */
+function topLevelFunctions(source) {
+  const lines = source.split("\n");
+  const found = [];
+  lines.forEach((text, i) => {
+    const m = DECL_RE.exec(text);
+    if (m) found.push({ name: m[2], exported: Boolean(m[1]), start: i + 1 });
+  });
+  return found.map((f, i) => {
+    const end = i + 1 < found.length ? found[i + 1].start - 1 : lines.length;
+    return { ...f, end, bytes: Buffer.byteLength(lines.slice(f.start - 1, end).join("\n"), "utf8") };
+  });
+}
+
+/**
+ * Adaptive context expansion: for each changed file whose diff touches an
+ * exported function, a state writer or a guard, select its importers and its
+ * sibling functions, then apply the per-round file and byte caps. Candidates
+ * are sorted by (path, kind), so selection and the dropped list are
+ * deterministic. A diff confined to private, non-writer, non-guard functions
+ * selects nothing.
+ */
+async function selectExpansion({ changed, diffText, repoRoot, importerIndex, caps }) {
+  const touched = changedLinesByFile(diffText);
+  const candidates = new Map();
+  const add = (key, entry) => {
+    const prior = candidates.get(key);
+    if (prior) prior.relatedTo = Array.from(new Set([...prior.relatedTo, ...entry.relatedTo])).sort();
+    else candidates.set(key, entry);
+  };
+  for (const file of changed) {
+    const lines = touched.get(file);
+    if (!lines || !isSourceFile(file)) continue;
+    let source;
+    try {
+      source = await readFile(path.resolve(repoRoot, file), "utf8");
+    } catch {
+      continue;
+    }
+    const fns = topLevelFunctions(source);
+    const hit = fns.filter((f) => (f.exported || WRITER_OR_GUARD_RE.test(f.name)) && [...lines].some((l) => l >= f.start && l <= f.end));
+    if (hit.length === 0) continue;
+    const siblings = fns.filter((f) => !hit.includes(f));
+    if (siblings.length > 0) {
+      add(`${file}\0siblings`, { path: file, kind: "siblings", relatedTo: [file], names: siblings.map((f) => f.name).sort(), bytes: siblings.reduce((n, f) => n + f.bytes, 0) });
+    }
+    for (const imp of importerIndex.get(file) ?? []) {
+      if (changed.includes(imp)) continue;
+      let bytes = 0;
+      try {
+        bytes = (await stat(path.resolve(repoRoot, imp))).size;
+      } catch {
+        continue;
+      }
+      add(`${imp}\0importer`, { path: imp, kind: "importer", relatedTo: [file], bytes });
+    }
+  }
+  const files = [];
+  const dropped = [];
+  let total = 0;
+  for (const key of Array.from(candidates.keys()).sort()) {
+    const c = candidates.get(key);
+    if (files.length < caps.maxFiles && total + c.bytes <= caps.maxBytes) {
+      files.push(c);
+      total += c.bytes;
+    } else {
+      dropped.push({ path: c.path, kind: c.kind, bytes: c.bytes });
+    }
+  }
+  return { maxFiles: caps.maxFiles, maxBytes: caps.maxBytes, files, dropped };
+}
+
 /**
  * Build the deterministic, neutral adjacent-code bundle for a set of changed
  * files. For each changed source file, collect its 1-hop import out-edges
@@ -343,9 +451,12 @@ async function readGuardedFile(repoRoot, relPath, maxFileBytes) {
  * @param {string[]} input.changedFiles — repo-relative paths from the diff
  * @param {string} [input.repoRoot]
  * @param {number} [input.maxFileBytes]
+ * @param {string} [input.diffText] — unified diff; drives the adaptive `expansion`
+ * @param {{ maxFiles?: number, maxBytes?: number }} [input.expansion] — per-round caps (gates.contextExpansion)
  * @returns {Promise<object>}
  */
-export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd(), maxFileBytes = DEFAULT_MAX_FILE_BYTES }) {
+export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd(), maxFileBytes = DEFAULT_MAX_FILE_BYTES, diffText = "", expansion = {} }) {
+  const caps = { maxFiles: expansion?.maxFiles ?? DEFAULT_EXPANSION_CAPS.maxFiles, maxBytes: expansion?.maxBytes ?? DEFAULT_EXPANSION_CAPS.maxBytes };
   const changed = Array.from(
     new Set((Array.isArray(changedFiles) ? changedFiles : []).map((f) => String(f).replace(/\\/g, "/")).filter((f) => f.length > 0)),
   ).sort();
@@ -353,7 +464,7 @@ export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd
   // No changed files → empty bundle. Return early so the empty case is O(1) and
   // skips the whole-repo scan + importer-index build entirely.
   if (changed.length === 0) {
-    return { maxFileBytes, files: [], stripped: [], truncated: [], missing: [] };
+    return { maxFileBytes, files: [], stripped: [], truncated: [], missing: [], expansion: { ...caps, files: [], dropped: [] } };
   }
 
   const repoFiles = await listRepoFiles(repoRoot);
@@ -438,5 +549,6 @@ export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd
     stripped,
     truncated: truncatedList,
     missing: missing.sort(),
+    expansion: await selectExpansion({ changed, diffText, repoRoot, importerIndex, caps }),
   };
 }

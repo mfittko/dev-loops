@@ -3076,7 +3076,7 @@ test("renderBriefingPrefix: carries the Reviewer token discipline section, befor
   assert.match(text, /`--jq`\/`--silent`/);
   assert.match(text, /[Nn]ever `cat`\/`head`/);
   assert.match(text, /jq '\{resolvedAngles, scope}' "tmp\/gate-context\/owner-repo\/pr-9\/draft_gate-abc1234567890\.json"/);
-  assert.match(text, /widen PAST a hunk's edges/);
+  assert.match(text, /never re-read a hunk interior/);
   assert.match(text, /cut -c1-200/);
   assert.match(text, /`contextWidened`/);
   assert.match(text, /absence means "not consulted", never "consulted and clean"/);
@@ -4063,7 +4063,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       "- Never `cat`/`head` dev-loops tool or artifact JSON: a dev-loops CLI takes its own `--jq`/`--silent` flags; an on-disk artifact file is read with plain `jq '<filter>' <path>`.",
       "- Read the gate-context artifact that way, e.g. `jq '{resolvedAngles, scope}' \"tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json\"`.",
-      "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior you already read there.",
+      "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — never re-read a hunk interior you already read there. Open a source file to widen past a hunk's edges only when your angle needs it, except the files the context artifact's `.adjacentCode.expansion` lists (importers and sibling functions of a changed exported function, state writer or guard): reading those files is expected, and the evidence file names any the cap dropped.",
       "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
       "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
       "",

@@ -256,6 +256,11 @@ gates:
       # holistic has no group: it joins the auto-chunked leftover pool and may
       # share a reviewer unit with other leftover angles. It keeps its own
       # prompt, findings artifact and provenance entry.
+  # Per-round caps on the importers and sibling functions the gate context adds
+  # when a diff changes an exported function, a state writer or a guard.
+  contextExpansion:
+    maxFiles: 6
+    maxBytes: 98304
   preApproval:
     angles:
       - name: dry
