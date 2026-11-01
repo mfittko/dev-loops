@@ -358,7 +358,7 @@ export async function runCli(
   const itemCounts = options.threadsFile ? { threadItemCount: sequence.actItems.length } : { actItemCount: sequence.actItems.length };
   if (resolveDeltaTrigger({ ...itemCounts, fixCommitted }) !== "delta") {
     // PRE-PUSH-DELTA-PUSH-AUTHORITY: the commit_only round ended without a fix commit, so its marker guards nothing and would only block later pushes.
-    if (!(options.fixerPlan && options.siteCoverage && !options.result && !options.handback)) throw new Error(`worktree HEAD ${currentHead} equals the baseline: pass the current pulled --fixer-plan and --site-coverage in input-only mode to close its sequence`);
+    if (!(options.fixerPlan && options.siteCoverage && !options.result && !options.handback)) throw new Error(`no delta review applies (worktree HEAD ${currentHead}, baseline ${sequence.reviewBaselineHead}, ${sequence.actItems.length} item(s)): pass the current pulled --fixer-plan and --site-coverage in input-only mode to close its sequence`);
   }
   // The fixer's commit_only handback. Without it every act item with a site query reports a coverage gap.
   const result = options.result ? JSON.parse(readFileSync(options.result, "utf8")) : null;
