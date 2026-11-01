@@ -297,3 +297,26 @@ test("a deleted private function after an exported function adds no expansion", 
     assert.deepEqual(b.expansion.files, []);
   });
 });
+
+const replaceDiff = (ctx, removed, added, tail) => [
+  "diff --git a/src/r.mjs b/src/r.mjs", "--- a/src/r.mjs", "+++ b/src/r.mjs", "@@ -1,9 +1,9 @@",
+  ...ctx.map((l) => ` ${l}`), ...removed.map((l) => `-${l}`), ...added.map((l) => `+${l}`), ...tail.map((l) => ` ${l}`), "",
+].join("\n");
+
+test("a multi-line replacement of a private function right after an exported function adds no expansion", async () => {
+  const src = "export function f(a) {\n  return a;\n}\nfunction g(b, c) {\n  return c;\n}\n";
+  const diff = replaceDiff(["export function f(a) {", "  return a;", "}"], ["function g(b) {", "  return b;"], ["function g(b, c) {", "  return c;"], ["}"]);
+  await withRepo({ "src/r.mjs": src, "src/use.mjs": 'import { f } from "./r.mjs";\nf(1);\n' }, async (root) => {
+    const b = await buildAdjacentBundle({ changedFiles: ["src/r.mjs"], repoRoot: root, diffText: diff });
+    assert.deepEqual(b.expansion.files, []);
+  });
+});
+
+test("a multi-line removal at an exported function tail still selects the importers", async () => {
+  const src = "export function f(a) {\n  return a;\n}\n";
+  const diff = replaceDiff(["export function f(a) {", "  return a;"], ["  log(a);", "  log2(a);"], [], ["}"]);
+  await withRepo({ "src/r.mjs": src, "src/use.mjs": 'import { f } from "./r.mjs";\nf(1);\n' }, async (root) => {
+    const b = await buildAdjacentBundle({ changedFiles: ["src/r.mjs"], repoRoot: root, diffText: diff });
+    assert.deepEqual(b.expansion.files.map((f) => f.path), ["src/use.mjs"]);
+  });
+});

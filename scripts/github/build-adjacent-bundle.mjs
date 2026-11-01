@@ -389,7 +389,7 @@ function changedLinesByFile(diffText) {
   const mark = (line) => out.get(file)?.lines.add(line);
   let pending = null; // new-side line a still-open removal run would be credited to
   const flush = (next) => {
-    if (pending !== null && !next.startsWith("+") && !next.startsWith("\\")) mark(pending);
+    if (pending !== null && !/^[-+\\]/.test(next)) mark(pending);
     if (!next.startsWith("-") && !next.startsWith("\\")) pending = null;
   };
   for (const line of String(diffText ?? "").split("\n")) {
