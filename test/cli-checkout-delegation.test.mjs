@@ -1,22 +1,23 @@
 // CLI-CHECKOUT-DELEGATION: an installed CLI runs the source checkout's CLI for gate, loop and pr.
 import { afterAll, test } from "bun:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { delegationStdio, findSkewedCheckout, runCli } from "../cli/index.mjs";
+import { delegationStdio, findSkewedCheckout, runCli, withSigintGuard } from "../cli/index.mjs";
+import { checkoutDelegationRefusal } from "../scripts/lib/checkout-delegation-refusal.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tmpRoots = [];
 afterAll(() => { for (const dir of tmpRoots) rmSync(dir, { recursive: true, force: true }); });
 
-function makeCheckout(entrySource) {
+function makeCheckout(entrySource, version = "9.9.9") {
   const root = mkdtempSync(path.join(tmpdir(), "devloops-delegation-"));
   tmpRoots.push(root);
   mkdirSync(path.join(root, "cli"));
-  writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "dev-loops", version: "9.9.9" }));
+  writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "dev-loops", version }));
   writeFileSync(path.join(root, "cli/index.mjs"), entrySource);
   return root;
 }
@@ -103,7 +104,44 @@ test("a checkout CLI that cannot run names the rerun command", async () => {
 test("rerun hint quotes args with spaces", async () => {
   const root = makeCheckout(ECHO_ENTRY);
   const result = await run(["loop", "startup", "--note", "a b"], root, { execPath: "/nonexistent/node" });
-  assert.match(result.stderr, /--note "a b"/);
+  assert.match(result.stderr, /--note 'a b'/);
+});
+
+test("rerun hint is shell-safe for the root and every argument", () => {
+  const hint = (root, argv) => checkoutDelegationRefusal({ installed: "1", checkoutVersion: "2", root, code: "ENOENT", argv });
+  assert.match(hint("/a/b/dev-loops", ["startup", "--issue=1"]), /--repo-root \/a\/b\/dev-loops cli\/index\.mjs startup --issue=1$/);
+  assert.match(hint("/Users/a/My Repos/dev-loops", []), /--repo-root '\/Users\/a\/My Repos\/dev-loops' cli/);
+  assert.match(hint("/r", ["$(id)", "cost $5", "`id`"]), / '\$\(id\)' 'cost \$5' '`id`'$/);
+  assert.match(hint("/r", ["it's"]), / 'it'\\''s'$/);
+  assert.match(hint("/r", [""]), / ''$/);
+});
+
+test("equal installed and checkout versions delegate without a skew notice", async () => {
+  const { version } = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+  const root = makeCheckout(ECHO_ENTRY, version);
+  const result = await run(["loop", "startup"], root);
+  assert.equal(JSON.parse(result.stdout).delegated, true);
+  assert.doesNotMatch(result.stderr, /version skew/);
+});
+
+test("findSkewedCheckout walks past an incomplete or malformed inner package.json", () => {
+  const outer = makeCheckout(ECHO_ENTRY);
+  const noCli = path.join(outer, "a");
+  const malformed = path.join(noCli, "b");
+  mkdirSync(malformed, { recursive: true });
+  writeFileSync(path.join(noCli, "package.json"), JSON.stringify({ name: "dev-loops", version: "1.0.0" }));
+  writeFileSync(path.join(malformed, "package.json"), "{ not json");
+  assert.equal(findSkewedCheckout(malformed)?.root, realpathSync(outer));
+});
+
+test("inherited delegation registers a SIGINT listener only during the spawn", () => {
+  const before = process.listenerCount("SIGINT");
+  let during = null;
+  withSigintGuard("inherit", () => { during = process.listenerCount("SIGINT"); });
+  assert.equal(during, before + 1);
+  assert.equal(process.listenerCount("SIGINT"), before);
+  withSigintGuard(["ignore", "pipe", "pipe"], () => { during = process.listenerCount("SIGINT"); });
+  assert.equal(during, before);
 });
 
 test("checkout output over the buffer is child_output_too_large without a rerun hint", async () => {

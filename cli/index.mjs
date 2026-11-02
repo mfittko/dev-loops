@@ -741,7 +741,13 @@ export function delegationStdio(stdout, stderr) {
   return stdout === process.stdout && stderr === process.stderr ? "inherit" : ["ignore", "pipe", "pipe"];
 }
 
-const quoteRerunArg = (arg) => (/^[\w./:=@-]+$/.test(arg) ? arg : JSON.stringify(arg));
+// Ctrl-C reaches the whole foreground group; an inherited-stdio child owns the terminal, so this wrapper must stay alive.
+export function withSigintGuard(stdio, fn) {
+  if (stdio !== "inherit") return fn();
+  const ignoreSigint = () => {};
+  process.on("SIGINT", ignoreSigint);
+  try { return fn(); } finally { process.off("SIGINT", ignoreSigint); }
+}
 
 async function delegateToCheckout({ argv, cwd, env, stdout, stderr, spawnMaxBuffer, execPath, alreadyDelegated }) {
   if (alreadyDelegated || !CHECKOUT_DELEGATED_CATEGORIES.has(argv[0])) return null;
@@ -753,21 +759,21 @@ async function delegateToCheckout({ argv, cwd, env, stdout, stderr, spawnMaxBuff
     writeLines(stderr, [`[dev-loops] version skew: installed ${installed}, checkout ${checkout.version}; running ${entry} (CLI-CHECKOUT-DELEGATION).`]);
   }
   const stdio = delegationStdio(stdout, stderr);
-  const result = spawnSync(execPath, [entry, ...argv], {
+  const result = withSigintGuard(stdio, () => spawnSync(execPath, [entry, ...argv], {
     cwd,
     encoding: "utf8",
     stdio,
     maxBuffer: spawnMaxBuffer,
     env: { ...env, DEVLOOPS_CHECKOUT_DELEGATED: "1" },
-  });
+  }));
   if (result.error?.code === "ENOBUFS") {
     writeLines(stderr, [`child_output_too_large: the checkout CLI output exceeded the ${spawnMaxBuffer}-byte wrapper buffer.`]);
     return 1;
   }
   if (result.error) {
-    // Lazy: a deps-less plugin checkout ships cli/ and lib/ only.
+    // Lazy: the refusal module loads only on this error path and has no @dev-loops/core dependency.
     const { checkoutDelegationRefusal } = await import("../scripts/lib/checkout-delegation-refusal.mjs");
-    writeLines(stderr, [checkoutDelegationRefusal({ installed, checkoutVersion: checkout.version, root: checkout.root, code: result.error.code ?? result.error.message, argvText: argv.map(quoteRerunArg).join(" ") })]);
+    writeLines(stderr, [checkoutDelegationRefusal({ installed, checkoutVersion: checkout.version, root: checkout.root, code: result.error.code ?? result.error.message, argv })]);
     return 1;
   }
   if (result.stdout) stdout.write(result.stdout);
