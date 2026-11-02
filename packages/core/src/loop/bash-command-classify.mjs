@@ -956,29 +956,182 @@ export function commandContainsCopilotSummonComment(command) {
  * benign false positive, because tightening the exemption to a shell-interpreter anchor would risk a
  * fail-open (missing a real `sh -c` poll loop), the worse direction.
  *
- * ponytail: blanks balanced quote pairs only, with the command-substitution/backtick preserve rule
- * and the `-c`-cluster/`--command`/`eval` exemption above — no full shell tokenizer (mismatched/
- * partial quotes and other exec-wrapper flags stay out of scope). Accepted ceiling: a deliberately
- * quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is blanked like any
- * other quoted literal and can therefore evade the ban — accepted as a deliberate-evasion class, not
- * a natural shape a genuine poll loop takes.
+ * Quote spans come from `tokenizeShellCommand`, so an escaped quote, a quote in a `#` comment and a
+ * quote nested in `$(...)` never pair across the wrong characters. Text from an unterminated quote,
+ * `$(` or heredoc onward is left as raw executable text (deny direction). Accepted ceiling: a
+ * deliberately quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is
+ * blanked like any other quoted literal and can therefore evade the ban.
  * @param {string} command @returns {string}
  */
 function stripQuotedLiterals(command) {
-  return command.replace(/(['"])((?:(?!\1).)*)\1/gs, (match, _quote, inner, offset, full) => {
-    // A quoted string containing a command substitution ($()) or backtick is executable code, not
-    // inert data — its command runs regardless of the surrounding quotes. Blanking it would hide a
-    // real poll loop such as `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done` that the
-    // gh/loop-state ban already denied. Preserve it (fail-closed direction).
-    if (/\$\(|`/.test(inner)) {
-      return match;
+  const { spans, incompleteAt } = tokenizeShellCommand(command);
+  const limit = incompleteAt < 0 ? command.length : incompleteAt;
+  let out = "";
+  let pos = 0;
+  for (const { start, end } of [...spans].sort((a, b) => a.start - b.start)) {
+    if (start < pos || start >= limit) continue; // nested in a span already handled, or in the unterminated tail
+    const kept =
+      /\$\(|`/.test(command.slice(start + 1, end - 1)) || // executable code in quotes: preserve (fail-closed)
+      /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(command.slice(0, start)); // -c/eval payload: real shell syntax
+    out += command.slice(pos, start) + (kept ? command.slice(start, end) : " ");
+    pos = end;
+  }
+  return out + command.slice(pos);
+}
+
+/**
+ * Shell-word tokenizer for the classifier. Returns `{ segments, spans, incomplete, incompleteAt }`.
+ * A segment ends at an unquoted `;`, `&&`, `||`, `|`, `|&`, `&` or newline (`>|`, `>&`, `&>` are
+ * redirects). Each segment has `words` (`raw`, unquoted `value`, `single`/`double`/`ansi` quoting
+ * flags, `subs` for `$(...)`, `op` for `<<`/`<<<` operator words) and `heredocs` (`delimiter`,
+ * `quoted`, `stripTabs`, `body`, `segment` index). Models single/double/ANSI-C quotes, backslash
+ * escapes, word-start `#` comments, here-strings, heredocs and `$(...)`/backtick substitutions.
+ * `spans` lists every terminated quote span (`start`/`end` offsets in COMMAND). An unterminated
+ * quote, `$(`, backtick or heredoc sets `incomplete`; `incompleteAt` is the offset of the earliest
+ * unclosed opener, and callers treat the text from there on as unquoted executable text.
+ * ponytail: arithmetic, `${...}` quoting and subshell grouping are not modelled; a stray `<<` fails closed.
+ * @param {string} command
+ * @returns {{ segments: object[], spans: {start:number,end:number,kind:string}[], incomplete: boolean, incompleteAt: number }}
+ */
+export function tokenizeShellCommand(command) {
+  const n = command.length;
+  const spans = [];
+  const pending = [];
+  let i = 0;
+  let incompleteAt = -1;
+  const fail = (at) => { incompleteAt = incompleteAt < 0 ? at : Math.min(incompleteAt, at); i = n; };
+
+  const readTicks = () => {
+    const start = i;
+    for (i++; i < n && command[i] !== "`"; i += command[i] === "\\" ? 2 : 1);
+    if (i >= n) { fail(start); return command.slice(start); }
+    i++;
+    return command.slice(start, i);
+  };
+  const readSub = (word) => {
+    const start = i;
+    i += 2;
+    const { segments, closed } = parseSeq(true);
+    if (!closed) fail(start);
+    word.subs.push({ start, end: i, segments });
+    return command.slice(start, i);
+  };
+  const readDouble = (word) => {
+    const start = i;
+    let value = "";
+    word.double = true;
+    for (i++; i < n;) {
+      const c = command[i];
+      if (c === '"') { i++; spans.push({ start, end: i, kind: "double" }); return value; }
+      if (c === "\\") { const d = command[i + 1] ?? ""; value += /["\\$`]/.test(d) ? d : c + d; i += 2; }
+      else if (c === "$" && command[i + 1] === "(") value += readSub(word);
+      else if (c === "`") value += readTicks();
+      else { value += c; i++; }
     }
-    const before = full.slice(0, offset);
-    if (/(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(before)) {
-      return match; // executable -c/eval payload — leave the real shell syntax intact
+    fail(start);
+    return value;
+  };
+
+  function parseSeq(inSub) {
+    const segments = [];
+    let seg = { words: [], heredocs: [], start: i, end: i };
+    let word = null;
+    const newWord = () => ({ raw: "", value: "", start: i, end: i, single: false, double: false, ansi: false, subs: [] });
+    const endWord = () => {
+      if (!word) return;
+      word.end = i;
+      word.raw = command.slice(word.start, i);
+      seg.words.push(word);
+      word = null;
+    };
+    const endSeg = () => {
+      endWord();
+      if (seg.words.length || seg.heredocs.length) { seg.end = i; segments.push(seg); }
+      seg = { words: [], heredocs: [], start: i, end: i };
+    };
+    const operator = (op, len) => {
+      endWord();
+      word = { ...newWord(), value: op, op };
+      i += len;
+      endWord();
+    };
+    const wordUnit = () => {
+      word ??= newWord();
+      const c = command[i];
+      const next = command[i + 1];
+      if (c === "\\") { if (next !== "\n") word.value += next ?? ""; i += 2; }
+      else if (c === "'") {
+        const end = command.indexOf("'", i + 1);
+        word.single = true;
+        if (end < 0) { word.value += command.slice(i + 1); fail(i); return; }
+        word.value += command.slice(i + 1, end);
+        spans.push({ start: i, end: end + 1, kind: "single" });
+        i = end + 1;
+      } else if (c === "$" && next === "'") {
+        let j = i + 2;
+        while (j < n && command[j] !== "'") j += command[j] === "\\" ? 2 : 1;
+        word.ansi = true;
+        if (j >= n) { word.value += command.slice(i + 2); fail(i); return; }
+        word.value += command.slice(i + 2, j).replace(/\\(.)/gs, "$1");
+        spans.push({ start: i + 1, end: j + 1, kind: "ansi" });
+        i = j + 1;
+      } else if (c === '"') word.value += readDouble(word);
+      else if (c === "$" && next === "(") word.value += readSub(word);
+      else if (c === "`") word.value += readTicks();
+      else { word.value += c; i++; }
+    };
+    const readHeredocBodies = () => {
+      for (const h of pending.splice(0)) {
+        const bodyStart = i;
+        let found = false;
+        for (let lineStart = i; lineStart < n && !found;) {
+          let eol = command.indexOf("\n", lineStart);
+          if (eol < 0) eol = n;
+          const line = command.slice(lineStart, eol);
+          if ((h.stripTabs ? line.replace(/^\t+/, "") : line) === h.delimiter) {
+            h.body = command.slice(bodyStart, Math.max(bodyStart, lineStart - 1));
+            i = Math.min(eol + 1, n);
+            found = true;
+          }
+          lineStart = eol + 1;
+        }
+        if (!found) { h.body = command.slice(bodyStart); fail(h.start); }
+      }
+    };
+
+    while (i < n) {
+      const c = command[i];
+      const next = command[i + 1];
+      const redirectChar = word && (command[i - 1] === ">" || command[i - 1] === "<");
+      if (inSub && c === ")") { endSeg(); i++; return { segments, closed: true }; }
+      if (c === " " || c === "\t") { endWord(); i++; }
+      else if (c === "\n") { endSeg(); i++; readHeredocBodies(); }
+      else if (c === "#" && !word) { while (i < n && command[i] !== "\n") i++; }
+      else if (c === "&" && next === "&") { endSeg(); i += 2; }
+      else if (c === "|" && next === "|") { endSeg(); i += 2; }
+      else if (c === "|" && next === "&") { endSeg(); i += 2; }
+      else if (c === ";" || (c === "|" && !(word && command[i - 1] === ">")) || (c === "&" && !redirectChar && next !== ">")) { endSeg(); i++; }
+      else if (c === "<" && command.startsWith("<<<", i)) operator("<<<", 3);
+      else if (c === "<" && next === "<") {
+        const start = i;
+        const stripTabs = command[i + 2] === "-";
+        operator("<<", stripTabs ? 3 : 2);
+        while (command[i] === " " || command[i] === "\t") i++;
+        while (i < n && !/[\s;&|()<>]/.test(command[i])) wordUnit();
+        const delimiter = word;
+        endWord();
+        if (!delimiter) { fail(start); continue; }
+        const heredoc = { delimiter: delimiter.value, quoted: delimiter.single || delimiter.double || delimiter.ansi || delimiter.raw.includes("\\"), stripTabs, body: "", start, segment: segments.length };
+        seg.heredocs.push(heredoc);
+        pending.push(heredoc);
+      } else wordUnit();
     }
-    return " ";
-  });
+    endSeg();
+    return { segments, closed: false };
+  }
+
+  const { segments } = parseSeq(false);
+  return { segments, spans, incomplete: incompleteAt >= 0, incompleteAt };
 }
 
 /**
@@ -1246,6 +1399,11 @@ function scanShellText(text) {
  * @param {string} command @returns {boolean}
  */
 export function commandContainsInlineInterpreter(command) {
+  // Malformed input (unterminated quote, `$(` or heredoc) fails closed. Checked on the whole command only: the recursive substitution slices below are cut mid-construct on purpose.
+  return tokenizeShellCommand(command).incomplete || scanInlineInterpreter(command);
+}
+
+function scanInlineInterpreter(command) {
   // Token-level, not a shell parser: text after each `$(` and inside backtick pairs is checked as a command too.
   // Literal text is blanked for this scan only (the per-segment check below keeps the raw text): quoted-delimiter heredoc bodies, single-quoted spans outside double quotes, and backslash-escaped characters.
   // ponytail: ceiling: nested quote context inside `$(...)`, process substitution `<(...)` and subshell `(...)` are not covered; wrapper options (`sudo -u x`, `nice -n 5`, `xargs -I{}`) are not skipped by stripLeadingWrappers (pre-existing).
@@ -1285,7 +1443,7 @@ export function commandContainsInlineInterpreter(command) {
     ...starts.map((s, k) => base.slice(s, k + 1 < starts.length ? starts[k + 1] - 2 : undefined)),
     ...ticks.filter((_, k) => k % 2 === 0).map((t, k) => base.slice(t + 1, ticks[2 * k + 1]).replace(/\\([`$\\])/g, "$1")), // bash unescapes \` \$ \\ in a backtick body
   ];
-  if (subs.some((sub) => commandContainsInlineInterpreter(sub))) return true;
+  if (subs.some((sub) => scanInlineInterpreter(sub))) return true;
   // The raw head keeps the env-option forms; the stripped head adds sudo/xargs/timeout.
   return shellSegments(command).flatMap((segment) => [segment, stripLeadingWrappers(segment)]).some((s) => {
     if (interpreterRegex("node").test(s)) {
