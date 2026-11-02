@@ -1621,3 +1621,13 @@ test("review fixes: hazard text keeps the body flag visible, nested quotes are a
   assert.equal(commandContainsInlineInterpreter(": <<$'\\x45OF'\nbody\nEOF"), false);
   assert.equal(commandContainsInlineInterpreter(": <<$'EO\\x46'\nbody\nEOF"), false);
 });
+
+test("tokenizeShellCommand: $((expr)) is arithmetic and DELIM) closes a heredoc inside $(...) (#2442)", () => {
+  for (const c of ["echo $((1<<2))", "x=$((a<<b)); echo $x"]) assert.equal(commandContainsInlineInterpreter(c), false, c);
+  assert.equal(tokenizeShellCommand(": $((1<<2))").incomplete, false);
+  assert.equal(tokenizeShellCommand(": $(( $(date) << 2 ))").incomplete, true); // arithmetic holding a substitution falls back to the `$(` reader: fail closed
+  const closed = "echo \"$(cat <<'EOF'\nbody\nEOF)\"";
+  assert.equal(tokenizeShellCommand(closed).incomplete, false);
+  assert.equal(tokenizeShellCommand("cat <<'EOF'\nbody\nEOF)").incomplete, true); // outside a substitution `EOF)` is no delimiter
+  assert.equal(commandContainsInlineInterpreter("gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\""), false);
+});
