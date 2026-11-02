@@ -6,13 +6,42 @@
  * `commit_only` fixer work order is emitted (ungranted) and rewritten with `fullGranted` when the
  * `full` work order is emitted. The git pre-push check reads it. Pure of git: the caller supplies the facts.
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 export const sequenceMarkerPath = (tmpRoot, baselineHead) => path.join(tmpRoot, "gate-delta", `${baselineHead}.sequence`);
 
 /** The closure record of a sequence closed by close-gate-sequence; keyed by execution so a second close with another execution on one head keeps the first. An execution-less close writes `.none.json` and overwrites a prior execution-less record on the same head. */
 export const sequenceClosurePath = (tmpRoot, baselineHead, executionIdentity) => path.join(tmpRoot, "gate-delta", `${baselineHead}.sequence-closed.${executionIdentity ?? "none"}.json`);
+
+/**
+ * Runs `fn` holding a lock per baseline head (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC), taken sorted and released in reverse.
+ * The suffix must not end with `.sequence`: listBaselines reads that suffix as a marker.
+ * ponytail: a mkdir lock with no owner token; a holder that dies blocks for at most `staleMs`, then the next taker steals it.
+ */
+export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 60000, waitMs = 10000 } = {}) {
+  const held = [];
+  try {
+    for (const head of [...new Set(baselineHeads)].sort()) {
+      const lock = path.join(tmpRoot, "gate-delta", `${head}.sequence-lock`);
+      mkdirSync(path.dirname(lock), { recursive: true });
+      for (const deadline = Date.now() + waitMs; ;) {
+        try { mkdirSync(lock); held.push(lock); break; } catch (error) {
+          if (error?.code !== "EEXIST") throw error;
+          let age = 0;
+          try { age = Date.now() - statSync(lock).mtimeMs; } catch { continue; } // released meanwhile: retry
+          if (age > staleMs) { rmSync(lock, { recursive: true, force: true }); continue; }
+          if (Date.now() >= deadline) throw Object.assign(new Error(`the sequence lock ${lock} is held by a concurrent close or pull; rerun once it finishes`), { code: "SEQUENCE_LOCK_BUSY" });
+          await sleep(25);
+        }
+      }
+    }
+    return await fn();
+  } finally {
+    for (const lock of held.reverse()) rmSync(lock, { recursive: true, force: true });
+  }
+}
 
 /** Record that a fix sequence is active for a baseline head; a `commit_only` emit writes it ungranted, a `full` emit granted. */
 export function writeSequenceMarker({ tmpRoot, baselineHead, fullGranted = false, branch, execution }) {
@@ -35,7 +64,7 @@ export function clearSequenceMarker(tmpRoot, baselineHead) {
 const noCommitHint = (baselineHead, markerPath, branch) => !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(baselineHead) ? ` The sequence marker is ${markerPath}. The marker names a baseline head that is not a full lowercase hex SHA, so no close command is rendered; the PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery.` : !branch ? ` The sequence marker is ${markerPath}. The marker is unreadable or names no branch, so the no-commit close cannot authenticate it; the PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery.` : ` The sequence marker is ${markerPath}. To close a commit_only sequence whose fixer made no commit, run \`check-pre-push-delta.mjs (--act-list <act-list> --findings-log <findings-log> | --threads-file <threads-file> --repo <owner/name> --pr <n>) --baseline ${baselineHead} --spec-identity <id> --fixer-plan <fixer-plan> --site-coverage <handback> --worktree <dir>\` (outcome no_commit); a fix commit takes the delta review and the full-phase push.`;
 
 /** Adds the close-sequence recovery for an abandoned sequence (the PR head moved, or no fixer ever pulled the work order); a live sequence stays uncloseable (#2999). */
-export const recoveryHint = (baselineHead, markerPath, branch) => noCommitHint(baselineHead, markerPath, branch) + (markerPath ? ` To close an abandoned sequence instead, run dev-loops-run scripts/loop/close-gate-sequence.mjs --head <baseline sha> --repo <owner/name> --pr <number>; it refuses a live sequence.` : "");
+export const recoveryHint = (baselineHead, markerPath, branch) => noCommitHint(baselineHead, markerPath, branch) + (markerPath ? ` To close an abandoned sequence instead, run dev-loops-run cli/index.mjs gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>; it refuses a live sequence.` : "");
 
 /** Approximates git check-ref-format for a branch name; an invalid name reads as no branch (fail closed). */
 const isValidBranchName = (b) =>

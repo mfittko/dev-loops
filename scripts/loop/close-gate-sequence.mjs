@@ -14,14 +14,18 @@ import { userInfo } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { clearSequenceMarker, readSequenceMarker, sequenceClosurePath, sequenceMarkerPath } from "@dev-loops/core/loop/fix-push-authority";
+import { clearSequenceMarker, readSequenceMarker, sequenceClosurePath, sequenceMarkerPath, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightFieldsSpec, preflightJqFilter } from "../lib/jq-output.mjs";
+import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { viewPr } from "../github/view-pr.mjs";
-import { pullReceiptPath } from "../github/_work-order-protocol.mjs";
+import { fixerReportPath, pullReceiptPath } from "../github/_work-order-protocol.mjs";
+import { resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 
-export const FIXER_GRACE_MS = 30 * 60 * 1000; // The runner-lock TTL: a dispatch or a fixer younger than this may be live.
+/** The grace is the runner-lock TTL itself (env override included): a dispatch or a fixer with no activity inside it may be abandoned. */
+export const fixerGraceMs = () => resolveStaleRunnerMaxAgeMs();
+const isFullSha = (sha) => normalizeFullHeadSha(sha) === sha;
 
 const USAGE = `usage: close-gate-sequence.mjs --head <marker baseline sha> --repo <owner/name> --pr <number> [--help]\n\n${JQ_OUTPUT_USAGE}`;
 const refuse =(refusal, reason, remedy) => ({ ok: false, refusal, reason, remedy });
@@ -36,7 +40,7 @@ export const defaultActor = (env = process.env, lookup = userInfo) => {
 };
 
 /** @param {{ tmpRoot: string, head: string, repo?: string, pr?: number, fetchPr?: Function, now?: () => number, actor?: string }} input */
-export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = viewPr, now = Date.now, actor = defaultActor(), hasCommit = localCommitExists }) {
+export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = viewPr, now = Date.now, actor = defaultActor(), hasCommit = localCommitExists, lock }) {
   const marker = readSequenceMarker(tmpRoot, head);
   if (!marker) return refuse("sequence_absent", `no sequence marker exists for ${head}`, "Nothing to close here; the push block comes from another marker, so rerun with that marker's head.");
   const { executionIdentity, workOrderRef, outputRef } = marker.execution ?? {};
@@ -56,13 +60,15 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   const markerMtime = mtimeMs(sequenceMarkerPath(tmpRoot, head));
   const pulled = receiptFound; // any receipt object at the work order ref proves a pull, whatever its content
   const pulledAt = pulled ? Date.parse(receipt.pulledAt) : NaN;
-  // A fixer that pulled its work order and has not handed back (no outputRef) inside the grace is running.
-  if (pulled && !(Number.isFinite(pulledAt) && now() - pulledAt >= FIXER_GRACE_MS) && mtimeMs(outputRef) === null) {
-    return refuse("fixer_running", `fixer execution ${executionIdentity} pulled its work order and has not handed back`, `Wait for the fixer to hand back, or for ${FIXER_GRACE_MS / 60000} minutes to pass, then rerun.`);
+  const grace = fixerGraceMs();
+  // A fixer that pulled its work order is running unless it handed back (outputRef exists) or its last activity (the pull, or its last report write) is older than the grace.
+  // An unparseable pulledAt makes the activity NaN, which reads as running (fail closed). The runner claim updatedAt is no signal: the closing coordinator heartbeats it itself.
+  if (pulled && mtimeMs(outputRef) === null && !(now() - Math.max(pulledAt, mtimeMs(fixerReportPath(outputRef)) ?? -Infinity) >= grace)) {
+    return refuse("fixer_running", `fixer execution ${executionIdentity} pulled its work order, has not handed back, and was active within ${grace / 60000} minutes (activity-based: the pull or the last fixer report write)`, `Wait for the fixer to hand back, or for ${grace / 60000} minutes without fixer activity, then rerun.`);
   }
   if (marker.branch === undefined || !repo || !pr) return refuse("abandonment_unproven", "the PR head cannot be checked without the marker's branch and --repo/--pr", "Pass --repo and --pr of the marker's PR. A marker without a branch cannot be proven abandoned, so ask the operator to delete it.");
   const { pr: facts } = await fetchPr({ repo, pr, fields: "headRefOid,headRefName" });
-  if (!/^[0-9a-f]{40,64}$/u.test(facts.headRefOid ?? "")) return refuse("abandonment_unproven", `GitHub returned no valid head sha for PR #${pr}`, "Rerun when the PR head is readable.");
+  if (!isFullSha(facts.headRefOid ?? "")) return refuse("abandonment_unproven", `GitHub returned no valid head sha for PR #${pr}`, "Rerun when the PR head is readable.");
   // The work order ref `fixer:<owner/name>#<pr>:...` names the marker's PR; a same-named branch in another repo or PR is no proof.
   const owner = /^fixer:([^#:]+)#([0-9]+):/u.exec(workOrderRef ?? "");
   if (owner && (owner[1] !== repo || Number(owner[2]) !== pr)) return refuse("abandonment_unproven", `the marker belongs to ${owner[1]}#${owner[2]}, not ${repo}#${pr}`, "Pass the --repo and --pr the marker names.");
@@ -71,33 +77,41 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   if (!owner && facts.headRefOid !== head && !hasCommit(head)) return refuse("baseline_unknown", `the marker names no work order ref and its baseline ${head} is not a commit in this repository`, "Run the close from a checkout of the marker's repository, or ask the operator to delete the marker.");
   let condition = null;
   if (facts.headRefOid !== head) condition = "HEAD_MOVED";
-  else if (executionIdentity && !receiptFound && now() - (markerMtime ?? now()) >= FIXER_GRACE_MS) condition = "FIXER_NEVER_PULLED";
+  else if (executionIdentity && !receiptFound && now() - (markerMtime ?? now()) >= grace) condition = "FIXER_NEVER_PULLED";
   if (condition === null) {
     return executionIdentity
       ? refuse("sequence_live", `the PR head is still ${head} and the fixer execution ${executionIdentity} is not proven abandoned`, "Finish the sequence with the pre-push delta review, or rerun after the dispatch grace if no fixer ever pulled the work order.")
       : refuse("abandonment_unproven", `the PR head is still ${head} and the marker names no fixer execution`, "Finish the sequence with the pre-push delta review, or ask the operator to delete the marker.");
   }
-  // A concurrent re-emit rewrote the marker while the PR was read: that is a new sequence, never close it.
-  const current = readSequenceMarker(tmpRoot, head);
-  if (current?.execution?.executionIdentity !== executionIdentity || mtimeMs(sequenceMarkerPath(tmpRoot, head)) !== markerMtime) return refuse("sequence_live", `the marker for ${head} changed while it was checked`, "Rerun close-sequence; a re-emitted marker starts a live sequence.");
-  const record = { baselineHead: head, executionIdentity: executionIdentity ?? null, condition, actor, closedAt: new Date(now()).toISOString() };
-  // The last pull receipt recheck precedes the record write, so a refused close leaves no record.
-  const pulledAfterRead = pulledMeanwhile();
-  if (pulledAfterRead) return pulledAfterRead;
-  // Record first, marker second: a failed write leaves the marker in place.
-  const file = sequenceClosurePath(tmpRoot, head, executionIdentity);
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(`${file}.tmp`, `${JSON.stringify(record, null, 2)}\n`);
-  renameSync(`${file}.tmp`, file);
-  clearSequenceMarker(tmpRoot, head);
-  return { ok: true, ...record, recordPath: file };
+  // The rest runs under the head's sequence lock (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC): a pull admission and a marker re-emit take the same lock, so neither interleaves with the checks below.
+  try {
+    return await withSequenceLock(tmpRoot, [head], () => {
+      // A concurrent re-emit rewrote the marker while the PR was read: that is a new sequence, never close it (compare-and-delete: identity and mtime).
+      const current = readSequenceMarker(tmpRoot, head);
+      if (current?.execution?.executionIdentity !== executionIdentity || mtimeMs(sequenceMarkerPath(tmpRoot, head)) !== markerMtime) return refuse("sequence_live", `the marker for ${head} changed while it was checked`, "Rerun close-sequence; a re-emitted marker starts a live sequence.");
+      const record = { baselineHead: head, executionIdentity: executionIdentity ?? null, condition, actor, closedAt: new Date(now()).toISOString() };
+      // The last pull receipt recheck precedes the record write, so a refused close leaves no record.
+      const pulledAfterRead = pulledMeanwhile();
+      if (pulledAfterRead) return pulledAfterRead;
+      // Record first, marker second: a failed write leaves the marker in place.
+      const file = sequenceClosurePath(tmpRoot, head, executionIdentity);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(`${file}.tmp`, `${JSON.stringify(record, null, 2)}\n`);
+      renameSync(`${file}.tmp`, file);
+      clearSequenceMarker(tmpRoot, head);
+      return { ok: true, ...record, recordPath: file };
+    }, lock);
+  } catch (error) {
+    if (error?.code === "SEQUENCE_LOCK_BUSY") return refuse("sequence_live", error.message, "Rerun close-sequence once the concurrent pull or emission finishes.");
+    throw error;
+  }
 }
 
 if (isDirectCliRun(import.meta.url)) {
   try {
     const { values } = parseArgs({ options: { head: { type: "string" }, repo: { type: "string" }, pr: { type: "string" }, help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS }, strict: true });
     if (values.help) { process.stdout.write(`${USAGE}\n`); process.exit(0); }
-    if (!/^[0-9a-f]{40,64}$/u.test(values.head ?? "") || (values.pr !== undefined && !/^[1-9][0-9]*$/u.test(values.pr))) throw new Error(USAGE);
+    if (!isFullSha(values.head ?? "") || (values.pr !== undefined && !/^[1-9][0-9]*$/u.test(values.pr))) throw new Error(USAGE);
     // Validate the output flags before the close writes the record and removes the marker.
     const preflight = preflightJqFilter(values.jq) ?? preflightFieldsSpec(values.fields, { jq: values.jq, silent: values.silent });
     if (preflight !== undefined) process.exitCode = preflight;

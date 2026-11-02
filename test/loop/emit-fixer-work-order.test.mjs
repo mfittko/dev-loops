@@ -244,6 +244,83 @@ test("a sequence closed as abandoned retires its execution: a late pull is stale
   });
 });
 
+const emitCommitOnly = (emit, files) => emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+const writeClosure = async (tmpRoot, head, identity) => {
+  const { sequenceClosurePath } = await import("@dev-loops/core/loop/fix-push-authority");
+  const file = sequenceClosurePath(tmpRoot, head, identity);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, "{}");
+};
+
+test("a closure record landing between locate and the receipt write refuses stale_dispatch and writes no receipt", async () => {
+  const { WORK_ORDER_ROLES } = await import("../../scripts/github/_work-order-protocol.mjs");
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const unit = await emitCommitOnly(emit, files);
+    const tmpRoot = path.join(root, "tmp");
+    const located = await locateFixerUnit({ ref: unit.workOrderRef, cwd: wt, tmpRoots: [tmpRoot] });
+    assert.equal(located.stale, undefined);
+    await writeClosure(tmpRoot, head, unit.executionIdentity); // lands after locate's check
+    let wrote = false;
+    await assert.rejects(WORK_ORDER_ROLES.get("fixer").admit(located, async () => { wrote = true; }), (error) => error.refusal === "stale_dispatch" && /never retarget/.test(error.message));
+    assert.equal(wrote, false);
+  });
+});
+
+test("a close racing a pull admission ends with exactly one winner: a closure record or a receipt", async () => {
+  const { WORK_ORDER_ROLES } = await import("../../scripts/github/_work-order-protocol.mjs");
+  const { closeGateSequence } = await import("../../scripts/loop/close-gate-sequence.mjs");
+  const { sequenceClosurePath, readSequenceMarker } = await import("@dev-loops/core/loop/fix-push-authority");
+  for (const closeFirst of [true, false]) await withFixture(async ({ root, wt, head, files, emit }) => {
+    const unit = await emitCommitOnly(emit, files);
+    const tmpRoot = path.join(root, "tmp");
+    const { branch } = readSequenceMarker(tmpRoot, head);
+    const located = await locateFixerUnit({ ref: unit.workOrderRef, cwd: wt, tmpRoots: [tmpRoot] });
+    const receipt = pullReceiptPath(tmpRoot, unit.workOrderRef);
+    const writeReceipt = async () => { await mkdir(path.dirname(receipt), { recursive: true }); await writeFile(receipt, JSON.stringify({ executionIdentity: unit.executionIdentity, pulledAt: new Date().toISOString() })); };
+    const admit = () => WORK_ORDER_ROLES.get("fixer").admit(located, writeReceipt).then(() => "pulled", (error) => error.refusal ?? error.message);
+    const close = () => closeGateSequence({ tmpRoot, head, repo: REPO, pr: PR, fetchPr: async () => ({ pr: { headRefOid: "b".repeat(40), headRefName: branch } }) }).then((r) => (r.ok ? "closed" : r.refusal));
+    const [a, b] = await Promise.all(closeFirst ? [close(), admit()] : [admit(), close()]);
+    const [closeResult, pullResult] = closeFirst ? [a, b] : [b, a];
+    const closed = existsSync(sequenceClosurePath(tmpRoot, head, unit.executionIdentity));
+    const pulled = existsSync(receipt);
+    assert.notEqual(closed, pulled, `closure ${closed}, receipt ${pulled}: ${closeResult} / ${pullResult}`);
+    if (closed) assert.deepEqual([closeResult, pullResult], ["closed", "stale_dispatch"]);
+    else assert.deepEqual([closeResult, pullResult], [closeResult, "pulled"]);
+  });
+});
+
+test("a held sequence lock refuses the pull as retryable sequence_lock_busy and writes no receipt", async () => {
+  const { WORK_ORDER_ROLES } = await import("../../scripts/github/_work-order-protocol.mjs");
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const unit = await emitCommitOnly(emit, files);
+    const tmpRoot = path.join(root, "tmp");
+    const located = await locateFixerUnit({ ref: unit.workOrderRef, cwd: wt, tmpRoots: [tmpRoot] });
+    await mkdir(path.join(tmpRoot, "gate-delta", `${head}.sequence-lock`), { recursive: true });
+    const admit = WORK_ORDER_ROLES.get("fixer").admit(located, async () => { throw new Error("receipt written under a held lock"); });
+    const realNow = Date.now;
+    Date.now = () => realNow() + 11_000; // past the wait deadline, inside the stale age
+    try {
+      await assert.rejects(admit, (error) => error.refusal === "sequence_lock_busy" && error.retryable === true && /re-run the same pull/.test(error.message));
+    } finally { Date.now = realNow; }
+  });
+});
+
+test("after a close of execution A, a new execution B on the same head stays pullable", async () => {
+  const { closeGateSequence } = await import("../../scripts/loop/close-gate-sequence.mjs");
+  const { readSequenceMarker } = await import("@dev-loops/core/loop/fix-push-authority");
+  await withFixture(async ({ root, head, files, emit }) => {
+    const first = await emitCommitOnly(emit, files);
+    const tmpRoot = path.join(root, "tmp");
+    const { branch } = readSequenceMarker(tmpRoot, head);
+    const closed = await closeGateSequence({ tmpRoot, head, repo: REPO, pr: PR, fetchPr: async () => ({ pr: { headRefOid: "b".repeat(40), headRefName: branch } }) });
+    assert.equal(closed.ok, true, closed.reason);
+    const second = await emitCommitOnly(emit, files);
+    assert.notEqual(second.executionIdentity, first.executionIdentity);
+    assert.equal(refusal(pull(first, root)), "stale_dispatch");
+    assert.equal(pull(second, root).status, 0);
+  });
+});
+
 test("an unreadable closure record fails closed as stale_dispatch", async () => {
   await withFixture(async ({ root, head, files, emit }) => {
     const unit = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });

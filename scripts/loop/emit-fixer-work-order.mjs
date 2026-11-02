@@ -18,7 +18,7 @@ import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement"
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { deltaCoverageBinding, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { normalizeFixerDispositionHandoff } from "@dev-loops/core/loop/fixer-disposition";
-import { sequenceClosurePath, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { sequenceClosurePath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, fixerReportPath, materializationHash, registerWorkOrderRole, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
@@ -499,7 +499,9 @@ export async function emitFixerWorkOrder({
   await rename(tempPath, planPath);
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: written last so a refused emit never grants the push; only a full work order grants the fixer.
   // Always under the canonical gate-artifact root (the location the push-authority check reads), whatever --tmp-root says.
-  writeSequenceMarker({ tmpRoot: resolveGateArtifactTmpRoot(cwd), baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
+  // Under the head's sequence lock, so a marker replacement never interleaves with a close-sequence.
+  const markerRoot = resolveGateArtifactTmpRoot(cwd);
+  await withSequenceLock(markerRoot, [headSha], () => writeSequenceMarker({ tmpRoot: markerRoot, baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } }));
   // The coordinator's gate wait-for-units --artifact path: a full-phase fixer's final-on-write report (ADR 0223), else the hand-back itself.
   return { ...plan, planPath, joinRef: phase === "full" ? fixerReportPath(outputRef) : outputRef };
   } finally { await capture.release(); }
@@ -582,6 +584,13 @@ export function fixerPlanPath(ref, tmpRoot) {
   return match ? path.join(buildFixerDir({ repo: match[1], pr: match[2], tmpRoot }), PLAN_FILE) : null;
 }
 
+const closedText = (executionIdentity) => `fixer execution ${executionIdentity} belongs to a gate fix sequence that was closed as abandoned`;
+/** True when a closure record exists for the execution at any head; only ENOENT means not closed. */
+const closureRecorded = async (root, heads, executionIdentity) => {
+  for (const head of new Set(heads)) if (await readFile(sequenceClosurePath(root, head, executionIdentity)).then(() => true, (error) => error?.code !== "ENOENT")) return true;
+  return false;
+};
+
 // Closure authenticates the original delivery even after a branch rewrite; pulls keep ancestry admission.
 export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false }) {
   const match = FIXER_REF_RE.exec(ref);
@@ -645,13 +654,10 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
   } catch { /* missing branch or head, or a reset/rewritten branch: stale authority */ }
   // A sequence closed as abandoned retires its execution: a late pull of its work order is refused.
   // The record sits at the marker baseline, which is the ref head or the review baseline head; only ENOENT means not closed.
-  let sequenceClosed = false;
-  if (!closureOnly) {
-    for (const head of new Set([headSha, ...(baseline ? [baseline.reviewBaselineHead] : [])])) {
-      sequenceClosed ||= await readFile(sequenceClosurePath(resolveGateArtifactTmpRoot(cwd), head, executionIdentity)).then(() => true, (error) => error?.code !== "ENOENT");
-    }
-  }
-  const stale = (sequenceClosed && `fixer execution ${executionIdentity} belongs to a gate fix sequence that was closed as abandoned`)
+  const closureRoot = resolveGateArtifactTmpRoot(cwd);
+  const closureHeads = [headSha, ...(baseline ? [baseline.reviewBaselineHead] : [])];
+  const sequenceClosed = !closureOnly && await closureRecorded(closureRoot, closureHeads, executionIdentity);
+  const stale = (sequenceClosed && closedText(executionIdentity))
     || (changed.length > 0 && `required fixer source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`)
     || (retired && `fixer execution ${executionIdentity} belongs to a ${order.gate} round at ${headSha} retired as ${retired}`)
     || (!contained && !closureOnly && `authority branch ${branch} no longer contains head ${headSha}; refresh the PR state and re-emit`);
@@ -664,11 +670,27 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
     materializationPath: plan.promptPath,
     subject: { repo, pr: Number(pr), headSha, branch, phase: order.phase, planPath },
     stale: stale || undefined,
+    closureRoot,
+    closureHeads,
   };
+}
+
+/** Receipt admission under the heads' sequence locks (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC): the closure record is rechecked right before the receipt lands, and a close takes the same locks. */
+async function admitFixerPull({ closureRoot, closureHeads, executionIdentity }, writeReceipt) {
+  try {
+    await withSequenceLock(closureRoot, closureHeads, async () => {
+      if (await closureRecorded(closureRoot, closureHeads, executionIdentity)) throw new WorkOrderRefusal("stale_dispatch", `${closedText(executionIdentity)}; never retarget to the newest round, reconcile and re-dispatch the current lawful unit`);
+      await writeReceipt();
+    });
+  } catch (error) {
+    if (error?.code === "SEQUENCE_LOCK_BUSY") throw new WorkOrderRefusal("sequence_lock_busy", `${error.message}; re-run the same pull`, true);
+    throw error;
+  }
 }
 
 registerWorkOrderRole("fixer", {
   locate: locateFixerUnit,
+  admit: admitFixerPull,
   validate: (order) => {
     if (order.operation === "complete") return completeAdmissionError(order);
     const kinds = new Set((Array.isArray(order.requiredReads) ? order.requiredReads : []).map((read) => read?.kind));

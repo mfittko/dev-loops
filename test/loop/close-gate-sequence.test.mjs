@@ -1,15 +1,17 @@
 // close-gate-sequence: a sanctioned close of an abandoned fix sequence; a live sequence is never closable.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { test } from "bun:test";
-import { readSequenceMarker, recoveryHint, sequenceClosurePath, sequenceMarkerPath, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
-import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
+import { readSequenceMarker, recoveryHint, sequenceClosurePath, sequenceMarkerPath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { fixerReportPath, pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../../cli/index.mjs";
-import { FIXER_GRACE_MS, closeGateSequence, defaultActor, localCommitExists } from "../../scripts/loop/close-gate-sequence.mjs";
+import { closeGateSequence, defaultActor, fixerGraceMs, localCommitExists } from "../../scripts/loop/close-gate-sequence.mjs";
 import { SANCTIONED_COMMANDS } from "../../scripts/loop/sanctioned-commands.mjs";
 import { withTempDir } from "../_helpers.mjs";
+
+const FIXER_GRACE_MS = fixerGraceMs();
 
 const HEAD = "a".repeat(40);
 const MOVED = "b".repeat(40);
@@ -189,7 +191,88 @@ test("unproven abandonment is refused: no execution, no branch, no PR, wrong bra
 });
 
 test("recoveryHint names the close command", () => {
-  assert.match(recoveryHint("a".repeat(40), "/x/gate-delta/h.sequence", "feat"), /close-gate-sequence\.mjs/);
+  const hint = recoveryHint("a".repeat(40), "/x/gate-delta/h.sequence", "feat");
+  assert.ok(hint.includes("dev-loops-run cli/index.mjs gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>"));
+  assert.doesNotMatch(hint, /close-gate-sequence\.mjs/);
+});
+
+const lockPath = (tmpRoot) => `${path.join(tmpRoot, "gate-delta", HEAD)}.sequence-lock`;
+const reemit = (tmpRoot, identity) => withSequenceLock(tmpRoot, [HEAD], () => writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: { ...execution(tmpRoot), executionIdentity: identity } }));
+
+test("a held sequence lock makes the close sequence_live with the rerun remedy; a stale lock is stolen", async () => {
+  await withTempDir(async (tmpRoot) => {
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: execution(tmpRoot) });
+    mkdirSync(lockPath(tmpRoot));
+    const busy = await closeGateSequence(base(tmpRoot, { lock: { waitMs: 60 } }));
+    assert.equal(busy.refusal, "sequence_live");
+    assert.match(busy.reason, /sequence-lock/);
+    assert.match(busy.remedy, /Rerun close-sequence/);
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(lockPath(tmpRoot), old, old);
+    assert.equal((await closeGateSequence(base(tmpRoot))).ok, true);
+    assert.equal(existsSync(lockPath(tmpRoot)), false, "the lock is released");
+  });
+});
+
+test("a marker re-emitted under the lock around the close is never deleted", async () => {
+  await withTempDir(async (tmpRoot) => {
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: execution(tmpRoot) });
+    const fetchThenReemit = async () => { const done = reemit(tmpRoot, "f1-ffff0000"); await new Promise((r) => setTimeout(r, 40)); await done; return pr(MOVED)(); };
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: fetchThenReemit }));
+    assert.equal(result.refusal, "sequence_live");
+    assert.equal(readSequenceMarker(tmpRoot, HEAD).execution.executionIdentity, "f1-ffff0000");
+    // A re-emit racing a close ends with the new marker in place, whichever side wins the lock.
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: execution(tmpRoot) });
+    await Promise.all([closeGateSequence(base(tmpRoot)), reemit(tmpRoot, "f1-eeee1111")]);
+    assert.equal(readSequenceMarker(tmpRoot, HEAD).execution.executionIdentity, "f1-eeee1111");
+  });
+});
+
+test("a fixer with a fresh report inside the grace is running even when it pulled before the grace; a stale report closes", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    pull(tmpRoot, ex, new Date(T0 - FIXER_GRACE_MS - 1000).toISOString());
+    const report = fixerReportPath(ex.outputRef);
+    writeFileSync(report, "{}");
+    utimesSync(report, new Date(T0 - 60_000), new Date(T0 - 60_000));
+    const running = await closeGateSequence(base(tmpRoot));
+    assert.equal(running.refusal, "fixer_running");
+    assert.match(running.reason, /activity-based/);
+    assert.match(running.remedy, new RegExp(`${FIXER_GRACE_MS / 60000} minutes`));
+    const old = new Date(T0 - FIXER_GRACE_MS - 500);
+    utimesSync(report, old, old);
+    assert.equal((await closeGateSequence(base(tmpRoot))).condition, "HEAD_MOVED");
+  });
+});
+
+test("the grace is the runner TTL and follows DEVLOOPS_STALE_RUNNER_MAX_AGE_MS", async () => {
+  const saved = process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS;
+  process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = "120000";
+  try {
+    assert.equal(fixerGraceMs(), 120_000);
+    await withTempDir(async (tmpRoot) => {
+      const ex = execution(tmpRoot);
+      writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+      pull(tmpRoot, ex, new Date(T0 - 100_000).toISOString());
+      const running = await closeGateSequence(base(tmpRoot));
+      assert.equal(running.refusal, "fixer_running");
+      assert.match(running.remedy, /2 minutes/);
+      pull(tmpRoot, ex, new Date(T0 - 130_000).toISOString());
+      assert.equal((await closeGateSequence(base(tmpRoot))).condition, "HEAD_MOVED");
+    });
+  } finally {
+    if (saved === undefined) delete process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS; else process.env.DEVLOOPS_STALE_RUNNER_MAX_AGE_MS = saved;
+  }
+});
+
+test("a 41 hex char head is rejected as a non-full sha by the CLI and for the GitHub head", async () => {
+  await withTempDir(async (tmpRoot) => {
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });
+    assert.equal((await closeGateSequence(base(tmpRoot, { fetchPr: pr("b".repeat(41)) }))).refusal, "abandonment_unproven");
+    assert.equal(spawnSync("node", [cli, "--head", "a".repeat(41), "--repo", "o/r", "--pr", "7"], { encoding: "utf8" }).status, 1);
+  });
 });
 
 test("pulled and handed back with the head unchanged stays sequence_live", async () => {
@@ -269,11 +352,14 @@ test("the CLI refuses a malformed --repo with the usage error", () => {
   }
 });
 
-test("the CLI accepts a padded --repo: it passes the usage check and reaches the sequence lookup", () => {
-  const run = spawnSync("node", [cli, "--head", HEAD, "--repo", " o/r ", "--pr", "7"], { encoding: "utf8" });
-  assert.equal(run.status, 1);
-  assert.doesNotMatch(run.stderr, /usage/);
-  assert.match(run.stdout + run.stderr, /sequence_absent/);
+test("the CLI accepts a padded --repo: it passes the usage check and reaches the sequence lookup", async () => {
+  await withTempDir(async (dir) => {
+    mkdirSync(path.join(dir, ".git")); // an explicit temp checkout: the result no longer depends on the host's markers
+    const run = spawnSync("node", [cli, "--head", HEAD, "--repo", " o/r ", "--pr", "7"], { cwd: dir, encoding: "utf8" });
+    assert.equal(run.status, 1);
+    assert.doesNotMatch(run.stderr, /usage/);
+    assert.match(run.stdout + run.stderr, /sequence_absent/);
+  });
 });
 
 test("a padded --repo reaches fetchPr trimmed: gh is called with the normalized slug", async () => {
