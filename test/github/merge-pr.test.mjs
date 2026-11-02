@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { mergePr, parseMergePrCliArgs, main, defaultIsAncestor, defaultFetchPrHead, buildDetectEvidenceArgv } from "../../scripts/github/merge-pr.mjs";
+import { mergePr, parseMergePrCliArgs, main, defaultIsAncestor, defaultFetchPrHead, buildDetectEvidenceArgv, defaultPostMergeComment } from "../../scripts/github/merge-pr.mjs";
+import { runChild } from "../../scripts/_cli-primitives.mjs";
 import { captureStream } from "../_helpers.mjs";
 
 const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
@@ -1618,4 +1619,21 @@ test("--check fails closed on missing size facts: no confirmed class and no stan
   assert.equal(result.mergeClass, null);
   assert.equal(result.approvalPath, null);
   assert.equal(result.approveMergeLine, null);
+});
+
+test("the default merge record comment kills a hung gh child at the timeout bound", async () => {
+  // A stub gh that hangs; the bound must kill it rather than leave it referenced.
+  const dir = mkdtempSync(join(tmpdir(), "merge-pr-hung-gh-"));
+  const hungGh = join(dir, "gh");
+  writeFileSync(hungGh, "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+  const started = Date.now();
+  try {
+    await assert.rejects(
+      defaultPostMergeComment({ repo: "mfittko/dev-loops", pr: 5, body: "b", env: process.env, ghCommand: hungGh, runChild, timeoutMs: 200 }),
+      /timed out/,
+    );
+    assert.ok(Date.now() - started < 5000, "the child was killed at the bound, not awaited to completion");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

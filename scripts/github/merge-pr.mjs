@@ -662,12 +662,10 @@ export function buildMergeRecordComment({ approvalVia, approvedBy, headSha, merg
 }
 
 const POST_MERGE_COMMENT_TIMEOUT_MS = 60_000;
-async function defaultPostMergeComment({ repo, pr, body, env, ghCommand, runChild }) {
-  // ponytail: runChild takes no timeout, so bound the wait (the child is left to finish); a shared-primitive timeout is a separate change.
-  let timer;
-  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("gh pr comment timed out")), POST_MERGE_COMMENT_TIMEOUT_MS); });
-  const result = await Promise.race([runChild(ghCommand, ["pr", "comment", String(pr), "--repo", repo, "--body", body], env), timeout]).finally(() => clearTimeout(timer));
-  if (!result || result.code !== 0) throw new Error(String(result?.stderr ?? "").trim() || "gh pr comment returned no result");
+export async function defaultPostMergeComment({ repo, pr, body, env, ghCommand, runChild, timeoutMs = POST_MERGE_COMMENT_TIMEOUT_MS }) {
+  // runChild kills the gh child at the bound, so a hung request cannot keep the CLI alive.
+  const result = await runChild(ghCommand, ["pr", "comment", String(pr), "--repo", repo, "--body", body], env, undefined, { timeoutMs });
+  if (!result || result.code !== 0) throw new Error(String(result?.stderr ?? "").trim() || (result?.code === null ? "gh pr comment timed out" : "gh pr comment returned no result"));
 }
 
 export async function mergePr(options, runtime = {}) {
