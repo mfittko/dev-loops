@@ -1,0 +1,181 @@
+import assert from "node:assert/strict";
+import { test } from "bun:test";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import {
+  BASH_GATE_RULES,
+  decideBashGateDeny,
+  decideUnresolveOwnerDeny,
+} from "../src/loop/bash-gate-decisions.mjs";
+
+const TARGET = "mfittko/dev-loops";
+
+// The gate's rule bodies and their reason texts moved out of the Claude seam into this shared
+// module, so the move has to be PINNED rather than trusted: the two tables below are the ordered
+// rule list and each rule's exact reason string. Reordering two checks, rewording a reason, or
+// dropping a rule fails here — which is what makes a later edit to the shared set (or a second
+// adapter that consumes it) safe to review.
+const BASE = Object.freeze({
+  role: null,
+  repoSlug: TARGET,
+  managedRepoSlug: TARGET,
+  inManagedContext: true,
+  humanMergeOnly: false,
+  enforceCoordinator: false,
+  readyGate: null,
+});
+
+/** One triggering fixture per registered rule, in EVALUATION ORDER. */
+const RULE_FIXTURES = [
+  {
+    id: "COORDINATOR-VERIFY-BOUNDARY",
+    facts: { ...BASE, enforceCoordinator: true, role: "dev-loop", command: "bun run verify" },
+    reason: "COORDINATOR-VERIFY-BOUNDARY: the dev-loop coordinator must not run code-verification/build commands inline. Delegate targeted checks to a fresh worker subagent (developer/fixer/quality), which reports back a compact pass/fail plus any failing-test names. Request local full-repository validation through `dev-loops-run cli/index.mjs gate resolve-validation` on a clean commit; when checking a pushed commit, prefer CI's structured conclusion (`gh pr checks` / scripts/github/detect-checkpoint-evidence.mjs) over a local run. See skills/docs/main-agent-contract.md.",
+  },
+  {
+    id: "OPS-NO-INLINE-INTERPRETER",
+    facts: { ...BASE, command: "node -e 'console.log(1)'" },
+    reason: "OPS-NO-INLINE-INTERPRETER: inline interpreters (node -e/--eval/-p, python3 -c, bun -e/--eval/-p/--print, bun -, heredoc to node/python/bun) are barred in the dev-loop flow. Parse tool output via --jq/--silent and mutate files via the editor/patch tools or a --jq-composed --body-file, never an inline interpreter.",
+  },
+  {
+    id: "COPILOT-FOLLOWUP-WAIT-TOOLS",
+    facts: { ...BASE, command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 &" },
+    reason: "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through a bounded FOREGROUND probe (scripts/github/probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit --timeout <seconds>; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops-run cli/index.mjs loop watch-cycle; gh run watch) — nohup/disown/tmux/screen detach, while-sleep-poll loops, and bare-`&` backgrounding of a probe/wait script are barred for the coordinator and every subagent (a backgrounded wait orphans under Claude Code, which has no async wake to join it).",
+  },
+  {
+    id: "SUBISSUE-NO-ADHOC-BYPASS",
+    facts: { ...BASE, command: "gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6" },
+    reason: "SUBISSUE-NO-ADHOC-BYPASS: ad-hoc `gh api` writes to the target repo's sub_issues endpoint are blocked. Manage sub-issues via the sanctioned manage-sub-issues wrapper instead.",
+  },
+  {
+    id: "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER",
+    facts: { ...BASE, command: "gh api graphql -f query='mutation { resolveReviewThread }'" },
+    reason: "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER: ad-hoc thread-reply mutations are blocked. Resolve review threads via scripts/github/reply-resolve-review-thread.mjs (one thread) or reply-resolve-review-threads.mjs (multiple threads, --message-map), not raw gh api/graphql. To reopen a wrongly resolved thread, the orchestrator or dev-loop coordinator runs scripts/github/unresolve-review-thread.mjs (never raw unresolveReviewThread).",
+  },
+  {
+    id: "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY",
+    facts: { ...BASE, command: "gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers -f reviewers[]=copilot-swe-agent" },
+    reason: "COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY: ad-hoc Copilot review requests are blocked. Request Copilot via scripts/github/request-copilot-review.mjs — do not write requested_reviewers or post a literal /copilot comment.",
+  },
+  {
+    id: "ADR-TRIPWIRE-STANDING-WAIVER",
+    facts: { ...BASE, command: "gh pr edit 5 --body hello" },
+    reason: "ADR-TRIPWIRE-STANDING-WAIVER: raw `gh pr edit` body writes and `gh api` body writes to pulls/<n> or issues/<n> are blocked. Edit a PR body through the launcher (`dev-loops-run cli/index.mjs pr edit`), which refuses a hand-written adr-tripwire:allow line. Edit an issue body through `dev-loops-run cli/index.mjs issue edit`. Write the ADR tripwire waiver only through the launcher (`dev-loops-run cli/index.mjs pr waive-adr-tripwire`), which needs a standing authorization on the default branch.",
+  },
+  {
+    id: "WORKTREE-NO-STASH",
+    facts: { ...BASE, command: "git stash" },
+    reason: "git stash blocked: refs/stash is shared across every worktree over this repo's one .git directory, so a stash can pop into a different worktree. Use `git diff` (or `git diff --staged`), save changes to a patch file, or use a separate scratch worktree instead of stashing.",
+  },
+  {
+    id: "STOP-HUMAN-MERGE-001",
+    facts: { ...BASE, humanMergeOnly: true, command: "gh pr merge 5" },
+    reason: "STOP-HUMAN-MERGE-001: this repo resolves autonomy.humanMergeOnly — the loop must stop at merge for a human action; the agent MUST NOT run `gh pr merge`. Leave the PR merge-ready and a human merges it.",
+  },
+  {
+    id: "OPS-DRAFT-FIRST-PR",
+    facts: { ...BASE, command: "gh pr create --fill" },
+    reason: "gh pr create blocked: open PRs via the canonical wrapper `node scripts/github/create-pr.mjs` (a.k.a. `dev-loops-run cli/index.mjs pr create`), which always creates a draft and self-assigns. Raw `gh pr create` defaults to ready-for-review and bypasses the draft-first contract (workflow.requireDraftFirst).",
+  },
+  {
+    id: "RAW-GH-PR-MERGE-BYPASS",
+    facts: { ...BASE, command: "gh pr merge 5" },
+    reason: "gh pr merge is forbidden: route the merge through the sanctioned wrapper `node scripts/github/merge-pr.mjs --repo <owner/name> --pr 5 --human-approved-by <login>`, which runs the full precondition set fail-closed (mandatory approver, merge class, fresh approval) — a raw `gh pr merge` bypasses those (RAW-GH-PR-MERGE-BYPASS).",
+  },
+  {
+    id: "GATE-COMMENT-DRAFT-REQUIREMENTS",
+    facts: { ...BASE, command: "gh pr ready 5" },
+    reason: "gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #5.",
+  },
+];
+
+/** The inline denies: real denials that carry no registered rule ID, so they stay out of the list. */
+const INLINE_FIXTURES = [
+  {
+    name: "unresolve owner allowlist",
+    facts: { ...BASE, role: "fixer", command: "dev-loops-run scripts/github/unresolve-review-thread.mjs --repo mfittko/dev-loops --pr 5 --thread-id T1" },
+    reason: "The fixer agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs is owned by the orchestrator (main agent) and the dev-loop coordinator. Report the wrongly resolved thread in your hand-back and let the owner run it.",
+  },
+  {
+    name: "timeout-wrapped sanctioned command",
+    facts: { ...BASE, command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation" },
+    reason: "Do not wrap sanctioned dev-loops commands in `timeout N`: the wrapper hides the `dev-loops-run` head from operator allow rules. Run the command bare. Wait/probe tools bound themselves with `--timeout <seconds>`; other commands rely on the harness tool-call timeout.",
+  },
+  {
+    name: "subagent ad-hoc external write",
+    facts: { ...BASE, role: "developer", command: "gh issue comment 5 --body hi" },
+    reason: "Ad-hoc GitHub issue/PR creation, comments, and edits from a subagent are blocked. Use the sanctioned node wrappers instead — gate-verdict comments via scripts/github/upsert-checkpoint-verdict.mjs, review-thread replies via scripts/github/reply-resolve*.mjs, board sync, issue comments via scripts/github/comment-issue.mjs, or issue-body edits via scripts/github/edit-issue.mjs. Direct `gh issue create` is reserved for the main agent / operator.",
+  },
+];
+
+test("BASH_GATE_RULES lists the registered rules in evaluation order", () => {
+  assert.deepEqual([...BASH_GATE_RULES], RULE_FIXTURES.map((f) => f.id));
+});
+
+test("every registered rule fires with its own id and its exact reason text", () => {
+  for (const { id, facts, reason } of RULE_FIXTURES) {
+    const decision = decideBashGateDeny(facts);
+    assert.ok(decision, `${id} did not deny its own fixture — the rule moved, lost, or was reordered`);
+    assert.equal(decision.ruleId, id, `${id} returned another rule's id`);
+    assert.equal(decision.reason, reason, `${id} reason text changed`);
+  }
+});
+
+test("every listed rule id is registered in skills/docs/required-rules.json", () => {
+  // The list cannot grow a rule the rule registry does not own, and cannot name an id no contract
+  // doc defines.
+  const rulesFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../../skills/docs/required-rules.json");
+  const registry = fs.readFileSync(rulesFile, "utf8");
+  for (const id of BASH_GATE_RULES) {
+    assert.ok(registry.includes(`"${id}"`), `${id} is not registered in skills/docs/required-rules.json`);
+  }
+});
+
+test("the inline denies carry no rule id and keep their exact reason text", () => {
+  for (const { name, facts, reason } of INLINE_FIXTURES) {
+    const decision = decideBashGateDeny(facts);
+    assert.ok(decision, `${name} did not deny`);
+    assert.equal(decision.ruleId, null, `${name} must not claim a registered rule id`);
+    assert.equal(decision.reason, reason, `${name} reason text changed`);
+  }
+});
+
+test("rule order is the evaluation order, not just the list order", () => {
+  // A command that matches two rules must report the EARLIER one, or the list above would pin an
+  // order the bodies do not actually follow.
+  const inlineBeatsRawCreate = decideBashGateDeny({ ...BASE, command: "gh pr create --fill && node -e 'x'" });
+  assert.equal(inlineBeatsRawCreate.ruleId, "OPS-NO-INLINE-INTERPRETER");
+  const inlineBeatsHumanMerge = decideBashGateDeny({ ...BASE, humanMergeOnly: true, command: "node -e 'x' && gh pr merge 5" });
+  assert.equal(inlineBeatsHumanMerge.ruleId, "OPS-NO-INLINE-INTERPRETER");
+  const stashBeatsHumanMerge = decideBashGateDeny({ ...BASE, humanMergeOnly: true, command: "git stash && gh pr merge 5" });
+  assert.equal(stashBeatsHumanMerge.ruleId, "WORKTREE-NO-STASH");
+});
+
+test("the unresolve owner allowlist is the shared set's FIRST rule", () => {
+  // Exported on its own because the Claude seam evaluates it ahead of its two Claude-only role
+  // boundaries, so the shared decision must reach the SAME body — and reach it first, which is why
+  // a `judge` attempt on the script reports this reason rather than the judge boundary's.
+  const command = "dev-loops-run scripts/github/unresolve-review-thread.mjs --repo mfittko/dev-loops --pr 5 --thread-id T1";
+  assert.equal(decideUnresolveOwnerDeny({ command, role: null }), null, "the main agent owns unresolve");
+  assert.equal(decideUnresolveOwnerDeny({ command, role: "dev-loop" }), null, "the dev-loop coordinator owns unresolve");
+  assert.equal(
+    decideBashGateDeny({ ...BASE, role: "judge", command }).reason,
+    decideUnresolveOwnerDeny({ command, role: "judge" }).reason,
+    "the shared decision must not reach the allowlist through another rule",
+  );
+});
+
+test("a caller that omits an injected fact is refused instead of defaulted (fail closed)", () => {
+  const { enforceCoordinator, ...withoutOne } = BASE;
+  const decision = decideBashGateDeny({ ...withoutOne, command: "gh pr merge 5" });
+  assert.ok(decision, "a missing fact must deny, never run the rules on a default");
+  assert.match(decision.reason, /supplied no valid enforceCoordinator fact/);
+  assert.equal(decision.ruleId, null);
+});
+
+test("an allowed command and a non-string command return no decision", () => {
+  assert.equal(decideBashGateDeny({ ...BASE, command: "gh pr ready 5", readyGate: { passed: true, error: null } }), null);
+  assert.equal(decideBashGateDeny({ ...BASE, command: null }), null);
+});
