@@ -874,7 +874,7 @@ export async function mergePr(options, runtime = {}) {
         ? { sizeClass: null, ...(options.stableRelease === true ? {} : { mergeClass: null }) }
         : {}),
       ...(humanMergeOnly ? { humanMergeOnly: true } : {}),
-      approverAssumed: options.humanApprovedBy === undefined || options.humanApprovedBy === null,
+      approverAssumed,
       approvalVia: verdict.approvalVia,
       failures: checkFailures,
       copilotConvergenceState: verdict.copilotConvergenceState,
