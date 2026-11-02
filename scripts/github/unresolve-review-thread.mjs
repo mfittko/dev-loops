@@ -15,7 +15,7 @@ const execFileAsync = promisify(execFile);
 const USAGE = `Usage: dev-loops-run scripts/github/unresolve-review-thread.mjs --repo <owner/name> --pr <n> --thread-id <id>
 
 Reopen a resolved review thread (undo of a wrong or premature resolve). Orchestrator and
-dev-loop coordinator only; the fixer, review and judge agents are denied by the Bash hook.
+dev-loop coordinator only; every other agent type, including fixer, review and judge, is denied by the Bash hook.
 
 Refuses with a named reason: thread_not_resolved, thread_not_on_pr, pr_closed_or_merged,
 thread_author_not_reviewer (the thread's first comment is neither Copilot nor a gate review).
