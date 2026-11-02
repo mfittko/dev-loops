@@ -20,10 +20,9 @@ import {
   classifyCopilotReviewBodyDisposition,
   COPILOT_DISPOSITION,
   isCopilotErrorReview,
-  isCopilotLogin,
   stripMarkdownCodeForScan,
 } from "@dev-loops/core/github/copilot-helpers";
-import { isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
+import { isSanctionedCopilotReviewerLogin, isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import path from "node:path";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
@@ -217,7 +216,7 @@ function reviewSubmittedAt(review) {
 export function resolveLatestCopilotReview(prData) {
   const reviews = Array.isArray(prData?.reviews) ? prData.reviews : [];
   // An error review is no review (ADR 0114), so it is never carried.
-  const candidates = reviews.filter((r) => r?.state !== "PENDING" && isCopilotLogin(r?.author?.login) && !isCopilotErrorReview(r));
+  const candidates = reviews.filter((r) => r?.state !== "PENDING" && isSanctionedCopilotReviewerLogin(r?.author?.login) && !isCopilotErrorReview(r));
   if (candidates.length === 0) return { review: null, ambiguousBlockingTie: false };
   let latestAt = null;
   for (const review of candidates) {

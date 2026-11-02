@@ -1375,6 +1375,14 @@ test("AC15: a Copilot review emits only when it is the latest one on the PR head
   });
 });
 
+test("AC15: a later copilot-helper[bot] review does not displace the real Copilot review as latest", async () => {
+  await withFixture(async ({ head, emit }) => {
+    const copilot = copilotReviewFor(head);
+    const helper = copilotReviewFor(head, { node_id: "PRR_HB1", submitted_at: "2026-11-01T12:00:00Z", user: { login: "copilot-helper[bot]", type: "Bot" } });
+    assert.equal((await emitReview(emit, [copilot, helper], { reviewId: "PRR_C1" })).workOrder.source, "review-body");
+  });
+});
+
 test("AC15: two Copilot body-only blocking reviews that share one submitted_at refuse as not the latest", async () => {
   await withFixture(async ({ head, emit }) => {
     const first = copilotReviewFor(head, { state: "CHANGES_REQUESTED" });

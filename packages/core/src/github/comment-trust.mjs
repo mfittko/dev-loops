@@ -8,6 +8,11 @@ const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 // the [bot] suffix, and the bare `Copilot` login the REST API emits for the same Bot).
 const SANCTIONED_COPILOT_REVIEWER = /^(?:copilot-pull-request-reviewer(?:\[bot\])?|copilot)$/i;
 
+/** Exact match on the sanctioned Copilot reviewer login; `copilot-helper[bot]` and other lookalikes are false. */
+export function isSanctionedCopilotReviewerLogin(login) {
+  return typeof login === "string" && SANCTIONED_COPILOT_REVIEWER.test(login);
+}
+
 /**
  * @param {{ login?: unknown, type?: unknown, association?: unknown }} author
  * @param {{ allowCopilot?: boolean }} [options] allowCopilot admits the sanctioned Copilot reviewer (a Bot whose login is exactly copilot-pull-request-reviewer, with an optional [bot] suffix, or Copilot).
