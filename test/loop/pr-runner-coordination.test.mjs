@@ -2081,7 +2081,7 @@ test("native Codex handoff with no id at all names the verified thread identity,
 async function feedStateFileReads(filePath, contents, { timeoutMs = Math.floor(resolveBunTestTimeoutMs() / 2) } = {}) {
   await rm(filePath);
   await execFileAsync("mkfifo", [filePath]);
-  // Resolves to `{ done }`: the FIFO exists before the caller starts the reader; `done` settles after the last write.
+  // Resolves to `{ done, watch }`: the FIFO exists before the caller starts the reader; `done` settles after the last write and the watched promise.
   const writer = (async () => {
     for (const [index, content] of contents.entries()) {
       const handle = await open(filePath, "w");
