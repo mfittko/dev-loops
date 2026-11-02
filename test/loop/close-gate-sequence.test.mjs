@@ -281,6 +281,16 @@ test("withSequenceLock never removes a fresh lock a holder took between the stal
   });
 });
 
+test("withSequenceLock never removes a fresh lock a holder took before the stealer held the steal lock", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const lock = plantLock(tmpRoot, "dead", 120_000);
+    // The stale holder releases and a fresh holder takes the lock after the stealer's age read, before the age re-check.
+    const afterStealLock = () => { plantLock(tmpRoot, "fresh", 0); };
+    await assert.rejects(withSequenceLock(tmpRoot, [HEAD], () => { throw new Error("must not run"); }, { waitMs: 150, afterStealLock }), (error) => error.code === "SEQUENCE_LOCK_BUSY");
+    assert.equal(readFileSync(path.join(lock, "owner"), "utf8"), "fresh");
+  });
+});
+
 test("branchReflogMs reads the reflog mtime of a branch committed in a temp repository, and null for an absent branch", async () => {
   await withTempDir(async (dir) => {
     const git = (...args) => assert.equal(spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: dir }).status, 0, args.join(" "));
