@@ -1710,6 +1710,9 @@ test("slice 2: any multi-segment command keeps every heredoc body visible, whate
     "e'x'ec \">\"l.sh\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
     "x='exec >l.sh'; eval \"$x\"\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
     "exec >l.sh; echo \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"; bash l.sh",
+    "echo \"$(cat > l.sh <<'EOF'\nnode -e 'x'\nEOF\n)$(bash l.sh)\"",
+    "echo \"$(cat > l.sh <<'EOF'\nnode -e 'x'\nEOF\n)\" \"$(bash l.sh)\"",
+    "git commit -m \"$(cat > l.sh <<'EOF'\nnode -e 'x'\nEOF\n)\" -m \"$(bash l.sh)\"",
   ]) assert.equal(commandContainsInlineInterpreter(c), true, c);
   assert.equal(commandIsSleepPollLoop("eval 'exec >l.sh'\ncat <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash l.sh"), true);
   assert.equal(commandContainsDetachedWaitTool("eval 'exec >l.sh'\ncat <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash l.sh"), true);

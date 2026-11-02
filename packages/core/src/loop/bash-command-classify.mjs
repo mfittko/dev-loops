@@ -1061,26 +1061,32 @@ function readsTextFromStdin(seg, head) {
 /**
  * Heredocs whose body is data (issue 2442 item 8): a `cat` or `tee` heredoc (or a `git commit -F -`/`gh pr comment --body-file -` message, `readsTextFromStdin`) that is closed, whose delimiter is quoted or whose body has no
  * `$(`/backtick, whose segment is not piped onward, and that sits in no `-c`/`eval`/here-string payload.
- * Structural rule: the whole command is that one segment (or the one `cat` segment inside the one `git commit -m "$(...)"` segment). Any multi-segment command keeps every heredoc body visible, so a later segment that runs a written file never sees a blanked body.
- * Inside a `$(...)` the host must be an inert `echo`/`printf`/`git`/`gh` segment that writes no file and carries no `-c`/alias override (`substitutionIsInert`).
+ * Structural rule, counted over the whole tree: the command is exactly one `cat`/`tee` heredoc segment, or one root `git`/`gh` segment holding exactly one substitution that holds exactly one `cat` segment. Anything else keeps every heredoc body visible, so a later segment or substitution that runs a written file never sees a blanked body.
+ * The host must write no file and carry no `-c`/alias override (`substitutionIsInert`); `echo`/`printf` are not hosts.
  * Every other body executes and stays visible.
  * @returns {object[]}
  */
-function dataHeredocs(segments, inPayload = false, out = [], root = segments, inertParent = true) {
-  if (segments.length !== 1) return out; // multi-segment: a later segment may run what the heredoc writes
-  segments.forEach((seg) => {
-    const head = segmentHead(seg);
-    const hostOk = inertParent && !seg.pipedOut && INERT_SUBSTITUTION_HOSTS.has(head) && writeTargets(seg).length === 0;
-    seg.words.forEach((w, k) => w.subs.forEach((sub) => dataHeredocs(sub.segments, inPayload || isPayloadWord(seg.words, k), out, root, hostOk && substitutionIsInert(seg, k, head))));
-    if (!inertParent || inPayload || seg.pipedOut || (head !== "cat" && head !== "tee" && !readsTextFromStdin(seg, head))) return; // `git -c alias.r='!sh' r <<EOF` runs its body
-    if (seg.words.some((w) => /^\d*[<>]*\(/.test(w.value))) return; // process substitution `>(sh)` or a `(`-target: the body is piped to a command
-    for (const h of seg.heredocs) if (h.closed && (h.quoted || !/\$\(|`/.test(h.body))) out.push(h);
-  });
-  return out;
+function dataHeredocs(segments) {
+  if (segments.length !== 1) return []; // multi-segment: a later segment may run what the heredoc writes
+  const seg = segments[0];
+  const head = segmentHead(seg);
+  const dataBody = (s, h) => { // closed, not piped onward, no process-substitution word (`>(sh)`, a `(`-target)
+    if (s.pipedOut || (h !== "cat" && h !== "tee" && !readsTextFromStdin(s, h))) return [];
+    if (s.words.some((w) => /^\d*[<>]*\(/.test(w.value))) return [];
+    return s.heredocs.filter((x) => x.closed && (x.quoted || !/\$\(|`/.test(x.body)));
+  };
+  const subs = seg.words.flatMap((w, k) => w.subs.map((sub) => ({ sub, k })));
+  if (subs.length === 0) return dataBody(seg, head);
+  // exactly one inert git/gh text-flag substitution holding exactly one substitution-free cat segment
+  if (subs.length !== 1 || !INERT_SUBSTITUTION_HOSTS.has(head) || seg.pipedOut || writeTargets(seg).length !== 0) return [];
+  const { sub, k } = subs[0];
+  if (isPayloadWord(seg.words, k) || !substitutionIsInert(seg, k, head) || sub.segments.length !== 1) return [];
+  const inner = sub.segments[0];
+  return segmentHead(inner) === "cat" && inner.words.every((w) => w.subs.length === 0) ? dataBody(inner, "cat") : [];
 }
 
-/** Heads whose `$(...)` argument is inert text (a commit message, a PR body, echoed text); a heredoc in any other substitution (`x=$(cat <<EOF ...)`) may flow into `eval`. */
-const INERT_SUBSTITUTION_HOSTS = new Set(["git", "gh", "echo", "printf"]);
+/** Heads whose `$(...)` text-flag argument is an inert commit message or PR body; a heredoc in any other substitution (`x=$(cat <<EOF ...)`, `echo "$(...)"`) may flow into `eval`. */
+const INERT_SUBSTITUTION_HOSTS = new Set(["git", "gh"]);
 
 /** COMMAND with the data heredoc bodies blanked to same-length whitespace (newlines kept), so offsets still index the input. Incomplete input is returned unchanged. */
 function blankDataHeredocs(command, tok = tokenizeShellCommand(command)) {

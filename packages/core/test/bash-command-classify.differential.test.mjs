@@ -222,6 +222,10 @@ const SALVAGED_DENY_ROWS = [
   "x='exec >l.sh'; eval \"$x\"\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
   "exec >l.sh; echo \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"; bash l.sh",
   "eval 'exec >l.sh'\ncat <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash l.sh",
+  // two substitutions in one root segment: the first writes l.sh, the second runs it
+  "echo \"$(cat > l.sh <<'EOF'\nnode -e 'x'\nEOF\n)$(bash l.sh)\"",
+  "echo \"$(cat > l.sh <<'EOF'\nnode -e 'x'\nEOF\n)\" \"$(bash l.sh)\"",
+  "git commit -m \"$(cat > l.sh <<'EOF'\nnode -e 'x'\nEOF\n)\" -m \"$(bash l.sh)\"",
   "for i in 1; do>&2\ncat <<'EOF'\nnode -e 'x'\nEOF\ndone>l.sh\nbash l.sh",
   "if true; then>&2\ncat <<'EOF'\nnode -e 'x'\nEOF\nfi>l.sh\nbash l.sh",
   "for i in 1; do&>/dev/null\ncat <<'EOF'\nnode -e 'x'\nEOF\ndone>l.sh\nbash l.sh",
