@@ -172,6 +172,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     const { workOrderText } = await pullWorkOrder({
       ...(short ? { execution: positionals[0] } : { ref: values.ref, digest: values.digest, execution: values.execution }), cwd, tmpRoots,
       receiptTmpRoot: receiptTmpRoot ?? resolveGateArtifactTmpRoot(cwd),
+      rerunTmpRoot: values["tmp-root"] ? tmpRoots[0] : undefined,
     });
     process.stdout.write(workOrderText);
     return 0;

@@ -230,6 +230,11 @@ const negatives = {
     receipt.subject.repo = "foreign/repo";
     await put(p, receipt);
   },
+  foreignExecutionIndex: async (f) => {
+    const unit = f.plan.units.find((u) => u.angles[0] === "coverage");
+    const p = path.join(f.tmpRoot, "work-order-executions", `${unit.executionIdentity}.json`);
+    await put(p, { ...JSON.parse(await readFile(p)), workOrderDigest: "foreign" });
+  },
   superseded: async (f) => { f.plan.roundId = "r1800000000001-1234abcd"; await put(f.planPath, f.plan); },
   retired: async (f) => { await put(path.join(f.tmpRoot, "retired-gate-rounds", HEAD, "old", "retirement.json"), { gate: "draft_gate", retiredAt: "2030-01-01T00:00:00Z" }); },
   outputOwnership: async (f) => { f.plan.units.find((u) => u.angles[0] === "coverage").workOrder.outputRefs[0] = f.supplemental; await put(f.planPath, f.plan); },

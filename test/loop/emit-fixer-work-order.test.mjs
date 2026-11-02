@@ -24,6 +24,7 @@ import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverag
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
+import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
 
 const EMITTER = path.resolve("scripts/loop/emit-fixer-work-order.mjs");
 const PULL = path.resolve("scripts/github/pull-work-order.mjs");
@@ -1474,7 +1475,7 @@ test("F2: dispatchPrompt is the shared envelope, fits the cap for a worst-case r
     // The unit's execution index entry (ADR 0115) sits under the emit plan's tmp root.
     const tmpRoot = path.resolve(path.dirname(unit.planPath), "../../..");
     assert.deepEqual(JSON.parse(await readFile(executionIndexPath(tmpRoot, unit.executionIdentity), "utf8")),
-      { executionIdentity: unit.executionIdentity, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest });
+      { executionIdentity: unit.executionIdentity, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, emitterRoot: TOOLCHAIN_ROOT });
     // A colliding index entry for the next identity refuses the emission.
     const next = { executionIdentity: "f1790000000001-0000beef", workOrderRef: "fixer:o/r#7:other", workOrderDigest: "sha256:0" };
     await writeExecutionIndex(tmpRoot, next);

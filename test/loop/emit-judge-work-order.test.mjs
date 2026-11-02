@@ -11,6 +11,7 @@ import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-a
 import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { withTempDir } from "../_helpers.mjs";
+import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { bindEvidenceToPrBody, seedJudgeSources } from "./_judge-delivery-fixture.mjs";
 import { SPEC_AUTHORITY_OUTCOME_VALUES, SPEC_AUTHORITY_VERDICT_SCHEMA, validateSpecAuthorityVerdict } from "../../packages/core/src/loop/spec-authority.mjs";
 
@@ -124,7 +125,7 @@ test("J2: every dispatch is the fixed compact pointer under the shared cap, reus
     const worst = { workOrderRef: `judge:${"o".repeat(39)}/${"r".repeat(40)}#99999:pre_approval_gate:${"f".repeat(64)}:j1790000000000-abcdef12`, workOrderDigest: "f".repeat(64), executionIdentity: "j1790000000000-abcdef12" };
     assert.ok(Buffer.byteLength(buildDispatchPointer(worst)) <= DISPATCH_POINTER_MAX_BYTES);
     assert.throws(() => buildDispatchPointer({ ...worst, workOrderRef: `${workOrderRef} and also check X` }), /not shell-safe/);
-    assert.deepEqual(JSON.parse(await readFile(executionIndexPath(path.join(root, "tmp"), executionIdentity), "utf8")), { executionIdentity, workOrderRef, workOrderDigest: digest });
+    assert.deepEqual(JSON.parse(await readFile(executionIndexPath(path.join(root, "tmp"), executionIdentity), "utf8")), { executionIdentity, workOrderRef, workOrderDigest: digest, emitterRoot: TOOLCHAIN_ROOT });
     const saved = JSON.parse(await readFile(plan.planPath, "utf8"));
     assert.equal(saved.dispatchPrompt, plan.dispatchPrompt);
     // Initial, resumed and replacement dispatches pull the same unit through the same path.
@@ -254,7 +255,7 @@ test("J4: a colliding execution index entry for the next identity refuses the em
     const body = JSON.parse(out.join(""));
     assert.equal(body.refusal, "execution_index_collision");
     assert.match(body.error, /already names a different unit/);
-    assert.deepEqual(JSON.parse(await readFile(executionIndexPath(path.join(root, "tmp"), next.executionIdentity), "utf8")), next);
+    assert.deepEqual(JSON.parse(await readFile(executionIndexPath(path.join(root, "tmp"), next.executionIdentity), "utf8")), { ...next, emitterRoot: TOOLCHAIN_ROOT });
   });
 });
 
