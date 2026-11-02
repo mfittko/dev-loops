@@ -19,10 +19,10 @@ export const sequenceClosurePath = (tmpRoot, baselineHead, executionIdentity) =>
 /**
  * Runs `fn` holding a lock per baseline head (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC), taken sorted and released in reverse.
  * The suffix must not end with `.sequence`: listBaselines reads that suffix as a marker.
- * ponytail: a mkdir lock with an owner token file; release removes only a lock whose token still matches, and a stale lock is stolen by rename to a unique name then removal (a fresh lock caught by the rename is renamed back).
- * Ceiling: a holder that stalls past `staleMs` and runs on can still overlap a stealer; a holder that dies blocks for at most `staleMs`.
+ * ponytail: a mkdir lock with an owner token file; release removes only a lock whose token still matches. A stale lock is stolen under a separate `.steal` mkdir lock: read the owner token, rename the lock to a unique name, and remove it only when its token is the stale token; a fresh lock caught by the rename is renamed back and never removed.
+ * Ceilings: a holder that stalls past `staleMs` and runs on can still overlap a stealer; a holder that dies blocks for at most `staleMs`; a fresh holder that acquires between the stealer's token read and its rename loses the path until the rename-back, and if a contender took the path in that window the two overlap (the stolen lock is left on disk, never deleted); a stealer that dies holding the `.steal` lock blocks stealing until that directory is removed.
  */
-export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 60000, waitMs = 10000 } = {}) {
+export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 60000, waitMs = 10000, beforeStealRename } = {}) {
   const held = [];
   try {
     for (const head of [...new Set(baselineHeads)].sort()) {
@@ -34,10 +34,25 @@ export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 6
           let age = 0;
           try { age = Date.now() - statSync(lock).mtimeMs; } catch { continue; } // released meanwhile: retry
           if (age > staleMs) {
-            const stolen = `${lock}.stale-${randomUUID()}`;
-            try { renameSync(lock, stolen); } catch { continue; } // another stealer or the holder won: retry
-            if (Date.now() - statSync(stolen).mtimeMs <= staleMs) { try { renameSync(stolen, lock); } catch { rmSync(stolen, { recursive: true, force: true }); } } else rmSync(stolen, { recursive: true, force: true });
-            continue;
+            // Stealers serialize on a steal lock; the stolen directory is removed only when its owner token is the stale token read before the rename. A fresh lock is never removed.
+            const stealLock = `${lock}.steal`;
+            let stealing = false;
+            try { mkdirSync(stealLock); stealing = true; } catch { /* another stealer is active: wait below */ }
+            if (stealing) {
+              try {
+                const readOwner = (dir) => { try { return readFileSync(path.join(dir, "owner"), "utf8"); } catch { return ""; } };
+                const staleToken = readOwner(lock);
+                await beforeStealRename?.(lock);
+                const stolen = `${lock}.stale-${randomUUID()}`;
+                let renamed = false;
+                try { renameSync(lock, stolen); renamed = true; } catch { /* the holder released or a fresh holder replaced it: retry */ }
+                if (renamed) {
+                  if (readOwner(stolen) === staleToken) rmSync(stolen, { recursive: true, force: true });
+                  else { try { renameSync(stolen, lock); } catch { /* ponytail: a contender took the path meanwhile; the stolen fresh lock stays on disk and its holder's token check still protects release */ } }
+                }
+              } finally { rmSync(stealLock, { recursive: true, force: true }); }
+              continue;
+            }
           }
           if (Date.now() >= deadline) throw Object.assign(new Error(`the sequence lock ${lock} is held by a concurrent close or pull; rerun once it finishes (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC)`), { code: "SEQUENCE_LOCK_BUSY" });
           await sleep(25);

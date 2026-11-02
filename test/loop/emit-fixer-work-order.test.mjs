@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, realpathSync } from "node:fs";
+import { chmodSync, existsSync, realpathSync, utimesSync } from "node:fs";
 import { cp, link, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -266,7 +266,7 @@ test("a closure record landing between locate and the receipt write refuses stal
   });
 });
 
-test("a close racing a pull admission ends with exactly one winner: a closure record or a receipt", async () => {
+test("a close and a pull admission, run in either order, end with exactly one winner: a closure record or a receipt", async () => {
   const { WORK_ORDER_ROLES } = await import("../../scripts/github/_work-order-protocol.mjs");
   const { closeGateSequence } = await import("../../scripts/loop/close-gate-sequence.mjs");
   const { sequenceClosurePath, readSequenceMarker } = await import("@dev-loops/core/loop/fix-push-authority");
@@ -279,13 +279,14 @@ test("a close racing a pull admission ends with exactly one winner: a closure re
     const writeReceipt = async () => { await mkdir(path.dirname(receipt), { recursive: true }); await writeFile(receipt, JSON.stringify({ executionIdentity: unit.executionIdentity, pulledAt: new Date().toISOString() })); };
     const admit = () => WORK_ORDER_ROLES.get("fixer").admit(located, writeReceipt).then(() => "pulled", (error) => error.refusal ?? error.message);
     const close = () => closeGateSequence({ tmpRoot, head, repo: REPO, pr: PR, fetchPr: async () => ({ pr: { headRefOid: "b".repeat(40), headRefName: branch } }) }).then((r) => (r.ok ? "closed" : r.refusal));
-    const [a, b] = await Promise.all(closeFirst ? [close(), admit()] : [admit(), close()]);
-    const [closeResult, pullResult] = closeFirst ? [a, b] : [b, a];
+    // Sequential on purpose: closeGateSequence awaits fetchPr before it locks and admit locks synchronously, so concurrent starts always make the pull win and never exercise close-wins.
+    let closeResult, pullResult;
+    if (closeFirst) { closeResult = await close(); pullResult = await admit(); } else { pullResult = await admit(); closeResult = await close(); }
     const closed = existsSync(sequenceClosurePath(tmpRoot, head, unit.executionIdentity));
     const pulled = existsSync(receipt);
     assert.notEqual(closed, pulled, `closure ${closed}, receipt ${pulled}: ${closeResult} / ${pullResult}`);
-    if (closed) assert.deepEqual([closeResult, pullResult], ["closed", "stale_dispatch"]);
-    else assert.deepEqual([closeResult, pullResult], [closeResult, "pulled"]);
+    if (closeFirst) assert.deepEqual([closed, pulled, closeResult, pullResult], [true, false, "closed", "stale_dispatch"]);
+    else assert.deepEqual([closed, pulled, pullResult], [false, true, "pulled"]);
   });
 });
 
@@ -302,6 +303,25 @@ test("a held sequence lock refuses the pull as retryable sequence_lock_busy and 
     try {
       await assert.rejects(admit, (error) => error.refusal === "sequence_lock_busy" && error.retryable === true && /re-run the same pull/.test(error.message));
     } finally { Date.now = realNow; }
+  });
+});
+
+test("a commit_only emit under a held head lock refuses sequence_lock_busy and leaves no current plan and no marker", async () => {
+  const { sequenceMarkerPath } = await import("@dev-loops/core/loop/fix-push-authority");
+  await withFixture(async ({ root, head, files, emit }) => {
+    const tmpRoot = path.join(root, "tmp");
+    const lock = path.join(tmpRoot, "gate-delta", `${head}.sequence-lock`);
+    await mkdir(lock, { recursive: true });
+    const future = new Date(Date.now() + 86_400_000);
+    utimesSync(lock, future, future); // never stale
+    const realNow = Date.now;
+    let clock = realNow();
+    Date.now = () => (clock += 2_000); // each read advances, so the 10 second wait expires
+    try {
+      await assert.rejects(emitCommitOnly(emit, files), /sequence_lock_busy.*no work order was made current/);
+    } finally { Date.now = realNow; }
+    assert.equal(existsSync(sequenceMarkerPath(tmpRoot, head)), false);
+    assert.equal((await readdir(tmpRoot, { recursive: true })).some((f) => /fixer-emit-plan\.json$/.test(f)), false);
   });
 });
 

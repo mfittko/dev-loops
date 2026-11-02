@@ -1,13 +1,13 @@
 // close-gate-sequence: a sanctioned close of an abandoned fix sequence; a live sequence is never closable.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { test } from "bun:test";
 import { readSequenceMarker, recoveryHint, sequenceClosurePath, sequenceMarkerPath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../../cli/index.mjs";
-import { closeGateSequence, defaultActor, fixerGraceMs, localCommitExists } from "../../scripts/loop/close-gate-sequence.mjs";
+import { branchReflogMs, closeGateSequence, defaultActor, fixerGraceMs, localCommitExists } from "../../scripts/loop/close-gate-sequence.mjs";
 import { SANCTIONED_COMMANDS } from "../../scripts/loop/sanctioned-commands.mjs";
 import { withTempDir } from "../_helpers.mjs";
 
@@ -18,7 +18,7 @@ const MOVED = "b".repeat(40);
 const T0 = Date.parse("2026-11-01T10:00:00Z");
 const execution = (dir) => ({ executionIdentity: "f1-abcd1234", workOrderRef: "fixer:o/r#7:head:f1-abcd1234", outputRef: path.join(dir, "out.json") });
 const pr = (oid, name = "feat") => async () => ({ pr: { headRefOid: oid, headRefName: name } });
-const base = (tmpRoot, extra = {}) => ({ tmpRoot, head: HEAD, repo: "o/r", pr: 7, actor: "tester", now: () => T0, fetchPr: pr(MOVED), ...extra });
+const base = (tmpRoot, extra = {}) => ({ tmpRoot, head: HEAD, repo: "o/r", pr: 7, actor: "tester", now: () => T0, fetchPr: pr(MOVED), branchActivityMs: () => null, ...extra }); // no host git state: tests that need activity inject it
 const pull = (tmpRoot, ex, pulledAt) => {
   const file = pullReceiptPath(tmpRoot, ex.workOrderRef);
   mkdirSync(path.dirname(file), { recursive: true });
@@ -239,6 +239,60 @@ test("a fixer with a fresh branch reflog write inside the grace is running even 
     assert.match(running.reason, /activity-based/);
     assert.match(running.remedy, new RegExp(`${FIXER_GRACE_MS / 60000} minutes`));
     assert.equal((await closeGateSequence(base(tmpRoot, { branchActivityMs: () => T0 - FIXER_GRACE_MS - 500 }))).condition, "HEAD_MOVED");
+  });
+});
+
+const plantLock = (tmpRoot, token, ageMs) => {
+  const lock = path.join(tmpRoot, "gate-delta", `${HEAD}.sequence-lock`);
+  rmSync(lock, { recursive: true, force: true });
+  mkdirSync(lock, { recursive: true });
+  writeFileSync(path.join(lock, "owner"), token);
+  const when = new Date(Date.now() - ageMs);
+  utimesSync(lock, when, when);
+  return lock;
+};
+
+test("the contract and its mirror name the close command exactly as recoveryHint emits it", () => {
+  const spelling = "dev-loops-run cli/index.mjs gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>";
+  assert.ok(recoveryHint(HEAD, "/m", "feat").includes(spelling));
+  for (const file of ["skills/docs/pre-pr-review-contract.md", ".claude/skills/docs/pre-pr-review-contract.md"]) {
+    const text = readFileSync(path.join(import.meta.dir, "..", "..", file), "utf8");
+    assert.ok(text.includes(`\`${spelling}\``), file);
+    assert.equal(text.includes("<dev-loops-package-root>/cli/index.mjs gate close-sequence"), false, file);
+  }
+});
+
+test("withSequenceLock steals a stale lock whose owner token is unchanged", async () => {
+  await withTempDir(async (tmpRoot) => {
+    plantLock(tmpRoot, "dead", 120_000);
+    let ran = false;
+    await withSequenceLock(tmpRoot, [HEAD], () => { ran = true; });
+    assert.equal(ran, true);
+  });
+});
+
+test("withSequenceLock never removes a fresh lock a holder took between the stale read and the steal", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const lock = plantLock(tmpRoot, "dead", 120_000);
+    // The old holder releases and a fresh holder takes the lock right after the stealer read the stale token.
+    const beforeStealRename = () => { plantLock(tmpRoot, "fresh", 0); };
+    await assert.rejects(withSequenceLock(tmpRoot, [HEAD], () => { throw new Error("must not run"); }, { waitMs: 150, beforeStealRename }), (error) => error.code === "SEQUENCE_LOCK_BUSY");
+    assert.equal(readFileSync(path.join(lock, "owner"), "utf8"), "fresh");
+  });
+});
+
+test("branchReflogMs reads the reflog mtime of a branch committed in a temp repository, and null for an absent branch", async () => {
+  await withTempDir(async (dir) => {
+    const git = (...args) => assert.equal(spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: dir }).status, 0, args.join(" "));
+    git("init", "-b", "feat");
+    git("commit", "--allow-empty", "-m", "c");
+    const cwd = process.cwd();
+    process.chdir(dir);
+    try {
+      const ms = branchReflogMs("feat");
+      assert.ok(Number.isFinite(ms) && Math.abs(Date.now() - ms) < 60_000, `reflog mtime ${ms}`);
+      assert.equal(branchReflogMs("no-such-branch"), null);
+    } finally { process.chdir(cwd); }
   });
 });
 

@@ -496,12 +496,19 @@ export async function emitFixerWorkOrder({
   await capture.recheck();
   rejectOriginalRetirement();
   recheckCandidate();
-  await rename(tempPath, planPath);
-  // PRE-PUSH-DELTA-PUSH-AUTHORITY: written last so a refused emit never grants the push; only a full work order grants the fixer.
+  // PRE-PUSH-DELTA-PUSH-AUTHORITY: the marker is written last so a refused emit never grants the push; only a full work order grants the fixer.
   // Always under the canonical gate-artifact root (the location the push-authority check reads), whatever --tmp-root says.
-  // Under the head's sequence lock, so a marker replacement never interleaves with a close-sequence.
+  // The plan rename and the marker write share the head's sequence lock: a busy lock refuses before the plan becomes current, so no pullable plan exists without its marker, and a marker replacement never interleaves with a close-sequence.
   const markerRoot = resolveGateArtifactTmpRoot(cwd);
-  await withSequenceLock(markerRoot, [headSha], () => writeSequenceMarker({ tmpRoot: markerRoot, baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } }));
+  try {
+    await withSequenceLock(markerRoot, [headSha], async () => {
+      await rename(tempPath, planPath);
+      writeSequenceMarker({ tmpRoot: markerRoot, baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
+    });
+  } catch (error) {
+    if (error?.code === "SEQUENCE_LOCK_BUSY") throw new Refusal(`sequence_lock_busy: ${error.message}; no work order was made current, so re-run the emit once the concurrent close or pull finishes`);
+    throw error;
+  }
   // The coordinator's gate wait-for-units --artifact path: a full-phase fixer's final-on-write report (ADR 0223), else the hand-back itself.
   return { ...plan, planPath, joinRef: phase === "full" ? fixerReportPath(outputRef) : outputRef };
   } finally { await capture.release(); }
