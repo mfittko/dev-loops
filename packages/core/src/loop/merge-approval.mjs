@@ -35,6 +35,19 @@ export function isValidGithubLogin(login) {
   return typeof login === "string" && login.length >= 1 && login.length <= 39 && GITHUB_LOGIN_RE.test(login);
 }
 
+/** One review fact from a GitHub REST review entry; the shape the merge gate and gate evidence share. */
+export function toReviewFact(r) {
+  return { id: r?.node_id ?? null, login: r?.user?.login ?? null, state: r?.state ?? null, commit_id: r?.commit_id ?? null, type: r?.user?.type ?? null, body: r?.body ?? "", submitted_at: r?.submitted_at ?? null };
+}
+
+/**
+ * The approval-fact projection: only SUBMITTED_REVIEW_STATES survive, so a PENDING
+ * draft never shadows an earlier submitted APPROVED review from the same login.
+ */
+export function projectSubmittedReviewFacts(apiReviews) {
+  return (Array.isArray(apiReviews) ? apiReviews : []).filter((r) => SUBMITTED_REVIEW_STATES.has(r?.state)).map(toReviewFact);
+}
+
 export const MERGE_CLASS = Object.freeze({ DRAIN: "drain", ESCALATED: "escalated" });
 
 /**

@@ -4826,3 +4826,8 @@ test("detect-checkpoint-evidence CLI: evidenceState for a cap-round draft_gate f
   assert.equal(await run({ rounds: [], threads: [], preHead: headSha, seedProof: true, baseRefName: "main" }), "satisfied", "sealed proof with --base-ref-name");
   assert.equal(await run({ rounds: [], threads: [], preHead: headSha, seedProof: true }), "violation", "sealed proof without --base-ref-name");
 }, 60000);
+
+test("parseDetectCheckpointEvidenceCliArgs honors --read-only (skips the runner-ownership heartbeat)", () => {
+  assert.equal(parseDetectCheckpointEvidenceCliArgs(["--repo", "owner/repo", "--pr", "17"]).readOnly, undefined);
+  assert.equal(parseDetectCheckpointEvidenceCliArgs(["--repo", "owner/repo", "--pr", "17", "--read-only"]).readOnly, true);
+});
