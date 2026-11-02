@@ -338,7 +338,9 @@ export function decideBashGateDeny(facts = {}) {
       reason:
         "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER: ad-hoc thread-reply mutations are blocked. Resolve review " +
         "threads via scripts/github/reply-resolve-review-thread.mjs (one thread) or " +
-        "reply-resolve-review-threads.mjs (multiple threads, --message-map), not raw gh api/graphql.",
+        "reply-resolve-review-threads.mjs (multiple threads, --message-map), not raw gh api/graphql. " +
+        "To reopen a wrongly resolved thread, the orchestrator or dev-loop coordinator runs " +
+        "scripts/github/unresolve-review-thread.mjs (never raw unresolveReviewThread).",
     };
   }
 

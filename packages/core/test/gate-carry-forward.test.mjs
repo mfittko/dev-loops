@@ -26,6 +26,12 @@ describe("angleReviewSurface — the pure angle -> surface mapping", () => {
     assert.equal(angleReviewSurface("renderer-security").kind, "always");
   });
 
+  test("state-concurrency reviews code kinds", () => {
+    const surface = angleReviewSurface("state-concurrency");
+    assert.equal(surface.kind, "kinds");
+    assert.deepEqual([...surface.kinds], ["code"]);
+  });
+
   test("explicit alwaysRerun angle -> always", () => {
     assert.equal(angleReviewSurface("scope", { alwaysRerun: ["scope"] }).kind, "always");
   });
@@ -136,7 +142,7 @@ describe("resolveAngleCarryForward — fail-closed decision", () => {
   });
 
   test("isDevLoopConfigSourcePath matches the config-source family and nothing else", () => {
-    for (const p of [".devloops", ".devloops.yaml", ".devloops.yml", ".devloops.json", "sub/.devloops", ".pi/dev-loop/settings.yaml", ".pi/dev-loop/defaults.json", ".pi\\dev-loop\\settings.yaml", "packages/core/src/config/extension-defaults.yaml"]) {
+    for (const p of [".devloops", ".devloops.yaml", ".devloops.yml", ".devloops.json", "sub/.devloops", ".pi/dev-loop/settings.yaml", ".pi/dev-loop/defaults.json", ".pi/dev-loop/defaults", ".pi\\dev-loop\\settings.yaml", "packages/core/src/config/extension-defaults.yaml"]) {
       assert.equal(isDevLoopConfigSourcePath(p), true, p);
     }
     for (const p of ["package.json", "my.devloops", "docs/devloops.md", ".devloopsx", "packages/core/src/config/config.mjs", null]) {

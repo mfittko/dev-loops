@@ -295,8 +295,8 @@ export function parseMarkdownSections(body) {
 /**
  * Parse bullet/checkbox items from a section body into item states. A checkbox
  * item — any GFM/CommonMark task-list marker (`-`/`*`/`+` bullets, ordered
- * `N.`/`N)`, blockquote-nested `> - [ ]`; parity with
- * tick-verified-checkboxes.mjs) — becomes `{ text, checked }`, where `checked`
+ * `N.`/`N)`, blockquote-nested `> - [ ]`; marker grammar as in
+ * CHECKBOX_ROW_RE) — becomes `{ text, checked }`, where `checked`
  * is true only for a ticked `[x]`/`[X]` marker read from the captured marker
  * group, never a whole-line re-test. A top-level plain bullet (`- text`, dash
  * at column 0) becomes `{ text, checked: null }` — it has no checkbox. Empty
@@ -325,9 +325,9 @@ function parseChecklistItems(sectionBody, { anyMarker = false } = {}) {
       continue;
     }
     // Checklist item: GFM/CommonMark task-list markers (`-`/`*`/`+` bullets,
-    // ordered `N.`/`N)`, blockquote-nested `> - [ ]`) — grammar parity with
-    // tick-verified-checkboxes.mjs so every form surfaced as unchecked is
-    // flippable by the tick tool. Push only when the line carries text, so
+    // ordered `N.`/`N)`, blockquote-nested `> - [ ]`) — marker grammar as in
+    // CHECKBOX_ROW_RE (this file); the gate parser keeps its own `.+?` label
+    // group. Push only when the line carries text, so
     // empty placeholders are skipped. The tick state comes from the CAPTURED
     // marker group, never a second whole-line re-test: an unanchored
     // `/\[[xX]\]/.test(line)` would read an unchecked box whose label merely
@@ -959,6 +959,21 @@ const CLOSING_ISSUE_REFERENCE_PATTERN =
   /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:[\w.-]+\/[\w.-]+)?#(\d+)/giu;
 
 export function extractClosingIssueNumbers(body) {
+  const text = stripFencesAndCodeSpans(body);
+  const seen = new Set();
+  const numbers = [];
+  for (const match of text.matchAll(CLOSING_ISSUE_REFERENCE_PATTERN)) {
+    const n = Number(match[1]);
+    if (Number.isInteger(n) && n > 0 && !seen.has(n)) {
+      seen.add(n);
+      numbers.push(n);
+    }
+  }
+  return numbers;
+}
+
+/** The body text GitHub scans for closing keywords: fenced blocks and inline code spans removed. */
+export function stripFencesAndCodeSpans(body) {
   // Same fence-skip as sectionHasBody: a `Closes #N` line quoted inside a
   // ```fenced``` example (e.g. a PR-template sample) must not spoof the gate.
   let fence = null;
@@ -975,17 +990,7 @@ export function extractClosingIssueNumbers(body) {
   // over-strips toward fail-closed, which is the safe direction for this gate.
   // Revisit with a real CommonMark span parser only if valid closing refs in
   // backtick-heavy bodies start being over-stripped into false negatives.
-  const text = unfenced.join("\n").replace(/(`+)[\s\S]*?\1/gu, " ");
-  const seen = new Set();
-  const numbers = [];
-  for (const match of text.matchAll(CLOSING_ISSUE_REFERENCE_PATTERN)) {
-    const n = Number(match[1]);
-    if (Number.isInteger(n) && n > 0 && !seen.has(n)) {
-      seen.add(n);
-      numbers.push(n);
-    }
-  }
-  return numbers;
+  return unfenced.join("\n").replace(/(`+)[\s\S]*?\1/gu, " ");
 }
 
 function sectionHasBody(section) {
@@ -1434,6 +1439,49 @@ export function checklistSectionLineIndices(body, { acOnly = false } = {}) {
     }
   }
   return indices;
+}
+
+/**
+ * The one GFM checkbox-row grammar (CHECKLIST-SCOPE-ONE-MODEL): optional indent, blockquote
+ * prefix, a `-*+` or `N.`/`N)` marker, a `[ ]`/`[x]` box, then the label and an optional `\r`.
+ * Groups: 1 indent, 2 quote, 3 marker, 4 mark, 5 rest, 6 cr.
+ */
+export const CHECKBOX_ROW_RE = /^(\s*)((?:>\s*)*)([-*+]|\d+[.)])\s+\[([ xX])\]\s+([^\r]*?)(\r?)$/u;
+
+/**
+ * Per-line checklist scope of a body, indexed like `body.split(/\r?\n/)`:
+ * "ac" or "dod" for a line under an Acceptance criteria / Definition of done
+ * section (nearest matching ancestor wins, so a `### Definition of done`
+ * nested under `## Acceptance criteria` is "dod"), null for any other line,
+ * undefined for a line inside fenced code. One scope model for every
+ * tick-integrity consumer (CHECKLIST-SCOPE-ONE-MODEL).
+ *
+ * @param {string} body
+ * @returns {Array<"ac"|"dod"|null|undefined>}
+ */
+export function checklistLineScopes(body) {
+  const lines = typeof body === "string" ? body.split(/\r?\n/u) : [];
+  const scopes = new Array(lines.length).fill(undefined);
+  const sections = parseMarkdownSections(body);
+  const mark = (from, texts, scope) => {
+    let fence = null;
+    texts.forEach((text, k) => {
+      const step = stepFence(fence, text);
+      fence = step.fence;
+      if (!step.insideFence) scopes[from + k] = scope;
+    });
+  };
+  mark(0, lines.slice(0, sections[0]?.line ?? lines.length), null);
+  const stack = [];
+  for (const section of sections) {
+    while (stack.length > 0 && stack.at(-1).level >= section.level) stack.pop();
+    const own = ACCEPTANCE_SECTION_PATTERNS.some((p) => p.test(section.name))
+      ? "ac"
+      : DOD_SECTION_PATTERNS.some((p) => p.test(section.name)) ? "dod" : (stack.at(-1)?.scope ?? null);
+    stack.push({ level: section.level, scope: own });
+    mark(section.line + 1, section.bodyLines, own);
+  }
+  return scopes;
 }
 
 /**

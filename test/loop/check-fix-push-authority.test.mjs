@@ -6,10 +6,13 @@ import { mkdir, realpath } from "node:fs/promises";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "bun:test";
-import { clearSequenceMarker, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { clearSequenceMarker, recoveryHint, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { renderGuardHook } from "@dev-loops/core/loop/default-branch-guard";
 import { checkFixPushAuthority, parsePushedShas } from "../../scripts/loop/check-fix-push-authority.mjs";
+import { closeGateSequence, fixerGraceMs } from "../../scripts/loop/close-gate-sequence.mjs";
 import { withTempDir } from "../_helpers.mjs";
+
+const FIXER_GRACE_MS = fixerGraceMs();
 
 const env = { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
 
@@ -109,15 +112,30 @@ test("only the PR branch's remote ref ends the sequence; a stacked remote ref of
   });
 });
 
-test("the refusal names the marker file and the delete recovery", async () => {
+test("the refusal names the no-commit close command with the baseline head, and never marker deletion (ADR 0218)", async () => {
   await withRepo(async (root, head) => {
-    const file = writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
+    writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head, branch: "issue-a" });
     const refused = checkFixPushAuthority(root);
     assert.equal(refused.ok, false);
-    assert.ok(refused.reason.includes(file), refused.reason);
-    assert.match(refused.reason, /delete the marker/);
+    assert.match(refused.reason, new RegExp(`check-pre-push-delta\\.mjs \\(--act-list <act-list> --findings-log <findings-log> \\| --threads-file <threads-file> --repo <owner/name> --pr <n>\\) --baseline ${head} .*--fixer-plan <fixer-plan> --site-coverage <handback>.*no_commit`));
+    assert.doesNotMatch(refused.reason, /delete the marker|delet/i);
+    assert.match(refused.reason, /dev-loops-run cli\/index\.mjs gate close-sequence --head <baseline sha> --repo <owner\/name> --pr <number>/);
+    assert.doesNotMatch(refused.reason, /close-gate-sequence\.mjs/);
     clearSequenceMarker(path.join(root, "tmp"), head);
     assert.deepEqual(checkFixPushAuthority(root), { ok: true }, "a cleared marker (a commit_only round without a fix commit) guards nothing");
+  });
+});
+
+test("the refusal for a marker that names no branch does not name the no-commit close or deletion, and points to the rule", async () => {
+  await withRepo(async (root, head) => {
+    const file = writeSequenceMarker({ tmpRoot: path.join(root, "tmp"), baselineHead: head });
+    for (const mutate of [() => {}, () => writeFileSync(file, "{not json")]) {
+      mutate();
+      const refused = checkFixPushAuthority(root);
+      assert.equal(refused.ok, false);
+      assert.doesNotMatch(refused.reason, /check-pre-push-delta|delet/i);
+      assert.match(refused.reason, /names no branch.*PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery/);
+    }
   });
 });
 
@@ -150,4 +168,32 @@ test("a force-push of a non-descendant sha to the marked branch is refused; anot
     assert.equal(checkFixPushAuthority(root, [{ sha: rewritten, remoteRef: "refs/heads/issue-a" }]).ok, false);
     assert.deepEqual(checkFixPushAuthority(root, [{ sha: rewritten, remoteRef: "refs/heads/issue-b" }]), { ok: true });
   });
+});
+
+// END-TO-END REGRESSION (#2999): the lockout was a refusal with no agent remedy; close-sequence is the remedy.
+test("END-TO-END REGRESSION abandoned sequence lockout: refused, close-sequence, then the same push is allowed", async () => {
+  const feat = async (oid) => ({ pr: { headRefOid: oid, headRefName: "feat" } });
+  for (const scenario of ["head moved", "work order never pulled"]) {
+    await withRepo(async (root, head) => {
+      const tmpRoot = path.join(root, "tmp");
+      const execution = { executionIdentity: "f1-abcd1234", workOrderRef: "fixer:o/r#7:head:f1-abcd1234", outputRef: path.join(root, "out.json") };
+      writeSequenceMarker({ tmpRoot, baselineHead: head, branch: "feat", execution });
+      const refused = checkFixPushAuthority(root);
+      assert.equal(refused.ok, false, `${scenario}: the pre-fix lockout`);
+      const moved = scenario === "head moved";
+      const closed = await closeGateSequence({ tmpRoot, head, repo: "o/r", pr: 7, actor: "t", fetchPr: () => feat(moved ? "b".repeat(40) : head), now: () => Date.now() + (moved ? 0 : FIXER_GRACE_MS + 1000) });
+      assert.equal(closed.ok, true, `${scenario}: ${closed.reason}`);
+      assert.deepEqual(checkFixPushAuthority(root), { ok: true }, `${scenario}: the same push is allowed after the close`);
+    });
+  }
+});
+
+test("recoveryHint renders the close command only for a 40 or 64 char lowercase hex baseline head", () => {
+  for (const ok of ["a".repeat(40), "0123456789abcdef".repeat(4)]) assert.match(recoveryHint(ok, "/m", "issue-a"), new RegExp(`check-pre-push-delta\\.mjs .*--baseline ${ok} `));
+  for (const bad of ["A".repeat(40), "a".repeat(39), "a".repeat(41), "a".repeat(40) + "; rm -rf /", "$(id)", "a".repeat(63), ""]) {
+    const hint = recoveryHint(bad, "/m", "issue-a");
+    assert.doesNotMatch(hint, /check-pre-push-delta/, bad);
+    assert.match(hint, /PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery/);
+    assert.match(hint, /sequence marker is \/m/);
+  }
 });

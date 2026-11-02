@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-24 ([issue 2532](https://github.com/mfittko/dev-loops/issues/2532), [efficiency epic 2268](https://github.com/mfittko/dev-loops/issues/2268)).
 
+Superseded in part by [0220](0220-coordinator-report-points-replace-per-phase-handback.md): the forced hand-back at the unit boundary and the hard 150K cap.
+
 ## Context
 
 One coordinator ran a whole dev-loop cycle and its context snowballed: the real-run

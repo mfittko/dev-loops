@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { mergePr, parseMergePrCliArgs, main, defaultIsAncestor, defaultFetchPrHead } from "../../scripts/github/merge-pr.mjs";
+import { mergePr, parseMergePrCliArgs, main, defaultIsAncestor, defaultFetchPrHead, buildDetectEvidenceArgv } from "../../scripts/github/merge-pr.mjs";
 import { captureStream } from "../_helpers.mjs";
 
 const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
@@ -606,6 +606,21 @@ test("a clean draft_gate on an older head resets the round count below the cap a
   });
 });
 
+test("a draft-gate reset puts the later-review carry below the cap, as the detector counts it", async () => {
+  // Raw count 2 equals the cap, so a later findings review with a resolved thread of its own carries.
+  // The clean draft_gate resets the count to 1, below the cap, so the same carry refuses until the Copilot gate passes, as in the detector.
+  const reviews = [copilotAt(MID_HEAD, "### 🟢 Approval recommended", "2026-01-01T00:00:00Z"), withNodeId(copilotAt(OLD_HEAD, YELLOW_BODY, "2026-01-03T00:00:00Z"), "PRR_old")];
+  const evidence = { ok: true, sizeOutcome: "pass", touchesT1: false, failures: [], draftGate: { verdict: "clean", headSha: MID_HEAD, updatedAt: "2026-01-02T00:00:00Z" } };
+  const overrides = { maxCopilotRounds: 2, reviews, reviewThreads: [reviewThread({ reviewId: "PRR_old", isResolved: true })] };
+  const atCap = await mergePr(baseOptions(), makeRuntime(overrides).runtime);
+  assert.equal(atCap.merged, true);
+  const { runtime } = makeRuntime({ ...overrides, evidence });
+  const threw = await mergePr(baseOptions(), runtime).then(() => null, (e) => e);
+  assert.ok(threw, "reset below the cap must refuse");
+  assert.deepEqual(threw.mergePrFailure.failures.map((f) => f.precondition), ["copilot_convergence"]);
+  assert.ok(refusalReason(threw).startsWith(NO_CURRENT_HEAD_REVIEW_REFUSAL));
+});
+
 test("each missing precondition refuses with a machine-readable reason naming it", async () => {
   const cases = [
     ["mergeable", makeRuntime({ prView: { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" } }), {}],
@@ -858,8 +873,13 @@ test("converged-once: a 🔵 review, a 🟡 review with its own resolved thread,
   assert.equal(blue.copilotDisposition, "converged_once");
   assert.equal(blue.copilotCarriedConvergence.sourceReviewId, "PRR_blue");
 
-  const ownThread = await mergePr(baseOptions(), makeRuntime({
+  await expectCopilotRefusal("a review with its own resolved thread below the cap", {
     maxCopilotRounds: 3,
+    reviews: [withNodeId(copilotAt(OLD_HEAD, YELLOW_BODY, "2026-01-01T00:00:00Z"), "PRR_yellow")],
+    reviewThreads: [reviewThread({ reviewId: "PRR_yellow", isResolved: true })],
+  });
+  const ownThread = await mergePr(baseOptions(), makeRuntime({
+    maxCopilotRounds: 1,
     reviews: [withNodeId(copilotAt(OLD_HEAD, YELLOW_BODY, "2026-01-01T00:00:00Z"), "PRR_yellow")],
     reviewThreads: [reviewThread({ reviewId: "PRR_yellow", isResolved: true })],
   }).runtime);
@@ -875,6 +895,19 @@ test("converged-once: a 🔵 review, a 🟡 review with its own resolved thread,
   assert.equal(recorded.copilotDisposition, "converged_once");
   assert.equal(recorded.copilotCarriedConvergence.bodyDisposition.reviewId, "PRR_unknown");
   assert.equal(recorded.copilotCarriedConvergence.sourceHeadSha, OLD_HEAD);
+});
+
+test("final round: a changes_recommended review whose thread the fixer resolved carries convergence to the one fix commit above it", async () => {
+  const { runtime } = makeRuntime({
+    maxCopilotRounds: 1,
+    reviews: [withNodeId(copilotAt(OLD_HEAD, YELLOW_BODY, "2026-01-01T00:00:00Z"), "PRR_final")],
+    reviewThreads: [reviewThread({ reviewId: "PRR_final", isResolved: true })],
+  });
+  const result = await mergePr(baseOptions(), runtime);
+  assert.equal(result.copilotConvergenceState, "no_current_head_review");
+  assert.equal(result.copilotDisposition, "converged_once");
+  assert.equal(result.copilotCarriedConvergence.sourceReviewId, "PRR_final");
+  assert.equal(result.copilotCarriedConvergence.sourceHeadSha, OLD_HEAD);
 });
 
 // ADR 0155: the fixer-disposition boundary is advisory; the merge gate still refuses an unresolved review thread.
@@ -925,7 +958,7 @@ test("converged-once: a later Copilot review wins over an earlier convergence un
   });
   assert.ok(refusalReason(blocked).includes(NO_CURRENT_HEAD_REVIEW_REFUSAL));
   const resolved = await mergePr(baseOptions(), makeRuntime({
-    maxCopilotRounds: 3,
+    maxCopilotRounds: 2,
     reviews,
     reviewThreads: [reviewThread({ reviewId: "PRR_later", isResolved: true })],
   }).runtime);
@@ -1311,4 +1344,20 @@ test("the ancestry check runs once, after the ADR step and the single fetch", as
   runtime.isAncestor = () => { order.push("ancestry"); return true; };
   await mergePr(baseOptions(), runtime);
   assert.deepEqual(order, ["fetch", "adr", "ancestry"]);
+});
+
+test("the evidence detector receives the PR base branch so the cap-fixed proof can be evaluated", async () => {
+  const { runtime } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+  const seen = [];
+  const detect = runtime.detectEvidence;
+  runtime.detectEvidence = async (opts) => { seen.push(opts.baseRefName); return detect(opts); };
+  await mergePr(baseOptions(), runtime);
+  assert.deepEqual(seen, ["main"]);
+});
+
+test("buildDetectEvidenceArgv adds --base-ref-name only for a non-empty base ref", () => {
+  const withBase = buildDetectEvidenceArgv({ repo: "o/r", pr: 5, baseRefName: "main" });
+  assert.deepEqual(withBase.slice(-2), ["--base-ref-name", "main"]);
+  const without = buildDetectEvidenceArgv({ repo: "o/r", pr: 5, baseRefName: "" });
+  assert.equal(without.includes("--base-ref-name"), false);
 });

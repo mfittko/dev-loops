@@ -36,6 +36,11 @@ export { BASH_GATE_RULES, COORDINATOR_AGENT_TYPES, DEV_LOOP_AGENT_TYPE, GATE_COO
 
 const ALLOW = Object.freeze({ decision: "allow" });
 
+// Intermediate tokens exclude shell separators so a compound command that only names the file is not an invocation.
+// The interpreter may carry a path prefix and follow a backtick; the script path itself also matches as a command head.
+const UNRESOLVE_INVOCATION = /(?:(?:^|[\s;&|(`])(?:[^\s;&|()`]*\/)?(?:node\s+(?:(?!(?:--check|-c)\s)[^\s;&|()`]+\s+)*?|(?:dev-loops-run|bun)\s+(?:[^\s;&|()`]+\s+)*?)|(?:^|[\n;&|(`])\s*)[^\s;&|()`]*unresolve-review-thread\.mjs(?=$|[\s;&|)`<>"'}])/;
+/** True when the command runs scripts/github/unresolve-review-thread.mjs (issue 2577). */
+export const isUnresolveInvocation = (command) => typeof command === "string" && UNRESOLVE_INVOCATION.test(command);
 /** Worker agents that keep write access to tracked worktree files under the main-agent read-only boundary. */
 const WORKER_AGENT_TYPES = new Set(["developer", "fixer", "quality", "docs"]);
 /** A worker by bare name or the `dev-loops:` plugin namespace only; `otherplugin:docs` is not a worker. */
@@ -123,6 +128,18 @@ export function decideBashGate({
   humanMergeOnly = false,
   enforceCoordinator = false,
 }) {
+  // Unresolve is owned by the orchestrator and the dev-loop coordinator (issue 2577).
+  // ponytail: token match only. Quote splitting, globs or variable expansion bypass it; this is a guardrail for cooperative agents.
+  // Owner allowlist: only the main agent (no agent type) and the dev-loop coordinator pass.
+  const unresolveCaller = normalizeAgentType(agentType);
+  if (unresolveCaller != null && unresolveCaller !== DEV_LOOP_AGENT_TYPE && isUnresolveInvocation(command)) {
+    return {
+      decision: "deny",
+      reason:
+        `The ${unresolveCaller} agent may not unresolve review threads: scripts/github/unresolve-review-thread.mjs ` +
+        "is owned by the orchestrator (main agent) and the dev-loop coordinator. Report the wrongly resolved thread in your hand-back and let the owner run it.",
+    };
+  }
   if (normalizeAgentType(agentType) === JUDGE_AGENT_TYPE) {
     return parseSanctionedPullLine(command) || isJudgeDecisionCheckLine(command) ? ALLOW : {
       decision: "deny",
@@ -130,7 +147,7 @@ export function decideBashGate({
         "Judge read-only boundary (agents/judge.agent.md, ADR 0106): the judge may run only its " +
         "dispatched `dev-loops-run scripts/github/pull-work-order.mjs <executionIdentity>` line (or its emitted 3-flag form), " +
         "alone, with no chaining, redirection or substitution, or `dev-loops-run scripts/loop/check-judge-decision.mjs --file tmp/gate-judge/<path>.json`. Read " +
-        "files with Read/Grep/Glob; never run shell, test or build commands.",
+        "files with `Read` (always available), plus Grep and Glob when available; never run shell, test or build commands.",
     };
   }
   // The fixer's binding is recorded only for the exact pull line (ADR 0107), so a modified one denies with the fix.
@@ -572,7 +589,8 @@ export function decideFixerWriteGuard({ agentType = null, targetPath = null, sym
   const granted = grants.some((g) => typeof g?.branch === "string" && g.branch === checkout.branch && inAllowedPaths(rel, g.allowedPaths));
   if (granted) return ALLOW;
   return deny(grants.length === 0
-    ? "no current fixer work-order pull grants a mutation authority. A pull line run with a prefix, suffix, redirect or `cd` records no grant; run the exact dispatched pull line again, alone"
+    ? "no current fixer work-order pull grants a mutation authority. A pull line run with a prefix, suffix, redirect or `cd` records no grant; run the exact dispatched pull line again, alone. " +
+      "The coordinator emits the work order and dispatches its pointer: `dev-loops-run scripts/loop/emit-fixer-work-order.mjs` with `--act-list-file <path> --gate <gate>`, `--threads-file <path>` or `--review-id <review node id>`"
     : `no current pull grants path ${JSON.stringify(rel)} on branch ${JSON.stringify(checkout.branch)}`);
 }
 

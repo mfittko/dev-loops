@@ -2410,6 +2410,45 @@ test("detect-pr-gate-coordination-state auto-releases the runner-coordination lo
     assert.equal(releaseCalls[0].repo, "owner/repo");
     assert.equal(releaseCalls[0].pr, 10);
     assert.equal(releaseCalls[0].env.DEVLOOPS_RUN_ID, "");
+    assert.equal(result.runnerRelease, undefined, "a successful release is not surfaced");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("detect-pr-gate-coordination-state carries the skipped release at a terminal stop (#2884)", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-runner-release-skipped-"));
+  try {
+    const body = `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\nNo AC/DoD sections at all.\n`;
+    const env = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+    const skipped = { ok: true, status: "skipped_no_async_run_id", remedy: "run handoff" };
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      buildMockRuntime(env, { releaseAsyncRunnerOwnershipImpl: async () => skipped }),
+    );
+
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    assert.deepEqual(result.runnerRelease, skipped);
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
@@ -3610,7 +3649,7 @@ for (const [location, step] of [["main", "reply_missing"], ["linked", "reply_mis
   const REPO = "owner/repo";
   const PR = 3001;
   const HEAD_SHA = "abc1234567";
-  const FIX_SHA = "fed9876543";
+  const FIX_SHA = "fed9876543fed9876543fed9876543fed9876543";
 
   try {
     initGitFixture(tempDir);
@@ -3725,6 +3764,62 @@ for (const [location, step] of [["main", "reply_missing"], ["linked", "reply_mis
     assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
     assert.match(result.fixerDispositionWarning.warning, /T1/);
     assert.match(result.fixerDispositionWarning.warning, new RegExp(step));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+for (const withMarker of [true, false]) test(`detect-pr-gate-coordination-state ${withMarker ? "completes a review-body checkpoint when a trusted marker is live" : "names the review, not 'thread undefined', when no marker is live"}`, async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-fixer-disposition-review-"));
+  const REPO = "owner/repo";
+  const PR = 3001;
+  const HEAD_SHA = "abc1234567";
+  const FIX_SHA = "fed9876543fed9876543fed9876543fed9876543";
+
+  try {
+    initGitFixture(tempDir);
+    const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
+    const { normalizeFixerDispositionHandoff } = await import("@dev-loops/core/loop/fixer-disposition");
+    const fullPath = path.join(tempDir, buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: HEAD_SHA, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(fullPath), { recursive: true });
+    const handoff = normalizeFixerDispositionHandoff({ headSha: HEAD_SHA, dispositions: [{ reviewId: "PRR_R1", fixingCommitSha: FIX_SHA, disposition: "tackled" }] });
+    await writeFile(fullPath, `${JSON.stringify(handoff, null, 2)}\n`, "utf8");
+    const marker = JSON.stringify({ id: 5, user: { login: "op", type: "User" }, author_association: "OWNER", body: `<!-- dev-loops:review-body-disposition review=PRR_R1 fix=${FIX_SHA} -->` });
+
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "number,state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: jsonLine({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD_SHA, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews: [] }),
+      },
+      { assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: jsonLine({ users: [], teams: [] }) },
+      {
+        assertArgs: ["api", "graphql", `pr=${PR}`],
+        stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } }] } } } } }),
+      },
+      { assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid"], stdout: jsonLine({ headRefOid: HEAD_SHA }) },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/issues/${PR}/comments?per_page=100`],
+        stdout: jsonLine([[{
+          id: 11,
+          body: ["Gate review: draft_gate", `Reviewed head SHA: ${HEAD_SHA}`, "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"),
+          html_url: "https://example.test/comment/11",
+          updated_at: "2026-05-31T20:00:00Z",
+        }]]),
+      },
+      { assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/pulls/${PR}/reviews?per_page=100`], stdout: jsonLine([[]]) },
+      { assertArgs: ["api", `repos/${REPO}/compare/${FIX_SHA}...${HEAD_SHA}`], stdout: jsonLine({ status: "ahead" }) },
+      { assertArgs: ["api", `repos/${REPO}/issues/${PR}/comments`, "--paginate", "--jq", ".[]"], stdout: withMarker ? `${marker}\n` : "\n" },
+      { assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: "\n" },
+    ]);
+
+    const result = await detectPrGateCoordinationState({ repo: REPO, pr: PR }, buildMockRuntime(env, { repoRoot: tempDir }));
+    assert.equal(result.ok, true);
+    if (withMarker) {
+      assert.equal(result.fixerDispositionWarning, undefined);
+    } else {
+      assert.match(result.fixerDispositionWarning.warning, /review PRR_R1: reply_missing/);
+      assert.doesNotMatch(result.fixerDispositionWarning.warning, /thread undefined/);
+    }
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -3957,7 +4052,7 @@ async function runNotVerifiedFixture({ phase = "full", handoffHead, handoffRaw, 
     }
     await writeFile(path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json"), handoffRaw ?? JSON.stringify({
       headSha: handoffHead ?? HEAD_SHA,
-      dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543", disposition: "tackled" }],
+      dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543fed9876543fed9876543fed9876543", disposition: "tackled" }],
     }));
     const checkerCalls = [];
     if (active) {
@@ -4050,6 +4145,17 @@ test("detect-pr-gate-coordination-state reports not_verified for a delivered tac
     assert.match(result.fixerDispositionWarning.warning, /not_verified/);
     assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
   });
+});
+
+test("detect-pr-gate-coordination-state reports not_verified for a tackled review-body handoff, and not for a deferred one", async () => {
+  for (const [key, id, disposition, warned] of [["reviewId", "PRR_R1", "tackled", true], ["reviewId", "PRR_R1", "deferred", false], ["threadId", "PRRT_x", "rejected", false]]) {
+    const handoffRaw = JSON.stringify({ headSha: "abc9988776", dispositions: [{ [key]: id, fixingCommitSha: "fed9876543fed9876543fed9876543fed9876543", disposition }] });
+    await runNotVerifiedFixture({ handoffRaw }, (result) => {
+      assert.equal(result.ok, true);
+      if (warned) assert.match(result.fixerDispositionWarning.warning, /review PRR_R1: not_verified/);
+      else assert.equal(result.fixerDispositionWarning ?? null, null);
+    });
+  }
 });
 
 test("detect-pr-gate-coordination-state keeps not_verified after a later commit_only emission overwrote the plan", async () => {
@@ -4240,5 +4346,124 @@ test("the detector writes the body finding to the derived judge file and removes
     await assert.rejects(readFile(found.copilotBodyJudgeFile, "utf8"), { code: "ENOENT" });
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+// ADR 0208 (#2462 slice 8): the PR 2976 shape. Cap round 4 found items, the fixer pass landed and its sealed delta cleared the current head, and a blocked round 5 sits at that head.
+async function seedCapFixedRepo(repoRoot, { headSha, seal = true }) {
+  initGitFixture(repoRoot, { branch: "main" });
+  const capHead = "c".repeat(40);
+  const findings = path.join(repoRoot, "tmp", "gate-findings", "owner-repo", "pr-10");
+  await mkdir(findings, { recursive: true });
+  const ledger = (head, verdict, i) => writeFile(path.join(findings, `draft_gate-${head}.json`), JSON.stringify({ repo: "owner/repo", pr: 10, gate: "draft_gate", headSha: head, verdict, loggedAt: `2026-11-0${i}T00:00:00.000Z`, findings: [] }), "utf8");
+  for (const [i, head] of ["1", "2", "3"].entries()) await ledger(head.repeat(40), "findings_present", i + 1);
+  await ledger(capHead, "findings_present", 4);
+  await ledger(headSha, "blocked", 5);
+  const deltaDir = path.join(repoRoot, "tmp", "gate-delta");
+  await mkdir(deltaDir, { recursive: true });
+  const record = `${JSON.stringify({ reviewBaselineHead: capHead, candidateHead: headSha, nextStep: "push", outcome: "locally_clear" })}\n`;
+  await writeFile(path.join(deltaDir, `${capHead}.json`), record, "utf8");
+  if (seal) await writeFile(path.join(deltaDir, `${capHead}.json.seal`), `${createHash("sha256").update(record).digest("hex")}\n`, "utf8");
+}
+
+async function capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody }) {
+  return writeGhStub(tempDir, [
+    {
+      stdout: JSON.stringify({
+        number: 10, state: "OPEN", isDraft, headRefOid: headSha, baseRefName: "main", mergeStateStatus: "CLEAN",
+        body: "## Objective\n\nShip.\n\n## In scope\n\n- x\n\n## Explicit non-goals\n\n- y\n\n## Acceptance criteria\n\n- [ ] x\n\n## Definition of done\n\n- [ ] tests pass\n\n## Open questions/risks\n\n- none\n",
+        closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }) + "\n",
+    },
+    { stdout: "{\"users\":[]}\n" },
+    { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+    { stdout: jsonLine({ headRefOid: headSha }) },
+    { stdout: jsonLine([[{ id: 11, body: draftGateBody, html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }]]) },
+    { stdout: "[]\n" },
+    { assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: "\n" },
+  ]);
+}
+
+for (const { name, isDraft, seal, expected } of [
+  { name: "a draft PR with a cleared sealed cap-round delta and a blocked round 5 goes mark_ready_for_review", isDraft: true, seal: true, expected: PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW },
+  { name: "a ready PR with a cleared sealed cap-round delta never reconciles the draft gate (goes to the Copilot cycle)", isDraft: false, seal: true, expected: PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW },
+  { name: "a draft PR whose delta record is unsealed is not cap-round-fixed and reports blocked (round N+1 never runs)", isDraft: true, seal: false, expected: PR_CHECKPOINT_ACTION.REPORT_BLOCKED },
+]) {
+  test(`detect-pr-gate-coordination-state (ADR 0208): ${name}`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-fixed-"));
+    try {
+      const headSha = "abc1234567".repeat(4);
+      await seedCapFixedRepo(tempDir, { headSha, seal });
+      const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
+      const env = await capFixedDetectorEnv(tempDir, { isDraft, headSha, draftGateBody: body });
+      const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+      assert.equal(result.ok, true);
+      assert.equal(result.nextAction, expected, result.reason);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
+// ADR 0218: a rejecting resolveCapRoundFixed (injected through the runtime) reaches the detector rejection handler, which reports cap_round_unresolved.
+test("detect-pr-gate-coordination-state (ADR 0218): a rejecting resolveCapRoundFixed reports cap_round_unresolved", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-throws-"));
+  try {
+    const headSha = "abc1234567".repeat(4);
+    await seedCapFixedRepo(tempDir, { headSha, seal: true });
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, resolveCapRoundFixed: async () => { throw new Error("resolver failed"); } }));
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+    assert.ok(result.reason.includes("Condition cap_round_unresolved:"), result.reason);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+for (const { name, chained, expected } of [
+  { name: "a draft PR whose later push is covered by a chain of sealed cap-round delta records goes mark_ready_for_review", chained: true, expected: PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW },
+  { name: "a draft PR whose later push has no record in the chain reports blocked", chained: false, expected: PR_CHECKPOINT_ACTION.REPORT_BLOCKED },
+]) {
+  test(`detect-pr-gate-coordination-state (ADR 0208 chain): ${name}`, async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-chain-"));
+    try {
+      const fixerHead = "abc1234567".repeat(4);
+      const laterHead = "def7654321".repeat(4);
+      await seedCapFixedRepo(tempDir, { headSha: fixerHead, seal: true });
+      if (chained) {
+        const record = `${JSON.stringify({ reviewBaselineHead: fixerHead, candidateHead: laterHead, nextStep: "push", outcome: "locally_clear" })}\n`;
+        const deltaDir = path.join(tempDir, "tmp", "gate-delta");
+        await writeFile(path.join(deltaDir, `${fixerHead}.json`), record, "utf8");
+        await writeFile(path.join(deltaDir, `${fixerHead}.json.seal`), `${createHash("sha256").update(record).digest("hex")}\n`, "utf8");
+      }
+      const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha: laterHead, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
+      const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha: laterHead, draftGateBody: body });
+      const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+      assert.equal(result.ok, true);
+      assert.equal(result.nextAction, expected, result.reason);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
+// ADR 0218: an unreadable in-range cap-round ledger still counts toward the cap, so the refusal stands, but it names cap_round_unresolved and not a clearing record that was never evaluated.
+test("detect-pr-gate-coordination-state (ADR 0218): an unreadable cap-round ledger reports cap_round_unresolved, not no_clearing_record", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-unresolved-"));
+  try {
+    const headSha = "abc1234567".repeat(4);
+    await seedCapFixedRepo(tempDir, { headSha, seal: true });
+    await writeFile(path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10", `draft_gate-${"c".repeat(40)}.json`), "not json", "utf8");
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+    assert.ok(result.reason.includes("Condition cap_round_unresolved:"), result.reason);
+    assert.ok(!result.reason.includes("no_clearing_record"), result.reason);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
   }
 });

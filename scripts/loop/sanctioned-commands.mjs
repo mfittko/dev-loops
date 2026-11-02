@@ -62,8 +62,10 @@ export const SANCTIONED_COMMANDS = Object.freeze({
     "copilot-request": "scripts/github/request-copilot-review.mjs",
     "reply-resolve-thread": "scripts/github/reply-resolve-review-thread.mjs",
     "reply-resolve-threads": "scripts/github/reply-resolve-review-threads.mjs",
+    "unresolve-thread": "scripts/github/unresolve-review-thread.mjs",
     "gate-verdict-comment": "scripts/github/upsert-checkpoint-verdict.mjs",
     "gate-findings-log-quarantine": "scripts/github/quarantine-gate-findings-log.mjs",
+    "close-gate-sequence": "scripts/loop/close-gate-sequence.mjs",
   }),
 
   // Never allowed for any operation above — the sanctioned wrapper is mandatory.

@@ -30,7 +30,8 @@ work order's header "role" must match it. --tmp-root pins where emitted work ord
 are searched (default: tmp/ of every checkout of this repo, current checkout first).
 Refusals (stdout JSON, exit 1): dispatch_reference_mismatch (retryable: re-dispatch
 the SAME unit with its canonical reference), dispatch_identity_mismatch,
-stale_dispatch, unknown_role, invalid_work_order, semantic_identity_mismatch,
+stale_dispatch, sequence_lock_busy (fixer pulls only; retryable: re-run the same
+pull), unknown_role, invalid_work_order, semantic_identity_mismatch,
 local_materialization_integrity_failure.
 Exit codes: 0 pulled, 1 refused, 2 usage/IO error.`;
 
@@ -171,6 +172,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     const { workOrderText } = await pullWorkOrder({
       ...(short ? { execution: positionals[0] } : { ref: values.ref, digest: values.digest, execution: values.execution }), cwd, tmpRoots,
       receiptTmpRoot: receiptTmpRoot ?? resolveGateArtifactTmpRoot(cwd),
+      rerunTmpRoot: values["tmp-root"] ? tmpRoots[0] : undefined,
     });
     process.stdout.write(workOrderText);
     return 0;

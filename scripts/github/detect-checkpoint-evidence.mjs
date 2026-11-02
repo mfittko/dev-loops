@@ -26,12 +26,14 @@ import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "./_gate-finding-
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
-import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, assertConfigLoaded, isSizeOutcomeT1Clean, loadDevLoopConfig, loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance, touchesRiskPath } from "@dev-loops/core/config";
+import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, assertConfigLoaded, isSizeOutcomeT1Clean, loadDevLoopConfig, loadDevLoopConfigStrict, stripConfigKeyPaths, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveGateDispatchMode, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
 import { FANOUT_UNAVAILABLE_MESSAGE, JUDGE_DISPOSITIONS, VALID_SEVERITIES, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, ledgerAngleNames, listOpenActItems, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
-import { detectMergeBaseChangedFiles, detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
+import { detectMergeBaseChangedFiles } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
+import { resolveCapRoundFixed } from "./write-gate-context.mjs";
+import { crossCheckRoundFromReviewBodies, normalizePrReviewsPayload, parseFindingMarker, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
+import { isCapRound } from "@dev-loops/core/loop/review-round-cap";
 import { flattenPaginatedSlurp, resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
@@ -41,16 +43,24 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
 import { countUnresolvedHumanChangesRequested, resolveSizeBudgetHumanApprovalRequired } from "@dev-loops/core/loop/size-budget-merge-gate";
 import { SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/copilot-helpers";
+import { parseHeadDeclaredKeys } from "./head-declared-keys-schema.mjs";
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
 Fetch the live PR head SHA and visible PR issue comments, then summarize the
 latest valid draft-gate and pre-approval checkpoint verdict comments. Always fail
-closed (exit 1) unless both required gate comments exist: a clean draft_gate
-comment for the one-time draft boundary and a clean current-head
-pre_approval_gate comment.
+closed (exit 1) unless both requirements hold: the draft requirement is met by a
+clean draft_gate comment for the one-time draft boundary, or by the
+cap-round-fixed state (GATE-EXEC-ROUND-CAP: the GitHub-visible round=<cap>
+header with resolved round threads, or the sealed proof read with
+--base-ref-name); and a clean current-head pre_approval_gate comment exists.
 Required:
   --repo <owner/name>   Repository slug (e.g. owner/repo)
   --pr <number>         Pull request number
 Optional:
+  --base-ref-name <name>  PR base branch; lets a sealed cap-round-fixed proof stand in for the clean draft_gate comment
+  --head-declared-keys <json>  Dotted config key paths the PR head's own schema declares
+                          ({"declaredKeys":[...]}); a head-only unknown key listed there is tolerated
+  --head-declared-keys-sha <sha>  Head SHA the declared keys were reported for; the keys apply only when it
+                          equals the evaluated head, otherwise the declared set is empty
   --skip-fanout-ledger-check  Skip the fan-out findings-log ledger/provenance/
                               angle-coverage layer of requireFanoutEvidence
                               enforcement. That evidence lives in a gitignored,
@@ -164,6 +174,9 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       pr: { type: "string" },
       "require-before-merge": { type: "boolean" },
       "skip-fanout-ledger-check": { type: "boolean" },
+      "base-ref-name": { type: "string" },
+      "head-declared-keys": { type: "string" },
+      "head-declared-keys-sha": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -201,6 +214,18 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       // below, never silently enabling the skip. So presence => enable, and the
       // only way to keep full enforcement is to omit the flag (the default).
       options.skipFanoutLedgerCheck = true;
+      continue;
+    }
+    if (token.name === "head-declared-keys") {
+      options.headDeclaredKeys = parseHeadDeclaredKeys(token.value ?? "");
+      continue;
+    }
+    if (token.name === "head-declared-keys-sha") {
+      options.headDeclaredKeysSha = (token.value ?? "").trim();
+      continue;
+    }
+    if (token.name === "base-ref-name") {
+      options.baseRefName = requireTokenValue(token, parseError).trim();
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -389,10 +414,18 @@ export function coerceUnresolvedThreadCount(parsedThreads) {
   const raw = parsedThreads?.summary?.unresolvedThreads;
   return Number.isInteger(raw) && raw >= 0 ? raw : -1;
 }
-export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false } = {}) {
+// GitHub-visible cap-round-fixed predicate: the cap-round marker is posted and every thread carrying a finding of that round is resolved.
+export function capRoundThreadsResolved(capRoundNumber, threadNodes) {
+  if (!Number.isInteger(capRoundNumber) || !Array.isArray(threadNodes)) return false;
+  return threadNodes.every((node) => parseFindingMarker(node?.comments?.nodes?.[0]?.body)?.round !== capRoundNumber || node?.isResolved === true);
+}
+export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false, capRoundFixed = false } = {}) {
   const failures = [];
   const warnings = [];
-  if (!(evidence.draftGate.visible && evidence.draftGate.verdict === "clean")) {
+  // A sealed "cap round fixed" proof stands in for the clean draft_gate comment; every other condition below stays fail-closed.
+  if (capRoundFixed === true) {
+    // proof accepted
+  } else if (!(evidence.draftGate.visible && evidence.draftGate.verdict === "clean")) {
     failures.push("missing visible clean draft_gate comment");
   } else if (evidence.draftGate.converged?.malformed) {
     failures.push("draft_gate comment carries a malformed Converged marker (expected `fixer <sha> delta sha256:<digest>`)");
@@ -620,8 +653,11 @@ function gateVerdictState({ visible, verdict, contractComplete = true }) {
  * definition — a clean-gates PR can still fail on an unrelated pre-merge
  * check, which is a real problem (violation), not "waiting".
  */
-export function deriveEvidenceState(evidence, preMergeGateCheck) {
-  const draftState = gateVerdictState({ visible: evidence.draftGate.visible, verdict: evidence.draftGate.verdict });
+export function deriveEvidenceState(evidence, preMergeGateCheck, capRoundFixed = false) {
+  // A cap-fixed PR holds the draft gate by the sealed proof: its visible findings_present review is not a violation, and preMergeGateCheck decides.
+  const draftState = capRoundFixed === true
+    ? "clean"
+    : gateVerdictState({ visible: evidence.draftGate.visible, verdict: evidence.draftGate.verdict });
   const preApprovalState = gateVerdictState({
     visible: evidence.preApprovalGateMarker.visible,
     verdict: evidence.preApprovalGateMarker.verdict,
@@ -755,6 +791,14 @@ async function readActListInAny(checkouts, ledgerPath, markerExecutionMode) {
   }
   return exists ? { ledgerPath, unreadable, open, unjudged } : null;
 }
+// The --head-declared-keys value uses the shared strict schema (invalid input is an empty set).
+export { parseHeadDeclaredKeys };
+
+/** The declared set applies only to the head it was reported for; a missing or different SHA yields the empty set (fail closed). */
+export function bindHeadDeclaredKeys(keys, keysSha, currentHeadSha) {
+  return keysSha && keysSha === currentHeadSha ? (keys ?? []) : [];
+}
+
 // A committed `.devloops` is a small hand-authored config file; 8 MiB is
 // already many times larger than any legitimate one, so bounding `git show`
 // here only guards against a runaway/corrupt blob, never a real config.
@@ -832,7 +876,7 @@ function readHeadDevloopsSource(repoRoot, headSha) {
  * head commit. Falls back to `invokingConfig` only when the head commit is not
  * resolvable locally; an invalid head `.devloops` throws config_load_failed.
  */
-async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
+async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha, headDeclaredKeys = [] }) {
   if (typeof headSha !== "string" || headSha.trim().length === 0) {
     return invokingConfig;
   }
@@ -840,7 +884,7 @@ async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
   if (!source.ok) {
     return invokingConfig; // head commit unresolvable locally -> fall back.
   }
-  const loaded = await loadDevLoopConfig({
+  let loaded = await loadDevLoopConfig({
     repoRoot,
     devloopsOverride: { raw: source.raw, path: source.path },
   });
@@ -849,7 +893,24 @@ async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
   // back to the older invoking config. Base-layer errors read from this same
   // repoRoot are the invoking strict load's concern, not the head's.
   const headAttributable = (error) => error.layer === "devloops" || error.layer === "merged";
-  assertConfigLoaded({ ...loaded, errors: (loaded.errors ?? []).filter(headAttributable) });
+  const headErrors = (loaded.errors ?? []).filter(headAttributable);
+  // A PR that adds a config key only its own (newer) schema knows is rejected by
+  // this trusted default-branch schema. When every head error is an
+  // unknown-keys-only error and every such key is declared by the head's own
+  // schema (headDeclaredKeys, reported by an untrusted credential-less job and
+  // treated as data), reload once with those keys stripped. Stripping is safe:
+  // the trusted base ignores keys it does not know, so a stripped key cannot
+  // change base behavior. The declared set only widens what is tolerated, never
+  // what is trusted; a key declared by neither schema still fails below.
+  if (headErrors.length > 0 && headErrors.every((e) => e.unknownKeysOnly && e.unknownKeys?.every((k) => headDeclaredKeys.includes(k)))) {
+    loaded = await loadDevLoopConfig({
+      repoRoot,
+      devloopsOverride: { raw: stripConfigKeyPaths(source.raw, source.path, headErrors.flatMap((e) => e.unknownKeys)), path: source.path },
+    });
+    assertConfigLoaded({ ...loaded, errors: (loaded.errors ?? []).filter(headAttributable) });
+    return loaded.config;
+  }
+  assertConfigLoaded({ ...loaded, errors: headErrors });
   return loaded.config;
 }
 
@@ -881,7 +942,7 @@ async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
 // implementations. Re-exported here for import-path back-compat.
 export { isSizeOutcomeT1Clean };
 
-export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd, hasFullLabel = false, baseRef = null }) {
+export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd, hasFullLabel = false, baseRef = null, headDeclaredKeys = [] }) {
   // Defensive only: callers strict-load and fail closed before this point, so a
   // null/undefined config never arrives here in practice.
   const checkouts = resolveLedgerCheckouts(cwd);
@@ -921,7 +982,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // (resolveGateConfig, resolveGateAngleContract, resolveFanoutGroups,
   // including the per-candidate resolution inside readLedgerProvenanceInAny)
   // so they can never drift apart on which config governs the angle layer.
-  const angleConfig = await resolveAngleLayerConfig({ invokingConfig: config, repoRoot, headSha: currentHeadSha });
+  const angleConfig = await resolveAngleLayerConfig({ invokingConfig: config, repoRoot, headSha: currentHeadSha, headDeclaredKeys });
   // Gate ACTIVATION (`.required`) stays sourced from the INVOKING checkout's
   // config, never the head-sourced angleConfig: a PR that sets its own
   // `gates.preApproval.required: false` must not be able to remove a gate
@@ -976,23 +1037,23 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
     // fails closed regardless of what it claims.
     let scopeUnderThreshold = false;
     if (lightMode && !hasFullLabel && baseRef && spec.marker.executionMode === "inline_single_agent") {
-      const scope = detectMergeBaseScope({ base: baseRef, head: scopeHeadSha, cwd: repoRoot });
-      const sizeCapOk = scope.ok === true && isEligibleForLightMode(scope, lightThreshold);
-      let riskPathOk = false;
-      if (sizeCapOk) {
-        const changedFilesResult = detectMergeBaseChangedFiles({ base: baseRef, head: scopeHeadSha, cwd: repoRoot });
-        riskPathOk = changedFilesResult.ok === true && !touchesRiskPath(changedFilesResult.files, lightThreshold.riskPaths);
-      }
-      let sizeOutcomeOk = false;
-      if (riskPathOk) {
+      // The ONE shared resolver (resolveGateDispatchMode) decides the weighted
+      // LOC + non-doc file cap, risk-path and T1 floors from the merge-base
+      // diff, so the merge check cannot drift from the draft/pre_approval gates.
+      const changedFilesResult = detectMergeBaseChangedFiles({ base: baseRef, head: scopeHeadSha, cwd: repoRoot });
+      let sizeOutcome = null;
+      if (changedFilesResult.ok === true) {
         try {
-          const sizeOutcome = await evaluatePrSizeBudget({ base: baseRef, head: scopeHeadSha, repoRoot });
-          sizeOutcomeOk = isSizeOutcomeT1Clean(sizeOutcome);
+          sizeOutcome = await evaluatePrSizeBudget({ base: baseRef, head: scopeHeadSha, repoRoot });
         } catch {
-          sizeOutcomeOk = false; // fails CLOSED on a size-budget computation error
+          sizeOutcome = null; // fails CLOSED on a size-budget computation error
         }
       }
-      scopeUnderThreshold = sizeCapOk && riskPathOk && sizeOutcomeOk;
+      scopeUnderThreshold = resolveGateDispatchMode(config, spec.name === "draft_gate" ? "draft" : "preApproval", {
+        changedFiles: changedFilesResult.ok === true ? changedFilesResult.files : undefined,
+        sizeOutcome,
+        hasFullLabel,
+      }).mode === "inline";
     }
     // Read ledger provenance for ANY fanout_fanin gate (not just when
     // requireProvenance is on): angle-coverage enforcement re-validates
@@ -1177,6 +1238,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     cwd,
     hasFullLabel,
     baseRef,
+    headDeclaredKeys: bindHeadDeclaredKeys(options.headDeclaredKeys, options.headDeclaredKeysSha, currentHeadSha),
   });
   return {
     ok: true,
@@ -1201,6 +1263,8 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     // buildPreMergeGateCheck's fail-closed handling is reachable without
     // threading the raw reviews array through it.
     reviewsReadFailed,
+    // The cap round when any posted draft_gate review header carries it (a later post-cap header does not mask it), else null (GitHub-visible; no tmp record).
+    capRoundNumber: (() => { const cap = resolveGateConfig(config, "draft").maxReviewRounds ?? 0; return prReviews.some((r) => isCapRound(crossCheckRoundFromReviewBodies([r.body], "draft_gate"), cap)) ? cap : null; })(),
     fanoutEnforcement,
     ...(runnerOwnership.status !== "skipped_no_async_run_id" ? { runnerOwnership } : {}),
     staleRunner: {
@@ -1245,7 +1309,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
  * same fact.
  */
 export async function detectCheckpointEvidence(options, ctx) {
-  const { reviews: _reviews, comments: _comments, ...publicResult } = await gatherCheckpointEvidenceRaw(options, ctx);
+  const { reviews: _reviews, comments: _comments, capRoundNumber: _capRoundNumber, ...publicResult } = await gatherCheckpointEvidenceRaw(options, ctx);
   if (typeof ctx?.unresolvedGateThreadCount === "number") {
     publicResult.draftGateSatisfied = publicResult.draftGateSatisfied && ctx.unresolvedGateThreadCount === 0;
   }
@@ -1272,10 +1336,12 @@ async function main() {
     const result = await gatherCheckpointEvidenceRaw(options);
     let unresolvedThreadCount = -1;
     let unresolvedGateThreadCount = -1;
+    let githubCapFixed = false;
     try {
       const threadsPayload = await fetchGithubReviewThreadsPayload(options, { env: process.env });
       const parsedThreads = parseReviewThreads(threadsPayload);
       unresolvedThreadCount = coerceUnresolvedThreadCount(parsedThreads);
+      githubCapFixed = capRoundThreadsResolved(result.capRoundNumber, threadsPayload);
       // The draftGateSatisfied field must assert 0 unresolved gate-authored
       // threads (high, medium, low, question, AND nit), not just a clean
       // verdict. Narrowed by the authenticated gate login (ADR 0088), the
@@ -1320,15 +1386,19 @@ async function main() {
         ? [`exit signal recorded for run ${result.staleRunner.activeRun?.runId}: refuse to merge`]
         : [],
     };
-    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true });
-    const evidenceState = deriveEvidenceState(result, preMergeGateCheck);
+    // The proof is read only when no clean draft_gate comment is visible and the caller named the base branch.
+    const draftClean = result.draftGate.visible && result.draftGate.verdict === "clean";
+    const capRoundFixed = !draftClean && (githubCapFixed || (Boolean(options.baseRefName)
+      && Boolean(await resolveCapRoundFixed({ repo: result.repo, pr: result.pr, headSha: result.currentHeadSha, baseRefName: options.baseRefName, anyHead: true }, { repoRoot: resolveRepoRoot(process.cwd()) }).catch(() => null))));
+    const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true, capRoundFixed });
+    const evidenceState = deriveEvidenceState(result, preMergeGateCheck, capRoundFixed);
     // reviews/comments are raw size-budget-gate input facts (comments carry
     // FULL PR comment bodies) consumed internally by buildPreMergeGateCheck
     // above; they are never read from the CLI's own JSON output by any
     // consumer (merge-pr.mjs reads only preMergeGateCheck.failures), so they
     // are excluded here to keep emitted output bounded regardless of how many
     // comments the PR has accumulated.
-    const { reviews: _reviews, comments: _comments, ...serializableResult } = result;
+    const { reviews: _reviews, comments: _comments, capRoundNumber: _capRoundNumber, ...serializableResult } = result;
     const output = { ...serializableResult, preMergeGateCheck, staleRunnerCheck, evidenceState };
     if (!preMergeGateCheck.ok) {
       process.stderr.write(`${JSON.stringify({

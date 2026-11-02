@@ -42,13 +42,41 @@ const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 // Only bare markdown counts: fenced blocks, inline code spans, and `>` quote
 // lines are dropped before matching, so a quoted or code-formatted marker is
-// never a record.
+// never a record. The review-body marker also drops 4-space and tab indented
+// lines (`dropIndented`); the Copilot record keeps them, as before.
+const bareMarkdown = (body, { dropIndented = false } = {}) => stripMarkdownCodeForScan(body)
+  .split("\n")
+  .filter((bodyLine) => !/^\s*>/.test(bodyLine) && !(dropIndented && /^(?: {4}|\t)/.test(bodyLine)))
+  .join("\n");
+
+// The fixer-verifier reply on a review body: separate from the Copilot record above and never a record for it.
+const REVIEW_BODY_MARKER_RE = /<!--\s*dev-loops:review-body-disposition\s+review=(\S+)\s+fix=([0-9a-fA-F]{40})\s*-->/g;
+// Every bare marker in the comment: one comment may name several reviews.
+export function parseReviewBodyDispositionMarkers(body) {
+  if (typeof body !== "string") return [];
+  return [...bareMarkdown(body, { dropIndented: true }).matchAll(REVIEW_BODY_MARKER_RE)].map((match) => ({ reviewId: match[1], fixSha: match[2].toLowerCase() }));
+}
+
+// Every review-body marker on the PR's issue comments for `reviewIds`, trusted or not, so a caller can
+// tell "no marker" from "marker by an untrusted author". Throws on a gh failure.
+export async function readReviewBodyMarkers(reviewIds, { repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  if (!reviewIds.length) return [];
+  const result = await runChild(ghCommand, ["api", `repos/${repo}/issues/${pr}/comments`, "--paginate", "--jq", ".[]"], env);
+  if (result.code !== 0) throw new Error(`gh command failed: ${result.stderr.trim() || `exit code ${result.code}`}`);
+  return result.stdout.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).flatMap((comment) => parseReviewBodyDispositionMarkers(comment.body)
+    .filter((marker) => reviewIds.includes(marker.reviewId))
+    .map((marker) => ({ ...marker, trusted: isTrustedDispositionAuthor(comment), author: comment?.user?.login ?? null })));
+}
+
+// The evaluateFixerDisposition `liveReviews` shape: the fixing commits trusted markers cite per review.
+export async function readReviewMarkerCommits(reviewIds, ctx, runtime) {
+  const markers = await readReviewBodyMarkers(reviewIds, ctx, runtime);
+  return reviewIds.map((reviewId) => ({ reviewId, markerCommits: markers.filter((m) => m.trusted && m.reviewId === reviewId).map((m) => m.fixSha) }));
+}
+
 export function parseCopilotBodyDispositionMarker(body) {
   if (typeof body !== "string") return null;
-  const bare = stripMarkdownCodeForScan(body)
-    .split("\n")
-    .filter((bodyLine) => !/^\s*>/.test(bodyLine))
-    .join("\n");
+  const bare = bareMarkdown(body);
   const match = MARKER_RE.exec(bare);
   if (!match) return null;
   return {
@@ -109,7 +137,7 @@ async function isFixAfterReviewAndInHead({ repo, fixSha, reviewCommitSha, headSh
  *
  * @returns {Promise<{ cleared: boolean, disposition: object|null, reason: string, reasonCode?: string }>}
  */
-export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewId, reviewCommitSha }, runtime = {}) {
+export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewId, reviewCommitSha, preferOperator = false }, runtime = {}) {
   const notCleared = (reason) => ({ cleared: false, disposition: null, reason });
   if (typeof headSha !== "string" || headSha.trim().length === 0 || reviewId === null || reviewId === undefined) {
     return notCleared("no head or source review to disposition");
@@ -120,6 +148,13 @@ export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewI
     markers = await fetchCopilotBodyDispositionMarkers({ repo, pr }, runtime);
   } catch (error) {
     return notCleared(`disposition records unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (preferOperator) {
+    // An operator record for this review and head wins over an earlier fix record.
+    const operatorMarker = markers.find((m) => m.operator && m.headSha === normalizedHead && m.reviewId === String(reviewId));
+    if (operatorMarker) {
+      return { cleared: true, disposition: operatorMarker, reason: `operator disposition recorded for review ${operatorMarker.reviewId} at head ${normalizedHead}` };
+    }
   }
   let numericIdMarker = null;
   for (const marker of markers) {

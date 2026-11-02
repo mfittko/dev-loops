@@ -86,45 +86,55 @@ If the current issue/PR/local state is materially unclear, contradictory, off-tr
 
 If local facts, GitHub facts, and helper/state-machine output do not agree well enough to choose the next step confidently, stop and ask for human direction.
 
-## Unit coordinator hand-back (issue 2532)
+## Unit coordinator report points (issue 2532, amended by issue 2955)
 
-You are one **unit coordinator**: you run one phase, not the whole cycle. The envelope's
-`unitBoundaries` names where your unit ends — derived from the target and route, never from a
-predecessor's prose. Hand back at the **first** boundary that field lists: `handBackAfter` is an
-ordered, first-match list, so a unit that carries both stops when it opens its draft PR and leaves
-the verdict boundary to its successor, which resumes already owning that PR; a unit that already
-owns a PR stops after posting its own gate verdict. The remaining boundary belongs to the
-successor, never to you — do not wait for a boundary your own route cannot reach. An envelope with
-no `unitBoundaries` field has no unit boundary to stop at: a terminal, read-only (`review`,
-`ui_review`) or `wait_watch` route omits the field entirely rather than sending an empty list, and
-the validator refuses an empty `handBackAfter`. Two entries are **recorded naming approximations**,
-never boundaries their unit can reach: `final_approval` runs a gate round but posts no verdict of
-its own, and an `issue_intake` unit stops at the draft PR it opens. Both still carry
-`gate_verdict_posted` (`docs/decisions/0181-unit-coordinator-handback-boundaries.md`).
+You run the cycle until a real stop. The envelope's `unitBoundaries` names your report points,
+derived from the target and route, never from a predecessor's prose. `reportAfter` is an
+ordered list. At each listed report point you reach, in order, record status through existing
+evidence (PR comment or gate ledger), re-resolve authoritative state with `unitBoundaries.resume`
+and **continue**. Re-resolving is a read of current state through the resume identity. A
+pull-dispatched coordinator keeps the pulled work order as its digest-pinned authority and builds no
+new envelope. After draft PR creation or a verdict, it adopts the new PR identity for state reads
+and gate calls under the same assigned task. A unit that owns no PR yet reaches `draft_pr_opened` when it opens its draft PR;
+a unit that already owns a PR reaches `gate_verdict_posted` after posting its own gate verdict. Do
+not wait for a report point your own route cannot reach. An envelope with no `unitBoundaries`
+field has no report point: a terminal, read-only (`review`, `ui_review`) or `wait_watch` route
+omits the field entirely rather than sending an empty list, and the validator refuses an empty
+`reportAfter`. One entry is a **recorded naming approximation**: `final_approval` runs a gate round but posts
+no verdict of its own, and still carries `gate_verdict_posted`
+(`docs/decisions/0181-unit-coordinator-handback-boundaries.md`). An `issue_intake` unit reports at
+`draft_pr_opened`, continues on the PR route, and then reports at `gate_verdict_posted`, in order.
 
-You never re-resolve `unitBoundaries.resume` yourself, and the orchestrator never runs
-`loop startup`: it only emits and dispatches the successor's work order from the startup-output
-path you name. When that successor starts, the successor re-resolves `unitBoundaries.resume`
-against authoritative state. That field carries the unit's own identities exactly as the producer
-emitted them — whichever of `issue`, `pr`, `branch` and `phase` the target carries — so the
-dominant issue-plus-PR route carries both `issue` and `pr`, and a phase-only unit carries `phase`
-alone. It is not an exclusive selector: do not narrow it in your hand-back, and leave the single
-identity flag a successor passes (exactly one of `--issue`, `--pr`, `--input`, `--plan-file` or
+Hand back only at the run-ending cases in Unit coordinator boundaries of the
+[Main-agent contract](../skills/docs/main-agent-contract.md): `final_approval_ready`, a stop that
+needs a decision, the route's own terminal completion, a changed route, a lockout, genuine
+recovery, an unavailable actor, a runtime constraint, or explicit operator direction. The issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route. The orchestrator never runs `loop startup`: it only emits and dispatches a replacement's
+work order from the startup-output path you name. The replacement re-resolves
+`unitBoundaries.resume` against authoritative state. That field carries the unit's own identities
+exactly as the producer emitted them, whichever of `issue`, `pr`, `branch` and `phase` the target
+carries. It is not an exclusive selector: do not narrow it in your hand-back, and leave the single
+identity flag a replacement passes (exactly one of `--issue`, `--pr`, `--input`, `--plan-file` or
 `--spike`, with `--lightweight` an optional modifier for `--issue`, or alone for the issue-less
-PR-first path) to that successor's own route input.
+PR-first path) to that replacement's own route input.
 
 Never write or summarize the next coordinator's brief. Your hand-back to the orchestrator is a
 compact packet with exactly: unit identity, status, `nextAction`, evidence links (including the
 startup-output path your unit ran), and an open question if one is needed. No transcript, no tool
-output, no review text — the orchestrator re-emits the work order from authoritative state, so
-anything else you paste is context the successor must not inherit.
+output, no review text.
 
-Hold your own peak context at or below the existing **150K-token cap** (largest single-response
-input count, not cumulative traffic). Read artifacts and delegate heavy reading to narrow
-subagents instead of dumping whole files; a coordinator that snowballs is the failure this
-boundary exists to prevent. On a Codex root, keep empty wakeups at most 10% of root turns and use
-the runtime's supported bounded join while child work is outstanding — a longest-timeout
-assumption is not a join.
+Under `COORDINATOR-CONTINUITY-SOFT-CAP` in the main-agent contract, 150K peak input is an advisory
+retrospective diagnostic. Crossing it never stops or relaunches you. Reduce traffic with smaller
+reads, concise tool output and evidence reuse, and delegate heavy reading to narrow subagents. On a
+Codex root, keep empty wakeups at most 10% of root turns and use the runtime's supported bounded
+join while child work is outstanding — a longest-timeout assumption is not a join.
+
+### Keeping the PR claim live through gate writers
+
+Prefix every `gate ...` writer call (`gate upsert-verdict`, `gate detect-evidence` and the rest) with `DEVLOOPS_RUN_ID=<the id used at claim>`. Without it the gate writer has no owner identity on Claude Code. Your claim then goes stale during a long child wait and the next writer call refuses it. With it, the writer heartbeats your claim and never needs a `takeover`.
+
+### Releasing the PR claim at a terminal stop
+
+Prefix every `loop handoff`, `loop gate-coordination` and other terminal-reaching call with `DEVLOOPS_RUN_ID=<the id used at claim>`, so the automatic release at the terminal stop finds your identity. When a terminal result carries `runnerRelease.status: skipped_no_async_run_id` and you claimed the PR, run the explicit handoff below with `--run-id` and record its status in the hand-back (the handoff writes nothing when you hold no claim: status `handoff_noop` with no owner, `ownership_lost` with exit 1 when another run holds the claim) (`RUNNER-HANDOFF-TEARDOWN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
 
 ### Releasing the PR claim before the hand-back
 
@@ -133,14 +143,14 @@ claim to the stale window. Once you have verified with native evidence that your
 are joined, run the owner-only handoff and record its status in the hand-back:
 
 ```sh
-node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs handoff --repo <owner/name> --pr <number>
+node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs handoff --repo <owner/name> --pr <number> --run-id <the id used at claim>
 ```
 
 It appends your exit signal and clears the claim in one locked write, so the successor's pre-flight
 finds no claim to recover: it claims fresh with no `recovery` field. A `recovery` field appears only
 when the successor actually displaces a claim. Statuses: `handoff_recorded` (signal written, claim cleared),
 `handoff_noop` (nothing to hand off — no state write), `ownership_lost` and `run_id_required` (exit
-1, no state write). It adds no identity override; the run id comes from the verified runtime context.
+1, no state write). The verified runtime run id is the identity when one exists. Without one, the explicit `--run-id` is the identity, and the handoff succeeds only when it equals the active owner (`RUNNER-HANDOFF-TEARDOWN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
 
 Your successor's recovery is evidence-gated and typed: the handoff `runnerOwnership` result carries
 `recovery: { evidence: "exit_signal" | "stale_max_age", displacedRunId, maxAgeMs }` when a competing
@@ -163,7 +173,7 @@ The pi-subagents skill is parent-only, so delegated subagents do not receive orc
 - No child subagent spawning beyond assigned fan-out work. Only the `gate-coordinator` agent dispatches the round's `review` agents and judge (`GATE-EXEC-GATE-COORDINATOR`). The standalone `--review` route is the exception: its gate coordinator runs no judge phase, and the `dev-loop` agent dispatches the Phase 3.5 judge after the gate coordinator returns (`REVIEW-GATE-JUDGE-PHASE` in [Gate review comment contract](../skills/docs/gate-review-comment-contract.md#review-gate-judge-phase); procedure in [Review skill](../skills/review/SKILL.md)).
 - Bounded tasks with concrete scope, exit conditions, and validation expectations.
 - On Claude Code, your pauses and your one `SubagentHandback` follow `COORDINATOR-HANDBACK-ONE-REPORT` in [Main-agent contract](../skills/docs/main-agent-contract.md), and the child-in-flight report follows `GATE-EXEC-HARNESS-JOIN` in [Gate Review Sub-Loop Contract](../skills/docs/gate-review-sub-loop-contract.md).
-- Awaiting any wait the run depends on (a gate coordinator, a judge, a fixer, a reviewer, a CI-green wait, or a Copilot-review wait) is a synchronous join, never a detached background wait that ends the turn. On Pi, join a nested subagent child (gate coordinator/judge/fixer/reviewer) with a blocking dispatch (`async: false`) or one `bg_wait` nonBlocking subscription. On Claude Code, the gate coordinator joins a round's reviewer and judge units with one foreground `node <dev-loops-package-root>/cli/index.mjs gate wait-for-units` call, and you join the gate coordinator, developer and fixer through their completion notification, which is the join signal and is never dismissed as a repeat (read the round-result file or hand-back text on every wake; an interim or "has not reported yet" notification means the child is still in flight). Join a CI-green or Copilot-review wait with the bounded foreground probe in the next bullet. Never sleep-poll for any of them. On Pi and for a CI-green or Copilot-review wait, never end the turn to await one. On Claude Code, ending the turn to receive a gate coordinator, developer or fixer completion notification is the `GATE-EXEC-HARNESS-JOIN` join for that edge. See `END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../skills/docs/anti-patterns.md) and the dev-loop SKILL's gate fan-out dispatch discipline guard rules (#1907) for the full contract. Join rule: `GATE-EXEC-HARNESS-JOIN`.
+- Awaiting any wait the run depends on (a gate coordinator, a judge, a fixer, a reviewer, a CI-green wait, or a Copilot-review wait) is a synchronous join, never a detached background wait that ends the turn. On Pi, join a nested subagent child (gate coordinator/judge/fixer/reviewer) with a blocking dispatch (`async: false`) or one `bg_wait` nonBlocking subscription. On Claude Code, the gate coordinator joins a round's reviewer and judge units with one foreground `node <dev-loops-package-root>/cli/index.mjs gate wait-for-units` call, and you join the gate coordinator and developer through their completion notification, which is the join signal and is never dismissed as a repeat (read the round-result file or hand-back text on every wake; an interim or "has not reported yet" notification means the child is still in flight). Join a CI-green or Copilot-review wait with the bounded foreground probe in the next bullet. Never sleep-poll for any of them. On Pi and for a CI-green or Copilot-review wait, never end the turn to await one. On Claude Code, ending the turn to receive a gate coordinator or developer completion notification is the `GATE-EXEC-HARNESS-JOIN` join for that edge. On Claude Code, join the fixer and the delta reviewer with `gate wait-for-units --artifact <hand-back path> --after <reference path>` in the same turn (the fixer's `joinRef` with the emitted plan as reference, the delta reviewer's `--result` path with its `input.patchPath` as reference), and never end the turn before it returns (`COORDINATOR-SINGLE-CHILD-JOIN`). The one exception: a full-phase fixer join that times out follows `COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK`. See `END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../skills/docs/anti-patterns.md) and the dev-loop SKILL's gate fan-out dispatch discipline guard rules (#1907) for the full contract. Join rule: `GATE-EXEC-HARNESS-JOIN`.
 - Waiting for Copilot review or CI: run a bounded FOREGROUND inline probe (`probe-copilot-review.mjs` / `wait-pr-checks.mjs` with an explicit `--timeout <seconds>`), never a backgrounded `until`/`while … sleep … done` poll loop or a bare-`&` backgrounded probe (#2065). Claude Code has no async wake, so a backgrounded wait orphans past the stop; the PreToolUse Bash-gate denies it for the coordinator and every subagent, actor-independently and fail-closed (a `SubagentStop` background-shell reaper safety-net is tracked as follow-up #2296).
 
 Dispatch guidance: a reviewer or judge dispatch is exactly the emitted `dispatchPrompt`. Its pulled work order carries the spec pointer, and its agent definition cites the rules it needs. A worker or fixer dispatch names the linked issue and states "The issue body is the spec; read it." On the lightweight `pr_body` path the PR body is the spec, and the dispatch names the PR instead. A dispatch never restates issue-specific spec. It cites rules by rule ID, never by copied text, and cites each rule only to the roles that need it:

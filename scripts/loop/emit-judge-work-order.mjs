@@ -14,16 +14,17 @@ import { fileURLToPath } from "node:url";
 import { loadDevLoopConfigStrict, resolveGateConfig } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY } from "@dev-loops/core/loop/gate-fanin";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
-import { computeSpecDigest, specCriterionIds, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
+import { SPEC_AUTHORITY_VERDICT_SCHEMA, computeSpecDigest, specCriterionIds, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { buildGateArtifactPath, buildGateContextPath, buildLogPath } from "../github/_gate-artifact-paths.mjs";
-import { listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
+import { PR_BODY_ABSENT_SENTINEL, listPriorActItems, renderRequiredReadLine } from "../github/write-gate-context.mjs";
 import { copilotBodyJudgePath } from "../github/_copilot-body-disposition.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { OUT_OF_BAND_WRITE, readSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveGateArtifactTmpRoot, resolveLedgerCheckouts, resolveRepoRoot } from "./_repo-root-resolver.mjs";
+import { SLICE_LINKAGE_SENTENCE, sliceLinkageIssues } from "./_slice-linkage.mjs";
 import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
 import { isFindingsLogName, resolveGateRound } from "../github/_gate-finding-surface.mjs";
 
@@ -39,7 +40,7 @@ The work order's two verdict outputRefs sit under that directory's <roundId>/ se
 Dispatch the judge with the compact dispatchPrompt only; each run supersedes the
 previous emission for this PR and gate at any head. The only operator input is --operator-focus-file, a JSON file { round?: string } that
 renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
-It accepts no other brief or summary input.
+It accepts no other brief or summary input. When the body holds exactly one closing reference and its number is named by a reopen line in the body or spec Non-goals, the work order carries "sliceLinkage" and "sliceLinkageIssues" (SPEC-SLICE-PR-KEEPS-CLOSING-REF) and renders it.
 Exit codes: 0 emitted, 1 refused (missing or inconsistent source), 2 usage/IO error.`;
 
 // ref = judge:<owner/repo>#<pr>:<gate>:<headSha>:<roundId>; executionIdentity = roundId.
@@ -80,16 +81,20 @@ export function renderWorkOrder(workOrder) {
 Codex only: before ANY contract/input read, use bounded direct cat/sed/rg for reads and qualify the digest tool with \`command -v shasum\`; stop if unavailable. Use direct \`shasum -a 256\` to authenticate every pinned contract/source. Derive the emitting toolchain root by removing \`agents/judge.agent.md\` from the absolute \`executionRules.contract\` below; resolve relative \`contracts[].path\` only against that root, never cwd or a searched fallback. Read those authenticated contracts in full before judging. These instructions precede their first read; do not wait for a setup message.
 This permits only pinned reads and concrete dependency widening already authorized below. Codex has no native Claude/Pi role or hook grant. No inline Python or Node, generated scripts, tests/builds, source writes, external posting or permission/settings changes. A permission/classifier denial stops this actor immediately: report it without another command or alternate attempt. Missing/unreadable or hash-mismatched inputs stop without verdicts. Recover truncated reads in bounded ranges; never judge from partial input. Write only the two existing verdict outputRefs and run only the existing pull/checker besides these reads/hashes. Pi and Claude retain native read tools and their existing shell restrictions.
 
+## Output schemas
+
+The \`outputSchemas\` map in the work order JSON gives the field shape of each verdict by file name. Build the spec-authority verdict from its entry; no source search is needed.
+
 ## Judgment
 
 Adjudicate every finding in the \`findings\` read per agents/judge.agent.md, against the COMPLETE spec in the \`spec\` read.
 Dispose each cluster once, never each raw finding: \`dispositions[].index\` is the cluster's \`clusterId\`, and one \`act\`, \`defer\` or \`reject\` with one rationale applies to every member. Severity, the \`round\` and the \`mediumFixWindow\` in the work order are inputs to your decision. No rule defers a finding from severity or round alone, so decide \`act\`, \`defer\` or \`reject\` for every cluster in every round. One exception holds: a cluster that contains a \`high\` or a \`question\`, and an all-\`nit\` cluster, is never deferred, so only \`act\` or \`reject\` is valid for it and a \`defer\` fails the judge pass closed.
 Each disposition carries \`title\` (the one-line defect), \`detail\` (the concrete path through the code and why it breaks), \`fix\` (the remedy and the test to add) and, for \`defer\` and \`reject\`, \`reason\` (one sentence). A disposition missing any required field fails closed. When a cluster repeats an entry of \`priorActItems\` (another instance at the same file and guard counts), set \`resurfaces\` on its disposition to that entry's \`fingerprint\`. Write plain sentences with no em dashes and no arrows.
-${workOrder.requiredReads.some((read) => read.kind === "copilot-body-feedback") ? "A `copilot-body-feedback` read holds a Copilot review body that raised a finding with no inline thread (GATE-EXEC-COPILOT-BODY-TO-JUDGE). Adjudicate it like an inline finding. Cite it in the rationale of a cluster that covers the same defect, otherwise note it in the scopeDrift rationale; its own ledger disposition lands with S3b (issue 2937 AC18). It never blocks by itself, and an operator marker overrides it.\n" : ""}Read every \`required\` entry below IN FULL before any judgment. If one is missing, unreadable, or its sha256 differs, stop and report which read failed; never write a verdict.
+${workOrder.requiredReads.some((read) => read.kind === "copilot-body-feedback") ? "A `copilot-body-feedback` read holds a Copilot review body that raised a finding with no inline thread (GATE-EXEC-COPILOT-BODY-TO-JUDGE). Adjudicate it like an inline finding. Cite it in the rationale of a cluster that covers the same defect, otherwise note it in the scopeDrift rationale; its own ledger disposition lands with S3b (issue 2937 AC18). It never blocks by itself, and an operator marker overrides it.\n" : ""}Read every \`required\` entry below IN FULL before any judgment. The pull already verified the sha256 of every required read, and a changed read arrives as a pull refusal, so Pi and Claude judges compute no digest of a required read and run no digest tool for it; the Codex after-pull setup above still governs Codex. If a read is missing or unreadable, stop and report which one; never write a verdict.
 Write exactly two artifacts: the relevance verdict to \`${verdictPath}\` and the spec-authority verdict to \`${specVerdictPath}\`.
 Widening: ${JUDGE_WIDENING_RULE}.
 
-${renderOperatorFocusSection(workOrder.operatorFocus)}## Required reads
+${typeof workOrder.sliceLinkage === "string" ? `## Slice linkage\n\n${workOrder.sliceLinkage}\nA remedy that changes Closes to Refs for this PR is never act.\n\n` : ""}${renderOperatorFocusSection(workOrder.operatorFocus)}## Required reads
 
 ${workOrder.requiredReads.map((read) => renderRequiredReadLine(read, "/")).join("\n")}
 
@@ -155,6 +160,14 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     if (typeof parsedBody?.angle !== "string" || !Array.isArray(parsedBody?.findings)) throw new Refusal(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${bodyFile} is not JSON with an angle and a findings array`);
   }
   const operatorFocus = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined);
+  // Slice linkage arms from the PR body section of the sha-verified evidence read (write-gate-context.mjs). Only the section at the first `## PR body` heading counts.
+  const evidenceText = evidence.bytes.toString("utf8");
+  const sectionStart = evidenceText.search(/^## PR body\n\n/m);
+  const prBodySection = sectionStart < 0 ? "" : evidenceText.slice(sectionStart);
+  const evidencePrBody = prBodySection.match(/^## PR body\n\n(`{3,})\n([\s\S]*?)\n\1(?:\n|$)/)?.[2] ?? null;
+  // An empty PR body renders as PR_BODY_ABSENT_SENTINEL (no fence); it has no closing reference and arms nothing.
+  if (evidencePrBody === null && prBodySection.split("\n")[2] !== PR_BODY_ABSENT_SENTINEL) throw new Refusal(`gate-context evidence ${evidenceRead.path} has no \`## PR body\` section; rebuild the round context with write-gate-context.mjs`);
+  const linkageIssues = sliceLinkageIssues(parseSource(spec).nonGoals, evidencePrBody ?? "", repo);
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
   const workOrder = {
     role: "judge",
@@ -173,6 +186,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     // GATE-EXEC-ROUND-CAP: the one past-cap closure round (the gate context records scope.closureRound).
     ...(context?.scope?.closureRound ? { closureRound: true } : {}),
     ...(operatorFocus ? { operatorFocus, ...operatorFocusDigestEntry(operatorFocus) } : {}),
+    ...(linkageIssues.length > 0 ? { sliceLinkage: SLICE_LINKAGE_SENTENCE, sliceLinkageIssues: linkageIssues } : {}),
     configSha256: sha256(JSON.stringify(config ?? {})),
     authority: {
       specDigest,
@@ -185,6 +199,10 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read), ...(copilotBody ? [copilotBody.read] : [])],
     // Per-round paths: a superseded round's late verdict never lands where this round's is read.
     outputRefs: [path.join(dir, roundId, "judge-verdict.json"), path.join(dir, roundId, "spec-authority-verdict.json")],
+    outputSchemas: {
+      "spec-authority-verdict.json": SPEC_AUTHORITY_VERDICT_SCHEMA,
+      "judge-verdict.json": "the relevance verdict shape in agents/judge.agent.md",
+    },
     executionRules: { widening: JUDGE_WIDENING_RULE, contract: fileURLToPath(new URL("agents/judge.agent.md", PACKAGE_ROOT)) },
   };
   const identityTriple = {

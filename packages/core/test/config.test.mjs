@@ -18,6 +18,7 @@ import { NEUTRAL_RUN_ID_VAR, RUN_ID_MARKERS } from "../src/loop/run-context.mjs"
 import {
   resolveConductorModel,
   resolveConductorSettings,
+  resolveRoleSettings,
   resolveAutonomyStopAt,
   resolveHumanMergeOnly,
   resolveEffectiveMergeAuthorized,
@@ -37,6 +38,9 @@ import {
   resolveLightMode,
   resolveIssuelessEnabled,
   resolveGateDispatchMode,
+  countLightModeFiles,
+  lightModeCapState,
+  touchesConfigSource,
   resolveReviewProportionality,
   isSizeOutcomeT1Clean,
   touchesRiskPath,
@@ -80,7 +84,7 @@ test("Codex conductor settings are strict, isolated, and merged field by field",
     assert.equal(resolveConductorModel(parsed), "legacy");
     for (const harness of ["pi", "claude"]) assert.equal(resolveRoleModel(parsed, { role: "dev-loop", harness }), "legacy-role");
   }
-  for (const codex of [{ conductor: {} }, { conductor: { model: " " } }, { conductor: { reasoningEffort: 1 } }, { conductor: { extra: true } }, { roles: {} }, { tiers: {} }, { angles: {} }]) {
+  for (const codex of [{ conductor: {} }, { conductor: { model: " " } }, { conductor: { reasoningEffort: 1 } }, { conductor: { extra: true } }, { angles: {} }]) {
     assert.equal(FileConfigSchema.safeParse({ version: 1, models: { harnesses: { codex } } }).success, false, JSON.stringify(codex));
   }
   const dir = await mkdtemp(path.join(os.tmpdir(), "codex-conductor-"));
@@ -95,6 +99,92 @@ test("Codex conductor settings are strict, isolated, and merged field by field",
     }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+test("Codex roles select whole objects, isolate legacy values and reject malformed settings", () => {
+  const models = { roles: { developer: "legacy" }, roleTiers: { developer: "low" }, harnesses: { codex: {
+    tiers: { low: { model: "tier", reasoningEffort: "high" } }, roles: { developer: { model: "explicit" } },
+  } } };
+  const resolve = () => resolveRoleSettings({ models }, { role: "developer", harness: "codex" });
+  assert.deepEqual(resolve(), { model: "explicit", reasoningEffort: null });
+  models.roleTiers.developer = "inherit";
+  assert.deepEqual(resolve(), { model: "explicit", reasoningEffort: null });
+  models.harnesses.codex.roles.developer = { model: null, reasoningEffort: null };
+  assert.deepEqual(resolve(), { model: null, reasoningEffort: null });
+  delete models.harnesses.codex.roles.developer;
+  assert.deepEqual(resolve(), { model: null, reasoningEffort: null });
+  models.roleTiers.developer = "low";
+  assert.deepEqual(resolve(), { model: "tier", reasoningEffort: "high" });
+  assert.equal(resolveRoleModel({ models }, { role: "developer", harness: "codex" }), "tier");
+  assert.equal(resolveRoleModel({ models }, { role: "developer", harness: "codex", kind: "angle" }), null);
+  delete models.harnesses;
+  assert.deepEqual(resolve(), { model: null, reasoningEffort: null });
+  for (const harness of ["pi", "claude"]) assert.equal(resolveRoleModel({ models }, { role: "developer", harness }), "legacy");
+  for (const map of ["roles", "tiers"]) {
+    for (const value of [{}, null, [], "model", { model: " " }, { reasoningEffort: 2 }, { extra: true }]) {
+      assert.equal(FileConfigSchema.safeParse({ version: 1, models: { harnesses: { codex: { [map]: { developer: value } } } } }).success, false);
+    }
+  }
+});
+
+test("Codex map keys normalize before layer merging and retain omitted fields", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "codex-map-keys-"));
+  try {
+    await mkdir(path.join(dir, ".pi/dev-loop"), { recursive: true });
+    for (const map of ["roles", "tiers"]) {
+      for (const [lowerKey, upperKey] of [["docs", " docs "], [" docs ", "docs"]]) {
+        const models = { ...(map === "tiers" ? { roleTiers: { docs: "docs" } } : {}), roles: { docs: "legacy" } };
+        await writeFile(path.join(dir, ".pi/dev-loop/defaults.json"), JSON.stringify({ version: 1, models: {
+          ...models, harnesses: { codex: { [map]: { [lowerKey]: { model: "lower", reasoningEffort: "high" } } } },
+        } }));
+        for (const override of [{ model: "upper" }, { model: null }, { reasoningEffort: null }]) {
+          await writeFile(path.join(dir, ".devloops"), JSON.stringify({ version: 1, models: {
+            harnesses: { codex: { [map]: { [upperKey]: override } } },
+          } }));
+          const loaded = await loadDevLoopConfig({ repoRoot: dir });
+          assert.deepEqual(loaded.errors, []);
+          assert.deepEqual(resolveRoleSettings(loaded.config, { role: "docs", harness: "codex" }), {
+            model: "lower", reasoningEffort: "high", ...override,
+          });
+          for (const harness of ["claude", "pi"]) {
+            assert.equal(resolveRoleModel(loaded.config, { role: "docs", harness }), "legacy");
+          }
+        }
+      }
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("Codex maps merge fields and validate aliases against final layers", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "codex-roles-"));
+  try {
+    await mkdir(path.join(dir, ".pi/dev-loop"), { recursive: true });
+    const lower = { version: 1, models: { roleTiers: { developer: "custom" }, harnesses: { codex: {
+      conductor: { model: "conductor" }, roles: { docs: { model: "writer", reasoningEffort: "medium" } },
+      tiers: { low: { model: "low", reasoningEffort: "high" } },
+    } } } };
+    const upper = { version: 1, models: { harnesses: { codex: {
+      roles: { docs: { model: null }, quality: { reasoningEffort: "low" } },
+      tiers: { custom: { model: " custom " }, low: { reasoningEffort: null } },
+    } } } };
+    await writeFile(path.join(dir, ".pi/dev-loop/defaults.json"), JSON.stringify(lower));
+    await writeFile(path.join(dir, ".devloops"), JSON.stringify(upper));
+    const loaded = await loadDevLoopConfig({ repoRoot: dir });
+    assert.deepEqual(loaded.errors, []);
+    for (const [role, expected] of [["developer", { model: "custom", reasoningEffort: null }], ["docs", { model: null, reasoningEffort: "medium" }], ["quality", { model: null, reasoningEffort: "low" }], ["fixer", { model: "low", reasoningEffort: null }]]) {
+      assert.deepEqual(resolveRoleSettings(loaded.config, { role, harness: "codex" }), expected);
+    }
+    assert.equal(resolveConductorSettings(loaded.config, { harness: "codex" }).model, "conductor");
+    assert.equal(resolveRoleModel(loaded.config, { role: "developer", harness: "pi" }), null);
+    delete upper.models.harnesses.codex.tiers.custom;
+    await writeFile(path.join(dir, ".devloops"), JSON.stringify(upper));
+    assert.match(JSON.stringify((await loadDevLoopConfig({ repoRoot: dir })).errors), /unknown model tier alias/);
+    lower.models = { roleTiers: { developer: "legacy-custom" } };
+    upper.models = { tiers: { "legacy-custom": { pi: "legacy" } } };
+    await writeFile(path.join(dir, ".pi/dev-loop/defaults.json"), JSON.stringify(lower));
+    await writeFile(path.join(dir, ".devloops"), JSON.stringify(upper));
+    assert.deepEqual((await loadDevLoopConfig({ repoRoot: dir })).errors, []);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 // #1592: a few fixtures below deliberately keep pre-rename severity spellings
 // ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
 // intentional backward-compat coverage (normalizeSeverity normalizes them on
@@ -3911,6 +4001,9 @@ describe("shipped defaults docs and deep angle wiring", () => {
       assert.match(roles["input-validation"].prompt, /repo slug, issue number, host, SHA, whitespace, and sentinel normalization/i);
       assert.match(roles["packaging-runtime"].prompt, /installed packages, extensions, or runtime bundles/i);
       assert.match(roles["state-concurrency"].prompt, /state-file read\/modify\/write paths/i);
+      assert.match(roles["state-concurrency"].prompt, /destructive write[^.]*precondition a concurrent change could have invalidated/i);
+      assert.match(roles["state-concurrency"].prompt, /bound to the owning repo, PR or execution/i);
+      assert.match(roles["state-concurrency"].prompt, /Flag code that treats elapsed time as proof that a process stopped/i);
       assert.match(roles["renderer-security"].prompt, /HTML text escaping, URL encoding, attribute encoding/i);
       assert.match(roles.determinism.prompt, /ordering, tie-breakers, localeCompare use/i);
     } finally {
@@ -4218,7 +4311,7 @@ test("resolveGateDispatchMode: over-threshold stays full_fanout regardless of is
       issueless: { enabled: true },
     },
   };
-  const result = resolveGateDispatchMode(config, "draft", { scope: { filesChanged: 10, linesChanged: 999 } });
+  const result = resolveGateDispatchMode(config, "draft", { sizeOutcome: { wholeLogicLoc: 999 } });
   assert.equal(result.mode, "full_fanout");
   assert.equal(result.reason, "over_threshold");
 });
@@ -4295,11 +4388,10 @@ const lightConfig = (over = {}) => ({
 // Non-risk, size-budget-passing facts for tests that exercise dispatch logic
 // BELOW the new proportionality floors (over_threshold/escalated) — these must
 // stay reachable, so every such test feeds facts that clear both new floors.
-const TRIVIAL_FACTS = { changedFiles: ["README.md"], sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } } };
+const TRIVIAL_FACTS = { changedFiles: ["README.md"], sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } } };
 
 test("resolveGateDispatchMode: gate:full label forces full fan-out even when tiny", () => {
   const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-    scope: { filesChanged: 1, linesChanged: 1 },
     hasFullLabel: true,
   });
   assert.equal(result.mode, "full_fanout");
@@ -4307,39 +4399,86 @@ test("resolveGateDispatchMode: gate:full label forces full fan-out even when tin
 });
 
 test("resolveGateDispatchMode: light mode disabled → full fan-out", () => {
-  const result = resolveGateDispatchMode(lightConfig({ enabled: false }), "preApproval", {
-    scope: { filesChanged: 1, linesChanged: 1 },
-  });
+  const result = resolveGateDispatchMode(lightConfig({ enabled: false }), "preApproval", {});
   assert.equal(result.mode, "full_fanout");
   assert.equal(result.reason, "light_mode_disabled");
 });
 
-test("resolveGateDispatchMode: over threshold on files → full fan-out", () => {
+const PASS_OUTCOME = { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } };
+
+test("resolveGateDispatchMode: over threshold on non-doc files → full fan-out", () => {
   const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-    scope: { filesChanged: 3, linesChanged: 5 },
+    changedFiles: ["a.mjs", "b.mjs", "c.mjs"],
+    sizeOutcome: PASS_OUTCOME,
   });
   assert.equal(result.mode, "full_fanout");
   assert.equal(result.reason, "over_threshold");
 });
 
-test("resolveGateDispatchMode: over threshold on lines → full fan-out", () => {
+test("resolveGateDispatchMode: over threshold on weighted lines → full fan-out", () => {
   const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-    scope: { filesChanged: 1, linesChanged: 21 },
+    changedFiles: ["a.mjs"],
+    sizeOutcome: { ...PASS_OUTCOME, wholeLogicLoc: 21 },
   });
   assert.equal(result.mode, "full_fanout");
   assert.equal(result.reason, "over_threshold");
 });
 
-test("resolveGateDispatchMode: missing/empty scope → over_threshold (Infinity fail-safe)", () => {
-  const result = resolveGateDispatchMode(lightConfig(), "preApproval", { scope: {} });
+test("resolveGateDispatchMode: weighted LOC under the cap → inline (AC1)", () => {
+  const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
+    changedFiles: ["a.mjs"],
+    sizeOutcome: { ...PASS_OUTCOME, wholeLogicLoc: 13 },
+  });
+  assert.equal(result.mode, "inline");
+});
+
+test("resolveGateDispatchMode: missing/invalid wholeLogicLoc fails closed (AC1)", () => {
+  for (const wholeLogicLoc of [undefined, NaN, -1, "5"]) {
+    const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
+      changedFiles: ["a.mjs"],
+      sizeOutcome: { outcome: "pass", wholeLogicLoc, tierLogicLoc: { t1: 0 } },
+    });
+    assert.equal(result.mode, "full_fanout");
+    assert.equal(result.reason, "size_outcome_unavailable");
+  }
+});
+
+test("resolveGateDispatchMode: 1 code + 1 test + 1 doc file under maxFiles 2 → inline (AC2)", () => {
+  const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
+    changedFiles: ["src/a.mjs", "test/a.test.mjs", "docs/note.md", "changes/x.md"],
+    sizeOutcome: PASS_OUTCOME,
+  });
+  assert.equal(result.mode, "inline");
+  assert.equal(countLightModeFiles(lightConfig(), ["src/a.mjs", "test/a.test.mjs", "docs/note.md", "changes/x.md"]), 2);
+  assert.equal(countLightModeFiles(lightConfig(), ["src/a.mjs", "package.json", ".github/workflows/ci.yml", "docs/note.md"]), 3);
+});
+
+test("resolveGateDispatchMode: contract doc with a tiny code diff → risk_path_touch (AC3)", () => {
+  const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
+    changedFiles: ["src/a.mjs", "skills/docs/gate-review-sub-loop-contract.md"],
+    sizeOutcome: PASS_OUTCOME,
+  });
   assert.equal(result.mode, "full_fanout");
-  assert.equal(result.reason, "over_threshold");
+  assert.equal(result.reason, "risk_path_touch");
+});
+
+test("every light-mode caller feeds the same inputs (AC5)", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const root = new URL("../../../", import.meta.url);
+  const dispatch = await readFile(new URL("scripts/loop/resolve-gate-dispatch.mjs", root), "utf8");
+  const context = await readFile(new URL("scripts/github/write-gate-context.mjs", root), "utf8");
+  const merge = await readFile(new URL("scripts/github/detect-checkpoint-evidence.mjs", root), "utf8");
+  // resolve-gate-dispatch and write-gate-context: resolveReviewProportionality with changedFiles + sizeOutcome.
+  assert.match(dispatch, /resolveReviewProportionality\(config, opts\.gate, \{[^}]*changedFiles,\s*sizeOutcome/s);
+  // write-gate-context: the CLI call site passes diff, checkFloors and sizeOutcome to resolveGateAnglesDynamic.
+  assert.match(context, /await resolveGateAnglesDynamic\(config, configKey, \{\s*diff,[^}]*checkFloors: Boolean\(options\.base\),\s*sizeOutcome,/s);
+  // merge gate: the same resolver with merge-base changedFiles + sizeOutcome.
+  assert.match(merge, /resolveGateDispatchMode\(config, spec\.name === "draft_gate" \? "draft" : "preApproval", \{[^}]*changedFiles:[^}]*sizeOutcome/s);
 });
 
 test("resolveGateDispatchMode: under threshold, no findings → inline", () => {
   const config = lightConfig();
   const result = resolveGateDispatchMode(config, "preApproval", {
-    scope: { filesChanged: 2, linesChanged: 20 },
     ...TRIVIAL_FACTS,
   });
   assert.equal(result.mode, "inline");
@@ -4349,7 +4488,6 @@ test("resolveGateDispatchMode: under threshold, no findings → inline", () => {
 
 test("resolveGateDispatchMode: under threshold + blocking inline finding → escalated", () => {
   const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-    scope: { filesChanged: 1, linesChanged: 5 },
     inlineFindingSeverities: ["medium"],
     ...TRIVIAL_FACTS,
   });
@@ -4359,7 +4497,6 @@ test("resolveGateDispatchMode: under threshold + blocking inline finding → esc
 
 test("resolveGateDispatchMode: under threshold + only non-blocking finding → inline", () => {
   const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-    scope: { filesChanged: 1, linesChanged: 5 },
     inlineFindingSeverities: ["defer"],
     ...TRIVIAL_FACTS,
   });
@@ -4374,7 +4511,6 @@ test("resolveGateDispatchMode: draft gate under threshold + medium-only inline f
     gates: { draft: { blockCleanOnFindingSeverities: ["high"] } },
   };
   const result = resolveGateDispatchMode(config, "draft", {
-    scope: { filesChanged: 1, linesChanged: 5 },
     inlineFindingSeverities: ["medium"],
     ...TRIVIAL_FACTS,
   });
@@ -4389,7 +4525,6 @@ test("resolveGateDispatchMode: draft gate under threshold + high inline finding 
     gates: { draft: { blockCleanOnFindingSeverities: ["high"] } },
   };
   const result = resolveGateDispatchMode(config, "draft", {
-    scope: { filesChanged: 1, linesChanged: 5 },
     inlineFindingSeverities: ["high"],
     ...TRIVIAL_FACTS,
   });
@@ -4404,7 +4539,6 @@ test("resolveGateDispatchMode: legacy-spelled config blocking list still escalat
     gates: { draft: { blockCleanOnFindingSeverities: ["must-fix", "worth-fixing-now"] } },
   };
   const result = resolveGateDispatchMode(config, "draft", {
-    scope: { filesChanged: 1, linesChanged: 5 },
     inlineFindingSeverities: ["worth-fixing-now"],
     ...TRIVIAL_FACTS,
   });
@@ -4504,18 +4638,27 @@ describe("touchesRiskPath (risk-path denylist floor)", () => {
 describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", () => {
   test("risk-path touch forces full_fanout even under the size cap", () => {
     const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-      scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["scripts/loop/check-size-budget.mjs"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(result.mode, "full_fanout");
     assert.equal(result.reason, "risk_path_touch");
   });
 
+  test("a config-source touch fails closed even when classify rules turn code into docs", () => {
+    const config = lightConfig();
+    config.classify = { paths: [{ pattern: "src/**", kind: "docs" }] };
+    const facts = { sizeOutcome: { outcome: "pass", wholeLogicLoc: 0, tierLogicLoc: { t1: 0 } } };
+    const hit = resolveGateDispatchMode(config, "preApproval", { ...facts, changedFiles: [".devloops", "src/a.mjs", "src/b.mjs", "src/c.mjs"] });
+    assert.equal(hit.mode, "full_fanout");
+    assert.equal(hit.reason, "config_source_touch");
+    const miss = resolveGateDispatchMode(config, "preApproval", { ...facts, changedFiles: ["src/a.mjs"] });
+    assert.equal(miss.mode, "inline");
+  });
+
   test("missing changedFiles fails CLOSED to full_fanout (ambiguous, not trivial)", () => {
     const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-      scope: { filesChanged: 1, linesChanged: 1 },
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(result.mode, "full_fanout");
     assert.equal(result.reason, "changed_files_unavailable");
@@ -4523,7 +4666,6 @@ describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", (
 
   test("missing sizeOutcome fails CLOSED to full_fanout (ambiguous, not trivial)", () => {
     const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-      scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["README.md"],
     });
     assert.equal(result.mode, "full_fanout");
@@ -4532,9 +4674,8 @@ describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", (
 
   test("size-outcome escalate forces full_fanout", () => {
     const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-      scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["README.md"],
-      sizeOutcome: { outcome: "escalate", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "escalate", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(result.mode, "full_fanout");
     assert.equal(result.reason, "size_outcome_escalate");
@@ -4542,9 +4683,8 @@ describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", (
 
   test("size-outcome block forces full_fanout", () => {
     const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-      scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["README.md"],
-      sizeOutcome: { outcome: "block", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "block", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(result.mode, "full_fanout");
     assert.equal(result.reason, "size_outcome_block");
@@ -4552,9 +4692,8 @@ describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", (
 
   test("a nonzero T1-tier slice forces full_fanout even on an otherwise-passing outcome", () => {
     const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-      scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["README.md"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 5 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 5 } },
     });
     assert.equal(result.mode, "full_fanout");
     assert.equal(result.reason, "size_outcome_t1");
@@ -4562,7 +4701,6 @@ describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", (
 
   test("malformed T1 evidence (missing tierLogicLoc) fails CLOSED to full_fanout instead of silently reading as T1-clean", () => {
     const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-      scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["README.md"],
       sizeOutcome: { outcome: "pass" },
     });
@@ -4572,9 +4710,8 @@ describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", (
 
   test("malformed T1 evidence (non-numeric t1) fails CLOSED to full_fanout instead of silently reading as T1-clean", () => {
     const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-      scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["README.md"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: NaN } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: NaN } },
     });
     assert.equal(result.mode, "full_fanout");
     assert.equal(result.reason, "size_outcome_unavailable");
@@ -4582,9 +4719,8 @@ describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", (
 
   test("a passing, non-T1, non-risk-path diff under the size cap stays inline", () => {
     const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-      scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["README.md"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(result.mode, "inline");
     assert.equal(result.reason, "under_threshold");
@@ -4592,9 +4728,8 @@ describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", (
 
   test("no supplied waiver/flag can lower the risk-path floor — hasFullLabel:false + trivial size + risk path still forces full_fanout", () => {
     const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-      scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["scripts/github/detect-checkpoint-evidence.mjs"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
       hasFullLabel: false,
       inlineFindingSeverities: [],
     });
@@ -4604,7 +4739,7 @@ describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", (
 
   test("over-cap short-circuits before the new floors are even consulted (no I/O needed on a definitely-full-fanout diff)", () => {
     const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
-      scope: { filesChanged: 10, linesChanged: 999 },
+      sizeOutcome: { wholeLogicLoc: 999 },
     });
     assert.equal(result.mode, "full_fanout");
     assert.equal(result.reason, "over_threshold");
@@ -4613,9 +4748,8 @@ describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", (
   test("repo config additive riskPaths cannot be used to WEAKEN the floor (only ever adds, never removes shipped globs)", () => {
     const config = lightConfig({ riskPaths: [] });
     const result = resolveGateDispatchMode(config, "preApproval", {
-      scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["scripts/loop/check-adr-tripwire.mjs"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(result.mode, "full_fanout");
     assert.equal(result.reason, "risk_path_touch");
@@ -4624,7 +4758,7 @@ describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", (
 
 describe("isSizeOutcomeT1Clean (GATE-EXEC-PROPORTIONALITY): the ONE shared size-outcome T1-clean predicate", () => {
   test("pass + finite/non-negative/numeric T1 === 0 is clean", () => {
-    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: 0 } }), true);
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } }), true);
   });
 
   test("missing sizeOutcome fails CLOSED (not clean)", () => {
@@ -4633,41 +4767,39 @@ describe("isSizeOutcomeT1Clean (GATE-EXEC-PROPORTIONALITY): the ONE shared size-
   });
 
   test("non-pass outcome fails CLOSED (not clean)", () => {
-    assert.equal(isSizeOutcomeT1Clean({ outcome: "escalate", tierLogicLoc: { t1: 0 } }), false);
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "escalate", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } }), false);
   });
 
   test("missing/partial tierLogicLoc fails CLOSED (not clean), never silently reads as T1-clean", () => {
     assert.equal(isSizeOutcomeT1Clean({ outcome: "pass" }), false);
-    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: {} }), false);
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: {} }), false);
   });
 
   test("non-finite (NaN) T1 fails CLOSED (not clean)", () => {
-    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: NaN } }), false);
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: NaN } }), false);
   });
 
   test("non-numeric T1 fails CLOSED (not clean) — no truthiness coercion", () => {
-    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: "0" } }), false);
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: "0" } }), false);
   });
 
   test("negative T1 fails CLOSED (not clean)", () => {
-    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: -1 } }), false);
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: -1 } }), false);
   });
 
   test("positive T1 is not clean (nonzero T1-tier slice)", () => {
-    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: 5 } }), false);
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 5 } }), false);
   });
 
   test("resolveGateDispatchMode delegates to this same predicate: a clean T1 stays inline, a dirty one full-fans-out", () => {
     const cleanResult = resolveGateDispatchMode(lightConfig(), "preApproval", {
-      scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["README.md"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(cleanResult.mode, "inline");
     const dirtyResult = resolveGateDispatchMode(lightConfig(), "preApproval", {
-      scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["README.md"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 5 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 5 } },
     });
     assert.equal(dirtyResult.mode, "full_fanout");
     assert.equal(dirtyResult.reason, "size_outcome_t1");
@@ -4697,11 +4829,24 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const facts = {
       scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["README.md"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     };
     const first = resolveReviewProportionality(config, "preApproval", facts);
     const second = resolveReviewProportionality(config, "preApproval", { ...facts, changedFiles: [...facts.changedFiles] });
     assert.deepStrictEqual(first, second);
+  });
+
+  test("config_source_touch pins the plan floor and refuses a lowered judge track", () => {
+    const config = preApprovalTierConfig();
+    config.classify = { paths: [{ pattern: "src/**", kind: "docs" }] };
+    const plan = resolveReviewProportionality(config, "preApproval", {
+      scope: { filesChanged: 4, linesChanged: 900 },
+      changedFiles: [".devloops", "src/a.mjs", "src/b.mjs"],
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 0, tierLogicLoc: { t1: 0 } },
+    });
+    assert.equal(plan.mode, "full_fanout");
+    assert.equal(plan.reason, "config_source_touch");
+    assert.equal(plan.floors.riskPath, true);
   });
 
   test("trivial micro-diff → inline, single combined reviewer covering mandatory angles", () => {
@@ -4709,7 +4854,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["README.md"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(plan.mode, "inline");
     assert.ok(plan.angles.includes("yagni"));
@@ -4721,7 +4866,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 5, linesChanged: 50 },
       changedFiles: ["docs/a.md", "docs/b.md"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 50, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(plan.mode, "full_fanout");
     assert.equal(plan.reason, "over_threshold");
@@ -4734,7 +4879,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 20, linesChanged: 2000 },
       changedFiles: ["packages/core/src/loop/gate-fanin.mjs"],
-      sizeOutcome: { outcome: "block", tierLogicLoc: { t1: 50 } },
+      sizeOutcome: { outcome: "block", wholeLogicLoc: 1, tierLogicLoc: { t1: 50 } },
     });
     assert.equal(plan.mode, "full_fanout");
     assert.deepStrictEqual(new Set(plan.angles), new Set(["yagni", "contradiction-lens", "renderer-security"]));
@@ -4746,7 +4891,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const riskPlan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["scripts/loop/check-size-budget.mjs"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(riskPlan.floors.riskPath, true);
     assert.equal(riskPlan.floors.sizeCap, false);
@@ -4760,7 +4905,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const sizeOutcomePlan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["README.md"],
-      sizeOutcome: { outcome: "escalate", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "escalate", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(sizeOutcomePlan.floors.sizeOutcome, true);
   });
@@ -4770,7 +4915,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["scripts/loop/check-size-budget.mjs"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
       hasFullLabel: false,
     });
     assert.equal(plan.mode, "full_fanout");
@@ -4783,7 +4928,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
       // also touches the risk-path denylist. The floor changes dispatch only.
       scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["docs/decisions/0001-example.md"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(plan.mode, "full_fanout");
     assert.equal(plan.reason, "risk_path_touch");
@@ -4795,7 +4940,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["docs/guide.md"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 5 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 5 } },
     });
     assert.equal(plan.mode, "full_fanout");
     assert.equal(plan.reason, "size_outcome_t1");
@@ -4807,7 +4952,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 5, linesChanged: 50 },
       changedFiles: ["docs/a.md", "docs/b.md"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 50, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(plan.mode, "full_fanout");
     assert.equal(plan.reason, "over_threshold");
@@ -4823,7 +4968,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
       // → resolveGateTier returns unclassifiable_file — resolveGateDispatchMode
       // alone has no classification awareness and would otherwise stay inline.
       changedFiles: ["assets/logo.bin"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(plan.mode, "full_fanout");
     assert.equal(plan.reason, "unclassifiable_diff");
@@ -4838,7 +4983,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 1, linesChanged: 2 },
       changedFiles: [".devloops"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.deepStrictEqual(new Set(plan.angles), new Set(["yagni", "contradiction-lens", "renderer-security"]));
     assert.ok(plan.angles.length < staticPool.length);
@@ -4850,7 +4995,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 1, linesChanged: 2 },
       changedFiles: [".devloops"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.ok(plan.angles.includes("config-consumer"));
   });
@@ -4863,7 +5008,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["assets/blob.bin"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.deepEqual(plan.angles, ["kiss"]);
   });
@@ -4888,7 +5033,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const plan = resolveReviewProportionality(config, "draft", {
       scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["assets/blob.bin"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.deepEqual(plan.angles, ["kiss"]);
     assert.deepEqual(result.recommendedAngles, plan.angles, "resolver and composer must agree");
@@ -4914,7 +5059,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 1, linesChanged: 2 },
       changedFiles: [".devloops"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.ok(staticPool.length > 1, "precondition: pool has optional angles to drop");
     assert.deepStrictEqual(new Set(plan.angles), new Set(staticPool));
@@ -4942,7 +5087,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
       const plan = resolveReviewProportionality(config, "preApproval", {
         scope: { filesChanged: 1, linesChanged: 1 },
         changedFiles,
-        sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+        sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
         hasFullLabel: true,
       });
       assert.deepStrictEqual(new Set(plan.angles), new Set(staticPool), JSON.stringify(changedFiles));
@@ -4954,7 +5099,7 @@ describe("resolveReviewProportionality (#1984 — gate-coordinator-owned determi
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["README.md"],
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.ok(Array.isArray(plan.groups));
     const grouped = new Set(plan.groups.flatMap((g) => g.angles));
@@ -5562,6 +5707,37 @@ describe("gates.reviewDiff.excludeGlobs", () => {
   test("an empty-string entry yields a validation error", async () => {
     const result = await loadWith({ reviewDiff: { excludeGlobs: ["  "] } });
     assert.ok(result.errors.length > 0, "empty-string entry should error");
+  });
+});
+
+describe("gates.contextExpansion", () => {
+  async function loadWith(gates) {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-context-expansion-"));
+    try {
+      await writeFile(path.join(tmpDir, ".devloops"), JSON.stringify({ version: 1, gates }));
+      return await loadDevLoopConfig({ repoRoot: tmpDir });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  test("ships maxFiles 6 and maxBytes 98304 by default", async () => {
+    const result = await loadWith({});
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.config.gates.contextExpansion.maxFiles, 6);
+    assert.equal(result.config.gates.contextExpansion.maxBytes, 98304);
+  });
+
+  test("a repo overrides the caps", async () => {
+    const result = await loadWith({ contextExpansion: { maxFiles: 2, maxBytes: 4096 } });
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.config.gates.contextExpansion.maxFiles, 2);
+    assert.equal(result.config.gates.contextExpansion.maxBytes, 4096);
+  });
+
+  test("a negative or non-integer cap yields a validation error", async () => {
+    assert.ok((await loadWith({ contextExpansion: { maxFiles: -1 } })).errors.length > 0);
+    assert.ok((await loadWith({ contextExpansion: { maxBytes: 1.5 } })).errors.length > 0);
   });
 });
 
@@ -6421,7 +6597,7 @@ describe("resolveGateAnglesDynamic", () => {
     const result = await resolveGateAnglesDynamic(config, "draft", {
       diff: { nameStatusOutput: `M\t${riskyDocPath}`, diffOutput: oneLineDiffOutput(riskyDocPath) },
       checkFloors: true,
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(result.dynamicAnglesActive, true);
     assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs"]));
@@ -6432,9 +6608,20 @@ describe("resolveGateAnglesDynamic", () => {
     const result = await resolveGateAnglesDynamic(config, "draft", {
       diff: { nameStatusOutput: `M\t${nonRiskyDocPath}`, diffOutput: oneLineDiffOutput(nonRiskyDocPath) },
       checkFloors: true,
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs"]));
+  });
+
+  test("checkFloors:true — a rename out of a risk path fires the riskPath floor via the source endpoint (AC5)", async () => {
+    const config = tieredRiskyConfig();
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: `R100\t${riskyDocPath}\t${nonRiskyDocPath}`, diffOutput: "" },
+      checkFloors: true,
+      explicitAngles: ["docs"],
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
+    });
+    assert.notDeepEqual(result.recommendedAngles, ["docs"]);
   });
 
   test("checkFloors:true — a malformed sizeOutcome keeps the matching tier's angle set", async () => {
@@ -6461,7 +6648,7 @@ describe("resolveGateAnglesDynamic", () => {
         floor: "riskPath",
         options: {
           diff: { nameStatusOutput: `M\t${riskyDocPath}`, diffOutput: oneLineDiffOutput(riskyDocPath) },
-          sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+          sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
         },
       },
       {
@@ -6469,7 +6656,7 @@ describe("resolveGateAnglesDynamic", () => {
         floor: "sizeOutcome",
         options: {
           diff: { nameStatusOutput: `M\t${nonRiskyDocPath}`, diffOutput: oneLineDiffOutput(nonRiskyDocPath) },
-          sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 5 } },
+          sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 5 } },
         },
       },
       {
@@ -6485,7 +6672,7 @@ describe("resolveGateAnglesDynamic", () => {
         floor: "unclassifiable",
         options: {
           diff: { nameStatusOutput: "M\tassets/blob.bin", diffOutput: oneLineDiffOutput("assets/blob.bin") },
-          sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+          sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
         },
       },
     ];
@@ -6520,7 +6707,7 @@ describe("resolveGateAnglesDynamic", () => {
     const result = await resolveGateAnglesDynamic(config, "draft", {
       diff: { nameStatusOutput: `M\t${nonRiskyDocPath}`, diffOutput: oneLineDiffOutput(nonRiskyDocPath) },
       checkFloors: true,
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
       explicitAngles: ["docs"],
     });
     assert.deepEqual(result.recommendedAngles, ["docs"]);
@@ -6546,7 +6733,7 @@ describe("resolveGateAnglesDynamic", () => {
         diffOutput,
       },
       checkFloors: true,
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.equal(result.dynamicAnglesActive, true);
     assert.equal(result.fallbackToAll, false);
@@ -6559,7 +6746,7 @@ describe("resolveGateAnglesDynamic", () => {
     const staticPool = resolveGateAngles(config, "draft");
     const result = await resolveGateAnglesDynamic(config, "draft", {
       checkFloors: true,
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.ok(result.recommendedAngles.length < staticPool.length);
     assert.ok(result.recommendedAngles.includes("pr-description"));
@@ -6574,7 +6761,7 @@ describe("resolveGateAnglesDynamic", () => {
     const staticPool = resolveGateAngles(config, "draft");
     const result = await resolveGateAnglesDynamic(config, "draft", {
       checkFloors: true,
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
     });
     assert.deepEqual(result.recommendedAngles, staticPool);
     assert.deepEqual(result.skippedAngles, []);
@@ -6629,7 +6816,7 @@ describe("resolveGateAnglesDynamic", () => {
         options: {
           diff: { nameStatusOutput: `M\t${riskyDocPath}`, diffOutput: oneLineDiffOutput(riskyDocPath) },
           checkFloors: true,
-          sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+          sizeOutcome: { outcome: "pass", wholeLogicLoc: 1, tierLogicLoc: { t1: 0 } },
         },
       },
       {
@@ -7605,7 +7792,6 @@ test("resolveGateDispatchMode: legacy defer input escalates against a nice-to-ha
     gates: { preApproval: { blockCleanOnFindingSeverities: ["must-fix", "nice-to-have"] } },
   };
   const result = resolveGateDispatchMode(config, "preApproval", {
-    scope: { filesChanged: 1, linesChanged: 5 },
     inlineFindingSeverities: ["defer"],
     ...TRIVIAL_FACTS,
   });
@@ -7804,4 +7990,16 @@ describe("gates.size.planningBand", () => {
     assert.ok(!DevLoopConfigSchema.safeParse({ version: 1, gates: { size: { planningBand: { minLoc: -1 } } } }).success);
     assert.ok(!DevLoopConfigSchema.safeParse({ version: 1, gates: { size: { planningBand: { maxLoc: 400 } } } }).success);
   });
+});
+
+test("lightModeCapState: weighted LOC or non-doc file count decides over; invalid LOC is reported, never over", () => {
+  const t = { maxFiles: 2, maxLines: 20 };
+  assert.deepEqual(lightModeCapState(lightConfig(), t, { changedFiles: ["a.mjs", "d.md"], sizeOutcome: { wholeLogicLoc: 20 } }), { over: false, locValid: true });
+  assert.equal(lightModeCapState(lightConfig(), t, { changedFiles: ["a.mjs"], sizeOutcome: { wholeLogicLoc: 21 } }).over, true);
+  assert.equal(lightModeCapState(lightConfig(), t, { changedFiles: ["a.mjs", "b.mjs", "c.mjs"], sizeOutcome: { wholeLogicLoc: 1 } }).over, true);
+  for (const sizeOutcome of [null, {}, { wholeLogicLoc: -1 }, { wholeLogicLoc: NaN }]) {
+    assert.deepEqual(lightModeCapState(lightConfig(), t, { changedFiles: ["a.mjs"], sizeOutcome }), { over: false, locValid: false });
+  }
+  assert.equal(touchesConfigSource([".devloops", "a.mjs"]), true);
+  assert.equal(touchesConfigSource(["a.mjs"]), false);
 });

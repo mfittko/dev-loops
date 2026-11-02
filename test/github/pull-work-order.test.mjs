@@ -8,14 +8,15 @@ import { cp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from "
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "bun:test";
-import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, codeTreeSkewNote, executionIndexPath, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import { findRetirementAfter, main as pullMain, pullDelegationTarget, shouldRetryFixerPullLocally } from "../../scripts/github/pull-work-order.mjs";
+import { shellQuote } from "../../scripts/lib/checkout-delegation-refusal.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 import { decideFixerWriteGuard } from "../../packages/core/src/claude/hook-decisions.mjs";
-import { resolveGateArtifactTmpRoot, resolveMainWorktreeRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot, resolveMainWorktreeRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 
 const SCRIPTS = path.resolve("scripts/github");
 const HEAD = "c".repeat(40);
@@ -273,6 +274,69 @@ test("the short pull prints the same work order and writes the same receipt as t
   });
 });
 
+test("a digest mismatch across two code trees names both roots, both versions and the rerun command (#2662 AC6)", async () => {
+  await withDir(async (root) => {
+    await withDir(async (emitter) => {
+      await mkdir(path.join(emitter, "scripts"));
+      await writeFile(path.join(emitter, "package.json"), JSON.stringify({ name: "dev-loops", version: "9.9.9" }), "utf8");
+      const pullerVersion = JSON.parse(await readFile(path.join(TOOLCHAIN_ROOT, "package.json"), "utf8")).version;
+      const unit = await emitRound(root);
+      const entryFile = indexPath(root, unit);
+      const entry = JSON.parse(await readFile(entryFile, "utf8"));
+      assert.equal(entry.emitterRoot, TOOLCHAIN_ROOT);
+      const planPath = buildGateEmitPlanPath({ repo: "o/r", pr: "7", gate: GATE, headSha: HEAD, tmpRoot: path.join(root, "tmp") });
+      const plan = JSON.parse(await readFile(planPath, "utf8"));
+      const mutated = structuredClone(plan);
+      mutated.units[0].workOrder.angleInstructions[0].prompt = "Something else.";
+      await writeFile(planPath, JSON.stringify(mutated), "utf8");
+      const plain = refusal(pullShort(unit.executionIdentity, root));
+      assert.equal(plain.refusal, "semantic_identity_mismatch");
+      assert.doesNotMatch(plain.error, /code-tree skew/); // same-root mismatch stays plain
+      await writeFile(entryFile, JSON.stringify({ ...entry, emitterRoot: undefined }), "utf8");
+      assert.doesNotMatch(refusal(pullShort(unit.executionIdentity, root)).error, /code-tree skew/); // old entry stays plain
+      await writeFile(entryFile, JSON.stringify({ ...entry, emitterRoot: emitter }), "utf8");
+      for (const result of [pullShort(unit.executionIdentity, root), pull(unit, root)]) {
+        const body = refusal(result);
+        assert.equal(body.refusal, "semantic_identity_mismatch");
+        assert.match(body.error, /no longer reproduces workOrderDigest/);
+        for (const part of [emitter, "dev-loops 9.9.9", TOOLCHAIN_ROOT, `dev-loops ${pullerVersion}`, `DEV_LOOPS_PULL_DELEGATED=1 node ${shellQuote(path.join(emitter, "scripts/github/pull-work-order.mjs"))} ${unit.executionIdentity}`]) assert.ok(body.error.includes(part), part);
+      }
+      // A caller-supplied --tmp-root rides the rerun command as an absolute, quoted path.
+      const tmpRoot = path.join(root, "tmp");
+      const scoped = refusal(run("pull-work-order.mjs", [unit.executionIdentity, "--tmp-root", tmpRoot], root));
+      assert.ok(scoped.error.includes(`node ${shellQuote(path.join(emitter, "scripts/github/pull-work-order.mjs"))} ${unit.executionIdentity} --tmp-root ${shellQuote(tmpRoot)}`), scoped.error);
+    });
+  });
+});
+
+test("codeTreeSkewNote quotes the emitter root, says the identity code may differ and scans every index root (#2662 AC6)", async () => {
+  await withDir(async (root) => {
+    const execution = "r1-abcdef12-u0";
+    const bad = path.join(root, "bad");
+    const good = path.join(root, "good");
+    const emitter = path.join(root, "my emitter");
+    await mkdir(path.dirname(executionIndexPath(bad, execution)), { recursive: true });
+    await writeFile(executionIndexPath(bad, execution), "{not json", "utf8");
+    await writeExecutionIndex(good, { executionIdentity: execution, workOrderRef: "review:o/r#7:x", workOrderDigest: "sha256:0", emitterRoot: emitter });
+    const note = await codeTreeSkewNote({ execution, tmpRoots: [bad, good], script: "scripts/github/pull-work-order.mjs", args: execution, env: "E=1 " });
+    assert.ok(note.includes(`E=1 node ${shellQuote(path.join(emitter, "scripts/github/pull-work-order.mjs"))} ${execution}`), note);
+    // The printed command runs as written from a separate consumer cwd and keeps that cwd (#2662 review).
+    await mkdir(path.join(emitter, "scripts/github"), { recursive: true });
+    await writeFile(path.join(emitter, "scripts/github/pull-work-order.mjs"), "console.log(JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2), env: process.env.E }));\n", "utf8");
+    const consumer = path.join(root, "consumer");
+    await mkdir(consumer);
+    const printed = note.match(/`(E=1 node [^`]+)`/)[1];
+    const out = JSON.parse(execFileSync("sh", ["-c", printed], { cwd: consumer, encoding: "utf8" }));
+    assert.deepEqual({ ...out, cwd: await realpath(out.cwd) }, { cwd: await realpath(consumer), args: [execution], env: "1" });
+    assert.match(note, /identity code may differ/);
+    assert.doesNotMatch(note, /identity code differs/);
+    const linked = path.join(root, "linked-emitter");
+    await symlink(root, linked);
+    await writeExecutionIndex(path.join(root, "sym"), { executionIdentity: execution, workOrderRef: "review:o/r#7:x", workOrderDigest: "sha256:0", emitterRoot: linked });
+    assert.equal(await codeTreeSkewNote({ execution, tmpRoots: [path.join(root, "sym")], script: "x", toolchainRoot: root }), "");
+  });
+});
+
 test("the pull takes one positional identity or all three flags; any other shape exits 2 with the usage text", async () => {
   await withDir(async (root) => {
     const unit = await emitRound(root);
@@ -287,10 +351,11 @@ test("the pull takes one positional identity or all three flags; any other shape
 test("each emitted unit has one execution index entry; a colliding entry refuses the write", async () => {
   await withDir(async (root) => {
     const unit = await emitRound(root);
-    assert.deepEqual(JSON.parse(await readFile(indexPath(root, unit), "utf8")), { executionIdentity: unit.executionIdentity, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest });
+    assert.deepEqual(JSON.parse(await readFile(indexPath(root, unit), "utf8")), { executionIdentity: unit.executionIdentity, workOrderRef: unit.workOrderRef, workOrderDigest: unit.workOrderDigest, emitterRoot: TOOLCHAIN_ROOT });
     const entry = { executionIdentity: "r1-abcdef12-u0", workOrderRef: "review:o/r#7:x", workOrderDigest: "sha256:0" };
-    await writeExecutionIndex(path.join(root, "tmp"), entry);
-    await writeExecutionIndex(path.join(root, "tmp"), entry);
+    await writeExecutionIndex(path.join(root, "tmp"), { ...entry, emitterRoot: "/some/emitter" });
+    assert.equal(JSON.parse(await readFile(executionIndexPath(path.join(root, "tmp"), entry.executionIdentity), "utf8")).emitterRoot, "/some/emitter");
+    await writeExecutionIndex(path.join(root, "tmp"), { ...entry, emitterRoot: "/some/emitter" });
     await assert.rejects(writeExecutionIndex(path.join(root, "tmp"), { ...entry, workOrderDigest: "sha256:1" }), (err) => err.refusal === "execution_index_collision");
   });
 });

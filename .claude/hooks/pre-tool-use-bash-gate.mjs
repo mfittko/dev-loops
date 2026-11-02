@@ -35,7 +35,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { JUDGE_AGENT_TYPE, decideBashGate, FIXER_AGENT_TYPE, isFixerPullAttempt, normalizeAgentType, parseSanctionedPullLine } from "./_hook-decisions.mjs";
+import { JUDGE_AGENT_TYPE, decideBashGate, FIXER_AGENT_TYPE, isFixerPullAttempt, isUnresolveInvocation, normalizeAgentType, parseSanctionedPullLine } from "./_hook-decisions.mjs";
 import { listCheckouts, parseFixerPullCommand, recordFixerAgentBinding } from "./_fixer-grants.mjs";
 import {
   commandContainsGhPrReady,
@@ -139,10 +139,12 @@ const isVerifyEntrypoint = typeof command === "string" && commandContainsCodeVer
 const isJudge = normalizeAgentType(agentType) === JUDGE_AGENT_TYPE;
 // A fixer pull attempt reaches the decider, which denies any line other than the exact one.
 const isFixerPull = isFixer && isFixerPullAttempt(command);
+// Unresolve ownership (issue 2577): the decider denies it for every agent type except the owners.
+const isUnresolve = isUnresolveInvocation(command);
 if (
   !isReady && !isMerge && !isCreate && !isExternalWrite && !isStash &&
   !isInline && !isSubIssue && !isReplyResolve && !isRequestApi && !isCopilotSummon && !isWaitTool &&
-  !isTimeoutWrapped && !isBodyWrite && !isVerifyEntrypoint && !isJudge && !isFixerPull
+  !isTimeoutWrapped && !isBodyWrite && !isVerifyEntrypoint && !isJudge && !isFixerPull && !isUnresolve
 ) {
   emitAllow();
 }

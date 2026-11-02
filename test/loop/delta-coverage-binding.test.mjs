@@ -1,11 +1,68 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { test } from "bun:test";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { A, B, boundArgs, coverageRepo, git } from "./_delta-coverage-fixture.mjs";
+import { checkFixPushAuthority } from "../../scripts/loop/check-fix-push-authority.mjs";
+import { readSequenceMarker, sequenceMarkerPath, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { initGitFixture } from "../_helpers.mjs";
+
+test("authenticated no_commit and foreign-head exits close only their own sequence and permit the push", async () => {
+  for (const outcome of ["no_commit", "head_moved"]) {
+    const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "delta-closure-")));
+    initGitFixture(cwd, { branch: "issue-1" });
+    const A = git(cwd, "rev-parse", "HEAD");
+    git(cwd, "commit", "--allow-empty", "-m", "developer change");
+    const act = { severity: "low", angle: "correctness", summary: outcome, judgeDisposition: "act" };
+    act.fingerprint = fingerprintFinding(act);
+    const actPath = path.join(cwd, `${outcome}.json`), coverage = path.join(cwd, `${outcome}-coverage.json`), log = path.join(cwd, `${outcome}-log.json`);
+    fs.writeFileSync(actPath, JSON.stringify([act]));
+    fs.writeFileSync(coverage, JSON.stringify({ headSha: A, siteCoverage: [] }));
+    fs.writeFileSync(log, JSON.stringify({ headSha: A, provenance: { perAngle: [{ angle: "correctness" }] } }));
+    const fixture = await boundArgs(["--act-list", actPath, "--baseline", A, "--site-coverage", coverage, "--spec-identity", "s", "--findings-log", log, "--worktree", cwd]);
+    const options = { stdout: { write() {} }, ...(outcome === "no_commit" ? { revParse: (_cwd, rev) => rev === "HEAD" ? A : rev } : {}) };
+    assert.equal(checkFixPushAuthority(cwd).ok, false);
+    assert.match(checkFixPushAuthority(cwd).reason, /check-pre-push-delta\.mjs .*--baseline [0-9a-f]{40} .*no_commit/, "the refusal names the close command");
+    const planBytes = fs.readFileSync(fixture.unit.planPath), receiptBytes = fs.readFileSync(fixture.pulled.receiptPath), outputBytes = fs.readFileSync(fixture.output);
+    const markerFile = sequenceMarkerPath(fixture.tmpRoot, A), markerBytes = fs.readFileSync(markerFile);
+    for (const defect of ["execution", "branch", "PR", "receipt", "malformed", "marker"]) {
+      const plan = JSON.parse(planBytes);
+      if (defect === "execution") plan.executionIdentity = "f1-00000000";
+      if (defect === "branch") plan.workOrder.mutationAuthority.branch = "other";
+      if (defect === "PR") plan.workOrder.target.pr++;
+      fs.writeFileSync(fixture.unit.planPath, JSON.stringify(plan));
+      if (defect === "receipt") fs.unlinkSync(fixture.pulled.receiptPath);
+      if (defect === "malformed") fs.writeFileSync(fixture.output, "{");
+      // A custom --tmp-root emission B replaced the canonical marker: the marker names another execution than plan A.
+      if (defect === "marker") { const m = readSequenceMarker(fixture.tmpRoot, A); writeSequenceMarker({ tmpRoot: fixture.tmpRoot, baselineHead: A, branch: m.branch, execution: { ...m.execution, executionIdentity: "f2-00000000", workOrderRef: "fixer:o/r#1:x:f2-00000000" } }); }
+      await assert.rejects(runCli(fixture.args, options), undefined, defect);
+      assert.notEqual(readSequenceMarker(fixture.tmpRoot, A), null, defect);
+      fs.writeFileSync(fixture.unit.planPath, planBytes);
+      fs.writeFileSync(fixture.pulled.receiptPath, receiptBytes);
+      fs.writeFileSync(fixture.output, outputBytes);
+      fs.writeFileSync(markerFile, markerBytes);
+    }
+    const result = await runCli(fixture.args, options);
+    assert.equal(result.outcome, outcome);
+    assert.equal(result.nextStep, "push_to_gate");
+    assert.equal(readSequenceMarker(fixture.tmpRoot, A), null);
+    assert.equal(checkFixPushAuthority(cwd).ok, true);
+    if (outcome === "no_commit") {
+      // PR 2992 shape (ADR 0218): after the close, the push of a base-refresh merge on the baseline is allowed.
+      git(cwd, "branch", "base-side", A);
+      git(cwd, "checkout", "-q", "base-side");
+      git(cwd, "commit", "--allow-empty", "-m", "base moves");
+      git(cwd, "checkout", "-q", "issue-1");
+      git(cwd, "merge", "--no-ff", "-m", "merge base", "base-side");
+      assert.equal(checkFixPushAuthority(cwd).ok, true, "the base-refresh merge push is allowed once the sequence is closed");
+    }
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 test("pulled coverage binding preserves raw identity through the input, result and decision", async () => {
   const act = { severity: "low", angle: "correctness", summary: "binding", judgeDisposition: "act", siteQuery: "git grep x" };
@@ -116,4 +173,33 @@ test("THREAD cannot opt into the ACT coverage protocol", async () => {
   fs.writeFileSync(result, JSON.stringify({ coverageProtocol: "pulled_commit_only_v1", siteCoverageDigest: sha256Hex([]).slice(7), handbackBytesDigest: "a".repeat(64),
     origin: { workOrderRef: `fixer:o/r#7:${A}:f1-00000000`, workOrderDigest: `sha256:${"b".repeat(64)}`, executionIdentity: "f1-00000000" } }));
   await assert.rejects(runCli(["--threads-file", file, "--repo", "o/r", "--pr", "7", "--baseline", A, "--result", result, "--invocation", "3", "--worktree", coverageRepo]), /THREAD cannot/);
+});
+
+test("an unpushed fix commit at HEAD keeps the sequence marker and the push refusal, and an empty act list refuses before any closure logic", async () => {
+  const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "delta-unpushed-")));
+  initGitFixture(cwd, { branch: "issue-1" });
+  const A = git(cwd, "rev-parse", "HEAD");
+  git(cwd, "commit", "--allow-empty", "-m", "fix commit");
+  const F = git(cwd, "rev-parse", "HEAD");
+  const act = { severity: "low", angle: "correctness", summary: "unpushed", judgeDisposition: "act" };
+  act.fingerprint = fingerprintFinding(act);
+  const actPath = path.join(cwd, "act.json"), emptyPath = path.join(cwd, "empty.json"), coverage = path.join(cwd, "coverage.json"), log = path.join(cwd, "log.json");
+  fs.writeFileSync(actPath, JSON.stringify([act]));
+  fs.writeFileSync(emptyPath, "[]");
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: F, siteCoverage: [] }));
+  fs.writeFileSync(log, JSON.stringify({ headSha: A, provenance: { perAngle: [{ angle: "correctness" }] } }));
+  const fixture = await boundArgs(["--act-list", actPath, "--baseline", A, "--site-coverage", coverage, "--spec-identity", "s", "--findings-log", log, "--worktree", cwd]);
+  assert.equal(JSON.parse(fs.readFileSync(fixture.output)).headSha, F, "the handback head is the authentic fix commit, equal to HEAD");
+  // The real unpushed-fix path: a non-empty act list and an authentic handback at F equal to HEAD fall through the closure branch and keep the marker.
+  const closed = await runCli([...fixture.args], { stdout: { write() {} } }).catch((error) => ({ error }));
+  assert.ok(!["no_commit", "head_moved"].includes(closed?.outcome), "an unpushed fix commit is never closed as no_commit or head_moved");
+  assert.notEqual(readSequenceMarker(fixture.tmpRoot, A), null);
+  assert.equal(checkFixPushAuthority(cwd).ok, false);
+  // An empty act list never reaches any closure logic.
+  const args = [...fixture.args];
+  args[args.indexOf("--act-list") + 1] = emptyPath;
+  await assert.rejects(runCli(args, { stdout: { write() {} } }), /non-empty judge act list/);
+  assert.notEqual(readSequenceMarker(fixture.tmpRoot, A), null);
+  assert.equal(checkFixPushAuthority(cwd).ok, false);
+  fs.rmSync(cwd, { recursive: true, force: true });
 });

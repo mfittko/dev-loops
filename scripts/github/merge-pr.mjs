@@ -107,7 +107,9 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
   head: copilot_gate_disabled (round cap 0, or an internal-only PR),
   converged_once (default mode: the latest Copilot review converged on an
   earlier head, with zero unresolved threads and no Copilot review outstanding
-  on the current head; the delta is not checked),
+  on the current head; the delta is not checked; below the effective round cap and
+  before a pre_approval_gate marker, a review with findings, meaning its own thread or a
+  fix-form record, does not grant it: COPILOT-STATE-CONVERGED-BELOW-CAP),
   round_cap_clean_fallback (round cap reached, unless the last review was clean
   and a significant change landed since), or, with
   refinement.requireCopilotConvergenceAtLatestHead: true, docs_only_suppression
@@ -215,11 +217,14 @@ export function parseMergePrCliArgs(argv) {
 // current-head pre_approval_gate verdicts, unresolved threads, the runner lock,
 // and fan-out provenance — reused wholesale (non-goal: do not re-derive the set).
 const DETECT_EVIDENCE_PATH = fileURLToPath(new URL("./detect-checkpoint-evidence.mjs", import.meta.url));
-function defaultDetectEvidence({ repo, pr, env, cwd }) {
+export function buildDetectEvidenceArgv({ repo, pr, baseRefName }) {
+  return [DETECT_EVIDENCE_PATH, "--repo", repo, "--pr", String(pr), ...(baseRefName ? ["--base-ref-name", baseRefName] : [])];
+}
+function defaultDetectEvidence({ repo, pr, env, cwd, baseRefName }) {
   return new Promise((resolve) => {
     execFile(
       process.execPath,
-      [DETECT_EVIDENCE_PATH, "--repo", repo, "--pr", String(pr)],
+      buildDetectEvidenceArgv({ repo, pr, baseRefName }),
       { env, cwd, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
         let parsed = null;
@@ -269,10 +274,15 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
   if (cap === 0) return pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_GATE_DISABLED);
   const requireCopilotConvergenceAtLatestHead = resolveRequireCopilotConvergenceAtLatestHead(config);
   const reviews = toSharedReviewShape(rawReviews);
+  // A missing draftGate means no round reset (the permissive direction); it only occurs when evidence is unreadable, which already fails gate_evidence.
+  const { completedCopilotReviewRounds } = summarizeCopilotReviews(reviews, {
+    headSha: currentHeadSha,
+    draftGateResetAtMs: resolveDraftGateRoundResetMs({ draftGate, currentHeadSha }),
+  });
   // The request status is checked separately, with merge-side fail-closed reads.
   const carriedDisposition = async (kind) => {
     const carried = await resolveCarriedConvergence(
-      { repo, pr, currentHeadSha, prData: { reviews }, copilotReviewRequestStatus: "none", requireCopilotConvergenceAtLatestHead, rules: resolveClassifyRules(config) },
+      { repo, pr, currentHeadSha, prData: { reviews }, copilotReviewRequestStatus: "none", requireCopilotConvergenceAtLatestHead, rules: resolveClassifyRules(config), copilotReviewRoundCount: completedCopilotReviewRounds, effectiveCap: cap },
       runtime,
     );
     if (!carried.carried || (await isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews }, runtime))) return null;
@@ -286,11 +296,6 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
   const lastReviewedHead = getLastCopilotReviewHeadSha({ reviews });
   const lastReviewConverged = lastReviewedHead !== null && lastReviewedHead !== currentHeadSha
     && evaluateCopilotConvergence({ currentHeadSha: lastReviewedHead, reviews }).state === COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN;
-  // A missing draftGate means no round reset (the permissive direction); it only occurs when evidence is unreadable, which already fails gate_evidence.
-  const { completedCopilotReviewRounds } = summarizeCopilotReviews(reviews, {
-    headSha: currentHeadSha,
-    draftGateResetAtMs: resolveDraftGateRoundResetMs({ draftGate, currentHeadSha }),
-  });
   // ADR 0012: at the cap, a significant change after a converged review opens a
   // new cycle regardless of the spent cap. A fix pushed after a findings review
   // keeps the fallback.
@@ -347,12 +352,12 @@ async function resolveAdrNumberCollisionRefusal({ repo, pr, baseRefName }, { env
 // review exists but the latest submitted Copilot review sits on an earlier
 // commit and is not converged by the shared predicate, or is converged while a
 // Copilot review is outstanding on the current head; null otherwise.
-async function resolveLaterCopilotReviewRefusal({ repo, pr, currentHeadSha, rawReviews, rawConvergenceState, rules }, runtime) {
+async function resolveLaterCopilotReviewRefusal({ repo, pr, currentHeadSha, rawReviews, rawConvergenceState, rules, effectiveCap, draftGate }, runtime) {
   if (rawConvergenceState === null || rawConvergenceState === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW) return null;
   const prData = { reviews: toSharedReviewShape(rawReviews) };
   const latestHead = getLastCopilotReviewHeadSha(prData);
   if (latestHead === null || latestHead === currentHeadSha) return null;
-  const carried = await resolveCarriedConvergence({ repo, pr, currentHeadSha, prData, copilotReviewRequestStatus: "none", rules }, runtime);
+  const carried = await resolveCarriedConvergence({ repo, pr, currentHeadSha, prData, copilotReviewRequestStatus: "none", rules, copilotReviewRoundCount: summarizeCopilotReviews(prData.reviews, { headSha: currentHeadSha, draftGateResetAtMs: resolveDraftGateRoundResetMs({ draftGate, currentHeadSha }) }).completedCopilotReviewRounds, effectiveCap }, runtime);
   const later = `a later Copilot review ${getLastCopilotReview(prData)?.id ?? "(unknown id)"} on an earlier commit (${latestHead})`;
   if (!carried.carried) return `${later} is not converged and supersedes the current-head review: ${carried.reason}`;
   // The carry reads the request status as "none"; check it here with the fail-closed reads.
@@ -657,7 +662,7 @@ export async function mergePr(options, runtime = {}) {
     { env, ghCommand, runChild },
   )).map((c) => ({ login: c?.user?.login ?? null, body: c?.body ?? "", type: c?.user?.type ?? null }));
 
-  const evidence = await detectEvidence({ repo: options.repo, pr: options.pr, env, cwd });
+  const evidence = await detectEvidence({ repo: options.repo, pr: options.pr, env, cwd, baseRefName });
   const configLoad = await loadConfig({ repoRoot: resolveRepoRoot(cwd) });
 
   // Fail closed on a config load/validation error: an unreadable `.devloops` is
@@ -725,7 +730,7 @@ export async function mergePr(options, runtime = {}) {
   // shared predicate, as the loop does. The converged-once form applies in
   // both modes: the current head has its own review, so no delta is carried.
   const copilotLaterReviewRefusal = await resolveLaterCopilotReviewRefusal(
-    { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, rawConvergenceState, rules: resolveClassifyRules(configLoad?.config) },
+    { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, rawConvergenceState, draftGate: evidence.draftGate, rules: resolveClassifyRules(configLoad?.config), effectiveCap: resolveRequireCopilotConvergenceAtLatestHead(configLoad?.config) ? undefined : resolveEffectiveCopilotRoundCap(configLoad?.config ?? { version: 1 }, { lightweight: options.lightweight === true }) },
     { env, ghCommand, runChild, ghJson },
   );
 

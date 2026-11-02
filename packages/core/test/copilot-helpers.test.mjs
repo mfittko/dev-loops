@@ -23,6 +23,12 @@ import {
   summarizeGateReviewComments,
 } from "../src/github/copilot-helpers.mjs";
 
+test("a shorter fence line inside a longer fenced block does not close it", () => {
+  assert.equal(containsBareCopilotSummon("````md\n```\n@copilot\n````"), false);
+  assert.equal(containsBareCopilotSummon("```\n```x\n@copilot\n```"), false);
+  assert.equal(containsBareCopilotSummon("````\ncode\n````\n@copilot"), true);
+});
+
 test("isCopilotLogin matches copilot-prefixed logins case-insensitively", () => {
   assert.equal(isCopilotLogin("copilot-swe-agent"), true);
   assert.equal(isCopilotLogin("Copilot"), true);

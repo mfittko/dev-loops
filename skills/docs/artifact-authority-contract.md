@@ -55,7 +55,7 @@ Key contract:
 - <!-- rule: ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS --> The PR body MUST carry the same invariants a durable spec would: **Objective/why, in-scope + explicit non-goals, testable acceptance criteria, definition of done, open questions/risks** — unconditionally, whether or not the work is tracker-backed. The `Closes #N` linkage (GitHub's other closing keywords count too) is conditional on artifact backing (operator ruling, issue #1210): REQUIRED when the work originates from a GitHub issue (`--issue --lightweight`), ABSENT BY DESIGN when the PR is the sole artifact with no backing issue (`--lightweight` alone, issue-less PR-first) — an issue-less PR body MUST NOT carry a closing reference to an issue that doesn't back it. `scripts/loop/validate-pr-body-spec.mjs` (reusing the generic markdown logic of `@dev-loops/core/loop/issue-refinement-artifact`, `validatePrBodySpec`) validates these and fails closed with a distinct reason per violated invariant — `missing_closing_issue_reference` without the linkage in tracker-backed mode, `closes_wrong_issue` when an `--expected-issue` is given and doesn't match, `unexpected_closing_issue_reference` when a closing reference is present under explicit issue-less mode (`--no-issue`) — so the lightweight path's issue-tracking state never silently diverges from PR state (issue #1181).
 - Unlike promotion (P4), where the PR body carries the committed plan-doc **path**, the lightweight PR body **is** the spec.
 - The explicit `--lightweight` flag is the only deterministic trigger. A chore/fix commit type with no `--plan-file` and a small change is a manual signal to reach for the flag, not an automatic selector.
-- <!-- rule: ARTIFACT-LIGHTWEIGHT-PLAN-FILE-EXCLUSIVE --> `--lightweight` MUST be rejected when combined with `--plan-file` (they are opposites: `--plan-file` commits a durable plan doc as the spec, `--lightweight` makes the PR body the spec). It composes with `--issue` (tracker-backed) or stands alone (issue-less PR-first, #1210 — gated on `localImplementation.lightMode` being enabled and the change scope staying within its threshold, unless `localImplementation.issueless` (#1349) sanctions issue-less PR-first at any change scope for consumers whose spec of record lives in an external tracker; review depth stays scope-driven — gate dispatch still resolves inline vs full fan-out from the light-mode threshold, and over-threshold PRs keep the full-PR Copilot round cap); it MUST be rejected when combined with any other mode flag (`--pr`, `--input`, `--spike`).
+- <!-- rule: ARTIFACT-LIGHTWEIGHT-PLAN-FILE-EXCLUSIVE --> `--lightweight` MUST be rejected when combined with `--plan-file` (they are opposites: `--plan-file` commits a durable plan doc as the spec, `--lightweight` makes the PR body the spec). It composes with `--issue` (tracker-backed) or stands alone (issue-less PR-first, #1210 — gated on `localImplementation.lightMode` being enabled and the change staying within its threshold under the one shared light-mode cap predicate (`lightModeCapState`: weighted logic LOC against `maxLines`, non-doc file count against `maxFiles`; the same one gate dispatch uses), with a missing size outcome, a `block` size outcome or a failed changed-file read (`size_outcome_unavailable`) or a config-source edit failing closed (`config_source_touch`), unless `localImplementation.issueless` (#1349) sanctions issue-less PR-first at any change scope for consumers whose spec of record lives in an external tracker; review depth stays scope-driven — gate dispatch still resolves inline vs full fan-out from the light-mode threshold, and over-threshold PRs keep the full-PR Copilot round cap); it MUST be rejected when combined with any other mode flag (`--pr`, `--input`, `--spike`).
 - Pre-approval acceptance-criteria verification reads the AC/DoD/invariants directly from the PR body rather than a linked issue body; see [Acceptance Criteria Verification](acceptance-criteria-verification.md).
 
 ### Mode selection table
@@ -64,7 +64,7 @@ Key contract:
 |---|---|---|---|
 | Tracker-first | GitHub issue | Yes | `strategy: tracker-first` (`github-first` is a deprecated accepted alias) |
 | Local-planning (shipped default) | Markdown plan file | No | `strategy: local-first` |
-| Lightweight (PR-body-as-spec) | GitHub PR description | Conditional — `--issue` when tracker-backed; absent for issue-less PR-first (#1210), gated on `localImplementation.lightMode` + change-scope threshold, or any-scope with `localImplementation.issueless` (#1349) | modifier: `--lightweight` (`canonicalSpecSource: pr_body`) |
+| Lightweight (PR-body-as-spec) | GitHub PR description | Conditional — `--issue` when tracker-backed; absent for issue-less PR-first (#1210), gated on `localImplementation.lightMode` + the shared light-mode cap predicate, or any-scope with `localImplementation.issueless` (#1349) | modifier: `--lightweight` (`canonicalSpecSource: pr_body`) |
 
 `inputSource` further disambiguates local-first startup:
 | inputSource | Meaning |
@@ -116,11 +116,12 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/loop/detect-copilot-loop-state.mjs` | Fail closed: `config_load_failed` |
 | `scripts/loop/copilot-pr-handoff.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/request-copilot-review.mjs` | Fail closed: `config_load_failed` |
+| `scripts/github/report-head-declared-keys.mjs` | Fail closed: loads the PR head's own schema in the credential-less job on purpose, and a load error yields the empty key set |
 | `scripts/github/write-gate-context.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/write-gate-findings-log.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/resolve-angle-carry-forward.mjs` | Fail closed: `config_load_failed` |
 | `scripts/loop/resolve-gate-dispatch.mjs` | Fail closed: `config_load_failed` |
-| `scripts/github/detect-checkpoint-evidence.mjs` | Fail closed: `config_load_failed` |
+| `scripts/github/detect-checkpoint-evidence.mjs` | Fail closed: `config_load_failed`. Sole exception (ADR 0234): a head-only unknown key listed in `--head-declared-keys` is stripped and the head config reloaded, and only when `--head-declared-keys-sha` equals the evaluated head SHA (any other value yields the empty set); every other error still fails with `config_load_failed` |
 | `scripts/github/emit-fanout-dispatch.mjs` | Fail closed: `config_load_failed` |
 | `scripts/github/reconcile-draft-gate.mjs` | Fail closed: `config_load_failed` |
 | `scripts/loop/emit-judge-work-order.mjs` | Fail closed: `config_load_failed` |
@@ -129,6 +130,7 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/loop/judge-pass.mjs` | Fail closed: throws |
 | `scripts/loop/spec-lint.mjs` | Fail closed: throws, so a broken `.devloops` cannot relax the size forecast bound |
 | `scripts/loop/check-pre-push-delta.mjs` | Fail closed: the earlier-head findings log is refused |
+| `scripts/loop/extend-cap-round-chain.mjs` | Fail closed: throws |
 | `scripts/loop/consolidate-fanin.mjs` | Fail closed: throws with `--gate` |
 | `scripts/github/upsert-checkpoint-verdict.mjs` | Fail closed: throws |
 | `scripts/github/merge-pr.mjs` | Fail closed: refuses with `configError` |
@@ -166,6 +168,11 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/loop/ui-review-teardown.mjs` | Not a gate decision: UI review recipe |
 | `scripts/loop/visual-grill-capture.mjs` | Not a gate decision: capture recipe |
 | `scripts/refine/promote-plan.mjs` | Not a gate decision: base branch |
+
+### CLI checkout delegation
+
+<!-- rule: CLI-CHECKOUT-DELEGATION -->
+`CLI-CHECKOUT-DELEGATION`: An installed `dev-loops` CLI MUST run the source checkout's CLI for the `gate`, `loop` and `pr` categories, so an older installed CLI cannot drop a newer `.devloops` key or decide a gate with stale code. `cli/index.mjs` walks up from the working directory to the nearest directory whose `package.json` is named `dev-loops` and that has `cli/index.mjs`. When that directory is not the running CLI's root, the CLI spawns `<root>/cli/index.mjs` with the same argv and working directory, sets `DEVLOOPS_CHECKOUT_DELEGATED=1`, forwards stdout and stderr, and returns the child exit status. A non-empty `DEVLOOPS_CHECKOUT_DELEGATED` disables delegation, so the checkout CLI never delegates again. A `gate`, `loop` or `pr` command inside a tree whose `package.json` declares the name `dev-loops` executes that tree's `cli/index.mjs` with the caller's environment, so the operator treats that tree as trusted code, the same trust `dev-loops-run` applies. The `dev-loops-run` launcher selects the nearest `dev-loops` checkout by its own entry criterion (a sibling `scripts/` directory, real path), so the two resolvers can pick different roots. The guard is removed from the process environment at CLI start, so grandchildren never inherit it. Other categories never delegate. When the installed and checkout versions differ, the CLI writes `[dev-loops] version skew: installed X, checkout Y; running <root>/cli/index.mjs (CLI-CHECKOUT-DELEGATION).` to stderr. When the checkout CLI does not start, the CLI writes `cli_version_skew: installed X, checkout Y; the checkout CLI did not start (<code>). CLI-CHECKOUT-DELEGATION refused to continue. Rerun: dev-loops-run --repo-root <root> cli/index.mjs <argv>` and exits 1. The `cli_version_skew` token names a start failure of the checkout CLI. It also appears when the installed and checkout versions are equal and only the roots differ. When the piped child output exceeds the wrapper buffer, the CLI writes `child_output_too_large` and exits 1.
 
 ## Local-first plan-file flow end to end
 
@@ -207,6 +214,9 @@ The shipped extension layer pairs local-first with a low-noise posture, in `pack
 | `gates.postFindingsComments` | `false` | Gate findings already live on the PR as the round's verdict review; a second consolidated comment would only duplicate them |
 
 `BUILT_IN_DEFAULTS` keeps the tracker-first values (`humanMergeOnly: false`, `maxAutoFiledIssues: 10`); the extension layer sets the local-first values above. A repo `.devloops` can override any of them.
+
+<!-- rule: SPEC-SLICE-PR-KEEPS-CLOSING-REF -->
+`SPEC-SLICE-PR-KEEPS-CLOSING-REF`: Interim rule, valid until Refs-only `pr_body` authority ships in a later slice of issue 2883. Until then a slice PR MUST keep its closing reference (`Closes #N`) and carry a Non-goals line that reopens the issue after the merge. Changing `Closes` to `Refs` is never an act remedy for a slice PR, because a `Refs`-only slice PR has no spec authority today. The `Refs` plus verbatim slice body shape (issue 2883 dod:3) stays open for that later slice. The spec context states this rule (`sliceLinkage`) when the extracted spec Non-goals hold a reopen line. The judge work order reads the PR body from the pinned gate-context evidence. It carries `sliceLinkage` and `sliceLinkageIssues` in its pinned work order only when that PR body holds exactly one closing reference, to an issue in this repository, and its number is named by a reopen line in the body or `--spec-file` Non-goals. `judge-pass.mjs` arms its coercion from the pinned `sliceLinkageIssues` alone: it coerces an `act` disposition whose `judgeFix` removes the PR's only closing reference to the issue a Non-goals reopen line names (a removal naming another issue number stays act) to `reject` and names this rule ID in `judgeReason`.
 
 ## dev-loops own mode
 

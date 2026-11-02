@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { detectMergeBaseScope, detectScope } from "../../scripts/loop/detect-change-scope.mjs";
+import { detectScope } from "../../scripts/loop/detect-change-scope.mjs";
 
 // GATE-EXEC-PROPORTIONALITY: detectScope feeds the gate coordinator's light-mode size
 // cap (resolve-gate-dispatch.mjs) and MUST diff the `cwd` repo regardless of
@@ -84,7 +84,7 @@ test("detectScope ignores an ambient GIT_DIR/GIT_WORK_TREE pointing at a DIFFERE
   }
 });
 
-test("detectScope and detectMergeBaseScope skip a changes/*.md fragment from both counts", async () => {
+test("detectScope skips a changes/*.md fragment from both counts", async () => {
   const dir = await makeRepo();
   try {
     await writeFile(path.join(dir, "a.md"), "base\n", "utf8");
@@ -97,7 +97,7 @@ test("detectScope and detectMergeBaseScope skip a changes/*.md fragment from bot
     await writeFile(path.join(dir, "changes", "1-fix.md"), "x\ny\nz\nw\n", "utf8");
     git(dir, "add", "-A");
     git(dir, "commit", "-qm", "head");
-    for (const detect of [detectScope, detectMergeBaseScope]) {
+    for (const detect of [detectScope]) {
       assert.deepEqual(detect({ base, head: "HEAD", cwd: dir }), { ok: true, filesChanged: 2, linesChanged: 5, rawFilesChanged: 3, rawLinesChanged: 9 }, detect.name);
       assert.equal(detect({ base, head: "does-not-exist", cwd: dir }).ok, false, detect.name);
     }

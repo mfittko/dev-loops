@@ -321,8 +321,8 @@ test("LOOP_DERIVED_CI_CHECK_NAME is the gate-evidence check", () => {
   assert.equal(LOOP_DERIVED_CI_CHECK_NAME, "gate-evidence");
 });
 
-test("LOOP_DERIVED_CI_CHECK_NAMES covers the status context and both workflow jobs' check runs", () => {
-  assert.deepEqual([...LOOP_DERIVED_CI_CHECK_NAMES], ["gate-evidence", "gate-evidence-runner", "gate-evidence-reporter"]);
+test("LOOP_DERIVED_CI_CHECK_NAMES covers the status context and every workflow job's check run", () => {
+  assert.deepEqual([...LOOP_DERIVED_CI_CHECK_NAMES], ["gate-evidence", "gate-evidence-runner", "gate-evidence-reporter", "head-declared-keys"]);
 });
 
 test("resolveNamedContextState resolves one named context's own state, independent of the rest of the rollup", () => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { link, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -10,14 +10,15 @@ import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { fingerprintFinding } from "./_gate-finding-surface.mjs";
+import { fingerprintFinding, listRestPrReviews } from "./_gate-finding-surface.mjs";
+import { isTrustedDispositionAuthor, readReviewBodyMarkers, readReviewMarkerCommits } from "./_copilot-body-disposition.mjs";
 import { selectActThreadBinding } from "./_fixer-act-thread-bindings.mjs";
 import { resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { captureParsedReviewThreads, findDeltaBlockedFixedReply, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
 import { planBatchReplyTargets } from "./reply-resolve-review-threads.mjs";
 import { buildContainmentMap, isCommitContainedByHead } from "./_commit-containment.mjs";
-import { EXECUTION_IDENTITY_RE, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
+import { EXECUTION_IDENTITY_RE, fixerReportPath, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
@@ -58,13 +59,34 @@ Required:
   --fixer-plan <path>   The fixer-emit-plan.json the full-phase fixer was dispatched
                         from (emit-fixer-work-order.mjs, ADR 0106). The disposition
                         handoff { headSha, dispositions } is read from the plan's
-                        outputRef. Each dispositions entry is { threadId,
-                        fixingCommitSha, disposition: "tackled"|"deferred",
-                        fingerprint?, validation? }; threadId, fixingCommitSha
-                        and disposition are required on every entry.
+                        outputRef. Each dispositions entry is { threadId | reviewId,
+                        fixingCommitSha, disposition: "tackled"|"deferred"|"rejected",
+                        fingerprint?, validation? }; each entry carries exactly one
+                        of threadId or reviewId, plus fixingCommitSha and
+                        disposition. A tackled threadId entry needs fixingCommitSha
+                        as the full 40-character SHA; a reviewId entry needs the
+                        full 40-character SHA for every disposition.
+                        A review-body work order (emit-fixer-work-order.mjs
+                        --review-id) takes a { reviewId, fixingCommitSha,
+                        disposition } entry written by the fixer; the verifier
+                        re-reads the review live (a changed body or a vanished
+                        review refuses), checks commit_not_contained, then
+                        fix_not_after_review (the cited commit is already
+                        contained by the reviewed commit; commit the fix after
+                        it, push, rewrite the handoff, re-run), then posts one
+                        dev-loops:review-body-disposition marker comment citing the
+                        fixing commit unless a marker for it is already live. An
+                        untrusted marker the verifier's own identity posted fails
+                        marker_author_untrusted and is never posted again (a
+                        foreign untrusted marker does not block the post); a
+                        --check run reports that state as reply_missing. A resolved thread whose replies cite
+                        only a short SHA fails resolved_short_sha_reply; a full-SHA
+                        reply on a resolved thread completes.
                         The handoff counts only with a matching fixer pull receipt,
-                        when written at or after that pull, and when its headSha is
-                        the observed --head-sha.
+                        when written at or after that pull. Its candidate head X
+                        may precede live --head-sha H only after containment and
+                        per-commit historical thread-site checks; uncertainty
+                        names the thread for pre_approval_gate --known-findings.
 Optional:
   --construct                 Construct the full worker's canonical report (ACT: from
                                authenticated completion input; THREAD: from the threads
@@ -84,6 +106,14 @@ Optional:
                                ok:false (residual_reply_failed, complete:false).
   --check                     Read-only delivery and live-state check; never
                                write a checkpoint or reply/resolve a thread.
+  --report-path <path>         Absolute path of the join report. Valid only with --check
+                               (refused otherwise, and when it equals the
+                               plan's outputRef). The verifier publishes its final result
+                               there once per successful run, last and atomically (temp file, then hard link; an existing report is never
+                               replaced and a later run with the same path refuses): the result with outcome
+                               "complete" or "incomplete", or on a refusal
+                               { ok: false, outcome: "refused", error }. A full-phase order
+                               derives it as <outputRef>.report (joinRef).
   --tmp-root <path>            Root tmp directory for the checkpoint and the pull
                                receipts (default: the main git worktree's tmp/, so
                                a prune of a linked worktree never takes the
@@ -96,9 +126,10 @@ already resolved live is left alone.
 In --check mode checkpointPath is null and all evidence remains unchanged.
 Output for normal verification or --check (stdout, JSON):
   { "ok": true, "repo": "owner/name", "pr": 17, "headSha": "...", "checkpointPath": "...",
-    "complete": true|false, "incomplete": [{ threadId, expectedCommit, failedStep, deltaStatus?, deltaRecord? }],
+    "complete": true|false, "incomplete": [{ threadId | reviewId, expectedCommit, failedStep, error?, deltaStatus?, deltaRecord? }],
     "forbiddenActions": [...], "nextAction": "..."|null, "reason": "..."|null,
-    "actions": [{ threadId, ok, step? , error? }] }
+    "actions": [{ threadId | reviewId, ok, step? , error? }] }
+  A review-body run reports reviewId entries; its action step is marker_comment_posted.
 Output for --construct (stdout, JSON):
   { "ok": true, "constructed": true, "outputRef": "..." }
   complete and checkpointPath are absent; normal verification remains mandatory.
@@ -126,6 +157,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
       "head-sha": { type: "string" },
       "fixer-plan": { type: "string" },
       "tmp-root": { type: "string" },
+      "report-path": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -141,6 +173,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
     headSha: undefined,
     fixerPlan: undefined,
     tmpRoot: undefined,
+    reportPath: undefined,
   };
   for (const token of tokens) {
     if (token.kind === "positional") {
@@ -183,11 +216,17 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
     }
+    if (token.name === "report-path") {
+      options.reportPath = requireTokenValue(token, parseError).trim();
+      if (!path.isAbsolute(options.reportPath)) throw parseError("--report-path must be an absolute path; pass <outputRef>.report from the emitted fixer plan (joinRef)");
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const missing = ["repo", "pr", "headSha", "fixerPlan"].filter((k) => options[k] === undefined);
   if (options.check && options.construct) throw parseError("--construct and --check are mutually exclusive");
+  if (options.reportPath !== undefined && !options.check) throw parseError(REPORT_PATH_NEEDS_CHECK_ERROR);
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
   }
@@ -324,11 +363,13 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       || sha256Hex(completion).slice(7) !== order.authority.completionInputDigest) {
       throw new Error("completion input differs from its semantic or exact-byte authority");
     }
-    if (!completion || completion.headSha !== options.headSha || !normalizeFullHeadSha(completion.headSha)
+    if (!completion || !normalizeFullHeadSha(completion.headSha)
       || normalizeFullHeadSha(completion.fixingCommitSha) !== completion.fixingCommitSha
       || !Array.isArray(completion.siteCoverage) || !Array.isArray(completion.threadBindings)) {
       throw new Error("completion input requires the actual full candidate/fixing heads, coverage and thread bindings");
     }
+    const decision = readGateDeltaRecord(receiptTmpRoot, baselineAuthority?.reviewBaselineHead ?? order.headSha);
+    if (decision && decision.candidateHead !== completion.headSha) throw new Error("completion input requires the actual full candidate/fixing heads from its clearing decision");
     const subject = receipt.receipt.subject;
     if (!/^f\d+-[a-f0-9]{8}$/.test(plan.executionIdentity) || plan.workOrderRef !== `fixer:${options.repo}#${options.pr}:${order.headSha}:${plan.executionIdentity}`
       || subject.repo !== options.repo || subject.pr !== options.pr || subject.headSha !== order.headSha
@@ -337,13 +378,27 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     }
   }
   if (options.construct && !completion && order.source !== "threads") throw new Error("--construct requires authenticated ACT completion input or a THREAD plan");
-  let raw = options.construct ? { headSha: options.headSha, dispositions: [], ...(completion ? { siteCoverage: completion.siteCoverage } : {}) } : null;
+  const observedHead = options.headSha;
+  let threadDelta;
+  if (order.source === "threads") {
+    const read = order.requiredReads.find((read) => read.kind === "delta-result");
+    if (read) {
+      const bytes = await readFile(read.path).catch(() => { throw new Error("THREAD needs a clearing delta record matching its authenticated emission"); });
+      threadDelta = JSON.parse(bytes);
+      if (createHash("sha256").update(bytes).digest("hex") !== read.sha256
+        || sha256Hex(threadDelta).slice(7) !== order.authority.deltaResultDigest) throw new Error("THREAD needs a clearing delta record matching its authenticated emission");
+    }
+  }
+  const constructionHead = completion?.headSha ?? (order.source === "threads" && !complete
+    ? threadDelta?.candidateHead ?? observedHead : observedHead);
+  let raw = options.construct ? { headSha: constructionHead, dispositions: [], ...(completion ? { siteCoverage: completion.siteCoverage } : {}) } : null;
   try {
     if (!options.construct) {
       const text = await readFile(handoffPath, "utf8");
       raw = JSON.parse(text);
       // Emitted plans carry a source: only the report this verifier's own --construct wrote counts.
-      if (order.source && await readFile(constructMarkPath(handoffPath), "utf8").catch(() => null) !== sha256Hex(text)) {
+      // A review-body handoff is the fixer's own write: no verifier --construct exists for it.
+      if (order.source && order.source !== "review-body" && await readFile(constructMarkPath(handoffPath), "utf8").catch(() => null) !== sha256Hex(text)) {
         throw Object.assign(new Error(`Fixer disposition handoff ${handoffPath} was not written by this verifier's --construct; never hand-write it; rm only this execution's refused report ${handoffPath} and its corresponding stale marker ${constructMarkPath(handoffPath)}, then run the verifier with --construct. Preserve accepted construction evidence and unrelated files`), { handWritten: true });
       }
     }
@@ -351,9 +406,12 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     if (error.handWritten) throw error;
     throw new Error(`Fixer disposition handoff ${handoffPath} is not valid JSON`);
   }
-  if (raw?.headSha !== options.headSha) {
+  if (raw?.headSha !== observedHead && (!order.source || !normalizeFullHeadSha(raw?.headSha))) {
     throw new Error(`Fixer disposition handoff claims head ${raw?.headSha}, not the observed head ${options.headSha}; refresh the PR state before verifying`);
   }
+  // Keep every existing report/Delta authority at X; only live observation and delivery run at H.
+  options = { ...options, headSha: raw.headSha };
+  if (completion && completion.headSha !== options.headSha) throw new Error("completion input candidate differs from the constructed report");
   if (order.headSha !== options.headSha) {
     const contained = await isCommitContainedByHead({ repo: options.repo, commitSha: order.headSha, headSha: options.headSha }, runtime);
     if (!contained.contained) throw new Error(`the work order head ${order.headSha} is not contained by the observed head ${options.headSha}: ${contained.reason}`);
@@ -373,7 +431,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       throw new Error(`the work order's threads ${threadsRead.path} have invalid thread IDs`);
     }
   }
-  if (options.construct && !completion) {
+  if (!completion && order.source === "threads" && (options.construct || options.headSha !== observedHead)) {
     // THREAD route: the clearing delta record bound to the pushed head decides each thread. An ordinary order's head is
     // the review baseline; a complete order's head is the pushed candidate, so its record is found by candidateHead.
     // A record decides only when it clears the pushed head and its items cover the pinned thread IDs: an ACT-route or
@@ -394,7 +452,10 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       throw new Error(`--construct needs a clearing delta record ${complete ? "" : `for baseline ${order.headSha} `}whose candidateHead is the pushed head ${options.headSha} and whose items cover the pinned threads; push the reviewed candidate first`);
     }
     const resolved = new Set((record.items ?? []).filter((item) => item?.status === "resolved").map((item) => item.ref));
-    raw.dispositions = source.threads.map(({ threadId }) => ({ threadId, fixingCommitSha: options.headSha, disposition: resolved.has(threadId) ? "tackled" : "deferred" }));
+    const dispositions = source.threads.map(({ threadId }) => ({ threadId, fixingCommitSha: options.headSha, disposition: resolved.has(threadId) ? "tackled" : "deferred" }));
+    if (options.construct) raw.dispositions = dispositions;
+    else if (raw.dispositions.length !== dispositions.length || dispositions.some((expected) => !raw.dispositions.some((entry) => entry.threadId === expected.threadId
+      && entry.fixingCommitSha === expected.fixingCommitSha && entry.disposition === expected.disposition))) throw new Error("THREAD report differs from the clearing candidate dispositions");
   }
   let handoff = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
   if (threadsRead) {
@@ -407,6 +468,34 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       if (extra.length) throw new Error(`complete handoff includes non-source thread(s) ${extra.join(", ")}`);
     }
   }
+  // A review-body order pins one review: the handoff needs its entry, and the live body must still be the pinned one.
+  let reviewId = null;
+  let reviewBodySha256 = null;
+  let reviewCommitId = null;
+  const reviewRead = (order.requiredReads ?? []).find((read) => read?.kind === "review-body");
+  if (reviewRead) {
+    const bytes = await readFile(reviewRead.path);
+    const snapshot = JSON.parse(bytes.toString("utf8"));
+    if (createHash("sha256").update(bytes).digest("hex") !== reviewRead.sha256 || sha256Hex(snapshot).slice(7) !== order.authority?.sourceDigest) {
+      throw new Error(`the work order's review snapshot ${reviewRead.path} differs from the sha256 or authority.sourceDigest the work order binds`);
+    }
+    reviewId = snapshot.reviewId;
+    reviewBodySha256 = snapshot.bodySha256;
+    reviewCommitId = snapshot.commitId ?? null;
+    const foreign = handoff.dispositions.filter((entry) => entry.reviewId && entry.reviewId !== reviewId).map((entry) => entry.reviewId);
+    if (foreign.length) throw new Error(`the handoff carries disposition entries for review(s) ${foreign.join(", ")}, not the pinned review ${reviewId}; remove them from the work order's outputRef`);
+    // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: a review-body order has no thread to reply to or resolve.
+    const stray = handoff.dispositions.filter((entry) => entry.reviewId !== reviewId);
+    if (stray.length) throw new Error(`the handoff for review-body order ${reviewId} must hold exactly one entry for the pinned review; remove the ${stray.length} other entr${stray.length === 1 ? "y" : "ies"} (a review-body order has no thread to reply to or resolve) from the work order's outputRef`);
+    if (!handoff.dispositions.some((entry) => entry.reviewId === reviewId)) {
+      throw new Error(`missing_from_handoff: the handoff has no disposition entry for source review ${reviewId}; write { reviewId, fixingCommitSha, disposition } to the work order's outputRef`);
+    }
+    const live = (await listRestPrReviews({ repo: options.repo, pr: options.pr }, runtime)).find((review) => review?.node_id === reviewId);
+    if (!live || createHash("sha256").update(String(live.body ?? ""), "utf8").digest("hex") !== snapshot.bodySha256) {
+      throw new Error(`review ${reviewId} ${live ? "changed after the work order pinned its body" : "is gone from the PR"}; re-emit the work order: dev-loops-run scripts/loop/emit-fixer-work-order.mjs --review-id ${reviewId} (with the original --repo, --pr, --head-sha, --phase and --harness)`);
+    }
+  }
+  if (!reviewRead && handoff.dispositions.some((entry) => entry.reviewId)) throw new Error("the handoff carries a reviewId entry but the work order pins no review body; remove the entry or re-emit the work order with --review-id");
   // GATE-EXEC-REMEDIATION-SITE-QUERY: an act-list work order's items with a siteQuery need a coverage record.
   const actRead = (order.requiredReads ?? []).find((read) => read?.kind === "act-list");
   let actList = null;
@@ -531,6 +620,9 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     deltaStatuses,
     completion,
     constructedReport: raw,
+    reviewId,
+    reviewBodySha256,
+    reviewCommitId,
     source: order.source,
     handoffPath,
     bindActiveFixer,
@@ -605,7 +697,107 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, delta
   }
 }
 
-export async function verifyFixerDisposition(
+// Historical coordinates belong to the authenticated root, never the live (possibly shifted) line.
+export async function assertDescendantThreadSites({ repo, pr, candidateHead, headSha, handoff, parsed, repoRoot }, { env, ghCommand, runChild }) {
+  const gitEnv = { ...env };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_DIFF_OPTS"]) delete gitEnv[key];
+  for (const entry of handoff.dispositions.filter((entry) => entry.threadId && entry.disposition === "tackled")) {
+    const refuse = (reason, changed = false) => { throw new Error(`thread_site_${changed ? "changed" : "unverifiable"}: ${entry.threadId} (${candidateHead} -> ${headSha}): ${reason}; run pre_approval_gate with this open thread in --known-findings`); };
+    const git = async (...args) => {
+      const result = await runChild("git", ["-C", repoRoot, "--literal-pathspecs", ...args], gitEnv).catch(() => refuse("history unavailable"));
+      if (result.code !== 0) refuse("history unavailable");
+      return result.stdout.trim();
+    };
+    const root = parsed.comments.filter((comment) => comment.threadId === entry.threadId)
+      .sort((a, b) => Number(a.databaseId) - Number(b.databaseId))[0];
+    if (!root || !/^\d+$/.test(String(root.databaseId))) refuse("root identity unavailable");
+    const response = await runChild(ghCommand, ["api", `repos/${repo}/pulls/comments/${root.databaseId}`], env).catch(() => refuse("historical root unreadable"));
+    let site;
+    try { site = JSON.parse(response.stdout); } catch { refuse("historical root unreadable"); }
+    if (response.code !== 0 || !site || String(site.id) !== String(root.databaseId) || site.node_id !== root.id || site.in_reply_to_id
+      || site.pull_request_url !== `https://api.github.com/repos/${repo}/pulls/${pr}`) refuse("historical root identity mismatch");
+    let start = site.original_start_line ?? site.original_line, end = site.original_line;
+    if (site.side !== "RIGHT" || site.original_start_line != null && site.start_side !== "RIGHT"
+      || !Number.isSafeInteger(start) || start < 1 || !Number.isSafeInteger(end) || end < start
+      || !normalizeFullHeadSha(site.original_commit_id) || typeof site.path !== "string" || !site.path
+      || path.isAbsolute(site.path) || site.path.split("/").includes("..")) refuse("unsupported historical coordinates");
+    const walk = async (from, to, rejectOverlap) => {
+      if (from === to) return;
+      await git("merge-base", "--is-ancestor", from, to);
+      const commits = (await git("rev-list", "--reverse", "--ancestry-path", `${from}..${to}`)).split("\n").filter(Boolean);
+      let parent = from;
+      for (const commit of commits) {
+        const parents = (await git("rev-list", "--parents", "-n", "1", commit)).split(" ");
+        if (parents.length !== 2 || parents[1] !== parent) refuse("nonlinear history");
+        const patch = await git("diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=0", "--inter-hunk-context=0", parent, commit, "--", site.path);
+        if (/^(?:Binary files |GIT binary patch$|(?:deleted file mode|new file mode|old mode|new mode) \d+$)/m.test(patch)) refuse("site file replaced, deleted or binary");
+        let offset = 0;
+        for (const hunk of patch.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) {
+          const oldStart = Number(hunk[1]) + offset, oldCount = Number(hunk[2] ?? 1), newCount = Number(hunk[4] ?? 1);
+          const delta = newCount - oldCount;
+          const overlap = oldCount ? oldStart <= end && oldStart + oldCount - 1 >= start : oldStart >= start && oldStart < end;
+          if (overlap) {
+            if (rejectOverlap) refuse("later commit overlaps the thread range", true);
+            if (!newCount) refuse("fix removed the historical range");
+            start = Math.min(start, Number(hunk[3]));
+            end = Math.max(Number(hunk[3]) + newCount - 1, end + delta);
+          } else if (oldStart < start) { start += delta; end += delta; }
+          offset += delta;
+        }
+        parent = commit;
+      }
+      if (parent !== to) refuse("incomplete history");
+    };
+    await git("cat-file", "-e", `${site.original_commit_id}:${site.path}`);
+    await walk(site.original_commit_id, candidateHead, false);
+    await walk(candidateHead, headSha, true);
+  }
+}
+
+const REPORT_PATH_NEEDS_CHECK_ERROR = "--report-path is valid only with --check; pass --check, or drop --report-path";
+
+// Final-on-write join report (ADR 0223): published once per successful step-6 run, last and atomically, so a file at reportPath is always final.
+export async function publishReport(reportPath, report) {
+  const temporary = `${reportPath}.tmp-${process.pid}-${randomUUID()}`;
+  await mkdir(path.dirname(reportPath), { recursive: true });
+  try {
+    await writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    // First write wins: link refuses on EEXIST, so a later --check run cannot replace a report that a join may already have consumed.
+    await link(temporary, reportPath).catch((error) => {
+      if (error?.code === "EEXIST") throw new Error(`--report-path ${reportPath} already holds the final report of an earlier run and is never replaced; the join already consumed it. Read that report, or re-emit the work order for a new joinRef`);
+      throw error;
+    });
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+export async function verifyFixerDisposition(options, deps = {}) {
+  if (options.reportPath === undefined) return verifyFixerDispositionCore(options, deps);
+  if (!options.check) throw new Error(REPORT_PATH_NEEDS_CHECK_ERROR);
+  const planPath = path.resolve(deps.repoRoot ?? process.cwd(), options.fixerPlan);
+  const outputRef = await readFile(planPath, "utf8").then((text) => JSON.parse(text)?.workOrder?.outputRefs?.[0]).catch(() => undefined);
+  if (typeof outputRef !== "string" || outputRef === "") throw new Error(`--report-path needs the emitted fixer plan ${planPath} to be readable JSON with a string workOrder.outputRefs[0]; pass --fixer-plan <the emitted fixer plan> and --report-path <outputRef>.report`);
+  if (!path.isAbsolute(options.reportPath)) throw new Error("--report-path must be an absolute path; pass <outputRef>.report from the emitted fixer plan (joinRef)");
+  // Compare through the real parent directory so a symlinked alias (macOS /tmp vs /private/tmp) cannot name a protected file.
+  const canonical = (file) => path.join(realpathNearestExisting(path.dirname(file)), path.basename(file));
+  const protectedFiles = [planPath, ...(typeof outputRef === "string" ? [outputRef, `${outputRef}.constructed`] : [])];
+  if (protectedFiles.some((file) => canonical(file) === canonical(options.reportPath))) {
+    throw new Error(`--report-path ${options.reportPath} equals the fixer plan or its outputRef, which --construct writes early; pass ${typeof outputRef === "string" ? fixerReportPath(outputRef) : "<outputRef>.report"} (the emitted joinRef)`);
+  }
+  let result;
+  try {
+    result = await verifyFixerDispositionCore(options, deps);
+  } catch (error) {
+    // The original refusal always propagates; a failed publish must not replace it.
+    await publishReport(options.reportPath, { ok: false, outcome: "refused", error: error instanceof Error ? error.message : String(error) }).catch(() => {});
+    throw error;
+  }
+  await publishReport(options.reportPath, { ...result, outcome: result.complete ? "complete" : "incomplete" });
+  return result;
+}
+
+async function verifyFixerDispositionCore(
   options,
   { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot = process.cwd() } = {},
 ) {
@@ -615,7 +807,7 @@ export async function verifyFixerDisposition(
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   const runtime = { env, ghCommand, runChild };
-  const { handoff, actList, deltaStatuses, completion, constructedReport, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  const { handoff, actList, deltaStatuses, completion, constructedReport, reviewId, reviewBodySha256, reviewCommitId, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
   const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,statusCheckRollup"], env);
   const livePayload = live.code === 0 ? (() => { try { return JSON.parse(live.stdout); } catch { return null; } })() : null;
@@ -632,6 +824,15 @@ export async function verifyFixerDisposition(
   if (Array.isArray(actList)) {
     gateLogin = await resolveAuthenticatedLogin({ env, ghCommand, runChild });
     assertActItemThreadsDisposed(actList, handoff, initialSnapshot, gateLogin, deltaStatuses, completion);
+  }
+  if (handoff.headSha !== options.headSha) {
+    if (source === "act-list" && !completion) throw new Error("thread_site_unverifiable: descendant ACT delivery needs authenticated completion input; run pre_approval_gate with the open threads in --known-findings");
+    const contained = await isCommitContainedByHead({ repo: options.repo, commitSha: handoff.headSha, headSha: options.headSha }, runtime);
+    if (!contained.contained) throw new Error(`candidate is not contained by the observed head: ${contained.reason}; run a full gate round`);
+    await assertDescendantThreadSites({ ...options, candidateHead: handoff.headSha, handoff, parsed: initialSnapshot, repoRoot }, runtime);
+    // Catch movement during the historical proof before construction, checkpoints or GitHub writes.
+    const current = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
+    if (current.code !== 0 || JSON.parse(current.stdout).headRefOid !== options.headSha) throw new Error("live head changed during thread-site proof; refresh and run a full gate round");
   }
   if (options.construct) {
     await mkdir(path.dirname(handoffPath), { recursive: true });
@@ -691,7 +892,7 @@ export async function verifyFixerDisposition(
   }
   if (!options.check) {
     await mkdir(path.dirname(fullPath), { recursive: true });
-    await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery }, null, 2)}\n`, "utf8");
+    await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery, headSha: options.headSha }, null, 2)}\n`, "utf8");
   }
 
   const tackledShas = [...new Set(
@@ -701,11 +902,21 @@ export async function verifyFixerDisposition(
   )];
   const containment = await buildContainmentMap(tackledShas, { repo: options.repo, headSha: options.headSha }, runtime);
 
-  let evaluation = evaluateFixerDisposition({
+  // A review-body fix must be strictly after the reviewed commit; an unknown or non-ancestor review commit fails closed.
+  const fixAfterReview = {};
+  for (const sha of new Set(handoff.dispositions.filter((entry) => entry.reviewId && entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.fixingCommitSha))) {
+    fixAfterReview[sha] = typeof reviewCommitId === "string" && (await isCommitContainedByHead({ repo: options.repo, commitSha: reviewCommitId.toLowerCase(), headSha: sha, requireAhead: true }, runtime)).contained;
+  }
+
+  let liveSnapshot = initialSnapshot;
+  const evaluate = async () => evaluateFixerDisposition({
     handoff,
-    liveThreads: buildLiveThreads(initialSnapshot),
+    liveThreads: buildLiveThreads(liveSnapshot),
     containment,
+    fixAfterReview,
+    liveReviews: await readReviewMarkerCommits(reviewId ? [reviewId] : [], options, runtime),
   });
+  let evaluation = await evaluate();
 
   const actions = [];
   const residualFailures = [];
@@ -761,7 +972,7 @@ export async function verifyFixerDisposition(
   // a claim with no ledger entry, is never evidence).
   // A thread the delta review of the fix left not_resolved or cannot_verify gets no "Fixed" reply.
   const deltaBlocked = new Map();
-  for (const entry of evaluation.incomplete.filter((e) => e.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING || e.failedStep === FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED)) {
+  for (const entry of evaluation.incomplete.filter((e) => e.threadId && (e.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING || e.failedStep === FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED))) {
     const blocked = await findDeltaBlockedFixedReply(
       [{ threadId: entry.threadId, body: `Fixed in commit ${entry.expectedCommit}.`, commit: entry.expectedCommit }],
       { repo: options.repo, pr: options.pr, parsed: initialSnapshot, tmpRoot: path.resolve(repoRoot, tmpRoot) },
@@ -769,7 +980,7 @@ export async function verifyFixerDisposition(
     );
     if (blocked) deltaBlocked.set(entry.threadId, blocked);
   }
-  const actionable = evaluation.incomplete.filter((entry) => !deltaBlocked.has(entry.threadId) && (
+  const actionable = evaluation.incomplete.filter((entry) => entry.threadId && !deltaBlocked.has(entry.threadId) && (
     entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING
     || entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.NOT_RESOLVED
   ));
@@ -821,22 +1032,63 @@ export async function verifyFixerDisposition(
     // Live re-read verify (invariant step 5): re-fetch rather than trust the
     // mutation responses, so a resolve that silently didn't stick still
     // surfaces as incomplete.
-    const refreshedSnapshot = await captureParsedReviewThreads({ repo: options.repo, pr: options.pr }, runtime);
-    evaluation = evaluateFixerDisposition({
-      handoff,
-      liveThreads: buildLiveThreads(refreshedSnapshot),
-      containment,
-    });
+    liveSnapshot = await captureParsedReviewThreads({ repo: options.repo, pr: options.pr }, runtime);
+    evaluation = await evaluate();
+  }
+  // A review body has no thread: post the one marker comment that cites the fixing commit, then re-read it. A live marker means nothing is posted.
+  const postedBy = new Map();
+  const unreplied = evaluation.incomplete.filter((entry) => entry.reviewId === reviewId && entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING);
+  if (!options.check && unreplied.length > 0) {
+    const untrustedMarker = (id, expectedCommit, author) => ({ reviewId: id, expectedCommit, failedStep: FIXER_DISPOSITION_FAILED_STEP.MARKER_AUTHOR_UNTRUSTED, error: `the marker comment by ${author} for review ${id} is not by a trusted author (OWNER, MEMBER or COLLABORATOR); post the marker as an OWNER, MEMBER or COLLABORATOR identity and run the verifier under that identity; re-running under this identity changes nothing` });
+    const existing = await readReviewBodyMarkers([reviewId], options, runtime);
+    for (const { reviewId: id, expectedCommit } of unreplied) {
+      // A marker for this review and commit that is live but not trusted never counts: post no second one.
+      const matches = existing.filter((marker) => marker.reviewId === id && marker.fixSha === expectedCommit.toLowerCase());
+      // Only this verifier's own untrusted marker blocks the post, wherever it sits in the comment order; a foreign untrusted marker must not lock out a trusted verifier. An unreadable login fails closed: no post.
+      const ownLogin = matches.some((marker) => !marker.trusted) ? await resolveAuthenticatedLogin(runtime).catch(() => null) : null;
+      const prior = matches.find((marker) => marker.trusted || ownLogin === null || (marker.author ?? "").toLowerCase() === ownLogin.toLowerCase());
+      if (prior) {
+        if (!prior.trusted) residualFailures.push(untrustedMarker(id, expectedCommit, prior.author ?? "an unknown identity"));
+        continue;
+      }
+      try {
+        // The body was checked once at load; re-check it now, so an edit made since then is never marked addressed.
+        const liveReview = (await listRestPrReviews({ repo: options.repo, pr: options.pr }, runtime)).find((review) => review?.node_id === id);
+        if (!liveReview || createHash("sha256").update(String(liveReview.body ?? ""), "utf8").digest("hex") !== reviewBodySha256) {
+          throw new Error(`review ${id} ${liveReview ? "changed after the work order pinned its body" : "is gone from the PR"}; re-emit the work order: dev-loops-run scripts/loop/emit-fixer-work-order.mjs --review-id ${id} (with the original --repo, --pr, --head-sha, --phase and --harness)`);
+        }
+        const body = `<!-- dev-loops:review-body-disposition review=${id} fix=${expectedCommit} -->\nAddressed review ${id} in commit ${expectedCommit}.`;
+        const posted = await runChild(ghCommand, ["api", `repos/${options.repo}/issues/${options.pr}/comments`, "-f", `body=${body}`], env);
+        if (posted.code !== 0) throw new Error(posted.stderr.trim() || `exit code ${posted.code}`);
+        // The trust decision reads the POST response, not a comment list that can lag behind the write.
+        let comment = null;
+        try { comment = JSON.parse(posted.stdout); } catch { /* the post response is unreadable: not trusted */ }
+        postedBy.set(id, { login: comment?.user?.login || "the posting identity", trusted: comment !== null && isTrustedDispositionAuthor(comment) });
+        actions.push({ reviewId: id, ok: true, step: "marker_comment_posted" });
+      } catch (error) {
+        actions.push({ reviewId: id, ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    evaluation = await evaluate();
+    for (const { reviewId: id, expectedCommit } of evaluation.incomplete.filter((entry) => entry.reviewId === reviewId && entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING && postedBy.has(entry.reviewId))) {
+      const { login, trusted } = postedBy.get(id);
+      residualFailures.push(trusted
+        ? { reviewId: id, expectedCommit, failedStep: FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING, error: `the trusted marker comment by ${login} for review ${id} is not listed yet; re-run the verifier` }
+        : untrustedMarker(id, expectedCommit, login));
+    }
   }
 
   const incomplete = [...evaluation.incomplete, ...residualFailures].map((entry) => (deltaBlocked.has(entry.threadId)
     ? { ...entry, failedStep: FIXER_DISPOSITION_FAILED_STEP.DELTA_BLOCKED, deltaStatus: deltaBlocked.get(entry.threadId).status, deltaRecord: deltaBlocked.get(entry.threadId).recordPath }
     : entry));
   const activeFixer = evaluation.ok ? undefined : await bindActiveFixer(false);
+  if (!options.check && evaluation.ok && residualFailures.length === 0) {
+    await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery, headSha: options.headSha, complete: true }, null, 2)}\n`, "utf8");
+  }
   return {
     // A failed residual-status reply is not delivered: nonzero exit naming the thread.
     ok: residualFailures.length === 0,
-    ...(residualFailures.length ? { error: `residual-status reply failed for thread(s) ${residualFailures.map((failure) => failure.threadId).join(", ")}; re-run the verifier` } : {}),
+    ...(residualFailures.length ? { error: residualReason(residualFailures) } : {}),
     repo: options.repo,
     pr: options.pr,
     headSha: options.headSha,
@@ -846,10 +1098,19 @@ export async function verifyFixerDisposition(
     incomplete,
     forbiddenActions: evaluation.forbiddenActions,
     nextAction: evaluation.nextAction,
-    reason: residualFailures.length > 0 ? `residual-status reply failed for thread(s) ${residualFailures.map((failure) => failure.threadId).join(", ")}; re-run the verifier`
+    reason: residualFailures.length > 0 ? residualReason(residualFailures)
       : deltaBlocked.size > 0 ? deltaBlockedReason(incomplete) : evaluation.reason,
     actions,
   };
+}
+
+// A thread residual names its threads; a review-body residual names the review and carries its own remedy.
+function residualReason(failures) {
+  const threads = failures.filter((failure) => failure.threadId);
+  return [
+    ...(threads.length ? [`residual-status reply failed for thread(s) ${threads.map((failure) => failure.threadId).join(", ")}; re-run the verifier`] : []),
+    ...failures.filter((failure) => !failure.threadId).map((failure) => `review ${failure.reviewId}: ${failure.failedStep}: ${failure.error}`),
+  ].join("; ");
 }
 
 // Re-derived from the remapped incomplete list so one output never carries two failedStep values.
@@ -880,6 +1141,8 @@ async function main() {
     process.exitCode = 1;
   }
 }
+export { loadDeliveredHandoff };
+
 if (isDirectCliRun(import.meta.url)) {
   await main();
 }

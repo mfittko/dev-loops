@@ -2,6 +2,97 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.9-pre.4
+
+### Added
+
+- `emit-fixer-work-order.mjs --review-id` accepts a human or Copilot review body as a fixer work-order source, verified by a `dev-loops:review-body-disposition` marker comment (#2548)
+- Add the sanctioned `unresolve-review-thread.mjs` wrapper; the hook allows only the main agent and the `dev-loop` coordinator and denies every other agent type (#2577)
+- Add `GATE-EXEC-ROUND-CAP-NO-DECLINE-RESOLVE`: fix high and medium cap-round findings via the thread route; the resolved-thread refusal names the unresolve script (#2577)
+
+### Changed
+
+- The checkbox-row grammar lives in one core constant shared by the tick, the live preview and the edit-pr untick guard (#2898)
+- The edit-pr untick guard and its usage text now name a heading edit that moves a checked row out of its AC/DoD scope (#2898)
+- The unified row grammar also accepts a row ending in U+2028 or U+2029 on the tick side, so the tick now flips such a row when its label is reviewer-verified (#2898)
+- The reviewer-verified tick docs describe the dry run before composing and the write before the post (#2898)
+
+### Fixed
+
+- Thread replies carry the full 40-character commit SHA; a resolved thread with a short-SHA reply is refused with the unresolve remedy (#2548)
+- gate-evidence accepts a `.devloops` key that only the PR's own schema declares; a key declared by neither schema still fails (#2662)
+- A work order pulled by another dev-loops code tree now refuses with both roots, both versions and the rerun command, not a bare `semantic_identity_mismatch` (#2662)
+
+## 1.0.9-pre.3
+
+### Changed
+
+- Logic-change draft rounds now run the `state-concurrency` review angle, extended with precondition, ownership-binding and liveness checks (#3005)
+- The gate reviewer brief now asks for a sibling sweep after a finding: the opposite direction, concurrent invocation, alternate input forms and every call site of a fix (#3005)
+- The gate context adds importers and sibling functions of a changed exported function, state writer or guard, within the `gates.contextExpansion` cap; the briefing lists dropped files (#3005)
+
+### Fixed
+
+- The pre-push delta input accepts the cap-round findings log across the sealed fixer chain plus a base-only merge, and its refusal names the remedy (#2462)
+- Fixer join is final on write; a notification fallback waits for the final notification; `wait-for-units --artifact` needs `--after` to reject a stale file (#2462)
+- An installed `dev-loops` CLI runs the source checkout's CLI for `gate`, `loop` and `pr`, and names a version difference on stderr (#2662)
+- Judge work order carries the verdict schema, the denial names Read, and the pull owns the digest check so Pi and Claude judges compute none (#2678)
+- The judge no longer acts on removing a slice PR's only closing reference (#2883)
+- A PR runner claim is released at hand-back with an explicit run id, `status` reports owner liveness, and `takeover` refuses a live owner (#2884)
+- A terminal stop on Claude Code releases the PR runner claim with an explicit run id, and the takeover pin payload has one shared helper (#2884)
+- Closing an abandoned fix sequence is atomic with fixer pull admission; liveness uses branch activity. `close-sequence --head` must be a full 40 or 64 char lowercase hex SHA (#2999)
+- Gate coordination at the Copilot round cap returns `wait_for_ci` or the thread route, not a remedy-less `report_blocked`; an orphaned cap-round baseline names the restart (#3002)
+- `pr waive-adr-tripwire` accepts the cap-round-fixed proof, `gate extend-cap-round-chain` extends the sealed chain over docs/tests-only commits, refusals name remedies (#3010)
+
+## 1.0.9-pre.2
+
+### Changed
+
+- Coordinators now continue across phase transitions: the unit-boundary field is `reportAfter`, and the 150K peak-context figure is an advisory retrospective diagnostic, not a cap (#2955)
+
+### Fixed
+
+- Cap-round blockers: a base merge after the cleared fix reaches ready, refusals name one condition and remedy, no-commit sequences close, and `wait-for-units --artifact` joins one child (#2462)
+- Deliver unchanged thread sites at descendant heads; identify changed sites for full-gate input. Unresolved gate-thread recovery admission is deferred until PR #2990 merges (#2787)
+- `upsert-checkpoint-verdict` ticks verified rows after all refusal checks, leaves act-named rows unticked; `edit-pr` refuses a silent untick without `--allow-untick` (#2898)
+- `dev-loops gate close-sequence` closes an abandoned gate fix sequence marker with a recorded condition, so a push is no longer locked out until the operator deletes a file (#2999)
+
+## 1.0.9-pre.1
+
+### Added
+
+- Fan-out, judge and fixer emitters take `--operator-focus-file`, a typed, bounded, digest-pinned operator focus rendered as an "Operator focus" section (#2635)
+- The gate fix loop is one state machine with a sanctioned exit from every state, registered in the conformance harness and State atlas; later-slice transitions are known gaps (#2787)
+- Configure Codex worker and pre-push reviewer model/effort through role and tier settings with `gate resolve-role --role` (#2914)
+- A gate findings log that fails integrity can be quarantined with `quarantine-gate-findings-log.mjs`, which unblocks the next round without deleting evidence (#2969)
+- The keyed fan-in ledger and the gate findings log carry a seal; an out-of-band write fails the next read with `gate_artifact_out_of_band_write` (#2971)
+
+### Changed
+
+- merge-pr and the CI gate-evidence check accept a cap-fixed PR from a cap-round marker plus resolved round threads; cap-fixed hardening lands (#2462)
+- After the draft_gate cap round's fixer pass lands the PR goes ready and round N+1 is refused (#2462)
+- Gate coordination records a base-merge verdict carry in a PR comment, and merge-pr and gate-evidence accept it after recomputation, so a base-only merge needs no new gate round (#2752)
+- Test runs now refuse to start when a worktree resolves its core package from another checkout, and the inline-interpreter hook also blocks `bun -e` and `bun` stdin scripts (#2941)
+- The release runbook defines the recurring post-release audit, memory and prose cleanup steps and the combined release retro (#2941)
+- Pi model tiers moved off the rate-limited Fast snapshot to the non-Fast `V4.1-Flash-1017` snapshot, then split across two rate-limit buckets (#2975)
+- Pi tiers split over two rate-limit buckets: bulk roles take the floating `V4.1-Flash` alias, review, judge, refiner, gate angles and the pre-PR reviewer stay on `V4.1-Flash-1017` (#2978)
+- Gate light mode caps weighted logic LOC and non-doc file count, so small fixes with a test and doc note stay inline (#2982)
+- Lightweight startup eligibility uses the shared light-mode cap (weighted logic LOC, non-doc files, config-source floor) (#2985)
+- Lightweight startup counts both endpoints of a rename in the changed-file list (#2985)
+- Lightweight startup fails closed with `size_outcome_unavailable` on a missing or failed size capture, a block size outcome or a failed changed-file read (#2985)
+- A `--base`-only gate dispatch run resolves `size_outcome_unavailable` (#2985)
+
+### Fixed
+
+- A Copilot review with findings no longer counts as converged below the round cap before the Copilot gate passes; the loop re-requests Copilot on the fix head (#2445)
+- Carry complete fixer checkpoints to descendants and close authenticated no-commit or foreign-head pre-push sequences; bind THREAD delta records to the committed candidate (#2787)
+- Authenticate empty-range delta exits and canonical handback heads, close sequences after baseline amendments, and align no-commit and THREAD instructions (#2787)
+- A retro checkpoint cannot be recorded complete without a record that names the merge commit, and the CLI wrapper reports oversized child output instead of truncating it (#2887)
+- Restore the repository's Codex worker and review tier mappings, guarded by live configuration structure checks (#2914)
+- The inline-interpreter hook refuses `sudo`/`xargs`/`timeout` wrapped heredocs, `$(...)` and backtick substitutions, and `python3 -Ic` flag clusters (#2943)
+- The inline-interpreter hook fails closed on nested heredocs and decodes ANSI-C `$'...'` quoted option values (#2943)
+- A non-empty `CODEX_THREAD_ID` (without `OMPCODE=1`) requires the Codex trailer instead of the Claude trailers, including without `CLAUDECODE` (#2980)
+
 ## 1.0.8
 
 ### Added

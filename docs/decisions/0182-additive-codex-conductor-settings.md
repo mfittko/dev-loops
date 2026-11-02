@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-23 ([issue 2913](https://github.com/mfittko/dev-loops/issues/2913)).
 
+Partially superseded by [ADR 0210](0210-codex-role-settings.md) for Codex role and tier settings and ordinary role dispatch; conductor and immutable emitter behavior remain unchanged.
+
 ## Context
 
 [Issue 2015](https://github.com/mfittko/dev-loops/issues/2015) specifies a canonical

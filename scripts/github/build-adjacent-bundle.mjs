@@ -21,7 +21,7 @@
  * not contamination. Output shape and role/relatedTo semantics are documented
  * on {@link buildAdjacentBundle} below.
  */
-import { open, readFile, readdir, stat } from "node:fs/promises";
+import { lstat, open, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 /** Default per-file byte cap before truncation. */
@@ -321,6 +321,210 @@ async function readGuardedFile(repoRoot, relPath, maxFileBytes) {
 }
 
 /**
+ * Decode a path token straight out of a unified diff header line. Git quotes a
+ * path (wraps it in `"..."`) whenever it carries a `"`, a `\`, a control
+ * character, or (under the default `core.quotePath`) a non-ASCII byte, and
+ * C-escapes the quoted content: `\"`, `\\`, `\t`, `\n`, and `\ooo` octal
+ * per raw byte. A raw string-slice of a quoted token (e.g. `"b/a b.txt"`
+ * sliced at a fixed offset) still carries the quotes and escapes verbatim,
+ * so a downstream consumer that classifies or displays that string sees the
+ * wrong path. Unquoted tokens (the common case) pass through unchanged.
+ * @param {string} raw
+ * @returns {string}
+ */
+export function decodeGitDiffPathToken(raw) {
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (trimmed.length < 2 || !trimmed.startsWith('"') || !trimmed.endsWith('"')) return trimmed;
+  const inner = trimmed.slice(1, -1);
+  const bytes = [];
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch !== "\\") {
+      const code = ch.codePointAt(0);
+      if (code > 255) bytes.push(...Buffer.from(ch, "utf8"));
+      else bytes.push(code);
+      continue;
+    }
+    const next = inner[i + 1];
+    if (next === "n") { bytes.push(10); i++; continue; }
+    if (next === "t") { bytes.push(9); i++; continue; }
+    if (next === '"') { bytes.push(34); i++; continue; }
+    if (next === "\\") { bytes.push(92); i++; continue; }
+    const octal = inner.slice(i + 1, i + 4);
+    if (/^[0-7]{3}$/.test(octal)) { bytes.push(parseInt(octal, 8)); i += 3; continue; }
+    bytes.push(ch.charCodeAt(0)); // unrecognized escape — keep the backslash's own byte, fail open
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+/** Default per-round caps for the adaptive context expansion (gates.contextExpansion). */
+export const DEFAULT_EXPANSION_CAPS = { maxFiles: 6, maxBytes: 98304 };
+
+// ponytail: line-regex scan, not a parser. Ceiling: top-level function and
+// arrow-const declarations only; a function ends at the next column-0 line that
+// is not a closing `}`/`)`/`]` (class methods, nested exports and column-0 lines
+// inside template literals are not understood). `export { a, b }` lists and
+// `export default function name` are covered. An arrow const needs its whole
+// parameter list on one line, without nested parentheses (a multi-line or
+// default-call parameter list is missed). Upgrade path: a real JS parser.
+const DECL_RE = /^(export\s+(?:default\s+)?)?(?:async\s+function\s*\*?\s*|function\s*\*?\s*|const\s+)([A-Za-z_$][\w$]*)(?=\s*(?:\(|=\s*(?:async\s*)?(?:\([^()]*\)\s*=>|function\b|[A-Za-z_$][\w$]*\s*=>)))/;
+// Group 2 is set for `export { a } from "m"`, which re-exports another module's binding.
+const EXPORT_LIST_RE = /^export\s*\{([^}]*)\}(\s*from\b)?/;
+const listedNames = (m) => m[1].split(",").map((item) => item.trim().split(/\s+/)[0]).filter(Boolean);
+// ponytail: name heuristic for state writers and guards, anchored to the start
+// of the name at a camelCase/underscore boundary; add a marker comment
+// convention if it misfires.
+const WRITER_OR_GUARD_RE = /^(write|save|persist|set|delete|remove|guard|assert|ensure|require|refuse|validate)(?![a-z])/;
+
+/**
+ * Per file: the new-side line numbers touched and the text of removed lines.
+ * A removal run is credited to the
+ * preceding new-side line (a removal at a function tail stays in that function)
+ * only when no added line follows it: a replacement is already marked by its added lines.
+ * A run is split at its first column-0 declaration: the declaration part is a whole-declaration removal, not a
+ * tail removal, so only the non-blank part before it (more than a lone `}`) is credited to the preceding function.
+ * Ceiling: a deleted file (`+++ /dev/null`) is skipped; its source is gone.
+ */
+function changedLinesByFile(diffText) {
+  const out = new Map();
+  let file = null;
+  let inHunk = false;
+  let n = 0;
+  const mark = (line) => out.get(file)?.lines.add(line);
+  let pending = null; // new-side line a still-open removal run would be credited to
+  let run = []; // removed lines of the open run
+  let lastText = ""; // text of the latest new-side line
+  const flush = (next) => {
+    // A removal after an export-list line is credited to it only when the run removes an export list or a declaration.
+    // The run splits at its first column-0 declaration: the declaration part is a whole-declaration removal and is never credited.
+    // The part before it is credited only when it holds a non-blank line other than a lone `}` (the shifted closing brace of the removed function).
+    const declAt = run.findIndex((t) => DECL_RE.test(t));
+    const head = (declAt < 0 ? run : run.slice(0, declAt)).filter((t) => t.trim() !== "");
+    const creditable = declAt < 0 || (head.length > 0 && !(head.length === 1 && head[0] === "}") && !EXPORT_LIST_RE.test(lastText));
+    const afterExportList = EXPORT_LIST_RE.test(lastText) && !run.some((t) => EXPORT_LIST_RE.test(t) || DECL_RE.test(t));
+    if (pending !== null && !/^[-+\\]/.test(next) && creditable && !afterExportList) mark(pending);
+    if (!next.startsWith("-") && !next.startsWith("\\")) { pending = null; run = []; }
+  };
+  for (const line of String(diffText ?? "").split("\n")) {
+    if (inHunk && file) flush(line.startsWith("@@") || line.startsWith("diff --git ") ? "" : line);
+    if (line.startsWith("diff --git ")) { inHunk = false; file = null; continue; }
+    if (!inHunk && line.startsWith("+++ ")) {
+      file = line.includes("/dev/null") ? null : decodeGitDiffPathToken(line.slice(4)).replace(/^.\//, "");
+      if (file) out.set(file, { lines: new Set(), removed: [] });
+      continue;
+    }
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line);
+    if (hunk) { inHunk = true; n = Number(hunk[1]); continue; }
+    if (!inHunk || !file) continue;
+    if (line.startsWith("+")) { mark(n); n += 1; lastText = line.slice(1); }
+    else if (line.startsWith("-")) { pending = n - 1; run.push(line.slice(1)); out.get(file)?.removed.push(line.slice(1)); }
+    else if (line.startsWith(" ")) { n += 1; lastText = line.slice(1); }
+  }
+  return out;
+}
+
+/** Top-level declarations of a source text: [{ name, exported, start, end, bytes }] (1-based lines). */
+function topLevelFunctions(source) {
+  const lines = source.split("\n");
+  const listed = new Set();
+  for (const text of lines) {
+    const list = EXPORT_LIST_RE.exec(text);
+    if (list && !list[2]) for (const name of listedNames(list)) listed.add(name);
+  }
+  const found = [];
+  lines.forEach((text, i) => {
+    const m = DECL_RE.exec(text);
+    if (!m) return;
+    let end = i + 1;
+    while (end < lines.length && (lines[end] === "" || /^[\s})\]]/.test(lines[end]))) end += 1;
+    while (end > i + 1 && lines[end - 1].trim() === "") end -= 1; // a function ends at its last non-blank line
+    // `end` is a 0-based index of the first non-member line, i.e. the 1-based last member line.
+    found.push({ name: m[2], exported: Boolean(m[1]) || listed.has(m[2]), start: i + 1, end });
+  });
+  return found.map((f) => ({ ...f, bytes: Buffer.byteLength(lines.slice(f.start - 1, f.end).join("\n"), "utf8") }));
+}
+
+/**
+ * Adaptive context expansion: for each changed file whose diff touches an
+ * exported function, a state writer or a guard, select its importers and its
+ * sibling functions. A touched local export-list entry counts as a change to the
+ * function it lists (an export-from does not). A removed writer or guard declaration
+ * selects the remaining siblings and importers. A removed export declaration or export-list entry also
+ * selects the file's importers, with no siblings entry. Then apply the per-round file and byte caps. Candidates
+ * are sorted by (kind with siblings first, path), so selection and the dropped
+ * list are deterministic. A diff confined to private, non-writer, non-guard
+ * functions selects nothing. Files absent from the repo or stripped by
+ * classifyStripReason (and symlink importers) are never selected. Ceiling:
+ * gates.reviewDiff.excludeGlobs is not applied here.
+ */
+async function selectExpansion({ changed, diffText, repoRoot, importerIndex, caps, existing }) {
+  if (caps.maxFiles <= 0 || caps.maxBytes <= 0) return { maxFiles: caps.maxFiles, maxBytes: caps.maxBytes, files: [], dropped: [] };
+  const touched = changedLinesByFile(diffText);
+  const candidates = new Map();
+  const add = (key, entry) => {
+    const prior = candidates.get(key);
+    if (prior) prior.relatedTo = Array.from(new Set([...prior.relatedTo, ...entry.relatedTo])).sort();
+    else candidates.set(key, entry);
+  };
+  for (const file of changed) {
+    const entry = touched.get(file);
+    if (!entry || !isSourceFile(file) || !existing.has(file) || classifyStripReason(file)) continue;
+    let source;
+    try {
+      source = await readFile(path.resolve(repoRoot, file), "utf8");
+    } catch {
+      continue;
+    }
+    const fns = topLevelFunctions(source);
+    const srcLines = source.split("\n");
+    // A touched local export-list line marks the functions it lists as changed.
+    const touchedNames = new Set();
+    for (const l of entry.lines) {
+      const m = EXPORT_LIST_RE.exec(srcLines[l - 1] ?? "");
+      if (m && !m[2]) for (const name of listedNames(m)) touchedNames.add(name);
+    }
+    const hit = fns.filter((f) => (f.exported || WRITER_OR_GUARD_RE.test(f.name)) && (touchedNames.has(f.name) || [...entry.lines].some((l) => l >= f.start && l <= f.end)));
+    // A removed export is gone from the new-side source; its importers are what it breaks.
+    const removedExport = entry.removed.some((t) => DECL_RE.exec(t)?.[1] || EXPORT_LIST_RE.test(t));
+    // A removed writer or guard declaration is gone from the new side too; its siblings and importers are what it affects.
+    const removedShared = entry.removed.some((t) => {
+      const m = DECL_RE.exec(t);
+      return m && WRITER_OR_GUARD_RE.test(m[2]);
+    });
+    if (hit.length === 0 && !removedExport && !removedShared) continue;
+    const siblings = fns.filter((f) => !hit.includes(f));
+    if ((hit.length > 0 || removedShared) && siblings.length > 0) {
+      add(`${file}\0siblings`, { path: file, kind: "siblings", relatedTo: [file], names: siblings.map((f) => f.name).sort(), bytes: siblings.reduce((n, f) => n + f.bytes, 0) });
+    }
+    for (const imp of importerIndex.get(file) ?? []) {
+      if (changed.includes(imp) || !existing.has(imp) || classifyStripReason(imp)) continue;
+      let bytes = 0;
+      try {
+        const info = await lstat(path.resolve(repoRoot, imp));
+        if (info.isSymbolicLink()) continue;
+        bytes = info.size;
+      } catch {
+        continue;
+      }
+      add(`${imp}\0importer`, { path: imp, kind: "importer", relatedTo: [file], bytes });
+    }
+  }
+  const files = [];
+  const dropped = [];
+  let total = 0;
+  const ordered = Array.from(candidates.values()).sort((a, b) => (a.kind === b.kind ? (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) : a.kind === "siblings" ? -1 : 1));
+  for (const c of ordered) {
+    if (files.length < caps.maxFiles && total + c.bytes <= caps.maxBytes) {
+      files.push(c);
+      total += c.bytes;
+    } else {
+      dropped.push({ path: c.path, kind: c.kind, ...(c.names ? { names: c.names } : {}), bytes: c.bytes });
+    }
+  }
+  return { maxFiles: caps.maxFiles, maxBytes: caps.maxBytes, files, dropped };
+}
+
+/**
  * Build the deterministic, neutral adjacent-code bundle for a set of changed
  * files. For each changed source file, collect its 1-hop import out-edges
  * (resolved relative imports) and in-edges (files that import it) and include
@@ -335,17 +539,25 @@ async function readGuardedFile(repoRoot, relPath, maxFileBytes) {
  *                 relatedTo: [..] }],                          // sorted by path
  *     truncated: [{ path, bytes, includedBytes }],            // sorted by path
  *     missing: [string],                                      // sorted
+ *     expansion: { maxFiles, maxBytes,                        // always emitted
+ *                  files: [{ path, kind: "siblings"|"importer", relatedTo: [..],
+ *                            names?, bytes }],
+ *                  dropped: [{ path, kind, names?, bytes }] }, // over the caps
  *   }
  *
- * Deterministic: same (repoRoot contents + changedFiles) → identical bundle.
+ * Deterministic: same (repoRoot contents + changedFiles + diffText + expansion
+ * caps) → identical bundle.
  *
  * @param {object} input
  * @param {string[]} input.changedFiles — repo-relative paths from the diff
  * @param {string} [input.repoRoot]
  * @param {number} [input.maxFileBytes]
+ * @param {string} [input.diffText] — unified diff; drives the adaptive `expansion`
+ * @param {{ maxFiles?: number, maxBytes?: number }} [input.expansion] — per-round caps (gates.contextExpansion)
  * @returns {Promise<object>}
  */
-export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd(), maxFileBytes = DEFAULT_MAX_FILE_BYTES }) {
+export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd(), maxFileBytes = DEFAULT_MAX_FILE_BYTES, diffText = "", expansion = {} }) {
+  const caps = { maxFiles: expansion?.maxFiles ?? DEFAULT_EXPANSION_CAPS.maxFiles, maxBytes: expansion?.maxBytes ?? DEFAULT_EXPANSION_CAPS.maxBytes };
   const changed = Array.from(
     new Set((Array.isArray(changedFiles) ? changedFiles : []).map((f) => String(f).replace(/\\/g, "/")).filter((f) => f.length > 0)),
   ).sort();
@@ -353,7 +565,7 @@ export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd
   // No changed files → empty bundle. Return early so the empty case is O(1) and
   // skips the whole-repo scan + importer-index build entirely.
   if (changed.length === 0) {
-    return { maxFileBytes, files: [], stripped: [], truncated: [], missing: [] };
+    return { maxFileBytes, files: [], stripped: [], truncated: [], missing: [], expansion: { ...caps, files: [], dropped: [] } };
   }
 
   const repoFiles = await listRepoFiles(repoRoot);
@@ -438,5 +650,6 @@ export async function buildAdjacentBundle({ changedFiles, repoRoot = process.cwd
     stripped,
     truncated: truncatedList,
     missing: missing.sort(),
+    expansion: await selectExpansion({ changed, diffText, repoRoot, importerIndex, caps, existing }),
   };
 }

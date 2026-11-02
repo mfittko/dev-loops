@@ -256,25 +256,13 @@ validation:
 
 ### Available review angles
 
-The shipped defaults activate these angles. Additional angles are available as opt-in — add them to your `gates.draft.angles` or `gates.preApproval.angles` and they'll use the prompts defined in the personas registry. Opt-in prompts are generic and can be overridden in consumer repos through `personas.<angle>.prompt` without depending on this repository's audit examples.
+The shipped defaults activate the angles below. Every angle is listed once; `holistic` and `contradiction-lens` run in both the draft and preApproval pools. Angles you define yourself are opt-in — add them to your `gates.draft.angles` or `gates.preApproval.angles` and they use the prompts defined in the personas registry. Prompts can be overridden in consumer repos through `personas.<angle>.prompt` without depending on this repository's audit examples.
 
-| Default (active) | Opt-in (add to gates) |
+| Pool | Angles |
 |---|---|
-| `dry` — duplication | `ocp` — Open/Closed (extension over modification) |
-| `kiss` — over-engineering | `lsp` — Liskov Substitution (subtype contracts) |
-| `yagni` — speculative features | `isp` — Interface Segregation (fat interfaces) |
-| `srp` — Single Responsibility | `dip` — Dependency Inversion (abstractions) |
-| `soc` — Separation of Concerns | `docs` — documentation links, command references, stale docs |
-| `deep` — structural quality / deslop audit | |
-| `scope` — scope compliance (draft gate) | `link-check` — Markdown links, anchors, doc paths |
-| `coverage` — test coverage (draft gate) | `config-drift` — config/schema/docs/runtime disagreement |
-| `correctness` — acceptance criteria (draft gate) | `gate-evidence` — missing/stale gate-review PR evidence |
-| `ci-guard` — CI/workflow reproducibility (draft gate) | `no-op` — ineffective tool or command usage |
-| `contract-surface` — schema/runtime/docs plus CLI help/stdout/stderr drift (draft gate) | `input-validation` — CLI/API args, repo slugs, IDs, sentinels |
-| | `packaging-runtime` — installers, bundles, copied assets, runtime imports |
-| | `state-concurrency` — state files, locks, polling/process cleanup |
-| | `renderer-security` — HTML/attribute/URL escaping and user content |
-| | `determinism` — ordering, tie-breakers, strict stubs, env/time independence |
+| Draft gate (`gates.draft.angles`) | `scope` — scope compliance; `coverage` — test coverage; `correctness` — acceptance criteria; `ci-guard` — CI/workflow reproducibility; `contract-surface` — schema/runtime/docs plus CLI help/stdout/stderr drift; `link-check` — Markdown links, anchors, doc paths; `config-drift` — config/schema/docs/runtime disagreement; `gate-evidence` — missing/stale gate-review PR evidence; `no-op` — ineffective tool or command usage; `input-validation` — CLI/API args, repo slugs, IDs, sentinels; `threat-model` — adversarial end-to-end threat model; `packaging-runtime` — installers, bundles, copied assets, runtime imports; `state-concurrency` — state files, locks, polling/process cleanup; `renderer-security` — HTML/attribute/URL escaping and user content; `determinism` — ordering, tie-breakers, strict stubs, env/time independence; `pr-comments` — PR comment and review-thread state; `code-conformance` — repo code conventions and patterns; `semantic-drift` — code versus documented behavior; `pr-description` — PR description accuracy; `deslop` — structural deslop audit |
+| Pre-approval gate (`gates.preApproval.angles`) | `dry` — duplication; `kiss` — over-engineering; `yagni` — speculative features; `srp` — Single Responsibility; `soc` — Separation of Concerns; `deep` — structural quality / deslop audit; `ocp` — Open/Closed (extension over modification); `lsp` — Liskov Substitution (subtype contracts); `isp` — Interface Segregation (fat interfaces); `dip` — Dependency Inversion (abstractions); `docs` — documentation links, command references, stale docs; `pr-checklist` — PR checklist; `correctness-final` — final correctness pass on the current head; `ui-validation` — UI validation contract |
+| Both pools | `holistic` — whole-change review; `contradiction-lens` — new rules against the rule registry |
 
 ### Workflow defaults
 

@@ -11,7 +11,9 @@ import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-a
 import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { withTempDir } from "../_helpers.mjs";
-import { seedJudgeSources } from "./_judge-delivery-fixture.mjs";
+import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { bindEvidenceToPrBody, seedJudgeSources } from "./_judge-delivery-fixture.mjs";
+import { SPEC_AUTHORITY_OUTCOME_VALUES, SPEC_AUTHORITY_VERDICT_SCHEMA, validateSpecAuthorityVerdict } from "../../packages/core/src/loop/spec-authority.mjs";
 
 const HEAD = "d".repeat(40);
 const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { prefix: "dev-loops-judge-wo-" });
@@ -47,7 +49,7 @@ test("J1: the producer derives the work order from the round's sources, pins the
   await withDir(async (root) => {
     const sources = await seed(root);
     const plan = await emitJudgeWorkOrder(sources);
-    assert.deepEqual(plan.workOrder.requiredReads.map((read) => read.kind), ["findings", "spec", "spec-identity", "evidence"]);
+    assert.deepEqual(plan.workOrder.requiredReads.map((read) => read.kind),["findings", "spec", "spec-identity", "evidence"]);
     assert.match(plan.workOrder.authority.specDigest, /^sha256:/);
     assert.deepEqual(plan.workOrder.contracts.map((c) => c.path), ["agents/judge.agent.md", "skills/docs/spec-authority-contract.md"]);
     const cli = (extra) => node("scripts/loop/emit-judge-work-order.mjs", ["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD,
@@ -123,7 +125,7 @@ test("J2: every dispatch is the fixed compact pointer under the shared cap, reus
     const worst = { workOrderRef: `judge:${"o".repeat(39)}/${"r".repeat(40)}#99999:pre_approval_gate:${"f".repeat(64)}:j1790000000000-abcdef12`, workOrderDigest: "f".repeat(64), executionIdentity: "j1790000000000-abcdef12" };
     assert.ok(Buffer.byteLength(buildDispatchPointer(worst)) <= DISPATCH_POINTER_MAX_BYTES);
     assert.throws(() => buildDispatchPointer({ ...worst, workOrderRef: `${workOrderRef} and also check X` }), /not shell-safe/);
-    assert.deepEqual(JSON.parse(await readFile(executionIndexPath(path.join(root, "tmp"), executionIdentity), "utf8")), { executionIdentity, workOrderRef, workOrderDigest: digest });
+    assert.deepEqual(JSON.parse(await readFile(executionIndexPath(path.join(root, "tmp"), executionIdentity), "utf8")), { executionIdentity, workOrderRef, workOrderDigest: digest, emitterRoot: TOOLCHAIN_ROOT });
     const saved = JSON.parse(await readFile(plan.planPath, "utf8"));
     assert.equal(saved.dispatchPrompt, plan.dispatchPrompt);
     // Initial, resumed and replacement dispatches pull the same unit through the same path.
@@ -253,7 +255,7 @@ test("J4: a colliding execution index entry for the next identity refuses the em
     const body = JSON.parse(out.join(""));
     assert.equal(body.refusal, "execution_index_collision");
     assert.match(body.error, /already names a different unit/);
-    assert.deepEqual(JSON.parse(await readFile(executionIndexPath(path.join(root, "tmp"), next.executionIdentity), "utf8")), next);
+    assert.deepEqual(JSON.parse(await readFile(executionIndexPath(path.join(root, "tmp"), next.executionIdentity), "utf8")), { ...next, emitterRoot: TOOLCHAIN_ROOT });
   });
 });
 
@@ -541,5 +543,105 @@ test("J1b: a sealed findings ledger edited out of band refuses judge emission (v
       await writeFile(file, edit);
       await assert.rejects(emitJudgeWorkOrder(sources), /gate_artifact_out_of_band_write/);
     }
+  });
+});
+
+const armedBy = async (root, sources, body) => {
+  await bindEvidenceToPrBody(root, sources, body);
+  return (await emitJudgeWorkOrder(sources)).workOrder;
+};
+
+test("a PR body Non-goals reopen line puts the slice-linkage sentence and issue into the work order and its rendering", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const sliceBody = "Closes #2883\n\n## Non-goals\n\n- Reopen #2883 on merge: slices 2+ remain.\n";
+    await bindEvidenceToPrBody(root, sources, sliceBody);
+    const plan = await emitJudgeWorkOrder(sources);
+    assert.match(plan.workOrder.sliceLinkage, /^SPEC-SLICE-PR-KEEPS-CLOSING-REF: a slice PR keeps its closing reference/);
+    assert.deepEqual(plan.workOrder.sliceLinkageIssues, [2883]);
+    assert.match(await readFile(plan.promptPath, "utf8"), /## Slice linkage\n\nSPEC-SLICE-PR-KEEPS-CLOSING-REF/);
+    assert.equal((await armedBy(root, sources, "Closes #2883\n\n## Non-goals\n\n- no build changes\n")).sliceLinkage, undefined);
+  });
+});
+
+test("the slice-linkage arming needs exactly one closing reference that a reopen line names", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    // Rejected forms: a second closing reference, or a reopen line that names another issue.
+    assert.equal((await armedBy(root, sources, "Closes #10\nCloses #99\n\n## Non-goals\n\n- Reopen #10 on merge.\n")).sliceLinkage, undefined);
+    assert.equal((await armedBy(root, sources, "Closes #2883\nCloses #2990\n\n## Non-goals\n\n- Reopen #2883 on merge.\n")).sliceLinkage, undefined);
+    assert.equal((await armedBy(root, sources, "Closes #10\n\n## Non-goals\n\n- Reopen #12 later.\n")).sliceLinkage, undefined);
+    assert.equal((await armedBy(root, sources, "Refs #10\n\n## Non-goals\n\n- Reopen #10 on merge.\n")).sliceLinkage, undefined);
+    // Accepted: the reopen line may come from the spec Non-goals.
+    await writeFile(path.join(root, "judge-fixture/reopen-spec.json"), JSON.stringify({ ...JSON.parse(await readFile(path.join(root, sources.specFile), "utf8")), nonGoals: ["Reopen #2883 on merge: slices 2+ remain."] }));
+    const reopenSources = await seed(root, { specFile: "judge-fixture/reopen-spec.json" });
+    assert.deepEqual((await armedBy(root, reopenSources, "Closes #2883\n")).sliceLinkageIssues, [2883]);
+  });
+});
+
+test("the PR body parser reads only the evidence's own section: a fenced body arms, and a quoted `## PR body` block in the linked issue never counts", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    // Accepted: a body holding a code fence renders with a longer fence and still arms.
+    const fenced = "Closes #2883\n\n```sh\nx\n```\n\n## Non-goals\n\n- Reopen #2883 on merge.\n";
+    assert.deepEqual((await armedBy(root, sources, fenced)).sliceLinkageIssues, [2883]);
+    // Absent PR body plus an issue section quoting a fenced `## PR body` block: the quoted text never arms.
+    const quoted = "## PR body\n\n```\nCloses #2883\n```\n";
+    await bindEvidenceToPrBody(root, sources, "", quoted);
+    assert.equal((await emitJudgeWorkOrder(sources)).workOrder.sliceLinkage, undefined);
+  });
+});
+
+test("an evidence read with no PR body section refuses judge emission", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const evidence = "## Diff\n\nnothing\n";
+    await writeFile(path.join(root, "judge-fixture", "evidence.md"), evidence);
+    const contextPath = path.join(root, buildGateContextPath(sources));
+    await writeFile(contextPath, JSON.stringify({ requiredReads: [{ kind: "evidence", path: "judge-fixture/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex"), bytes: Buffer.byteLength(evidence), required: true }] }));
+    await assert.rejects(emitJudgeWorkOrder(sources), /has no `## PR body` section/);
+  });
+});
+
+test("2678: the work order carries outputSchemas and a verdict built from them validates", async () => {
+  await withDir(async (root) => {
+    const plan = await emitJudgeWorkOrder(await seed(root));
+    const { outputSchemas, outputRefs, authority } = plan.workOrder;
+    for (const ref of outputRefs) assert.ok(outputSchemas[path.basename(ref)], path.basename(ref));
+    const schema = outputSchemas["spec-authority-verdict.json"];
+    assert.deepEqual(schema, SPEC_AUTHORITY_VERDICT_SCHEMA);
+    const result = pull(plan, root);
+    assert.equal(result.status, 0, result.stderr);
+    const names = [...Object.keys(schema.topLevel.required), ...Object.keys(schema.decision.required)];
+    for (const name of names) assert.ok(result.stdout.includes(`"${name}"`), name);
+    for (const outcome of SPEC_AUTHORITY_OUTCOME_VALUES) assert.ok(result.stdout.includes(outcome), outcome);
+    // Build the verdict only from the rendered field names.
+    const values = { specDigest: authority.specDigest, headSha: HEAD, contentDigest: authority.contentDigest, checkedCriteria: authority.checkedCriteria, index: 0, outcome: "finding_conflicts", rationale: "r", conflictingCriteria: [authority.checkedCriteria[0]] };
+    const decision = Object.fromEntries(Object.keys(schema.decision.required).map((k) => [k, values[k]]));
+    decision.conflictingCriteria = values.conflictingCriteria;
+    const verdict = Object.fromEntries(Object.keys(schema.topLevel.required).map((k) => [k, k === "decisions" ? [decision] : values[k]]));
+    const checked = validateSpecAuthorityVerdict(verdict, { findingsCount: 1, criterionIds: authority.checkedCriteria });
+    assert.equal(checked.decisions.length, 1);
+    // valid_compliant: the conditional keys come from the schema, with string values.
+    const compliant = Object.fromEntries(Object.keys(schema.decision.required).map((k) => [k, values[k]]));
+    compliant.outcome = "valid_compliant";
+    for (const k of ["authorizedRemediation", "defectClass", "siteQuery"]) {
+      assert.ok(schema.decision.conditional[k], k);
+      compliant[k] = "fnA fnB";
+    }
+    const okVerdict = { ...verdict, decisions: [compliant] };
+    assert.equal(validateSpecAuthorityVerdict(okVerdict, { findingsCount: 1, criterionIds: authority.checkedCriteria }).decisions.length, 1);
+    assert.throws(() => validateSpecAuthorityVerdict({ ...verdict, decisions: [{ ...compliant, siteQuery: ["fnA", "fnB"] }] }, { findingsCount: 1, criterionIds: authority.checkedCriteria }), /siteQuery/);
+  });
+});
+
+test("2678: the Judgment section leaves the digest check to the pull", async () => {
+  await withDir(async (root) => {
+    const plan = await emitJudgeWorkOrder(await seed(root));
+    const result = pull(plan, root);
+    const judgment = result.stdout.slice(result.stdout.indexOf("## Judgment"), result.stdout.indexOf("## Required reads"));
+    assert.doesNotMatch(judgment, /sha256 differs/);
+    assert.match(judgment, /pull refusal, so Pi and Claude judges compute no digest of a required read/);
+    assert.match(judgment, /the Codex after-pull setup above still governs Codex/);
   });
 });

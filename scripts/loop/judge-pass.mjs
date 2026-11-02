@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { access, mkdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
@@ -38,9 +38,11 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
-import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
+import { codeTreeSkewNote, materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { rejectClosingRefRemoval } from "./_slice-linkage.mjs";
+import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
 import { locateJudgeUnit, renderWorkOrder } from "./emit-judge-work-order.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot, resolveLedgerCheckouts, toolchainRootMismatch } from "./_repo-root-resolver.mjs";
 import {
@@ -210,6 +212,7 @@ export function parseJudgePassCliArgs(argv) {
     coverageMap: undefined,
     jq: undefined,
     silent: false,
+    args: [...argv],
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -861,6 +864,22 @@ async function resolveGateSettings(options, resolvedRoot) {
 }
 
 /**
+ * Rerun parts for a code-tree skew note: the emitter's script rejects `--repo-root` naming another
+ * checkout (toolchainRootMismatch), so the flag is dropped and the rerun starts in the resolved root.
+ */
+function skewRerun(options, resolvedRoot) {
+  const args = [];
+  let dropped = false;
+  const argv = options.args ?? [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === "--repo-root") { i += 1; dropped = true; continue; }
+    if (argv[i].startsWith("--repo-root=")) { dropped = true; continue; }
+    args.push(argv[i]);
+  }
+  return { script: "scripts/loop/judge-pass.mjs", args: args.map(shellQuote).join(" "), env: dropped ? `cd ${shellQuote(resolvedRoot)} && ` : "" };
+}
+
+/**
  * Pull transport binding (ADR 0106): a verdict counts only for the emitted judge
  * invocation that --judge-plan records, after a matching judge pull receipt, with
  * both verdict artifacts written after that pull, over the ledger the work order
@@ -901,7 +920,7 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   }
   // The plan's work order must be exactly what the judge pulled: its digest and its rendered bytes.
   if (workOrderDigest(order) !== plan.workOrderDigest || materializationHash(renderWorkOrder(order)) !== receipt.materializationHash) {
-    throw new Error(`--judge-plan ${options.judgePlan} does not reproduce the work order execution ${plan.executionIdentity} pulled; pass the plan emit-judge-work-order.mjs wrote`);
+    throw new Error(`--judge-plan ${options.judgePlan} does not reproduce the work order execution ${plan.executionIdentity} pulled; pass the plan emit-judge-work-order.mjs wrote${await codeTreeSkewNote({ execution: plan.executionIdentity, tmpRoots: [planTmpRoot, path.resolve(receiptTmpRoot)], ...skewRerun(options, resolvedRoot) })}`);
   }
   const ledger = await readJsonArtifact(resolve(options.findingsFile), "--findings-file", parseError);
   if (sha256Hex(ledger) !== order.authority?.findingsDigest) {
@@ -912,7 +931,7 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   if (!current || current.stale || current.workOrderDigest !== plan.workOrderDigest || current.executionIdentity !== plan.executionIdentity) {
     throw new Error(`judge execution ${plan.executionIdentity} is not the current emission for ${options.gate} at ${options.headSha} (${current?.stale ?? "no checkout holds its plan"}); re-emit the judge work order and re-run the judge`);
   }
-  return order.authority;
+  return { ...order.authority, sliceLinkageIssues: Array.isArray(order.sliceLinkageIssues) ? order.sliceLinkageIssues : [] };
 }
 
 /**
@@ -972,6 +991,12 @@ export async function judgePassCli(
   );
   const { lowFixCapped, round } = await resolveDraftRoundCap({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: historyRoot(options, resolvedRoot) }, { repoRoot: resolvedRoot });
   const result = runJudgePass(findings, judgeVerdict, options.headSha, { pastCap: lowFixCapped, round });
+
+  // Only the pinned work order's sliceLinkageIssues arm the coercion; the emitter already read the spec and PR body Non-goals.
+  if (rejectClosingRefRemoval(result.enriched, pinned.sliceLinkageIssues) > 0) {
+    result.act = result.enriched.filter(isOpenActItem);
+    result.counts = countByDisposition(result.enriched);
+  }
 
   // Immutable spec-authority gate (opt-in via --spec-file). A spec_cannot_decide
   // outcome fails closed here so the loop stops at the human-spec-decision state

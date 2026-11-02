@@ -7,7 +7,8 @@ import { DIFF_ISOLATION_FLAGS, gitEnvWithoutDirOverrides } from "../github/write
 import { isScopeCountExcluded } from "@dev-loops/core/config";
 
 const USAGE = `Usage: detect-change-scope.mjs [--base <ref>] [--head <ref>]
-Detect change scope from git diff for light-mode eligibility.
+Detect change scope from git diff. The raw counts and eligibleForLightMode are informational;
+startup and gate dispatch decide light-mode eligibility through lightModeCapState.
 filesChanged/linesChanged skip SCOPE_COUNT_EXCLUDE_GLOBS paths (changes/*.md,
 .claude/{skills,agents,commands}/**); see ADR 0108.
 Options:
@@ -110,39 +111,8 @@ function isEligibleForLightMode(scope, threshold) {
   return scope.filesChanged <= threshold.maxFiles && scope.linesChanged <= threshold.maxLines;
 }
 /**
- * Detect change scope for the merge-base diff between `base` and `head` (the
- * three-dot `base...head` diff git resolves against merge-base(base, head)).
- *
- * Fails CLOSED: a missing base/head, or any git failure, returns `{ ok: false }`
- * so callers that gate on scope (e.g. the light-mode pre-merge acceptance) reject
- * rather than silently treating an unmeasurable diff as under threshold. Reuses
- * the same `parseGitNumstat` scope resolution as `detectScope`.
- *
- * Isolated from ambient `GIT_DIR`/`GIT_WORK_TREE` and diff-config drift the
- * same way `detectMergeBaseChangedFiles` is (see its doc comment) — this feeds
- * the merge-gate hard size cap, so a poisoned env under-reporting scope here
- * would fail-OPEN that cap exactly like an unisolated changed-file read would.
- */
-function detectMergeBaseScope({ base, head, cwd } = {}) {
-  if (!base || !head) {
-    return { ok: false, filesChanged: 0, linesChanged: 0, error: "base and head are required for merge-base scope detection" };
-  }
-  let output;
-  try {
-    output = execFileSync(
-      "git",
-      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--numstat", "-z", `${base}...${head}`],
-      { encoding: "utf8", maxBuffer: 1_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() },
-    );
-  } catch (err) {
-    return { ok: false, filesChanged: 0, linesChanged: 0, error: err instanceof Error ? err.message : String(err) };
-  }
-  return { ok: true, ...parseGitNumstat(output) };
-}
-/**
- * List changed files for the SAME merge-base (three-dot `base...head`) diff
- * {@link detectMergeBaseScope} measures — the companion fact the
- * GATE-EXEC-PROPORTIONALITY risk-path floor needs at merge-gate re-verify
+ * List changed files for the merge-base (three-dot `base...head`) diff — the
+ * fact the GATE-EXEC-PROPORTIONALITY risk-path floor needs at merge-gate re-verify
  * time (detect-checkpoint-evidence.mjs). Fails CLOSED: `{ ok: false, files: null }`
  * on a missing base/head or any git failure, never a silently-empty list.
  *
@@ -161,13 +131,13 @@ function detectMergeBaseChangedFiles({ base, head, cwd } = {}) {
   try {
     output = execFileSync(
       "git",
-      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", `${base}...${head}`],
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", "-z", "--no-renames", `${base}...${head}`],
       { encoding: "utf8", maxBuffer: 10_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() },
     );
   } catch (err) {
     return { ok: false, files: null, error: err instanceof Error ? err.message : String(err) };
   }
-  const files = output.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  const files = output.split("\0").filter((l) => l.length > 0);
   return { ok: true, files };
 }
 async function main() {
@@ -206,4 +176,19 @@ if (isDirectRun) {
     process.exitCode = 1;
   });
 }
-export { detectScope, detectMergeBaseScope, detectMergeBaseChangedFiles, isEligibleForLightMode };
+// Changed paths from `base` to the working tree (committed plus uncommitted), isolated like the merge-base reader.
+function detectWorkingTreeChangedFiles({ base, cwd } = {}) {
+  let output;
+  try {
+    output = execFileSync(
+      "git",
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", "-z", "--no-renames", base],
+      { encoding: "utf8", maxBuffer: 10_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() },
+    );
+  } catch (err) {
+    return { ok: false, files: null, error: err instanceof Error ? err.message : String(err) };
+  }
+  return { ok: true, files: output.split("\0").filter((l) => l.length > 0) };
+}
+
+export { detectScope, detectMergeBaseChangedFiles, detectWorkingTreeChangedFiles, isEligibleForLightMode };

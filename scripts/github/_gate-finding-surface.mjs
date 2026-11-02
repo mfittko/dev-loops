@@ -18,7 +18,9 @@ import { JUDGE_DISPOSITIONS, SEVERITY_ORDER, VALID_SEVERITIES, hasLocatableShape
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
   parseJsonText,
+  resolveDraftGateRoundResetMs,
   sanitizeCopilotSummonTokens,
+  summarizeCopilotReviews,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
 } from "../_core-helpers.mjs";
@@ -877,6 +879,11 @@ function assertGhSuccess(result) {
 export const prReviewsApiPath = (repo, pr) => `repos/${repo}/pulls/${pr}/reviews?per_page=100`;
 export const prReviewsApiArgs = (repo, pr) => ["api", "--paginate", "--slurp", prReviewsApiPath(repo, pr)];
 
+/** The PR's raw REST reviews (node_id, user, author_association, commit_id, body kept), for readers that pin one review. */
+export async function listRestPrReviews({ repo, pr }, runtime) {
+  return flattenPaginatedSlurp(await runGhJson(prReviewsApiArgs(repo, pr), runtime));
+}
+
 export async function listPrReviews({ repo, pr }, { env, ghCommand, runChild }) {
   const payload = await runGhJson(prReviewsApiArgs(repo, pr), { env, ghCommand, runChild });
   // A PENDING (unsubmitted) review must never feed round resolution or
@@ -916,6 +923,29 @@ export async function fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, 
   if (reviewSurfaceRead) surfaces.push("review");
   surfaces.push("issue_comment");
   return reportSurfaces ? { comments, surfaces } : comments;
+}
+
+/**
+ * The draft-gate-adjusted Copilot round count (AC5): the one derivation the
+ * handoff and the request tool share, so both feed the same count to the
+ * round-cap predicate. Reads the gate evidence once the raw count reaches the
+ * cap, applies resolveDraftGateRoundResetMs, and recounts the reviews. A
+ * reset only lowers the count, so an unavailable head (a failed gh read), a
+ * gate-evidence read failure, or no reset returns the raw count: a null head
+ * would read every clean draft_gate as off-head and must never lower it.
+ */
+export async function resolveDraftGateAdjustedRoundCount({ repo, pr, currentHeadSha, reviews, rawCount, effectiveCap }, runtime) {
+  if (!Number.isInteger(rawCount) || (Number.isInteger(effectiveCap) && rawCount < effectiveCap)) return rawCount;
+  const headSha = typeof currentHeadSha === "string" ? currentHeadSha.trim() : "";
+  if (!headSha) return rawCount;
+  try {
+    const gateSummary = summarizeGateReviewComments(await fetchGateEvidenceComments({ repo, pr }, runtime));
+    const draftGateResetAtMs = resolveDraftGateRoundResetMs({ draftGate: gateSummary?.draft_gate, currentHeadSha: headSha });
+    if (draftGateResetAtMs == null) return rawCount;
+    return summarizeCopilotReviews(reviews ?? [], { headSha, draftGateResetAtMs }).completedCopilotReviewRounds ?? rawCount;
+  } catch {
+    return rawCount;
+  }
 }
 
 /**
@@ -1374,7 +1404,7 @@ export function collectVerdictHeadShas(comments, gate, headShas) {
 // review BODY at all (only in the separate review comment GitHub attaches
 // it to), so scanning finding markers here could never find a round the
 // header does not already carry.
-function crossCheckRoundFromReviewBodies(bodies, gate) {
+export function crossCheckRoundFromReviewBodies(bodies, gate) {
   let max = 0;
   for (const body of bodies) {
     if (typeof body !== "string") continue;
