@@ -882,7 +882,8 @@ test("F1: older authority contracts cannot replace the emitting toolchain's pinn
 test("F1: a delta result that does not belong to this act list and head refuses before dispatch", async () => {
   await withFixture(async ({ head, files, emit }) => {
     await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: files.delta }), /--delta-result applies only to an --act-list-file source/);
-    for (const bad of [deltaResultFor("b".repeat(40)), deltaResultFor(head, { actSetId: "0".repeat(16) }), { nextStep: "fix_and_rereview", items: [{ ref: 0, status: "not_resolved" }] }, ACT]) {
+    // The emit helper seals each bad result (it carries heads), so the seal check passes and the membership check refuses it.
+    for (const bad of [deltaResultFor("b".repeat(40)), deltaResultFor(head, { actSetId: "0".repeat(16) }), { ...deltaResultFor(head), nextStep: "fix_and_rereview", actionableItems: [{ ref: 0, status: "not_resolved" }] }, { ...deltaResultFor(head), actionableItems: ACT }]) {
       await writeFile(files.delta, JSON.stringify(bad));
       await assert.rejects(emit({ deltaResult: files.delta }), /does not belong to this act list/, JSON.stringify(bad));
     }
