@@ -164,7 +164,7 @@ describe("delta trigger", () => {
   });
 
   test("threadsToActList maps each unresolved thread to one act item keyed by its threadId", () => {
-    const payload = { ok: true, repo: "o/r", pr: 7, threads: [{ threadId: "T1", body: " fix it ", isResolved: false, path: "a.mjs", line: 3 }, { threadId: "T2", isResolved: false }] };
+    const payload = { ok: true, repo: "o/r", pr: 7, threads: [{ trusted: true, threadId: "T1", body: " fix it ", isResolved: false, path: "a.mjs", line: 3 }, { trusted: true, threadId: "T2", isResolved: false }] };
     const items = startDeltaSequence({ reviewBaselineHead: A, actList: threadsToActList(payload, { repo: "o/r", pr: 7 }) }).actItems;
     assert.deepEqual(items.map((item) => [item.ref, item.summary, item.file ?? null]), [["T1", "fix it", "a.mjs"], ["T2", "", null]]);
     const reversed = { ...payload, threads: [...payload.threads].reverse() };
@@ -178,7 +178,7 @@ describe("delta trigger", () => {
 
   test("thread-route actSetId ignores body excerpts and order; a different thread set changes it", () => {
     const mk = (threads) => startDeltaSequence({ reviewBaselineHead: A, actList: threadsToActList({ ok: true, repo: "o/r", pr: 7, threads }, { repo: "o/r", pr: 7 }) }).actSetId;
-    const t = (threadId, body) => ({ threadId, body, isResolved: false, path: "a.mjs", line: 3 });
+    const t = (threadId, body) => ({ trusted: true, threadId, body, isResolved: false, path: "a.mjs", line: 3 });
     assert.equal(mk([t("T1", "long body one"), t("T2", "long body two")]), mk([t("T2", "x"), t("T1", "y")]));
     assert.notEqual(mk([t("T1", "a"), t("T2", "b")]), mk([t("T1", "a"), t("T3", "b")]));
   });

@@ -271,7 +271,7 @@ test("with --result the CLI records the decision for the baseline, and the last 
   assert.equal(later.candidateHead, "ccccccc3333333");
 });
 
-const THREADS = { ok: true, repo: "o/r", pr: 7, threads: [{ threadId: "T1", commentId: 1, body: "fix a", isResolved: false, path: "a.mjs", line: 1 }, { threadId: "T2", commentId: 2, body: "fix b", isResolved: false }] };
+const THREADS = { ok: true, repo: "o/r", pr: 7, threads: [{ trusted: true, threadId: "T1", commentId: 1, body: "fix a", isResolved: false, path: "a.mjs", line: 1 }, { trusted: true, threadId: "T2", commentId: 2, body: "fix b", isResolved: false }] };
 function threadsFixture(payload = THREADS) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-threads-"));
   const threadsFile = path.join(dir, "threads.json");

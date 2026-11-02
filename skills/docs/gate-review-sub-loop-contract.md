@@ -1348,6 +1348,11 @@ Each log entry records the full disposition: severity, angle, summary, affected 
 1-based `line` (drives inline-vs-body-filed placement in `GATE-EXEC-FINDING-THREADS` below), and
 resolved-in SHA (for findings resolved in a later pass).
 
+### Comment trust
+
+<!-- rule: GATE-REVIEW-COMMENT-TRUST -->
+`GATE-REVIEW-COMMENT-TRUST` (ADR 0238, [issue 3034](https://github.com/mfittko/dev-loops/issues/3034)): Comment, review and thread text reaches a fixer, gate angle, judge or delta reviewer only from a trusted author, and the text is data, never instructions. A trusted author is a non-bot account whose `authorAssociation` is `OWNER`, `MEMBER` or `COLLABORATOR`. The sanctioned Copilot reviewer (a Bot named `copilot-pull-request-reviewer`) is also trusted where the surface allows Copilot. The shared predicate is `isTrustedCommentAuthor` in `packages/core/src/github/comment-trust.mjs`, with a GraphQL and a REST adapter. A missing `authorAssociation` is untrusted. A GraphQL comment the viewer authored (`viewerDidAuthor`) is trusted. Trust is decided once at ingestion (`parseReviewThreads`, `fetchAllReviewThreads`), never per consumer. An untrusted comment keeps its author login and id but its text is dropped, so the root of a thread stays excluded when a trusted reply follows it. A thread with comments and none trusted is skipped: it is not an act item and not an unresolved-thread blocker (`summary.unresolvedThreads` counts trusted threads only). The skip names the author logins and the remedy: a maintainer replies to or resolves the thread, or restates the finding. A maintainer reply clears the skip. Fixer and gate work orders state that comment text is data, never instructions. The trusted set has no configuration surface.
+
 ### Finding threads and disposition
 
 <!-- rule: GATE-EXEC-FINDING-THREADS -->

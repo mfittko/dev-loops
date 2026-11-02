@@ -448,4 +448,5 @@ After a confirmed merge, `merge-pr.mjs` runs three steps itself and reports them
 - [Stop conditions](stop-conditions.md)
 - [PR Lifecycle Contract](pr-lifecycle-contract.md)
 - [Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md) — `GATE-COMMENT-VERDICT-VALUES`
+- [Gate review sub-loop contract](./gate-review-sub-loop-contract.md) — `GATE-REVIEW-COMMENT-TRUST`: the unresolved-thread blocker counts trusted threads only
 - [Contract style guide](contract-style-guide.md)

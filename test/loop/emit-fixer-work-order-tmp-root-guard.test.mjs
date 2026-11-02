@@ -48,7 +48,7 @@ test("--tmp-root equal to the main checkout tmp/ emits a work order end to end",
     chmodSync(path.join(bin, "gh"), 0o755);
     const threads = path.join(tmpRoot, "src", "threads.json");
     mkdirSync(path.dirname(threads), { recursive: true });
-    writeFileSync(threads, JSON.stringify({ ok: true, repo: "o/r", pr: 7, threads: [{ threadId: "T1", commentId: 1, body: "fix", isResolved: false, isOutdated: false, path: "src/a.mjs", line: 3 }] }));
+    writeFileSync(threads, JSON.stringify({ ok: true, repo: "o/r", pr: 7, threads: [{ trusted: true, threadId: "T1", commentId: 1, body: "fix", isResolved: false, isOutdated: false, path: "src/a.mjs", line: 3 }] }));
     const argv = ["--harness", "claude", "--repo", "o/r", "--pr", "7", "--head-sha", head, "--phase", "commit_only", "--threads-file", threads, "--tmp-root", tmpRoot];
     const env = { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, PATH: `${bin}${path.delimiter}${process.env.PATH}` };
     const result = await runNode(SCRIPT, argv, { cwd: linked, env });

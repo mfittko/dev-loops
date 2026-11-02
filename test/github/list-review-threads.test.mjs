@@ -37,8 +37,9 @@ function threadNode({ id, isResolved = false, isOutdated = false, path: filePath
   };
 }
 
-function commentNode({ databaseId, body, login }) {
-  return { databaseId, body, author: { login } };
+function commentNode({ databaseId, body, login, authorAssociation = "MEMBER" }) {
+  const bot = /\[bot\]$|^copilot$/i.test(login);
+  return { databaseId, body, authorAssociation, author: { login, __typename: bot ? "Bot" : "User" } };
 }
 
 test("list-review-threads returns the reply-resolve shape for a single page", async () => {
@@ -66,6 +67,7 @@ test("list-review-threads returns the reply-resolve shape for a single page", as
     assert.deepEqual(parsed.threads, [
       {
         threadId: "THREAD_1",
+        trusted: true,
         commentId: 101,
         author: "copilot-pull-request-reviewer[bot]",
         body: "please fix",
@@ -76,6 +78,7 @@ test("list-review-threads returns the reply-resolve shape for a single page", as
       },
       {
         threadId: "THREAD_2",
+        trusted: true,
         commentId: 102,
         author: "alice",
         body: "already resolved",
@@ -238,6 +241,7 @@ test("list-review-threads handles a thread with no comments (null commentId/auth
     const parsed = JSON.parse(result.stdout);
     assert.deepEqual(parsed.threads[0], {
       threadId: "THREAD_EMPTY",
+      trusted: true,
       commentId: null,
       author: null,
       body: "",

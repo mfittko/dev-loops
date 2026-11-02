@@ -23,6 +23,7 @@ import {
   isCopilotLogin,
   stripMarkdownCodeForScan,
 } from "@dev-loops/core/github/copilot-helpers";
+import { isTrustedRestComment } from "@dev-loops/core/github/comment-trust";
 import path from "node:path";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
 import { repoSlugFor } from "./_gate-artifact-paths.mjs";
@@ -36,9 +37,6 @@ export const copilotBodyJudgePath = ({ tmpRoot, repo, pr, headSha }) => {
 
 const MARKER_RE = /<!--\s*dev-loops:copilot-body-disposition\s+review=(\S+)\s+head=([0-9a-fA-F]{40})\s+(?:fix=([0-9a-fA-F]{40})|operator)\s*-->/;
 
-// Trusted authors: a human with OWNER/MEMBER/COLLABORATOR standing on the repo.
-// Any bot login (Copilot included) is rejected regardless of association.
-const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 // Only bare markdown counts: fenced blocks, inline code spans, and `>` quote
 // lines are dropped before matching, so a quoted or code-formatted marker is
@@ -87,14 +85,9 @@ export function parseCopilotBodyDispositionMarker(body) {
   };
 }
 
+// ADR 0238: the shared trust predicate lives in comment-trust.mjs; this stays as the REST alias.
 export function isTrustedDispositionAuthor(comment) {
-  const login = typeof comment?.user?.login === "string" ? comment.user.login : "";
-  if (login.length === 0) return false;
-  if (isCopilotLogin(login)) return false;
-  if (/\[bot\]$/i.test(login)) return false;
-  if (typeof comment?.user?.type === "string" && comment.user.type.toLowerCase() === "bot") return false;
-  const association = typeof comment?.author_association === "string" ? comment.author_association.toUpperCase() : "";
-  return TRUSTED_ASSOCIATIONS.has(association);
+  return isTrustedRestComment(comment);
 }
 
 // Every trusted, well-formed disposition record on the PR's issue-comment

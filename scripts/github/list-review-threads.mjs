@@ -3,6 +3,7 @@ import { parseArgs } from "node:util";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { isTrustedGraphqlComment, UNTRUSTED_COMMENT_REMEDY } from "@dev-loops/core/github/comment-trust";
 import { authorMatchesFilter } from "./_review-thread-mutations.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -25,12 +26,15 @@ export const LIST_REVIEW_THREADS_QUERY = [
   "          isOutdated",
   "          path",
   "          line",
-  "          comments(first: 1) {",
+  "          comments(first: 100) {",
   "            nodes {",
   "              databaseId",
   "              body",
+  "              authorAssociation",
+  "              viewerDidAuthor",
   "              author {",
   "                login",
+  "                __typename",
   "              }",
   "            }",
   "          }",
@@ -66,7 +70,10 @@ Output (stdout, JSON):
     { "threadId": "...", "commentId": N|null, "author": "..."|null,
       "body": "...", "isResolved": bool, "isOutdated": bool,
       "path": "..."|null, "line": N|null }, ...
-  ] }
+  ], "skippedUntrusted": [ { "threadId": "...", "authors": [...], "remedy": "..." } ] }
+  Comments from authors who are not an OWNER, MEMBER or COLLABORATOR (the Copilot
+  reviewer excepted) are never listed (ADR 0238); a thread with only such comments
+  appears in skippedUntrusted (omitted when empty), with author logins and no text.
 Error output (stderr, JSON):
   Argument/usage errors:
     { "ok": false, "error": "...", "usage": "..." }
@@ -184,13 +191,22 @@ function excerptBody(rawBody, max = BODY_EXCERPT_MAX_CHARS) {
   return `${text.slice(0, max)}…`;
 }
 
+// ADR 0238: trust is decided here, at ingestion. The listing shows the first TRUSTED
+// comment of a thread; a thread with comments and none trusted is returned as
+// `skipped` (author logins only, no text).
 function normalizeThreadNode(node, bodyMax) {
-  const firstComment = node?.comments?.nodes?.[0] ?? null;
+  const comments = Array.isArray(node?.comments?.nodes) ? node.comments.nodes : [];
+  const firstComment = comments.find((comment) => isTrustedGraphqlComment(comment, { allowCopilot: true })) ?? null;
+  if (firstComment === null && comments.length > 0) {
+    const authors = [...new Set(comments.map((comment) => (typeof comment?.author?.login === "string" && comment.author.login.length > 0 ? comment.author.login : "unknown")))];
+    return { skipped: { threadId: typeof node?.id === "string" ? node.id : "", authors, isResolved: Boolean(node?.isResolved), remedy: UNTRUSTED_COMMENT_REMEDY } };
+  }
   const commentId = Number.isFinite(firstComment?.databaseId) ? firstComment.databaseId : null;
   const authorLogin = firstComment?.author?.login;
   const author = typeof authorLogin === "string" && authorLogin.length > 0 ? authorLogin : null;
   return {
     threadId: typeof node?.id === "string" ? node.id : "",
+    trusted: true, // ADR 0238 marker: consumers refuse a thread file without it
     commentId,
     author,
     body: excerptBody(firstComment?.body, bodyMax),
@@ -201,12 +217,18 @@ function normalizeThreadNode(node, bodyMax) {
   };
 }
 
-export async function fetchAllReviewThreads(
+/** Trusted threads only (ADR 0238). Use fetchAllReviewThreadsWithSkips to also read the skipped untrusted threads. */
+export async function fetchAllReviewThreads(target, options) {
+  return (await fetchAllReviewThreadsWithSkips(target, options)).threads;
+}
+
+export async function fetchAllReviewThreadsWithSkips(
   { repo, pr },
   { env = process.env, ghCommand = "gh", runChild = defaultRunChild, bodyMax = BODY_EXCERPT_MAX_CHARS } = {},
 ) {
   const { owner, name } = parseRepoSlug(repo);
   const threads = [];
+  const skipped = [];
   let after = null;
   let pages = 0;
   // 10k threads at 100/page; same ceiling as capture-review-threads.mjs, so a
@@ -225,7 +247,9 @@ export async function fetchAllReviewThreads(
     const payload = parseJsonText(result.stdout);
     const { nodes, hasNextPage, endCursor } = readThreadsConnection(payload);
     for (const node of nodes) {
-      threads.push(normalizeThreadNode(node, bodyMax));
+      const normalized = normalizeThreadNode(node, bodyMax);
+      if (normalized.skipped) skipped.push(normalized.skipped);
+      else threads.push(normalized);
     }
     if (!hasNextPage) {
       break;
@@ -238,7 +262,7 @@ export async function fetchAllReviewThreads(
     }
     after = endCursor;
   }
-  return threads;
+  return { threads, skipped };
 }
 
 export function filterThreads(threads, { unresolvedOnly = false, author = undefined } = {}) {
@@ -274,9 +298,10 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return 0;
   }
-  const allThreads = await fetchAllReviewThreads({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+  const { threads: allThreads, skipped } = await fetchAllReviewThreadsWithSkips({ repo: options.repo, pr: options.pr }, { env, ghCommand });
   const threads = filterThreads(allThreads, { unresolvedOnly: options.unresolvedOnly, author: options.author });
-  const result = { ok: true, repo: options.repo, pr: options.pr, threads };
+  const skippedUntrusted = options.unresolvedOnly ? skipped.filter((thread) => !thread.isResolved) : skipped;
+  const result = { ok: true, repo: options.repo, pr: options.pr, threads, ...(skippedUntrusted.length > 0 ? { skippedUntrusted } : {}) };
   return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 

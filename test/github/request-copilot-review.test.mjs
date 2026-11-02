@@ -2850,7 +2850,7 @@ for (const [active, failure, opts] of [["missing", /result_missing/], ["empty", 
       const headRefOid = "a".repeat(40);
       const extra = active === "omitted ACT" ? [
         { assertArgs: ["pr", "view", "17", "--json", "headRefOid,statusCheckRollup"], stdout: JSON.stringify({ headRefOid, statusCheckRollup: [] }) },
-        { assertArgs: GRAPHQL_ARGS, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_ACT", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "<!-- dev-loops:finding 0123456789abcdef -->", author: { login: "gate", __typename: "User" } }] } }] } } } } }) },
+        { assertArgs: GRAPHQL_ARGS, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_ACT", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "<!-- dev-loops:finding 0123456789abcdef -->", authorAssociation: "OWNER", author: { login: "gate", __typename: "User" } }] } }] } } } } }) },
         { assertArgs: ["api", "user"], stdout: '{"login":"gate"}' },
       ] : [];
       const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [FIXER_REQUESTED, { assertArgs: PR_VIEW_ARGS, stdout: JSON.stringify({ headRefOid, isDraft: false, reviews: [] }) }, ...extra, ...PROCEED(headRefOid)], { repoRoot });
@@ -2865,7 +2865,7 @@ for (const [active, failure, opts] of [["missing", /result_missing/], ["empty", 
 for (const [step, compare, reply] of [["commit_not_contained", "diverged", false], ["reply_missing", "ahead", false], ["not_resolved", "ahead", true]]) {
   test(`request-copilot-review proceeds with a ${step} warning for a tackled checkpoint`, async () => {
     await withFixerHandoff(async (repoRoot) => {
-      const comments = reply ? [{ id: "c1", databaseId: 1, body: "Fixed in commit fed9876543fed9876543fed9876543fed9876543", author: { login: "bot", __typename: "User" } }] : [];
+      const comments = reply ? [{ id: "c1", databaseId: 1, body: "Fixed in commit fed9876543fed9876543fed9876543fed9876543", authorAssociation: "OWNER", author: { login: "bot", __typename: "User" } }] : [];
       const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
         FIXER_REQUESTED,
         FIXER_PR_VIEW,

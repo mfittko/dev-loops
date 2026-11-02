@@ -3710,7 +3710,7 @@ test("detect-checkpoint-evidence fails pre-merge with unresolved human review th
               isResolved: false,
               comments: {
                 nodes: [
-                  { id: "c-human", databaseId: 5001, body: "human reviewer concern", author: { login: "reviewer", __typename: "User" } },
+                  { id: "c-human", databaseId: 5001, body: "human reviewer concern", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } },
                 ],
               },
             },
@@ -3788,7 +3788,7 @@ test("detect-checkpoint-evidence passes pre-merge when all human review threads 
               isResolved: true,
               comments: {
                 nodes: [
-                  { id: "c-human", databaseId: 5001, body: "human reviewer concern", author: { login: "reviewer", __typename: "User" } },
+                  { id: "c-human", databaseId: 5001, body: "human reviewer concern", authorAssociation: "OWNER", author: { login: "reviewer", __typename: "User" } },
                 ],
               },
             },

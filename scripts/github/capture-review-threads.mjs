@@ -34,6 +34,8 @@ export const REVIEW_THREADS_QUERY = [
   "              id",
   "              databaseId",
   "              body",
+  "              authorAssociation",
+  "              viewerDidAuthor",
   "              pullRequestReview {",
   "                id",
   "              }",

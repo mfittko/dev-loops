@@ -103,12 +103,12 @@ function threadNode({ id, isResolved = false, path: filePath = null, line = null
     line,
     comments: {
       nodes: [
-        { id: `gid-${commentId}`, databaseId: commentId, body, author: { login: author, __typename: "User" } },
+        { id: `gid-${commentId}`, databaseId: commentId, body, authorAssociation: "OWNER", author: { login: author, __typename: "User" } },
         ...replies.map((r, i) => ({
           id: `gid-${commentId}-reply-${i}`,
           databaseId: r.commentId ?? `${commentId}-reply-${i}`,
           body: r.body,
-          author: { login: r.author ?? "operator", __typename: "User" },
+          authorAssociation: "OWNER", author: { login: r.author ?? "operator", __typename: "User" },
         })),
       ],
     },

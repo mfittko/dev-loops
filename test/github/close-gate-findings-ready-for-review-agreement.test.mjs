@@ -64,7 +64,7 @@ function threadNodeFromState(threadState) {
         id: `gid-${c.databaseId}`,
         databaseId: c.databaseId,
         body: c.body,
-        author: { login: c.author, __typename: "User" },
+        authorAssociation: "OWNER", author: { login: c.author, __typename: "User" },
       })),
     },
   };

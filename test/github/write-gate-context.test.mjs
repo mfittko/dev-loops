@@ -7672,7 +7672,7 @@ for (const reason of ["thread_site_changed", "thread_site_unverifiable", "no_com
     const state = interpretFixLoopState({ headMoved: reason !== "no_commit", noCommit: reason === "no_commit", sequenceClosed: true });
     assert.equal(state.state, "full_gate_round");
     const capturePath = path.join(repoRoot, "open-thread.json"), id = { repo: "owner/repo", pr: 2787, headSha, gate: "pre_approval_gate" };
-    await writeFile(capturePath, JSON.stringify({ threads: [{ id: "C19_OPEN", isResolved: false }], comments: [{ threadId: "C19_OPEN", author: { login: "gate" }, body: `${reason}: reassess this exact open thread` }] }));
+    await writeFile(capturePath, JSON.stringify({ threads: [{ id: "C19_OPEN", isResolved: false }], comments: [{ threadId: "C19_OPEN", trusted: true, author: { login: "gate" }, body: `${reason}: reassess this exact open thread` }] }));
     let admitted = false;
     await main(["--repo", id.repo, "--pr", String(id.pr), "--gate", id.gate, "--head-sha", headSha, "--base", baseSha,
       "--angles", '["correctness"]', "--known-findings", capturePath, "--silent"], { repoRoot, run: stubGhRun,
@@ -7704,7 +7704,7 @@ test("writeGateContext --known-findings: full thread bodies go to a hash-bound r
 
     await writeCapture(
       [{ id: "T1", isResolved: false }, { id: "T2", isResolved: true }],
-      [{ threadId: "T1", author: { login: "gate-bot" }, body: longBody }, { threadId: "T2", author: { login: "human" }, body: "resolved-body" }],
+      [{ threadId: "T1", trusted: true, author: { login: "gate-bot" }, body: longBody }, { threadId: "T2", trusted: true, author: { login: "human" }, body: "resolved-body" }],
     );
     const result = await writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot });
     assert.equal(result.prefixHash, empty.prefixHash, "the shared prefix never lists the known findings");

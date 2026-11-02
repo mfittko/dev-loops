@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 import { parseCliTokens } from "../cli/primitives.mjs";
+import { isTrustedGraphqlComment, UNTRUSTED_COMMENT_REMEDY } from "./comment-trust.mjs";
 
 function normalizeId(value, fallback) {
   if (typeof value === "string" && value.trim().length > 0) {
@@ -105,13 +106,17 @@ function normalizeComment(comment, threadId, index, { isResolved = false } = {})
     ? null
     : normalizeId(comment.databaseId, null);
 
+  // ADR 0238: trust is decided once, here. An untrusted comment keeps its author
+  // and id but its text never leaves this function.
+  const trusted = isTrustedGraphqlComment(comment, { allowCopilot: true });
   return {
     id: normalizeId(comment?.id ?? comment?.databaseId, `${threadId}:comment-${index + 1}`),
     databaseId,
     threadId,
     author,
-    body,
-    isActionable: !isResolved && body.length > 0 && author.login.length > 0 && author.type !== "System" && !author.isBot,
+    trusted,
+    body: trusted ? body : "",
+    isActionable: trusted && !isResolved && body.length > 0 && author.login.length > 0 && author.type !== "System" && !author.isBot,
   };
 }
 
@@ -143,10 +148,15 @@ export function parseReviewThreads(payload) {
       .map((comment) => comment.databaseId)
       .filter((value) => value !== null);
 
+    // A thread with comments and no trusted one is skipped (ADR 0238): it is no unresolved blocker and no act item.
+    const untrusted = normalizedComments.length > 0 && !normalizedComments.some((comment) => comment.trusted);
+
     return {
       id: threadId,
       isResolved,
       reviewId,
+      untrusted,
+      untrustedAuthors: untrusted ? [...new Set(normalizedComments.map((comment) => comment.author.login || "unknown"))] : [],
       isActionable: actionableCommentIds.length > 0,
       commentIds,
       commentDatabaseIds,
@@ -160,13 +170,19 @@ export function parseReviewThreads(payload) {
     return threadOrder === 0 ? compareIds(left.id, right.id) : threadOrder;
   });
 
+  const skippedUntrusted = threads
+    .filter((thread) => thread.untrusted && !thread.isResolved)
+    .map((thread) => ({ threadId: thread.id, authors: thread.untrustedAuthors, remedy: UNTRUSTED_COMMENT_REMEDY }));
+
   return {
     summary: {
       totalThreads: threads.length,
-      unresolvedThreads: threads.filter((thread) => !thread.isResolved).length,
+      unresolvedThreads: threads.filter((thread) => !thread.isResolved && !thread.untrusted).length,
+      skippedUntrustedThreads: skippedUntrusted.length,
       actionableThreads: threads.filter((thread) => thread.isActionable).length,
       actionableComments: threads.reduce((count, thread) => count + thread.actionableCommentIds.length, 0),
     },
+    skippedUntrusted,
     threads,
     comments: sortedComments,
   };
@@ -182,7 +198,8 @@ export function parseReviewThreads(payload) {
  */
 export function parseUnresolvedThreadBodies(payload) {
   const rawThreads = extractRawThreads(payload);
-  const { summary } = parseReviewThreads(payload);
+  const { summary, skippedUntrusted } = parseReviewThreads(payload);
+  const skippedIds = new Set(skippedUntrusted.map((entry) => entry.threadId));
   const threads = rawThreads
     .map((thread, threadIndex) => ({ thread, threadIndex }))
     .filter(({ thread }) => !thread?.isResolved)
@@ -191,13 +208,15 @@ export function parseUnresolvedThreadBodies(payload) {
       path: typeof thread?.path === "string" && thread.path.length > 0 ? thread.path : null,
       line: Number.isInteger(thread?.line) ? thread.line : null,
       isOutdated: Boolean(thread?.isOutdated),
-      bodies: extractRawComments(thread).map((comment) =>
-        normalizeBody(comment?.body ?? comment?.bodyText ?? comment?.bodyHTML ?? ""),
-      ),
+      // ADR 0238: an untrusted comment's text is dropped, so a trusted reply to an untrusted root keeps only the reply.
+      bodies: extractRawComments(thread)
+        .filter((comment) => isTrustedGraphqlComment(comment, { allowCopilot: true }))
+        .map((comment) => normalizeBody(comment?.body ?? comment?.bodyText ?? comment?.bodyHTML ?? "")),
     }))
+    .filter(({ threadId }) => !skippedIds.has(threadId))
     .sort((left, right) => compareIds(left.threadId, right.threadId));
 
-  return { summary, threads };
+  return { summary, skippedUntrusted, threads };
 }
 
 // ── Signal classification heuristics ──────────────────────────────────────
