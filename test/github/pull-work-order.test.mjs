@@ -316,6 +316,10 @@ test("codeTreeSkewNote quotes the emitter root, says the identity code may diffe
     assert.ok(note.includes(`--repo-root '${emitter}' scripts/github/pull-work-order.mjs ${execution}`), note);
     assert.match(note, /identity code may differ/);
     assert.doesNotMatch(note, /identity code differs/);
+    const linked = path.join(root, "linked-emitter");
+    await symlink(root, linked);
+    await writeExecutionIndex(path.join(root, "sym"), { executionIdentity: execution, workOrderRef: "review:o/r#7:x", workOrderDigest: "sha256:0", emitterRoot: linked });
+    assert.equal(await codeTreeSkewNote({ execution, tmpRoots: [path.join(root, "sym")], rerun: "x", toolchainRoot: root }), "");
   });
 });
 
