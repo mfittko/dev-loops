@@ -14,11 +14,14 @@ const TARGET = "mfittko/dev-loops";
 
 // The gate's rule bodies and their reason texts moved out of the Claude seam into this shared
 // module, so the move has to be PINNED rather than trusted: the tables below are the ordered rule
-// list, every reason variant's exact string, the two inline denies' place in the same ordered body,
-// the fact-validation refusals and the attribution of an unparsable lifecycle verb. Reordering two
-// checks, rewording a reason or
-// dropping a rule fails here — which is what makes a later edit to the shared set (or a second
-// adapter that consumes it) safe to review.
+// list, each rule's reason strings exactly as the module emits them (including the draft-gate
+// gate-error variants the `readyGate` probe adds to the ready and raw-merge denies), the two inline
+// denies' place in the same ordered body, the fact-validation refusals and the attribution of an
+// unparsable lifecycle verb. Two variants deliberately stay outside the exact-string tables and are
+// pinned by fragment assertions instead: the raw-merge deny's optional "also writes gate evidence"
+// hint (claude-hook-decisions.test.mjs) and the ready verb's unparsable-PR attribution. Reordering
+// two checks, rewording a pinned reason or dropping a rule fails here — which is what makes a later
+// edit to the shared set (or a second adapter that consumes it) safe to review.
 const BASE = Object.freeze({
   role: null,
   repoSlug: TARGET,
@@ -100,6 +103,24 @@ const RULE_FIXTURES = [
     id: "GATE-COMMENT-DRAFT-REQUIREMENTS",
     facts: { ...BASE, command: "gh pr ready 5" },
     reason: "gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #5.",
+  },
+  {
+    // The same rule's PROBED-FAILURE variant: when the draft-gate guard ran and reported an error, the
+    // ready deny names the evidence check instead of the missing comment. No fixture reached it, so a
+    // reworded `draft-gate evidence check failed (...)` message used to leave every suite green.
+    id: "GATE-COMMENT-DRAFT-REQUIREMENTS",
+    facts: { ...BASE, command: "gh pr ready 5", readyGate: { passed: false, error: "draft-gate guard unavailable" } },
+    reason: "gh pr ready blocked: draft-gate evidence check failed (draft-gate guard unavailable).",
+  },
+  {
+    // The raw-merge deny's probed-failure variant: the same `readyGate` error is appended as a suffix to
+    // the merge reason, which no fixture pinned either. The merge verb keeps RAW-GH-PR-MERGE-BYPASS as
+    // its rule id.
+    id: "RAW-GH-PR-MERGE-BYPASS",
+    facts: { ...BASE, command: "gh pr merge 5", readyGate: { passed: false, error: "draft-gate guard unavailable" } },
+    reason:
+      "gh pr merge is forbidden: route the merge through the sanctioned wrapper `node scripts/github/merge-pr.mjs --repo <owner/name> --pr 5 --human-approved-by <login>`, which runs the full precondition set fail-closed (mandatory approver, merge class, fresh approval) — a raw `gh pr merge` bypasses those (RAW-GH-PR-MERGE-BYPASS)." +
+      " (pre-merge gate evidence check also failed: draft-gate guard unavailable)",
   },
 ];
 
@@ -397,7 +418,8 @@ test("a missing or mistyped required fact is refused instead of defaulted (fail 
 
 test("a null or absent facts bag is refused, never thrown on", () => {
   // A throw in a PreToolUse seam does not block the command, so the deny has to survive `null`.
-  const everyFact = ["command", "role", "repoSlug", "managedRepoSlug", "inManagedContext", "humanMergeOnly", "enforceCoordinator"];
+  // `readyGate` is in the list too: it is a validated fact now, so the whole-bag refusal names it.
+  const everyFact = ["command", "role", "repoSlug", "managedRepoSlug", "inManagedContext", "humanMergeOnly", "enforceCoordinator", "readyGate"];
   for (const bag of [undefined, null, {}]) {
     const decision = decideBashGateDeny(bag);
     assert.ok(decision, `facts ${String(bag)} must deny instead of throwing or allowing`);
@@ -407,4 +429,49 @@ test("a null or absent facts bag is refused, never thrown on", () => {
   // The argument-less spelling is the same call as the `undefined` bag above, asserted on its own
   // because it is the form a second adapter's missing facts resolver produces.
   assert.match(decideBashGateDeny().reason, /supplied no valid command/);
+});
+
+/**
+ * `readyGate` input-form coverage (GATE-EXEC-REMEDIATION-SITE-QUERY, #3032): one test per accepted and
+ * rejected form. `readyGate` is the adapter fact whose "not probed" value is meaningful, and it used to
+ * be the ONE fact the required-fact check skipped — a malformed NON-null probe was silently read as "not
+ * probed", so the deny misattributed the block to missing evidence instead of naming the bad fact.
+ */
+const READY_PROBE = { ...BASE, command: "gh pr ready 5" };
+
+test("readyGate accepts null, its 'not probed' value", () => {
+  const decision = decideBashGateDeny({ ...READY_PROBE, readyGate: null });
+  assert.equal(decision.ruleId, "GATE-COMMENT-DRAFT-REQUIREMENTS");
+  assert.equal(decision.reason, "gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #5.");
+});
+
+test("readyGate accepts a well-formed passing probe", () => {
+  assert.equal(decideBashGateDeny({ ...READY_PROBE, readyGate: { passed: true, error: null } }), null);
+});
+
+test("readyGate accepts a well-formed failing probe", () => {
+  const decision = decideBashGateDeny({ ...READY_PROBE, readyGate: { passed: false, error: "draft-gate verdict missing" } });
+  assert.equal(decision.ruleId, "GATE-COMMENT-DRAFT-REQUIREMENTS");
+  assert.equal(decision.reason, "gh pr ready blocked: draft-gate evidence check failed (draft-gate verdict missing).");
+});
+
+test("a readyGate bag with no boolean `passed` is refused naming readyGate", () => {
+  const decision = decideBashGateDeny({ ...READY_PROBE, readyGate: { ok: true } });
+  assert.ok(decision, "a malformed probe must deny instead of degrading to 'not probed'");
+  assert.equal(decision.ruleId, null);
+  assert.match(decision.reason, /supplied no valid readyGate fact/);
+});
+
+test("a readyGate probe whose `passed` is a string is refused naming readyGate", () => {
+  const decision = decideBashGateDeny({ ...READY_PROBE, readyGate: { passed: "true" } });
+  assert.ok(decision, "a mistyped `passed` must deny instead of degrading to 'not probed'");
+  assert.equal(decision.ruleId, null);
+  assert.match(decision.reason, /supplied no valid readyGate fact/);
+});
+
+test("a readyGate probe whose `error` is neither a string nor null is refused naming readyGate", () => {
+  const decision = decideBashGateDeny({ ...READY_PROBE, readyGate: { passed: false, error: 0 } });
+  assert.ok(decision, "a mistyped `error` must deny instead of degrading to 'not probed'");
+  assert.equal(decision.ruleId, null);
+  assert.match(decision.reason, /supplied no valid readyGate fact/);
 });

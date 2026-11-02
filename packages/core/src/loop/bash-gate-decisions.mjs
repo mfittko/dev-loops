@@ -17,8 +17,11 @@
  * facts is REQUIRED and an omitted or mistyped one is refused (fail closed) instead of defaulted: a
  * permissive default switches off the deny it backs (`humanMergeOnly: false` fails
  * STOP-HUMAN-MERGE-001 open, `inManagedContext: false` switches every managed-repo rule off) and the
- * omission is invisible at the call site. `readyGate` alone stays nullable — `null` is its meaningful
- * "not probed" input, which still gates a ready verb:
+ * omission is invisible at the call site. `readyGate` is validated like every other fact, except that
+ * its "not probed" value is meaningful and therefore accepted: `null` (or an absent key, which the
+ * destructuring default turns into `null`) still gates a ready verb, while any other value must be a
+ * well-formed probe — a malformed non-null bag is refused naming `readyGate` instead of silently
+ * degrading to "not probed", which would misreport the block as missing evidence:
  *   - `command` — the Bash command string, and the one fact EVERY rule reads. A caller that omits it,
  *     or names it something else (`cmd`), is refused rather than allowed: without it every rule would
  *     read an `undefined` command and quietly allow.
@@ -31,8 +34,10 @@
  *   - `humanMergeOnly` — the repo's effective `autonomy.humanMergeOnly` invariant.
  *   - `enforceCoordinator` — `DEVLOOPS_COORDINATOR_READONLY=1`, the flag that also gates the
  *     coordinator write boundary.
- *   - `readyGate` — the `gh pr ready` draft-gate evidence probe (`{ passed, error }`). `null`
- *     means "not probed", which gates `gh pr ready` and still denies a raw merge.
+ *   - `readyGate` — the `gh pr ready` draft-gate evidence probe. `null` (or an absent key) means "not
+ *     probed", which gates `gh pr ready` and still denies a raw merge; any other value must be an
+ *     object with a boolean `passed` and a `string|null` `error`, so a malformed probe is refused
+ *     rather than read as "not probed".
  *
  * The unresolve owner allowlist is NOT a Claude-edge rule: it keys on the role name alone, which
  * every role-resolving adapter can supply, so it lives here with the rest of the shared set.
@@ -159,8 +164,11 @@ export const BASH_GATE_RULES = Object.freeze([
  * and a silent default made exactly that omission invisible at the call site. `command` is checked
  * here too — it is the fact every rule reads, so a caller that omits it or spells it `cmd` would
  * otherwise run all of them against an `undefined` command and allow. A slug is nullable (an
- * unresolvable identity still gates, fail closed); `readyGate` is deliberately absent here because
- * `null` is its meaningful "not probed" value.
+ * unresolvable identity still gates, fail closed). `readyGate` is checked here too, with a validator
+ * that keeps its meaningful "not probed" value (`null`, or an absent key) while refusing a malformed
+ * non-null bag: without it `{ ok: true }` or `{ passed: "true" }` would silently degrade to "not
+ * probed", and the deny would then misreport the block as missing evidence instead of naming the bad
+ * fact.
  */
 const ADAPTER_FACTS = Object.freeze([
   ["command", (value) => typeof value === "string"],
@@ -170,6 +178,12 @@ const ADAPTER_FACTS = Object.freeze([
   ["inManagedContext", (value) => typeof value === "boolean"],
   ["humanMergeOnly", (value) => typeof value === "boolean"],
   ["enforceCoordinator", (value) => typeof value === "boolean"],
+  // `null`/absent is the meaningful "not probed" value; any other value must be a real probe of the
+  // documented `{ passed: boolean, error: string|null }` shape, so a malformed bag is refused instead
+  // of being read as "not probed".
+  ["readyGate", (value) =>
+    value === null || value === undefined
+    || (typeof value === "object" && typeof value.passed === "boolean" && (value.error === null || typeof value.error === "string"))],
 ]);
 
 /**
@@ -250,8 +264,9 @@ export function decideBashGateDeny(facts = {}) {
       reason:
         `Bash gate blocked: the caller supplied no valid ${missing.join(", ")} fact(s), so the shared deny ` +
         "decision cannot run. Inject every adapter fact (`command`, `role`, `repoSlug`, `managedRepoSlug`, " +
-        "`inManagedContext`, `humanMergeOnly`, `enforceCoordinator`) instead of omitting one; `readyGate` " +
-        "stays explicitly nullable for its 'not probed' value.",
+        "`inManagedContext`, `humanMergeOnly`, `enforceCoordinator`, `readyGate`) instead of omitting one; " +
+        "`readyGate` accepts only its 'not probed' shapes (`null` or an absent key) or a " +
+        "`{ passed: boolean, error: string|null }` probe.",
     };
   }
   // Past the validation `command` is a required string, so the allow path for a non-string command is
