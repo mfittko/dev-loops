@@ -30,6 +30,9 @@ export const REVIEW_THREADS_QUERY = [
   "          path",
   "          line",
   "          comments(first: 100) {",
+  "            pageInfo {",
+  "              hasNextPage",
+  "            }",
   "            nodes {",
   "              id",
   "              databaseId",
@@ -67,6 +70,15 @@ Options:
                     valid together; the default output shape is unchanged when
                     they are omitted. Canonical loop re-entry read — no
                     post-processing needed beyond --jq '.threads[]'.
+                    The output also carries skippedUntrusted (always emitted,
+                    an empty array included; list-review-threads omits it when
+                    empty): [ { threadId, authors, remedy } ] for unresolved
+                    threads with no trusted comment (ADR 0238), with logins and
+                    no text. summary adds skippedUntrustedThreads and counts
+                    only trusted threads as unresolvedThreads. The default
+                    capture adds per-thread untrusted/untrustedAuthors and a
+                    per-comment trusted flag; an untrusted comment's body is
+                    empty.
   --output <path>   Write JSON output to file in addition to stdout
   --help, -h        Show this help
 ${JQ_OUTPUT_USAGE}

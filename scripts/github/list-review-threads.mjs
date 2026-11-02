@@ -27,6 +27,9 @@ export const LIST_REVIEW_THREADS_QUERY = [
   "          path",
   "          line",
   "          comments(first: 100) {",
+  "            pageInfo {",
+  "              hasNextPage",
+  "            }",
   "            nodes {",
   "              databaseId",
   "              body",
@@ -62,18 +65,22 @@ Required:
   --pr <number>         Pull request number
 Optional:
   --unresolved-only     Only include threads where isResolved is false
-  --author <login>      Only include threads whose first comment author matches
+  --author <login>      Only include threads whose root (first) comment author matches
                         (case-insensitive; "copilot" matches any Copilot review
                         login variant; "all" matches every author)
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/name", "pr": N, "threads": [
-    { "threadId": "...", "commentId": N|null, "author": "..."|null,
+    { "threadId": "...", "trusted": true, "commentId": N|null, "author": "..."|null,
       "body": "...", "isResolved": bool, "isOutdated": bool,
       "path": "..."|null, "line": N|null }, ...
-  ], "skippedUntrusted": [ { "threadId": "...", "authors": [...], "remedy": "..." } ] }
+  ], "skippedUntrusted": [ { "threadId": "...", "authors": [...], "isResolved": bool, "remedy": "..." } ] }
+  commentId and author belong to the root (first) comment, the reply target; body is the
+  first trusted comment's text. "trusted": true is the ingestion marker consumers require.
   Comments from authors who are not an OWNER, MEMBER or COLLABORATOR (the Copilot
-  reviewer excepted) are never listed (ADR 0238); a thread with only such comments
-  appears in skippedUntrusted (omitted when empty), with author logins and no text.
+  reviewer and comments the reading identity authored itself excepted) are never listed
+  (ADR 0238); a thread with only such comments appears in skippedUntrusted (omitted
+  when empty), with author logins and no text. A thread with more than 100 comments
+  and no trusted comment on the first page stays listed with an empty body.
 Error output (stderr, JSON):
   Argument/usage errors:
     { "ok": false, "error": "...", "usage": "..." }
@@ -191,25 +198,30 @@ function excerptBody(rawBody, max = BODY_EXCERPT_MAX_CHARS) {
   return `${text.slice(0, max)}…`;
 }
 
-// ADR 0238: trust is decided here, at ingestion. The listing shows the first TRUSTED
-// comment of a thread; a thread with comments and none trusted is returned as
-// `skipped` (author logins only, no text).
+// ADR 0238: trust is decided here, at ingestion. The listing shows the text of the first
+// TRUSTED comment of a thread; a thread with comments and none trusted is returned as
+// `skipped` (author logins only, no text). commentId and author come from the root
+// comment (ids and logins are not prompt text), so a reply targets a top-level comment.
+// A thread whose comments connection has a next page is not provably all-untrusted:
+// it stays listed (a blocker) with no text.
 function normalizeThreadNode(node, bodyMax) {
   const comments = Array.isArray(node?.comments?.nodes) ? node.comments.nodes : [];
-  const firstComment = comments.find((comment) => isTrustedGraphqlComment(comment, { allowCopilot: true })) ?? null;
-  if (firstComment === null && comments.length > 0) {
+  const trustedComment = comments.find((comment) => isTrustedGraphqlComment(comment, { allowCopilot: true })) ?? null;
+  const truncated = node?.comments?.pageInfo?.hasNextPage === true;
+  if (trustedComment === null && comments.length > 0 && !truncated) {
     const authors = [...new Set(comments.map((comment) => (typeof comment?.author?.login === "string" && comment.author.login.length > 0 ? comment.author.login : "unknown")))];
     return { skipped: { threadId: typeof node?.id === "string" ? node.id : "", authors, isResolved: Boolean(node?.isResolved), remedy: UNTRUSTED_COMMENT_REMEDY } };
   }
-  const commentId = Number.isFinite(firstComment?.databaseId) ? firstComment.databaseId : null;
-  const authorLogin = firstComment?.author?.login;
+  const rootComment = comments[0];
+  const commentId = Number.isFinite(rootComment?.databaseId) ? rootComment.databaseId : null;
+  const authorLogin = rootComment?.author?.login;
   const author = typeof authorLogin === "string" && authorLogin.length > 0 ? authorLogin : null;
   return {
     threadId: typeof node?.id === "string" ? node.id : "",
     trusted: true, // ADR 0238 marker: consumers refuse a thread file without it
     commentId,
     author,
-    body: excerptBody(firstComment?.body, bodyMax),
+    body: excerptBody(trustedComment?.body, bodyMax),
     isResolved: Boolean(node?.isResolved),
     isOutdated: Boolean(node?.isOutdated),
     path: typeof node?.path === "string" ? node.path : null,

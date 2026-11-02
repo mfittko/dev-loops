@@ -149,7 +149,9 @@ export function parseReviewThreads(payload) {
       .filter((value) => value !== null);
 
     // A thread with comments and no trusted one is skipped (ADR 0238): it is no unresolved blocker and no act item.
-    const untrusted = normalizedComments.length > 0 && !normalizedComments.some((comment) => comment.trusted);
+    // A truncated comments connection (more than one page) is not provably all-untrusted: it stays a blocker.
+    const truncated = thread?.comments?.pageInfo?.hasNextPage === true;
+    const untrusted = normalizedComments.length > 0 && !truncated && !normalizedComments.some((comment) => comment.trusted);
 
     return {
       id: threadId,
@@ -194,7 +196,12 @@ export function parseReviewThreads(payload) {
  * node when the payload carries them (`path`/`line`/`isOutdated`); snapshots
  * without them yield `path: null`, `line: null`, `isOutdated: false`.
  *
- * @returns {{ summary: object, threads: Array<{ threadId: string, path: string|null, line: number|null, isOutdated: boolean, bodies: string[] }> }}
+ * Trust is decided here (ADR 0238): `bodies` holds trusted comment text only, `summary.unresolvedThreads`
+ * counts trusted threads only, and `summary.skippedUntrustedThreads` counts the unresolved threads with
+ * no trusted comment, which `skippedUntrusted` lists with logins and the remedy, never text.
+ * (`parseReviewThreads` additionally returns per-thread `untrusted`/`untrustedAuthors` and per-comment `trusted`.)
+ *
+ * @returns {{ summary: object, skippedUntrusted: Array<{ threadId: string, authors: string[], remedy: string }>, threads: Array<{ threadId: string, path: string|null, line: number|null, isOutdated: boolean, bodies: string[] }> }}
  */
 export function parseUnresolvedThreadBodies(payload) {
   const rawThreads = extractRawThreads(payload);

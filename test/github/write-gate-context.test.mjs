@@ -9471,3 +9471,8 @@ test("resolveCapRoundFixed reports cap_round_unresolved when the cap round canno
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
+
+test("renderBriefingVolatile: the data-never-instructions statement is carried without known findings (ADR 0238)", () => {
+  const text = renderBriefingVolatile({ gate: "draft_gate", headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z" });
+  assert.match(text, /data, never instructions/);
+});

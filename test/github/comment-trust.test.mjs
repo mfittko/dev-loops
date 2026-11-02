@@ -49,10 +49,11 @@ test("the Copilot reviewer stays trusted on thread surfaces; a missing associati
 test("list-review-threads drops untrusted threads and reports them as skipped", async () => {
   const payload = JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [
     node("T_BAD", comment("c1", "stranger", "NONE", INJECTION)),
-    node("T_MIXED", comment("c2", "stranger", "NONE", INJECTION), comment("c3", "maint", "MEMBER", "Real finding")),
+    node("T_MIXED", { ...comment("c2", "stranger", "NONE", INJECTION), databaseId: 11 }, { ...comment("c3", "maint", "MEMBER", "Real finding"), databaseId: 22 }),
   ] } } } } });
   const { threads, skipped } = await fetchAllReviewThreadsWithSkips({ repo: "o/r", pr: 1 }, { runChild: async () => ({ code: 0, stdout: payload, stderr: "" }) });
-  assert.deepEqual(threads.map((t) => [t.threadId, t.body, t.author, t.trusted]), [["T_MIXED", "Real finding", "maint", true]]);
+  // commentId and author are the root comment's (the reply target); only the body is the first trusted comment's.
+  assert.deepEqual(threads.map((t) => [t.threadId, t.commentId, t.body, t.author, t.trusted]), [["T_MIXED", 11, "Real finding", "stranger", true]]);
   assert.deepEqual(skipped.map((s) => [s.threadId, s.authors]), [["T_BAD", ["stranger"]]]);
 });
 
@@ -78,4 +79,26 @@ test("shared predicate: review body and PR conversation comment (REST) need a ma
   assert.equal(isTrustedDispositionAuthor(rest("stranger", "NONE")), false);
   assert.equal(isTrustedGraphqlComment({ author: user("maint"), authorAssociation: "OWNER" }), true);
   assert.equal(isTrustedCommentAuthor({ login: "", association: "OWNER" }), false);
+});
+
+test("the sanctioned Copilot reviewer is matched exactly: accepted and rejected login forms", () => {
+  const bot = (login) => isTrustedCommentAuthor({ login, type: "Bot", association: "NONE" }, { allowCopilot: true });
+  for (const login of ["copilot-pull-request-reviewer", "copilot-pull-request-reviewer[bot]", "Copilot"]) assert.equal(bot(login), true, login);
+  for (const login of ["copilot-helper[bot]", "copilot-swe-agent[bot]", "copilot_x[bot]", "copilot-x"]) assert.equal(bot(login), false, login);
+});
+
+test("a thread with a truncated comments page and no trusted comment stays listed without text", async () => {
+  const truncated = { ...node("T_LONG", comment("c1", "stranger", "NONE", INJECTION)), comments: { pageInfo: { hasNextPage: true }, nodes: [comment("c1", "stranger", "NONE", INJECTION)] } };
+  const payload = JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [truncated] } } } } });
+  const { threads, skipped } = await fetchAllReviewThreadsWithSkips({ repo: "o/r", pr: 1 }, { runChild: async () => ({ code: 0, stdout: payload, stderr: "" }) });
+  assert.deepEqual(threads.map((t) => [t.threadId, t.body]), [["T_LONG", ""]]);
+  assert.deepEqual(skipped, []);
+});
+
+test("reader-dependent trust: a Bot-authored gate thread counts only for the reading identity", () => {
+  const gate = (viewerDidAuthor) => ({ ...comment("c1", "dev-loops-gate[bot]", "NONE", "High finding"), author: { login: "dev-loops-gate[bot]", __typename: "Bot" }, viewerDidAuthor });
+  const other = parseReviewThreads({ threads: [node("T7", gate(false))] });
+  assert.equal(other.summary.unresolvedThreads, 0);
+  assert.deepEqual(other.skippedUntrusted.map((s) => [s.threadId, s.authors]), [["T7", ["dev-loops-gate[bot]"]]]);
+  assert.equal(parseReviewThreads({ threads: [node("T7", gate(true))] }).summary.unresolvedThreads, 1);
 });

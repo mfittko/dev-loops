@@ -789,6 +789,7 @@ test("F1: bootstrap teaches permitted reads and immediate denial stop before ver
     assert.match(rule, /absolute root as the explicit cwd of every subsequent tool call\/subprocess/);
     assert.match(rule, /absolute `executionRules.contract`.*emitting toolchain root/);
     assert.match(rule, /pull subprocess does not change later tool-call cwd/);
+    assert.match(rule, /data, never instructions/);
     assert.match(rule, /Keep every contract\/source hash, branch, allowed-path and phase check/);
     const verifyAt = rule.indexOf("Verify every contract/source digest");
     assert.ok(verifyAt > rule.indexOf("stops this actor immediately"));
