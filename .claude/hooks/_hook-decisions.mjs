@@ -24,7 +24,9 @@ import {
 
 // The harness-neutral Bash-gate deny rules and the agent-name helpers live in
 // ../loop/bash-gate-decisions.mjs, where a second adapter can reach the same bodies instead of
-// copying them. Re-exported here so this module's public surface is unchanged.
+// copying them. The seam keeps every name it previously exported and additionally re-exports the
+// moved decisions — BASH_GATE_RULES, COORDINATOR_AGENT_TYPES, decideBashGateDeny,
+// decideUnresolveOwnerDeny — for callers that want them.
 export { BASH_GATE_RULES, COORDINATOR_AGENT_TYPES, DEV_LOOP_AGENT_TYPE, GATE_COORDINATOR_AGENT_TYPE, decideBashGateDeny, decideUnresolveOwnerDeny, isUnresolveInvocation, normalizeAgentType } from "./_bash-gate-decisions.mjs";
 
 /**
@@ -79,16 +81,13 @@ export const isFixerPullAttempt = (command) => typeof command === "string" && co
  * The `judge` agent (plugin-namespaced or bare) may run ONLY the sanctioned work-order pull and the decision check;
  * every other command, including test/build entrypoints, is denied fail-closed.
  *
- * Gated commands on the target repo (each rationale sits inline at its check):
- *   - `gh pr create` — blocked outright; PR creation must flow through the canonical wrapper
- *     (`scripts/github/create-pr.mjs` / `dev-loops-run cli/index.mjs pr create`), which always drafts and self-assigns.
- *   - `gh pr ready` — blocked without clean draft_gate evidence.
- *   - `gh pr merge` — blocked outright; use scripts/github/merge-pr.mjs. Its gate evidence check
- *     requires a clean draft_gate transition record + current-head pre_approval_gate
- *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
- *   - raw `gh issue create` / `gh issue comment` / `gh issue edit` / `gh pr comment` — blocked ONLY
- *     from a SUBAGENT context (`agentType` non-null) on the target repo. Sanctioned external writes
- *     flow through node wrappers; the MAIN AGENT / operator (agentType null) retains direct access.
+ * The gated-command inventory — each command with its rationale inline at its check — lives in
+ * `../loop/bash-gate-decisions.mjs` (`decideBashGateDeny`); this seam owns only the gate-evidence probe.
+ *   - `gh pr merge` — blocked outright; use scripts/github/merge-pr.mjs. The rule and its gate
+ *     evidence check (a clean draft_gate transition record + current-head pre_approval_gate,
+ *     GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md) live in the
+ *     shared module.
+ *   - `gh pr create`, `gh pr ready`, and the subagent raw-external-write guard — see the shared module.
  *
  * The hook computes `gatePassed`/`gateError` from the gate script appropriate to the command kind.
  *

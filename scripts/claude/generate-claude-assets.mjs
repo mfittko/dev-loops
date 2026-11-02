@@ -136,7 +136,6 @@ const HOOK_BUNDLE = [
     target: ".claude/hooks/_hook-decisions.mjs",
     rewrites: [
       ['"../loop/run-context.mjs"', '"./_run-context.mjs"'],
-      ['"../loop/bash-command-classify.mjs"', '"./_bash-command-classify.mjs"'],
       ['"../loop/bash-gate-decisions.mjs"', '"./_bash-gate-decisions.mjs"'],
       ['"../loop/worktree-guard.mjs"', '"./_worktree-guard.mjs"'],
       ['"../loop/work-order-digest.mjs"', '"./_work-order-digest.mjs"'],

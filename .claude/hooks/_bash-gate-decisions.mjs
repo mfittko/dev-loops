@@ -242,9 +242,6 @@ export function decideUnresolveOwnerDeny({ command, role }) {
  */
 export function decideBashGateDeny(facts = {}) {
   const { command } = facts;
-  if (typeof command !== "string") {
-    return null;
-  }
   const missing = ADAPTER_FACTS.filter(([name, isValid]) => !isValid(facts[name])).map(([name]) => name);
   if (missing.length > 0) {
     return {
@@ -255,6 +252,11 @@ export function decideBashGateDeny(facts = {}) {
         "`inManagedContext`, `humanMergeOnly`, `enforceCoordinator`) instead of omitting one; `readyGate` " +
         "stays explicitly nullable for its 'not probed' value.",
     };
+  }
+  // A non-string command is "nothing to gate" only once every required adapter fact has been
+  // validated; checking it first would let a caller that omitted a fact fail open.
+  if (typeof command !== "string") {
+    return null;
   }
   const { role, repoSlug, managedRepoSlug, inManagedContext, humanMergeOnly, enforceCoordinator, readyGate = null } = facts;
   const gatePassed = readyGate?.passed === true;
@@ -545,6 +547,7 @@ export function decideBashGateDeny(facts = {}) {
     ? extractPrNumberFromGhPrMergeAnywhere(command)
     : extractPrNumberFromGhPrReadyAnywhere(command);
   if (prNumber === null) {
+    // The verb's own rule owns this deny: the command names no PR number, so no rule more specific than the triggering verb can be attributed.
     return {
       ruleId: isMerge ? "RAW-GH-PR-MERGE-BYPASS" : "GATE-COMMENT-DRAFT-REQUIREMENTS",
       reason: `${verb} blocked: could not determine the PR number from the command. Include the PR number explicitly.`,
