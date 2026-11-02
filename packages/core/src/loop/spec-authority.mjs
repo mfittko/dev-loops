@@ -341,7 +341,7 @@ export const SPEC_AUTHORITY_VERDICT_SCHEMA = Object.freeze({
       defectClass: `non-empty string when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only)`,
       siteQuery: `non-empty string (a git grep pattern or a space-separated symbol list, never an array) when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only)`,
       remedyKind: "evidence_only when the remedy changes no file; then defectClass and siteQuery are not needed",
-      defectKind: `one of: ${DEFECT_KINDS.join(", ")} (default other); matcher also needs acceptedForms[] and rejectedForms[], doc_lag needs statedSurfaces[]`,
+      defectKind: `one of: ${DEFECT_KINDS.join(", ")} (default other); matcher also needs acceptedForms[] and rejectedForms[], each a non-empty array of strings (verbatim input forms, "" allowed); doc_lag needs statedSurfaces[], a non-empty array of non-empty strings (surface locations); the lists are refused on any other defectKind`,
     }),
   }),
 });
