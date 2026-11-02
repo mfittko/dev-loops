@@ -1146,8 +1146,8 @@ export async function releaseAsyncRunnerOwnership({
       activeRun: null,
       exitSignals: [],
       filePath: null,
-      // RUNNER-HANDOFF-TEARDOWN: a terminal stop with no env run id leaves the claim in place.
-      remedy: `Run pr-runner-coordination.mjs handoff --repo ${normalizeRepoSlug(repo)} --pr ${normalizePr(pr)} --run-id <the id used at claim> to release the claim.`,
+      // RUNNER-HANDOFF-TEARDOWN: a terminal stop with no env run id releases nothing (the state is not read).
+      remedy: `If you claimed this PR, run pr-runner-coordination.mjs handoff --repo ${normalizeRepoSlug(repo)} --pr ${normalizePr(pr)} --run-id <the id used at claim> to release the claim (a safe no-op otherwise).`,
     };
   }
   const filePath = defaultRunnerCoordinationFilePathForTarget({ repo, pr }, cwd);

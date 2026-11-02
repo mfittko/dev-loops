@@ -2601,6 +2601,48 @@ test("copilot-pr-handoff releases runner ownership at the terminal human-checkpo
   }
 });
 
+test("copilot-pr-handoff terminal stop with no env run id carries the skipped release and its remedy (#2884)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-release-skipped-"));
+
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-owner", cwd: tempDir });
+
+    // Same gh script as the review-unavailable stop above: a terminal stop reached without a run id.
+    const prView = ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"];
+    const { env } = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo"], stdout: OPEN_PR + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: prView, stdout: '{"reviews":[]}\n' },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
+        stderr: "gh: Reviews may only be requested from collaborators.\n",
+        exitCode: 1,
+      },
+      { assertArgs: prView, stdout: '{"reviews":[]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: prView, stdout: '{"reviews":[]}\n' },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], {
+      cwd: tempDir,
+      env: { ...env, DEVLOOPS_RUN_ID: "" },
+    });
+
+    assert.equal(result.code, 0);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.terminal, true);
+    assert.equal(output.runnerRelease.status, "skipped_no_async_run_id");
+    assert.match(output.runnerRelease.remedy, /handoff --repo owner\/repo --pr 17 --run-id/);
+
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-owner");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("copilot-pr-handoff stops when human comment check fails with non-zero exit", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-human-fetch-fail-"));
 

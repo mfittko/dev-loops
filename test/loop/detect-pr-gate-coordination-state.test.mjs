@@ -2410,6 +2410,45 @@ test("detect-pr-gate-coordination-state auto-releases the runner-coordination lo
     assert.equal(releaseCalls[0].repo, "owner/repo");
     assert.equal(releaseCalls[0].pr, 10);
     assert.equal(releaseCalls[0].env.DEVLOOPS_RUN_ID, "");
+    assert.equal(result.runnerRelease, undefined, "a successful release is not surfaced");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("detect-pr-gate-coordination-state carries the skipped release at a terminal stop (#2884)", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-runner-release-skipped-"));
+  try {
+    const body = `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\nNo AC/DoD sections at all.\n`;
+    const env = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+    const skipped = { ok: true, status: "skipped_no_async_run_id", remedy: "run handoff" };
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      buildMockRuntime(env, { releaseAsyncRunnerOwnershipImpl: async () => skipped }),
+    );
+
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    assert.deepEqual(result.runnerRelease, skipped);
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
