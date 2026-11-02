@@ -2063,7 +2063,7 @@ const isUnsealedDeltaRecord = (tmpRoot, head) => {
 };
 
 /** The last candidate head of the sealed clearing chain that begins at `start`. */
-function clearingChainEnd(tmpRoot, start, visited) {
+function clearingChainEnd(tmpRoot, start, visited, { allowUnsealedEnd = false } = {}) {
   const seen = new Set();
   let last;
   for (let record = start; record;) {
@@ -2075,7 +2075,7 @@ function clearingChainEnd(tmpRoot, start, visited) {
     visited?.add(next);
     record = clearingDeltaRecord(tmpRoot, next);
     // A record at the candidate that exists but is not verifiably sealed (corrupt or seal removed) breaks the chain: its end is not trusted.
-    if (!record && isUnsealedDeltaRecord(tmpRoot, next)) return undefined;
+    if (!record && isUnsealedDeltaRecord(tmpRoot, next)) { return allowUnsealedEnd ? last : undefined; } // allowUnsealedEnd: extend-cap-round-chain needs the end of the sealed prefix to refuse record_not_clearing
   }
   return last;
 }
@@ -2135,18 +2135,8 @@ export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefNam
   for (const start of starts.filter(covering)) {
     const seededFrom = normalizeSha(start.reviewBaselineHead);
     if (seededFrom && seededFrom !== normalizeSha(capHead)) heads.add(seededFrom);
-    // Each record is read once per step: the end and the visited heads come from the same read. A per-start cycle or invalid candidate has no end, as in clearingChainEnd.
-    const seen = new Set();
-    let last;
-    for (let record = start; record;) {
-      const next = normalizeSha(record.candidateHead);
-      if (!next || seen.has(next)) { last = undefined; break; }
-      seen.add(next);
-      last = next;
-      heads.add(next);
-      record = clearingDeltaRecord(tmpRoot, next);
-      if (!record && isUnsealedDeltaRecord(tmpRoot, next)) { if (!allowUnsealedEnd) last = undefined; break; } // allowUnsealedEnd: extend-cap-round-chain needs the end of the sealed prefix to refuse record_not_clearing
-    }
+    // The end and the visited heads come from one read of each record, in the shared clearingChainEnd.
+    const last = clearingChainEnd(tmpRoot, start, heads, { allowUnsealedEnd });
     if (last) ends.push(last);
   }
   return { ends, heads: [...heads] };
