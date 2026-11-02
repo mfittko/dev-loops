@@ -819,6 +819,8 @@ async function resolveUnverifiedFixerHandoff({ repo, pr, currentHeadSha, tmpRoot
     for (const entry of Array.isArray(handoff.dispositions) ? handoff.dispositions : []) {
       if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.threadId === "string") {
         incomplete.push({ threadId: entry.threadId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
+      } else if (entry?.disposition === FIXER_DISPOSITION_KIND.TACKLED && typeof entry.reviewId === "string") {
+        incomplete.push({ reviewId: entry.reviewId, expectedCommit: entry.fixingCommitSha ?? null, failedStep: FIXER_DISPOSITION_FAILED_STEP.NOT_VERIFIED });
       }
     }
   }

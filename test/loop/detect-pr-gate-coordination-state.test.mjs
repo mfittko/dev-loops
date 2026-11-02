@@ -4147,6 +4147,17 @@ test("detect-pr-gate-coordination-state reports not_verified for a delivered tac
   });
 });
 
+test("detect-pr-gate-coordination-state reports not_verified for a tackled review-body handoff, and not for a deferred one", async () => {
+  for (const [key, id, disposition, warned] of [["reviewId", "PRR_R1", "tackled", true], ["reviewId", "PRR_R1", "deferred", false], ["threadId", "PRRT_x", "rejected", false]]) {
+    const handoffRaw = JSON.stringify({ headSha: "abc9988776", dispositions: [{ [key]: id, fixingCommitSha: "fed9876543fed9876543fed9876543fed9876543", disposition }] });
+    await runNotVerifiedFixture({ handoffRaw }, (result) => {
+      assert.equal(result.ok, true);
+      if (warned) assert.match(result.fixerDispositionWarning.warning, /review PRR_R1: not_verified/);
+      else assert.equal(result.fixerDispositionWarning ?? null, null);
+    });
+  }
+});
+
 test("detect-pr-gate-coordination-state keeps not_verified after a later commit_only emission overwrote the plan", async () => {
   await runNotVerifiedFixture({ phase: "commit_only" }, (result) => {
     assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);

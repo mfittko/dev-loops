@@ -123,9 +123,10 @@ already resolved live is left alone.
 In --check mode checkpointPath is null and all evidence remains unchanged.
 Output for normal verification or --check (stdout, JSON):
   { "ok": true, "repo": "owner/name", "pr": 17, "headSha": "...", "checkpointPath": "...",
-    "complete": true|false, "incomplete": [{ threadId, expectedCommit, failedStep, deltaStatus?, deltaRecord? }],
+    "complete": true|false, "incomplete": [{ threadId | reviewId, expectedCommit, failedStep, error?, deltaStatus?, deltaRecord? }],
     "forbiddenActions": [...], "nextAction": "..."|null, "reason": "..."|null,
-    "actions": [{ threadId, ok, step? , error? }] }
+    "actions": [{ threadId | reviewId, ok, step? , error? }] }
+  A review-body run reports reviewId entries; its action step is marker_comment_posted.
 Output for --construct (stdout, JSON):
   { "ok": true, "constructed": true, "outputRef": "..." }
   complete and checkpointPath are absent; normal verification remains mandatory.
@@ -466,6 +467,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
   }
   // A review-body order pins one review: the handoff needs its entry, and the live body must still be the pinned one.
   let reviewId = null;
+  let reviewBodySha256 = null;
   const reviewRead = (order.requiredReads ?? []).find((read) => read?.kind === "review-body");
   if (reviewRead) {
     const bytes = await readFile(reviewRead.path);
@@ -474,8 +476,12 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       throw new Error(`the work order's review snapshot ${reviewRead.path} differs from the sha256 or authority.sourceDigest the work order binds`);
     }
     reviewId = snapshot.reviewId;
+    reviewBodySha256 = snapshot.bodySha256;
     const foreign = handoff.dispositions.filter((entry) => entry.reviewId && entry.reviewId !== reviewId).map((entry) => entry.reviewId);
     if (foreign.length) throw new Error(`the handoff carries disposition entries for review(s) ${foreign.join(", ")}, not the pinned review ${reviewId}; remove them from the work order's outputRef`);
+    // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: a review-body order has no thread to reply to or resolve.
+    const stray = handoff.dispositions.filter((entry) => entry.reviewId !== reviewId);
+    if (stray.length) throw new Error(`the handoff for review-body order ${reviewId} must hold exactly one entry for the pinned review; remove the ${stray.length} other entr${stray.length === 1 ? "y" : "ies"} (a review-body order has no thread to reply to or resolve) from the work order's outputRef`);
     if (!handoff.dispositions.some((entry) => entry.reviewId === reviewId)) {
       throw new Error(`missing_from_handoff: the handoff has no disposition entry for source review ${reviewId}; write { reviewId, fixingCommitSha, disposition } to the work order's outputRef`);
     }
@@ -610,6 +616,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     completion,
     constructedReport: raw,
     reviewId,
+    reviewBodySha256,
     source: order.source,
     handoffPath,
     bindActiveFixer,
@@ -794,7 +801,7 @@ async function verifyFixerDispositionCore(
   const logPath = buildLogPath({ repo: options.repo, pr: options.pr, gate: "fixer-disposition", headSha: options.headSha, tmpRoot });
   const fullPath = path.resolve(repoRoot, logPath);
   const runtime = { env, ghCommand, runChild };
-  const { handoff, actList, deltaStatuses, completion, constructedReport, reviewId, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
+  const { handoff, actList, deltaStatuses, completion, constructedReport, reviewId, reviewBodySha256, source, handoffPath, delivery, bindActiveFixer } = await loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot: path.resolve(repoRoot, tmpRoot), runtime });
   // The observed head must be the live PR head, never a caller claim.
   const live = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid,statusCheckRollup"], env);
   const livePayload = live.code === 0 ? (() => { try { return JSON.parse(live.stdout); } catch { return null; } })() : null;
@@ -1032,6 +1039,11 @@ async function verifyFixerDispositionCore(
         continue;
       }
       try {
+        // The body was checked once at load; re-check it now, so an edit made since then is never marked addressed.
+        const liveReview = (await listRestPrReviews({ repo: options.repo, pr: options.pr }, runtime)).find((review) => review?.node_id === id);
+        if (!liveReview || createHash("sha256").update(String(liveReview.body ?? ""), "utf8").digest("hex") !== reviewBodySha256) {
+          throw new Error(`review ${id} ${liveReview ? "changed after the work order pinned its body" : "is gone from the PR"}; re-emit the work order: dev-loops-run scripts/loop/emit-fixer-work-order.mjs --review-id ${id} (with the original --repo, --pr, --head-sha, --phase and --harness)`);
+        }
         const body = `<!-- dev-loops:review-body-disposition review=${id} fix=${expectedCommit} -->\nAddressed review ${id} in commit ${expectedCommit}.`;
         const posted = await runChild(ghCommand, ["api", `repos/${options.repo}/issues/${options.pr}/comments`, "-f", `body=${body}`], env);
         if (posted.code !== 0) throw new Error(posted.stderr.trim() || `exit code ${posted.code}`);
