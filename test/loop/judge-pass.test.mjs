@@ -1741,15 +1741,19 @@ test("judge-pass J5: a plan that does not reproduce across two code trees names 
   const { root, plan, runPass } = await deliveryCase();
   const forged = { ...plan, workOrder: { ...plan.workOrder, authority: { ...plan.workOrder.authority, findingsDigest: "0".repeat(64) } } };
   await writeFile(path.join(root, "forged-plan.json"), JSON.stringify(forged));
-  await assert.rejects(runPass({ judgePlan: "./forged-plan.json" }), (err) => !/code-tree skew/.test(err.message));
+  await assert.rejects(runPass({ judgePlan: "./forged-plan.json" }), (err) => /does not reproduce the work order/.test(err.message) && !/code-tree skew/.test(err.message));
   const emitter = await mkdtemp(path.join(os.tmpdir(), "judge-pass-emitter-"));
-  await writeFile(path.join(emitter, "package.json"), JSON.stringify({ name: "dev-loops", version: "9.9.9" }));
-  const indexFile = executionIndexPath(path.join(root, "tmp"), plan.executionIdentity);
-  await writeFile(indexFile, JSON.stringify({ ...JSON.parse(await readFile(indexFile, "utf8")), emitterRoot: emitter }));
-  await assert.rejects(runPass({ judgePlan: "./forged-plan.json" }), (err) => {
-    for (const part of [emitter, "dev-loops 9.9.9", `dev-loops-run --repo-root ${emitter} scripts/loop/judge-pass.mjs`]) assert.ok(err.message.includes(part), part);
-    return /does not reproduce the work order/.test(err.message);
-  });
+  try {
+    await writeFile(path.join(emitter, "package.json"), JSON.stringify({ name: "dev-loops", version: "9.9.9" }));
+    const indexFile = executionIndexPath(path.join(root, "tmp"), plan.executionIdentity);
+    await writeFile(indexFile, JSON.stringify({ ...JSON.parse(await readFile(indexFile, "utf8")), emitterRoot: emitter }));
+    await assert.rejects(runPass({ judgePlan: "./forged-plan.json" }), (err) => {
+      for (const part of [emitter, "dev-loops 9.9.9", `dev-loops-run --repo-root ${emitter} scripts/loop/judge-pass.mjs`]) assert.ok(err.message.includes(part), part);
+      return /does not reproduce the work order/.test(err.message);
+    });
+  } finally {
+    await rm(emitter, { recursive: true, force: true });
+  }
 });
 
 test("judge-pass J5: a non-ledger required read changed after the pull refuses at acceptance", async () => {
