@@ -1,47 +1,23 @@
 // GENERATED from packages/core/src/loop/bash-gate-decisions.mjs by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate.
 /**
- * Harness-neutral Bash-gate deny decisions.
- *
- * The Bash-gate deny rules moved here VERBATIM from the Claude Code PreToolUse seam
+ * Harness-neutral Bash-gate deny decisions, moved VERBATIM out of the Claude Code PreToolUse seam
  * (`packages/core/src/claude/hook-decisions.mjs`, `decideBashGate`), which now delegates to
- * `decideBashGateDeny` below: same evaluation order, same predicates, same reason texts. The Claude
- * verdicts are therefore unchanged, and `packages/core/test/bash-gate-decisions.test.mjs` pins the
- * ordered rule list and every reason string so a later edit cannot drift them.
+ * `decideBashGateDeny`: same evaluation order, predicates and reason texts. The rules key on the
+ * command string plus injected facts, never on Claude machinery, so a second adapter can reach these
+ * same bodies instead of growing a drifting copy. The two rules that DO key on Claude role machinery
+ * — the judge command restriction and the fixer pull-line / grant binding — stay at that edge. The
+ * fact list and rule inventory are owned by `skills/docs/cross-harness-regression-contract.md`.
  *
- * The rules live in a harness-neutral module because none of them ever keyed on Claude machinery:
- * each reads the command string plus an injected fact set. A second adapter (the Pi `tool_call`
- * handler) can therefore reach these SAME bodies instead of growing a copy that drifts from them.
- * The two rules that DO key on Claude role machinery — the judge command restriction and the fixer
- * pull-line / grant binding — stay at the Claude edge in `hook-decisions.mjs`.
+ * Facts are injected per call, so this module stays pure. Every fact is REQUIRED, and an omitted or
+ * mistyped one is refused fail-closed instead of defaulted: a permissive default silently switches
+ * off the deny it backs (`humanMergeOnly: false` fails STOP-HUMAN-MERGE-001 open) and the omission is
+ * invisible at the call site. `readyGate` is nullable as its own meaningful "not probed" value, which
+ * still gates `gh pr ready`; any other value must be a well-formed probe.
  *
- * Each adapter gathers its own facts and injects them, so this module stays pure. Every one of those
- * facts is REQUIRED and an omitted or mistyped one is refused (fail closed) instead of defaulted: a
- * permissive default switches off the deny it backs (`humanMergeOnly: false` fails
- * STOP-HUMAN-MERGE-001 open, `inManagedContext: false` switches every managed-repo rule off) and the
- * omission is invisible at the call site. `readyGate` is validated like every other fact, except that
- * its "not probed" value is meaningful and therefore accepted: `null` (or an absent key, which the
- * destructuring default turns into `null`) still gates a ready verb, while any other value must be a
- * well-formed probe — a malformed non-null bag is refused naming `readyGate` instead of silently
- * degrading to "not probed", which would misreport the block as missing evidence:
- *   - `command` — the Bash command string, and the one fact EVERY rule reads. A caller that omits it,
- *     or names it something else (`cmd`), is refused rather than allowed: without it every rule would
- *     read an `undefined` command and quietly allow.
- *   - `role` — the calling agent: the Claude `agent_type` today, and the Pi role resolved from the
- *     calling session's `active_agent` tag once the Pi adapter injects it. `null` is the
- *     unrestricted main agent / operator; any other string, including Pi's fail-closed unresolved
- *     `""`, is a subagent context.
- *   - `inManagedContext` / `managedRepoSlug` / `repoSlug` — the resolved repo identity. A managed
- *     context whose identity cannot be resolved still gates (fail closed).
- *   - `humanMergeOnly` — the repo's effective `autonomy.humanMergeOnly` invariant.
- *   - `enforceCoordinator` — `DEVLOOPS_COORDINATOR_READONLY=1`, the flag that also gates the
- *     coordinator write boundary.
- *   - `readyGate` — the `gh pr ready` draft-gate evidence probe. `null` (or an absent key) means "not
- *     probed", which gates `gh pr ready` and still denies a raw merge; any other value must be an
- *     object with a boolean `passed` and a `string|null` `error`, so a malformed probe is refused
- *     rather than read as "not probed".
- *
- * The unresolve owner allowlist is NOT a Claude-edge rule: it keys on the role name alone, which
- * every role-resolving adapter can supply, so it lives here with the rest of the shared set.
+ * `BASH_GATE_RULES` is the ordered registry of registered rule IDs, whose ids and reason literals are
+ * pinned by `packages/core/test/bash-gate-decisions.test.mjs`. Inline denies instead carry
+ * `ruleId: null`. When a `gh pr ready` / `gh pr merge` command names no PR number, no rule more
+ * specific than the triggering verb is attributable, so that site borrows the verb's registry id.
  *
  * Pure and side-effect free.
  */
