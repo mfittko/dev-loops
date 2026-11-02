@@ -119,7 +119,7 @@ export async function extendCapRoundChain(options, {
   // Only commits in E..HEAD that the base does not hold count: a base-only merge after E brings base commits, not PR logic.
   const range = [`${chainEnd}..${head}`, `^origin/${baseRefName}`];
   const rules = resolveClassifyRules((await loadDevLoopConfigStrict({ repoRoot })).config);
-  const files = [...new Set(git(repoRoot, ["log", "--no-merges", "--no-renames", "--no-relative", "--name-only", "--format=", ...range]).split("\n").filter(Boolean))];
+  const files = [...new Set(git(repoRoot, ["log", "--no-merges", "--no-renames", "--no-relative", "--ignore-submodules=none", "--name-only", "--format=", ...range]).split("\n").filter(Boolean))];
   const logic = files.filter((f) => !["docs", "test"].includes(classifyFile(f, rules)));
   for (const merge of git(repoRoot, ["rev-list", "--merges", ...range]).split("\n").filter(Boolean)) {
     const fromHead = git(repoRoot, ["rev-parse", `${merge}^1`]);
@@ -186,7 +186,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     stderr.write(`${JSON.stringify(result)}\n`);
     return 1;
   }
-  return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+  return emitResult(result, { jq: options.jq, fields: options.fields, silent: options.silent, stdout, stderr });
 }
 
 if (isDirectCliRun(import.meta.url)) {
