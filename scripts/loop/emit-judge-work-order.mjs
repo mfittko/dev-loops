@@ -162,9 +162,10 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
   const operatorFocus = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined);
   if (!prBodyFile) throw Object.assign(new Refusal("--pr-body-file is required: write the PR body with dev-loops-run scripts/github/view-pr.mjs --repo <owner/name> --pr <N> --jq '.pr.body' > <pr-body-path> and pass it, so the slice-linkage coercion is armed"), { refusal: "pr_body_file_required" });
   const prBody = await readSource("pr-body", abs(prBodyFile));
-  // Bind the body file to this round: it must be non-empty and appear in the PR body of the pinned evidence read, so a stale, foreign or placeholder file cannot disarm the coercion.
+  // Bind the body file to this round: it must be non-empty and equal the fenced `## PR body` section of the pinned evidence read (write-gate-context.mjs), so a stale, truncated, foreign or placeholder file cannot disarm the coercion.
   const prBodyText = prBody.bytes.toString("utf8");
-  if (prBodyText.trim() === "" || !evidence.bytes.toString("utf8").includes(prBodyText.trim())) throw Object.assign(new Refusal(`--pr-body-file ${prBodyFile} is empty or differs from the PR body in the pinned gate-context evidence; rewrite it with view-pr.mjs --jq '.pr.body' at the current head`), { refusal: "pr_body_mismatch" });
+  const evidencePrBody = evidence.bytes.toString("utf8").match(/^## PR body\n\n(`{3,})\n([\s\S]*?)\n\1(?:\n|$)/m)?.[2] ?? null;
+  if (prBodyText.trim() === "" || prBodyText.trim() !== evidencePrBody) throw Object.assign(new Refusal(`--pr-body-file ${prBodyFile} is empty or differs from the \`## PR body\` section of the pinned gate-context evidence; rewrite it with view-pr.mjs --jq '.pr.body' at the current head`), { refusal: "pr_body_mismatch" });
   const linkageIssues = sliceLinkageIssues(parseSource(spec).nonGoals, prBodyText, repo);
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
   const workOrder = {

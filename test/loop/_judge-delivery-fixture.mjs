@@ -14,7 +14,7 @@ export const JUDGE_SPEC = { acceptanceCriteria: ["Fix the finding"], definitionO
 
 // The judge emitter binds --pr-body-file to the PR body of the gate-context evidence read; write both from one body.
 export async function bindEvidenceToPrBody(root, { repo, pr, gate, headSha }, body) {
-  const evidence = `## PR body\n${body}`;
+  const evidence = `## PR body\n\n\`\`\`\n${body.trim()}\n\`\`\`\n`;
   await mkdir(path.join(root, "judge-fixture"), { recursive: true });
   await writeFile(path.join(root, "judge-fixture", "evidence.md"), evidence);
   const contextPath = path.join(root, buildGateContextPath({ repo, pr, gate, headSha }));

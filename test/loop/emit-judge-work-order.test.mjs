@@ -592,7 +592,11 @@ test("an omitted --pr-body-file refuses judge emission instead of skipping the s
 test("a --pr-body-file that is empty or differs from the pinned evidence PR body refuses with pr_body_mismatch", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
-    for (const body of ["", "   \n", "Closes #2883\n\n## Non-goals\n\n- Reopen #2883 on merge.\n"]) {
+    const current = "Closes #2883\n\n## Non-goals\n\n- Reopen #2883 on merge.\n";
+    await bindEvidenceToPrBody(root, sources, current);
+    // A prefix (stale pre-edit body) and a truncated body are substrings of the evidence but not its PR body section.
+    for (const body of ["", "   \n", current, "Closes #2883", "Closes #2883\n\n## Non-goals\n"]) {
+      await bindEvidenceToPrBody(root, sources, body === current ? "Declared scope: other.\n" : current);
       await writeFile(path.join(root, "pr-body.md"), body);
       await assert.rejects(emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" }), (err) => err.refusal === "pr_body_mismatch", JSON.stringify(body));
     }

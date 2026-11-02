@@ -4,4 +4,4 @@
 
 ### Changed
 
-- emit-judge-work-order requires --pr-body-file and refuses with pr_body_file_required without it; the file must match the PR body in the pinned gate-context evidence or the emitter refuses with pr_body_mismatch (#2883)
+- emit-judge-work-order requires --pr-body-file and refuses with pr_body_file_required without it; the file must equal the `## PR body` section of the pinned gate-context evidence or the emitter refuses with pr_body_mismatch (#2883)
