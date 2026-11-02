@@ -16,6 +16,8 @@ The carry also reads the `pre_approval_gate` marker comments to decide whether t
 
 A headerless Copilot review whose body states that Copilot reviewed no files classifies as `unrecognized` in `classifyCopilotReviewBodyDisposition`. The zero-file wording covers both "wasn't able to review any files" and "reviewed 0 out of N changed files". Such a review is therefore a body-only review with findings. Below the effective round cap it converges only when an `operator`-form disposition record names it for the current head (ADR 0215). At the cap the existing round-cap fallback applies. Other headerless reviews keep their current classification.
 
+A zero-file review on the current head follows the unchanged same-head rules. It reads as unresolved body feedback, so the loop state is `unresolved_feedback_present` and the loop does not re-request Copilot. An `operator` disposition record for the current head or a new head clears it.
+
 When the read of the `pre_approval_gate` marker comments fails, the carry refuses with a typed reason that starts with `copilot_reviews_unreadable`. This reason is distinct from the not-converged reason.
 
 ## Consequences
