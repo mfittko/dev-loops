@@ -720,7 +720,7 @@ function parseTopLevelCommand(argv) {
 // CLI-CHECKOUT-DELEGATION: an installed CLI runs the source checkout's CLI for these categories.
 const CHECKOUT_DELEGATED_CATEGORIES = new Set(["gate", "loop", "pr"]);
 
-export function findSkewedCheckout(cwd, runningRoot = REPO_ROOT) {
+export function findSkewedCheckout(cwd) {
   for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
     let pkg = null;
     try { pkg = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")); } catch { /* no package.json here */ }
@@ -729,7 +729,7 @@ export function findSkewedCheckout(cwd, runningRoot = REPO_ROOT) {
       try {
         realpathSync(path.join(dir, "cli/index.mjs"));
         const root = realpathSync(dir);
-        return root === realpathSync(runningRoot) ? null : { root, version };
+        return root === realpathSync(REPO_ROOT) ? null : { root, version };
       } catch { /* no CLI entry: keep walking */ }
     }
     if (path.dirname(dir) === dir) return null;
