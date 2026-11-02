@@ -73,7 +73,8 @@ Optional:
                                merges, comments or writes, and prints JSON with
                                mergeClass (drain|escalated|null), approvalPath
                                (standing_authorization | human_review |
-                               comment_marker), approveMergeLine (the exact
+                               comment_marker; null with mergeClass null when size
+                               facts are missing), approveMergeLine (the exact
                                "approve merge <headSha>" line for comment_marker),
                                sizeClass, and EVERY failing precondition. Exit 0
                                whenever the preconditions could be evaluated
@@ -240,14 +241,14 @@ export function parseMergePrCliArgs(argv) {
 // current-head pre_approval_gate verdicts, unresolved threads, the runner lock,
 // and fan-out provenance — reused wholesale (non-goal: do not re-derive the set).
 const DETECT_EVIDENCE_PATH = fileURLToPath(new URL("./detect-checkpoint-evidence.mjs", import.meta.url));
-export function buildDetectEvidenceArgv({ repo, pr, baseRefName }) {
-  return [DETECT_EVIDENCE_PATH, "--repo", repo, "--pr", String(pr), ...(baseRefName ? ["--base-ref-name", baseRefName] : [])];
+export function buildDetectEvidenceArgv({ repo, pr, baseRefName, readOnly }) {
+  return [DETECT_EVIDENCE_PATH, "--repo", repo, "--pr", String(pr), ...(baseRefName ? ["--base-ref-name", baseRefName] : []), ...(readOnly ? ["--read-only"] : [])];
 }
-function defaultDetectEvidence({ repo, pr, env, cwd, baseRefName }) {
+function defaultDetectEvidence({ repo, pr, env, cwd, baseRefName, readOnly }) {
   return new Promise((resolve) => {
     execFile(
       process.execPath,
-      buildDetectEvidenceArgv({ repo, pr, baseRefName }),
+      buildDetectEvidenceArgv({ repo, pr, baseRefName, readOnly }),
       { env, cwd, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
         let parsed = null;
@@ -256,7 +257,9 @@ function defaultDetectEvidence({ repo, pr, env, cwd, baseRefName }) {
         // we could no longer read the size-budget outcome (which sets the merge
         // class), so treat it as a gate_evidence failure and fail closed.
         const ok = !error && parsed !== null;
-        const size = parsed?.preApprovalGate ?? {};
+        // Size facts come from the current-head pre_approval marker the detector validates, and survive its size-approval failure.
+        const marker = parsed?.preApprovalGateMarker;
+        const size = marker && marker.headSha === parsed?.currentHeadSha ? marker : {};
         const failures = Array.isArray(parsed?.preMergeGateCheck?.failures)
           ? parsed.preMergeGateCheck.failures
           : parsed?.error
@@ -658,8 +661,12 @@ export function buildMergeRecordComment({ approvalVia, approvedBy, headSha, merg
   return `merge-pr record: merged head \`${headSha}\` (${mergeClass} merge); approvalVia \`${approvalVia}\`; approver \`${approvedBy}\`.`;
 }
 
+const POST_MERGE_COMMENT_TIMEOUT_MS = 60_000;
 async function defaultPostMergeComment({ repo, pr, body, env, ghCommand, runChild }) {
-  const result = await runChild(ghCommand, ["pr", "comment", String(pr), "--repo", repo, "--body", body], env);
+  // ponytail: runChild takes no timeout, so bound the wait (the child is left to finish); a shared-primitive timeout is a separate change.
+  let timer;
+  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("gh pr comment timed out")), POST_MERGE_COMMENT_TIMEOUT_MS); });
+  const result = await Promise.race([runChild(ghCommand, ["pr", "comment", String(pr), "--repo", repo, "--body", body], env), timeout]).finally(() => clearTimeout(timer));
   if (!result || result.code !== 0) throw new Error(String(result?.stderr ?? "").trim() || "gh pr comment returned no result");
 }
 
@@ -715,7 +722,7 @@ export async function mergePr(options, runtime = {}) {
     { env, ghCommand, runChild },
   )).map((c) => ({ login: c?.user?.login ?? null, body: c?.body ?? "", type: c?.user?.type ?? null }));
 
-  const evidence = await detectEvidence({ repo: options.repo, pr: options.pr, env, cwd, baseRefName });
+  const evidence = await detectEvidence({ repo: options.repo, pr: options.pr, env, cwd, baseRefName, readOnly: options.check === true });
   const configLoad = await loadConfig({ repoRoot: resolveRepoRoot(cwd) });
 
   // Fail closed on a config load/validation error: an unreadable `.devloops` is
@@ -842,8 +849,9 @@ export async function mergePr(options, runtime = {}) {
   // Unreadable evidence, or evidence for another head, has no size outcome for this head: sizeClass is unknown, and so is mergeClass unless a stable release forces escalated.
   const approval = {
     ...describeApproval({ verdict, headSha: currentHeadSha, sizeClass: evidence.sizeOutcome }),
-    ...(evidenceHeadMismatch || (evidence.ok !== true && !evidence.sizeOutcome)
-      ? { sizeClass: null, ...(options.stableRelease === true ? {} : { mergeClass: null }) }
+    // Missing size facts also leave the class unknown, and the approval path with it: nothing is confirmed as standing_authorization or drain.
+    ...(evidenceHeadMismatch || !evidence.sizeOutcome
+      ? { sizeClass: null, ...(options.stableRelease === true ? {} : { mergeClass: null, approvalPath: null, approveMergeLine: null }) }
       : {}),
   };
   // Escalated with no head-pinned approval: name the class, the exact approval line and the size class.

@@ -1587,3 +1587,35 @@ test("--check without an approver does not match an approval by a real account n
   assert.equal(result.approvalPath, "comment_marker");
   assert.ok(result.failures.some((f) => f.precondition === "merge_approval"));
 });
+
+test("buildDetectEvidenceArgv adds --read-only only when asked", () => {
+  assert.equal(buildDetectEvidenceArgv({ repo: "o/r", pr: 5, readOnly: true }).includes("--read-only"), true);
+  assert.equal(buildDetectEvidenceArgv({ repo: "o/r", pr: 5 }).includes("--read-only"), false);
+});
+
+test("--check asks the detector for read-only evidence (no runner heartbeat write); a real run does not", async () => {
+  const seen = [];
+  for (const check of [true, false]) {
+    const { runtime } = makeRuntime();
+    const detect = runtime.detectEvidence;
+    runtime.detectEvidence = async (opts) => { seen.push(opts.readOnly); return detect(opts); };
+    await mergePr(baseOptions({ check, humanApprovedBy: "mfittko" }), runtime).catch(() => {});
+  }
+  assert.deepEqual(seen, [true, false]);
+});
+
+test("--check keeps the escalated class when the detector failed its size-approval gate (escalated, no approval)", async () => {
+  const { runtime } = makeRuntime({ evidence: { ok: false, sizeOutcome: "escalate", touchesT1: false, failures: ["size-budget requires a human APPROVED review"] } });
+  const result = await mergePr(baseOptions({ check: true, humanApprovedBy: "mfittko", standingAuthorization: false }), runtime);
+  assert.equal(result.mergeClass, "escalated");
+  assert.equal(result.sizeClass, "escalate");
+  assert.equal(result.approvalPath, "comment_marker");
+});
+
+test("--check fails closed on missing size facts: no confirmed class and no standing_authorization path", async () => {
+  const { runtime } = makeRuntime({ evidence: { ok: true, sizeOutcome: null, touchesT1: null, failures: [] } });
+  const result = await mergePr(baseOptions({ check: true, humanApprovedBy: "mfittko" }), runtime);
+  assert.equal(result.mergeClass, null);
+  assert.equal(result.approvalPath, null);
+  assert.equal(result.approveMergeLine, null);
+});

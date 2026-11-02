@@ -60,6 +60,7 @@ Optional:
                           ({"declaredKeys":[...]}); a head-only unknown key listed there is tolerated
   --head-declared-keys-sha <sha>  Head SHA the declared keys were reported for; the keys apply only when it
                           equals the evaluated head, otherwise the declared set is empty
+  --read-only             Skip the runner-ownership refresh (it writes a heartbeat); for read-only callers such as merge-pr --check
   --skip-fanout-ledger-check  Skip the fan-out findings-log ledger/provenance/
                               angle-coverage layer of requireFanoutEvidence
                               enforcement. That evidence lives in a gitignored,
@@ -173,6 +174,7 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       pr: { type: "string" },
       "require-before-merge": { type: "boolean" },
       "skip-fanout-ledger-check": { type: "boolean" },
+      "read-only": { type: "boolean" },
       "base-ref-name": { type: "string" },
       "head-declared-keys": { type: "string" },
       "head-declared-keys-sha": { type: "string" },
@@ -213,6 +215,10 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       // below, never silently enabling the skip. So presence => enable, and the
       // only way to keep full enforcement is to omit the flag (the default).
       options.skipFanoutLedgerCheck = true;
+      continue;
+    }
+    if (token.name === "read-only") {
+      options.readOnly = true;
       continue;
     }
     if (token.name === "head-declared-keys") {
@@ -1094,7 +1100,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
 // detect-pr-gate-coordination-state.mjs, which durably stores the whole
 // returned object) can re-expose them.
 async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd(), recordCarry = false } = {}) {
-  const runnerOwnership = await ensureAsyncRunnerOwnership({
+  const runnerOwnership = options.readOnly === true ? { ok: true } : await ensureAsyncRunnerOwnership({
     repo: options.repo,
     pr: options.pr,
     env,
@@ -1402,6 +1408,8 @@ async function main() {
         repo: result.repo,
         pr: result.pr,
         currentHeadSha: result.currentHeadSha,
+        // Size facts survive a size-approval failure so merge-pr --check can still name the escalated class.
+        preApprovalGateMarker: result.preApprovalGateMarker,
         preMergeGateCheck,
         staleRunnerCheck,
         staleRunner: result.staleRunner,
