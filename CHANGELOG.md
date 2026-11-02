@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.9-pre.4
+
+### Added
+
+- `emit-fixer-work-order.mjs --review-id` accepts a human or Copilot review body as a fixer work-order source, verified by a `dev-loops:review-body-disposition` marker comment (#2548)
+- Add the sanctioned `unresolve-review-thread.mjs` wrapper; the hook allows only the main agent and the `dev-loop` coordinator and denies every other agent type (#2577)
+- Add `GATE-EXEC-ROUND-CAP-NO-DECLINE-RESOLVE`: fix high and medium cap-round findings via the thread route; the resolved-thread refusal names the unresolve script (#2577)
+
+### Changed
+
+- The checkbox-row grammar lives in one core constant shared by the tick, the live preview and the edit-pr untick guard (#2898)
+- The edit-pr untick guard and its usage text now name a heading edit that moves a checked row out of its AC/DoD scope (#2898)
+- The unified row grammar also accepts a row ending in U+2028 or U+2029 on the tick side, so the tick now flips such a row when its label is reviewer-verified (#2898)
+- The reviewer-verified tick docs describe the dry run before composing and the write before the post (#2898)
+
+### Fixed
+
+- Thread replies carry the full 40-character commit SHA; a resolved thread with a short-SHA reply is refused with the unresolve remedy (#2548)
+- gate-evidence accepts a `.devloops` key that only the PR's own schema declares; a key declared by neither schema still fails (#2662)
+- A work order pulled by another dev-loops code tree now refuses with both roots, both versions and the rerun command, not a bare `semantic_identity_mismatch` (#2662)
+
 ## 1.0.9-pre.3
 
 ### Changed
