@@ -168,6 +168,11 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/loop/visual-grill-capture.mjs` | Not a gate decision: capture recipe |
 | `scripts/refine/promote-plan.mjs` | Not a gate decision: base branch |
 
+### CLI checkout delegation
+
+<!-- rule: CLI-CHECKOUT-DELEGATION -->
+`CLI-CHECKOUT-DELEGATION`: An installed `dev-loops` CLI MUST run the source checkout's CLI for the `gate`, `loop` and `pr` categories, so an older installed CLI cannot drop a newer `.devloops` key or decide a gate with stale code. `cli/index.mjs` walks up from the working directory to the nearest directory whose `package.json` is named `dev-loops` and that has `cli/index.mjs`. When that directory is not the running CLI's root, the CLI spawns `<root>/cli/index.mjs` with the same argv and working directory, sets `DEVLOOPS_CHECKOUT_DELEGATED=1`, forwards stdout and stderr, and returns the child exit status. A set `DEVLOOPS_CHECKOUT_DELEGATED` disables delegation, so the checkout CLI never delegates again. Other categories never delegate. When the installed and checkout versions differ, the CLI writes `[dev-loops] version skew: installed X, checkout Y; running <root>/cli/index.mjs (CLI-CHECKOUT-DELEGATION).` to stderr. When the checkout CLI does not start, the CLI writes `cli_version_skew: installed X, checkout Y; the checkout CLI did not start (<code>). Rerun: dev-loops-run --repo-root <root> cli/index.mjs <argv>` and exits 1.
+
 ## Local-first plan-file flow end to end
 
 Under local-planning, one plan file moves through four stages. Each stage has a shipped helper script; the start, refine, and promote stages also expose their pure logic as an `@dev-loops/core` contract, while the validate stage's `validatePlanFile` lives in its helper script (`scripts/refine/validate-plan-file.mjs`). The [Local-Planning Flow](local-planning.md#local-planning-flow) skill doc walks the same sequence as operator steps, and the [Local-Planning Worked Example](local-planning.md#local-planning-worked-example) shows one plan file evolving through every stage.

@@ -717,8 +717,53 @@ function parseTopLevelCommand(argv) {
   return { kind: "malformed", message: `Unrecognized command: ${cmd}.` };
 }
 
+// CLI-CHECKOUT-DELEGATION: an installed CLI runs the source checkout's CLI for these categories.
+const CHECKOUT_DELEGATED_CATEGORIES = new Set(["gate", "loop", "pr"]);
+
+export function findSkewedCheckout(cwd, runningRoot = REPO_ROOT) {
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    let pkg = null;
+    try { pkg = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")); } catch { /* no package.json here */ }
+    if (pkg?.name === "dev-loops" && typeof pkg.version === "string") {
+      const version = pkg.version;
+      try {
+        realpathSync(path.join(dir, "cli/index.mjs"));
+        const root = realpathSync(dir);
+        return root === realpathSync(runningRoot) ? null : { root, version };
+      } catch { /* no CLI entry: keep walking */ }
+    }
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+
+function delegateToCheckout({ argv, cwd, env, stdout, stderr, spawnMaxBuffer }) {
+  if (env.DEVLOOPS_CHECKOUT_DELEGATED || !CHECKOUT_DELEGATED_CATEGORIES.has(argv[0])) return null;
+  const checkout = findSkewedCheckout(cwd);
+  if (checkout === null) return null;
+  const installed = readOwnVersion() ?? "unknown";
+  const entry = path.join(checkout.root, "cli/index.mjs");
+  if (installed !== checkout.version) {
+    writeLines(stderr, [`[dev-loops] version skew: installed ${installed}, checkout ${checkout.version}; running ${entry} (CLI-CHECKOUT-DELEGATION).`]);
+  }
+  const result = spawnSync(process.execPath, [entry, ...argv], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: spawnMaxBuffer,
+    env: { ...env, DEVLOOPS_CHECKOUT_DELEGATED: "1" },
+  });
+  if (result.error) {
+    writeLines(stderr, [`cli_version_skew: installed ${installed}, checkout ${checkout.version}; the checkout CLI did not start (${result.error.code ?? result.error.message}). Rerun: dev-loops-run --repo-root ${checkout.root} cli/index.mjs ${argv.join(" ")}`]);
+    return 1;
+  }
+  if (result.stdout) stdout.write(result.stdout);
+  if (result.stderr) stderr.write(result.stderr);
+  return result.status ?? 1;
+}
+
 export async function runCli({
   argv = process.argv.slice(2),
+  env = process.env,
   stdout = process.stdout,
   stderr = process.stderr,
   runtime,
@@ -729,6 +774,8 @@ export async function runCli({
   // Child-output buffer for routed subcommands.
   spawnMaxBuffer = SPAWN_MAX_BUFFER,
 } = {}) {
+  const delegated = delegateToCheckout({ argv, cwd, env, stdout, stderr, spawnMaxBuffer });
+  if (delegated !== null) return delegated;
   const fromTop = parseTopLevelCommand(argv);
 
   switch (fromTop.kind) {
