@@ -252,6 +252,68 @@ test("bash-gate hook allows gh pr ready when the (stubbed) draft gate passes", (
   }
 });
 
+// #2965 review residue: the draft-gate evidence probe describes exactly ONE PR, so the hook must
+// probe the PR the shared decider reads — the ONE the command's IN-SCOPE ready segments name — not
+// the command's first ready segment. `gh pr ready --repo other/repo 1 && gh pr ready 5` used to probe
+// managed PR #1 and hand its clean record to #5, which then left draft with no evidence of its own,
+// while the Pi adapter scoped the same probe with `inScopeGhPrReadyPrNumbers` and denied. The parity
+// suite's injected-fact fixtures cannot see this: they hand the fact over, so only a hook-level test
+// can pin which PR the probe actually asks about.
+const withArgvRecordingStub = (fn) => {
+  const stem = path.join(repoRoot, "tmp", `gate-stub-argv-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  const record = `${stem}.json`;
+  const stub = `${stem}.mjs`;
+  fs.mkdirSync(path.dirname(stub), { recursive: true });
+  fs.writeFileSync(
+    stub,
+    `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(record)}, JSON.stringify(process.argv.slice(2)));\n`,
+    "utf8",
+  );
+  try {
+    return fn(stub, record);
+  } finally {
+    fs.rmSync(stub, { force: true });
+    fs.rmSync(record, { force: true });
+  }
+};
+
+test("bash-gate hook probes the IN-SCOPE gh pr ready PR, not a proven-foreign segment's number (#2965)", () => {
+  withArgvRecordingStub((stub, record) => {
+    const { code, json } = runHook(
+      "pre-tool-use-bash-gate.mjs",
+      { tool_name: "Bash", tool_input: { command: "gh pr ready --repo other/repo 1 && gh pr ready 5" }, cwd: repoRoot },
+      { DEVLOOPS_PRE_PR_READY_GATE_SCRIPT: stub },
+    );
+    assert.equal(code, 0);
+    assert.equal(json, null, "the in-scope PR's own passing evidence must be allowed");
+    const argv = JSON.parse(fs.readFileSync(record, "utf8"));
+    assert.ok(argv.includes("--repo"), "the probe still resolves the managed repo");
+    assert.equal(
+      argv[argv.indexOf("--pr") + 1],
+      "5",
+      "the probe must ask about the in-scope PR #5, never the proven-foreign segment's #1",
+    );
+  });
+});
+
+test("bash-gate hook skips the probe and denies when no single in-scope ready PR owns the fact (#2965)", () => {
+  withArgvRecordingStub((stub, record) => {
+    const { code, json } = runHook(
+      "pre-tool-use-bash-gate.mjs",
+      {
+        tool_name: "Bash",
+        tool_input: { command: "gh pr ready --repo other/repo 1 && gh pr ready 5 && gh pr ready 6" },
+        cwd: repoRoot,
+      },
+      { DEVLOOPS_PRE_PR_READY_GATE_SCRIPT: stub },
+    );
+    assert.equal(code, 0);
+    assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+    assert.match(json.hookSpecificOutput.permissionDecisionReason, /exactly ONE PR/);
+    assert.equal(fs.existsSync(record), false, "no probe may run when no single in-scope PR owns the fact");
+  });
+});
+
 test("bash-gate hook denies a raw gh pr create in the target repo (e2e)", () => {
   // No gate stub needed — create is an unconditional block routing to the wrapper.
   const { code, json } = runHook("pre-tool-use-bash-gate.mjs", {

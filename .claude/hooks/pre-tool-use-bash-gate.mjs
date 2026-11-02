@@ -55,10 +55,10 @@ import {
   commandContainsRawPrBodyEdit,
   commandContainsRawPrBodyApiWrite,
   commandContainsCodeVerificationEntrypoint,
-  extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   normalizeGitHubRepoSlug,
 } from "./_bash-command-classify.mjs";
+import { inScopeGhPrReadyPrNumbers } from "./_bash-gate-decisions.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
 
@@ -159,8 +159,19 @@ function runHelper(script, args = [], override = null, options = {}) {
   });
 }
 if (inManagedContext) {
-  // When both verbs appear (compound command), apply the stricter merge gate.
-  const pr = isMerge ? extractPrNumberFromGhPrMergeAnywhere(command) : extractPrNumberFromGhPrReadyAnywhere(command);
+  // When both verbs appear (compound command), apply the stricter merge gate. The draft-gate
+  // evidence probe describes exactly ONE PR, and the shared decider authorizes a ready command only
+  // from the ONE PR its IN-SCOPE ready segments name (`inScopeGhPrReadyPrNumbers`), so the probe must
+  // read that same number. Probing the command's first ready segment instead gathered the fact for a
+  // proven-foreign PR and applied its clean record to an in-scope one: `gh pr ready --repo other/repo
+  // 1 && gh pr ready 5` probed managed PR #1 and let #5 leave draft on #1's evidence, while the Pi
+  // adapter probed #5 and denied (#2965 review residue). An in-scope segment that names no PR
+  // number, or several different in-scope numbers, has no single fact to probe: skip the probe and
+  // let the decider's own single-PR guard refuse fail-closed.
+  const inScopeReadyPrs = isMerge ? [] : inScopeGhPrReadyPrNumbers(command, managedRepoSlug);
+  const pr = isMerge
+    ? extractPrNumberFromGhPrMergeAnywhere(command)
+    : inScopeReadyPrs.length === 1 ? inScopeReadyPrs[0] : null;
   // STOP-HUMAN-MERGE-001 (#1622): resolve the repo's effective `autonomy.humanMergeOnly` via the
   // resolved toolchain (the hook bundle cannot import @dev-loops/core); fail
   // open (false) when the script is unavailable so the loop-level merge safety remains authoritative.
