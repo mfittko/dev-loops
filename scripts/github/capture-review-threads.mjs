@@ -65,8 +65,11 @@ Options:
                     Emit the fix-loop working set instead of the full capture:
                     only unresolved threads, each as
                     { threadId, path, line, isOutdated, bodies: [...] } with the
-                    thread's comment bodies joined in order (plus the summary
-                    block). Resolved threads are absent. The two flags are only
+                    thread's trusted comment bodies in thread order (an untrusted
+                    comment is dropped from bodies; plus the summary block).
+                    Resolved threads are absent, and an unresolved thread with no
+                    trusted comment appears in skippedUntrusted, not threads.
+                    The two flags are only
                     valid together; the default output shape is unchanged when
                     they are omitted. Canonical loop re-entry read — no
                     post-processing needed beyond --jq '.threads[]'.

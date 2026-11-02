@@ -1348,6 +1348,7 @@ test("AC4: the review source refuses an unknown review, a wrong state, an empty 
     for (const state of ["APPROVED", "DISMISSED", "PENDING"]) await refuses([reviewFor(head, { state })], new RegExp(`has state ${state}`));
     await refuses([reviewFor(head, { body: "  \n" })], /empty body/);
     await refuses([reviewFor(head, { user: { login: "dependabot[bot]", type: "Bot" } })], /by the bot dependabot\[bot\]/);
+    for (const login of ["copilot-helper[bot]", "copilot-swe-agent[bot]"]) await refuses([copilotReviewFor(head, { user: { login, type: "Bot" } })], /by the bot copilot-/);
     await refuses([reviewFor(head, { author_association: "CONTRIBUTOR" })], /association CONTRIBUTOR/);
     await refuses([reviewFor(head, { user: { login: "copilot-lookalike", type: "User" } })], /association COLLABORATOR|only an OWNER/);
     await refuses([reviewFor(head, { commit_id: "d".repeat(40) })], /does not contain/, { runChild: compareAs("diverged") });

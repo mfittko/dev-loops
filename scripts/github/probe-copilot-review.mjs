@@ -252,7 +252,7 @@ function extractCopilotIssueComments(payload) {
 function parseCopilotActivity(payload) {
   const parsedThreads = parseReviewThreads(payload);
   const newComments = (parsedThreads?.comments ?? [])
-    .filter((comment) => isCopilotLogin(comment.author?.login))
+    .filter((comment) => isCopilotLogin(comment.author?.login) && comment.trusted === true)
     .map((comment) => ({
       id: comment.id,
       threadId: comment.threadId,

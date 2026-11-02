@@ -214,12 +214,16 @@ function normalizeThreadNode(node, bodyMax) {
   }
   const rootComment = comments[0];
   const commentId = Number.isFinite(rootComment?.databaseId) ? rootComment.databaseId : null;
+  // bodyCommentId is the comment whose text `body` carries: the full-body join keys on it, since
+  // the root may be untrusted (empty body in the snapshot) while a trusted reply supplies the text.
+  const bodyCommentId = Number.isFinite(trustedComment?.databaseId) ? trustedComment.databaseId : null;
   const authorLogin = rootComment?.author?.login;
   const author = typeof authorLogin === "string" && authorLogin.length > 0 ? authorLogin : null;
   return {
     threadId: typeof node?.id === "string" ? node.id : "",
     trusted: true, // ADR 0238 marker: consumers refuse a thread file without it
     commentId,
+    bodyCommentId,
     author,
     body: excerptBody(trustedComment?.body, bodyMax),
     isResolved: Boolean(node?.isResolved),

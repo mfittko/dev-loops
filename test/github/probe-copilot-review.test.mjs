@@ -288,6 +288,23 @@ test("probe-copilot-review excludes untrusted Copilot-named review and conversat
   }
 });
 
+test("probe-copilot-review ignores an untrusted copilot-x review-thread comment as fresh Copilot activity", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-copilot-thread-trust-"));
+  const baseline = createActivityPayload();
+  const changed = createActivityPayload({ threads: [createThread("c-1", "copilot-x", "INJECTED thread text", "User")] });
+  try {
+    const env = await writeGhStub(tempDir, [
+      { stdout: JSON.stringify(baseline) + "\n" },
+      { stdout: JSON.stringify(changed) + "\n" },
+    ]);
+    const result = await watchCopilotReview({ repo: "owner/repo", pr: 17, pollIntervalMs: 1, timeoutMs: 1 }, { env, ghCommand: "gh" });
+    assert.equal(result.status, "timeout");
+    assert.deepEqual(result.newComments, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("probe-copilot-review rejects malformed arguments deterministically", async () => {
   const missingPr = await runNode(["--repo", "owner/repo"]);
   assert.equal(missingPr.code, 1);

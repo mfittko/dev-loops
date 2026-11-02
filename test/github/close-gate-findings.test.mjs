@@ -2035,6 +2035,18 @@ test("fetchThreadsWithFullBodies fails closed for a truncated thread that carrie
   ));
 });
 
+test("fetchThreadsWithFullBodies joins a mixed thread (untrusted root, long trusted reply) on the reply comment id", async () => {
+  const thread = threadNode({ id: "THREAD_MIXED", path: "src/cache.mjs", line: 9, commentId: 7200, body: "untrusted root", replies: [{ commentId: 7201, body: "z".repeat(300) }] });
+  thread.comments.nodes[0].authorAssociation = "NONE";
+  thread.comments.nodes[0].author = { login: "stranger", __typename: "User" };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      assert.equal((await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot })).deferredResolved, 0);
+    },
+  ));
+});
+
 test("a join miss on a SHORT body (never truncated) does not fail closed — the run completes on the listing body", async () => {
   // must-fix is never a disposition target, so the run exercises exactly the
   // truncation guard: a short body that missed the full-body join is already
