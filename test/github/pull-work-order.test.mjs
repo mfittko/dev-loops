@@ -8,7 +8,7 @@ import { cp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from "
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "bun:test";
-import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, executionIndexPath, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { DISPATCH_POINTER_MAX_BYTES, WorkOrderRefusal, buildDispatchPointer, codeTreeSkewNote, executionIndexPath, materializationHash, pullReceiptPath, pullWorkOrder, registerWorkOrderRole, verifyPullReceipt, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { seedJudgeSources } from "../loop/_judge-delivery-fixture.mjs";
 import { withTempDir } from "../_helpers.mjs";
@@ -300,6 +300,22 @@ test("a digest mismatch across two code trees names both roots, both versions an
         for (const part of [emitter, "dev-loops 9.9.9", TOOLCHAIN_ROOT, `dev-loops-run --repo-root ${emitter} scripts/github/pull-work-order.mjs ${unit.executionIdentity}`]) assert.ok(body.error.includes(part), part);
       }
     });
+  });
+});
+
+test("codeTreeSkewNote quotes the emitter root, says the identity code may differ and scans every index root (#2662 AC6)", async () => {
+  await withDir(async (root) => {
+    const execution = "r1-abcdef12-u0";
+    const bad = path.join(root, "bad");
+    const good = path.join(root, "good");
+    const emitter = path.join(root, "my emitter");
+    await mkdir(path.dirname(executionIndexPath(bad, execution)), { recursive: true });
+    await writeFile(executionIndexPath(bad, execution), "{not json", "utf8");
+    await writeExecutionIndex(good, { executionIdentity: execution, workOrderRef: "review:o/r#7:x", workOrderDigest: "sha256:0", emitterRoot: emitter });
+    const note = await codeTreeSkewNote({ execution, tmpRoots: [bad, good], rerun: `scripts/github/pull-work-order.mjs ${execution}` });
+    assert.ok(note.includes(`--repo-root '${emitter}' scripts/github/pull-work-order.mjs ${execution}`), note);
+    assert.match(note, /identity code may differ/);
+    assert.doesNotMatch(note, /identity code differs/);
   });
 });
 

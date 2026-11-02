@@ -13,6 +13,7 @@
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { TOOLCHAIN_ROOT } from "../loop/_repo-root-resolver.mjs";
+import { shellQuote } from "../lib/checkout-delegation-refusal.mjs";
 import { writeJson } from "@dev-loops/core/loop/phase-files";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { DISPATCH_POINTER_MAX_BYTES, EXECUTION_IDENTITY_RE, executionIndexPath, workOrderDigest } from "@dev-loops/core/loop/work-order-digest";
@@ -57,17 +58,17 @@ const versionOf = async (root) => JSON.parse(await readFile(path.join(root, "pac
 export async function codeTreeSkewNote({ execution, tmpRoots, rerun, toolchainRoot = TOOLCHAIN_ROOT }) {
   try {
     for (const tmpRoot of tmpRoots) {
-      const text = await readFile(executionIndexPath(tmpRoot, execution), "utf8").catch(() => null);
-      const emitterRoot = text === null ? null : JSON.parse(text).emitterRoot;
+      let emitterRoot = null;
+      try { emitterRoot = JSON.parse(await readFile(executionIndexPath(tmpRoot, execution), "utf8")).emitterRoot; } catch { continue; }
       if (typeof emitterRoot !== "string" || await real(emitterRoot) === await real(toolchainRoot)) continue;
       const version = (root) => versionOf(root).catch(() => "unknown");
-      return `; code-tree skew: emitted by ${emitterRoot} (dev-loops ${await version(emitterRoot)}), pulled by ${toolchainRoot} (dev-loops ${await version(toolchainRoot)}), and the work-order identity code differs; rerun with \`dev-loops-run --repo-root ${emitterRoot} ${rerun}\``;
+      return `; code-tree skew: emitted by ${emitterRoot} (dev-loops ${await version(emitterRoot)}), pulled by ${toolchainRoot} (dev-loops ${await version(toolchainRoot)}), and the work-order identity code may differ; rerun with \`dev-loops-run --repo-root ${shellQuote(emitterRoot)} ${rerun}\``;
     }
   } catch { /* best effort: the plain refusal stands */ }
   return "";
 }
 
-const IDENTITY_ROLES ={ r: "review", j: "judge", f: "fixer", c: "coordinator" };
+const IDENTITY_ROLES = { r: "review", j: "judge", f: "fixer", c: "coordinator" };
 
 /** The one `{ workOrderRef, workOrderDigest }` the execution index holds for `execution` across `tmpRoots`. */
 async function resolveExecutionIndex(execution, tmpRoots) {

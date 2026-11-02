@@ -6,7 +6,7 @@ Accepted — 2026-11-02
 
 ## Context
 
-Issue [2662](https://github.com/mfittko/dev-loops/issues/2662) describes a work order emitted by one dev-loops code tree and pulled by another. When the work-order identity code differs between the trees, the digest does not reproduce and the pull refuses with a bare `semantic_identity_mismatch`. The message gives no sign that two code trees are involved.
+Issue [2662](https://github.com/mfittko/dev-loops/issues/2662) describes a work order emitted by one dev-loops code tree and pulled by another. When the work-order identity code may differ between the trees, the digest does not reproduce and the pull refuses with a bare `semantic_identity_mismatch`. The message gives no sign that two code trees are involved.
 
 ADR 0117 and ADR 0124 already delegate review and fixer pulls to the emitting tree by index location and authority branch. The skew case is the one where that delegation did not apply.
 
