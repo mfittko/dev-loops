@@ -108,7 +108,7 @@ test("PR 2876 case 2c: a foreign file with matching heads, act set and run id at
   verify(dir, KEY, file, result());
 });
 
-test("emit-fixer-work-order refuses an unsealed --delta-result", async () => {
+test("emit-fixer-work-order refuses a --delta-result with no run record with evidence_run_missing", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-evidence-emit-"));
   const actList = path.join(dir, "act-list.json");
   const deltaResult = path.join(dir, "result.json");
@@ -299,6 +299,23 @@ test("emit-fixer-work-order refuses a --delta-result whose run was never sealed 
   fs.writeFileSync(deltaResult, JSON.stringify(result({ candidateHead: A })));
   createEvidenceRun(dir, deltaEvidenceKey(A, A, RUN_ID), { ...EXPECTED, candidateHead: A });
   await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_unsealed/);
+});
+
+test("emit-fixer-work-order gives the typed evidence refusal for an edited sealed --delta-result before the membership check", async () => {
+  const run = async (over) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-evidence-emit-edit-"));
+    const actList = path.join(dir, "act-list.json");
+    const deltaResult = path.join(dir, "result.json");
+    fs.writeFileSync(actList, JSON.stringify(ACT_LIST));
+    fs.writeFileSync(deltaResult, JSON.stringify(result({ candidateHead: A })));
+    const key = deltaEvidenceKey(A, A, RUN_ID);
+    createEvidenceRun(dir, key, { ...EXPECTED, candidateHead: A }, deltaResult);
+    sealEvidence(dir, key, deltaResult, result({ candidateHead: A }));
+    edit(deltaResult, over);
+    return emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir });
+  };
+  await assert.rejects(run({ actionableItems: [{ ref: "act-x", status: "resolved", evidence: ["e"] }] }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_digest_mismatch/);
+  await assert.rejects(run({ actSetId: "0".repeat(16) }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_foreign_run/);
 });
 
 test("a sealed result with an edited coverage field gives evidence_digest_mismatch before any coverage check", async () => {
