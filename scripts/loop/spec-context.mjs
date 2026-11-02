@@ -37,10 +37,10 @@ import { captureChangedFilesBetween } from "../lib/git-delta.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveTrackerLocalSpec } from "../github/resolve-tracker-local-spec.mjs";
 import { viewPr } from "../github/view-pr.mjs";
-import { SLICE_LINKAGE_SENTENCE, hasReopenLine, prBodyNonGoals } from "./_slice-linkage.mjs";
+import { SLICE_LINKAGE_SENTENCE, hasReopenLine } from "./_slice-linkage.mjs";
 
 const USAGE = `Usage:
-  spec-context.mjs --repo <owner/name> (--issue <number> | --pr <number> | --body-file <path>) --content-file <path> [--head-sha <sha>] [--spec-out <path>] [--identity-out <path>] [--pr-body-file <path>]
+  spec-context.mjs --repo <owner/name> (--issue <number> | --pr <number> | --body-file <path>) --content-file <path> [--head-sha <sha>] [--spec-out <path>] [--identity-out <path>]
   spec-context.mjs changed-paths --base <ref> --head <ref> [--repo-root <path>]
 
 Default (extract) mode: resolve the selected canonical issue or live PR body, extract the
@@ -51,8 +51,7 @@ compute specDigest (from the spec) + contentDigest (from --content-file) +
 the complete criterionIds set — feeds judge-pass.mjs's --spec-file/
 --content-digest directly, so the skill never hand-derives them.
 When the spec Non-goals hold a reopen line (a slice PR), the result also carries sliceLinkage,
-the SPEC-SLICE-PR-KEEPS-CLOSING-REF sentence. With --issue, the optional --pr-body-file (the PR
-body text) also arms it, because the slice PR's reopen line sits in its own body. It is stdout-only: the --spec-out spec is the
+the SPEC-SLICE-PR-KEEPS-CLOSING-REF sentence. It is stdout-only: the --spec-out spec is the
 specDigest input and stays unchanged. The judge sees the sentence through
 emit-judge-work-order.mjs, which renders the rule only when the PR body has exactly one closing reference that a reopen line names, and carries that number as sliceLinkageIssues.
 Required (extract mode):
@@ -82,8 +81,6 @@ Optional (extract mode):
                               <path> flag reads (issue 2008 / ADR 0061 AC1).
                               Requires --head-sha (fail-closed: the identity
                               is incomplete without it).
-  --pr-body-file <path>       PR body text; requires --issue. Only arms sliceLinkage
-                              (the spec and its digests stay unchanged)
 
 changed-paths mode: emit the JSON string array of repo-relative paths changed
 between --base and --head (two-dot delta, reusing the same git isolation seam
@@ -126,7 +123,6 @@ function parseExtractCliArgs(argv) {
       issue: { type: "string" },
       pr: { type: "string" },
       "body-file": { type: "string" },
-      "pr-body-file": { type: "string" },
       "content-file": { type: "string" },
       "head-sha": { type: "string" },
       "spec-out": { type: "string" },
@@ -144,7 +140,6 @@ function parseExtractCliArgs(argv) {
     issue: undefined,
     pr: undefined,
     bodyFile: undefined,
-    prBodyFile: undefined,
     contentFile: undefined,
     headSha: undefined,
     specOut: undefined,
@@ -178,11 +173,6 @@ function parseExtractCliArgs(argv) {
       if (options.bodyFile.length === 0) throw parseError("--body-file requires a non-empty path");
       continue;
     }
-    if (token.name === "pr-body-file") {
-      options.prBodyFile = requireTokenValue(token, parseError).trim();
-      if (options.prBodyFile.length === 0) throw parseError("--pr-body-file requires a non-empty path");
-      continue;
-    }
     if (token.name === "content-file") {
       options.contentFile = requireTokenValue(token, parseError).trim();
       continue;
@@ -212,9 +202,6 @@ function parseExtractCliArgs(argv) {
   }
   if (options.contentFile.length === 0) {
     throw parseError("--content-file requires a non-empty path");
-  }
-  if (options.prBodyFile !== undefined && options.issue === undefined) {
-    throw parseError("--pr-body-file requires --issue (the other modes already read the PR body)");
   }
   if (options.specOut !== undefined && options.specOut.length === 0) {
     throw parseError("--spec-out requires a non-empty path");
@@ -302,15 +289,6 @@ export async function specContextExtract(
   } catch (error) {
     throw new Error(`Cannot read --content-file "${options.contentFile}": ${error instanceof Error ? error.message : String(error)}`);
   }
-  // --issue mode: the slice PR's own reopen line lives in its body, which never joins the spec or its digests.
-  let prBody;
-  if (options.prBodyFile !== undefined) {
-    try {
-      prBody = await readFile(path.resolve(repoRoot, options.prBodyFile), "utf8");
-    } catch (error) {
-      throw new Error(`Cannot read --pr-body-file "${options.prBodyFile}": ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
   const specDigest = computeSpecDigest(spec);
   const contentDigest = computeContentDigest(contentBytes);
   const criterionIds = specCriterionIds(spec);
@@ -324,7 +302,7 @@ export async function specContextExtract(
     contentDigest,
     criterionIds,
     ...(options.headSha !== undefined ? { headSha: options.headSha } : {}),
-    ...(hasReopenLine(spec.nonGoals) || hasReopenLine(prBodyNonGoals(prBody)) ? { sliceLinkage: SLICE_LINKAGE_SENTENCE } : {}),
+    ...(hasReopenLine(spec.nonGoals) ? { sliceLinkage: SLICE_LINKAGE_SENTENCE } : {}),
   };
   if (options.specOut !== undefined) {
     const specPath = path.resolve(repoRoot, options.specOut);
