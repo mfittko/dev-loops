@@ -16,7 +16,7 @@ A judge searched the source tree to learn the spec-authority verdict shape, trie
 2. The judge work order carries `outputSchemas`, keyed by the file name of each `outputRefs` path.
 3. The pull owns the digest check. A changed read arrives as a pull refusal. A Pi or Claude judge computes no digest for its required reads and stops only when a read is missing or unreadable. The Codex after-pull setup still governs a Codex judge.
 4. The judge denial names `Read` as the always-available file tool, and Grep and Glob only when available.
-5. The read-only boundary is unchanged: the judge still cannot run a digest tool.
+5. The read-only boundary is unchanged: a Pi or Claude judge still runs no digest tool. The Codex after-pull setup still requires `shasum -a 256` for a Codex judge.
 
 ## Consequences
 
