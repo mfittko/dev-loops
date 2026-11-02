@@ -950,6 +950,14 @@ test("decideBashGate denies inline interpreters actor-independently on the targe
   assert.match(dMain.reason, /OPS-NO-INLINE-INTERPRETER/);
 });
 
+test("decideBashGate names incomplete tokenization in the OPS-NO-INLINE-INTERPRETER deny reason (#2442)", () => {
+  const ctx = { repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET };
+  const d = decideBashGate({ command: 'echo "$(gh pr view 5', ...ctx });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /incomplete tokenization/);
+  assert.doesNotMatch(decideBashGate({ command: 'node -e "x"', ...ctx }).reason, /incomplete tokenization/);
+});
+
 test("decideBashGate allows a heredoc write whose body only names a wait script and denies a backgrounded probe (#2442)", () => {
   const ctx = { repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET };
   const write = "cat > tmp/f <<'EOF'\nnode scripts/loop/detect-copilot-loop-state.mjs & then node -e 'x'\nEOF";
