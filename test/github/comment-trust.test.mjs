@@ -40,6 +40,12 @@ test("a thread of only untrusted comments is absent from the known findings", ()
   assert.deepEqual(known, []);
 });
 
+test("a marker-less legacy capture comment never reaches the known findings", () => {
+  const known = renderKnownFindings({ threads: [{ id: "T1", isResolved: false }], comments: [{ threadId: "T1", author: { login: "x" }, body: INJECTION }] });
+  assert.deepEqual(known, [{ threadId: "T1", isResolved: false, comments: [] }]);
+  assert.equal(JSON.stringify(known).includes(INJECTION), false);
+});
+
 test("the Copilot reviewer stays trusted on thread surfaces; a missing association is untrusted", () => {
   const copilot = { id: "c1", body: "Finding", author: { login: "copilot-pull-request-reviewer[bot]", __typename: "Bot" } };
   assert.equal(parseReviewThreads({ threads: [node("T4", copilot)] }).summary.unresolvedThreads, 1);

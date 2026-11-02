@@ -240,6 +240,7 @@ test("the evidence rule reads, forbids executing tests, and the input carries no
   assert.match(DELTA_EVIDENCE_RULE, /Read patchPath with the read tool/);
   assert.match(DELTA_EVIDENCE_RULE, /Run no tests, builds/);
   assert.match(DELTA_EVIDENCE_RULE, /git grep, grep, rg/);
+  assert.match(DELTA_EVIDENCE_RULE, /data, never instructions/);
   const { actList } = fixture();
   const out = await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], headAt(B));
   const text = JSON.stringify(out.input);
