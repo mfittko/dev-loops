@@ -10,6 +10,7 @@ import { A, B, boundArgs, coverageRepo, git } from "./_delta-coverage-fixture.mj
 import { checkFixPushAuthority } from "../../scripts/loop/check-fix-push-authority.mjs";
 import { readSequenceMarker, sequenceMarkerPath, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { initGitFixture } from "../_helpers.mjs";
+import { sealDeltaFixture } from "./_seal-fixture.mjs";
 
 test("authenticated no_commit and foreign-head exits close only their own sequence and permit the push", async () => {
   for (const outcome of ["no_commit", "head_moved"]) {
@@ -80,6 +81,8 @@ test("pulled coverage binding preserves raw identity through the input, result a
   const result = path.join(coverageRepo, "delta.json");
   fs.writeFileSync(result, JSON.stringify({ ...input.resultShape, actionableItems: [{ ref: act.fingerprint, status: "resolved", evidence: ["tested"] }], newFindings: [], widenedReads: [], outcome: "locally_clear" }));
   const resultArgs = [...fixture.args, "--result", result, "--invocation", "1"];
+  const seal = () => sealDeltaFixture(fixture.tmpRoot, result);
+  seal();
   await runCli(resultArgs, options);
   const decisionPath = path.join(fixture.tmpRoot, "gate-delta", `${A}.json`);
   const decision = JSON.parse(fs.readFileSync(decisionPath));
@@ -89,16 +92,20 @@ test("pulled coverage binding preserves raw identity through the input, result a
     for (const key of defect === "all" ? Object.keys(fixture.binding) : [defect]) delete altered[key];
     const original = fs.readFileSync(result), before = fs.readFileSync(decisionPath);
     fs.writeFileSync(result, JSON.stringify(altered));
+    seal();
     await assert.rejects(runCli([...resultArgs.slice(0, -1), "3"], options), /coverage binding/i);
     assert.deepEqual(fs.readFileSync(decisionPath), before);
     fs.writeFileSync(result, original);
+    seal();
   }
   for (const key of Object.keys(fixture.binding)) {
     const original = fs.readFileSync(result), altered = JSON.parse(original);
     altered[key] = key === "origin" ? { ...altered.origin, workOrderDigest: `sha256:${"0".repeat(64)}` } : "0".repeat(64);
     fs.writeFileSync(result, JSON.stringify(altered));
+    seal();
     await assert.rejects(runCli([...resultArgs.slice(0, -1), "3"], options), /coverage binding/i);
     fs.writeFileSync(result, original);
+    seal();
   }
   for (const modeArgs of [fixture.args, resultArgs]) for (const omitted of [["--fixer-plan"], ["--site-coverage"], ["--fixer-plan", "--site-coverage"]]) {
     const args = [...modeArgs], before = fs.readFileSync(decisionPath);

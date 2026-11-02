@@ -33,6 +33,7 @@ import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
+import { createEvidenceRun, deltaEvidenceKey, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { clearSequenceMarker, readSequenceMarker, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import {
   DELTA_MAX_INVOCATIONS,
@@ -209,6 +210,8 @@ function gitRevParse(worktree, rev) {
 }
 
 export const DELTA_EVIDENCE_RULE = "Read patchPath with the read tool. Evidence is a file:line, or a test's path:line, read from disk. Run no tests, builds, or other command that mutates or executes anything; for a site query use only the shell-inert read/search commands the reviewer read-only gate allows (git grep, grep, rg).";
+
+export const DELTA_SEAL_COMMAND = "After writing your result file, run: dev-loops-run scripts/loop/seal-evidence.mjs --kind delta --file <result path>. An unsealed or edited result is refused (GATE-EXEC-EVIDENCE-SEALED).";
 
 export const deltaPatchPath = (tmpRoot, baseline, candidate) => path.join(tmpRoot, "gate-delta", `${baseline}-${candidate}.patch`);
 
@@ -433,6 +436,7 @@ export async function runCli(
   const truncatedNeedles = Array.isArray(stale) ? [] : stale.truncatedNeedles ?? [];
   let payload;
   if (options.result) {
+    verifyEvidence(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(result?.reviewBaselineHead, result?.candidateHead), options.result, result);
     // A truncated hit list blocks locally_clear until a finding or a skipped site names the gap.
     const decision = decideDeltaNextStep({
       sequence, result, invocation: options.invocation, currentHead, siteCoverage, validationCoverage, coverageBinding,
@@ -464,10 +468,11 @@ export async function runCli(
     if (!options.handback) { // the fixer handbackCheck stays write-free
       mkdirSync(path.dirname(patchPath), { recursive: true });
       writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead));
+      createEvidenceRun(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(sequence.reviewBaselineHead, currentHead), { reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead, actSetId: sequence.actSetId });
     }
     // The target authenticateCoverage verified binds the log's repo and pr; without an authenticated plan the chain path refuses.
     const target = authenticatedTarget;
-    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: DELTA_SEAL_COMMAND }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;

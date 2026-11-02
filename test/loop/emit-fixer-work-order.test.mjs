@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, realpathSync, utimesSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, realpathSync, utimesSync } from "node:fs";
 import { cp, link, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -24,7 +24,13 @@ import { assertFixerDispatchPayload, buildFixerDispatchPayload, buildSiteCoverag
 import { verifyFixerDisposition } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { makeGhMock, runIdFreeEnv, withTempDir } from "../_helpers.mjs";
-import { TOOLCHAIN_ROOT } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { TOOLCHAIN_ROOT, resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
+import { sealDeltaFixture } from "./_seal-fixture.mjs";
+
+// Seals a delta result file that exists and parses as an object with heads; fixtures that pin malformed results stay unsealed.
+const sealIfPresent = (tmpRoot, file) => {
+  try { if (file && JSON.parse(readFileSync(file, "utf8")).reviewBaselineHead) sealDeltaFixture(tmpRoot, file); } catch { /* not a sealable fixture */ }
+};
 
 const EMITTER = path.resolve("scripts/loop/emit-fixer-work-order.mjs");
 const PULL = path.resolve("scripts/github/pull-work-order.mjs");
@@ -198,7 +204,7 @@ async function withFixture(fn) {
       await writeFile(recordPath, JSON.stringify({ ...JSON.parse(original), items: (delta.actionableItems ?? []).map(({ ref, status }) => ({ ref, status })) }));
       return () => writeFile(recordPath, original);
     };
-    const emitRaw = (over = {}) => emitFixerWorkOrder({
+    const emitRaw = (over = {}) => (sealIfPresent(over.tmpRoot ?? resolveGateArtifactTmpRoot(over.cwd ?? wt), "deltaResult" in over ? over.deltaResult : files.delta), emitFixerWorkOrder)({
       repo: REPO, pr: PR, headSha: head, phase: "commit_only", actListFile: files.actList, gate: "draft_gate", cwd: wt,
       ...(over.actListFile === undefined && "actListFile" in over ? {} : { deltaResult: files.delta }),
       fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }), fetchVerdictMarkers: verdictPostedAt(head), executionIdentity: nextExecution(), ...over,
@@ -223,6 +229,7 @@ async function withFixture(fn) {
       const result = { ...input.input.resultShape, actionableItems: input.input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["focused check"] })), newFindings: [], widenedReads: [], outcome: "locally_clear" };
       if (bounded) { git(wt, "commit", "-q", "--allow-empty", "-m", "candidate B"); result.outcome = "bounded_out"; }
       await writeFile(files.delta, JSON.stringify(result));
+      sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
       assert.equal((await runCli([...args, "--result", files.delta, "--invocation", bounded ? "3" : "1"], { stdout: { write() {} } })).nextStep, bounded ? "push_to_gate" : "push");
       const candidate = git(wt, "rev-parse", "HEAD");
       const runtime = () => makeGhMock([
@@ -533,6 +540,7 @@ test("ordinary full emission carries genuine pulled coverage from reviewed A thr
     const args = ["--act-list", files.actList, "--baseline", head, "--worktree", wt, "--fixer-plan", prior.planPath, "--site-coverage", prior.workOrder.outputRefs[0]];
     const input = await runCli([...args, "--spec-identity", "spec@1", "--findings-log", log], { stdout: { write() {} } });
     await writeFile(files.delta, JSON.stringify({ ...input.input.resultShape, actionableItems: [{ ref: ACT_REF, status: "resolved", evidence: ["query returned no sites"] }], newFindings: [], widenedReads: [], outcome: "locally_clear" }));
+    sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
     const decision = await runCli([...args, "--result", files.delta, "--invocation", "1"], { stdout: { write() {} } });
     assert.equal(decision.nextStep, "push");
     const mock = makeGhMock([
@@ -1523,6 +1531,7 @@ test("F2: Claude, Pi and Codex initial, rebuilt and replacement payloads carry t
     chmodSync(path.join(bin, "gh"), 0o755);
     // Hermetic: a launched session's DEVLOOPS_AGENT_OVERRIDES must not flip the consumer-checkout agent type.
     const env = { ...runIdFreeEnv({ DEVLOOPS_AGENT_OVERRIDES: undefined }), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+    sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
     const cli = (harness, extra = []) => spawnSync("node", [EMITTER, "--harness", harness, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "commit_only", "--act-list-file", files.actList, "--gate", "draft_gate", "--delta-result", files.delta, ...extra], { cwd: wt, encoding: "utf8", env });
     const unsupportedRoot = path.join(root, "tmp", "unsupported");
     const unsupported = cli("unknown", ["--tmp-root", unsupportedRoot]);
@@ -2568,6 +2577,7 @@ test("regenerate: the rule is identical for the claude, pi and codex harness CLI
     chmodSync(path.join(bin, "gh"), 0o755);
     const env = { ...runIdFreeEnv({ DEVLOOPS_AGENT_OVERRIDES: undefined }), PATH: `${bin}${path.delimiter}${process.env.PATH}` };
     const rules = [];
+    sealDeltaFixture(resolveGateArtifactTmpRoot(wt), files.delta);
     for (const harness of ["claude", "pi", "codex"]) {
       const cli = spawnSync("node", [EMITTER, "--harness", harness, "--repo", REPO, "--pr", String(PR), "--head-sha", head, "--phase", "commit_only", "--act-list-file", files.actList, "--gate", "draft_gate", "--delta-result", files.delta], { cwd: wt, encoding: "utf8", env });
       assert.equal(cli.status, 0, cli.stderr);

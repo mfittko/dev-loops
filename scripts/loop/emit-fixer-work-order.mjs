@@ -14,6 +14,7 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { VALID_SEVERITIES, normalizeSeverity, isPastRoundCap, pastCapBlockers } from "@dev-loops/core/loop/gate-fanin";
+import { deltaEvidenceKey, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement";
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { deltaCoverageBinding, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
@@ -463,6 +464,7 @@ export async function emitFixerWorkOrder({
     // The delta result must belong to this act list and this head (its pinned review baseline).
     const errors = validateDeltaResult(delta.parsed, { sequence: startDeltaSequence({ reviewBaselineHead: headSha, actList: source.parsed }), membershipOnly: true });
     if (errors.length > 0) throw new Refusal(`delta result ${deltaResult} does not belong to this act list at ${headSha}: ${errors.join("; ")}`);
+    try { verifyEvidence(tmpRoot, deltaEvidenceKey(delta.parsed.reviewBaselineHead, delta.parsed.candidateHead), abs(deltaResult), delta.parsed); } catch (error) { throw new Refusal(`delta result ${deltaResult} refused (GATE-EXEC-EVIDENCE-SEALED): ${error.message}`); }
   }
   await capture.read(gateDeltaRecordPath(tmpRoot, headSha));
   // ADR 0235: a commit_only thread-route re-dispatch carries the delta record's findings as act items.

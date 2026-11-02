@@ -13,6 +13,7 @@ import { DELTA_EVIDENCE_RULE, deltaPatchPath, parseCheckPrePushDeltaArgs, runCli
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { A, B, C, M, boundArgs, coverageRepo } from "./_delta-coverage-fixture.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
+import { sealDeltaFixture } from "./_seal-fixture.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { decidePiToolCall } from "../../extension/readonly-role-gate.ts";
 
@@ -120,6 +121,7 @@ test("real delta CLI refuses committed invalid inputs concealed by uncommitted c
       newFindings: [], widenedReads: [], outcome: "locally_clear",
     }));
     const resultArgs = [...args, "--result", resultPath, "--invocation", "1"];
+    sealDeltaFixture(resolveGateArtifactTmpRoot(dir), resultPath);
     const recordDir = path.join(resolveGateArtifactTmpRoot(dir), "gate-delta");
     if (length === 201 || correction) {
       const out = spawnSync(process.execPath, [path.resolve("scripts/loop/check-pre-push-delta.mjs"), ...resultArgs], { cwd: dir, encoding: "utf8" });
@@ -162,6 +164,7 @@ test("result-mode changelog ignores inherited Git directory overrides", async ()
       actionableItems: input.actItems.map(({ ref }) => ({ ref, status: "resolved", evidence: ["checked"] })),
       newFindings: [], widenedReads: [], outcome: "locally_clear",
     }));
+    sealDeltaFixture(resolveGateArtifactTmpRoot(target), resultPath);
     const recordDir = path.join(resolveGateArtifactTmpRoot(target), "gate-delta");
     assert.equal(fs.existsSync(path.join(recordDir, `${baseline}.json`)), false);
     const out = spawnSync(process.execPath, [path.resolve("scripts/loop/check-pre-push-delta.mjs"), ...args, "--result", resultPath, "--invocation", "1"], {
