@@ -959,6 +959,21 @@ const CLOSING_ISSUE_REFERENCE_PATTERN =
   /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:[\w.-]+\/[\w.-]+)?#(\d+)/giu;
 
 export function extractClosingIssueNumbers(body) {
+  const text = stripFencesAndCodeSpans(body);
+  const seen = new Set();
+  const numbers = [];
+  for (const match of text.matchAll(CLOSING_ISSUE_REFERENCE_PATTERN)) {
+    const n = Number(match[1]);
+    if (Number.isInteger(n) && n > 0 && !seen.has(n)) {
+      seen.add(n);
+      numbers.push(n);
+    }
+  }
+  return numbers;
+}
+
+/** The body text GitHub scans for closing keywords: fenced blocks and inline code spans removed. */
+export function stripFencesAndCodeSpans(body) {
   // Same fence-skip as sectionHasBody: a `Closes #N` line quoted inside a
   // ```fenced``` example (e.g. a PR-template sample) must not spoof the gate.
   let fence = null;
@@ -975,17 +990,7 @@ export function extractClosingIssueNumbers(body) {
   // over-strips toward fail-closed, which is the safe direction for this gate.
   // Revisit with a real CommonMark span parser only if valid closing refs in
   // backtick-heavy bodies start being over-stripped into false negatives.
-  const text = unfenced.join("\n").replace(/(`+)[\s\S]*?\1/gu, " ");
-  const seen = new Set();
-  const numbers = [];
-  for (const match of text.matchAll(CLOSING_ISSUE_REFERENCE_PATTERN)) {
-    const n = Number(match[1]);
-    if (Number.isInteger(n) && n > 0 && !seen.has(n)) {
-      seen.add(n);
-      numbers.push(n);
-    }
-  }
-  return numbers;
+  return unfenced.join("\n").replace(/(`+)[\s\S]*?\1/gu, " ");
 }
 
 function sectionHasBody(section) {

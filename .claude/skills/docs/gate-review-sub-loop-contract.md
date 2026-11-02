@@ -902,6 +902,7 @@ dev-loops-run scripts/loop/emit-judge-work-order.mjs --repo <owner/name> --pr <N
   [--round <n>] [--operator-focus-file <path>] [--tmp-root <checkout>/tmp]
 ```
 
+A slice PR's reopen line lives in the PR body Non-goals when the spec comes from the linked issue. The producer reads the PR body from the pinned gate-context evidence and, when it holds exactly one closing reference, to an issue in this repository, whose number a reopen line names, carries `sliceLinkage` and `sliceLinkageIssues` in the work order. `judge-pass` arms its coercion from those pinned fields only (`SPEC-SLICE-PR-KEEPS-CLOSING-REF`).
 Write the `--operator-focus-file` JSON only when the operator supplied round context for the judge (`GATE-EXEC-OPERATOR-FOCUS`).
 
 A prior head's verdict path is not derivable from the head alone, because each emission's

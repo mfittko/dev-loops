@@ -11,7 +11,7 @@ import { buildGateContextPath, buildLogPath } from "../../scripts/github/_gate-a
 import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { withTempDir } from "../_helpers.mjs";
-import { seedJudgeSources } from "./_judge-delivery-fixture.mjs";
+import { bindEvidenceToPrBody, seedJudgeSources } from "./_judge-delivery-fixture.mjs";
 import { SPEC_AUTHORITY_OUTCOME_VALUES, SPEC_AUTHORITY_VERDICT_SCHEMA, validateSpecAuthorityVerdict } from "../../packages/core/src/loop/spec-authority.mjs";
 
 const HEAD = "d".repeat(40);
@@ -48,7 +48,7 @@ test("J1: the producer derives the work order from the round's sources, pins the
   await withDir(async (root) => {
     const sources = await seed(root);
     const plan = await emitJudgeWorkOrder(sources);
-    assert.deepEqual(plan.workOrder.requiredReads.map((read) => read.kind), ["findings", "spec", "spec-identity", "evidence"]);
+    assert.deepEqual(plan.workOrder.requiredReads.map((read) => read.kind),["findings", "spec", "spec-identity", "evidence"]);
     assert.match(plan.workOrder.authority.specDigest, /^sha256:/);
     assert.deepEqual(plan.workOrder.contracts.map((c) => c.path), ["agents/judge.agent.md", "skills/docs/spec-authority-contract.md"]);
     const cli = (extra) => node("scripts/loop/emit-judge-work-order.mjs", ["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD,
@@ -542,6 +542,63 @@ test("J1b: a sealed findings ledger edited out of band refuses judge emission (v
       await writeFile(file, edit);
       await assert.rejects(emitJudgeWorkOrder(sources), /gate_artifact_out_of_band_write/);
     }
+  });
+});
+
+const armedBy = async (root, sources, body) => {
+  await bindEvidenceToPrBody(root, sources, body);
+  return (await emitJudgeWorkOrder(sources)).workOrder;
+};
+
+test("a PR body Non-goals reopen line puts the slice-linkage sentence and issue into the work order and its rendering", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const sliceBody = "Closes #2883\n\n## Non-goals\n\n- Reopen #2883 on merge: slices 2+ remain.\n";
+    await bindEvidenceToPrBody(root, sources, sliceBody);
+    const plan = await emitJudgeWorkOrder(sources);
+    assert.match(plan.workOrder.sliceLinkage, /^SPEC-SLICE-PR-KEEPS-CLOSING-REF: a slice PR keeps its closing reference/);
+    assert.deepEqual(plan.workOrder.sliceLinkageIssues, [2883]);
+    assert.match(await readFile(plan.promptPath, "utf8"), /## Slice linkage\n\nSPEC-SLICE-PR-KEEPS-CLOSING-REF/);
+    assert.equal((await armedBy(root, sources, "Closes #2883\n\n## Non-goals\n\n- no build changes\n")).sliceLinkage, undefined);
+  });
+});
+
+test("the slice-linkage arming needs exactly one closing reference that a reopen line names", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    // Rejected forms: a second closing reference, or a reopen line that names another issue.
+    assert.equal((await armedBy(root, sources, "Closes #10\nCloses #99\n\n## Non-goals\n\n- Reopen #10 on merge.\n")).sliceLinkage, undefined);
+    assert.equal((await armedBy(root, sources, "Closes #2883\nCloses #2990\n\n## Non-goals\n\n- Reopen #2883 on merge.\n")).sliceLinkage, undefined);
+    assert.equal((await armedBy(root, sources, "Closes #10\n\n## Non-goals\n\n- Reopen #12 later.\n")).sliceLinkage, undefined);
+    assert.equal((await armedBy(root, sources, "Refs #10\n\n## Non-goals\n\n- Reopen #10 on merge.\n")).sliceLinkage, undefined);
+    // Accepted: the reopen line may come from the spec Non-goals.
+    await writeFile(path.join(root, "judge-fixture/reopen-spec.json"), JSON.stringify({ ...JSON.parse(await readFile(path.join(root, sources.specFile), "utf8")), nonGoals: ["Reopen #2883 on merge: slices 2+ remain."] }));
+    const reopenSources = await seed(root, { specFile: "judge-fixture/reopen-spec.json" });
+    assert.deepEqual((await armedBy(root, reopenSources, "Closes #2883\n")).sliceLinkageIssues, [2883]);
+  });
+});
+
+test("the PR body parser reads only the evidence's own section: a fenced body arms, and a quoted `## PR body` block in the linked issue never counts", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    // Accepted: a body holding a code fence renders with a longer fence and still arms.
+    const fenced = "Closes #2883\n\n```sh\nx\n```\n\n## Non-goals\n\n- Reopen #2883 on merge.\n";
+    assert.deepEqual((await armedBy(root, sources, fenced)).sliceLinkageIssues, [2883]);
+    // Absent PR body plus an issue section quoting a fenced `## PR body` block: the quoted text never arms.
+    const quoted = "## PR body\n\n```\nCloses #2883\n```\n";
+    await bindEvidenceToPrBody(root, sources, "", quoted);
+    assert.equal((await emitJudgeWorkOrder(sources)).workOrder.sliceLinkage, undefined);
+  });
+});
+
+test("an evidence read with no PR body section refuses judge emission", async () => {
+  await withDir(async (root) => {
+    const sources = await seed(root);
+    const evidence = "## Diff\n\nnothing\n";
+    await writeFile(path.join(root, "judge-fixture", "evidence.md"), evidence);
+    const contextPath = path.join(root, buildGateContextPath(sources));
+    await writeFile(contextPath, JSON.stringify({ requiredReads: [{ kind: "evidence", path: "judge-fixture/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex"), bytes: Buffer.byteLength(evidence), required: true }] }));
+    await assert.rejects(emitJudgeWorkOrder(sources), /has no `## PR body` section/);
   });
 });
 
