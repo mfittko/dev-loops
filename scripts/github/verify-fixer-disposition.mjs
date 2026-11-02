@@ -60,11 +60,12 @@ Required:
                         from (emit-fixer-work-order.mjs, ADR 0106). The disposition
                         handoff { headSha, dispositions } is read from the plan's
                         outputRef. Each dispositions entry is { threadId | reviewId,
-                        fixingCommitSha, disposition: "tackled"|"deferred",
+                        fixingCommitSha, disposition: "tackled"|"deferred"|"rejected",
                         fingerprint?, validation? }; each entry carries exactly one
                         of threadId or reviewId, plus fixingCommitSha and
-                        disposition. A tackled entry needs fixingCommitSha as the
-                        full 40-character SHA.
+                        disposition. A tackled threadId entry needs fixingCommitSha
+                        as the full 40-character SHA; a reviewId entry needs the
+                        full 40-character SHA for every disposition.
                         A review-body work order (emit-fixer-work-order.mjs
                         --review-id) takes a { reviewId, fixingCommitSha,
                         disposition } entry written by the fixer; the verifier
@@ -72,8 +73,10 @@ Required:
                         review refuses), then posts one
                         dev-loops:review-body-disposition marker comment citing the
                         fixing commit unless a marker for it is already live. An
-                        untrusted author's marker fails marker_author_untrusted and
-                        is never posted again. A resolved thread whose replies cite
+                        untrusted marker the verifier's own identity posted fails
+                        marker_author_untrusted and is never posted again (a
+                        foreign untrusted marker does not block the post); a
+                        --check run reports that state as reply_missing. A resolved thread whose replies cite
                         only a short SHA fails resolved_short_sha_reply; a full-SHA
                         reply on a resolved thread completes.
                         The handoff counts only with a matching fixer pull receipt,
@@ -1021,7 +1024,10 @@ async function verifyFixerDispositionCore(
     for (const { reviewId: id, expectedCommit } of unreplied) {
       // A marker for this review and commit that is live but not trusted never counts: post no second one.
       const prior = existing.find((marker) => marker.reviewId === id && marker.fixSha === expectedCommit.toLowerCase());
-      if (prior) {
+      // Only this verifier's own untrusted marker blocks the post; a foreign untrusted marker must not lock out a trusted verifier. An unreadable login fails closed: no post.
+      const ownLogin = prior && !prior.trusted ? await resolveAuthenticatedLogin(runtime).catch(() => null) : null;
+      const priorIsOwn = prior && (prior.trusted || ownLogin === null || (prior.author ?? "").toLowerCase() === ownLogin.toLowerCase());
+      if (priorIsOwn) {
         if (!prior.trusted) residualFailures.push(untrustedMarker(id, expectedCommit, prior.author ?? "an unknown identity"));
         continue;
       }

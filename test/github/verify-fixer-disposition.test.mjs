@@ -246,6 +246,19 @@ test("review-body: a marker by an untrusted author, and --check without a marker
   });
 });
 
+test("review-body: a foreign untrusted marker does not block the trusted verifier's own post", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
+    const postedAs = claim({ ...markerPostEntry, stdout: JSON.stringify({ user: { login: "op" }, author_association: "OWNER" }) });
+    const userAs = claim({ assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "op" })}\n` });
+    const foreign = JSON.stringify({ id: 4, user: { login: "mallory", type: "User" }, author_association: "CONTRIBUTOR", body: `<!-- dev-loops:review-body-disposition review=PRR_R1 fix=${FIX_SHA} -->` });
+    const { deps, calls } = runtime(reviewBodyEntries(commentsEntry(foreign), commentsEntry(foreign), userAs, postedAs, commentsEntry(foreign + "\n" + markerLine("OWNER"))), repoRoot, { live: false });
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
+    assert.equal(posts(calls).length, 1);
+    assert.equal(result.complete, true, JSON.stringify(result));
+  });
+});
+
 test("review-body: a changed body, a vanished review and a missing handoff entry refuse with a named remedy", async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
@@ -289,7 +302,7 @@ test("review-body: a posted marker that the trusted-author filter ignores fails 
 test("review-body: an untrusted marker that is already live is never posted again and reports marker_author_untrusted without a re-run remedy", async () => {
   await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
-    const { deps, calls } = runtime(reviewBodyEntries(commentsEntry(markerLine("CONTRIBUTOR")), commentsEntry(markerLine("CONTRIBUTOR")), commentsEntry(markerLine("CONTRIBUTOR"))), repoRoot, { live: false });
+    const { deps, calls } = runtime(reviewBodyEntries(commentsEntry(markerLine("CONTRIBUTOR")), claim({ assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "op" })}\n` }), commentsEntry(markerLine("CONTRIBUTOR")), commentsEntry(markerLine("CONTRIBUTOR"))), repoRoot, { live: false });
     const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
     assert.equal(posts(calls).length, 0);
     assert.equal(result.ok, false);
