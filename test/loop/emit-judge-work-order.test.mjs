@@ -48,11 +48,11 @@ test("J1: the producer derives the work order from the round's sources, pins the
   await withDir(async (root) => {
     const sources = await seed(root);
     const plan = await emitJudgeWorkOrder(sources);
-    assert.deepEqual(plan.workOrder.requiredReads.map((read) => read.kind), ["findings", "spec", "spec-identity", "evidence", "pr-body"]);
+    assert.deepEqual(plan.workOrder.requiredReads.map((read) => read.kind),["findings", "spec", "spec-identity", "evidence"]);
     assert.match(plan.workOrder.authority.specDigest, /^sha256:/);
     assert.deepEqual(plan.workOrder.contracts.map((c) => c.path), ["agents/judge.agent.md", "skills/docs/spec-authority-contract.md"]);
     const cli = (extra) => node("scripts/loop/emit-judge-work-order.mjs", ["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD,
-      "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile, "--pr-body-file", sources.prBodyFile, ...extra], root);
+      "--findings-file", sources.findingsFile, "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...extra], root);
     for (const flag of ["--brief", "--payload", "--summary-file"]) assert.equal(cli([flag, "x"]).status, 2, `${flag} is not an input`);
     assert.equal(JSON.parse(cli(["--tmp-root", "tmp"]).stdout).ok, true, "the checkout's own tmp root is accepted");
     for (const tmpRoot of ["scripts/tmp", path.join(root, "..", "elsewhere")]) {
@@ -217,7 +217,7 @@ test("J3: an emission from a checkout subdirectory lands under the checkout root
     await mkdir(sub);
     const rel = (p) => path.join("..", p);
     const out = JSON.parse(node("scripts/loop/emit-judge-work-order.mjs", ["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD,
-      "--findings-file", rel(sources.findingsFile), "--spec-file", rel(sources.specFile), "--identity-file", rel(sources.identityFile), "--pr-body-file", rel(sources.prBodyFile)], sub).stdout);
+      "--findings-file", rel(sources.findingsFile), "--spec-file", rel(sources.specFile), "--identity-file", rel(sources.identityFile)], sub).stdout);
     assert.equal(out.ok, true, out.error);
     assert.ok(out.planPath.startsWith(path.join(root, "tmp", "gate-judge")), out.planPath);
     assert.equal(pull(out, sub).status, 0);
@@ -247,7 +247,7 @@ test("J4: a colliding execution index entry for the next identity refuses the em
     process.stdout.write = (chunk) => (out.push(String(chunk)), true);
     try {
       await main(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-file", sources.findingsFile,
-        "--spec-file", sources.specFile, "--identity-file", sources.identityFile, "--pr-body-file", sources.prBodyFile], { cwd: root, roundId: next.executionIdentity });
+        "--spec-file", sources.specFile, "--identity-file", sources.identityFile], { cwd: root, roundId: next.executionIdentity });
     } finally {
       process.stdout.write = write;
     }
@@ -408,7 +408,7 @@ test("J1: the --round CLI accepts only /^[1-9][0-9]*$/ and carries it to the wor
       process.stdout.write = (chunk) => (out.push(String(chunk)), true);
       try {
         await main(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-file", sources.findingsFile,
-          "--spec-file", sources.specFile, "--identity-file", sources.identityFile, "--pr-body-file", sources.prBodyFile, ...extra], { cwd: root });
+          "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...extra], { cwd: root });
       } finally {
         process.stdout.write = write;
       }
@@ -500,7 +500,7 @@ async function runJudgeMain(root, sources, extra) {
   process.stderr.write = (chunk) => (err.push(String(chunk)), true);
   try {
     const code = await main(["--repo", "o/r", "--pr", "7", "--gate", "pre_approval_gate", "--head-sha", HEAD, "--findings-file", sources.findingsFile,
-      "--spec-file", sources.specFile, "--identity-file", sources.identityFile, "--pr-body-file", sources.prBodyFile, ...extra], { cwd: root });
+      "--spec-file", sources.specFile, "--identity-file", sources.identityFile, ...extra], { cwd: root });
     return { code, stdout: out.join(""), stderr: err.join("") };
   } finally {
     process.stdout.write = writeOut;
@@ -546,21 +546,18 @@ test("J1b: a sealed findings ledger edited out of band refuses judge emission (v
 });
 
 const armedBy = async (root, sources, body) => {
-  await writeFile(path.join(root, "pr-body.md"), body);
   await bindEvidenceToPrBody(root, sources, body);
-  return (await emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" })).workOrder;
+  return (await emitJudgeWorkOrder(sources)).workOrder;
 };
 
 test("a PR body Non-goals reopen line puts the slice-linkage sentence and issue into the work order and its rendering", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
     const sliceBody = "Closes #2883\n\n## Non-goals\n\n- Reopen #2883 on merge: slices 2+ remain.\n";
-    await writeFile(path.join(root, "pr-body.md"), sliceBody);
     await bindEvidenceToPrBody(root, sources, sliceBody);
-    const plan = await emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" });
+    const plan = await emitJudgeWorkOrder(sources);
     assert.match(plan.workOrder.sliceLinkage, /^SPEC-SLICE-PR-KEEPS-CLOSING-REF: a slice PR keeps its closing reference/);
     assert.deepEqual(plan.workOrder.sliceLinkageIssues, [2883]);
-    assert.ok(plan.workOrder.requiredReads.some((read) => read.kind === "pr-body"));
     assert.match(await readFile(plan.promptPath, "utf8"), /## Slice linkage\n\nSPEC-SLICE-PR-KEEPS-CLOSING-REF/);
     assert.equal((await armedBy(root, sources, "Closes #2883\n\n## Non-goals\n\n- no build changes\n")).sliceLinkage, undefined);
   });
@@ -581,75 +578,27 @@ test("the slice-linkage arming needs exactly one closing reference that a reopen
   });
 });
 
-test("an omitted --pr-body-file refuses judge emission instead of skipping the slice-linkage arming", async () => {
-  await withDir(async (root) => {
-    const { prBodyFile, ...withoutBody } = await seed(root);
-    await assert.rejects(emitJudgeWorkOrder(withoutBody), (err) => err.refusal === "pr_body_file_required" && /--pr-body-file/.test(err.message) && /view-pr\.mjs/.test(err.message));
-    await assert.rejects(emitJudgeWorkOrder({ ...withoutBody, prBodyFile: "" }), (err) => err.refusal === "pr_body_file_required");
-  });
-});
-
-test("a --pr-body-file that is empty or differs from the pinned evidence PR body refuses with pr_body_mismatch", async () => {
-  await withDir(async (root) => {
-    const sources = await seed(root);
-    const current = "Closes #2883\n\n## Non-goals\n\n- Reopen #2883 on merge.\n";
-    await bindEvidenceToPrBody(root, sources, current);
-    // A prefix (stale pre-edit body) and a truncated body are substrings of the evidence but not its PR body section.
-    for (const body of ["", "   \n", current, "Closes #2883", "Closes #2883\n\n## Non-goals\n"]) {
-      await bindEvidenceToPrBody(root, sources, body === current ? "Declared scope: other.\n" : current);
-      await writeFile(path.join(root, "pr-body.md"), body);
-      await assert.rejects(emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" }), (err) => err.refusal === "pr_body_mismatch", JSON.stringify(body));
-    }
-  });
-});
-
-test("an empty --pr-body-file is accepted when the evidence records the PR body as absent, and arms no slice linkage", async () => {
-  await withDir(async (root) => {
-    const sources = await seed(root);
-    await bindEvidenceToPrBody(root, sources, "");
-    for (const body of ["", "  \n"]) {
-      await writeFile(path.join(root, "pr-body.md"), body);
-      const { workOrder } = await emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" });
-      assert.equal(workOrder.sliceLinkage, undefined);
-    }
-    // Rejected: a non-empty file against an absent evidence body.
-    await writeFile(path.join(root, "pr-body.md"), "Closes #2883\n");
-    await assert.rejects(emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" }), (err) => err.refusal === "pr_body_mismatch");
-    // Rejected: an empty file against a fenced non-empty evidence body (kept by the test above); the fenced form equal to the file is accepted by the arming tests.
-  });
-});
-
 test("the PR body parser reads only the evidence's own section: a fenced body arms, and a quoted `## PR body` block in the linked issue never counts", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
     // Accepted: a body holding a code fence renders with a longer fence and still arms.
     const fenced = "Closes #2883\n\n```sh\nx\n```\n\n## Non-goals\n\n- Reopen #2883 on merge.\n";
     assert.deepEqual((await armedBy(root, sources, fenced)).sliceLinkageIssues, [2883]);
-    // Absent PR body plus an issue section quoting a fenced `## PR body` block: the empty file is accepted, the quoted text is refused.
+    // Absent PR body plus an issue section quoting a fenced `## PR body` block: the quoted text never arms.
     const quoted = "## PR body\n\n```\nCloses #2883\n```\n";
     await bindEvidenceToPrBody(root, sources, "", quoted);
-    await writeFile(path.join(root, "pr-body.md"), "");
-    assert.equal((await emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" })).workOrder.sliceLinkage, undefined);
-    await writeFile(path.join(root, "pr-body.md"), "Closes #2883\n");
-    await assert.rejects(emitJudgeWorkOrder({ ...sources, prBodyFile: "pr-body.md" }), (err) => err.refusal === "pr_body_mismatch");
+    assert.equal((await emitJudgeWorkOrder(sources)).workOrder.sliceLinkage, undefined);
   });
 });
 
-test("a missing --pr-body-file path refuses judge emission", async () => {
+test("an evidence read with no PR body section refuses judge emission", async () => {
   await withDir(async (root) => {
     const sources = await seed(root);
-    await assert.rejects(emitJudgeWorkOrder({ ...sources, prBodyFile: "missing-pr-body.md" }), /pr-body/);
-  });
-});
-
-test("an empty or whitespace-only --pr-body-file is a usage error (exit 2)", async () => {
-  await withDir(async (root) => {
-    const sources = await seed(root);
-    for (const value of ["", "   "]) {
-      const { code, stderr } = await runJudgeMain(root, sources, ["--pr-body-file", value]);
-      assert.equal(code, 2);
-      assert.match(stderr, /--pr-body-file requires a non-empty path/);
-    }
+    const evidence = "## Diff\n\nnothing\n";
+    await writeFile(path.join(root, "judge-fixture", "evidence.md"), evidence);
+    const contextPath = path.join(root, buildGateContextPath(sources));
+    await writeFile(contextPath, JSON.stringify({ requiredReads: [{ kind: "evidence", path: "judge-fixture/evidence.md", sha256: createHash("sha256").update(evidence).digest("hex"), bytes: Buffer.byteLength(evidence), required: true }] }));
+    await assert.rejects(emitJudgeWorkOrder(sources), /has no `## PR body` section/);
   });
 });
 

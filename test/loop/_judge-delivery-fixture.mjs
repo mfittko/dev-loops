@@ -13,7 +13,7 @@ import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs
 
 export const JUDGE_SPEC = { acceptanceCriteria: ["Fix the finding"], definitionOfDone: ["Verdicts are valid"], nonGoals: ["No new schema"] };
 
-// The judge emitter binds --pr-body-file to the PR body of the gate-context evidence read; write both from one body.
+// The judge emitter reads the PR body from the gate-context evidence read; write it from one body.
 export async function bindEvidenceToPrBody(root, { repo, pr, gate, headSha }, body, issueBody = null) {
   // The real renderer picks the fence and renders an empty body as the unfenced absent sentinel.
   const evidence = renderBriefingEvidence({ repo, pr, gate, headSha, prBody: body, issueRef: issueBody ? "#2883" : null, issueBody }).text;
@@ -46,11 +46,9 @@ export async function seedJudgeSources(root, { repo = "o/r", pr = 7, gate = "pre
   const identityFile = "judge-fixture/identity.json";
   await mkdir(path.join(root, "judge-fixture"), { recursive: true });
   await writeFile(path.join(root, identityFile), JSON.stringify({ specDigest: computeSpecDigest(spec), headSha, contentDigest, checkedCriteria: specCriterionIds(spec) }));
-  // The judge emitter requires a PR body file; the default body holds no closing reference, so it arms nothing.
-  const prBodyFile = "judge-fixture/pr-body.md";
-  await writeFile(path.join(root, prBodyFile), "Declared scope: fix the finding.\n");
+  // The default body holds no closing reference, so it arms nothing.
   await bindEvidenceToPrBody(root, { repo, pr, gate, headSha }, "Declared scope: fix the finding.\n");
-  return { repo, pr, gate, headSha, findingsFile, specFile, identityFile, prBodyFile, cwd: root };
+  return { repo, pr, gate, headSha, findingsFile, specFile, identityFile, cwd: root };
 }
 
 /**

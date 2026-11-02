@@ -34,7 +34,7 @@ async function judgePassCli(options, { pinned = {}, ...deps } = {}) {
     findingsFile: options.findingsFile, specFile: pinned.specFile ?? options.specFile, contentDigest: pinned.contentDigest ?? options.contentDigest,
   });
   if (pinned.prBodyFile) await bindEvidenceToPrBody(root, sources, await readFile(path.resolve(root, pinned.prBodyFile), "utf8"));
-  const { plan, receiptTmpRoot } = await deliverJudge(root, { ...sources, ...(pinned.prBodyFile ? { prBodyFile: pinned.prBodyFile } : {}) });
+  const { plan, receiptTmpRoot } = await deliverJudge(root, sources);
   const delivered = { judgePlan: plan.planPath, ...options };
   for (const [key, ref] of [["judgeVerdict", plan.workOrder.outputRefs[0]], ["specAuthorityVerdict", plan.workOrder.outputRefs[1]]]) {
     if (options[key] === undefined) continue;

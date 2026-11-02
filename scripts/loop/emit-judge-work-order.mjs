@@ -28,7 +28,7 @@ import { SLICE_LINKAGE_SENTENCE, sliceLinkageIssues } from "./_slice-linkage.mjs
 import { OperatorFocusRefusal, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
 import { isFindingsLogName, resolveGateRound } from "../github/_gate-finding-surface.mjs";
 
-const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--tmp-root <path>] [--operator-focus-file <path>] --pr-body-file <path>
+const USAGE = `Usage: emit-judge-work-order.mjs --repo <owner/name> --pr <n> --gate <gate> --head-sha <sha> --findings-file <ledger> --spec-file <spec> --identity-file <identity> [--prior-verdict <path>]... [--round <n>] [--tmp-root <path>] [--operator-focus-file <path>]
 Derives the judge's work order from the round's authoritative inputs: the consolidated
 ledger (consolidate-fanin --ledger-out), the structured spec and identity stamp
 (spec-context.mjs --spec-out/--identity-out), the gate-context evidence read and the
@@ -40,7 +40,7 @@ The work order's two verdict outputRefs sit under that directory's <roundId>/ se
 Dispatch the judge with the compact dispatchPrompt only; each run supersedes the
 previous emission for this PR and gate at any head. The only operator input is --operator-focus-file, a JSON file { round?: string } that
 renders as a bounded, sanitized "Operator focus" section and is pinned by the digest (GATE-EXEC-OPERATOR-FOCUS).
-It accepts no other brief or summary input. --pr-body-file is required: the PR body text, pinned as a "pr-body" read, written with dev-loops-run scripts/github/view-pr.mjs --repo <owner/name> --pr <N> --jq '.pr.body' > <path>. When the body holds exactly one closing reference and its number is named by a reopen line in the body or spec Non-goals, the work order carries "sliceLinkage" and "sliceLinkageIssues" (SPEC-SLICE-PR-KEEPS-CLOSING-REF) and renders it.
+It accepts no other brief or summary input. When the body holds exactly one closing reference and its number is named by a reopen line in the body or spec Non-goals, the work order carries "sliceLinkage" and "sliceLinkageIssues" (SPEC-SLICE-PR-KEEPS-CLOSING-REF) and renders it.
 Exit codes: 0 emitted, 1 refused (missing or inconsistent source), 2 usage/IO error.`;
 
 // ref = judge:<owner/repo>#<pr>:<gate>:<headSha>:<roundId>; executionIdentity = roundId.
@@ -110,7 +110,7 @@ ${JSON.stringify(workOrder, null, 2)}
  * Emit one judge work order. Returns the plan record written beside it. Throws
  * Refusal on a missing or inconsistent source. `roundId` is injectable for tests.
  */
-export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile, specFile, identityFile, priorVerdicts = [], round = null, operatorFocusFile, prBodyFile, cwd = process.cwd(), tmpRoot, roundId = `j${Date.now()}-${randomBytes(4).toString("hex")}` }) {
+export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile, specFile, identityFile, priorVerdicts = [], round = null, operatorFocusFile, cwd = process.cwd(), tmpRoot, roundId = `j${Date.now()}-${randomBytes(4).toString("hex")}` }) {
   if (!/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Refusal(`--head-sha must be a full 40- or 64-char lowercase SHA, got ${headSha}`);
   if (round !== null && !(Number.isInteger(round) && round > 0)) {
     throw Object.assign(new Refusal(`--round must be a positive integer, got ${round}`), { refusal: "invalid_round" });
@@ -160,20 +160,14 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     if (typeof parsedBody?.angle !== "string" || !Array.isArray(parsedBody?.findings)) throw new Refusal(`GATE-EXEC-COPILOT-BODY-TO-JUDGE: ${bodyFile} is not JSON with an angle and a findings array`);
   }
   const operatorFocus = await readOperatorFocusFile(operatorFocusFile ? abs(operatorFocusFile) : undefined);
-  if (!prBodyFile) throw Object.assign(new Refusal("--pr-body-file is required: write the PR body with dev-loops-run scripts/github/view-pr.mjs --repo <owner/name> --pr <N> --jq '.pr.body' > <pr-body-path> and pass it, so the slice-linkage coercion is armed"), { refusal: "pr_body_file_required" });
-  const prBody = await readSource("pr-body", abs(prBodyFile));
-  // Bind the body file to this round: it must be non-empty and equal the fenced `## PR body` section of the pinned evidence read (write-gate-context.mjs), so a stale, truncated, foreign or placeholder file cannot disarm the coercion.
-  const prBodyText = prBody.bytes.toString("utf8");
-  // Only the section at the first `## PR body` heading counts; a later quoted heading (for example inside the linked issue section) is never searched.
+  // Slice linkage arms from the PR body section of the sha-verified evidence read (write-gate-context.mjs). Only the section at the first `## PR body` heading counts.
   const evidenceText = evidence.bytes.toString("utf8");
   const sectionStart = evidenceText.search(/^## PR body\n\n/m);
   const prBodySection = sectionStart < 0 ? "" : evidenceText.slice(sectionStart);
   const evidencePrBody = prBodySection.match(/^## PR body\n\n(`{3,})\n([\s\S]*?)\n\1(?:\n|$)/)?.[2] ?? null;
-  // An empty PR body renders as PR_BODY_ABSENT_SENTINEL (no fence); it has no closing reference, so an empty file matches it and arms nothing.
-  const evidenceBodyAbsent = evidencePrBody === null && prBodySection.split("\n")[2] === PR_BODY_ABSENT_SENTINEL;
-  const bodyMatches = evidenceBodyAbsent ? prBodyText.trim() === "" : prBodyText.trim() !== "" && prBodyText.trim() === evidencePrBody;
-  if (!bodyMatches) throw Object.assign(new Refusal(`--pr-body-file ${prBodyFile} is empty or differs from the \`## PR body\` section of the pinned gate-context evidence; if the PR body changed after the round context was built, rebuild the round context with write-gate-context.mjs, then rewrite the file with view-pr.mjs --jq '.pr.body'`), { refusal: "pr_body_mismatch" });
-  const linkageIssues = sliceLinkageIssues(parseSource(spec).nonGoals, prBodyText, repo);
+  // An empty PR body renders as PR_BODY_ABSENT_SENTINEL (no fence); it has no closing reference and arms nothing.
+  if (evidencePrBody === null && prBodySection.split("\n")[2] !== PR_BODY_ABSENT_SENTINEL) throw new Refusal(`gate-context evidence ${evidenceRead.path} has no \`## PR body\` section; rebuild the round context with write-gate-context.mjs`);
+  const linkageIssues = sliceLinkageIssues(parseSource(spec).nonGoals, evidencePrBody ?? "", repo);
   const contracts = await Promise.all(JUDGE_CONTRACTS.map(async (rel) => ({ path: rel, digest: sha256(await readFile(new URL(rel, PACKAGE_ROOT))) })));
   const workOrder = {
     role: "judge",
@@ -202,7 +196,7 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
       priorVerdictDigests: priors.map((prior) => sha256Hex(parseSource(prior))),
     },
     contracts,
-    requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read), prBody.read,...(copilotBody ? [copilotBody.read] : [])],
+    requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read), ...(copilotBody ? [copilotBody.read] : [])],
     // Per-round paths: a superseded round's late verdict never lands where this round's is read.
     outputRefs: [path.join(dir, roundId, "judge-verdict.json"), path.join(dir, roundId, "spec-authority-verdict.json")],
     outputSchemas: {
@@ -319,7 +313,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   const { values } = parseArgs({ args: argv, options: {
     repo: { type: "string" }, pr: { type: "string" }, gate: { type: "string" }, "head-sha": { type: "string" },
     "findings-file": { type: "string" }, "spec-file": { type: "string" }, "identity-file": { type: "string" },
-    "prior-verdict": { type: "string", multiple: true }, round: { type: "string" }, "operator-focus-file": { type: "string" }, "pr-body-file": { type: "string" }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" },
+    "prior-verdict": { type: "string", multiple: true }, round: { type: "string" }, "operator-focus-file": { type: "string" }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" },
     ...JQ_OUTPUT_PARSE_OPTIONS,
   } });
   if (values.help) {
@@ -334,10 +328,6 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
   const emit = (payload) => emitResult(payload, { jq: values.jq, silent: values.silent, fields: values.fields });
   if (values["operator-focus-file"] === "") {
     process.stderr.write(`--operator-focus-file must not be an empty value; pass a path or omit the flag\n${USAGE}\n`);
-    return 2;
-  }
-  if (values["pr-body-file"] !== undefined && values["pr-body-file"].trim().length === 0) {
-    process.stderr.write(`--pr-body-file requires a non-empty path\n${USAGE}\n`);
     return 2;
   }
   const jqSyntaxError = preflightJqFilter(values.jq);
@@ -356,7 +346,7 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
     const plan = await emitJudgeWorkOrder({
       repo: values.repo, pr: values.pr, gate: values.gate, headSha: values["head-sha"].toLowerCase(),
       findingsFile: values["findings-file"], specFile: values["spec-file"], identityFile: values["identity-file"],
-      priorVerdicts: values["prior-verdict"] ?? [], ...(values["operator-focus-file"] ? { operatorFocusFile: values["operator-focus-file"] } : {}), ...(values["pr-body-file"] !== undefined ? { prBodyFile: values["pr-body-file"].trim() } : {}), ...(values.round !== undefined ? { round: /^[1-9][0-9]*$/.test(values.round) ? Number(values.round) : values.round } : {}), cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}),
+      priorVerdicts: values["prior-verdict"] ?? [], ...(values["operator-focus-file"] ? { operatorFocusFile: values["operator-focus-file"] } : {}), ...(values.round !== undefined ? { round: /^[1-9][0-9]*$/.test(values.round) ? Number(values.round) : values.round } : {}), cwd, ...(tmpRoot ? { tmpRoot } : {}), ...(roundId ? { roundId } : {}),
     });
     const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
     return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath });
