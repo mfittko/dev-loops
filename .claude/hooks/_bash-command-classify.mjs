@@ -1023,7 +1023,7 @@ function segmentsHaveQuotedHeredoc(segments) {
  * quote, `$(`, backtick or heredoc sets `incomplete`; `incompleteAt` is the offset of the earliest
  * unclosed opener, and callers treat the text from there on as unquoted executable text.
  * `$((expr))` with a plain expression is read as arithmetic text (so `1<<2` is no heredoc);
- * inside `$(...)` a line starting `DELIM)` closes the heredoc and the substitution together.
+ * inside `$(...)` a line `DELIM)` followed only by whitespace or the substitution's closing double quote closes the heredoc and the substitution together.
  * ponytail: `${...}` quoting, subshell grouping and arithmetic holding a substitution or quote are not modelled; the last fails closed.
  * @param {string} command
  * @returns {{ segments: object[], spans: {start:number,end:number,kind:string}[], ticks: string[], comments: string[], incomplete: boolean, incompleteAt: number }}
@@ -1063,7 +1063,7 @@ export function tokenizeShellCommand(command) {
     let level = 2;
     let inner = -1;
     for (let j = i + 3; j < n; j++) {
-      if (level === 1 && /[;|&]/.test(command[j])) return null; // `$((a);(b))` is a substitution of subshells; fail closed on any separator between the parens
+      if (level === 1 && /[;|&\n]/.test(command[j])) return null; // `$((a);(b))` is a substitution of subshells; fail closed on any separator (newline included) between the parens
       if (command[j] === "(") level++;
       else if (command[j] === ")") {
         level--;

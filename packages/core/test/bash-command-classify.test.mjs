@@ -1626,11 +1626,14 @@ test("tokenizeShellCommand: $((expr)) is arithmetic and DELIM) closes a heredoc 
   for (const c of ["echo $((1<<2))", "x=$((a<<b)); echo $x"]) assert.equal(commandContainsInlineInterpreter(c), false, c);
   assert.equal(tokenizeShellCommand(": $((1<<2))").incomplete, false);
   assert.equal(tokenizeShellCommand(": $(( $(date) << 2 ))").incomplete, true); // arithmetic holding a substitution falls back to the `$(` reader: fail closed
-  for (const c of [": $((true);(gh pr merge 5))", ": $((true) | (cmd))", ": $((p);(q))"]) assert.equal(tokenizeShellCommand(c).segments[0].words[1].subs.length, 1, c); // read as a substitution (visible), not opaque arithmetic
+  for (const c of [": $((true);(gh pr merge 5))", ": $((true) | (cmd))", ": $((p);(q))", ": $((true)\n(gh pr merge 5))", ": $((a)&(b))"]) assert.equal(tokenizeShellCommand(c).segments[0].words[1].subs.length, 1, c); // read as a substitution (visible), not opaque arithmetic
   assert.equal(commandContainsInlineInterpreter(": $((1<<2))\nnode - <<EOF\nconsole.log(1)\nEOF"), true);
   assert.equal(tokenizeShellCommand(": $((1<<2").incomplete, true);
   assert.equal(tokenizeShellCommand(": $(( (1<<2) ))").incomplete, false);
-  for (const c of ["EOF)rest", "EOF) && node -e 1"]) assert.equal(tokenizeShellCommand(`cat <<'EOF'\nbody\n${c}`).incomplete, true, c);
+  for (const c of ["EOF)rest", "EOF) && node -e 1"]) assert.equal(tokenizeShellCommand(`X=$(cat <<'EOF'\nbody\n${c}`).incomplete, true, c);
+  const tabbed = "X=$(cat <<-'EOF'\n\tbody\n\tEOF)";
+  assert.equal(tokenizeShellCommand(tabbed).incomplete, false);
+  assert.ok(JSON.stringify(tokenizeShellCommand(tabbed)).includes("\\tbody"), "<<- body kept");
   const closed = "echo \"$(cat <<'EOF'\nbody\nEOF)\"";
   assert.equal(tokenizeShellCommand(closed).incomplete, false);
   assert.equal(tokenizeShellCommand("cat <<'EOF'\nbody\nEOF)").incomplete, true); // outside a substitution `EOF)` is no delimiter
