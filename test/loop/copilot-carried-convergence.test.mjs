@@ -125,7 +125,7 @@ function scenario({ priorBody = "", threads = [], delta = DOCS_DELTA, prOwn = de
     commentsEntry(dispositions),
     ...(gatePassedRead ? [
       slurpEntry(`repos/${REPO}/issues/${PR}/comments?per_page=100`, gatePassedRead.issueComments ?? []),
-      slurpEntry(`repos/${REPO}/pulls/${PR}/reviews?per_page=100`, gatePassedRead.prReviews ?? []),
+      { ...slurpEntry(`repos/${REPO}/pulls/${PR}/reviews?per_page=100`, gatePassedRead.prReviews ?? []), ...(gatePassedRead.reviewsFail ? { exitCode: 1, stdout: "" } : {}) },
     ] : []),
   ];
   return { reviews, shared, gateComments: gatePassedRead?.issueComments ?? [] };
@@ -1135,7 +1135,7 @@ describe("COPILOT-STATE-CONVERGED-BELOW-CAP: below the round cap an unclean revi
   const own = [thread({ isResolved: true, reviewId: "PRR_prior" })];
   const gatePassed = { id: 900, body: `### Gate review: \`pre_approval_gate\`\n\nGate: pre_approval_gate\nHead SHA: ${OLDER}\nVerdict: clean\nFindings: none\nNext action: merge`, user: { login: "maintainer" } };
   const carry = async (fixture, extra = {}) => {
-    const { reviews, shared } = scenario({ delta: CODE_DELTA, ...fixture });
+    const { reviews, shared } = scenario({ delta: CODE_DELTA, gatePassedRead: {}, ...fixture });
     const { runtime } = runtimeFor(shared);
     return resolveCarriedConvergence({ repo: REPO, pr: PR, currentHeadSha: HEAD, prData: { reviews }, copilotReviewRequestStatus: "none", ...extra }, runtime);
   };
@@ -1283,5 +1283,58 @@ describe("a Copilot error review is never carried (ADR 0114)", () => {
 
   it("returns no review when every Copilot review is an error review", () => {
     assert.equal(resolveLatestCopilotReview({ reviews: [review("R_err", ERROR_BODY, "2026-09-22T10:00:00Z")] }).review, null);
+  });
+});
+
+describe("a zero-file Copilot review is not clean (ADR 0237)", () => {
+  const ZERO = "Copilot wasn't able to review any files in this pull request.";
+  const below = { copilotReviewRoundCount: 1, effectiveCap: 5 };
+  const atCap = { copilotReviewRoundCount: 5, effectiveCap: 5 };
+  const carry = async (fixture, extra = {}) => {
+    const { reviews, shared } = scenario({ delta: CODE_DELTA, priorBody: ZERO, ...fixture });
+    const { runtime } = runtimeFor(shared);
+    return resolveCarriedConvergence({ repo: REPO, pr: PR, currentHeadSha: HEAD, prData: { reviews }, copilotReviewRequestStatus: "none", ...extra }, runtime);
+  };
+
+  it("below the cap it does not carry and the request tool re-requests", async () => {
+    const refused = await carry({ gatePassedRead: {} }, below);
+    assert.equal(refused.carried, false);
+    const request = await runRequestTool(scenario({ priorBody: ZERO, delta: CODE_DELTA, gatePassedRead: {} }), { root: convergedOnceWideRoot });
+    assert.equal(request.status, "requested");
+  });
+
+  it("an operator record for the current head converges it below the cap", async () => {
+    const carried = await carry({ dispositions: [dispositionComment({ reviewId: "PRR_prior" })], gatePassedRead: {} }, below);
+    assert.equal(carried.carried, true, carried.reason);
+    assert.equal(carried.bodyDisposition.operator, true);
+  });
+
+  it("at the cap it follows the body-only path: no record refuses, a record clears", async () => {
+    const refused = await carry({}, atCap);
+    assert.equal(refused.carried, false);
+    assert.match(refused.reason, /body-only/);
+    assert.equal((await carry({ dispositions: [dispositionComment({ reviewId: "PRR_prior" })] }, atCap)).carried, true);
+  });
+
+  it("merge refuses it without a record and merges with an operator record", async () => {
+    const refused = await runMerge(scenario({ priorBody: ZERO, delta: CODE_DELTA }), { delta: CODE_DELTA }, { strict: false });
+    assert.ok(refused.failures.some((failure) => failure.precondition === "copilot_convergence"), JSON.stringify(refused));
+    const dispositions = [dispositionComment({ reviewId: "PRR_prior" })];
+    const merged = await runMerge(scenario({ priorBody: ZERO, delta: CODE_DELTA, dispositions }), { delta: CODE_DELTA, dispositions }, { strict: false });
+    assert.equal(merged.merged, true, JSON.stringify(merged.failures));
+  });
+
+  it("an unreadable gate-evidence read refuses with copilot_reviews_unreadable", async () => {
+    const own = [thread({ isResolved: true, reviewId: "PRR_prior" })];
+    const refused = await carry({ priorBody: YELLOW, threads: own, gatePassedRead: null }, below);
+    assert.equal(refused.carried, false);
+    assert.match(refused.reason, /^copilot_reviews_unreadable/);
+  });
+
+  it("a failed PR-reviews read with a readable issue-comment stream refuses with copilot_reviews_unreadable", async () => {
+    const own = [thread({ isResolved: true, reviewId: "PRR_prior" })];
+    const refused = await carry({ priorBody: YELLOW, threads: own, gatePassedRead: { reviewsFail: true } }, below);
+    assert.equal(refused.carried, false);
+    assert.match(refused.reason, /^copilot_reviews_unreadable/);
   });
 });

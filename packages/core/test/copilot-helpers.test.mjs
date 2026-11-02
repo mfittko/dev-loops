@@ -1347,3 +1347,10 @@ test("classifyCopilotReviewBodyDisposition: error-body edge cases", () => {
     assert.equal(classifyCopilotReviewBodyDisposition(state, body), expected, `${state} ${JSON.stringify(body)}`);
   }
 });
+
+test("classifyCopilotReviewBodyDisposition: a headerless zero-file review is unrecognized, not none (ADR 0237)", () => {
+  for (const body of ["Copilot wasn't able to review any files in this pull request.", "Copilot wasn’t able to review any files in this pull request.", "Copilot reviewed 0 out of 12 changed files in this pull request."]) {
+    assert.equal(classifyCopilotReviewBodyDisposition("COMMENTED", body), COPILOT_DISPOSITION.UNRECOGNIZED);
+    assert.equal(copilotReviewBodySignalsChanges("COMMENTED", body), true);
+  }
+});
