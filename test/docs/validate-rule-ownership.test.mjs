@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -40,6 +40,12 @@ test("extractRuleDefinitions reads rule markers", () => {
   const defs = extractRuleDefinitions("| <!-- rule: TEST-RULE-001 --> `TEST-RULE-001` | The tool MUST pass. |", "doc.md");
   assert.deepEqual(defs.map((d) => d.id), ["TEST-RULE-001"]);
   assert.match(defs[0].body, /MUST pass/);
+});
+
+test("GATE-EXEC-ROUND-CAP-NO-DECLINE-RESOLVE is defined exactly once in the gate contract", async () => {
+  const doc = path.join(import.meta.dir, "..", "..", "skills", "docs", "gate-review-sub-loop-contract.md");
+  const defs = extractRuleDefinitions(await readFile(doc, "utf8"), doc);
+  assert.equal(defs.filter((d) => d.id === "GATE-EXEC-ROUND-CAP-NO-DECLINE-RESOLVE").length, 1);
 });
 
 test("extractRuleReferences reads comment refs and markdown ID links", () => {

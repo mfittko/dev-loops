@@ -1177,6 +1177,9 @@ test("F1: missing or conflicting source and authority refuse before dispatch", a
       await writeFile(files.threads, JSON.stringify(bad));
       await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads }), /not successful list-review-threads --unresolved-only output/);
     }
+    // Resolved threads name the runnable unresolve remedy (GATE-EXEC-ROUND-CAP-NO-DECLINE-RESOLVE).
+    await writeFile(files.threads, JSON.stringify({ ...THREADS, threads: [{ ...THREADS.threads[0], threadId: "T9", isResolved: true }] }));
+    await assert.rejects(emit({ actListFile: undefined, gate: undefined, threadsFile: files.threads }), (e) => e.message.includes(`dev-loops-run scripts/github/unresolve-review-thread.mjs --repo ${REPO} --pr ${PR} --thread-id T9`));
     await writeFile(files.threads, JSON.stringify(THREADS));
     await assert.rejects(emit({ fetchPr: async () => ({ headRefName: "issue-1", headRefOid: "b".repeat(40) }) }), /conflicting authority/);
     await assert.rejects(emit({ fetchPr: async () => ({ headRefOid: head }) }), /mutation authority is missing/);

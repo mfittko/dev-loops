@@ -363,7 +363,9 @@ export async function emitFixerWorkOrder({
   const operatorFocus = actListFile ? bindOperatorFocusItems(operatorFocusRaw, source.parsed) : operatorFocusRaw;
   if (threadsFile && (source.parsed?.ok !== true || !Array.isArray(source.parsed.threads) || source.parsed.repo !== repo || Number(source.parsed.pr) !== Number(pr)
     || !source.parsed.threads.every((thread) => thread?.isResolved === false))) {
-    throw new Refusal(`threads file ${threadsFile} is not successful list-review-threads --unresolved-only output for ${repo}#${pr}`);
+    const resolved = Array.isArray(source.parsed?.threads) ? source.parsed.threads.filter((thread) => thread?.isResolved === true) : [];
+    const unresolve = `dev-loops-run scripts/github/unresolve-review-thread.mjs --repo ${repo} --pr ${pr} --thread-id ${resolved[0]?.threadId ?? "<id>"}`;
+    throw new Refusal(`threads file ${threadsFile} is not successful list-review-threads --unresolved-only output for ${repo}#${pr}${resolved.length > 0 ? ` (GATE-EXEC-ROUND-CAP-NO-DECLINE-RESOLVE: the file holds resolved threads; run ${unresolve} for each, then re-list with --unresolved-only)` : ""}`);
   }
   if (deltaResult && !actListFile) throw new Refusal("--delta-result applies only to an --act-list-file source");
   // A thread source reads the record the thread-route delta review wrote for this head (step 7 bounded_out rule), never a flag.
