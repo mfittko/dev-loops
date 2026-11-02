@@ -270,7 +270,7 @@ export function gitStaleSurfaceHits(worktreeArg, baseline, head) {
 
 // The findings log writer stamps `headSha`; the log must be the baseline round's and carry provenance.perAngle.
 // A log at an earlier head is accepted when the baseline is a base-only merge of it (the closure round after a cap round, ADR 0197), equals the end of its sealed clearing chain,
-// or is a base-only merge of the log head or a chain end (PRE-PUSH-DELTA-INPUT-CAP-CHAIN, ADR 0224); any error fails closed.
+// or is a base-only merge of the log head or a chain end (PRE-PUSH-DELTA-INPUT-CAP-CHAIN, ADR 0225); any error fails closed.
 async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerge, tmpRoot, target }) {
   if (!findingsLogPath) return [];
   const log = JSON.parse(readFileSync(findingsLogPath, "utf8"));

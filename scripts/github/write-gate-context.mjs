@@ -2121,17 +2121,18 @@ async function capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, re
  * The last candidate head of every sealed clearing chain of the cap round `capHead` (ADR 0218), seeded as resolveCapRoundFixed seeds them; empty when no chain starts.
  * The emitter seam skips the `covers` filter on purpose: it must admit a base-only merge M of a chain end before the fixer's record for M exists.
  */
-export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
-  return (await clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge })).ends;
+export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true }) {
+  return (await clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge, covering })).ends;
 }
 
 /** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk: each start's end is collected in the same loop that fills the heads, so a record rewrite cannot split them. */
-export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince }) {
+export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true }) {
   const { starts, seedHeads } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
   const ends = [];
   // The heads the seed proof visited stay in the set even if a concurrent rewrite changes a record before the traversal below.
   const heads = new Set(seedHeads);
-  for (const start of starts) {
+  // `covering` drops a start that does not name every act item of the cap round (the emitter seam passes none).
+  for (const start of starts.filter(covering)) {
     const seededFrom = normalizeSha(start.reviewBaselineHead);
     if (seededFrom && seededFrom !== normalizeSha(capHead)) heads.add(seededFrom);
     // Each record is read once per step: the end and the visited heads come from the same read. A per-start cycle or invalid candidate has no end, as in clearingChainEnd.
@@ -2150,6 +2151,15 @@ export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefNam
   }
   return { ends, heads: [...heads] };
 }
+
+/**
+ * The `covers` check of resolveCapRoundFixed, shared with the chain-extension tool so the two cannot disagree:
+ * the first clearing record must name every act item of the cap round. Pass it as `covering` to clearingChainLastCandidates.
+ */
+export const capRoundCovers = (capRound) => (record) => {
+  const refs = new Set((Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref)));
+  return [...new Set(capRoundActRefs(capRound.log.findings, capRound.log.headSha).values())].every((r) => refs.has(r));
+};
 
 /**
  * "Cap round fixed" (ADR 0208): the cap round exists, and a sealed pre-push delta record bound to the cap-round head cleared (or bounded out) the current head.
@@ -2183,11 +2193,7 @@ export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = 
   };
   // The first clearing record must name every act item of the cap round: a delta record keyed on the same baseline for another route (a thread review) proves nothing about them.
   // With no open act item the check is vacuously true: any clearing record then binds, and the cap round rests on the baseline match alone.
-  const covers = (record) => {
-    const refs = new Set((Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref)));
-    const expected = new Set(capRoundActRefs(capRound.log.findings, capHead).values());
-    return [...expected].every((r) => refs.has(r));
-  };
+  const covers = capRoundCovers(capRound);
   // The direct chain is tried first: merge-seeded starts (a directory scan and Git probes) are discovered only when it does not prove the round fixed.
   const chainArgs = { tmpRoot, capHead, repo: options.repo, pr: options.pr, repoRoot, baseOnlyMerge };
   const directStarts = (await capRoundChainStarts({ ...chainArgs, baseRefName: undefined })).starts;

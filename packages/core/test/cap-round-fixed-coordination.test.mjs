@@ -57,11 +57,11 @@ test("a draft PR past the round cap without a fixed cap round reports blocked, n
 test("the cap-round refusal names its failed condition and the remedy for that condition", () => {
   const table = [
     ["baseline_orphaned", /not an ancestor of the current head.*Remedy: push the head to a new branch.*--head <new-branch> --allow-replacement-pr <this PR number>/],
-    ["no_clearing_record", /no sealed clearing delta record exists.*Remedy: complete the cap round's fixer pass and run `check-pre-push-delta.mjs --result`/],
+    ["no_clearing_record", /no sealed clearing delta record exists.*Remedy: complete the cap round's fixer pass and run `check-pre-push-delta.mjs --result`.*node <dev-loops-package-root>\/cli\/index\.mjs gate extend-cap-round-chain --repo <owner\/name> --pr <number>/],
     ["unsealed_record", /carries no valid seal.*Remedy: rerun `check-pre-push-delta.mjs --result`.*never edit the record/],
     ["items_do_not_cover", /do not cover the cap round's act refs.*Remedy: rerun the pre-push delta on the cap round's act list/],
     ["cap_round_unresolved", /could not be resolved.*Remedy: repair or quarantine the unreadable ledger or config/],
-    ["chain_does_not_reach_head", /ends before the current head.*Remedy: run the pre-push delta for the current head's fix commit, or fetch origin\/<base>/],
+    ["chain_does_not_reach_head", /ends before the current head.*Remedy: run the pre-push delta for the current head's fix commit, or fetch origin\/<base>.*node <dev-loops-package-root>\/cli\/index\.mjs gate extend-cap-round-chain --repo <owner\/name> --pr <number>/],
   ];
   for (const [condition, pattern] of table) {
     const { reason, nextAction } = draftAt({ draftRoundRefused: true, draftCapRoundFailure: condition });

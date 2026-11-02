@@ -1,4 +1,4 @@
-# 0224. Delta input authenticates the cap-round findings log across the fixer chain
+# 0225. Delta input authenticates the cap-round findings log across the fixer chain
 
 ## Status
 

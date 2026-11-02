@@ -782,7 +782,7 @@ test("input mode refuses the chain log when a later round wrote its own findings
   await assert.rejects(chainRun(M, chainLog(A), { ledgerAt: M }), /sealed clearing chain/);
 });
 
-test("input mode accepts a base-only merge of the log head even when the ledger already holds the baseline (ADR 0224 item 4)", async () => {
+test("input mode accepts a base-only merge of the log head even when the ledger already holds the baseline (ADR 0225 item 4)", async () => {
   const out = await chainRun(M, chainLog(A), { mergeFrom: A, ledgerAt: M });
   assert.deepEqual(out.input.surfaceHints, ["correctness"]);
 });
