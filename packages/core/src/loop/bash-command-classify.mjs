@@ -1047,8 +1047,8 @@ function substitutionIsInert(seg, k, head) {
   return !overridesConfig(seg) && (TEXT_FLAG_RE.test(seg.words[k - 1]?.value ?? "") || TEXT_FLAG_ATTACHED_RE.test(w.raw));
 }
 
-/** A `-c`/`--config` override or `alias.` word: git/gh run a shell alias from it. */
-const overridesConfig = (seg) => seg.words.some((w) => /^(?:-c|--config)|alias\./.test(w.value));
+/** A `-c`/`--config` override or `alias.` word (any case): git/gh run a shell alias from it. */
+const overridesConfig = (seg) => seg.words.some((w) => /^(?:-c|--config)|alias\./i.test(w.value));
 const STDIN_TEXT_SUBCOMMANDS = { git: new Set(["commit", "tag", "notes"]), gh: new Set(["pr", "issue", "release", "gist"]) };
 /** A top-level `git commit -F -` / `gh pr comment --body-file -` segment: a text subcommand of git/gh with a `-F -`/`--body-file -` operand, no `-c`, no env assignment. Its heredoc is message text. */
 function readsTextFromStdin(seg, head) {
@@ -1062,7 +1062,7 @@ function readsTextFromStdin(seg, head) {
  * Heredocs whose body is data (issue 2442 item 8): a `cat` or `tee` heredoc (or a `git commit -F -`/`gh pr comment --body-file -` message, `readsTextFromStdin`) that is closed, whose delimiter is quoted or whose body has no
  * `$(`/backtick, whose segment is not piped onward, and that sits in no `-c`/`eval`/here-string payload.
  * Structural rule, counted over the whole tree: the command is exactly one `cat`/`tee` heredoc segment, or one root `git`/`gh` segment holding exactly one substitution that holds exactly one `cat` segment. Anything else keeps every heredoc body visible, so a later segment or substitution that runs a written file never sees a blanked body.
- * The host must write no file and carry no `-c`/alias override (`substitutionIsInert`); `echo`/`printf` are not hosts.
+ * The host must write no file, carry no env-assignment word and no `-c`/alias override (`substitutionIsInert`); `echo`/`printf` are not hosts.
  * Every other body executes and stays visible.
  * @returns {object[]}
  */
@@ -1078,7 +1078,7 @@ function dataHeredocs(segments) {
   const subs = seg.words.flatMap((w, k) => w.subs.map((sub) => ({ sub, k })));
   if (subs.length === 0) return dataBody(seg, head);
   // exactly one inert git/gh text-flag substitution holding exactly one substitution-free cat segment
-  if (subs.length !== 1 || !INERT_SUBSTITUTION_HOSTS.has(head) || seg.pipedOut || writeTargets(seg).length !== 0) return [];
+  if (subs.length !== 1 || !INERT_SUBSTITUTION_HOSTS.has(head) || seg.pipedOut || writeTargets(seg).length !== 0 || seg.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return [];
   const { sub, k } = subs[0];
   if (isPayloadWord(seg.words, k) || !substitutionIsInert(seg, k, head) || sub.segments.length !== 1) return [];
   const inner = sub.segments[0];

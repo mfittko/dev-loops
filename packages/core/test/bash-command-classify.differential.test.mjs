@@ -226,6 +226,9 @@ const SALVAGED_DENY_ROWS = [
   "echo \"$(cat > l.sh <<'EOF'\nnode -e 'x'\nEOF\n)$(bash l.sh)\"",
   "echo \"$(cat > l.sh <<'EOF'\nnode -e 'x'\nEOF\n)\" \"$(bash l.sh)\"",
   "git commit -m \"$(cat > l.sh <<'EOF'\nnode -e 'x'\nEOF\n)\" -m \"$(bash l.sh)\"",
+  // env-assignment prefix on the git host: GIT_EDITOR runs the message, a mixed-case alias key defines a shell alias
+  "GIT_EDITOR=sh git commit --allow-empty -e -m \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
+  "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=Alias.x GIT_CONFIG_VALUE_0='!f(){ eval \"$2\"; }; f' git x -m \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
   "for i in 1; do>&2\ncat <<'EOF'\nnode -e 'x'\nEOF\ndone>l.sh\nbash l.sh",
   "if true; then>&2\ncat <<'EOF'\nnode -e 'x'\nEOF\nfi>l.sh\nbash l.sh",
   "for i in 1; do&>/dev/null\ncat <<'EOF'\nnode -e 'x'\nEOF\ndone>l.sh\nbash l.sh",
