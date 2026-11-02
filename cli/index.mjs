@@ -736,8 +736,15 @@ export function findSkewedCheckout(cwd, runningRoot = REPO_ROOT) {
   }
 }
 
-function delegateToCheckout({ argv, cwd, env, stdout, stderr, spawnMaxBuffer }) {
-  if (env.DEVLOOPS_CHECKOUT_DELEGATED || !CHECKOUT_DELEGATED_CATEGORIES.has(argv[0])) return null;
+// Interactive routes (loop claude-launch) need the real TTY; injected streams get the piped path.
+export function delegationStdio(stdout, stderr) {
+  return stdout === process.stdout && stderr === process.stderr ? "inherit" : ["ignore", "pipe", "pipe"];
+}
+
+const quoteRerunArg = (arg) => (/^[\w./:=@-]+$/.test(arg) ? arg : JSON.stringify(arg));
+
+function delegateToCheckout({ argv, cwd, env, stdout, stderr, spawnMaxBuffer, execPath, alreadyDelegated }) {
+  if (alreadyDelegated || !CHECKOUT_DELEGATED_CATEGORIES.has(argv[0])) return null;
   const checkout = findSkewedCheckout(cwd);
   if (checkout === null) return null;
   const installed = readOwnVersion() ?? "unknown";
@@ -745,15 +752,20 @@ function delegateToCheckout({ argv, cwd, env, stdout, stderr, spawnMaxBuffer }) 
   if (installed !== checkout.version) {
     writeLines(stderr, [`[dev-loops] version skew: installed ${installed}, checkout ${checkout.version}; running ${entry} (CLI-CHECKOUT-DELEGATION).`]);
   }
-  const result = spawnSync(process.execPath, [entry, ...argv], {
+  const stdio = delegationStdio(stdout, stderr);
+  const result = spawnSync(execPath, [entry, ...argv], {
     cwd,
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio,
     maxBuffer: spawnMaxBuffer,
     env: { ...env, DEVLOOPS_CHECKOUT_DELEGATED: "1" },
   });
+  if (result.error?.code === "ENOBUFS") {
+    writeLines(stderr, [`child_output_too_large: the checkout CLI output exceeded the ${spawnMaxBuffer}-byte wrapper buffer.`]);
+    return 1;
+  }
   if (result.error) {
-    writeLines(stderr, [`cli_version_skew: installed ${installed}, checkout ${checkout.version}; the checkout CLI did not start (${result.error.code ?? result.error.message}). Rerun: dev-loops-run --repo-root ${checkout.root} cli/index.mjs ${argv.join(" ")}`]);
+    writeLines(stderr, [`cli_version_skew: installed ${installed}, checkout ${checkout.version}; the checkout CLI did not start (${result.error.code ?? result.error.message}). Rerun: dev-loops-run --repo-root ${checkout.root} cli/index.mjs ${argv.map(quoteRerunArg).join(" ")}`]);
     return 1;
   }
   if (result.stdout) stdout.write(result.stdout);
@@ -773,8 +785,13 @@ export async function runCli({
   fetchLatestVersion,
   // Child-output buffer for routed subcommands.
   spawnMaxBuffer = SPAWN_MAX_BUFFER,
+  // Test-only seam: a nonexistent path forces a checkout start failure.
+  execPath = process.execPath,
 } = {}) {
-  const delegated = delegateToCheckout({ argv, cwd, env, stdout, stderr, spawnMaxBuffer });
+  // The guard must not reach grandchildren: read it, then drop it from the process env.
+  const alreadyDelegated = Boolean(env.DEVLOOPS_CHECKOUT_DELEGATED);
+  if (env === process.env) delete process.env.DEVLOOPS_CHECKOUT_DELEGATED;
+  const delegated = delegateToCheckout({ argv, cwd, env, stdout, stderr, spawnMaxBuffer, execPath, alreadyDelegated });
   if (delegated !== null) return delegated;
   const fromTop = parseTopLevelCommand(argv);
 

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { findSkewedCheckout, runCli } from "../cli/index.mjs";
+import { delegationStdio, findSkewedCheckout, runCli } from "../cli/index.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tmpRoots = [];
@@ -94,8 +94,40 @@ test("the checkout exit status is returned", async () => {
 
 test("a checkout CLI that cannot run names the rerun command", async () => {
   const root = makeCheckout(ECHO_ENTRY);
-  const result = await run(["loop", "startup"], root, { spawnMaxBuffer: 1 });
+  const result = await run(["loop", "startup"], root, { execPath: "/nonexistent/node" });
   assert.equal(result.code, 1);
   assert.match(result.stderr, /cli_version_skew: installed \S+, checkout 9\.9\.9; the checkout CLI did not start/);
   assert.match(result.stderr, /Rerun: dev-loops-run --repo-root .+ cli\/index\.mjs loop startup/);
+});
+
+test("rerun hint quotes args with spaces", async () => {
+  const root = makeCheckout(ECHO_ENTRY);
+  const result = await run(["loop", "startup", "--note", "a b"], root, { execPath: "/nonexistent/node" });
+  assert.match(result.stderr, /--note "a b"/);
+});
+
+test("checkout output over the buffer is child_output_too_large without a rerun hint", async () => {
+  const root = makeCheckout(ECHO_ENTRY);
+  const result = await run(["loop", "startup"], root, { spawnMaxBuffer: 1 });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /child_output_too_large/);
+  assert.doesNotMatch(result.stderr, /Rerun/);
+});
+
+test("delegation inherits stdio only for the real process streams", () => {
+  assert.equal(delegationStdio(process.stdout, process.stderr), "inherit");
+  assert.deepEqual(delegationStdio(collector(), process.stderr), ["ignore", "pipe", "pipe"]);
+});
+
+test("the delegation guard is removed from process.env but still skips delegation", async () => {
+  const root = makeCheckout(ECHO_ENTRY);
+  process.env.DEVLOOPS_CHECKOUT_DELEGATED = "1";
+  const stdout = collector();
+  await runCli({ argv: ["--version"], cwd: root, stdout, stderr: collector() });
+  assert.equal(process.env.DEVLOOPS_CHECKOUT_DELEGATED, undefined);
+  process.env.DEVLOOPS_CHECKOUT_DELEGATED = "1";
+  const out = collector();
+  await runCli({ argv: ["loop"], cwd: root, stdout: out, stderr: collector() });
+  assert.doesNotMatch(out.text, /"delegated"/);
+  assert.equal(process.env.DEVLOOPS_CHECKOUT_DELEGATED, undefined);
 });

@@ -85,7 +85,8 @@
       "enforcement": "runtime"
     },
     {
-      "id": "CLI-CHECKOUT-DELEGATION"
+      "id": "CLI-CHECKOUT-DELEGATION",
+      "enforcement": "runtime"
     },
     {
       "id": "CLOSING-REF-BRANCH-MISMATCH",
