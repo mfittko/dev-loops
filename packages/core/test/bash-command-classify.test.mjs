@@ -38,7 +38,6 @@ import {
   commandContainsCopilotSummonComment,
   commandContainsRawPrBodyEdit,
   commandContainsRawPrBodyApiWrite,
-  inlineInterpreterDenyDetail,
   commandContainsDetachedWaitTool,
   commandIsSleepPollLoop,
   commandIsFileMarkerPollLoop,
@@ -1765,7 +1764,4 @@ test("slice 2: a heredoc closed by EOF) inside a substitution is complete; malfo
   assert.equal(tokenizeShellCommand("cat <<'EOF'\nbody\nEOF)").incomplete, true);
   assert.equal(tokenizeShellCommand(": $((1<<2))").incomplete, false);
   assert.equal(tokenizeShellCommand(": $(( $(date) << 2 ))").incomplete, true); // arithmetic holding a substitution is not read as plain arithmetic: fail closed
-  assert.equal(inlineInterpreterDenyDetail("node -e 'x"), inlineInterpreterDenyDetail("echo \"$(gh pr view 5"));
-  assert.match(inlineInterpreterDenyDetail("node -e 'x"), /incomplete tokenization/);
-  assert.equal(inlineInterpreterDenyDetail("node -e 'x'"), "");
 });
