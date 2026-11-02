@@ -187,6 +187,8 @@ const SALVAGED_DENY_ROWS = [
 
 /** Hook-verdict row from test/loop/check-retro-tooling.test.mjs: `EOF)` is not a delimiter line, so origin/main allowed it and the head denies it. */
 const EOF_PAREN_ROW = "gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\"";
+/** Arithmetic shifts inside `$((...))`: the tokenizer reads the unquoted `<<` as a heredoc operator (arithmetic is out of tokenizer scope, ng:0). */
+const ARITH_SHIFT_ROWS = ["echo $((1<<2))", "echo $(( 1 << 2 ))", "x=$((a<<b)); echo $x"];
 const rowKey = (name, cmd) => `${name}: ${JSON.stringify(cmd)}`;
 /**
  * Rows the frozen copy allows and the head denies on purpose (fail-closed, slice 1). Key: `<predicate>: <JSON command>`.
@@ -205,6 +207,7 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
   flip("commandContainsRawPrBodyEdit", "trailing # comment with an apostrophe is a quote-pairing hazard: the stripper blanks nothing, so the flag-looking text in the quoted title stays visible", "gh pr edit 5 --title 'a --body b' # it's");
   flip("commandContainsInlineInterpreter", R_UNCLOSED, 'echo "$(gh pr view 5');
   flip("commandContainsInlineInterpreter", R_EOFPAREN, EOF_PAREN_ROW);
+  for (const row of ARITH_SHIFT_ROWS) flip("commandContainsInlineInterpreter", "arithmetic << inside $((...)) is read as a heredoc operator: the delimiter is the next word, the heredoc stays pending, so the input is incomplete and fails closed (arithmetic is out of tokenizer scope)", row);
   for (const sep of SEPARATORS) {
     for (const f of ["cat > src/a.mjs <<'EOF'", "cat > tmp/r.mjs <<'EOF' && node tmp/r.mjs"]) flip("commandContainsInlineInterpreter", R_HEREDOC, `${sep}${f}\necho done`);
   }
@@ -222,7 +225,7 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
 const INTENDED_REMOVALS = new Set();
 
 function buildCorpus() {
-  const corpus = new Set([...RESIDUE_SHAPES, ...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW]);
+  const corpus = new Set([...RESIDUE_SHAPES, ...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, ...QUOTED_HASH_ROWS, EOF_PAREN_ROW, ...ARITH_SHIFT_ROWS]);
   const forms = [...INLINE_FORMS, ...WAIT_FORMS, ...PR_BODY_FORMS];
   for (const f of forms) {
     for (const sep of SEPARATORS) for (const suf of SUFFIXES) corpus.add(`${sep}${f}${suf}`);
