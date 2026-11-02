@@ -1,4 +1,4 @@
-# 0206. A slice PR keeps its closing reference and a Non-goals reopen line
+# 0228. A slice PR keeps its closing reference and a Non-goals reopen line
 
 ## Status
 
