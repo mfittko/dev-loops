@@ -361,9 +361,11 @@ test("an authenticated commit_only round without a fix commit clears its sequenc
   const { actList } = fixture();
   const full = A;
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-delta-tmp-"));
-  const marker = writeSequenceMarker({ tmpRoot, baselineHead: full, branch: "issue-1" });
   const seam = { ...quiet, tmpRoot, revParse: (_worktree, rev) => (rev === "HEAD" ? full : full), isAncestor: () => true };
-  const result = await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], seam);
+  const bound = await boundArgs(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--findings-log", logFor(A)], seam);
+  // The marker names the pulled plan's execution, as the real emission writes it.
+  const marker = writeSequenceMarker({ tmpRoot, baselineHead: full, branch: "issue-1", execution: { executionIdentity: bound.unit.executionIdentity, workOrderRef: bound.unit.workOrderRef, outputRef: bound.output } });
+  const result = await runDeltaCli(bound.args, bound.seam);
   assert.equal(result.outcome, "no_commit");
   assert.equal(result.nextStep, "push_to_gate");
   assert.equal(fs.existsSync(marker), false);

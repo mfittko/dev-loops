@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, realpathSync } from "node:fs";
+import { chmodSync, existsSync, realpathSync, utimesSync } from "node:fs";
 import { cp, link, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -244,6 +244,122 @@ test("a sequence closed as abandoned retires its execution: a late pull is stale
   });
 });
 
+const emitCommitOnly = (emit, files) => emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+const writeClosure = async (tmpRoot, head, identity) => {
+  const { sequenceClosurePath } = await import("@dev-loops/core/loop/fix-push-authority");
+  const file = sequenceClosurePath(tmpRoot, head, identity);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, "{}");
+};
+
+test("a closure record landing between locate and the receipt write refuses stale_dispatch and writes no receipt", async () => {
+  const { WORK_ORDER_ROLES } = await import("../../scripts/github/_work-order-protocol.mjs");
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const unit = await emitCommitOnly(emit, files);
+    const tmpRoot = path.join(root, "tmp");
+    const located = await locateFixerUnit({ ref: unit.workOrderRef, cwd: wt, tmpRoots: [tmpRoot] });
+    assert.equal(located.stale, undefined);
+    await writeClosure(tmpRoot, head, unit.executionIdentity); // lands after locate's check
+    let wrote = false;
+    await assert.rejects(WORK_ORDER_ROLES.get("fixer").admit(located, async () => { wrote = true; }), (error) => error.refusal === "stale_dispatch" && /never retarget/.test(error.message));
+    assert.equal(wrote, false);
+  });
+});
+
+test("a close and a pull admission, run in either order, end with exactly one winner: a closure record or a receipt", async () => {
+  const { WORK_ORDER_ROLES } = await import("../../scripts/github/_work-order-protocol.mjs");
+  const { closeGateSequence } = await import("../../scripts/loop/close-gate-sequence.mjs");
+  const { sequenceClosurePath, readSequenceMarker } = await import("@dev-loops/core/loop/fix-push-authority");
+  for (const closeFirst of [true, false]) await withFixture(async ({ root, wt, head, files, emit }) => {
+    const unit = await emitCommitOnly(emit, files);
+    const tmpRoot = path.join(root, "tmp");
+    const { branch } = readSequenceMarker(tmpRoot, head);
+    const located = await locateFixerUnit({ ref: unit.workOrderRef, cwd: wt, tmpRoots: [tmpRoot] });
+    const receipt = pullReceiptPath(tmpRoot, unit.workOrderRef);
+    const writeReceipt = async () => { await mkdir(path.dirname(receipt), { recursive: true }); await writeFile(receipt, JSON.stringify({ executionIdentity: unit.executionIdentity, pulledAt: new Date().toISOString() })); };
+    const admit = () => WORK_ORDER_ROLES.get("fixer").admit(located, writeReceipt).then(() => "pulled", (error) => error.refusal ?? error.message);
+    const close = () => closeGateSequence({ tmpRoot, head, repo: REPO, pr: PR, fetchPr: async () => ({ pr: { headRefOid: "b".repeat(40), headRefName: branch } }) }).then((r) => (r.ok ? "closed" : r.refusal));
+    // Sequential on purpose: closeGateSequence awaits fetchPr before it locks and admit locks synchronously, so concurrent starts always make the pull win and never exercise close-wins.
+    let closeResult, pullResult;
+    if (closeFirst) { closeResult = await close(); pullResult = await admit(); } else { pullResult = await admit(); closeResult = await close(); }
+    const closed = existsSync(sequenceClosurePath(tmpRoot, head, unit.executionIdentity));
+    const pulled = existsSync(receipt);
+    assert.notEqual(closed, pulled, `closure ${closed}, receipt ${pulled}: ${closeResult} / ${pullResult}`);
+    if (closeFirst) assert.deepEqual([closed, pulled, closeResult, pullResult], [true, false, "closed", "stale_dispatch"]);
+    else assert.deepEqual([closed, pulled, pullResult], [false, true, "pulled"]);
+  });
+});
+
+test("a held sequence lock refuses the pull as retryable sequence_lock_busy and writes no receipt", async () => {
+  const { WORK_ORDER_ROLES } = await import("../../scripts/github/_work-order-protocol.mjs");
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const unit = await emitCommitOnly(emit, files);
+    const tmpRoot = path.join(root, "tmp");
+    const located = await locateFixerUnit({ ref: unit.workOrderRef, cwd: wt, tmpRoots: [tmpRoot] });
+    await mkdir(path.join(tmpRoot, "gate-delta", `${head}.sequence-lock`), { recursive: true });
+    const admit = WORK_ORDER_ROLES.get("fixer").admit(located, async () => { throw new Error("receipt written under a held lock"); });
+    const realNow = Date.now;
+    Date.now = () => realNow() + 11_000; // past the wait deadline, inside the stale age
+    try {
+      await assert.rejects(admit, (error) => error.refusal === "sequence_lock_busy" && error.retryable === true && /re-run the same pull/.test(error.message));
+    } finally { Date.now = realNow; }
+  });
+});
+
+test("pullWorkOrder admits through the head lock: a held lock refuses sequence_lock_busy and writes no receipt", async () => {
+  const { pullWorkOrder } = await import("../../scripts/github/_work-order-protocol.mjs");
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const unit = await emitCommitOnly(emit, files);
+    const tmpRoot = path.join(root, "tmp");
+    const lock = path.join(tmpRoot, "gate-delta", `${head}.sequence-lock`);
+    await mkdir(lock, { recursive: true });
+    const future = new Date(Date.now() + 86_400_000);
+    utimesSync(lock, future, future); // never stale
+    const realNow = Date.now;
+    let clock = realNow();
+    Date.now = () => (clock += 2_000); // each read advances, so the 10 second wait expires
+    try {
+      await assert.rejects(pullWorkOrder({ ref: unit.workOrderRef, digest: unit.workOrderDigest, execution: unit.executionIdentity, cwd: wt, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot }), (error) => error.refusal === "sequence_lock_busy" && error.retryable === true);
+    } finally { Date.now = realNow; }
+    assert.equal(existsSync(pullReceiptPath(tmpRoot, unit.workOrderRef)), false);
+  });
+});
+
+test("a commit_only emit under a held head lock refuses sequence_lock_busy and leaves no current plan and no marker", async () => {
+  const { sequenceMarkerPath } = await import("@dev-loops/core/loop/fix-push-authority");
+  await withFixture(async ({ root, head, files, emit }) => {
+    const tmpRoot = path.join(root, "tmp");
+    const lock = path.join(tmpRoot, "gate-delta", `${head}.sequence-lock`);
+    await mkdir(lock, { recursive: true });
+    const future = new Date(Date.now() + 86_400_000);
+    utimesSync(lock, future, future); // never stale
+    const realNow = Date.now;
+    let clock = realNow();
+    Date.now = () => (clock += 2_000); // each read advances, so the 10 second wait expires
+    try {
+      await assert.rejects(emitCommitOnly(emit, files), (error) => error.refusal === "sequence_lock_busy" && error.retryable === true && /no work order was made current/.test(error.message));
+    } finally { Date.now = realNow; }
+    assert.equal(existsSync(sequenceMarkerPath(tmpRoot, head)), false);
+    assert.equal((await readdir(tmpRoot, { recursive: true })).some((f) => /fixer-emit-plan\.json$/.test(f)), false);
+  });
+});
+
+test("after a close of execution A, a new execution B on the same head stays pullable", async () => {
+  const { closeGateSequence } = await import("../../scripts/loop/close-gate-sequence.mjs");
+  const { readSequenceMarker } = await import("@dev-loops/core/loop/fix-push-authority");
+  await withFixture(async ({ root, head, files, emit }) => {
+    const first = await emitCommitOnly(emit, files);
+    const tmpRoot = path.join(root, "tmp");
+    const { branch } = readSequenceMarker(tmpRoot, head);
+    const closed = await closeGateSequence({ tmpRoot, head, repo: REPO, pr: PR, fetchPr: async () => ({ pr: { headRefOid: "b".repeat(40), headRefName: branch } }) });
+    assert.equal(closed.ok, true, closed.reason);
+    const second = await emitCommitOnly(emit, files);
+    assert.notEqual(second.executionIdentity, first.executionIdentity);
+    assert.equal(refusal(pull(first, root)), "stale_dispatch");
+    assert.equal(pull(second, root).status, 0);
+  });
+});
+
 test("an unreadable closure record fails closed as stale_dispatch", async () => {
   await withFixture(async ({ root, head, files, emit }) => {
     const unit = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
@@ -292,6 +408,29 @@ test("THREAD no_commit and head_moved close an authenticated sequence and allow 
     assert.equal(result.nextStep, "push_to_gate");
     assert.equal(existsSync(marker), false);
     assert.equal(checkFixPushAuthority(wt).ok, true);
+  });
+});
+
+test("the no_commit close under a held head lock throws SEQUENCE_LOCK_BUSY and leaves the marker in place", async () => {
+  await withFixture(async ({ root, wt, head, files, emit }) => {
+    const unit = await emit({ phase: "commit_only", actListFile: undefined, gate: undefined, threadsFile: files.threads, deltaResult: undefined });
+    assert.equal(pull(unit, root).status, 0);
+    const output = unit.workOrder.outputRefs[0];
+    await mkdir(path.dirname(output), { recursive: true });
+    await writeFile(output, JSON.stringify({ headSha: head, dispositions: [] }));
+    const args = ["--threads-file", files.threads, "--repo", REPO, "--pr", String(PR), "--baseline", head, "--spec-identity", "s", "--fixer-plan", unit.planPath, "--site-coverage", output, "--worktree", wt];
+    const marker = path.join(root, "tmp", "gate-delta", `${head}.sequence`);
+    const lock = path.join(root, "tmp", "gate-delta", `${head}.sequence-lock`);
+    await mkdir(lock, { recursive: true });
+    const future = new Date(Date.now() + 86_400_000);
+    utimesSync(lock, future, future); // never stale
+    const realNow = Date.now;
+    let clock = realNow();
+    Date.now = () => (clock += 2_000); // each read advances, so the 10 second wait expires
+    try {
+      await assert.rejects(runCli(args, { stdout: { write() {} } }), (error) => error.code === "SEQUENCE_LOCK_BUSY");
+    } finally { Date.now = realNow; }
+    assert.equal(existsSync(marker), true);
   });
 });
 
