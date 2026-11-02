@@ -14,7 +14,7 @@ A bare `dev-loops` binary on PATH can be older than the dev-loops checkout it ru
 
 - For the `gate`, `loop` and `pr` categories, `cli/index.mjs` finds the nearest `dev-loops` checkout above the working directory. When that checkout is not the running CLI's root, the CLI spawns the checkout's `cli/index.mjs` with the same argv and working directory, and returns its exit status.
 - The child runs with `DEVLOOPS_CHECKOUT_DELEGATED=1`. A non-empty variable disables delegation, so the checkout CLI never delegates again.
-- The CLI writes a stderr notice only when the installed and checkout versions differ. When the checkout CLI does not start, the CLI exits 1 with a `cli_version_skew` line that names the `dev-loops-run --repo-root` rerun command.
+- The CLI writes a stderr notice only when the installed and checkout versions differ. When the checkout CLI does not start, the CLI exits 1 with a `cli_version_skew` line that names the `dev-loops-run --repo-root` rerun command. The `cli_version_skew` token names a start failure of the checkout CLI. It also appears when the installed and checkout versions are equal and only the roots differ.
 - Other categories (`doctor`, `--version`, top-level help) run in the installed CLI.
 
 Rejected: refusing to run on a version skew. The checkout code is the intended code, so running it gives the operator the right behavior without a manual rerun.
