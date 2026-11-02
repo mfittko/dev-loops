@@ -6,7 +6,8 @@
  * `commit_only` fixer work order is emitted (ungranted) and rewritten with `fullGranted` when the
  * `full` work order is emitted. The git pre-push check reads it. Pure of git: the caller supplies the facts.
  */
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -18,7 +19,8 @@ export const sequenceClosurePath = (tmpRoot, baselineHead, executionIdentity) =>
 /**
  * Runs `fn` holding a lock per baseline head (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC), taken sorted and released in reverse.
  * The suffix must not end with `.sequence`: listBaselines reads that suffix as a marker.
- * ponytail: a mkdir lock with no owner token; a holder that dies blocks for at most `staleMs`, then the next taker steals it.
+ * ponytail: a mkdir lock with an owner token file; release removes only a lock whose token still matches, and a stale lock is stolen by rename to a unique name then removal (a fresh lock caught by the rename is renamed back).
+ * Ceiling: a holder that stalls past `staleMs` and runs on can still overlap a stealer; a holder that dies blocks for at most `staleMs`.
  */
 export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 60000, waitMs = 10000 } = {}) {
   const held = [];
@@ -27,11 +29,16 @@ export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 6
       const lock = path.join(tmpRoot, "gate-delta", `${head}.sequence-lock`);
       mkdirSync(path.dirname(lock), { recursive: true });
       for (const deadline = Date.now() + waitMs; ;) {
-        try { mkdirSync(lock); held.push(lock); break; } catch (error) {
+        try { mkdirSync(lock); const token = randomUUID(); writeFileSync(path.join(lock, "owner"), token); held.push({ lock, token }); break; } catch (error) {
           if (error?.code !== "EEXIST") throw error;
           let age = 0;
           try { age = Date.now() - statSync(lock).mtimeMs; } catch { continue; } // released meanwhile: retry
-          if (age > staleMs) { rmSync(lock, { recursive: true, force: true }); continue; }
+          if (age > staleMs) {
+            const stolen = `${lock}.stale-${randomUUID()}`;
+            try { renameSync(lock, stolen); } catch { continue; } // another stealer or the holder won: retry
+            if (Date.now() - statSync(stolen).mtimeMs <= staleMs) { try { renameSync(stolen, lock); } catch { rmSync(stolen, { recursive: true, force: true }); } } else rmSync(stolen, { recursive: true, force: true });
+            continue;
+          }
           if (Date.now() >= deadline) throw Object.assign(new Error(`the sequence lock ${lock} is held by a concurrent close or pull; rerun once it finishes`), { code: "SEQUENCE_LOCK_BUSY" });
           await sleep(25);
         }
@@ -39,7 +46,11 @@ export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 6
     }
     return await fn();
   } finally {
-    for (const lock of held.reverse()) rmSync(lock, { recursive: true, force: true });
+    for (const { lock, token } of held.reverse()) {
+      let owner = null;
+      try { owner = readFileSync(path.join(lock, "owner"), "utf8"); } catch { /* stolen or released: not ours */ }
+      if (owner === token) rmSync(lock, { recursive: true, force: true });
+    }
   }
 }
 

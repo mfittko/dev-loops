@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { test } from "bun:test";
 import { readSequenceMarker, recoveryHint, sequenceClosurePath, sequenceMarkerPath, withSequenceLock, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
-import { fixerReportPath, pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
+import { pullReceiptPath } from "../../scripts/github/_work-order-protocol.mjs";
 import { SUBCOMMAND_ROUTES } from "../../cli/index.mjs";
 import { closeGateSequence, defaultActor, fixerGraceMs, localCommitExists } from "../../scripts/loop/close-gate-sequence.mjs";
 import { SANCTIONED_COMMANDS } from "../../scripts/loop/sanctioned-commands.mjs";
@@ -229,21 +229,16 @@ test("a marker re-emitted under the lock around the close is never deleted", asy
   });
 });
 
-test("a fixer with a fresh report inside the grace is running even when it pulled before the grace; a stale report closes", async () => {
+test("a fixer with a fresh branch reflog write inside the grace is running even when it pulled before the grace; a stale one closes", async () => {
   await withTempDir(async (tmpRoot) => {
     const ex = execution(tmpRoot);
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
     pull(tmpRoot, ex, new Date(T0 - FIXER_GRACE_MS - 1000).toISOString());
-    const report = fixerReportPath(ex.outputRef);
-    writeFileSync(report, "{}");
-    utimesSync(report, new Date(T0 - 60_000), new Date(T0 - 60_000));
-    const running = await closeGateSequence(base(tmpRoot));
+    const running = await closeGateSequence(base(tmpRoot, { branchActivityMs: (branch) => branch === "feat" ? T0 - 60_000 : null }));
     assert.equal(running.refusal, "fixer_running");
     assert.match(running.reason, /activity-based/);
     assert.match(running.remedy, new RegExp(`${FIXER_GRACE_MS / 60000} minutes`));
-    const old = new Date(T0 - FIXER_GRACE_MS - 500);
-    utimesSync(report, old, old);
-    assert.equal((await closeGateSequence(base(tmpRoot))).condition, "HEAD_MOVED");
+    assert.equal((await closeGateSequence(base(tmpRoot, { branchActivityMs: () => T0 - FIXER_GRACE_MS - 500 }))).condition, "HEAD_MOVED");
   });
 });
 

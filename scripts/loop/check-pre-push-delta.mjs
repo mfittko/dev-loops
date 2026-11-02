@@ -33,7 +33,7 @@ import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
-import { clearSequenceMarker, readSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { clearSequenceMarker, readSequenceMarker, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import {
   DELTA_MAX_INVOCATIONS,
   buildDeltaInput,
@@ -398,9 +398,12 @@ export async function runCli(
       await authenticateCoverage(options, sequence, raw.headSha, raw, reportBytes, { candidateHead: raw.headSha }, isAncestor, { closureOnly: true });
       const root = tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree);
       const plan = JSON.parse(planBytes);
-      const marker = readSequenceMarker(root, sequence.reviewBaselineHead);
-      if (!readFileSync(options.fixerPlan).equals(planBytes) || !marker || marker.branch !== plan.workOrder.mutationAuthority.branch || marker.fullGranted) throw new Error("sequence closure requires the matching active commit_only branch marker");
-      clearSequenceMarker(root, sequence.reviewBaselineHead);
+      // Read, check and clear under the head's sequence lock: a full-granted re-emit takes the same lock, so it is never deleted here.
+      await withSequenceLock(root, [sequence.reviewBaselineHead], () => {
+        const marker = readSequenceMarker(root, sequence.reviewBaselineHead);
+        if (!readFileSync(options.fixerPlan).equals(planBytes) || !marker || marker.branch !== plan.workOrder.mutationAuthority.branch || marker.fullGranted) throw new Error("sequence closure requires the matching active commit_only branch marker");
+        clearSequenceMarker(root, sequence.reviewBaselineHead);
+      });
       const payload = { ok: true, outcome: fixCommitted ? "head_moved" : "no_commit", nextStep: "push_to_gate", reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead };
       process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
       return payload;

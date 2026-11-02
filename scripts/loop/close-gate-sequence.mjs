@@ -19,7 +19,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightFieldsSpec, preflightJqFilter } from "../lib/jq-output.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { viewPr } from "../github/view-pr.mjs";
-import { fixerReportPath, pullReceiptPath } from "../github/_work-order-protocol.mjs";
+import { pullReceiptPath } from "../github/_work-order-protocol.mjs";
 import { resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
 import { gitEnvNoDirOverrides, resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
 
@@ -32,6 +32,11 @@ const refuse =(refusal, reason, remedy) => ({ ok: false, refusal, reason, remedy
 /** True when the sha is a commit object in the local repository. */
 export const localCommitExists = (sha) => spawnSync("git", ["cat-file", "-e", `${sha}^{commit}`], { stdio: "ignore", env: gitEnvNoDirOverrides() }).status === 0;
 const mtimeMs = (file) => { try { return statSync(file).mtimeMs; } catch { return null; } };
+/** The mtime of the fixer branch reflog, which every fixer commit updates; null when the reflog is absent or git fails. */
+export const branchReflogMs = (branch) => {
+  const common = spawnSync("git", ["rev-parse", "--git-common-dir"], { encoding: "utf8", env: gitEnvNoDirOverrides() });
+  return common.status === 0 ? mtimeMs(path.resolve(common.stdout.trim(), "logs", "refs", "heads", branch)) : null;
+};
 
 /** The recorded actor: DEVLOOPS_RUN_ID, else the OS user; a uid without a passwd entry makes userInfo throw, so fall back to "unknown". */
 export const defaultActor = (env = process.env, lookup = userInfo) => {
@@ -40,7 +45,7 @@ export const defaultActor = (env = process.env, lookup = userInfo) => {
 };
 
 /** @param {{ tmpRoot: string, head: string, repo?: string, pr?: number, fetchPr?: Function, now?: () => number, actor?: string }} input */
-export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = viewPr, now = Date.now, actor = defaultActor(), hasCommit = localCommitExists, lock }) {
+export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = viewPr, now = Date.now, actor = defaultActor(), hasCommit = localCommitExists, branchActivityMs = branchReflogMs, lock }) {
   const marker = readSequenceMarker(tmpRoot, head);
   if (!marker) return refuse("sequence_absent", `no sequence marker exists for ${head}`, "Nothing to close here; the push block comes from another marker, so rerun with that marker's head.");
   const { executionIdentity, workOrderRef, outputRef } = marker.execution ?? {};
@@ -61,10 +66,10 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   const pulled = receiptFound; // any receipt object at the work order ref proves a pull, whatever its content
   const pulledAt = pulled ? Date.parse(receipt.pulledAt) : NaN;
   const grace = fixerGraceMs();
-  // A fixer that pulled its work order is running unless it handed back (outputRef exists) or its last activity (the pull, or its last report write) is older than the grace.
+  // A fixer that pulled its work order is running unless it handed back (outputRef exists) or its last activity (the pull, or the last write to its branch reflog; a fixer that never commits shows only its pull) is older than the grace.
   // An unparseable pulledAt makes the activity NaN, which reads as running (fail closed). The runner claim updatedAt is no signal: the closing coordinator heartbeats it itself.
-  if (pulled && mtimeMs(outputRef) === null && !(now() - Math.max(pulledAt, mtimeMs(fixerReportPath(outputRef)) ?? -Infinity) >= grace)) {
-    return refuse("fixer_running", `fixer execution ${executionIdentity} pulled its work order, has not handed back, and was active within ${grace / 60000} minutes (activity-based: the pull or the last fixer report write)`, `Wait for the fixer to hand back, or for ${grace / 60000} minutes without fixer activity, then rerun.`);
+  if (pulled && mtimeMs(outputRef) === null && !(now() - Math.max(pulledAt, (marker.branch && branchActivityMs(marker.branch)) ?? -Infinity) >= grace)) {
+    return refuse("fixer_running", `fixer execution ${executionIdentity} pulled its work order, has not handed back, and was active within ${grace / 60000} minutes (activity-based: the pull or the last write to the fixer branch reflog)`, `Wait for the fixer to hand back, or for ${grace / 60000} minutes without fixer activity, then rerun.`);
   }
   if (marker.branch === undefined || !repo || !pr) return refuse("abandonment_unproven", "the PR head cannot be checked without the marker's branch and --repo/--pr", "Pass --repo and --pr of the marker's PR. A marker without a branch cannot be proven abandoned, so ask the operator to delete it.");
   const { pr: facts } = await fetchPr({ repo, pr, fields: "headRefOid,headRefName" });
