@@ -309,6 +309,42 @@ function normalizeIdSet(value, label) {
 
 const DEFECT_KINDS = Object.freeze(["matcher", "doc_lag", "other"]);
 
+/**
+ * SPEC-AUTHORITY-VERDICT-SCHEMA: the field list a judge writes into
+ * spec-authority-verdict.json, derived from the constants the validators use.
+ * The judge work order carries it as outputSchemas so no source search is needed.
+ * Mirrors validateSpecAuthorityVerdict, validateSpecAuthorityDecision and validateRemediationScope.
+ */
+export const SPEC_AUTHORITY_VERDICT_SCHEMA = Object.freeze({
+  topLevel: Object.freeze({
+    required: Object.freeze({
+      specDigest: `string matching ${DIGEST_RE.source}; the authority specDigest of the work order`,
+      headSha: `string matching ${HEAD_SHA_RE.source}; the reviewed head`,
+      contentDigest: `string matching ${DIGEST_RE.source}; the authority contentDigest of the work order`,
+      decisions: "array with exactly one decision per finding, each index disposed once",
+    }),
+  }),
+  decision: Object.freeze({
+    required: Object.freeze({
+      index: "non-negative integer; the finding index (a cluster's index covers its members)",
+      outcome: `one of: ${SPEC_AUTHORITY_OUTCOME_VALUES.join(", ")}`,
+      specDigest: "same value as the top-level specDigest",
+      headSha: "same value as the top-level headSha",
+      contentDigest: "same value as the top-level contentDigest",
+      checkedCriteria: "array of criterion ids covering EVERY criterion of the spec",
+      rationale: "non-empty string",
+    }),
+    conditional: Object.freeze({
+      conflictingCriteria: `non-empty array of criterion ids when outcome is one of ${SPEC_AUTHORITY_CONFLICT_OUTCOMES.join(", ")}; absent otherwise`,
+      authorizedRemediation: `non-empty string when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT}`,
+      defectClass: `non-empty string when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only)`,
+      siteQuery: `non-empty git grep pattern or symbol list when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only)`,
+      remedyKind: "evidence_only when the remedy changes no file; then defectClass and siteQuery are not needed",
+      defectKind: `one of: ${DEFECT_KINDS.join(", ")} (default other); matcher also needs acceptedForms[] and rejectedForms[], doc_lag needs statedSurfaces[]`,
+    }),
+  }),
+});
+
 function nonEmptyStringList(value) {
   return Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "string" && v.trim().length > 0)
     ? value.map((v) => v.trim())
