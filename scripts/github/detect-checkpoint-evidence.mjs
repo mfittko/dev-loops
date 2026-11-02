@@ -26,7 +26,7 @@ import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "./_gate-finding-
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
-import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, assertConfigLoaded, isSizeOutcomeT1Clean, loadDevLoopConfig, loadDevLoopConfigStrict, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveGateDispatchMode, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
+import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, assertConfigLoaded, isSizeOutcomeT1Clean, loadDevLoopConfig, loadDevLoopConfigStrict, stripConfigKeyPaths, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveGateDispatchMode, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
 import { FANOUT_UNAVAILABLE_MESSAGE, JUDGE_DISPOSITIONS, VALID_SEVERITIES, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, ledgerAngleNames, listOpenActItems, normalizeSeverity, provenanceConsistencyError, resolveGateAngleCatalogKey } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseChangedFiles } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
@@ -56,6 +56,8 @@ Required:
   --pr <number>         Pull request number
 Optional:
   --base-ref-name <name>  PR base branch; lets a sealed cap-round-fixed proof stand in for the clean draft_gate comment
+  --head-declared-keys <json>  Dotted config key paths the PR head's own schema declares (JSON array or
+                          {"declaredKeys":[...]}); a head-only unknown key listed there is tolerated
   --skip-fanout-ledger-check  Skip the fan-out findings-log ledger/provenance/
                               angle-coverage layer of requireFanoutEvidence
                               enforcement. That evidence lives in a gitignored,
@@ -170,6 +172,7 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       "require-before-merge": { type: "boolean" },
       "skip-fanout-ledger-check": { type: "boolean" },
       "base-ref-name": { type: "string" },
+      "head-declared-keys": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -207,6 +210,10 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       // below, never silently enabling the skip. So presence => enable, and the
       // only way to keep full enforcement is to omit the flag (the default).
       options.skipFanoutLedgerCheck = true;
+      continue;
+    }
+    if (token.name === "head-declared-keys") {
+      options.headDeclaredKeys = parseHeadDeclaredKeys(requireTokenValue(token, parseError));
       continue;
     }
     if (token.name === "base-ref-name") {
@@ -776,6 +783,20 @@ async function readActListInAny(checkouts, ledgerPath, markerExecutionMode) {
   }
   return exists ? { ledgerPath, unreadable, open, unjudged } : null;
 }
+const HEAD_DECLARED_KEYS_MAX_BYTES = 256 * 1024;
+
+/** Parse the --head-declared-keys value; invalid or oversized input is an empty set, never an error. */
+export function parseHeadDeclaredKeys(text) {
+  if (typeof text !== "string" || Buffer.byteLength(text) > HEAD_DECLARED_KEYS_MAX_BYTES) return [];
+  try {
+    const parsed = JSON.parse(text);
+    const list = Array.isArray(parsed) ? parsed : parsed?.declaredKeys;
+    return Array.isArray(list) ? list.filter((k) => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 // A committed `.devloops` is a small hand-authored config file; 8 MiB is
 // already many times larger than any legitimate one, so bounding `git show`
 // here only guards against a runaway/corrupt blob, never a real config.
@@ -853,7 +874,7 @@ function readHeadDevloopsSource(repoRoot, headSha) {
  * head commit. Falls back to `invokingConfig` only when the head commit is not
  * resolvable locally; an invalid head `.devloops` throws config_load_failed.
  */
-async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
+async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha, headDeclaredKeys = [] }) {
   if (typeof headSha !== "string" || headSha.trim().length === 0) {
     return invokingConfig;
   }
@@ -861,7 +882,7 @@ async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
   if (!source.ok) {
     return invokingConfig; // head commit unresolvable locally -> fall back.
   }
-  const loaded = await loadDevLoopConfig({
+  let loaded = await loadDevLoopConfig({
     repoRoot,
     devloopsOverride: { raw: source.raw, path: source.path },
   });
@@ -870,7 +891,24 @@ async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
   // back to the older invoking config. Base-layer errors read from this same
   // repoRoot are the invoking strict load's concern, not the head's.
   const headAttributable = (error) => error.layer === "devloops" || error.layer === "merged";
-  assertConfigLoaded({ ...loaded, errors: (loaded.errors ?? []).filter(headAttributable) });
+  const headErrors = (loaded.errors ?? []).filter(headAttributable);
+  // A PR that adds a config key only its own (newer) schema knows is rejected by
+  // this trusted default-branch schema. When every head error is an
+  // unknown-keys-only error and every such key is declared by the head's own
+  // schema (headDeclaredKeys, reported by an untrusted credential-less job and
+  // treated as data), reload once with those keys stripped. Stripping is safe:
+  // the trusted base ignores keys it does not know, so a stripped key cannot
+  // change base behavior. The declared set only widens what is tolerated, never
+  // what is trusted; a key declared by neither schema still fails below.
+  if (headErrors.length > 0 && headErrors.every((e) => e.unknownKeysOnly && e.unknownKeys?.every((k) => headDeclaredKeys.includes(k)))) {
+    loaded = await loadDevLoopConfig({
+      repoRoot,
+      devloopsOverride: { raw: stripConfigKeyPaths(source.raw, source.path, headErrors.flatMap((e) => e.unknownKeys)), path: source.path },
+    });
+    assertConfigLoaded({ ...loaded, errors: (loaded.errors ?? []).filter(headAttributable) });
+    return loaded.config;
+  }
+  assertConfigLoaded({ ...loaded, errors: headErrors });
   return loaded.config;
 }
 
@@ -902,7 +940,7 @@ async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
 // implementations. Re-exported here for import-path back-compat.
 export { isSizeOutcomeT1Clean };
 
-export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd, hasFullLabel = false, baseRef = null }) {
+export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd, hasFullLabel = false, baseRef = null, headDeclaredKeys = [] }) {
   // Defensive only: callers strict-load and fail closed before this point, so a
   // null/undefined config never arrives here in practice.
   const checkouts = resolveLedgerCheckouts(cwd);
@@ -942,7 +980,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // (resolveGateConfig, resolveGateAngleContract, resolveFanoutGroups,
   // including the per-candidate resolution inside readLedgerProvenanceInAny)
   // so they can never drift apart on which config governs the angle layer.
-  const angleConfig = await resolveAngleLayerConfig({ invokingConfig: config, repoRoot, headSha: currentHeadSha });
+  const angleConfig = await resolveAngleLayerConfig({ invokingConfig: config, repoRoot, headSha: currentHeadSha, headDeclaredKeys });
   // Gate ACTIVATION (`.required`) stays sourced from the INVOKING checkout's
   // config, never the head-sourced angleConfig: a PR that sets its own
   // `gates.preApproval.required: false` must not be able to remove a gate
@@ -1198,6 +1236,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     cwd,
     hasFullLabel,
     baseRef,
+    headDeclaredKeys: options.headDeclaredKeys,
   });
   return {
     ok: true,

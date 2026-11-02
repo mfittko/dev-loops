@@ -23,6 +23,80 @@ permissions:
   statuses: write
 
 jobs:
+  # Trust boundary (docs/decisions/0034, 0076, 0234): PR head code runs ONLY in
+  # this credential-less job (permissions: {}, no secrets, no API call). The
+  # write-credential jobs below run ONLY default-branch code. This job's output
+  # is a JSON list of config keys the PR head's own schema declares; the
+  # detector treats it as DATA (env variable, never spliced into a shell) and
+  # uses it only to tolerate a head-only config key the default-branch schema
+  # does not know yet (issue 2662 AC7). The PR number comes from the event
+  # payload and the head is fetched as refs/pull/<n>/head, so no token is
+  # needed (a private repository would need `contents: read` here and would
+  # fail closed to an empty key set). The job never fails: every step is
+  # continue-on-error and the output defaults to an empty key set.
+  head-declared-keys:
+    # Same condition as gate-evidence-runner (kept in sync by the workflow test).
+    if: >-
+      (github.event_name != 'issue_comment' && github.event.pull_request.draft == false) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       (startsWith(github.event.comment.body, '### Gate review:') ||
+        startsWith(github.event.comment.body, 'approve merge ') ||
+        startsWith(github.event.comment.body, '<!-- dev-loops:carried-heads:v1') ||
+        startsWith(github.event.changes.body.from, 'approve merge ')) &&
+       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+    permissions: {}
+    runs-on: ubuntu-latest
+    outputs:
+      declared_keys: ${{ steps.report.outputs.declared_keys }}
+    steps:
+      - name: Check out PR head (untrusted)
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          path: head
+          ref: refs/pull/${{ github.event.pull_request.number || github.event.issue.number }}/head
+          persist-credentials: false
+
+      # Trusted script source only; it is never given PR head scripts.
+      - name: Check out default branch (trusted script)
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          path: trusted
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        continue-on-error: true
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Set up Bun
+        continue-on-error: true
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.1
+
+      - name: Install PR head dependencies (no credentials, no secrets)
+        continue-on-error: true
+        working-directory: head
+        run: bun install --frozen-lockfile
+
+      - name: Report keys the PR head schema declares
+        id: report
+        continue-on-error: true
+        run: |
+          keys='{"declaredKeys":[]}'
+          out="$(node trusted/scripts/github/report-head-declared-keys.mjs --head-root head 2>/dev/null | head -n1 | head -c 262144)" && [ -n "$out" ] && keys="$out"
+          delim="EOF_$(openssl rand -hex 16)"
+          {
+            echo "declared_keys<<${delim}"
+            echo "$keys"
+            echo "${delim}"
+          } >> "$GITHUB_OUTPUT"
+
   # The compute-heavy DETECTOR: checks out the trusted default branch and runs
   # detect-checkpoint-evidence.mjs. Keeps job-level cancel-in-progress — its
   # waste-avoidance is worth keeping — but it no longer owns the required
@@ -30,6 +104,7 @@ jobs:
   # a job output so the non-cancelling reporter job below can reuse it without
   # recomputing when it was not superseded.
   gate-evidence-runner:
+    needs: [head-declared-keys]
     # pull_request/review events: skip drafts via the payload. issue_comment:
     # only PR comments carrying the gate-comment marker, the carried-heads record marker OR the head-pinned
     # approve-merge marker start a run (draft is resolved by the
@@ -151,11 +226,13 @@ jobs:
         if: steps.pr.outputs.draft == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_DECLARED_KEYS: ${{ needs.head-declared-keys.outputs.declared_keys }}
         run: |
           set +e
           node scripts/github/detect-checkpoint-evidence.mjs \
             --repo "${{ github.repository }}" \
             --pr "${{ steps.pr.outputs.number }}" \
+            --head-declared-keys "$HEAD_DECLARED_KEYS" \
             --skip-fanout-ledger-check \
             > gate_check_stdout.json 2> gate_check_stderr.json
           cat gate_check_stdout.json
@@ -172,7 +249,7 @@ jobs:
   # the required check dangling: this job still runs for the final event and
   # always posts a definitive state at the resolved head (docs/decisions/0076).
   gate-evidence-reporter:
-    needs: [gate-evidence-runner]
+    needs: [gate-evidence-runner, head-declared-keys]
     # always(): runs whether the detector succeeded, failed, or was cancelled
     # by its OWN job-level concurrency group (the workflow RUN itself is not
     # cancelled, only that one job) — `needs.<job>.result` reports `cancelled`
@@ -276,11 +353,13 @@ jobs:
         if: steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_DECLARED_KEYS: ${{ needs.head-declared-keys.outputs.declared_keys }}
         run: |
           set +e
           node scripts/github/detect-checkpoint-evidence.mjs \
             --repo "${{ github.repository }}" \
             --pr "${{ steps.pr.outputs.number }}" \
+            --head-declared-keys "$HEAD_DECLARED_KEYS" \
             --skip-fanout-ledger-check \
             > gate_check_stdout.json 2> gate_check_stderr.json
           cat gate_check_stdout.json

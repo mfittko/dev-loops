@@ -168,7 +168,7 @@ test("gate-evidence-runner never posts a status; gate-evidence-reporter always p
     "gate-evidence-reporter-${{ github.event.pull_request.number || github.event.issue.number }}",
   );
   assert.equal(reporterJob.concurrency["cancel-in-progress"], false, "the reporter's group must be non-cancelling");
-  assert.deepEqual(reporterJob.needs, ["gate-evidence-runner"]);
+  assert.deepEqual(reporterJob.needs, ["gate-evidence-runner", "head-declared-keys"]);
   assert.ok(String(reporterJob.if).includes("always()"), "the reporter must run even when the detector was cancelled");
   assert.ok(
     String(reporterJob.if).includes("needs.gate-evidence-runner.result != 'skipped'"),
@@ -391,4 +391,33 @@ test("required-context invariant (status not job) stays documented on the merge-
     LOOP_DERIVED_CI_CHECK_NAMES.includes("gate-evidence-runner") && LOOP_DERIVED_CI_CHECK_NAMES.includes("gate-evidence-reporter"),
     "both Gate-evidence jobs must remain loop-derived (non-required) checks",
   );
+});
+
+// Pins #2662 AC7 (docs/decisions/0234): PR head code runs only in the credential-less
+// head-declared-keys job; the write-credential detector jobs stay on the default branch
+// and receive the reported keys as data through env only.
+test("head-declared-keys is the only job that checks out a PR head, with no permissions, and feeds the detectors via env", async () => {
+  const workflow = parseYaml(await readRepo(".github/workflows/gate-evidence.yml"));
+  const keysJob = workflow.jobs["head-declared-keys"];
+  const runnerJob = workflow.jobs["gate-evidence-runner"];
+  const reporterJob = workflow.jobs["gate-evidence-reporter"];
+  assert.equal(keysJob.if, runnerJob.if, "head-declared-keys must start under the same condition as the runner");
+  assert.deepEqual(keysJob.permissions, {}, "the job that runs PR head code holds no permissions");
+  assert.ok(keysJob.steps.every((s) => s["continue-on-error"] === true), "head-declared-keys must never fail");
+  const checkouts = (job) => job.steps.filter((s) => String(s.uses ?? "").startsWith("actions/checkout"));
+  assert.ok(checkouts(keysJob).some((s) => String(s.with.ref).startsWith("refs/pull/")), "the keys job checks out the PR head");
+  for (const s of checkouts(keysJob)) assert.equal(s.with["persist-credentials"], false);
+  for (const job of [runnerJob, reporterJob]) {
+    for (const s of checkouts(job)) {
+      assert.equal(s.with.ref, "${{ github.event.repository.default_branch }}", "detector jobs check out only the default branch");
+    }
+  }
+  assert.ok(runnerJob.needs.includes("head-declared-keys"));
+  assert.ok(reporterJob.needs.includes("head-declared-keys") && reporterJob.needs.includes("gate-evidence-runner"));
+  for (const job of [runnerJob, reporterJob]) {
+    const detect = job.steps.find((s) => typeof s.run === "string" && s.run.includes("detect-checkpoint-evidence.mjs"));
+    assert.equal(detect.env.HEAD_DECLARED_KEYS, "${{ needs.head-declared-keys.outputs.declared_keys }}");
+    assert.ok(detect.run.includes('--head-declared-keys "$HEAD_DECLARED_KEYS"'));
+    assert.ok(!detect.run.includes("needs.head-declared-keys"), "declared keys never reach the shell by splice");
+  }
 });

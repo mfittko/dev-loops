@@ -35,6 +35,8 @@ export const LOOP_DERIVED_CI_CHECK_NAMES = Object.freeze([
   LOOP_DERIVED_CI_CHECK_NAME,
   "gate-evidence-runner",
   "gate-evidence-reporter",
+  // The credential-less job that reports PR-head-declared config keys (docs/decisions/0234).
+  "head-declared-keys",
 ]);
 
 /**
