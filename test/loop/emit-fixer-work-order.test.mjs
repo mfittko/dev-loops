@@ -3040,6 +3040,17 @@ test("issue 2787 C11: --ci-file takes only --phase full and no other source, --g
   });
 });
 
+test("issue 2787 C11: --ci-file refuses while an ungranted commit_only sequence is active at the head and leaves the marker unchanged", async () => {
+  await withFixture(async (fx) => {
+    await fx.emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, threadsFile: fx.files.threads, phase: "commit_only" });
+    const marker = path.join(fx.root, "tmp", "gate-delta", `${fx.head}.sequence`);
+    const before = await readFile(marker);
+    await assert.rejects(emitCi(fx), /commit_only sequence is active.*close-gate-sequence/);
+    assert.deepEqual(await readFile(marker), before);
+    assert.equal(JSON.parse(before).fullGranted, false);
+  });
+});
+
 // Delta findings on the thread route (issue 2787 C12, ADR 0235).
 const FINDING = { severity: "high", summary: "new null deref in src/b.mjs", evidence: "src/b.mjs:9 reads x.y before the guard", site: "src/b.mjs:9" };
 const threadsCommitOnly = (fx, over = {}) => fx.emit({ actListFile: undefined, gate: undefined, deltaResult: undefined, threadsFile: fx.files.threads, phase: "commit_only", ...over });

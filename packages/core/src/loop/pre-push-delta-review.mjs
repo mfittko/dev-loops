@@ -277,10 +277,10 @@ export function buildDeltaInput({ sequence, candidateHead, specIdentity = null, 
 export function deltaFixerFindings(result) {
   const findings = Array.isArray(result?.newFindings) ? result.newFindings : [];
   return findings
-    .filter((f) => isOpenResidue(f) || (!nonEmpty(f?.residueOf) && severityRank(f?.severity) <= MEDIUM_RANK))
+    .filter((f) => nonEmpty(f?.summary) && (isOpenResidue(f) || (!nonEmpty(f?.residueOf) && severityRank(f?.severity) <= MEDIUM_RANK)))
     .slice(0, 20)
     .map((f) => ({
-      severity: f.severity, summary: f.summary.slice(0, 2000), evidence: [].concat(f.evidence ?? []).join("; ").slice(0, 2000),
+      severity: f.severity, summary: f.summary.slice(0, 2000), evidence: [].concat(f.evidence ?? []).map(String).join("; ").slice(0, 2000),
       ...(nonEmpty(f.residueOf) ? { residueOf: f.residueOf.slice(0, 2000) } : {}), ...(nonEmpty(f.site) ? { site: f.site.slice(0, 2000) } : {}),
     }));
 }
