@@ -1,6 +1,7 @@
 // Node-id marker rule (#2937 AC16) and the judge finding for a body-only Copilot review.
 import assert from "node:assert/strict";
 import { test } from "bun:test";
+import { summarizeCopilotReviews } from "../../packages/core/src/github/copilot-helpers.mjs";
 import { buildJudgeFinding, copilotBodyJudgePath, resolveCopilotBodyDisposition, resolveCurrentHeadBodyFeedback } from "../../scripts/github/_copilot-body-disposition.mjs";
 
 const HEAD = "a".repeat(40);
@@ -36,6 +37,27 @@ test("an operator marker with the node id still clears and leaves no judge findi
   assert.equal(feedback.copilotBodyFeedbackUnresolved, false);
   assert.equal(feedback.judgeFinding, null);
   assert.notEqual(feedback.bodyDisposition, null);
+});
+
+// ADR 0237: a zero-file review on the current head reads as unresolved body feedback.
+const zeroFileReview = { ...review, body: "Copilot wasn't able to review any files in this pull request." };
+const zeroFileSummary = summarizeCopilotReviews([zeroFileReview], { headSha: HEAD });
+const resolveZeroFile = (markerReviewId) => resolveCurrentHeadBodyFeedback(
+  { repo: "o/r", pr: 1, headSha: HEAD, reviewSummary: zeroFileSummary, reviewThreads: [] },
+  markerReviewId === null ? { runChild: async () => ({ code: 0, stderr: "", stdout: "" }) } : runtimeWith(markerReviewId),
+);
+
+test("a current-head zero-file review is unresolved body feedback without an operator record", async () => {
+  assert.equal(zeroFileSummary.hasBodyFindingOnCurrentHead, true);
+  const feedback = await resolveZeroFile(null);
+  assert.equal(feedback.copilotBodyFeedbackUnresolved, true);
+  assert.equal(feedback.dispositionRequired.reviewId, NODE_ID);
+});
+
+test("an operator record for the current head clears a current-head zero-file review", async () => {
+  const feedback = await resolveZeroFile(NODE_ID);
+  assert.equal(feedback.copilotBodyFeedbackUnresolved, false);
+  assert.equal(feedback.judgeFinding, null);
 });
 
 test("a numeric marker clears a numeric review id", async () => {
