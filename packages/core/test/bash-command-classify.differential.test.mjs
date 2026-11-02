@@ -277,8 +277,11 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
   const R_UNCLOSED = "unterminated $( substitution: incomplete, so commandContainsInlineInterpreter fails closed";
   const R_COMMENT = "apostrophe in a # comment: the regex paired it across lines and blanked the loop; the tokenizer skips the comment";
   const R_ESCAPE = 'escaped \\" inside a double-quoted word: the regex paired the quotes wrongly and blanked the loop; the tokenizer keeps the loop visible';
+  const R_EOFPAREN = "heredoc closed by `EOF)` instead of a delimiter line: the tokenizer never sees the delimiter, so the input is incomplete and the hook denies a command origin/main allowed";
   flip("commandContainsRawPrBodyEdit", "trailing # comment with an apostrophe is a quote-pairing hazard: the stripper blanks nothing, so the flag-looking text in the quoted title stays visible", "gh pr edit 5 --title 'a --body b' # it's");
   flip("commandContainsInlineInterpreter", R_UNCLOSED, 'echo "$(gh pr view 5');
+  flip("commandContainsInlineInterpreter", R_EOFPAREN, EOF_PAREN_ROW);
+  for (const row of ARITH_SHIFT_ROWS) flip("commandContainsInlineInterpreter", "arithmetic << inside $((...)) is read as a heredoc operator: the delimiter is the next word, the heredoc stays pending, so the input is incomplete and fails closed (arithmetic is out of tokenizer scope)", row);
   for (const sep of SEPARATORS) {
     for (const f of ["cat > src/a.mjs <<'EOF'", "cat > tmp/r.mjs <<'EOF' && node tmp/r.mjs"]) flip("commandContainsInlineInterpreter", R_HEREDOC, `${sep}${f}\necho done`);
   }

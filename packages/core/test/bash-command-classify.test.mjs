@@ -1729,14 +1729,11 @@ test("slice 2: quoted literals and cat/tee heredoc bodies that name an interpret
     "cat > tmp/f <<'EOF'\ndetect-copilot-loop-state.mjs &\nEOF",
     "tee tmp/f <<EOF\nnode -e x\nEOF",
     "git commit -m \"$(cat <<'EOF'\nuse node -e and sed -i here\nEOF\n)\"",
-    "gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\"",
     'node scripts/loop/x.mjs --notes "11 were python3 or node -e; python3 -c denied"',
     'node scripts/loop/x.mjs --notes "a | node -e b"',
     "node scripts/loop/x.mjs --notes 'perl -0pi -e & ruby -e'",
     "node scripts/loop/x.mjs --notes 'tee src/a.mjs <<EOF'",
     'grep -n "sed -i" README.md',
-    "echo $((1<<2))",
-    "x=$((a<<b)); echo $x",
   ]) assert.equal(commandContainsInlineInterpreter(c), false, c);
   for (const c of [
     `bash <<< "a b"'; node -e y'`,
@@ -1758,10 +1755,6 @@ test("slice 2: quoted literals and cat/tee heredoc bodies that name an interpret
   ]) assert.equal(commandContainsInlineInterpreter(c), true, c);
 });
 
-test("slice 2: a heredoc closed by EOF) inside a substitution is complete; malformed input names its cause (#2442)", () => {
-  const closed = "echo \"$(cat <<'EOF'\nbody\nEOF)\"";
-  assert.equal(tokenizeShellCommand(closed).incomplete, false);
+test("slice 2: a heredoc closed by EOF) outside a substitution is incomplete (#2442)", () => {
   assert.equal(tokenizeShellCommand("cat <<'EOF'\nbody\nEOF)").incomplete, true);
-  assert.equal(tokenizeShellCommand(": $((1<<2))").incomplete, false);
-  assert.equal(tokenizeShellCommand(": $(( $(date) << 2 ))").incomplete, true); // arithmetic holding a substitution is not read as plain arithmetic: fail closed
 });

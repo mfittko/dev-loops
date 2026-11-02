@@ -1132,10 +1132,9 @@ function segmentsHaveQuotedHeredoc(segments) {
  * quote, `$(`, backtick or heredoc sets `incomplete`; `incompleteAt` is the offset of the earliest
  * unclosed opener, and callers treat the text from there on as unquoted executable text.
  * A heredoc record also carries `closed`, `bodyStart` and `bodyEnd` (offsets of the body in COMMAND) once its delimiter line is found; a segment
- * carries `pipedOut` when an unquoted `|`/`|&` follows it. `$((expr))` with a plain expression is read as arithmetic text (so `1<<2` is no heredoc);
- * inside `$(...)` a line starting `DELIM)` closes the heredoc and the substitution together. A heredoc operator at the end of input with no
+ * carries `pipedOut` when an unquoted `|`/`|&` follows it. A heredoc operator at the end of input with no
  * newline has no body to hide and is complete; a `<<` with no delimiter word, or a body that never reaches its delimiter line, is incomplete.
- * ponytail: `${...}` quoting, subshell grouping and arithmetic holding a substitution or quote are not modelled; the last fails closed.
+ * ponytail: arithmetic, `${...}` quoting and subshell grouping are not modelled; a stray `<<` fails closed.
  * @param {string} command
  * @returns {{ segments: object[], spans: {start:number,end:number,kind:string}[], ticks: string[], comments: string[], incomplete: boolean, incompleteAt: number }}
  */
@@ -1168,30 +1167,8 @@ export function tokenizeShellCommand(command) {
     ticks.push(command.slice(start, i));
     return command.slice(start, i);
   };
-  // `$((expr))` with a plain expression is arithmetic text (`1<<2` is a shift, not a heredoc). Anything that could hold a command or quote falls back to the `$(` reader.
-  const readArith = () => {
-    if (command[i + 2] !== "(") return null;
-    let level = 2;
-    let inner = -1;
-    for (let j = i + 3; j < n; j++) {
-      if (command[j] === "(") level++;
-      else if (command[j] === ")") {
-        level--;
-        if (level === 1) inner = j;
-        if (level === 0) {
-          if (inner !== j - 1 || /\$\(|[`'"\\]/.test(command.slice(i + 3, j - 1))) return null;
-          const text = command.slice(i, j + 1);
-          i = j + 1;
-          return text;
-        }
-      }
-    }
-    return null;
-  };
   const readSub = (word) => {
     const start = i;
-    const arith = readArith();
-    if (arith !== null) return arith;
     if (depth >= 64) { fail(start); return command.slice(start); } // bounded recursion: past the cap the input is incomplete, so the gate denies
     i += 2;
     depth++;
@@ -1274,15 +1251,13 @@ export function tokenizeShellCommand(command) {
           let eol = command.indexOf("\n", lineStart);
           if (eol < 0) eol = n;
           const line = command.slice(lineStart, eol);
-          // A delimiter line at end of input needs no trailing newline (bash accepts it). Inside `$(...)`, `EOF)` closes the heredoc and the substitution together; outside one it is not a delimiter, so the heredoc stays incomplete.
-          const text = h.stripTabs ? line.replace(/^\t+/, "") : line;
-          const closesSub = inSub && text.startsWith(`${h.delimiter})`) && /^\s*"?\s*$/.test(text.slice(h.delimiter.length + 1)); // only whitespace or the substitution's closing quote may follow
-          if (text === h.delimiter || closesSub) {
+          // A delimiter line at end of input needs no trailing newline (bash accepts it); `EOF)` is not a delimiter (bash warns), so it stays incomplete.
+          if ((h.stripTabs ? line.replace(/^\t+/, "") : line) === h.delimiter) {
             h.bodyStart = bodyStart;
             h.bodyEnd = Math.max(bodyStart, lineStart - 1);
             h.body = command.slice(h.bodyStart, h.bodyEnd);
             h.closed = true;
-            i = closesSub ? lineStart + line.length - text.length + h.delimiter.length : Math.min(eol + 1, n);
+            i = Math.min(eol + 1, n);
             found = true;
           }
           lineStart = eol + 1;
