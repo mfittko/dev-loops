@@ -200,6 +200,9 @@ const SALVAGED_DENY_ROWS = [
   "git -c alias.r='!sh' r <<'EOF'\nnode -e x\nEOF",
   "echo \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" | bash",
   "cat <<'EOF' |& sh\nnode -e 'x'\nEOF",
+  "printf -vx \"$(cat <<'EOF'\nnode -e 1\nEOF\n)\"; eval \"$x\"",
+  "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nfind tmp -name 'l*' -exec sh {} \\;",
+  "cat > Makefile <<'EOF'\nall:\n\tnode -e 1\nEOF\nmake",
 ];
 
 /** Hook-verdict row from test/loop/check-retro-tooling.test.mjs: `EOF)` is not a delimiter line, so origin/main allowed it and the head denies it. */

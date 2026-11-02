@@ -1684,6 +1684,10 @@ test("slice 2: a written script run through a wrapper, runner payload, glob or a
     "git -c alias.r='!sh' r <<'EOF'\nnode -e x\nEOF",
     "echo \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" | bash",
     "cat <<'EOF' |& sh\nnode -e 'x'\nEOF",
+    "printf -vx \"$(cat <<'EOF'\nnode -e 1\nEOF\n)\"; eval \"$x\"",
+    "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nfind tmp -name 'l*' -exec sh {} \\;",
+    "cat > Makefile <<'EOF'\nall:\n\tnode -e 1\nEOF\nmake",
+    "git -c alias.r='!sh' commit -F - <<'EOF'\nnode -e x\nEOF",
   ]) assert.equal(commandContainsInlineInterpreter(c), true, c);
 });
 
