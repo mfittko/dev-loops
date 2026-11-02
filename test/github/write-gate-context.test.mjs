@@ -47,6 +47,7 @@ import {
   resolveCapRound,
   resolveCapRoundFixed,
   clearingChainLastCandidates,
+  clearingChainWalk,
   readGateContext,
   renderBriefingEvidence,
   renderBriefingPrefix,
@@ -9113,6 +9114,22 @@ test("resolveCapRoundFixed follows a chain of sealed clearing records to the cur
   }
 });
 
+test("resolveCapRoundFixed refuses a base-only merge past an unsealed continuation record", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    const opts = { repo: "owner/repo", pr: 59, gate: "draft_gate", headSha, baseRefName: "main" };
+    const fixer = "6".repeat(40);
+    await seedClosedRounds(repoRoot, 59, ["1".repeat(40), "2".repeat(40), "3".repeat(40), baseSha]);
+    await writeDeltaRecord(repoRoot, baseSha, fixer);
+    const baseOnlyMerge = async (args) => args.fromHead === fixer && args.head === headSha;
+    assert.ok(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge }), "a sealed chain end accepts the base-only merge");
+    await writeDeltaRecord(repoRoot, fixer, "8".repeat(40), "push", { seal: false });
+    assert.equal(await resolveCapRoundFixed(opts, { repoRoot, baseOnlyMerge }), null, "an unsealed continuation record is no valid chain end");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveCapRoundFixed starts the chain at a ledgerless base-only merge of the cap-round head", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
@@ -9192,6 +9209,49 @@ test("resolveCapRoundFixed seeds a chain from the record of a ledgerless base-on
     const selfMerge = async (args) => args.head === args.fromHead || merge(args);
     assert.ok((await failure(opts, { baseOnlyMerge: selfMerge })).result, "the covering record still holds with a permissive merge probe");
     assert.deepEqual(await clearingChainLastCandidates({ tmpRoot: path.join(repoRoot, "tmp"), capHead: A, repo: "owner/repo", pr: 63, baseRefName: "main", repoRoot, baseOnlyMerge: merge }), [B, C], "the emitter seam lists both chain ends");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// The seed proof's heads survive a record rewrite that lands during the base-only probe.
+test("clearingChainWalk keeps the seed-proof heads when a sealed record is rewritten during seeding", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const C = "8".repeat(40);
+    const M = "7".repeat(40);
+    const E = "6".repeat(40);
+    const D = "9".repeat(40);
+    await seedClosedRounds(repoRoot, 66, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    await writeDeltaRecord(repoRoot, A, B);
+    await writeDeltaRecord(repoRoot, B, C);
+    await writeDeltaRecord(repoRoot, M, E);
+    const merge = async (args) => {
+      if (args.fromHead !== C || args.head !== M) return false;
+      await writeDeltaRecord(repoRoot, B, D);
+      return true;
+    };
+    const walk = await clearingChainWalk({ tmpRoot: path.join(repoRoot, "tmp"), capHead: A, repo: "owner/repo", pr: 66, baseRefName: "main", repoRoot, baseOnlyMerge: merge });
+    assert.ok(walk.heads.includes(C), "C was proven by the seed walk before the rewrite");
+    assert.ok(walk.ends.includes(E), "the seeded M to E chain still ends at E");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// A sealed A to B to C chain whose B record loses its seal has no trusted end: B is not reported as the chain end.
+test("clearingChainWalk and clearingChainLastCandidates return no end when a mid-chain record is unsealed", async () => {
+  const { repoRoot, baseSha: A, headSha: B } = await makeBaseDiffRepo();
+  try {
+    const C = "8".repeat(40);
+    await seedClosedRounds(repoRoot, 67, ["1".repeat(40), "2".repeat(40), "3".repeat(40), A]);
+    await writeDeltaRecord(repoRoot, A, B);
+    await writeDeltaRecord(repoRoot, B, C);
+    const args = { tmpRoot: path.join(repoRoot, "tmp"), capHead: A, repo: "owner/repo", pr: 67, baseRefName: "main", repoRoot, baseOnlyMerge: async () => false };
+    assert.deepEqual((await clearingChainWalk(args)).ends, [C], "the intact chain ends at C");
+    await rm(path.join(repoRoot, "tmp", "gate-delta", `${B}.json.seal`));
+    assert.deepEqual((await clearingChainWalk(args)).ends, [], "an unsealed B record leaves no end");
+    assert.deepEqual(await clearingChainLastCandidates(args), [], "the emitter seam agrees");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
