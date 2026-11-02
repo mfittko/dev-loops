@@ -110,6 +110,10 @@ function makeRuntime({
           if (compare.stdout !== undefined) return { stdout: compare.stdout, stderr: "", code: 0 };
           return { stdout: JSON.stringify({ status: compare.status ?? "ahead", files: (compareFiles ?? []).map((filename) => ({ filename, status: "modified" })) }), stderr: "", code: 0 };
         }
+        // The gate-evidence read (a readable, empty stream); an unreadable one refuses (copilot_reviews_unreadable).
+        if (args.includes("--slurp") && /\/(comments|reviews)\?per_page=100$/.test(String(args[args.length - 1]))) {
+          return { stdout: "[[]]\n", stderr: "", code: 0 };
+        }
         if (args[0] === "pr" && args[1] === "view" && args.includes("files")) {
           return prFilesCode ? { stdout: "", stderr: "files read failed", code: prFilesCode } : { stdout: prFiles.join("\n"), stderr: "", code: 0 };
         }
