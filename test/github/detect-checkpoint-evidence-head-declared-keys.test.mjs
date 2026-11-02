@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 import { loadDevLoopConfig, stripConfigKeyPaths } from "@dev-loops/core/config";
-import { buildFanoutEnforcement, parseHeadDeclaredKeys } from "../../scripts/github/detect-checkpoint-evidence.mjs";
+import { bindHeadDeclaredKeys, buildFanoutEnforcement, parseHeadDeclaredKeys } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { reportHeadDeclaredKeys } from "../../scripts/github/report-head-declared-keys.mjs";
 
 const BASE = "version: 1\ngates:\n  requireFanoutEvidence: true\n";
@@ -68,6 +68,20 @@ test("parseHeadDeclaredKeys accepts an array or object and treats bad or oversiz
   assert.deepEqual(parseHeadDeclaredKeys('{"declaredKeys":["a"]}'), ["a"]);
   assert.deepEqual(parseHeadDeclaredKeys("not json"), []);
   assert.deepEqual(parseHeadDeclaredKeys(JSON.stringify(["x".repeat(70 * 1024)])), []);
+});
+
+test("one off-pattern entry among 600 valid entries keeps the valid ones", () => {
+  const valid = Array.from({ length: 600 }, (_, i) => `k${i}`);
+  assert.deepEqual(parseHeadDeclaredKeys(JSON.stringify([...valid, "bad key"])), valid);
+});
+
+test("the declared set applies only to the head it was reported for", async () => {
+  assert.deepEqual(bindHeadDeclaredKeys(["a"], "h1", "h1"), ["a"]);
+  assert.deepEqual(bindHeadDeclaredKeys(["a"], "h1", "h2"), []);
+  assert.deepEqual(bindHeadDeclaredKeys(["a"], "", "h2"), []);
+  assert.deepEqual(bindHeadDeclaredKeys(["a"], undefined, "h2"), []);
+  // A mismatched SHA yields the empty set, so the head-only key fails closed.
+  await rejectsConfigLoadFailed(enforceWithHead("futureKey: 1\n", bindHeadDeclaredKeys(["futureKey"], "h1", "h2")));
 });
 
 test("stripConfigKeyPaths removes nested paths from a bare file and stays loadable", () => {

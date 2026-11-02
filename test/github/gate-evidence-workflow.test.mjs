@@ -426,6 +426,7 @@ test("head-declared-keys is the only job that checks out a PR head, with no perm
   assert.ok(!JSON.stringify(keysJob).includes("refs/pull/"), "no moving PR ref in the keys job");
   const report = keysJob.steps.find((s) => s.id === "report");
   assert.ok(/if \[ "\$ok" = true \]; then\n\s+mkdir -p "\$RUNNER_TEMP\/keys"/u.test(report.run), "the artifact file is written only after a successful report step");
+  assert.ok(report.run.includes(`jq -e '.declaredKeys | length > 0'`), "the success signal is a non-empty declared set, not non-empty stdout");
   for (const s of checkouts(keysJob)) assert.equal(s.with["persist-credentials"], false);
   for (const job of [runnerJob, reporterJob]) {
     for (const s of checkouts(job)) {
@@ -441,6 +442,8 @@ test("head-declared-keys is the only job that checks out a PR head, with no perm
       "${{ github.event_name == 'issue_comment' && steps.fetch_keys.outputs.declared_keys || needs.head-declared-keys.outputs.declared_keys }}",
     );
     assert.ok(detect.run.includes('--head-declared-keys="$HEAD_DECLARED_KEYS"'), "flag form with = so a dash-leading value is data");
+    assert.equal(detect.env.HEAD_DECLARED_KEYS_SHA, "${{ steps.pr.outputs.head_sha }}");
+    assert.ok(detect.run.includes('--head-declared-keys-sha="$HEAD_DECLARED_KEYS_SHA"'), "the key set is bound to the head it was reported for");
     assert.ok(!detect.run.includes("needs.head-declared-keys") && !detect.run.includes("fetch_keys"), "declared keys never reach the shell by splice");
     const fetchIdx = job.steps.findIndex((s) => s.id === "fetch_keys");
     assert.ok(fetchIdx >= 0 && fetchIdx < job.steps.indexOf(detect), "fetch step precedes the detect step");

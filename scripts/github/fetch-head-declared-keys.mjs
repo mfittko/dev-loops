@@ -38,17 +38,19 @@ export async function fetchHeadDeclaredKeys({ repo, pr, headSha, exec = defaultE
   let dir;
   try {
     // Validate before interpolating into gh api paths; any mismatch yields the empty set.
-    parseRepoSlug(repo);
+    const { owner, name } = parseRepoSlug(repo);
+    const slug = `${owner}/${name}`;
+    if (slug !== repo || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(slug)) return [];
     if (!/^[1-9]\d*$/.test(String(pr)) || !/^[0-9a-f]{40}$/.test(String(headSha))) return [];
     const gh = async (apiPath) => exec("gh", ["api", apiPath]);
-    const current = JSON.parse((await gh(`repos/${repo}/pulls/${pr}`)).toString("utf8"));
+    const current = JSON.parse((await gh(`repos/${slug}/pulls/${pr}`)).toString("utf8"));
     if (current?.head?.sha !== headSha) return [];
-    const list = JSON.parse((await gh(`repos/${repo}/actions/artifacts?name=head-declared-keys-${headSha}&per_page=100`)).toString("utf8"));
+    const list = JSON.parse((await gh(`repos/${slug}/actions/artifacts?name=head-declared-keys-${headSha}&per_page=100`)).toString("utf8"));
     const artifact = selectHeadKeysArtifact(list?.artifacts, headSha);
     if (!artifact || !Number.isInteger(artifact.id)) return [];
     dir = await mkdtemp(path.join(os.tmpdir(), "head-declared-keys-"));
     const zip = path.join(dir, "artifact.zip");
-    await writeFile(zip, await gh(`repos/${repo}/actions/artifacts/${artifact.id}/zip`));
+    await writeFile(zip, await gh(`repos/${slug}/actions/artifacts/${artifact.id}/zip`));
     const text = (await exec("unzip", ["-p", zip, "head-declared-keys.json"])).toString("utf8");
     return parseDeclaredKeysStrict(text);
   } catch {

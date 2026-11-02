@@ -59,6 +59,8 @@ Optional:
   --base-ref-name <name>  PR base branch; lets a sealed cap-round-fixed proof stand in for the clean draft_gate comment
   --head-declared-keys <json>  Dotted config key paths the PR head's own schema declares (JSON array or
                           {"declaredKeys":[...]}); a head-only unknown key listed there is tolerated
+  --head-declared-keys-sha <sha>  Head SHA the declared keys were reported for; the keys apply only when it
+                          equals the evaluated head, otherwise the declared set is empty
   --skip-fanout-ledger-check  Skip the fan-out findings-log ledger/provenance/
                               angle-coverage layer of requireFanoutEvidence
                               enforcement. That evidence lives in a gitignored,
@@ -174,6 +176,7 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
       "skip-fanout-ledger-check": { type: "boolean" },
       "base-ref-name": { type: "string" },
       "head-declared-keys": { type: "string" },
+      "head-declared-keys-sha": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -215,6 +218,10 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
     }
     if (token.name === "head-declared-keys") {
       options.headDeclaredKeys = parseHeadDeclaredKeys(token.value ?? "");
+      continue;
+    }
+    if (token.name === "head-declared-keys-sha") {
+      options.headDeclaredKeysSha = (token.value ?? "").trim();
       continue;
     }
     if (token.name === "base-ref-name") {
@@ -787,6 +794,11 @@ async function readActListInAny(checkouts, ledgerPath, markerExecutionMode) {
 // The --head-declared-keys value uses the shared strict schema (invalid input is an empty set).
 export { parseHeadDeclaredKeys };
 
+/** The declared set applies only to the head it was reported for; a missing or different SHA yields the empty set (fail closed). */
+export function bindHeadDeclaredKeys(keys, keysSha, currentHeadSha) {
+  return keysSha && keysSha === currentHeadSha ? (keys ?? []) : [];
+}
+
 // A committed `.devloops` is a small hand-authored config file; 8 MiB is
 // already many times larger than any legitimate one, so bounding `git show`
 // here only guards against a runaway/corrupt blob, never a real config.
@@ -1226,7 +1238,7 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
     cwd,
     hasFullLabel,
     baseRef,
-    headDeclaredKeys: options.headDeclaredKeys,
+    headDeclaredKeys: bindHeadDeclaredKeys(options.headDeclaredKeys, options.headDeclaredKeysSha, currentHeadSha),
   });
   return {
     ok: true,

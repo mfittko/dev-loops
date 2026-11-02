@@ -58,6 +58,20 @@ test("malformed --repo, --pr or --head-sha yield the empty set without calling g
   for (const headSha of ["a86e10f", SHA.toUpperCase(), ""]) assert.deepEqual(await call({ headSha }), [], headSha);
 });
 
+test("gh api paths are built from the validated slug; query, fragment, encoded and padded repos yield the empty set", async () => {
+  for (const repo of ["mfittko/dev-loops", "o/r", "o.r/a_b-c"]) {
+    const paths = [];
+    const exec = fakeExec();
+    const keys = await fetchHeadDeclaredKeys({ repo, pr: 1, headSha: SHA, exec: async (f, a) => { if (f === "gh") paths.push(a[1]); return exec(f, a); } });
+    assert.deepEqual(keys, ["a.b"], repo);
+    assert.ok(paths.every((p) => p.startsWith(`repos/${repo}/`)), repo);
+  }
+  const never = async () => { throw new Error("must not be called"); };
+  for (const repo of ["o/r?x=1", " o/r", "o/r#x", "o/r%2F"]) {
+    assert.deepEqual(await fetchHeadDeclaredKeys({ repo, pr: 1, headSha: SHA, exec: never }), [], repo);
+  }
+});
+
 test("a malformed artifact yields the empty set", async () => {
   for (const zipText of [
     "not json",
@@ -66,7 +80,6 @@ test("a malformed artifact yields the empty set", async () => {
     '["bad key!"]',
     '["a..b"]',
     '[""]',
-    JSON.stringify(Array.from({ length: 513 }, (_, i) => `k${i}`)),
     JSON.stringify(["x".repeat(201)]),
     JSON.stringify(["x".repeat(300 * 1024)]),
   ]) {
@@ -77,7 +90,7 @@ test("a malformed artifact yields the empty set", async () => {
 test("the detector and fetcher share one strict schema", () => {
   assert.equal(parseDeclaredKeysStrict, parseHeadDeclaredKeys);
   assert.deepEqual(parseHeadDeclaredKeys('["a","b.c"]'), ["a", "b.c"]);
-  assert.deepEqual(parseHeadDeclaredKeys('["a","bad key"]'), []);
+  assert.deepEqual(parseHeadDeclaredKeys('["a","bad key"]'), ["a"]);
 });
 
 test("a failed keys job (empty --head-declared-keys value) parses to the empty set, not a CLI error", () => {

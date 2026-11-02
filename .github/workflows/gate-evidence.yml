@@ -33,8 +33,8 @@ jobs:
   # is a JSON list of config keys the PR head's own schema declares; the
   # detector treats it as DATA (env variable, never spliced into a shell) and
   # uses it only to tolerate a head-only config key the default-branch schema
-  # does not know yet (docs/decisions/0234). The PR number comes from the event
-  # payload and the head is fetched as refs/pull/<n>/head, so no token is
+  # does not know yet (docs/decisions/0234). The job checks out the event's head
+  # SHA (github.event.pull_request.head.sha), so no token is
   # needed (a private repository would need `contents: read` here and would
   # fail closed to an empty key set). Every step is continue-on-error and the
   # output defaults to an empty key set, but a job-level failure or timeout is
@@ -95,14 +95,14 @@ jobs:
         run: |
           keys='{"declaredKeys":[]}'
           ok=false
-          out="$(node trusted/scripts/github/report-head-declared-keys.mjs --head-root head 2>/dev/null | head -n1 | head -c 65536)" && [ -n "$out" ] && keys="$out" && ok=true
+          out="$(node trusted/scripts/github/report-head-declared-keys.mjs --head-root head 2>/dev/null | head -n1 | head -c 65536)" && printf '%s' "$out" | jq -e '.declaredKeys | length > 0' >/dev/null && keys="$out" && ok=true
           delim="EOF_$(openssl rand -hex 16)"
           {
             echo "declared_keys<<${delim}"
             echo "$keys"
             echo "${delim}"
           } >> "$GITHUB_OUTPUT"
-          # Only a successful run writes the artifact file, so a failed run never supersedes earlier evidence for this head.
+          # Only a non-empty declared set writes the artifact file: the reporter also prints the empty set on every caught failure, so an empty result must never supersede earlier evidence for this head (a missing artifact already means the empty set).
           if [ "$ok" = true ]; then
             mkdir -p "$RUNNER_TEMP/keys"
             printf '%s\n' "$keys" > "$RUNNER_TEMP/keys/head-declared-keys.json"
@@ -272,12 +272,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_DECLARED_KEYS: ${{ github.event_name == 'issue_comment' && steps.fetch_keys.outputs.declared_keys || needs.head-declared-keys.outputs.declared_keys }}
+          HEAD_DECLARED_KEYS_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           set +e
           node scripts/github/detect-checkpoint-evidence.mjs \
             --repo "${{ github.repository }}" \
             --pr "${{ steps.pr.outputs.number }}" \
             --head-declared-keys="$HEAD_DECLARED_KEYS" \
+            --head-declared-keys-sha="$HEAD_DECLARED_KEYS_SHA" \
             --skip-fanout-ledger-check \
             > gate_check_stdout.json 2> gate_check_stderr.json
           cat gate_check_stdout.json
@@ -414,12 +416,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_DECLARED_KEYS: ${{ github.event_name == 'issue_comment' && steps.fetch_keys.outputs.declared_keys || needs.head-declared-keys.outputs.declared_keys }}
+          HEAD_DECLARED_KEYS_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           set +e
           node scripts/github/detect-checkpoint-evidence.mjs \
             --repo "${{ github.repository }}" \
             --pr "${{ steps.pr.outputs.number }}" \
             --head-declared-keys="$HEAD_DECLARED_KEYS" \
+            --head-declared-keys-sha="$HEAD_DECLARED_KEYS_SHA" \
             --skip-fanout-ledger-check \
             > gate_check_stdout.json 2> gate_check_stderr.json
           cat gate_check_stdout.json
