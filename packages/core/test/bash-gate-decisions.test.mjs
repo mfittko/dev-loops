@@ -13,8 +13,10 @@ import {
 const TARGET = "mfittko/dev-loops";
 
 // The gate's rule bodies and their reason texts moved out of the Claude seam into this shared
-// module, so the move has to be PINNED rather than trusted: the two tables below are the ordered
-// rule list and each rule's exact reason string. Reordering two checks, rewording a reason, or
+// module, so the move has to be PINNED rather than trusted: the tables below are the ordered rule
+// list, every reason variant's exact string, the two inline denies' place in the same ordered body,
+// the fact-validation refusals and the attribution of an unparsable lifecycle verb. Reordering two
+// checks, rewording a reason or
 // dropping a rule fails here — which is what makes a later edit to the shared set (or a second
 // adapter that consumes it) safe to review.
 const BASE = Object.freeze({
@@ -27,12 +29,22 @@ const BASE = Object.freeze({
   readyGate: null,
 });
 
-/** One triggering fixture per registered rule, in EVALUATION ORDER. */
+/**
+ * One triggering fixture per registered rule, in EVALUATION ORDER — one entry per reason VARIANT, so
+ * a rule with two actor-scoped reason texts (COORDINATOR-VERIFY-BOUNDARY) appears twice.
+ */
 const RULE_FIXTURES = [
   {
     id: "COORDINATOR-VERIFY-BOUNDARY",
     facts: { ...BASE, enforceCoordinator: true, role: "dev-loop", command: "bun run verify" },
     reason: "COORDINATOR-VERIFY-BOUNDARY: the dev-loop coordinator must not run code-verification/build commands inline. Delegate targeted checks to a fresh worker subagent (developer/fixer/quality), which reports back a compact pass/fail plus any failing-test names. Request local full-repository validation through `dev-loops-run cli/index.mjs gate resolve-validation` on a clean commit; when checking a pushed commit, prefer CI's structured conclusion (`gh pr checks` / scripts/github/detect-checkpoint-evidence.mjs) over a local run. See skills/docs/main-agent-contract.md.",
+  },
+  {
+    // The same rule's gate-coordinator variant: the rule owns TWO reason texts, and a reason freeze
+    // that pinned only the dev-loop one would let this half be reworded silently.
+    id: "COORDINATOR-VERIFY-BOUNDARY",
+    facts: { ...BASE, enforceCoordinator: true, role: "gate-coordinator", command: "bun run verify" },
+    reason: "COORDINATOR-VERIFY-BOUNDARY: the gate coordinator must not run code-verification/build commands inline. Run the round's full validation through `dev-loops-run cli/index.mjs gate resolve-validation`; for any other check, stop and return a typed observation to the dev-loop coordinator (GATE-EXEC-GATE-COORDINATOR). See skills/docs/main-agent-contract.md.",
   },
   {
     id: "OPS-NO-INLINE-INTERPRETER",
@@ -110,8 +122,11 @@ const INLINE_FIXTURES = [
   },
 ];
 
-test("BASH_GATE_RULES lists the registered rules in evaluation order", () => {
-  assert.deepEqual([...BASH_GATE_RULES], RULE_FIXTURES.map((f) => f.id));
+test("BASH_GATE_RULES matches the fixture rule order", () => {
+  // The list is compared against the fixtures' rule IDS in order (a rule with two reason variants owns
+  // two fixture entries). This is the LIST assertion only: that the list IS the evaluation order is the
+  // separate order test below.
+  assert.deepEqual([...BASH_GATE_RULES], [...new Set(RULE_FIXTURES.map((f) => f.id))]);
 });
 
 test("every registered rule fires with its own id and its exact reason text", () => {
@@ -123,13 +138,13 @@ test("every registered rule fires with its own id and its exact reason text", ()
   }
 });
 
-test("every listed rule id is registered in skills/docs/required-rules.json", () => {
-  // The list cannot grow a rule the rule registry does not own, and cannot name an id no contract
-  // doc defines.
+test("every listed rule id is a rule entry in skills/docs/required-rules.json", () => {
+  // The list cannot grow a rule the registry does not own. Match the id as a PARSED entry, not as a
+  // substring of the file: an id that merely appears in prose is not a registered rule.
   const rulesFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../../skills/docs/required-rules.json");
-  const registry = fs.readFileSync(rulesFile, "utf8");
+  const registered = new Set(JSON.parse(fs.readFileSync(rulesFile, "utf8")).requiredRules.map((rule) => rule.id));
   for (const id of BASH_GATE_RULES) {
-    assert.ok(registry.includes(`"${id}"`), `${id} is not registered in skills/docs/required-rules.json`);
+    assert.ok(registered.has(id), `${id} is not a rule entry in skills/docs/required-rules.json`);
   }
 });
 
@@ -223,6 +238,37 @@ const ORDER_PAIRS = [
   },
 ];
 
+/**
+ * The two INLINE denies (no registered rule id) sit INSIDE the same ordered body: the `timeout`-wrapped
+ * sanctioned-command deny between COPILOT-FOLLOWUP-WAIT-TOOLS and SUBISSUE-NO-ADHOC-BYPASS, and the
+ * subagent ad-hoc external-write deny between WORKTREE-NO-STASH and STOP-HUMAN-MERGE-001. The pair
+ * table above is asserted to cover exactly the registered consecutive pairs, so an inline deny cannot
+ * ride in it; each entry here pins its deny's PLACE with two commands: one that also trips the
+ * registered rule ABOVE it (that rule must still win) and one that also trips the registered rule BELOW
+ * it (the inline deny must win, with `ruleId: null` and its own exact reason — which also proves the
+ * inline body still matches, so the pairs above are real order tests).
+ */
+const INLINE_ORDER_PAIRS = [
+  {
+    name: "timeout-wrapped sanctioned command",
+    facts: BASE,
+    above: {
+      id: "COPILOT-FOLLOWUP-WAIT-TOOLS",
+      command: "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 & timeout 30 dev-loops-run cli/index.mjs gate resolve-validation",
+    },
+    below: {
+      id: "SUBISSUE-NO-ADHOC-BYPASS",
+      command: "timeout 30 dev-loops-run cli/index.mjs gate resolve-validation && gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6",
+    },
+  },
+  {
+    name: "subagent ad-hoc external write",
+    facts: { ...BASE, role: "developer", humanMergeOnly: true },
+    above: { id: "WORKTREE-NO-STASH", command: "git stash && gh issue comment 5 --body hi" },
+    below: { id: "STOP-HUMAN-MERGE-001", command: "gh issue comment 5 --body hi && gh pr merge 5" },
+  },
+];
+
 test("rule order is the evaluation order, not just the list order", () => {
   // EVERY consecutive pair, not a sample: a command that matches two adjacent rules must report the
   // EARLIER one. A hand-swapped pair of `if` bodies then fails here even though `RULE_FIXTURES` still
@@ -268,6 +314,23 @@ test("rule order is the evaluation order, not just the list order", () => {
   );
 });
 
+test("the inline denies keep their place inside the ordered body", () => {
+  for (const { name, facts, above, below } of INLINE_ORDER_PAIRS) {
+    const entryFacts = { ...BASE, ...facts };
+    const inlineReason = INLINE_FIXTURES.find((fixture) => fixture.name === name)?.reason;
+    assert.ok(inlineReason, `${name} needs an INLINE_FIXTURES entry so its reason text has one home`);
+    assert.equal(
+      decideBashGateDeny({ ...entryFacts, command: above.command }).ruleId,
+      above.id,
+      `the inline deny ${name} must not outrank ${above.id}`,
+    );
+    const belowDecision = decideBashGateDeny({ ...entryFacts, command: below.command });
+    assert.ok(belowDecision, `${name} vs ${below.id}: the shared command denied nothing`);
+    assert.equal(belowDecision.ruleId, null, `the inline deny ${name} must beat ${below.id} and claim no rule id`);
+    assert.equal(belowDecision.reason, inlineReason, `the inline deny ${name} reason text changed`);
+  }
+});
+
 test("the unresolve owner allowlist is the shared set's FIRST rule", () => {
   // Exported on its own because the Claude seam evaluates it ahead of its two Claude-only role
   // boundaries, so the shared decision must reach the SAME body — and reach it first, which is why
@@ -293,15 +356,55 @@ test("the unresolve owner allowlist is the shared set's FIRST rule", () => {
   assert.equal(shared.reason, allowlist.reason, "a registered rule must not outrank the allowlist block");
 });
 
-test("a caller that omits an injected fact is refused instead of defaulted (fail closed)", () => {
-  const { enforceCoordinator, ...withoutOne } = BASE;
-  const decision = decideBashGateDeny({ ...withoutOne, command: "gh pr merge 5" });
-  assert.ok(decision, "a missing fact must deny, never run the rules on a default");
-  assert.match(decision.reason, /supplied no valid enforceCoordinator fact/);
-  assert.equal(decision.ruleId, null);
+test("an unparsable lifecycle verb is attributed to the verb's own rule", () => {
+  // `gh pr merge` with no PR number never reaches the wrapper hint, so the rule has to name itself
+  // from the verb alone — the attribution no PR-number branch owns.
+  const decision = decideBashGateDeny({ ...BASE, command: "gh pr merge" });
+  assert.equal(decision.ruleId, "RAW-GH-PR-MERGE-BYPASS");
+  assert.equal(decision.reason, "gh pr merge blocked: could not determine the PR number from the command. Include the PR number explicitly.");
 });
 
-test("an allowed command and a non-string command return no decision", () => {
+test("an allowed command returns no decision", () => {
   assert.equal(decideBashGateDeny({ ...BASE, command: "gh pr ready 5", readyGate: { passed: true, error: null } }), null);
-  assert.equal(decideBashGateDeny({ ...BASE, command: null }), null);
+  assert.equal(
+    decideBashGateDeny({ command: "ls", role: "dev-loop", repoSlug: null, managedRepoSlug: null, inManagedContext: false, humanMergeOnly: false, enforceCoordinator: false }),
+    null,
+  );
+});
+
+test("a missing or mistyped required fact is refused instead of defaulted (fail closed)", () => {
+  // One case per failure shape: omitted, mistyped (a boolean given as its string form), and the two
+  // ways `command` — the fact EVERY rule reads — can be wrong. The reason names the fact the caller
+  // did not supply, so a validator relaxed to `typeof value !== "undefined"` fails here.
+  const drop = (bag, ...names) => Object.fromEntries(Object.entries(bag).filter(([name]) => !names.includes(name)));
+  const complete = { ...BASE, command: "gh pr merge 5" };
+  const omitted = drop(complete, "enforceCoordinator");
+  const misspelled = { ...drop(complete, "command"), cmd: "gh pr merge 5" };
+  const cases = [
+    ["enforceCoordinator omitted", omitted, "enforceCoordinator"],
+    ["humanMergeOnly mistyped", { ...complete, humanMergeOnly: "false" }, "humanMergeOnly"],
+    ["command misspelled `cmd`", misspelled, "command"],
+    ["command undefined", { ...complete, command: undefined }, "command"],
+    ["command not a string", { ...complete, command: null }, "command"],
+  ];
+  for (const [name, facts, missing] of cases) {
+    const decision = decideBashGateDeny(facts);
+    assert.ok(decision, `${name}: a missing fact must deny, never run the rules on a default`);
+    assert.match(decision.reason, new RegExp(`supplied no valid ${missing} fact`));
+    assert.equal(decision.ruleId, null);
+  }
+});
+
+test("a null or absent facts bag is refused, never thrown on", () => {
+  // A throw in a PreToolUse seam does not block the command, so the deny has to survive `null`.
+  const everyFact = ["command", "role", "repoSlug", "managedRepoSlug", "inManagedContext", "humanMergeOnly", "enforceCoordinator"];
+  for (const bag of [undefined, null, {}]) {
+    const decision = decideBashGateDeny(bag);
+    assert.ok(decision, `facts ${String(bag)} must deny instead of throwing or allowing`);
+    assert.equal(decision.ruleId, null);
+    for (const fact of everyFact) assert.match(decision.reason, new RegExp(fact), `a whole-bag refusal must name ${fact}`);
+  }
+  // The argument-less spelling is the same call as the `undefined` bag above, asserted on its own
+  // because it is the form a second adapter's missing facts resolver produces.
+  assert.match(decideBashGateDeny().reason, /supplied no valid command/);
 });

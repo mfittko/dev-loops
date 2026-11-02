@@ -13,20 +13,21 @@ import { resolveRunId } from "../loop/run-context.mjs";
 import { isUnderWorktreePath } from "../loop/worktree-guard.mjs";
 import { DISPATCH_POINTER_MAX_BYTES, EXECUTION_IDENTITY_RE } from "../loop/work-order-digest.mjs";
 import {
-  COORDINATOR_AGENT_TYPES,
   DEV_LOOP_AGENT_TYPE,
   GATE_COORDINATOR_AGENT_TYPE,
   decideBashGateDeny,
   decideUnresolveOwnerDeny,
+  isCoordinatorRole,
   normalizeAgentType,
 } from "../loop/bash-gate-decisions.mjs";
 
 // The harness-neutral Bash-gate deny rules and the agent-name helpers live in
 // ../loop/bash-gate-decisions.mjs, where a second adapter can reach the same bodies instead of
 // copying them. The seam keeps every name it previously exported and additionally re-exports the
-// moved decisions — BASH_GATE_RULES, COORDINATOR_AGENT_TYPES, decideBashGateDeny,
-// decideUnresolveOwnerDeny — for callers that want them.
-export { BASH_GATE_RULES, COORDINATOR_AGENT_TYPES, DEV_LOOP_AGENT_TYPE, GATE_COORDINATOR_AGENT_TYPE, decideBashGateDeny, decideUnresolveOwnerDeny, isUnresolveInvocation, normalizeAgentType } from "../loop/bash-gate-decisions.mjs";
+// moved decisions — BASH_GATE_RULES, decideBashGateDeny, decideUnresolveOwnerDeny — for callers that
+// want them. The coordinator boundary stays a predicate (`isCoordinatorRole`), never the mutable Set
+// behind it.
+export { BASH_GATE_RULES, DEV_LOOP_AGENT_TYPE, GATE_COORDINATOR_AGENT_TYPE, decideBashGateDeny, decideUnresolveOwnerDeny, isUnresolveInvocation, normalizeAgentType } from "../loop/bash-gate-decisions.mjs";
 
 /**
  * @typedef {Object} HookDecision
@@ -81,9 +82,9 @@ export const isFixerPullAttempt = (command) => typeof command === "string" && co
  * every other command, including test/build entrypoints, is denied fail-closed.
  *
  * The gated-command inventory — each command with its rationale inline at its check — lives in
- * `../loop/bash-gate-decisions.mjs` (`decideBashGateDeny`) owns that shared inventory; this seam keeps
- * only its Claude role boundaries above (the unresolve owner allowlist, the judge guard and the fixer
- * pull-line boundary), and the hook-computed gate evidence is passed through as `gatePassed`/`gateError`.
+ * `../loop/bash-gate-decisions.mjs`; `decideBashGateDeny` owns that shared inventory. This seam keeps
+ * only its two Claude role boundaries above (the judge guard and the fixer pull-line boundary), and the
+ * hook-computed gate evidence is passed through as `gatePassed`/`gateError`.
  *   - `gh pr merge` — blocked outright; use scripts/github/merge-pr.mjs. The rule and its gate
  *     evidence check (a clean draft_gate transition record + current-head pre_approval_gate,
  *     GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md) live in the
@@ -256,7 +257,7 @@ export function decideCoordinatorWriteGuard({ filePath, isRepoMutation, enforce 
   if (!isRepoMutation) {
     return ALLOW; // non-repo or gitignored path (tmp/, the scratchpad, sanctioned ledger paths)
   }
-  if (!COORDINATOR_AGENT_TYPES.has(normalizeAgentType(agentType))) {
+  if (!isCoordinatorRole(agentType)) {
     return ALLOW; // not the coordinator — a worker subagent, or the main agent (the other boundary)
   }
   const reason = normalizeAgentType(agentType) === GATE_COORDINATOR_AGENT_TYPE

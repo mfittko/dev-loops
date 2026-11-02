@@ -20,6 +20,9 @@
  * STOP-HUMAN-MERGE-001 open, `inManagedContext: false` switches every managed-repo rule off) and the
  * omission is invisible at the call site. `readyGate` alone stays nullable — `null` is its meaningful
  * "not probed" input, which still gates a ready verb:
+ *   - `command` — the Bash command string, and the one fact EVERY rule reads. A caller that omits it,
+ *     or names it something else (`cmd`), is refused rather than allowed: without it every rule would
+ *     read an `undefined` command and quietly allow.
  *   - `role` — the calling agent: the Claude `agent_type` today, and the Pi role resolved from the
  *     calling session's `active_agent` tag once the Pi adapter injects it. `null` is the
  *     unrestricted main agent / operator; any other string, including Pi's fail-closed unresolved
@@ -73,8 +76,20 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
 
 /** The gate-round capsule agent (GATE-EXEC-GATE-COORDINATOR, ADR 0112). */
 export const GATE_COORDINATOR_AGENT_TYPE = "gate-coordinator";
-/** Callers that hold the coordinator write and verify boundaries: the gate coordinator never loosens them. */
-export const COORDINATOR_AGENT_TYPES = new Set([DEV_LOOP_AGENT_TYPE, GATE_COORDINATOR_AGENT_TYPE]);
+/**
+ * Callers that hold the coordinator write and verify boundaries: the gate coordinator never loosens
+ * them. Kept module-private and asked through `isCoordinatorRole` below — an exported Set is a mutable
+ * boundary container, so a consumer's `.add(...)` would widen the coordinator boundary for the rest of
+ * a long-lived hook/extension process.
+ */
+const COORDINATOR_AGENT_TYPES = new Set([DEV_LOOP_AGENT_TYPE, GATE_COORDINATOR_AGENT_TYPE]);
+
+/**
+ * True when the calling agent holds the coordinator write/verify boundaries. The one accessor the
+ * shared rules and the Claude seam both call, so the Set above cannot be widened by mutation.
+ * @param {string|null|undefined} role @returns {boolean}
+ */
+export const isCoordinatorRole = (role) => COORDINATOR_AGENT_TYPES.has(normalizeAgentType(role));
 
 /**
  * Normalize a harness agent value that may be PLUGIN-NAMESPACED
@@ -139,32 +154,17 @@ export const BASH_GATE_RULES = Object.freeze([
 ]);
 
 /**
- * True when EVERY one of `segments` is PROVEN foreign: it carries an explicit repo, the managed
- * slug resolves, and the explicit repo demonstrably differs. A segment with no explicit repo, or
- * an unresolvable managed slug, is NOT proven foreign (fail closed).
- * @param {Array<{explicitRepo: string|null}>} segments @param {string|null} managedSlug
- */
-function segmentsProvenForeign(segments, managedSlug) {
-  return (
-    segments.length > 0 &&
-    segments.every(
-      (seg) =>
-        seg.explicitRepo != null &&
-        managedSlug !== null &&
-        seg.explicitRepo.toLowerCase() !== managedSlug,
-    )
-  );
-}
-
-/**
  * The adapter-supplied facts this decision reads, each with the shape it must have. A missing or
  * mistyped entry refuses the decision instead of defaulting: `humanMergeOnly = false` would fail
  * STOP-HUMAN-MERGE-001 open, `inManagedContext = false` would switch every managed-repo rule off,
- * and a silent default made exactly that omission invisible at the call site. A slug is nullable
- * (an unresolvable identity still gates, fail closed); `readyGate` is deliberately absent here
- * because `null` is its meaningful "not probed" value.
+ * and a silent default made exactly that omission invisible at the call site. `command` is checked
+ * here too — it is the fact every rule reads, so a caller that omits it or spells it `cmd` would
+ * otherwise run all of them against an `undefined` command and allow. A slug is nullable (an
+ * unresolvable identity still gates, fail closed); `readyGate` is deliberately absent here because
+ * `null` is its meaningful "not probed" value.
  */
 const ADAPTER_FACTS = Object.freeze([
+  ["command", (value) => typeof value === "string"],
   ["role", (value) => value === null || typeof value === "string"],
   ["repoSlug", (value) => value === null || typeof value === "string"],
   ["managedRepoSlug", (value) => value === null || typeof value === "string"],
@@ -241,24 +241,23 @@ export function decideUnresolveOwnerDeny({ command, role }) {
  *   missing-facts deny.
  */
 export function decideBashGateDeny(facts = {}) {
-  const { command } = facts;
-  const missing = ADAPTER_FACTS.filter(([name, isValid]) => !isValid(facts[name])).map(([name]) => name);
+  // A null BAG is coerced, never destructured directly: a throw does not block a PreToolUse command,
+  // so throwing here would lose the very deny this validation exists to produce.
+  const injected = facts ?? {};
+  const missing = ADAPTER_FACTS.filter(([name, isValid]) => !isValid(injected[name])).map(([name]) => name);
   if (missing.length > 0) {
     return {
       ruleId: null,
       reason:
         `Bash gate blocked: the caller supplied no valid ${missing.join(", ")} fact(s), so the shared deny ` +
-        "decision cannot run. Inject every adapter fact (`role`, `repoSlug`, `managedRepoSlug`, " +
+        "decision cannot run. Inject every adapter fact (`command`, `role`, `repoSlug`, `managedRepoSlug`, " +
         "`inManagedContext`, `humanMergeOnly`, `enforceCoordinator`) instead of omitting one; `readyGate` " +
         "stays explicitly nullable for its 'not probed' value.",
     };
   }
-  // A non-string command is "nothing to gate" only once every required adapter fact has been
-  // validated; checking it first would let a caller that omitted a fact fail open.
-  if (typeof command !== "string") {
-    return null;
-  }
-  const { role, repoSlug, managedRepoSlug, inManagedContext, humanMergeOnly, enforceCoordinator, readyGate = null } = facts;
+  // Past the validation `command` is a required string, so the allow path for a non-string command is
+  // gone: "nothing to gate" no longer means "run no rule", it means a missing fact.
+  const { command, role, repoSlug, managedRepoSlug, inManagedContext, humanMergeOnly, enforceCoordinator, readyGate = null } = injected;
   const gatePassed = readyGate?.passed === true;
   const gateError = readyGate?.error ?? null;
 
@@ -278,7 +277,7 @@ export function decideBashGateDeny(facts = {}) {
   // agent_type discriminator. Opt-in via the same `DEVLOOPS_COORDINATOR_READONLY=1` flag as the
   // write-guard boundary; default fail-open. Not scoped to `inManagedRepo` — this is a local
   // command-invocation boundary (which binary ran), not a GitHub-repo-targeting one.
-  if (enforceCoordinator && COORDINATOR_AGENT_TYPES.has(normalizeAgentType(role)) && commandContainsCodeVerificationEntrypoint(command)) {
+  if (enforceCoordinator && isCoordinatorRole(role) && commandContainsCodeVerificationEntrypoint(command)) {
     // A gate coordinator dispatches no worker (decideAgentDispatch), so its reason names its own path.
     const reason = normalizeAgentType(role) === GATE_COORDINATOR_AGENT_TYPE
       ? "COORDINATOR-VERIFY-BOUNDARY: the gate coordinator must not run code-verification/build " +
@@ -528,13 +527,18 @@ export function decideBashGateDeny(facts = {}) {
   // slug, is NOT proven foreign — fail closed (preserves the fail-closed default). Mirrors the
   // per-segment `.some()` scoping on the create/external-write paths: a proven-foreign FIRST segment
   // must not shield a later managed segment (`gh pr merge --repo other/x 1 && gh pr merge 2`).
-  const allSegmentsProvenForeign = segmentsProvenForeign(
-    [
-      ...(isMerge ? extractRepoFlagsFromGhPrMergeSegments(command) : []),
-      ...(isReady ? extractRepoFlagsFromGhPrReadySegments(command) : []),
-    ],
-    managedSlug,
-  );
+  const gatedVerbSegments = [
+    ...(isMerge ? extractRepoFlagsFromGhPrMergeSegments(command) : []),
+    ...(isReady ? extractRepoFlagsFromGhPrReadySegments(command) : []),
+  ];
+  const allSegmentsProvenForeign =
+    gatedVerbSegments.length > 0 &&
+    gatedVerbSegments.every(
+      (seg) =>
+        seg.explicitRepo != null &&
+        managedSlug !== null &&
+        seg.explicitRepo.toLowerCase() !== managedSlug,
+    );
   if (allSegmentsProvenForeign) {
     return null;
   }
