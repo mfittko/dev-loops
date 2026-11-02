@@ -68,9 +68,12 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
   const grace = fixerGraceMs();
   // A fixer that pulled its work order is running unless it handed back (outputRef exists) or its last activity (the pull, or the last write to its branch reflog; a fixer that never commits shows only its pull) is older than the grace.
   // An unparseable pulledAt makes the activity NaN, which reads as running (fail closed). The runner claim updatedAt is no signal: the closing coordinator heartbeats it itself.
-  if (pulled && mtimeMs(outputRef) === null && !(now() - Math.max(pulledAt, (marker.branch && branchActivityMs(marker.branch)) ?? -Infinity) >= grace)) {
-    return refuse("fixer_running", `fixer execution ${executionIdentity} pulled its work order, has not handed back, and was active within ${grace / 60000} minutes (activity-based: the pull or the last write to the fixer branch reflog)`, `Wait for the fixer to hand back, or for ${grace / 60000} minutes without fixer activity, then rerun.`);
-  }
+  // Evaluated again under the sequence lock: a fixer commit or handback during fetchPr or the lock wait must still refuse the close.
+  const fixerRunning = () => pulled && mtimeMs(outputRef) === null && !(now() - Math.max(pulledAt, (marker.branch && branchActivityMs(marker.branch)) ?? -Infinity) >= grace)
+    ? refuse("fixer_running", `fixer execution ${executionIdentity} pulled its work order, has not handed back, and was active within ${grace / 60000} minutes (activity-based: the pull or the last write to the fixer branch reflog)`, `Wait for the fixer to hand back, or for ${grace / 60000} minutes without fixer activity, then rerun.`)
+    : null;
+  const runningBeforeFetch = fixerRunning();
+  if (runningBeforeFetch) return runningBeforeFetch;
   if (marker.branch === undefined || !repo || !pr) return refuse("abandonment_unproven", "the PR head cannot be checked without the marker's branch and --repo/--pr", "Pass --repo and --pr of the marker's PR. A marker without a branch cannot be proven abandoned, so ask the operator to delete it.");
   const { pr: facts } = await fetchPr({ repo, pr, fields: "headRefOid,headRefName" });
   if (!isFullSha(facts.headRefOid ?? "")) return refuse("abandonment_unproven", `GitHub returned no valid head sha for PR #${pr}`, "Rerun when the PR head is readable.");
@@ -96,7 +99,7 @@ export async function closeGateSequence({ tmpRoot, head, repo, pr, fetchPr = vie
       if (current?.execution?.executionIdentity !== executionIdentity || mtimeMs(sequenceMarkerPath(tmpRoot, head)) !== markerMtime) return refuse("sequence_live", `the marker for ${head} changed while it was checked`, "Rerun close-sequence; a re-emitted marker starts a live sequence.");
       const record = { baselineHead: head, executionIdentity: executionIdentity ?? null, condition, actor, closedAt: new Date(now()).toISOString() };
       // The last pull receipt recheck precedes the record write, so a refused close leaves no record.
-      const pulledAfterRead = pulledMeanwhile();
+      const pulledAfterRead = pulledMeanwhile() ?? fixerRunning();
       if (pulledAfterRead) return pulledAfterRead;
       // Record first, marker second: a failed write leaves the marker in place.
       const file = sequenceClosurePath(tmpRoot, head, executionIdentity);

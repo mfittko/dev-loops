@@ -337,7 +337,7 @@ test("a commit_only emit under a held head lock refuses sequence_lock_busy and l
     let clock = realNow();
     Date.now = () => (clock += 2_000); // each read advances, so the 10 second wait expires
     try {
-      await assert.rejects(emitCommitOnly(emit, files), /sequence_lock_busy.*no work order was made current/);
+      await assert.rejects(emitCommitOnly(emit, files), (error) => error.refusal === "sequence_lock_busy" && error.retryable === true && /no work order was made current/.test(error.message));
     } finally { Date.now = realNow; }
     assert.equal(existsSync(sequenceMarkerPath(tmpRoot, head)), false);
     assert.equal((await readdir(tmpRoot, { recursive: true })).some((f) => /fixer-emit-plan\.json$/.test(f)), false);

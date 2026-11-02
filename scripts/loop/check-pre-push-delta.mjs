@@ -401,7 +401,7 @@ export async function runCli(
       // Read, check and clear under the head's sequence lock: a full-granted re-emit takes the same lock, so it is never deleted here.
       await withSequenceLock(root, [sequence.reviewBaselineHead], () => {
         const marker = readSequenceMarker(root, sequence.reviewBaselineHead);
-        if (!readFileSync(options.fixerPlan).equals(planBytes) || !marker || marker.branch !== plan.workOrder.mutationAuthority.branch || marker.fullGranted) throw new Error("sequence closure requires the matching active commit_only branch marker");
+        if (!readFileSync(options.fixerPlan).equals(planBytes) || !marker || marker.branch !== plan.workOrder.mutationAuthority.branch || marker.fullGranted || marker.execution?.executionIdentity !== plan.executionIdentity || marker.execution?.workOrderRef !== plan.workOrderRef) throw new Error("sequence closure requires the matching active commit_only branch marker");
         clearSequenceMarker(root, sequence.reviewBaselineHead);
       });
       const payload = { ok: true, outcome: fixCommitted ? "head_moved" : "no_commit", nextStep: "push_to_gate", reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead };

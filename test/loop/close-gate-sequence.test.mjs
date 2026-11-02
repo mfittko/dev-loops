@@ -175,6 +175,21 @@ test("a fixer that pulls while the PR is read is sequence_live: marker kept, no 
   });
 });
 
+test("fixer branch activity during fetchPr is fixer_running: marker kept, no closure record", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const ex = execution(tmpRoot);
+    writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat", execution: ex });
+    const now = Date.now() + FIXER_GRACE_MS * 2;
+    pull(tmpRoot, ex, new Date(now - FIXER_GRACE_MS - 1000).toISOString()); // pulled earlier than the grace
+    let active = null;
+    const commitsDuringFetch = async () => { active = now - 1000; return pr(MOVED)(); };
+    const result = await closeGateSequence(base(tmpRoot, { fetchPr: commitsDuringFetch, now: () => now, branchActivityMs: () => active }));
+    assert.equal(result.refusal, "fixer_running");
+    assert.notEqual(readSequenceMarker(tmpRoot, HEAD), null);
+    assert.equal(existsSync(sequenceClosurePath(tmpRoot, HEAD, ex.executionIdentity)), false);
+  });
+});
+
 test("unproven abandonment is refused: no execution, no branch, no PR, wrong branch, absent marker", async () => {
   await withTempDir(async (tmpRoot) => {
     writeSequenceMarker({ tmpRoot, baselineHead: HEAD, branch: "feat" });

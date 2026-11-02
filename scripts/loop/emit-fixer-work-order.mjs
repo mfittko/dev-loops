@@ -507,7 +507,7 @@ export async function emitFixerWorkOrder({
       writeSequenceMarker({ tmpRoot: markerRoot, baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
     });
   } catch (error) {
-    if (error?.code === "SEQUENCE_LOCK_BUSY") throw new Refusal(`sequence_lock_busy: ${error.message}; no work order was made current, so re-run the emit once the concurrent close or pull finishes`);
+    if (error?.code === "SEQUENCE_LOCK_BUSY") throw new WorkOrderRefusal("sequence_lock_busy", `sequence_lock_busy: ${error.message}; no work order was made current, so re-run the emit once the concurrent close or pull finishes`, true);
     throw error;
   }
   // The coordinator's gate wait-for-units --artifact path: a full-phase fixer's final-on-write report (ADR 0223), else the hand-back itself.

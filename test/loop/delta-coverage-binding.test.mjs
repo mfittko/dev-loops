@@ -8,7 +8,7 @@ import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.m
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { A, B, boundArgs, coverageRepo, git } from "./_delta-coverage-fixture.mjs";
 import { checkFixPushAuthority } from "../../scripts/loop/check-fix-push-authority.mjs";
-import { readSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { readSequenceMarker, sequenceMarkerPath, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { initGitFixture } from "../_helpers.mjs";
 
 test("authenticated no_commit and foreign-head exits close only their own sequence and permit the push", async () => {
@@ -28,7 +28,8 @@ test("authenticated no_commit and foreign-head exits close only their own sequen
     assert.equal(checkFixPushAuthority(cwd).ok, false);
     assert.match(checkFixPushAuthority(cwd).reason, /check-pre-push-delta\.mjs .*--baseline [0-9a-f]{40} .*no_commit/, "the refusal names the close command");
     const planBytes = fs.readFileSync(fixture.unit.planPath), receiptBytes = fs.readFileSync(fixture.pulled.receiptPath), outputBytes = fs.readFileSync(fixture.output);
-    for (const defect of ["execution", "branch", "PR", "receipt", "malformed"]) {
+    const markerFile = sequenceMarkerPath(fixture.tmpRoot, A), markerBytes = fs.readFileSync(markerFile);
+    for (const defect of ["execution", "branch", "PR", "receipt", "malformed", "marker"]) {
       const plan = JSON.parse(planBytes);
       if (defect === "execution") plan.executionIdentity = "f1-00000000";
       if (defect === "branch") plan.workOrder.mutationAuthority.branch = "other";
@@ -36,11 +37,14 @@ test("authenticated no_commit and foreign-head exits close only their own sequen
       fs.writeFileSync(fixture.unit.planPath, JSON.stringify(plan));
       if (defect === "receipt") fs.unlinkSync(fixture.pulled.receiptPath);
       if (defect === "malformed") fs.writeFileSync(fixture.output, "{");
+      // A custom --tmp-root emission B replaced the canonical marker: the marker names another execution than plan A.
+      if (defect === "marker") { const m = readSequenceMarker(fixture.tmpRoot, A); writeSequenceMarker({ tmpRoot: fixture.tmpRoot, baselineHead: A, branch: m.branch, execution: { ...m.execution, executionIdentity: "f2-00000000", workOrderRef: "fixer:o/r#1:x:f2-00000000" } }); }
       await assert.rejects(runCli(fixture.args, options), undefined, defect);
       assert.notEqual(readSequenceMarker(fixture.tmpRoot, A), null, defect);
       fs.writeFileSync(fixture.unit.planPath, planBytes);
       fs.writeFileSync(fixture.pulled.receiptPath, receiptBytes);
       fs.writeFileSync(fixture.output, outputBytes);
+      fs.writeFileSync(markerFile, markerBytes);
     }
     const result = await runCli(fixture.args, options);
     assert.equal(result.outcome, outcome);
