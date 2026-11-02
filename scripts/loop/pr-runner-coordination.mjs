@@ -12,6 +12,7 @@ import {
   claimRunnerOwnership,
   handoffRunnerOwnership,
   loadRunnerCoordinationState,
+  pinObservedClaim,
   releaseRunnerOwnership,
 } from "./_pr-runner-coordination.mjs";
 import { describeRunnerLiveness, resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
@@ -150,7 +151,7 @@ export async function runPrRunnerCoordination(options, { env = process.env, cwd 
     // Refuse a live non-stale foreign owner before any write (no history entry).
     const { state, filePath } = await loadRunnerCoordinationState({ repo: options.repo, pr: options.pr, cwd });
     const active = state?.activeRun;
-    const { stale, staleReason } = describeRunnerLiveness(state, { maxAgeMs: resolveStaleRunnerMaxAgeMs({}, env) });
+    const { stale, staleReason } = describeRunnerLiveness(state, { maxAgeMs });
     if (active && active.runId !== runId && !stale) {
       return buildConflict({
         error: "active_run_exists",
@@ -176,11 +177,7 @@ export async function runPrRunnerCoordination(options, { env = process.env, cwd 
       mode: "takeover",
       cwd,
       maxAgeMs,
-      expectPreviousRunId: active.runId,
-      expectPreviousClaim: {
-        claimedAt: typeof active.claimedAt === "string" ? active.claimedAt : null,
-        updatedAt: typeof active.updatedAt === "string" ? active.updatedAt : null,
-      },
+      ...pinObservedClaim(active),
     });
   }
   if (options.command === "assert") {

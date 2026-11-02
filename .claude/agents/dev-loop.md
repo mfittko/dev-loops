@@ -117,6 +117,10 @@ join while child work is outstanding — a longest-timeout assumption is not a j
 
 Prefix every `gate ...` writer call (`gate upsert-verdict`, `gate detect-evidence` and the rest) with `DEVLOOPS_RUN_ID=<the id used at claim>`. Without it the gate writer has no owner identity on Claude Code. Your claim then goes stale during a long child wait and the next writer call refuses it. With it, the writer heartbeats your claim and never needs a `takeover`.
 
+### Releasing the PR claim at a terminal stop
+
+Prefix every `loop handoff`, `loop gate-coordination` and other terminal-reaching call with `DEVLOOPS_RUN_ID=<the id used at claim>`, so the automatic release at the terminal stop finds your identity. When a terminal result carries `runnerRelease.status: skipped_no_async_run_id` and you claimed the PR, run the explicit handoff below with `--run-id` and record its status in the hand-back (the handoff writes nothing when you hold no claim: status `handoff_noop` with no owner, `ownership_lost` with exit 1 when another run holds the claim) (`RUNNER-HANDOFF-TEARDOWN` in [Copilot loop operations](../skills/docs/copilot-loop-operations.md)).
+
 ### Releasing the PR claim before the hand-back
 
 A unit that owns a PR claim and returns its hand-back before a terminal stop must not leave that

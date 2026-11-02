@@ -557,7 +557,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
       terminal: true,
       snapshot,
       runnerOwnership,
-      ...(runnerRelease.status !== "skipped_no_async_run_id" ? { runnerRelease } : {}),
+      runnerRelease,
       basePickupPreflight: basePickup,
       requestWatchContract: {
         action: "stop",
@@ -624,7 +624,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
       terminal: true,
       snapshot,
       runnerOwnership,
-      ...(runnerRelease.status !== "skipped_no_async_run_id" ? { runnerRelease } : {}),
+      runnerRelease,
       humanCommentPause: {
         reason: humanCommentCheck.paused ? "human_comment_detected" : "human_comment_check_unavailable",
         error: humanCommentCheck.error || undefined,
@@ -1005,9 +1005,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
       env,
       cwd: resolvedRepoRoot,
     });
-    if (runnerRelease.status !== "skipped_no_async_run_id") {
-      result.runnerRelease = runnerRelease;
-    }
+    result.runnerRelease = runnerRelease;
   }
   return result;
 }

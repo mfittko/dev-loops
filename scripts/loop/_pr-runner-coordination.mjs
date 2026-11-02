@@ -1081,11 +1081,7 @@ export async function ensureAsyncRunnerOwnership({
           runId,
           cwd,
           mode: "takeover",
-          expectPreviousRunId: stale.activeRun?.runId ?? null,
-          expectPreviousClaim: {
-            claimedAt: stale.activeRun?.claimedAt ?? null,
-            updatedAt: stale.activeRun?.updatedAt ?? null,
-          },
+          ...pinObservedClaim(stale.activeRun),
         });
         if (!takenOver.ok || takenOver.status !== "taken_over") {
           return takenOver;
@@ -1103,6 +1099,17 @@ export async function ensureAsyncRunnerOwnership({
     return asserted;
   }
   return claimRunnerOwnership({ repo, pr, runId, cwd, mode: "claim" });
+}
+/**
+ * Takeover pin for an observed claim (run id and generation). A non-string member pins as
+ * null, because claimRunnerOwnership refuses a non-string member as malformed.
+ */
+export function pinObservedClaim(activeRun) {
+  const str = (value) => (typeof value === "string" ? value : null);
+  return {
+    expectPreviousRunId: str(activeRun?.runId),
+    expectPreviousClaim: { claimedAt: str(activeRun?.claimedAt), updatedAt: str(activeRun?.updatedAt) },
+  };
 }
 /**
  * Env-aware, best-effort release for the run-completion/stop path.
@@ -1139,6 +1146,8 @@ export async function releaseAsyncRunnerOwnership({
       activeRun: null,
       exitSignals: [],
       filePath: null,
+      // RUNNER-HANDOFF-TEARDOWN: a terminal stop with no env run id releases nothing (the state is not read).
+      remedy: `If you claimed this PR, run pr-runner-coordination.mjs handoff --repo ${normalizeRepoSlug(repo)} --pr ${normalizePr(pr)} --run-id <the id used at claim> to release the claim (\`handoff_noop\` with no owner, \`ownership_lost\` with a foreign owner; neither writes state).`,
     };
   }
   const filePath = defaultRunnerCoordinationFilePathForTarget({ repo, pr }, cwd);
