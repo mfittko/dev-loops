@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { editIssue as coreEditIssue } from "@dev-loops/core/github/issue-ops";
 import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { waiverLineChangeRefusal } from "../loop/adr-waiver-markers.mjs";
+import { booleanFlagValue, untickedRows } from "./edit-pr.mjs";
 import { parseArgs } from "node:util";
 import {
   JQ_OUTPUT_PARSE_OPTIONS,
@@ -40,6 +43,8 @@ At least one edit:
   --reason <completed|not_planned>
                                 Close reason; only valid together with
                                 --state closed
+  --allow-untick                Allow a body that unticks or removes a checked
+                                row (CHECKLIST-SCOPE-ONE-MODEL, #2898)
   --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
                                 refuse a body that embeds grill
                                 transcript/synthesis/Q&A headings.
@@ -72,6 +77,7 @@ export function parseEditIssueCliArgs(argv) {
       state: { type: "string" },
       reason: { type: "string" },
       "enforce-grill": { type: "boolean" },
+      "allow-untick": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -91,6 +97,7 @@ export function parseEditIssueCliArgs(argv) {
     state: undefined,
     reason: undefined,
     enforceGrill: false,
+    allowUntick: false,
     jq: undefined,
     silent: false,
   };
@@ -185,6 +192,10 @@ export function parseEditIssueCliArgs(argv) {
       options.enforceGrill = true;
       continue;
     }
+    if (token.name === "allow-untick") {
+      options.allowUntick = booleanFlagValue(token.value);
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -220,7 +231,9 @@ export async function editIssue(options, { env = process.env, ghCommand = "gh", 
   // ADR-TRIPWIRE-STANDING-WAIVER: a PR is also an issue, so `gh issue edit` can
   // rewrite a PR body. A body write may not add, change or remove an
   // `adr-tripwire:allow` line; fail closed when the current body is unreadable.
-  // The body is resolved once and forwarded inline so stdin is read a single time.
+  // The body is resolved once so stdin is read a single time.
+  let snapshotDir;
+  try {
   if (options.body !== undefined || options.bodyFile !== undefined) {
     let body = options.body;
     if (body === undefined) {
@@ -243,8 +256,27 @@ export async function editIssue(options, { env = process.env, ghCommand = "gh", 
     }
     const waiverRefusal = waiverLineChangeRefusal({ currentBody: baseline, nextBody: body, action: "write" });
     if (waiverRefusal) throw new Error(waiverRefusal);
-    if (options.bodyFile === "-") options = { ...options, body, bodyFile: undefined };
+    const unticked = untickedRows(baseline, body);
+    if (unticked.length > 0 && !options.allowUntick) {
+      throw new Error(`CHECKLIST-SCOPE-ONE-MODEL: refusing to untick or remove ${unticked.length} checked row(s) on #${options.issue} (unticked, deleted, reworded, or moved into or out of its AC/DoD scope): ${unticked.map((l) => JSON.stringify(l)).join("; ")}. Edit from the current body, or pass --allow-untick for a deliberate change.`);
+    }
+    // Forward the body that was just checked, never a re-read of the caller's
+    // file (it may change after the guard ran). Stdin and file bodies go through
+    // a private temp snapshot so a large body cannot exceed argv limits.
+    if (options.bodyFile !== undefined) {
+      snapshotDir = await mkdtemp(join(tmpdir(), "edit-issue-"));
+      const snapshot = join(snapshotDir, "body.md");
+      await writeFile(snapshot, body, { mode: 0o600 });
+      options = { ...options, bodyFile: snapshot };
+    }
   }
+    return await editWithGrillCheck(options, { env, ghCommand, run });
+  } finally {
+    if (snapshotDir !== undefined) await rm(snapshotDir, { recursive: true, force: true });
+  }
+}
+
+async function editWithGrillCheck(options, { env, ghCommand, run }) {
   // GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628): behind the --enforce-grill opt-in,
   // refuse to write a body that embeds grill transcript/synthesis/Q&A headings.
   if (options.enforceGrill && (options.body !== undefined || options.bodyFile !== undefined)) {
