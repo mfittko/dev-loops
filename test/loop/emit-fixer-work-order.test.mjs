@@ -2929,3 +2929,13 @@ test("ADR 0218: a clearing chain that ends at the head itself does not read as a
     await assert.rejects(fx.emit(over), (e) => e.refusal === "round_cap_reached");
   });
 });
+
+test("review source: a non-array review list, a missing commit_id, an empty id and a null user refuse with a next action", async () => {
+  await withFixture(async ({ head, emit }) => {
+    await assert.rejects(emitReview(emit, [reviewFor(head)], { fetchReview: async () => ({ message: "rate limited" }) }), /is not an array.*--threads-file/);
+    await assert.rejects(emitReview(emit, [reviewFor(head, { commit_id: null })]), /has no commit_id.*re-review the head/);
+    await assert.rejects(emitReview(emit, [reviewFor(head)], { reviewId: "" }), /--review-id must be a review node id/);
+    await assert.rejects(emitReview(emit, [reviewFor(head, { user: null })]), /unknown author.*--threads-file/);
+    await assert.rejects(emitReview(emit, [copilotReviewFor("d".repeat(40))]), /re-review the head and pass the new node id/);
+  });
+});

@@ -45,14 +45,15 @@ const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 // never a record.
 const bareMarkdown = (body) => stripMarkdownCodeForScan(body)
   .split("\n")
-  .filter((bodyLine) => !/^\s*>/.test(bodyLine))
+  .filter((bodyLine) => !/^\s*>/.test(bodyLine) && !/^(?: {4}|\t)/.test(bodyLine))
   .join("\n");
 
 // The fixer-verifier reply on a review body: separate from the Copilot record above and never a record for it.
-const REVIEW_BODY_MARKER_RE = /<!--\s*dev-loops:review-body-disposition\s+review=(\S+)\s+fix=([0-9a-fA-F]{40})\s*-->/;
-export function parseReviewBodyDispositionMarker(body) {
-  const match = typeof body === "string" ? REVIEW_BODY_MARKER_RE.exec(bareMarkdown(body)) : null;
-  return match ? { reviewId: match[1], fixSha: match[2].toLowerCase() } : null;
+const REVIEW_BODY_MARKER_RE = /<!--\s*dev-loops:review-body-disposition\s+review=(\S+)\s+fix=([0-9a-fA-F]{40})\s*-->/g;
+// Every bare marker in the comment: one comment may name several reviews.
+export function parseReviewBodyDispositionMarkers(body) {
+  if (typeof body !== "string") return [];
+  return [...bareMarkdown(body).matchAll(REVIEW_BODY_MARKER_RE)].map((match) => ({ reviewId: match[1], fixSha: match[2].toLowerCase() }));
 }
 
 export function parseCopilotBodyDispositionMarker(body) {

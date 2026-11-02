@@ -12,7 +12,7 @@ import {
 } from "../src/loop/fixer-disposition.mjs";
 import { PR_CHECKPOINT_ACTION } from "../src/loop/pr-gate-coordination.mjs";
 
-const SHA = "abc1234def5670000000000000000000000000000";
+const SHA = "abc1234def567000000000000000000000000000";
 
 test("input forms stay strict except explicitly accounted authenticated residuals", () => {
   const items = [{ fingerprint: "fp", siteQuery: "query", acceptedForms: ["--flag"] }];
@@ -274,7 +274,7 @@ test("evaluateFixerDisposition names every incomplete thread, its expected commi
     headSha: SHA,
     dispositions: [
       { threadId: "PRRT_T1", fixingCommitSha: SHA, disposition: "tackled" },
-      { threadId: "PRRT_T2", fixingCommitSha: "0000000deadbeef000000000000000000000000", disposition: "tackled" },
+      { threadId: "PRRT_T2", fixingCommitSha: "0000000deadbeef0000000000000000000000000", disposition: "tackled" },
     ],
   });
   const result = evaluateFixerDisposition({
@@ -283,13 +283,13 @@ test("evaluateFixerDisposition names every incomplete thread, its expected commi
       { threadId: "PRRT_T1", isResolved: false, replyBodies: [`Fixed in commit ${SHA}.`] },
       { threadId: "PRRT_T2", isResolved: false, replyBodies: [] },
     ],
-    containment: { [SHA]: true, "0000000deadbeef000000000000000000000000": false },
+    containment: { [SHA]: true, "0000000deadbeef0000000000000000000000000": false },
   });
   assert.equal(result.ok, false);
   assert.equal(result.incomplete.length, 2);
   assert.equal(result.nextAction, COMPLETE_FIXER_DISPOSITION_ACTION);
-  assert.match(result.reason, /thread PRRT_T1 \(expected commit abc1234def5670000000000000000000000000000, failed step: not_resolved\)/);
-  assert.match(result.reason, /thread PRRT_T2 \(expected commit 0000000deadbeef000000000000000000000000, failed step: commit_not_contained\)/);
+  assert.match(result.reason, /thread PRRT_T1 \(expected commit abc1234def567000000000000000000000000000, failed step: not_resolved\)/);
+  assert.match(result.reason, /thread PRRT_T2 \(expected commit 0000000deadbeef0000000000000000000000000, failed step: commit_not_contained\)/);
   assert.match(result.reason, new RegExp(`only legal next action is ${COMPLETE_FIXER_DISPOSITION_ACTION}`));
 });
 
@@ -427,6 +427,14 @@ test("normalizeFixerDispositionHandoff accepts a reviewId entry and refuses both
   assert.throws(handoff(reviewEntry(), reviewEntry()), /duplicate reviewId: PRR_R1/);
   assert.throws(handoff(reviewEntry({ fixingCommitSha: "ccccccc" })), /full 40-character SHA/);
   assert.throws(handoff(reviewEntry({ reviewId: "PRRT_T1" })), /not a review node id/);
+});
+
+test("a tackled thread entry needs the full 40-character SHA; a short SHA never reaches the evaluator", () => {
+  const entry = (over) => ({ threadId: "PRRT_T1", fixingCommitSha: FULL, disposition: "tackled", ...over });
+  const normalize = (over) => () => normalizeFixerDispositionHandoff({ headSha: FULL, dispositions: [entry(over)] });
+  assert.throws(normalize({ fixingCommitSha: "ccccccc" }), /thread PRRT_T1 needs fixingCommitSha as the full 40-character SHA/);
+  assert.equal(normalize({ fixingCommitSha: FULL })().dispositions[0].fixingCommitSha, FULL);
+  assert.equal(normalize({ fixingCommitSha: "ccccccc", disposition: "deferred" })().dispositions[0].disposition, "deferred");
 });
 
 test("evaluateFixerDisposition reports commit_not_contained, then reply_missing, for a tackled reviewId entry and never not_resolved", () => {

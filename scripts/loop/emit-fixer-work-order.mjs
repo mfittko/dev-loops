@@ -130,22 +130,24 @@ const defaultFetchReview = ({ repo, pr, runtime }) => listRestPrReviews({ repo, 
  */
 async function loadReviewBodySnapshot({ repo, pr, reviewId, headSha, fetchReview, runtime }) {
   const reviews = await fetchReview({ repo, pr, runtime });
+  if (!Array.isArray(reviews)) throw new Refusal(`the review list of ${repo}#${pr} is not an array; re-run, or pass the feedback as --threads-file`);
   const review = reviews.find((r) => r?.node_id === reviewId);
   const where = `${repo}#${pr}`;
-  if (!review) throw new Refusal(`no review of ${where} has node id ${reviewId}; pass the review node id that scripts/github/view-pr.mjs --json reviews reports`);
+  if (!review) throw new Refusal(`no review of ${where} has node id ${reviewId}; pass the review node id that scripts/github/view-pr.mjs --json reviews reports, or use --threads-file for inline threads`);
   if (!["CHANGES_REQUESTED", "COMMENTED"].includes(review.state)) throw new Refusal(`review ${reviewId} has state ${review.state}; only a CHANGES_REQUESTED or COMMENTED review carries feedback to fix`);
   const body = typeof review.body === "string" ? review.body : "";
   if (body.trim() === "") throw new Refusal(`review ${reviewId} has an empty body; feedback in inline threads goes through --threads-file`);
   const login = review.user?.login ?? "";
   if (isCopilotLogin(login) && review.user?.type === "Bot") {
     const latest = resolveLatestCopilotReview({ reviews: reviews.map((r) => ({ id: r.node_id, author: { login: r.user?.login }, state: r.state, body: r.body, commit_id: r.commit_id, submitted_at: r.submitted_at })) });
-    if (latest.ambiguousBlockingTie || latest.review?.id !== reviewId) throw new Refusal(`review ${reviewId} is not the latest Copilot review of ${where}${latest.review ? ` (latest: ${latest.review.id})` : ""}; a Copilot body on an earlier review is stale, so pass the latest review node id`);
-    if (review.commit_id !== headSha) throw new Refusal(`Copilot review ${reviewId} is on ${review.commit_id}, not the PR head ${headSha}; a Copilot body on an older head is stale, wait for the next Copilot review of the head`);
+    if (latest.ambiguousBlockingTie || latest.review?.id !== reviewId) throw new Refusal(`review ${reviewId} is not the latest Copilot review of ${where}${latest.review ? ` (latest: ${latest.review.id})` : ""}; a Copilot body on an earlier review is stale, so re-review the head and pass the new node id, or use --threads-file`);
+    if (review.commit_id !== headSha) throw new Refusal(`Copilot review ${reviewId} is on ${review.commit_id}, not the PR head ${headSha}; a Copilot body on an older head is stale, re-review the head and pass the new node id, or use --threads-file`);
   } else {
-    if (review.user?.type === "Bot" || /\[bot\]$/i.test(login)) throw new Refusal(`review ${reviewId} is by the bot ${login}; only a trusted human or the Copilot reviewer is a fixer source`);
-    if (!isTrustedDispositionAuthor(review)) throw new Refusal(`review ${reviewId} is by ${login || "an unknown author"} with association ${review.author_association}; only an OWNER, MEMBER or COLLABORATOR review is a fixer source`);
+    if (review.user?.type === "Bot" || /\[bot\]$/i.test(login)) throw new Refusal(`review ${reviewId} is by the bot ${login}; only a trusted human or the Copilot reviewer is a fixer source; pass a review by one of them, or use --threads-file`);
+    if (!isTrustedDispositionAuthor(review)) throw new Refusal(`review ${reviewId} is by ${login || "an unknown author"} with association ${review.author_association}; only an OWNER, MEMBER or COLLABORATOR review is a fixer source; pass such a review's node id, or use --threads-file`);
+    if (typeof review.commit_id !== "string") throw new Refusal(`review ${reviewId} has no commit_id; re-review the head and pass the new node id, or use --threads-file`);
     const contained = await isCommitContainedByHead({ repo, commitSha: review.commit_id, headSha }, runtime);
-    if (!contained.contained) throw new Refusal(`review ${reviewId} is on commit ${review.commit_id}, which the PR head ${headSha} does not contain: ${contained.reason}`);
+    if (!contained.contained) throw new Refusal(`review ${reviewId} is on commit ${review.commit_id}, which the PR head ${headSha} does not contain: ${contained.reason}; re-review the head and pass the new node id, or use --threads-file`);
   }
   return { repo, pr: Number(pr), reviewId, state: review.state, commitId: review.commit_id, author: login, authorAssociation: review.author_association ?? null, submittedAt: review.submitted_at ?? null, body, bodySha256: sha256(Buffer.from(body, "utf8")) };
 }
@@ -331,6 +333,7 @@ export async function emitFixerWorkOrder({
 }) {
   if (!/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(headSha)) throw new Refusal(`--head-sha must be a full 40- or 64-char lowercase SHA, got ${headSha}`);
   if (!FIXER_PHASES.includes(phase)) throw new Refusal(`--phase must be one of ${FIXER_PHASES.join(", ")}, got ${phase}`);
+  if (reviewId === "") throw new Refusal("--review-id must be a review node id, got an empty value; pass the id that scripts/github/view-pr.mjs --json reviews reports");
   if ([actListFile, threadsFile, reviewId].filter(Boolean).length !== 1) throw new Refusal("pass exactly one of --act-list-file, --threads-file and --review-id");
   if (actListFile && !GATE_NAMES.includes(gate)) throw new Refusal(`--act-list-file needs --gate ${GATE_NAMES.join("|")}, got ${gate}`);
   if (!actListFile && gate) throw new Refusal("--gate applies only to an --act-list-file source");

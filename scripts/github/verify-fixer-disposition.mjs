@@ -11,7 +11,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { loadKnownRuleIds } from "../lib/known-rule-ids.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { fingerprintFinding, listRestPrReviews } from "./_gate-finding-surface.mjs";
-import { isTrustedDispositionAuthor, parseReviewBodyDispositionMarker } from "./_copilot-body-disposition.mjs";
+import { isTrustedDispositionAuthor, parseReviewBodyDispositionMarkers } from "./_copilot-body-disposition.mjs";
 import { selectActThreadBinding } from "./_fixer-act-thread-bindings.mjs";
 import { resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
@@ -463,6 +463,8 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       throw new Error(`the work order's review snapshot ${reviewRead.path} differs from the sha256 or authority.sourceDigest the work order binds`);
     }
     reviewId = snapshot.reviewId;
+    const foreign = handoff.dispositions.filter((entry) => entry.reviewId && entry.reviewId !== reviewId).map((entry) => entry.reviewId);
+    if (foreign.length) throw new Error(`the handoff carries disposition entries for review(s) ${foreign.join(", ")}, not the pinned review ${reviewId}; remove them from the work order's outputRef`);
     if (!handoff.dispositions.some((entry) => entry.reviewId === reviewId)) {
       throw new Error(`missing_from_handoff: the handoff has no disposition entry for source review ${reviewId}; write { reviewId, fixingCommitSha, disposition } to the work order's outputRef`);
     }
@@ -471,6 +473,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       throw new Error(`review ${reviewId} ${live ? "changed after the work order pinned its body" : "is gone from the PR"}; re-emit the work order: dev-loops-run scripts/loop/emit-fixer-work-order.mjs --review-id ${reviewId} (with the original --repo, --pr, --head-sha, --phase and --harness)`);
     }
   }
+  if (!reviewRead && handoff.dispositions.some((entry) => entry.reviewId)) throw new Error("the handoff carries a reviewId entry but the work order pins no review body; remove the entry or re-emit the work order with --review-id");
   // GATE-EXEC-REMEDIATION-SITE-QUERY: an act-list work order's items with a siteQuery need a coverage record.
   const actRead = (order.requiredReads ?? []).find((read) => read?.kind === "act-list");
   let actList = null;
@@ -619,8 +622,8 @@ async function readReviewMarkerCommits(reviewId, { repo, pr }, { env, ghCommand,
   const result = await runChild(ghCommand, ["api", `repos/${repo}/issues/${pr}/comments`, "--paginate", "--jq", ".[]"], env);
   if (result.code !== 0) throw new Error(`gh command failed: ${result.stderr.trim() || `exit code ${result.code}`}`);
   const markers = result.stdout.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
-    .filter((comment) => isTrustedDispositionAuthor(comment)).map((comment) => parseReviewBodyDispositionMarker(comment.body))
-    .filter((marker) => marker?.reviewId === reviewId);
+    .filter((comment) => isTrustedDispositionAuthor(comment)).flatMap((comment) => parseReviewBodyDispositionMarkers(comment.body))
+    .filter((marker) => marker.reviewId === reviewId);
   return [{ reviewId, markerCommits: markers.map((marker) => marker.fixSha) }];
 }
 
@@ -1013,19 +1016,27 @@ async function verifyFixerDispositionCore(
     evaluation = await evaluate();
   }
   // A review body has no thread: post the one marker comment that cites the fixing commit, then re-read it. A live marker means nothing is posted.
-  const unreplied = evaluation.incomplete.filter((entry) => entry.reviewId && entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING);
+  const postedBy = new Map();
+  const unreplied = evaluation.incomplete.filter((entry) => entry.reviewId === reviewId && entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING);
   if (!options.check && unreplied.length > 0) {
     for (const { reviewId: id, expectedCommit } of unreplied) {
       try {
         const body = `<!-- dev-loops:review-body-disposition review=${id} fix=${expectedCommit} -->\nAddressed review ${id} in commit ${expectedCommit}.`;
         const posted = await runChild(ghCommand, ["api", `repos/${options.repo}/issues/${options.pr}/comments`, "-f", `body=${body}`], env);
         if (posted.code !== 0) throw new Error(posted.stderr.trim() || `exit code ${posted.code}`);
+        let login = "the posting identity";
+        try { login = JSON.parse(posted.stdout).user.login || login; } catch { /* the post response has no author */ }
+        postedBy.set(id, login);
         actions.push({ reviewId: id, ok: true, step: "marker_comment_posted" });
       } catch (error) {
         actions.push({ reviewId: id, ok: false, error: error instanceof Error ? error.message : String(error) });
       }
     }
     evaluation = await evaluate();
+    // The marker is live-read through trusted authors only: a post that did not count names its author and the remedy.
+    for (const { reviewId: id, expectedCommit } of evaluation.incomplete.filter((entry) => entry.reviewId === reviewId && entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING && postedBy.has(entry.reviewId))) {
+      residualFailures.push({ reviewId: id, expectedCommit, failedStep: "marker_author_untrusted", error: `the marker comment by ${postedBy.get(id)} is not a trusted author (OWNER, MEMBER or COLLABORATOR); post the marker as a OWNER, MEMBER or COLLABORATOR identity, then re-run the verifier` });
+    }
   }
 
   const incomplete = [...evaluation.incomplete, ...residualFailures].map((entry) => (deltaBlocked.has(entry.threadId)
@@ -1038,7 +1049,7 @@ async function verifyFixerDispositionCore(
   return {
     // A failed residual-status reply is not delivered: nonzero exit naming the thread.
     ok: residualFailures.length === 0,
-    ...(residualFailures.length ? { error: `residual-status reply failed for thread(s) ${residualFailures.map((failure) => failure.threadId).join(", ")}; re-run the verifier` } : {}),
+    ...(residualFailures.length ? { error: `residual-status reply failed for thread(s) ${residualFailures.map((failure) => failure.threadId ?? failure.reviewId).join(", ")}; re-run the verifier` } : {}),
     repo: options.repo,
     pr: options.pr,
     headSha: options.headSha,
@@ -1048,7 +1059,7 @@ async function verifyFixerDispositionCore(
     incomplete,
     forbiddenActions: evaluation.forbiddenActions,
     nextAction: evaluation.nextAction,
-    reason: residualFailures.length > 0 ? `residual-status reply failed for thread(s) ${residualFailures.map((failure) => failure.threadId).join(", ")}; re-run the verifier`
+    reason: residualFailures.length > 0 ? `residual-status reply failed for thread(s) ${residualFailures.map((failure) => failure.threadId ?? failure.reviewId).join(", ")}; re-run the verifier`
       : deltaBlocked.size > 0 ? deltaBlockedReason(incomplete) : evaluation.reason,
     actions,
   };

@@ -241,6 +241,9 @@ export function normalizeFixerDispositionHandoff(raw, { ruleIds } = {}) {
     if (!isNonEmptyString(entry.fixingCommitSha)) {
       throw new Error(`Fixer disposition handoff entry for thread ${threadId} is missing fixingCommitSha`);
     }
+    if (String(entry.disposition).trim().toLowerCase() === FIXER_DISPOSITION_KIND.TACKLED && !/^[0-9a-fA-F]{40}$/.test(entry.fixingCommitSha.trim())) {
+      throw new Error(`Fixer disposition handoff entry for thread ${threadId} needs fixingCommitSha as the full 40-character SHA (git rev-parse <commit>)`);
+    }
     if (!isNonEmptyString(entry.disposition)) {
       throw new Error(`Fixer disposition handoff entry for thread ${threadId} is missing disposition`);
     }
@@ -273,7 +276,7 @@ function formatIncompleteReason(incomplete) {
   const shortSha = incomplete.some((entry) => entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.RESOLVED_SHORT_SHA_REPLY)
     ? " A resolved thread whose replies cite only a short SHA needs the full 40-character SHA: run `dev-loops-run scripts/github/unresolve-review-thread.mjs --repo <owner/name> --pr <n> --thread-id <thread id>`, then re-run the verifier, which replies with the full SHA and resolves again."
     : "";
-  return `Fixer disposition is incomplete for ${incomplete.length} tackled thread(s):${parts.join("; ")}. `
+  return `Fixer disposition is incomplete for ${incomplete.length} entry(ies): ${parts.join("; ")}. `
     + `The only legal next action is ${COMPLETE_FIXER_DISPOSITION_ACTION}.${shortSha}`;
 }
 

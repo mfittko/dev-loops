@@ -261,6 +261,31 @@ test("review-body: a changed body, a vanished review and a missing handoff entry
   });
 });
 
+test("review-body: a foreign reviewId entry, and a reviewId entry with no pinned review, refuse before any post", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, [...REVIEW_HANDOFF, { reviewId: "PRR_OTHER", fixingCommitSha: FIX_SHA, disposition: "tackled" }], { review: REVIEW });
+    const { deps, calls } = runtime([reviewsEntry()], repoRoot, { live: false });
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps), /review\(s\) PRR_OTHER, not the pinned review PRR_R1/);
+    assert.equal(posts(calls).length, 0);
+  });
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, {});
+    const { deps } = runtime([], repoRoot, { live: false });
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps), /reviewId entry but the work order pins no review body/);
+  });
+});
+
+test("review-body: a posted marker that the trusted-author filter ignores fails with the author and the remedy", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, REVIEW_HANDOFF, { review: REVIEW });
+    const postedAs = claim({ ...markerPostEntry, stdout: JSON.stringify({ user: { login: "some-bot" } }) });
+    const { deps } = runtime(reviewBodyEntries(commentsEntry(), postedAs, commentsEntry(markerLine("CONTRIBUTOR"))), repoRoot, { live: false });
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
+    assert.equal(result.ok, false);
+    assert.match(result.incomplete.find((entry) => entry.failedStep === "marker_author_untrusted").error, /marker comment by some-bot is not a trusted author.*OWNER, MEMBER or COLLABORATOR identity/);
+  });
+});
+
 test("an already resolved thread completes with a full-SHA reply and refuses resolved_short_sha_reply with a short-SHA reply", async () => {
   for (const [body, complete] of [[`Fixed in commit ${FIX_SHA}.`, true], [`Fixed in commit ${FIX_SHA.slice(0, 7)}.`, false]]) await withRepoRoot(async (repoRoot) => {
     const fixerPlan = await deliver(repoRoot, TACKLED);
@@ -1623,19 +1648,11 @@ for (const [name, change, compare, expected] of [
   });
 }
 
-test("an abbreviated fixingCommitSha resolving to a commit a not_resolved record covers gets no Fixed reply", async () => {
+test("an abbreviated fixingCommitSha on a tackled thread entry is refused before any reply", async () => {
   await withRepoRoot(async (repoRoot) => {
-    const short = FIX_SHA.slice(0, 10);
-    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_T1", fixingCommitSha: short, disposition: "tackled" }]);
-    await writeDeltaRecord(repoRoot, { items: [{ ref: "PRRT_T1", status: "not_resolved" }] });
-    const { deps, calls } = runtimeWithGit([unresolvedT1(), compareEntry(short, "ahead")], repoRoot, (args) => (
-      args[0] === "rev-parse" ? { code: 0, stdout: `${FIX_SHA}\n` } : { code: 0 }
-    ));
-    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps);
-    assert.equal(result.complete, false);
-    assert.deepEqual(result.incomplete.map((entry) => [entry.threadId, entry.failedStep, entry.deltaStatus]), [["PRRT_T1", "delta_blocked", "not_resolved"]]);
-    assert.doesNotMatch(result.reason, /reply_missing/);
-    assert.match(result.reason, /delta_blocked[^]*fix it, re-run the delta review/);
+    const fixerPlan = await deliver(repoRoot, [{ threadId: "PRRT_T1", fixingCommitSha: FIX_SHA.slice(0, 10), disposition: "tackled" }]);
+    const { deps, calls } = runtimeWithGit([unresolvedT1()], repoRoot, () => ({ code: 0, stdout: `${FIX_SHA}\n` }));
+    await assert.rejects(verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan, tmpRoot: "tmp" }, deps), /needs fixingCommitSha as the full 40-character SHA/);
     assert.equal(hasPost(calls), false);
   });
 });
