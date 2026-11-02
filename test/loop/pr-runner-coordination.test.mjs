@@ -26,6 +26,7 @@ import {
 } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner, STALE_RUNNER_DEFAULT_MAX_AGE_MS, STALE_RUNNER_ERROR } from "../../scripts/loop/_stale-runner-detection.mjs";
 import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordination.mjs";
+import { resolveBunTestTimeoutMs } from "../../scripts/run-bun-test.mjs";
 import {
   NATIVE_PI_CHILD_MARKER,
   NATIVE_PI_PARENT_SESSION_MARKER,
@@ -2075,7 +2076,9 @@ test("native Codex handoff with no id at all names the verified thread identity,
 // its end open, so the reader sees EOF only after the path already points at the next FIFO. A writer
 // open blocks until its reader opens. The order is a data-flow guarantee, with no timing.
 // A read-count drift fails `done` with a named message after `timeoutMs` and releases any blocked FIFO open.
-async function feedStateFileReads(filePath, contents, { timeoutMs = 5000 } = {}) {
+// The watchdog stays armed until the writer finished and the promise passed to `watch` settled, so an over-read fails too.
+// The default timeout is half the managed per-test timeout, so load scaling applies.
+async function feedStateFileReads(filePath, contents, { timeoutMs = Math.floor(resolveBunTestTimeoutMs() / 2) } = {}) {
   await rm(filePath);
   await execFileAsync("mkfifo", [filePath]);
   // Resolves to `{ done }`: the FIFO exists before the caller starts the reader; `done` settles after the last write.
@@ -2103,9 +2106,25 @@ async function feedStateFileReads(filePath, contents, { timeoutMs = 5000 } = {})
       reject(new Error(`feedStateFileReads: the code under test did not read the state file exactly ${contents.length} time(s)`));
     }, timeoutMs);
   });
-  const done = Promise.race([writer, timeout]).finally(() => clearTimeout(timer));
-  return { done };
+  let watched = Promise.resolve();
+  const settled = (async () => { await writer; await watched; })();
+  const done = Promise.race([settled, timeout]).finally(() => clearTimeout(timer));
+  // The caller passes the promise of the code under test, so a hung extra read keeps `done` pending until the watchdog fires.
+  const watch = (promise) => { watched = promise.catch(() => {}); };
+  return { done, watch };
 }
+
+test("feedStateFileReads fails with a named message when the code reads more times than fed", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-feed-overread-"));
+  try {
+    const filePath = path.join(cwd, "state.json");
+    await writeFile(filePath, "x");
+    const { done, watch } = await feedStateFileReads(filePath, ["a"], { timeoutMs: 200 });
+    const pending = (async () => { await readFile(filePath, "utf8"); await readFile(filePath, "utf8"); })();
+    watch(pending);
+    await assert.rejects(done, /did not read the state file exactly 1 time\(s\)/);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
 
 test("feedStateFileReads fails with a named message when the code reads fewer times than fed", async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "runner-feed-drift-"));
@@ -2125,8 +2144,9 @@ test("locked re-check ownership_lost refusal names the owner liveness", async ()
     const stateR = await readFile(claim.filePath, "utf8");
     const stateS = JSON.stringify({ ...JSON.parse(stateR), activeRun: { ...JSON.parse(stateR).activeRun, runId: "run-S" } });
     // The lock-free read sees stateR and the locked re-read sees stateS (see feedStateFileReads).
-    const { done } = await feedStateFileReads(claim.filePath, [stateR, stateS]);
+    const { done, watch } = await feedStateFileReads(claim.filePath, [stateR, stateS]);
     const pending = assertRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-R", cwd, requireExisting: true });
+    watch(pending);
     const [result] = await Promise.all([pending, done]);
     assert.equal(result.error, "ownership_lost");
     assert.match(result.message, /now owned by run run-S/);
@@ -2187,8 +2207,9 @@ test("CLI takeover pins the observed claim: a heartbeat between the read and the
     fresh.activeRun.updatedAt = new Date().toISOString();
     // Read 1 (CLI pre-check) sees the stale owner, read 2 (locked write) sees the same owner after a
     // heartbeat (see feedStateFileReads). Without the pin the takeover would succeed.
-    const { done } = await feedStateFileReads(claim.filePath, [JSON.stringify(stale), JSON.stringify(fresh)]);
+    const { done, watch } = await feedStateFileReads(claim.filePath, [JSON.stringify(stale), JSON.stringify(fresh)]);
     const pending = runPrRunnerCoordination({ command: "takeover", repo: "owner/repo", pr: 17, runId: "C" }, { env: {}, cwd });
+    watch(pending);
     const [result] = await Promise.all([pending, done]);
     assert.equal(result.error, "active_run_exists");
     assert.equal(result.activeRun.runId, "owner");
