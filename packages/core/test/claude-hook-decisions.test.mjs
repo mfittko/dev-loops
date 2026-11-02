@@ -950,6 +950,14 @@ test("decideBashGate denies inline interpreters actor-independently on the targe
   assert.match(dMain.reason, /OPS-NO-INLINE-INTERPRETER/);
 });
 
+test("decideBashGate names incomplete tokenization in the OPS-NO-INLINE-INTERPRETER deny reason (#2442)", () => {
+  const ctx = { repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET };
+  const d = decideBashGate({ command: 'echo "$(gh pr view 5', ...ctx });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /incomplete tokenization/);
+  assert.doesNotMatch(decideBashGate({ command: 'node -e "x"', ...ctx }).reason, /incomplete tokenization/);
+});
+
 test("decideBashGate allows sanctioned node/python script invocations and off-target inline interpreters", () => {
   assert.equal(decideBashGate({ command: "node scripts/github/comment-issue.mjs 5", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
   assert.equal(decideBashGate({ command: 'node -e "console.log(1)"', repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
