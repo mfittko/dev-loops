@@ -12,12 +12,12 @@ Under `PRE-PUSH-DELTA-PUSH-AUTHORITY`, a gate fix sequence writes the marker `tm
 
 ## Decision
 
-`dev-loops gate close-sequence --head <baseline> --repo <owner/name> --pr <number>` (`scripts/loop/close-gate-sequence.mjs`) closes a marker only when it proves one abandonment condition from authoritative state:
+`dev-loops-run cli/index.mjs gate close-sequence --head <baseline sha> --repo <owner/name> --pr <number>` (`scripts/loop/close-gate-sequence.mjs`) closes a marker only when it proves one abandonment condition from authoritative state:
 
 - `HEAD_MOVED`: the PR head read from GitHub differs from the marker baseline, on the branch the marker names.
 - `FIXER_NEVER_PULLED`: the marker names a fixer execution, no pull receipt exists for its work order, and the marker is at least 30 minutes old.
 
-The 30 minute grace equals the runner-lock TTL. A dispatch or a fixer younger than the grace may be live.
+The grace period is the runner-lock TTL itself (`resolveStaleRunnerMaxAgeMs`, 30 minutes by default, `DEVLOOPS_STALE_RUNNER_MAX_AGE_MS` overrides it). A dispatch or a fixer younger than the grace may be live.
 
 A live sequence is never cleared. The command refuses `sequence_live`, `fixer_running`, `abandonment_unproven`, `baseline_unknown` and `sequence_absent`, and each refusal names a remedy. `baseline_unknown` applies to a marker that names no work order ref when its baseline is not a commit in the local repository. The remedy is to run the close from a checkout of the marker's repository, or to ask the operator to delete the marker. A fixer that pulled its work order and has not handed back within the grace reads as running. An unreadable pull receipt also reads as running. A marker rewritten while the PR head is read starts a new sequence and is refused.
 
