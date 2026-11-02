@@ -723,9 +723,9 @@ const sealRecord = (tmpRoot, from, to, { seal = true } = {}) => {
   if (seal) fs.writeFileSync(path.join(dir, `${from}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
 };
 // `sealed` lists extra sealed records [from, to]; `ledgerAt` is one head or a list of heads that carry a draft_gate findings log.
-const chainRun = (baseline, log, { seal = true, mergeFrom = B, to = B, merge = true, calls = [], seedTo, ledgerAt, sealed = [] } = {}) => {
+const chainRun = (baseline, log, { seal = true, mergeFrom = B, to = B, merge = true, calls = [], seedTo, ledgerAt, sealed = [], between = [] } = {}) => {
   const { actList } = fixture();
-  const seam = { ...headAt("c".repeat(40)), baseOnlyMerge: async ({ fromHead, head }) => { calls.push(fromHead); return merge && fromHead === mergeFrom && head === (seedTo ? M : baseline); } };
+  const seam = { ...headAt("c".repeat(40)), revList: () => between, baseOnlyMerge: async ({ fromHead, head }) => { calls.push(fromHead); return merge && fromHead === mergeFrom && head === (seedTo ? M : baseline); } };
   if (!seedTo) sealRecord(seam.tmpRoot, A, to, { seal });
   if (seedTo) sealRecord(seam.tmpRoot, M, seedTo);
   for (const [from, next] of sealed) sealRecord(seam.tmpRoot, from, next);
@@ -769,6 +769,14 @@ test("input mode refuses the chain log when a later full round ran at an interme
   await assert.rejects(chainRun(C, chainLog(A), { merge: false, sealed: [[B, C]], ledgerAt: B }), /sealed clearing chain/);
   // log at B, baseline M a base-only merge of B (no log at M)
   await assert.rejects(chainRun(M, chainLog(A), { ledgerAt: B }), /sealed clearing chain/);
+});
+
+test("input mode refuses the chain log when a draft_gate round ran at an intermediate merge between the chain end and the baseline", async () => {
+  const M1 = "1".repeat(40);
+  await assert.rejects(chainRun(M, chainLog(A), { between: [M, M1], ledgerAt: M1 }), /sealed clearing chain/);
+  const out = await chainRun(M, chainLog(A), { between: [M, M1] }); // no log at M1: accepted
+  assert.deepEqual(out.input.surfaceHints, ["correctness"]);
+  await assert.rejects(chainRun(M, chainLog(A), { between: null }), /sealed clearing chain/); // rev-list failure fails closed
 });
 
 test("input mode refuses a chain log whose repo or pr differs from the authenticated plan target", async () => {

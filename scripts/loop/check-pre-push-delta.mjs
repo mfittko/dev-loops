@@ -230,6 +230,12 @@ function gitIsAncestor(worktree, ancestor, descendant) {
   throw new Error(`git merge-base --is-ancestor failed in ${worktree}: ${out.stderr.trim()}`);
 }
 
+function gitRevList(worktree, from, to) {
+  const out = spawnSync("git", ["-C", worktree, "rev-list", `${from}..${to}`], { encoding: "utf8", env: gitEnvNoDirOverrides(), maxBuffer: 64 * 1024 * 1024 });
+  if (out.status !== 0) throw new Error(`git rev-list ${from}..${to} failed in ${worktree}: ${out.stderr.trim()}`);
+  return out.stdout.split("\n").filter(Boolean);
+}
+
 function gitChangedPaths(worktree, baseline, head) {
   const out = spawnSync("git", ["diff", "--name-only", "-z", "--no-renames", "--no-relative", "--no-ext-diff", `${baseline}..${head}`], {
     cwd: resolveRepoRoot(worktree), env: gitEnvNoDirOverrides(), encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
@@ -271,7 +277,7 @@ export function gitStaleSurfaceHits(worktreeArg, baseline, head) {
 // The findings log writer stamps `headSha`; the log must be the baseline round's and carry provenance.perAngle.
 // A log at an earlier head is accepted when the baseline is a base-only merge of it (the closure round after a cap round, ADR 0197), equals the end of its sealed clearing chain,
 // or is a base-only merge of the log head or a chain end (PRE-PUSH-DELTA-INPUT-CAP-CHAIN, ADR 0225); any error fails closed.
-async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerge, tmpRoot, target }) {
+async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerge, revList, tmpRoot, target }) {
   if (!findingsLogPath) return [];
   const log = JSON.parse(readFileSync(findingsLogPath, "utf8"));
   const perAngle = log?.provenance?.perAngle;
@@ -294,7 +300,8 @@ async function roundAnglesOf(findingsLogPath, baseline, { worktree, baseOnlyMerg
       const roundAt = (headSha) => existsSync(buildLogPath({ repo: log.repo, pr: log.pr, gate: "draft_gate", headSha, tmpRoot }));
       if ([baseline, ...heads].some(roundAt)) return false;
       if (ends.includes(baseline)) return true;
-      for (const end of ends) if (await merged(end)) return true;
+      // A draft_gate log at a commit between the chain end and the baseline also superseded this round; a git failure fails closed.
+      for (const end of ends) if (await merged(end) && !revList(worktree, end, baseline).some((sha) => sha !== baseline && roundAt(sha))) return true;
       return false;
     }).catch(() => false);
   if (!sameHead && !earlierHead) {
@@ -352,7 +359,7 @@ async function authenticateCoverage(options, sequence, currentHead, raw, reportB
 
 export async function runCli(
   argv = process.argv.slice(2),
-  { revParse = gitRevParse, diffPatch = gitDiffPatch, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, baseOnlyMerge = isBaseOnlyMergeSince, stdout = process.stdout, tmpRoot } = {},
+  { revParse = gitRevParse, diffPatch = gitDiffPatch, isAncestor = gitIsAncestor, staleSurface = gitStaleSurfaceHits, changedPaths = gitChangedPaths, validateChangelog: changelog = validateChangelog, baseOnlyMerge = isBaseOnlyMergeSince, revList = gitRevList, stdout = process.stdout, tmpRoot } = {},
 ) {
   const options = parseCheckPrePushDeltaArgs(argv);
   if (options.help) {
@@ -457,7 +464,7 @@ export async function runCli(
     }
     // The target authenticateCoverage verified binds the log's repo and pr; without an authenticated plan the chain path refuses.
     const target = authenticatedTarget;
-    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE }), ...buildDeltaInput({ sequence, candidateHead: currentHead, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;
