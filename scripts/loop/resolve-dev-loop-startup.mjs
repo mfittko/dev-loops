@@ -32,8 +32,9 @@ import {
   ownershipNeedsViewerLogin,
 } from "@dev-loops/core/github/ownership-helpers";
 import { resolveLinkedIssuesFromPr } from "./detect-pr-gate-coordination-state.mjs";
-import { configLoadFailure, loadDevLoopConfig, normalizeToBareBranch, resolveBaseBranch, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig } from "@dev-loops/core/config";
-import { detectScope } from "./detect-change-scope.mjs";
+import { configLoadFailure, countLightModeFiles, lightModeCapState, loadDevLoopConfig, normalizeToBareBranch, resolveBaseBranch, resolveIssuelessEnabled, resolveLightMode, resolveWorkflowConfig, touchesConfigSource } from "@dev-loops/core/config";
+import { detectScope, detectWorkingTreeChangedFiles } from "./detect-change-scope.mjs";
+import { evaluateWorkingTreeSizeBudget } from "./check-size-budget.mjs";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { validatePlanFile } from "../refine/validate-plan-file.mjs";
 import {
@@ -101,10 +102,12 @@ Optional modifier:
                  issue-less PR-first (#1210) — no tracker binding at all
                  (canonicalSpecSource: pr_body, no issue-keyed worktree
                  requirement). Gated on localImplementation.lightMode being
-                 enabled AND the live change scope (git diff) staying within
-                 its maxFiles/maxLines threshold; fails closed with a distinct
-                 reason (light mode disabled / scope undetectable / over
-                 threshold) requiring --issue above the threshold — unless
+                 enabled AND the live change scope passing the shared
+                 lightModeCapState predicate (weighted logic LOC against
+                 maxLines, non-doc file count against maxFiles); fails closed
+                 with a distinct reason (light mode disabled / scope
+                 undetectable / over threshold / size_outcome_unavailable /
+                 config_source_touch) requiring --issue above the threshold — unless
                  localImplementation.issueless is set, which sanctions
                  issue-less PR-first at ANY change scope (the whole eligibility
                  gate is skipped; gate dispatch still resolves review depth
@@ -1218,9 +1221,12 @@ function configuredBaseBranch(config) {
 
 /**
  * Decide whether the live change scope is eligible for issue-less lightweight
- * PR-first: reuses the same localImplementation.lightMode threshold that
- * gates inline vs full-fanout gate dispatch, so "genuinely small" means the
- * same thing everywhere in the repo.
+ * PR-first: reuses the shared lightModeCapState predicate (weighted logic LOC
+ * against maxLines, non-doc file count against maxFiles) that gates inline vs
+ * full-fanout gate dispatch, so "genuinely small" means the same thing
+ * everywhere in the repo. Refusal reasons: light_mode_disabled,
+ * scope_detection_failed, over_threshold, config_source_touch and
+ * size_outcome_unavailable.
  *
  * Scope is measured from the merge-base with the default branch to the
  * working tree (`git diff --stat <merge-base>`), so multi-commit branches and
@@ -1231,8 +1237,9 @@ function configuredBaseBranch(config) {
  *
  * Every git invocation is bound to `cwd` (the adapter-resolved repoRoot) —
  * process.cwd() is never relied on implicitly.
+ * The optional `detectChangedFiles` and `evaluateSize` seams default to the real readers; tests inject failures.
  */
-export function resolveIssuelessLightweightEligibility(config, cwd) {
+export function resolveIssuelessLightweightEligibility(config, cwd, { detectChangedFiles = detectWorkingTreeChangedFiles, evaluateSize = evaluateWorkingTreeSizeBudget } = {}) {
   const threshold = resolveLightMode(config);
   if (!threshold) {
     return { eligible: false, reason: "light_mode_disabled" };
@@ -1259,8 +1266,34 @@ export function resolveIssuelessLightweightEligibility(config, cwd) {
   if (scope.ok === false) {
     return { eligible: false, reason: "scope_detection_failed", detail: scope.error };
   }
-  if (scope.filesChanged > threshold.maxFiles || scope.linesChanged > threshold.maxLines) {
-    return { eligible: false, reason: "over_threshold", scope, threshold };
+  // The same cap predicate as gate dispatch: weighted logic LOC plus the non-doc
+  // file count. Missing evidence fails closed.
+  const changed = detectChangedFiles({ base: mergeBase, cwd });
+  let sizeOutcome = null;
+  try {
+    sizeOutcome = evaluateSize({ config, base: mergeBase, repoRoot: cwd });
+  } catch {
+    sizeOutcome = null;
+  }
+  const changedFiles = changed.ok === true ? changed.files : undefined;
+  const cap = lightModeCapState(config, threshold, { changedFiles, sizeOutcome });
+  if (cap.over) {
+    return {
+      eligible: false,
+      reason: "over_threshold",
+      scope,
+      threshold,
+      wholeLogicLoc: cap.locValid ? sizeOutcome.wholeLogicLoc : undefined,
+      fileCount: Array.isArray(changedFiles) ? countLightModeFiles(config, changedFiles) : undefined,
+    };
+  }
+  // Same floor as gate dispatch: a config-source edit can reclassify its own code as docs.
+  if (Array.isArray(changedFiles) && touchesConfigSource(changedFiles)) {
+    return { eligible: false, reason: "config_source_touch", threshold };
+  }
+  // A "block" outcome means the size cannot be computed safely (e.g. substantial unclassified source reads 0 LOC): fail closed.
+  if (!cap.locValid || sizeOutcome.outcome === "block" || !Array.isArray(changedFiles)) {
+    return { eligible: false, reason: "size_outcome_unavailable", threshold };
   }
   return { eligible: true, scope, threshold };
 }
@@ -1293,7 +1326,13 @@ export function buildLightweightIssuelessInput({ config, cwd }) {
       if (eligibility.reason === "scope_detection_failed") {
         throw new Error(`--lightweight without --issue (issue-less PR-first) requires a measurable change scope; git diff failed (${eligibility.detail}). Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.`);
       }
-      throw new Error(`--lightweight without --issue (issue-less PR-first) requires the change to stay within the light-mode threshold (maxFiles=${eligibility.threshold.maxFiles}, maxLines=${eligibility.threshold.maxLines}); this change is ${eligibility.scope.filesChanged} files / ${eligibility.scope.linesChanged} lines. Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.`);
+      if (eligibility.reason === "size_outcome_unavailable") {
+        throw new Error("--lightweight without --issue (issue-less PR-first) requires a measurable weighted change size; the size outcome or changed-file list is unavailable. Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.");
+      }
+      if (eligibility.reason === "config_source_touch") {
+        throw new Error("--lightweight without --issue (issue-less PR-first) requires no dev-loop config-source edit, which could reclassify its own code as docs. Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.");
+      }
+      throw new Error(`--lightweight without --issue (issue-less PR-first) requires the change to stay within the light-mode threshold (maxFiles=${eligibility.threshold.maxFiles} non-doc files, maxLines=${eligibility.threshold.maxLines} weighted logic lines); this change is ${eligibility.fileCount ?? "unknown"} non-doc files and ${eligibility.wholeLogicLoc ?? "unknown"} weighted logic lines. Set localImplementation.issueless for any-scope issue-less PR-first, or provide --issue <n>.`);
     }
   }
   return {

@@ -77,12 +77,12 @@ const ModelTierMapping = z
 /**
  * Reject `models.roleTiers` entries that reference a tier alias which is neither
  * a built-in alias (low/high), the literal "inherit", nor defined in this
- * config's own `models.tiers`. Applied to both the merged and file-level
- * ModelsConfig so a typo'd alias fails closed with a clear message.
+ * legacy or Codex tier definitions. The loader defers alias checks until
+ * layers are merged; standalone schema validation still checks references.
  * @param {Record<string, unknown>|undefined} models
  * @param {z.RefinementCtx} ctx
  */
-function refineRoleTiers(models, ctx) {
+function refineRoleTiers(models, ctx, { aliases = true } = {}) {
   for (const key of ["roleTiers", "roles"]) {
     if (Object.hasOwn(models?.[key] ?? {}, "pre-PR-reviewer")) {
       ctx.addIssue({
@@ -92,27 +92,32 @@ function refineRoleTiers(models, ctx) {
       });
     }
   }
-  const known = new Set([...BUILTIN_TIER_ALIASES, ...Object.keys(models?.tiers ?? {})]);
+  if (!aliases) return;
+  const known = new Set([...BUILTIN_TIER_ALIASES, ...Object.keys(models?.tiers ?? {}), ...Object.keys(models?.harnesses?.codex?.tiers ?? {})]);
   for (const [role, tier] of Object.entries(models?.roleTiers ?? {})) {
     if (tier !== "inherit" && !known.has(tier)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["roleTiers", role],
-        message: `unknown model tier alias "${tier}" — define it under models.tiers, use a built-in alias (${BUILTIN_TIER_ALIASES.join(", ")}), or "inherit"`,
+        message: `unknown model tier alias "${tier}" — define it under models.tiers or models.harnesses.codex.tiers, use a built-in alias (${BUILTIN_TIER_ALIASES.join(", ")}), or "inherit"`,
       });
     }
   }
 }
 
-const CodexExecutionToken = z.string({ error: (issue) => `expected a Codex string token or null, got ${JSON.stringify(issue.input)}; correct the conductor setting` })
-  .regex(/\S/, { error: (issue) => `empty Codex token ${JSON.stringify(issue.input)}; use a nonempty conductor setting or null to inherit` }).trim().nullable();
+const CodexExecutionToken = z.string({ error: (issue) => `expected a Codex string token or null, got ${JSON.stringify(issue.input)}; correct the execution setting` })
+  .regex(/\S/, { error: (issue) => `empty Codex token ${JSON.stringify(issue.input)}; use a nonempty execution setting or null to inherit` }).trim().nullable();
 const CodexExecutionSettings = z.strictObject({
   model: CodexExecutionToken.optional(),
   reasoningEffort: CodexExecutionToken.optional(),
-}).refine((settings) => Object.keys(settings).length > 0, "conductor settings must set model or reasoningEffort (null clears a field)").meta({ minProperties: 1 });
+}).refine((settings) => Object.keys(settings).length > 0, "execution settings must set model or reasoningEffort (null clears a field)").meta({ minProperties: 1 });
 
 const ModelsConfigBase = z.strictObject({
-  harnesses: z.strictObject({ codex: z.strictObject({ conductor: CodexExecutionSettings.optional() }) }).optional(),
+  harnesses: z.strictObject({ codex: z.strictObject({
+    conductor: CodexExecutionSettings.optional(),
+    roles: z.record(z.string().trim().min(1), CodexExecutionSettings).optional(),
+    tiers: z.record(z.string().trim().min(1), CodexExecutionSettings).optional(),
+  }) }).optional(),
   conductor: z.string().trim().min(1).describe("Model override for the conductor (dev-loop) session; absent = inherit the session model.").optional(),
   roles: z.record(z.string(), z.string().trim().min(1)).describe("Concrete per-role/angle model overrides (highest precedence, above tiers).").optional(),
   tiers: z.record(z.string().min(1), ModelTierMapping).describe("Tier alias → per-harness concrete model; null on a harness means inherit (no override).").optional(),
@@ -433,6 +438,14 @@ const ReviewDiffConfig = z.strictObject({
   excludeGlobs: z.array(z.string().trim().min(1)).default([]).describe("Globs whose file blocks are dropped from the required filtered reviewer diff on every gate, on top of the built-in defaults (lockfiles, vendored trees). The raw diff keeps them as the optional raw-diff read, and the evidence file lists each excluded path with its reason. Default empty."),
 });
 
+// Adaptive reviewer-context expansion (global, applies on every gate): the
+// per-round caps on the importers and sibling functions added for a changed
+// exported function, state writer or guard.
+const ContextExpansionConfig = z.strictObject({
+  maxFiles: z.number().int().min(0).default(6).describe("Max files the per-round context expansion adds (importers plus sibling-function files). Default 6; 0 disables the expansion."),
+  maxBytes: z.number().int().min(0).default(98304).describe("Max total bytes the per-round context expansion adds, counted from the sibling-function source and the importer file sizes. Default 98304 (96 KiB); 0 disables the expansion."),
+});
+
 /**
  * The reserved synthetic packed-bin name shape. Every bin `packDispatchUnits`
  * generates (including a one-member bin) is named `packed:sha256:<64 lowercase
@@ -559,6 +572,7 @@ const GatesConfig = z.strictObject({
   // GLOBAL, not per-gate — see resolveFanoutGroups.
   fanout: FanoutConfig.superRefine(rejectInvalidFanoutGroupNames).optional(),
   reviewDiff: ReviewDiffConfig.optional(),
+  contextExpansion: ContextExpansionConfig.optional(),
 });
 
 const AutonomyConfig = z.strictObject({
@@ -621,9 +635,9 @@ const WorkflowConfig = z.strictObject({
 const LocalImplementationConfig = z.strictObject({
   /** Opt into light mode for small scoped changes */
   lightMode: z.strictObject({
-    enabled: z.boolean().describe("Opt small scoped changes into the lightweight dispatch path."),
-    maxFiles: z.number().int().min(1).describe("Light mode applies only when the change touches at most this many files."),
-    maxLines: z.number().int().min(1).describe("Light mode applies only when the change stays within this many lines."),
+    enabled: z.boolean().describe("Opt small scoped changes into the lightweight dispatch path. Gate dispatch and --lightweight startup eligibility share one cap predicate (weighted logic LOC and non-doc file count); a change that touches the dev-loop config source always takes full fan-out (config_source_touch)."),
+    maxFiles: z.number().int().min(1).describe("Light mode applies only when the change counts at most this many non-doc files (docs and scope-count exclusions are not counted)."),
+    maxLines: z.number().int().min(1).describe("Light mode applies only when the change stays within this many weighted logic lines of code (docs, config, CI and asset lines count 0; test lines are discounted)."),
     // Composes with (does not replace) refinement.maxCopilotRounds — see
     // resolveEffectiveCopilotRoundCap.
     maxCopilotRounds: z.number().int().nonnegative().default(1).describe("Copilot round cap for light-dispatched PRs; composes as min(this, refinement.maxCopilotRounds)."),
@@ -979,6 +993,7 @@ const FileGatesConfig = z.strictObject({
   rejectForeignAngles: z.boolean().describe("Reject fan-out provenance naming angles outside the gate's configured pool (default true).").optional(),
   fanout: FanoutConfig.partial().superRefine(rejectInvalidFanoutGroupNames).describe("Grouped vs per-angle fan-out dispatch policy + static grouping table (global, not per-gate).").optional(),
   reviewDiff: ReviewDiffConfig.partial().describe("Reviewer-diff shaping (global, applies on every gate): excludeGlobs drops matching file blocks from the required filtered diff read.").optional(),
+  contextExpansion: ContextExpansionConfig.partial().describe("Adaptive reviewer-context expansion caps (global, applies on every gate): maxFiles and maxBytes bound the importers and sibling functions added per round.").optional(),
 });
 
 // ============================================================================
@@ -1323,13 +1338,13 @@ export function resolveReviewerRole(config, angle) {
  * (only `docs` today) MUST pass `kind: "angle"` to avoid the silent downgrade.
  *
  * @param {DevLoopConfig} config
- * Codex currently has no model mapping; it returns `null` so dispatch
- * inherits the active Codex session model.
+ * Codex roles select harness-scoped settings; Codex angles still inherit.
  *
  * @param {{ role: string, harness: "claude"|"pi"|"codex", kind?: "role"|"angle" }} params
  * @returns {string|null}
  */
 export function resolveRoleModel(config, { role, harness, kind } = {}) {
+  if (harness === "codex") return kind === "angle" || !role ? null : resolveRoleSettings(config, { role, harness }).model;
   if (!role || (harness !== "claude" && harness !== "pi")) return null;
 
   if (kind === "angle") {
@@ -1511,13 +1526,17 @@ function mergeConfigLayers(target, source) {
       result[key] = key === "gates"
         ? mergeGatesFamily(result[key], source[key])
         : { ...(result[key] || {}), ...(source[key] || {}) };
-      if (key === "models" && source.models.harnesses?.codex?.conductor) {
-        result.models.harnesses = { codex: { conductor: {
-          ...target.models?.harnesses?.codex?.conductor,
-          ...source.models.harnesses.codex.conductor,
-        } } };
-      } else if (key === "models" && target.models?.harnesses) {
-        result.models.harnesses = target.models.harnesses;
+      if (key === "models" && (target.models?.harnesses || source.models.harnesses)) {
+        const lower = target.models?.harnesses?.codex ?? {};
+        const upper = source.models.harnesses?.codex ?? {};
+        const codex = { ...lower, ...upper };
+        if (lower.conductor || upper.conductor) codex.conductor = { ...lower.conductor, ...upper.conductor };
+        for (const map of ["roles", "tiers"]) {
+          if (!lower[map] && !upper[map]) continue;
+          codex[map] = { ...lower[map], ...upper[map] };
+          for (const name of Object.keys(upper[map] ?? {})) codex[map][name] = { ...lower[map]?.[name], ...upper[map][name] };
+        }
+        result.models.harnesses = { codex };
       }
     } else {
       result[key] = source[key];
@@ -1783,7 +1802,9 @@ function applyParsedLayer(merged, filePath, data, layer, warnings, errors, repoR
   // in this layer drops the WHOLE layer (errors populated, `merged` returned
   // unchanged) rather than merging the file's other valid keys. errors[].message
   // names the offending path/field so the failure is actionable.
-  const validation = FileConfigSchema.safeParse(data);
+  // Alias references can point into later layers; shape and retired keys remain strict here.
+  const validation = FileConfigSchema.extend({ models: ModelsConfigBase.partial()
+    .superRefine((models, ctx) => refineRoleTiers(models, ctx, { aliases: false })).optional() }).safeParse(data);
   if (!validation.success) {
     // Surface a visible WARNING (not just the structured error) so the
     // whole-layer drop is never silent: many consumers never read
@@ -1823,6 +1844,15 @@ function applyParsedLayer(merged, filePath, data, layer, warnings, errors, repoR
     return merged;
   }
 
+  // Merge Codex map identities after schema trimming, without normalizing legacy families.
+  const codex = data.models?.harnesses?.codex;
+  if (codex) {
+    const normalized = { ...codex };
+    for (const map of ["roles", "tiers"]) {
+      if (codex[map]) normalized[map] = validation.data.models.harnesses.codex[map];
+    }
+    data = { ...data, models: { ...data.models, harnesses: { codex: normalized } } };
+  }
   return mergeConfigLayers(merged, data);
 }
 
@@ -1980,11 +2010,29 @@ export function resolveConductorSettings(config, { harness } = {}) {
   return { model: settings?.model ?? null, reasoningEffort: settings?.reasoningEffort ?? null };
 }
 
+/** Select one Codex role object, never borrowing omitted fields from its tier. */
+export function resolveRoleSettings(config, { role, harness } = {}) {
+  if (harness !== "codex" || typeof role !== "string" || !role.trim()) throw new Error("Role execution settings require a nonempty role and harness codex");
+  const codex = config?.models?.harnesses?.codex;
+  const tier = config?.models?.roleTiers?.[role] ?? BUILTIN_ROLE_TIERS[role];
+  const settings = codex?.roles?.[role] ?? (tier !== "inherit" ? codex?.tiers?.[tier] : null);
+  return { model: settings?.model ?? null, reasoningEffort: settings?.reasoningEffort ?? null };
+}
+
+export function resolveRoleDispatch(loadResult, { role, harness } = {}) {
+  return resolveExecutionDispatch(loadResult, { role, harness });
+}
+
 /** Shared config-only selection for initial native dispatch and emitted coordinators. */
 export function resolveConductorDispatch(loadResult, { harness } = {}) {
+  return resolveExecutionDispatch(loadResult, { harness });
+}
+
+function resolveExecutionDispatch(loadResult, { role, harness }) {
   const configErrors = loadResult.errors ?? [];
-  const settings = resolveConductorSettings(configErrors.length ? null : loadResult.config, { harness });
-  return { ok: configErrors.length === 0, harness, kind: "conductor", settings,
+  const config = configErrors.length ? null : loadResult.config;
+  const settings = role === undefined ? resolveConductorSettings(config, { harness }) : resolveRoleSettings(config, { role, harness });
+  return { ok: configErrors.length === 0, harness, ...(role === undefined ? { kind: "conductor" } : { kind: "role", role }), settings,
     nativeOverrides: configErrors.length ? {} : {
       ...(settings.model !== null ? { model: settings.model } : {}),
       ...(settings.reasoningEffort !== null ? { reasoning_effort: settings.reasoningEffort } : {}),
@@ -2508,16 +2556,64 @@ export function isSizeOutcomeT1Clean(sizeOutcome) {
 }
 
 /**
+ * True when any changed file is a dev-loop config-source path. One shared
+ * predicate: a diff that edits the config source could reclassify its own code.
+ * @param {string[]} changedFiles
+ * @returns {boolean}
+ */
+export function touchesConfigSource(changedFiles) {
+  return changedFiles.some((f) => isDevLoopConfigSourcePath(f));
+}
+
+/**
+ * The one light-mode over-cap decision, shared by gate dispatch and lightweight
+ * startup eligibility: weighted logic LOC (`sizeOutcome.wholeLogicLoc`) above
+ * `maxLines`, or the non-doc file count above `maxFiles`. An unreadable input
+ * never counts as over; `locValid` tells the caller whether the LOC was usable.
+ * @param {DevLoopConfig} config
+ * @param {{ maxFiles: number, maxLines: number }} threshold
+ * @param {{ changedFiles?: string[], sizeOutcome?: { wholeLogicLoc?: number }|null }} facts
+ * @returns {{ over: boolean, locValid: boolean }}
+ */
+export function lightModeCapState(config, threshold, { changedFiles, sizeOutcome } = {}) {
+  const wholeLogicLoc = sizeOutcome?.wholeLogicLoc;
+  const locValid = typeof wholeLogicLoc === "number" && Number.isFinite(wholeLogicLoc) && wholeLogicLoc >= 0;
+  const over = (locValid && wholeLogicLoc > threshold.maxLines)
+    || (Array.isArray(changedFiles) && countLightModeFiles(config, changedFiles) > threshold.maxFiles);
+  return { over, locValid };
+}
+
+/**
+ * Light-mode file count: changed files that are not scope-count excluded and do not
+ * classify as docs. Code, test, config, CI, asset and unknown files all count. The one
+ * shared counter for every light-mode caller (GATE-EXEC-PROPORTIONALITY).
+ * @param {DevLoopConfig} config
+ * @param {string[]} changedFiles
+ * @returns {number}
+ */
+export function countLightModeFiles(config, changedFiles) {
+  const rules = resolveClassifyRules(config);
+  return changedFiles.filter((f) => {
+    if (isScopeCountExcluded(f)) return false;
+    const kind = classifyFile(String(f), rules);
+    return kind !== "docs";
+  }).length;
+}
+
+/**
  * Decide whether a gate runs as a single-agent inline check or full fan-out,
  * from light-mode config + authoritative PR facts.
  *
  * Precedence (first match wins):
  *   1. `gate:full` label present              → full_fanout
  *   2. light mode disabled / no threshold      → full_fanout
- *   3. scope over threshold (files OR lines)   → full_fanout
+ *   3. over threshold: weighted `sizeOutcome.wholeLogicLoc` > maxLines OR
+ *      non-doc file count (countLightModeFiles) > maxFiles → full_fanout
  *   4. `changedFiles` unavailable (ambiguous)  → full_fanout
  *   5. a changed file touches a risk path      → full_fanout
- *   6. `sizeOutcome` unavailable (ambiguous)    → full_fanout
+ *      or is a dev-loop config source (`config_source_touch`: a PR can
+ *      reclassify its own code as docs through `classify`, so it never goes inline)
+ *   6. `sizeOutcome` or its `wholeLogicLoc` unavailable/invalid → full_fanout
  *   7. size-outcome escalate/block             → full_fanout
  *   8. size-outcome touches the T1 risk tier   → full_fanout
  *   9. inline finding severity in the gate's blockCleanOnFindingSeverities set
@@ -2525,28 +2621,28 @@ export function isSizeOutcomeT1Clean(sizeOutcome) {
  *   10. otherwise                              → inline
  *
  * Steps 4-8 are the GATE-EXEC-PROPORTIONALITY non-overridable floors
- * (gate-review-sub-loop-contract.md): they run only once the cheap file/line
- * cap (step 3) has already passed, so an already-over-cap diff costs the
- * caller nothing extra. A caller that omits `changedFiles`/`sizeOutcome` for
+ * (gate-review-sub-loop-contract.md): they run only once the file/line
+ * cap (step 3) has already passed. The line cap reads
+ * `sizeOutcome.wholeLogicLoc`, so callers supply `sizeOutcome` (and
+ * `changedFiles`) whenever light mode is on. A caller that omits them for
  * an otherwise-under-cap diff fails CLOSED (full fan-out) rather than silently
  * treating missing evidence as trivial — no flag/waiver/prompt can lower these
  * floors.
  *
  * Pre-check omits `inlineFindingSeverities` (decides whether to run the inline
  * pass at all); escalation passes the inline pass's severities. Absent/partial
- * `facts.scope` fails safe to full_fanout (missing counts → Infinity).
+ * `facts.sizeOutcome`/`facts.changedFiles` fails safe to full_fanout.
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
  * @param {object} facts
- * @param {{ filesChanged?: number, linesChanged?: number }} [facts.scope] PR scope; absent/partial fields fail safe to full_fanout
  * @param {string[]} [facts.changedFiles] repo-relative changed-file paths; absent/non-array fails safe to full_fanout
- * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome] check-size-budget.mjs's computeSizeBudget outcome; absent/null fails safe to full_fanout
+ * @param {{ outcome?: "pass"|"escalate"|"block", wholeLogicLoc?: number, tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome] check-size-budget.mjs's computeSizeBudget outcome; absent/null fails safe to full_fanout
  * @param {boolean} [facts.hasFullLabel]           `gate:full` label present on the PR
  * @param {string[]} [facts.inlineFindingSeverities] severities from the inline pass (escalation phase)
  * @returns {{ mode: "inline"|"full_fanout", reason: string, threshold: ({maxFiles:number,maxLines:number,riskPaths:string[]})|null }}
  */
-export function resolveGateDispatchMode(config, gate, { scope, changedFiles, sizeOutcome, hasFullLabel = false, inlineFindingSeverities } = {}) {
+export function resolveGateDispatchMode(config, gate, { changedFiles, sizeOutcome, hasFullLabel = false, inlineFindingSeverities } = {}) {
   if (hasFullLabel) {
     return { mode: "full_fanout", reason: "gate_full_label", threshold: null };
   }
@@ -2554,9 +2650,8 @@ export function resolveGateDispatchMode(config, gate, { scope, changedFiles, siz
   if (!threshold) {
     return { mode: "full_fanout", reason: "light_mode_disabled", threshold: null };
   }
-  const filesChanged = Number(scope?.filesChanged ?? Infinity);
-  const linesChanged = Number(scope?.linesChanged ?? Infinity);
-  if (filesChanged > threshold.maxFiles || linesChanged > threshold.maxLines) {
+  const { over, locValid } = lightModeCapState(config, threshold, { changedFiles, sizeOutcome });
+  if (over) {
     return { mode: "full_fanout", reason: "over_threshold", threshold };
   }
   if (!Array.isArray(changedFiles)) {
@@ -2565,7 +2660,12 @@ export function resolveGateDispatchMode(config, gate, { scope, changedFiles, siz
   if (touchesRiskPath(changedFiles, threshold.riskPaths)) {
     return { mode: "full_fanout", reason: "risk_path_touch", threshold };
   }
-  if (sizeOutcome == null || typeof sizeOutcome !== "object") {
+  // Both cap inputs read the head config's `classify` rules, so a diff that edits
+  // the config source could reclassify its own code as docs. Fail closed.
+  if (touchesConfigSource(changedFiles)) {
+    return { mode: "full_fanout", reason: "config_source_touch", threshold };
+  }
+  if (sizeOutcome == null || typeof sizeOutcome !== "object" || !locValid) {
     return { mode: "full_fanout", reason: "size_outcome_unavailable", threshold };
   }
   if (sizeOutcome.outcome !== "pass") {
@@ -2898,7 +2998,7 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
   ) {
     return { tier: null, angles: null, reason: "scope_unavailable" };
   }
-  if (changedFiles.some((f) => isDevLoopConfigSourcePath(f))) {
+  if (touchesConfigSource(changedFiles)) {
     return { tier: null, angles: null, reason: "config_source_delta" };
   }
   const rules = resolveClassifyRules(config);
@@ -3003,10 +3103,11 @@ function selectFloorPlusJustifiedAngles(config, gate, changedFiles) {
  * @param {"draft"|"preApproval"} gate
  * @param {object} facts
  * @param {{ filesChanged?: number, linesChanged?: number, rawFilesChanged?: number, rawLinesChanged?: number }} [facts.scope]
- *   `filesChanged`/`linesChanged` feed the light-mode cap. Tier matching reads
- *   the unfiltered `raw*` counts when present, matching resolveGateAnglesDynamic.
+ *   The light-mode cap reads `sizeOutcome.wholeLogicLoc` and `changedFiles`, not
+ *   this scope. Tier matching reads the unfiltered `raw*` counts when present,
+ *   matching resolveGateAnglesDynamic.
  * @param {string[]} [facts.changedFiles]
- * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome]
+ * @param {{ outcome?: "pass"|"escalate"|"block", wholeLogicLoc?: number, tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome]
  * @param {boolean} [facts.hasFullLabel]
  * @param {string[]} [facts.inlineFindingSeverities]
  * @returns {{ mode: "inline"|"full_fanout", angles: string[]|null, groups: { name: string, angles: string[] }[], reason: string, floors: { sizeCap: boolean, riskPath: boolean, sizeOutcome: boolean, ambiguity: boolean, unclassifiable: boolean } }}
@@ -3020,7 +3121,7 @@ export function resolveReviewProportionality(config, gate, {
   judgeTrack = "full",
   judgeTrackReason = "judge_full",
 } = {}) {
-  const dispatch = resolveGateDispatchMode(config, gate, { scope, changedFiles, sizeOutcome, hasFullLabel, inlineFindingSeverities });
+  const dispatch = resolveGateDispatchMode(config, gate, { changedFiles, sizeOutcome, hasFullLabel, inlineFindingSeverities });
   const tier = resolveGateTier(config, gate, {
     changedFiles,
     filesChanged: scope?.rawFilesChanged ?? scope?.filesChanged,
@@ -3029,7 +3130,7 @@ export function resolveReviewProportionality(config, gate, {
   });
   const floors = Object.freeze({
     sizeCap: dispatch.reason === "over_threshold",
-    riskPath: dispatch.reason === "risk_path_touch",
+    riskPath: dispatch.reason === "risk_path_touch" || dispatch.reason === "config_source_touch",
     sizeOutcome: typeof dispatch.reason === "string" && dispatch.reason.startsWith("size_outcome_") && dispatch.reason !== "size_outcome_unavailable",
     ambiguity: dispatch.reason === "changed_files_unavailable" || dispatch.reason === "size_outcome_unavailable",
     // resolveGateDispatchMode has no diff-classification awareness of its own
@@ -3065,6 +3166,7 @@ export function resolveReviewProportionality(config, gate, {
   const overCapRisk = judgeTrack !== "full" && dispatch.reason === "over_threshold"
     && (!Array.isArray(changedFiles)
       || touchesRiskPath(changedFiles, threshold.riskPaths)
+      || touchesConfigSource(changedFiles)
       || !isSizeOutcomeT1Clean(sizeOutcome));
   // resolveGateTier returns before classifying when no tiers are configured, so
   // classify here independently of tier configuration before lowering the track.
@@ -3121,7 +3223,7 @@ export function resolveReviewProportionality(config, gate, {
  * @param {{ nameStatusOutput: string, diffOutput?: string }} [options.diff]
  * @param {boolean} [options.hasFullLabel] — `gate:full` label present on the PR (bypasses tier resolution)
  * @param {boolean} [options.checkFloors] — opt into the GATE-EXEC-PROPORTIONALITY floor check above
- * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [options.sizeOutcome] — only consulted when `checkFloors` is true
+ * @param {{ outcome?: "pass"|"escalate"|"block", wholeLogicLoc?: number, tierLogicLoc?: { t1?: number } }|null} [options.sizeOutcome] — only consulted when `checkFloors` is true
  * @param {boolean} [options.seamFirstRound] — true in a draft_gate round, or in a pre_approval_gate round at a head where no draft_gate round ran threat-model (caller-derived; defaults to true only for `draft`); only then does a SECURITY_SENSITIVE_SEAM diff force threat-model past `enabled: false`, so a pre_approval_gate round after a draft round at the same head does not re-run it
  * @param {string[]} [options.explicitAngles] — caller-supplied verbatim override (e.g. CLI `--angles`); wins over tier/dynamic resolution but NEVER over a fired floor above (a fired floor refuses the override and continues to tier/dynamic best-effort selection); a SECURITY_SENSITIVE_SEAM diff still adds threat-model to the explicit set (when seamFirstRound)
  * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: boolean, dynamicAnglesActive: boolean, addedAngles: string[], addedReasons: Record<string,string> }}
@@ -3177,7 +3279,14 @@ async function selectGateAnglesDynamic(config, gate, { diff, hasFullLabel = fals
     const { analyzeT0, analyzeT1 } = await import("../analysis/diff-analyzer.mjs");
     const rules = resolveClassifyRules(config);
     const t0 = analyzeT0(diff.nameStatusOutput, rules);
-    changedFiles = t0.files;
+    // AC5: a rename row feeds BOTH endpoints, matching the `--no-renames` readers
+    // in resolve-gate-dispatch and detect-change-scope (analyzeT0 keeps only the destination).
+    const renameSources = diff.nameStatusOutput.split("\n")
+      .map((line) => line.split("\t"))
+      .filter((parts) => parts.length >= 3 && parts[0].startsWith("R"))
+      .map((parts) => parts[1].replace(/\\/g, "/"))
+      .filter((p) => p && !t0.files.includes(p));
+    changedFiles = [...t0.files, ...renameSources];
     filesChanged = changedFiles.length;
     prosePresent = t0.prosePresent; // gate deslop on the prose surface
     if (diff.diffOutput) {

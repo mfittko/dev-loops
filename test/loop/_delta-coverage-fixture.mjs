@@ -12,6 +12,11 @@ export const coverageRepo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir()
 export const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnvNoDirOverrides(), stdio: ["ignore", "pipe", "pipe"] }).trim();
 initGitFixture(coverageRepo, { branch: "issue-1" });
 export const A = git(coverageRepo, "rev-parse", "HEAD");
+// M is a real commit for the cap-round chain tests; the seams, not the topology, decide the base-only merge.
+git(coverageRepo, "-c", "user.name=T", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "base-only merge");
+export const M = git(coverageRepo, "rev-parse", "HEAD");
+git(coverageRepo, "-c", "user.name=T", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "chain end");
+export const C = git(coverageRepo, "rev-parse", "HEAD");
 git(coverageRepo, "-c", "user.name=T", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "candidate");
 export const B = git(coverageRepo, "rev-parse", "HEAD");
 let next = 0;
@@ -25,7 +30,7 @@ export async function boundArgs(argv, seam = {}) {
   const cwd = get("--worktree"), actList = get("--act-list");
   const baseline = seam.revParse ? seam.revParse(cwd, get("--baseline")) : git(cwd, "rev-parse", get("--baseline"));
   const candidate = seam.revParse ? seam.revParse(cwd, "HEAD") : git(cwd, "rev-parse", "HEAD");
-  if (!fs.existsSync(actList) || !JSON.parse(fs.readFileSync(actList)).length || baseline === candidate) {
+  if (!fs.existsSync(actList) || !JSON.parse(fs.readFileSync(actList)).length) {
     args.push("--fixer-plan", "unused", "--site-coverage", "unused");
     return { args, seam };
   }

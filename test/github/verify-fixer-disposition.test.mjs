@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { link, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
@@ -15,21 +15,65 @@ import { initGitFixture, makeGhMock, runIdFreeEnv } from "../_helpers.mjs";
 import {
   parseVerifyFixerDispositionCliArgs,
   verifyFixerDisposition,
+  assertDescendantThreadSites,
+  publishReport,
 } from "../../scripts/github/verify-fixer-disposition.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
 import { selectActThreadBinding } from "../../scripts/github/_fixer-act-thread-bindings.mjs";
-import { materializationHash, pullReceiptPath, pullWorkOrder, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
+import { fixerReportPath, materializationHash, pullReceiptPath, pullWorkOrder, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitFixerWorkOrder, renderWorkOrder } from "../../scripts/loop/emit-fixer-work-order.mjs";
 import { runCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { gitEnvNoDirOverrides } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { resolveFixerDispositionInput } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import * as legacyOwner from "../../scripts/github/_legacy-fixer-revalidation.mjs";
+import { main as buildGateContext, readGateContext } from "../../scripts/github/write-gate-context.mjs";
 
 const REPO = "owner/repo";
 const PR = 1975;
 const HEAD_SHA = "a".repeat(40);
 const FIX_SHA = "b".repeat(40);
+
+for (const change of ["miss", "metadata-text", "mode", "offset", "offset-touch", "multi-hunk", "multiline", "overlap", "revert", "rename", "delete", "binary", "left", "missing", "foreign", "unknown", "merge"]) test(`C19 historical root proof: ${change}`, async () => {
+  await withRepoRoot(async (root) => {
+    initGitFixture(root, { branch: "issue-1" });
+    const git = (...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+    const file = path.join(root, "site.txt"), original = "one\ntwo\nthree\nfour\nfive\n";
+    const commit = async (text) => { await writeFile(file, text); git("add", "-A"); git("commit", "-qm", "site change"); return git("rev-parse", "HEAD"); };
+    const origin = await commit(original);
+    const candidate = await commit(original.replace("three", "fixed"));
+    if (["offset", "offset-touch"].includes(change)) { await commit(`before\n${original.replace("three", "fixed")}`); if (change === "offset-touch") await commit(`before\n${original.replace("three", "changed")}`); }
+    else if (change === "multi-hunk") await commit(`before\n${original.replace("three", "changed")}`);
+    else if (change === "multiline") await commit(original.replace("two", "changed").replace("three", "fixed"));
+    else if (change === "rename") { git("mv", "site.txt", "renamed.txt"); git("commit", "-qm", "rename"); }
+    else if (change === "delete") { git("rm", "site.txt"); git("commit", "-qm", "delete"); }
+    else if (change === "binary") await commit("\0binary\n");
+    else if (change === "metadata-text") {
+      await commit(original.replace("three", "fixed") + "// use the new model\nBinary files a and b differ\nGIT binary patch\ndeleted file mode 100644\nnew file mode 100644\nold mode 100644\nnew mode 100755\n");
+      await commit(original.replace("three", "fixed"));
+    }
+    else if (change === "mode") { git("update-index", "--chmod=+x", "site.txt"); git("commit", "-qm", "mode change"); }
+    else if (change === "merge") { git("checkout", "-qb", "other"); await commit(original.replace("three", "changed")); git("checkout", "issue-1"); git("merge", "--no-ff", "other", "-m", "merge"); }
+    else { await commit(original.replace("three", ["overlap", "revert"].includes(change) ? "changed" : "fixed").replace("five", "elsewhere")); }
+    if (change === "revert") await commit(original.replace("three", "fixed"));
+    const head = git("rev-parse", "HEAD");
+    const comment = { id: 1, node_id: "root", pull_request_url: `https://api.github.com/repos/${REPO}/pulls/${PR}`, path: "site.txt", original_commit_id: origin,
+      original_start_line: 2, original_line: 3, side: change === "left" ? "LEFT" : "RIGHT", start_side: "RIGHT" };
+    if (change === "missing") comment.original_line = null;
+    if (change === "foreign") comment.node_id = "foreign";
+    if (change === "unknown") comment.original_commit_id = "d".repeat(40);
+    const deps = { env: runIdFreeEnv(), ghCommand: "gh", runChild: async (cmd, args) => {
+      if (cmd === "gh") return { code: 0, stdout: JSON.stringify(comment), stderr: "" };
+      const result = spawnSync(cmd, args, { cwd: root, env: gitEnvNoDirOverrides(), encoding: "utf8" });
+      return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+    } };
+    const proof = () => assertDescendantThreadSites({ repo: REPO, pr: PR, candidateHead: candidate, headSha: head,
+      handoff: { dispositions: [{ threadId: "t", disposition: "tackled" }] },
+      parsed: { comments: [{ threadId: "t", id: "root", databaseId: "1" }] }, repoRoot: root }, deps);
+    if (["miss", "offset", "metadata-text"].includes(change)) await proof();
+    else await assert.rejects(proof, change === "overlap" || change === "revert" ? /thread_site_changed.*t/ : /thread_site_(changed|unverifiable).*t/);
+  });
+});
 
 function threadsPayload(threads) {
   return `${JSON.stringify({
@@ -158,6 +202,17 @@ async function boundFixture(root, writeHandoff = false, setup = {}) {
   return { plan, planPath, receiptPath, subject };
 }
 
+test("only successful normal verification stamps a checkpoint complete for descendant carry", async () => {
+  for (const complete of [false, true]) await withRepoRoot(async (repoRoot) => {
+    const fixerPlan = await deliver(repoRoot, complete ? [] : TACKLED);
+    const { deps } = runtime([threadsCallEntry([]), ...complete ? [] : [compareEntry(FIX_SHA, "diverged")]], repoRoot);
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, fixerPlan }, deps);
+    assert.equal(result.complete, complete);
+    const checkpoint = JSON.parse(await readFile(path.resolve(repoRoot, result.checkpointPath), "utf8"));
+    assert.equal(checkpoint.complete === true, complete);
+  });
+});
+
 test("bound active full missing output is typed subject evidence and resolver stays incomplete", async () => {
   await withRepoRoot(async (root) => {
     const f = await boundFixture(root);
@@ -204,24 +259,32 @@ test("emitted and pulled THREAD full binds missing output without an execution d
 });
 
 // An emitted and pulled THREAD full plan whose pushed head is the baseline head (issue 2787 C3, C4).
-async function threadConstructFixture(root, recordOver) {
+async function threadConstructFixture(root, recordOver, site = false, commitCandidate = false) {
   root = await realpath(root);
   initGitFixture(root, { branch: "issue-1" });
+  if (site) {
+    await writeFile(path.join(root, "site.txt"), typeof site === "string" ? site : "one\ntwo\nthree\nfour\nfive\n");
+    execFileSync("git", ["-C", root, "add", "site.txt"]);
+    execFileSync("git", ["-C", root, "commit", "-qm", "site"]);
+  }
   const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+  if (commitCandidate) execFileSync("git", ["-C", root, "commit", "-q", "--allow-empty", "-m", "fix"], { env: gitEnvNoDirOverrides() });
+  const candidate = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
   const tmpRoot = path.join(root, "tmp"), threadsFile = path.join(tmpRoot, "threads.json");
   const recordPath = path.join(tmpRoot, "gate-delta", `${head}.json`);
   await mkdir(path.dirname(recordPath), { recursive: true });
   await writeFile(threadsFile, JSON.stringify({ ok: true, repo: REPO, pr: PR, threads: [{ threadId: "PRRT_T1", isResolved: false }] }));
-  const record = { reviewBaselineHead: head, candidateHead: head, actSetId: "0".repeat(16),
-    invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "PRRT_T1", status: "resolved" }] };
+  const record = { reviewBaselineHead: head, candidateHead: candidate, actSetId: "0".repeat(16),
+    invocation: 1, outcome: "locally_clear", nextStep: "push", items: [{ ref: "PRRT_T1", status: "resolved" }],
+    ...(recordOver?.outcome === "bounded_out" ? recordOver : {}) };
   await writeFile(recordPath, JSON.stringify(record));
   const plan = await emitFixerWorkOrder({ repo: REPO, pr: PR, headSha: head, phase: "full", threadsFile, cwd: root,
     fetchPr: async () => ({ headRefName: "issue-1", headRefOid: head }) });
   await pullWorkOrder({ ref: plan.workOrderRef, digest: plan.workOrderDigest, execution: plan.executionIdentity, cwd: root, tmpRoots: [tmpRoot], receiptTmpRoot: tmpRoot });
-  // A variant record replaces the clearing one after emission and pull, which need the clearing record.
-  if (recordOver) await (recordOver.missing ? rm(recordPath) : writeFile(recordPath, JSON.stringify({ ...record, ...recordOver })));
+  // Negative variants corrupt the authenticated record only after emission and pull.
+  if (recordOver && recordOver.outcome !== "bounded_out") await (recordOver.missing ? rm(recordPath) : writeFile(recordPath, JSON.stringify({ ...record, ...recordOver })));
   const options = { repo: REPO, pr: PR, headSha: head, fixerPlan: plan.planPath };
-  return { plan, options, head, output: plan.workOrder.outputRefs[0], root, runtimeFor: (entries, rollup, extra = {}) => runtime([liveHeadEntry(head, rollup), ...entries], root, { live: false, ...extra }) };
+  return { plan, options, head, candidate, output: plan.workOrder.outputRefs[0], root, runtimeFor: (entries, rollup, extra = {}) => runtime([liveHeadEntry(head, rollup), ...entries], root, { live: false, ...extra }) };
 }
 
 test("THREAD full --construct builds the report from the threads, the clearing record and the pushed head, then normal and --check pass", async () => {
@@ -234,6 +297,190 @@ test("THREAD full --construct builds the report from the threads, the clearing r
       const mock = f.runtimeFor([threadsCallEntry([{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }]), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]);
       assert.equal((await verifyFixerDisposition({ ...f.options, check }, mock.deps)).complete, true);
     }
+  });
+});
+
+test("--report-path is final-on-write: absent until the last step, atomic, complete on success, refused without --check and with the outputRef", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    const reportPath = fixerReportPath(f.output);
+    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }];
+    const finalMock = () => f.runtimeFor([threadsCallEntry(resolved), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]);
+    await assert.rejects(verifyFixerDisposition({ ...f.options, construct: true, reportPath }, f.runtimeFor([threadsCallEntry([])]).deps), /valid only with --check; pass --check, or drop --report-path/);
+    await assert.rejects(verifyFixerDisposition({ ...f.options, reportPath }, finalMock().deps), /valid only with --check; pass --check, or drop --report-path/);
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: f.output }, finalMock().deps), /equals the fixer plan or its outputRef.*joinRef/);
+    const planAbsolute = path.resolve(root, f.options.fixerPlan);
+    const aliasDir = path.join(root, "alias-dir");
+    await mkdir(path.dirname(f.output), { recursive: true });
+    await symlink(path.dirname(f.output), aliasDir);
+    const planBefore = await readFile(planAbsolute, "utf8");
+    for (const rejected of [path.join(aliasDir, path.basename(f.output)), planAbsolute, `${f.output}.constructed`]) {
+      await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: rejected }, finalMock().deps), /equals the fixer plan or its outputRef.*joinRef/, rejected);
+    }
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: "rel.report" }, finalMock().deps), /absolute path/);
+    assert.equal(await readFile(planAbsolute, "utf8"), planBefore, "the plan is not overwritten");
+    assert.equal(existsSync(reportPath), false, "no report from refused arguments");
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    assert.equal(existsSync(reportPath), false, "--construct writes the outputRef, never the report");
+    await verifyFixerDisposition({ ...f.options, check: true, reportPath }, finalMock().deps);
+    const report = JSON.parse(await readFile(reportPath, "utf8"));
+    assert.equal(report.outcome, "complete");
+    assert.equal(report.complete, true);
+    assert.deepEqual(readdirSync(path.dirname(f.output)).filter((name) => name.includes(".tmp-")), [], "the temp file is renamed away");
+    assert.equal(JSON.parse(await readFile(f.output, "utf8")).outcome, undefined, "the outputRef is left unchanged");
+    await rm(reportPath);
+    await verifyFixerDisposition({ ...f.options, check: true, reportPath }, finalMock().deps);
+    assert.equal(JSON.parse(await readFile(reportPath, "utf8")).outcome, "complete");
+  });
+});
+
+test("--report-path is first-write-wins: a second --check run refuses and leaves the first report unchanged", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    const reportPath = fixerReportPath(f.output);
+    const resolved = [{ id: "PRRT_T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 1, body: `Fixed in commit ${f.head}.`, author: { login: "bot", __typename: "User" } }] } }];
+    const finalMock = () => f.runtimeFor([threadsCallEntry(resolved), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]);
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    await verifyFixerDisposition({ ...f.options, check: true, reportPath }, finalMock().deps);
+    const first = await readFile(reportPath, "utf8");
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath }, finalMock().deps), /already holds the final report.*never replaced/);
+    assert.equal(await readFile(reportPath, "utf8"), first);
+    assert.deepEqual(readdirSync(path.dirname(f.output)).filter((name) => name.includes(".tmp-")), []);
+  });
+});
+
+test("--report-path is refused when the plan yields no string outputRef, and no file is written", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    const reportPath = fixerReportPath(f.output);
+    const planAbsolute = path.resolve(root, f.options.fixerPlan);
+    for (const content of ["not json", JSON.stringify({ workOrder: {} })]) {
+      await writeFile(planAbsolute, content);
+      await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath }, f.runtimeFor([]).deps), /string workOrder\.outputRefs\[0\].*emitted fixer plan/, content);
+      assert.equal(existsSync(reportPath), false);
+    }
+    await rm(planAbsolute);
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath }, f.runtimeFor([]).deps), /emitted fixer plan/);
+    assert.equal(existsSync(reportPath), false);
+  });
+});
+
+test("--report-path publishes an incomplete outcome and a refused outcome with the error text", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    const reportPath = fixerReportPath(f.output);
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]).deps), /ci_failed.*lint/);
+    const refused = JSON.parse(await readFile(reportPath, "utf8"));
+    assert.equal(refused.ok, false);
+    assert.equal(refused.outcome, "refused");
+    assert.match(refused.error, /ci_failed.*lint/);
+    await rm(reportPath);
+    const incomplete = await verifyFixerDisposition({ ...f.options, check: true, reportPath }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head), compareEntry(f.head, "identical", f.head)]).deps);
+    assert.equal(incomplete.complete, false);
+    assert.equal(JSON.parse(await readFile(reportPath, "utf8")).outcome, "incomplete");
+  });
+});
+
+test("--report-path parses as an absolute path and is refused without --check", () => {
+  const base = ["--repo", REPO, "--pr", String(PR), "--head-sha", HEAD_SHA, "--fixer-plan", "plan.json"];
+  assert.equal(parseVerifyFixerDispositionCliArgs([...base, "--check", "--report-path", "/a/b.report"]).reportPath, "/a/b.report");
+  assert.throws(() => parseVerifyFixerDispositionCliArgs([...base, "--report-path", "rel.report"]), /absolute path/);
+  assert.throws(() => parseVerifyFixerDispositionCliArgs([...base, "--construct", "--report-path", "/a/b.report"]), /valid only with --check; pass --check, or drop --report-path/);
+  assert.throws(() => parseVerifyFixerDispositionCliArgs([...base, "--report-path", "/a/b.report"]), /valid only with --check; pass --check, or drop --report-path/);
+});
+
+const repeatedDiffScenarios = ["myers", "histogram", "patience"].flatMap((algorithm) =>
+  ["true", "false"].flatMap((heuristic) => ["miss", "touch"].map((change) => `${change}-repeated-${algorithm}-${heuristic}`)));
+for (const route of ["THREAD", "ACT"]) for (const scenario of ["miss", "miss-diff-opts", "miss-inter-hunk", "touch", "touch-diff-opts", "touch-inter-hunk", "touch-color-diff", "touch-color-ui", "left", "behind", "diverged", "red", "pending", "head-race", "missing-report", "forged-source", ...repeatedDiffScenarios]) test(`C19 ${route} descendant delivery: ${scenario}`, async () => {
+  await withRepoRoot(async (root) => {
+    root = await realpath(root);
+    const repeated = scenario.includes("-repeated-");
+    const site = repeated ? "start\na\nb\nc\na\nb\nc\nend\n" : true;
+    const f = route === "THREAD" ? await threadConstructFixture(root, undefined, site) : await completionFixture(root, "resolved", { site });
+    const candidate = f.head ?? f.candidate, fixerPlan = f.options?.fixerPlan ?? f.fixerPlan;
+    if (route === "THREAD") await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    const output = f.output ?? f.plan.workOrder.outputRefs[0], before = await readFile(output);
+    const git = (...args) => execFileSync("git", ["-C", root, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+    const interHunk = scenario.endsWith("inter-hunk");
+    if (repeated) {
+      const [, , algorithm, heuristic] = scenario.split("-");
+      git("config", "diff.algorithm", algorithm);
+      git("config", "diff.indentHeuristic", heuristic);
+      await writeFile(path.join(root, "site.txt"), "start\na\nb\nc\nend\na\nb\nc\n");
+      git("add", "site.txt"); git("commit", "-qm", "shift repeated block");
+    }
+    if (interHunk) git("config", "diff.interHunkContext", "100");
+    const text = scenario.startsWith("touch") ? "one\ntwo\nchanged\nfour\nfive\n" : "one\ntwo\nthree\nfour\nelsewhere\n";
+    // Myers maps the original line 6 to 7; touching line 6 must pass and line 7 must refuse.
+    const repeatedText = scenario.startsWith("touch") ? "start\na\nb\nc\nend\na\nchanged\nc\n" : "start\na\nb\nc\nend\nelsewhere\nb\nc\n";
+    await writeFile(path.join(root, "site.txt"), repeated ? repeatedText : interHunk ? text.replace("one", "before").replace("five", "after") : text);
+    git("add", "site.txt"); git("commit", "-qm", "developer");
+    if (scenario.startsWith("touch-color")) git("config", scenario === "touch-color-diff" ? "color.diff" : "color.ui", "always");
+    let head = git("rev-parse", "HEAD");
+    const ids = route === "THREAD" ? ["PRRT_T1"] : ["PRRT_MERGED", "PRRT_SHARED"];
+    const nodes = route === "THREAD" ? [{ id: ids[0], isResolved: false, comments: { nodes: [{ id: "root0", databaseId: 1, body: "open", author: { login: "bot" } }] } }] : structuredClone(f.nodes);
+    nodes.forEach((node, index) => { node.isResolved = false; node.comments.nodes[0].id = `root${index}`; node.comments.nodes[0].body = node.comments.nodes[0].body.replace(/Fixed in commit [a-f0-9]+\./, ""); });
+    if (scenario === "missing-report") await rm(output);
+    if (scenario === "forged-source") await writeFile(f.plan.workOrder.requiredReads[0].path, "[]");
+    let resolved = false, reads = 0; const posts = [];
+    const deps = { env: runIdFreeEnv(scenario.endsWith("diff-opts") ? { GIT_DIFF_OPTS: "-u100" } : {}), ghCommand: "gh", repoRoot: root, runChild: async (cmd, args, env, stdin) => {
+      if (cmd === "git") { const r = spawnSync(cmd, args, { cwd: root, env, encoding: "utf8" }); return { code: r.status, stdout: r.stdout, stderr: r.stderr }; }
+      if (args[0] === "pr") return { code: 0, stdout: JSON.stringify({ headRefOid: scenario === "head-race" && reads++ ? candidate : head, statusCheckRollup: ["red", "pending"].includes(scenario) ? [{ name: "unit" }] : [] }) };
+      if (args[1] === "user") return { code: 0, stdout: JSON.stringify({ login: "gate" }) };
+      if (args[1]?.includes("/compare/")) return { code: 0, stdout: JSON.stringify({ status: ["behind", "diverged"].includes(scenario) && args[1].endsWith(`${candidate}...${head}`) ? scenario : "ahead" }) };
+      if (args[1]?.includes("/pulls/comments/")) {
+        const index = Number(args[1].split("/").at(-1)) - 1;
+        return { code: 0, stdout: JSON.stringify({ id: index + 1, node_id: `root${index}`, pull_request_url: `https://api.github.com/repos/${REPO}/pulls/${PR}`, path: "site.txt", original_commit_id: candidate, original_line: repeated ? 6 : 3, side: scenario === "left" ? "LEFT" : "RIGHT" }) };
+      }
+      if (args.includes("POST")) { posts.push(stdin); return { code: 0, stdout: JSON.stringify({ id: 9, html_url: "https://example.com/9" }) }; }
+      if (args[1] === "graphql" && args.some((arg) => arg.includes("resolveReviewThread"))) { resolved = true; return { code: 0, stdout: JSON.stringify({ data: { resolveReviewThread: { thread: { id: args.find((arg) => arg.startsWith("threadId="))?.slice(9) ?? ids[0], isResolved: true } } } }) }; }
+      if (args[1] === "graphql") {
+        if (resolved) nodes.forEach((node) => { node.isResolved = true; node.comments.nodes.push({ id: "reply", databaseId: 99, body: `Fixed in commit ${candidate}.`, author: { login: "bot" } }); });
+        return { code: 0, stdout: threadsPayload(nodes) };
+      }
+      if (args[1]?.includes("/check-runs")) return { code: 0, stdout: JSON.stringify({ check_runs: ["red", "pending"].includes(scenario) ? [{ name: "unit", status: scenario === "red" ? "completed" : "in_progress", conclusion: scenario === "red" ? "failure" : null }] : [] }) };
+      if (args[1]?.includes("/status?")) return { code: 0, stdout: JSON.stringify({ state: "pending", statuses: [] }) };
+      throw new Error(`unexpected call ${cmd} ${args.join(" ")}`);
+    } };
+    const options = { repo: REPO, pr: PR, headSha: head, fixerPlan };
+    if (scenario !== "miss" && !scenario.startsWith("miss-")) {
+      const expected = repeated ? /thread_site_changed/ : { touch: /thread_site_changed/, "touch-diff-opts": /thread_site_changed/, "touch-inter-hunk": /thread_site_changed/, "touch-color-diff": /thread_site_changed/, "touch-color-ui": /thread_site_changed/, left: /thread_site_unverifiable/, behind: /not contained/, diverged: /not contained/, red: /ci_failed/, pending: /ci_pending/, "head-race": /live head changed/, "missing-report": /result_missing/, "forged-source": /differ|Invalid fixer review baseline/ }[scenario];
+      await assert.rejects(verifyFixerDisposition(options, deps), expected); assert.deepEqual(posts, []);
+      assert.equal(resolved, false);
+      assert.deepEqual(await checkpointFiles(root), []);
+      if (!["touch", "left"].includes(scenario)) return;
+      const capture = path.join(root, "tmp", "open-thread.json");
+      await writeFile(capture, JSON.stringify(parseReviewThreads(JSON.parse(threadsPayload(nodes)))));
+      const deltaPath = path.join(root, "tmp", "gate-delta", `${head}.json`);
+      assert.equal(existsSync(deltaPath), false);
+      await buildGateContext(["--repo", REPO, "--pr", String(PR), "--gate", "pre_approval_gate", "--head-sha", head, "--base", candidate,
+        "--angles", '["correctness"]', "--known-findings", capture, "--silent"], { repoRoot: root,
+        run: async () => ({ code: 0, stdout: JSON.stringify({ body: "review recovery", closingIssuesReferences: [], baseRefName: "main" }) }),
+        checkBaseFreshness: async () => ({ ok: true, status: "base_current", base: "main" }),
+        loadCoordination: async () => ({ prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true, draftGate: { verdict: "clean", headSha: candidate } } }) });
+      const context = await readGateContext({ repo: REPO, pr: PR, gate: "pre_approval_gate", headSha: head }, { repoRoot: root });
+      const read = context.requiredReads.find((entry) => entry.kind === "known-findings"), bytes = await readFile(path.resolve(root, read.path));
+      assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"));
+      assert.deepEqual(JSON.parse(bytes).map((thread) => thread.threadId), ids);
+      assert.equal(existsSync(deltaPath), false);
+    }
+    else {
+      const result = await verifyFixerDisposition(options, deps);
+      assert.equal(result.complete, true, JSON.stringify(result));
+      assert.ok(posts.length); assert.ok(posts.every((body) => body.includes(candidate)));
+      const count = posts.length;
+      assert.equal((await verifyFixerDisposition({ ...options, check: true }, deps)).complete, true);
+      assert.equal(posts.length, count);
+      await writeFile(path.join(root, "later.txt"), "another developer change\n");
+      git("add", "later.txt"); git("commit", "-qm", "later developer");
+      head = git("rev-parse", "HEAD");
+      assert.equal((await verifyFixerDisposition({ ...options, headSha: head }, deps)).complete, true, "H -> H2 re-enters delivery with the original report and Delta");
+      assert.equal(posts.length, count);
+      assert.equal(existsSync(path.join(root, "tmp", "gate-delta", `${head}.json`)), false);
+    }
+    assert.deepEqual(await readFile(output), before);
   });
 });
 
@@ -358,11 +605,8 @@ for (const [label, over] of [
 
 test("THREAD full --construct with a pushed candidate later than the order head names the candidate; normal and --check pass", async () => {
   await withRepoRoot(async (root) => {
-    const f = await threadConstructFixture(root);
-    execFileSync("git", ["-C", f.root, "commit", "-q", "--allow-empty", "-m", "fix"], { env: gitEnvNoDirOverrides() });
-    const pushed = execFileSync("git", ["-C", f.root, "rev-parse", "HEAD"], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
-    const recordPath = path.join(f.root, "tmp", "gate-delta", `${f.head}.json`);
-    await writeFile(recordPath, JSON.stringify({ ...JSON.parse(await readFile(recordPath, "utf8")), candidateHead: pushed }));
+    const f = await threadConstructFixture(root, undefined, false, true);
+    const pushed = f.candidate;
     const options = { ...f.options, headSha: pushed };
     const mockFor = (entries) => runtime(entries, f.root, { live: false });
     const ahead = compareEntry(f.head, "ahead", pushed);
@@ -1503,6 +1747,7 @@ async function completionFixture(repoRoot, kind = "resolved", settings = {}) {
   repoRoot = await realpath(repoRoot);
   initGitFixture(repoRoot, { branch: "issue-1" });
   const git = (...args) => execFileSync("git", ["-C", repoRoot, ...args], { env: gitEnvNoDirOverrides(), encoding: "utf8" }).trim();
+  if (settings.site) { await writeFile(path.join(repoRoot, "site.txt"), typeof settings.site === "string" ? settings.site : "one\ntwo\nthree\nfour\nfive\n"); git("add", "site.txt"); git("commit", "-qm", "site"); }
   await writeFile(path.join(repoRoot, ".gitignore"), "tmp/\n");
   git("add", ".gitignore");
   git("commit", "-qm", "ignore evidence");
@@ -2887,5 +3132,37 @@ test("bounded_out THREAD failed residual POST stays incomplete under --check; cl
     const done = await verifyFixerDisposition({ ...f.options, check: true }, passing.deps);
     assert.equal(done.complete, true);
     assert.equal(passing.residualPosts.length, 0);
+  });
+});
+
+test("--report-path creates a missing parent directory and a failed publish keeps the original refusal error", async () => {
+  await withRepoRoot(async (root) => {
+    const f = await threadConstructFixture(root);
+    await verifyFixerDisposition({ ...f.options, construct: true }, f.runtimeFor([threadsCallEntry([])]).deps);
+    const open = [{ id: "PRRT_T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 1, body: "please fix", author: { login: "bot", __typename: "User" } }] } }];
+    const nested = path.join(root, "missing", "dir", "x.report");
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: nested }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]).deps), /ci_failed.*lint/);
+    assert.equal(JSON.parse(await readFile(nested, "utf8")).outcome, "refused", "the parent directory is created");
+    const dirTarget = path.join(root, "dir-target.report");
+    await mkdir(path.join(dirTarget, "child"), { recursive: true });
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: dirTarget }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]).deps), /ci_failed.*lint/);
+    assert.deepEqual(readdirSync(root).filter((name) => name.startsWith("dir-target.report.tmp-")), [], "a failed rename leaves no temp file");
+    const blocked = path.join(root, "blocker");
+    await writeFile(blocked, "a file, so mkdir of a child fails");
+    await assert.rejects(verifyFixerDisposition({ ...f.options, check: true, reportPath: path.join(blocked, "x.report") }, f.runtimeFor([threadsCallEntry(open), ...ciEntries(f.head, { failing: "lint" })]).deps), /ci_failed.*lint/, "the original refusal is rethrown, not the publish error");
+  });
+});
+
+test("concurrent publishReport calls on one report path never truncate the published report", async () => {
+  await withRepoRoot(async (root) => {
+    for (let round = 0; round < 20; round += 1) {
+      const reportPath = path.join(root, `r${round}`, "x.report");
+      const reports = ["A", "B"].map((tag) => ({ tag, pad: tag.repeat(200000 + (tag === "A" ? 0 : 50000)) }));
+      const results = await Promise.allSettled(reports.map((report) => publishReport(reportPath, report)));
+      assert.equal(results.filter((r) => r.status === "fulfilled").length, 1, "exactly one publish wins");
+      assert.match(results.find((r) => r.status === "rejected").reason.message, /already holds the final report/);
+      const winner = reports[results.findIndex((r) => r.status === "fulfilled")];
+      assert.equal(await readFile(reportPath, "utf8"), `${JSON.stringify(winner, null, 2)}\n`, "the winner's report is intact");
+    }
   });
 });

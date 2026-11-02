@@ -26,6 +26,17 @@ Provenance shape:
 <!-- rule: RETRO-ENFORCEMENT-CONFIG-GATED -->
 Whether the checkpoint is evaluated MUST be controlled by `.devloops` at repo root `workflow.requireRetrospective`; shipped defaults remain permissive and this repo opts in. With the flag unset or `false`, startup reports no `pendingRetrospectives`, `merge-pr` does not evaluate `retrospective_checkpoint`, and neither site reads the checkpoint file or runs the ancestry lookup.
 
+## Coordinator context and traffic report (issue 2955)
+
+The retrospective reports coordinator cost from existing records only. It adds no new transcript store.
+
+- Coordinator peak context (largest single-response input count) against the advisory 150K diagnostic in `COORDINATOR-CONTINUITY-SOFT-CAP`.
+- Total input, cached and output token traffic, when the harness provides it.
+- Coordinator launches and the reason for each, read from the predecessor's hand-back packet `status`, which names the run-ending case, reported as "unknown" when the status is absent.
+- Avoidable repeated reads, bootstrap and review work, with the evidence for each.
+
+A value the record does not carry is reported as "unknown", never zero. The report keeps context size, token traffic and billing apart: they are three different quantities. Crossing 150K is a finding to reduce, never a failure of the cycle.
+
 ## Size waiver count
 
 <!-- rule: RETRO-SIZE-WAIVER-COUNT -->

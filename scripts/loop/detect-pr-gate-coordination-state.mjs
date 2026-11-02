@@ -28,9 +28,11 @@ import {
   normalizeFixerDispositionHandoff,
 } from "@dev-loops/core/loop/fixer-disposition";
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
+import { countCompletedRounds, resolveCapRoundFixed } from "../github/write-gate-context.mjs";
+import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { buildContainmentMap, isCommitContainedByHead } from "../github/_commit-containment.mjs";
 import { workOrderDigest } from "../github/_work-order-protocol.mjs";
-import { verifyFixerDisposition } from "../github/verify-fixer-disposition.mjs";
+import { loadDeliveredHandoff, verifyFixerDisposition } from "../github/verify-fixer-disposition.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "../github/_gate-finding-surface.mjs";
 import { resolveAuthenticatedLogin } from "../github/post-gate-findings.mjs";
@@ -352,8 +354,8 @@ export async function loadRecordedDesignerEvidence(evidencePath) {
 }
 
 // Total changed lines across a PR's changed files (additions + deletions),
-// mirroring the canonical light-mode line dimension (resolveGateDispatchMode's
-// scope.linesChanged). Returns 0 when no line data is available.
+// as a raw-diff line total, independent of the weighted size-budget LOC that
+// resolveGateDispatchMode caps on. Returns 0 when no line data is available.
 export function countPrChangedLines(prData) {
   const files = Array.isArray(prData?.files) ? prData.files : [];
   let total = 0;
@@ -366,10 +368,10 @@ export function countPrChangedLines(prData) {
 }
 
 // Whether a light/spike relaxed-gate carve-out exempts the required
-// designer/vision recorded-evidence check. Mirrors the existing relaxed-gate
-// carve-outs (resolveGateDispatchMode): light-dispatched, spike,
+// designer/vision recorded-evidence check. Light-dispatched, spike,
 // or a change under the configured light-mode threshold (files AND lines)
-// exempts. When changed-lines data is unavailable the line dimension is
+// exempts. The threshold uses raw file and line counts, independent of the
+// weighted cap in resolveGateDispatchMode. When changed-lines data is unavailable the line dimension is
 // treated as within threshold, preserving files-only behavior for callers
 // that lack it.
 export function deriveUiDesignerReviewExempt({
@@ -869,6 +871,28 @@ async function readFixerDispositionEvidence({ repo, pr, currentHeadSha, parsedTh
           applicable = relation.contained;
         }
         if (applicable) {
+          const currentCheckpoint = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot });
+          const legacyCurrent = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot: "tmp" });
+          if (![currentCheckpoint, ...resolveLedgerCheckouts(repoRoot).map((root) => path.resolve(root, legacyCurrent))].some(existsSync)) {
+            const output = path.join(path.dirname(planPath), plan.executionIdentity, "fixer-disposition.json");
+            const head = await readFile(output, "utf8").then((text) => JSON.parse(text).headSha).catch(() => null);
+            if (head && head !== currentHeadSha && existsSync(buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: head, tmpRoot }))) {
+              const checkpointPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: head, tmpRoot });
+              const checkpoint = await readFile(checkpointPath, "utf8").then(JSON.parse);
+              if (checkpoint.complete !== true) throw new Error("ancestor checkpoint is not complete; run a full gate round");
+              const { handoff, delivery } = await loadDeliveredHandoff({ repo, pr, headSha: head, fixerPlan: planPath }, { repoRoot, receiptTmpRoot: tmpRoot, runtime });
+              if (Object.entries(delivery).some(([key, value]) => checkpoint[key] !== value)) throw new Error("ancestor checkpoint belongs to another fixer execution");
+              if (JSON.stringify(normalizeFixerDispositionHandoff(checkpoint)) !== JSON.stringify(handoff)) throw new Error("ancestor checkpoint differs from authenticated delivery");
+              const relation = await isCommitContainedByHead({ repo, commitSha: head, headSha: currentHeadSha, requireAhead: true }, runtime);
+              if (!relation.contained) throw new Error("ancestor checkpoint requires an ahead live head; run a full gate round");
+              const threads = typeof parsedThreads === "function" ? await parsedThreads() : parsedThreads;
+              const containment = await buildContainmentMap(handoff.dispositions.filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED).map((entry) => entry.fixingCommitSha), { repo, headSha: currentHeadSha }, runtime);
+              const liveThreads = threads.threads.map((thread) => ({ threadId: thread.id, isResolved: thread.isResolved, replyBodies: threads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body) }));
+              const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment });
+              if (!(await readFile(planPath)).equals(planBytes)) throw new Error("active fixer plan changed during carry verification");
+              return { complete: evaluation.ok, incomplete: evaluation.incomplete, ...(evaluation.ok ? { carriedFromHead: head } : {}) };
+            }
+          }
           const checked = await verifyFixerDisposition({ repo, pr, headSha: currentHeadSha, fixerPlan: planPath, check: true }, { ...runtime, repoRoot });
           if (!checked.complete) {
             const unchanged = (await readFile(planPath)).equals(planBytes);
@@ -1158,6 +1182,8 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     reviewThreads: parsedThreads.threads,
     requireCopilotConvergenceAtLatestHead: resolveRequireCopilotConvergenceAtLatestHead(interpreterConfigResult.config),
     rules: resolveClassifyRules(interpreterConfigResult.config),
+    copilotReviewRoundCount: snapshot.copilotReviewRoundCount,
+    effectiveCap: interpreterRefinementConfig.maxCopilotRounds,
   };
   // ponytail: the carry predicate re-reads the disposition comment stream the
   // body-feedback resolver above already read; share the result if gh call
@@ -1245,6 +1271,9 @@ export function buildGateCoordinationEvaluatorInput({
   designerReviewExempt = false,
   designerReviewEvidence = null,
   earlySurface = null,
+  draftCapRoundFixed = false,
+  draftRoundRefused = false,
+  draftCapRoundFailure = null,
 }) {
   return {
     repo: context.repo,
@@ -1306,6 +1335,9 @@ export function buildGateCoordinationEvaluatorInput({
     preApprovalGateMarker: context.gateEvidence.preApprovalGateMarker,
     refinementArtifact: context.refinementArtifact,
     postConvergenceSignificantChange,
+    draftCapRoundFixed,
+    draftRoundRefused,
+    draftCapRoundFailure,
     ...(earlySurface ?? {}),
   };
 }
@@ -1380,6 +1412,12 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
         prBody: typeof context.prData?.body === "string" ? context.prData.body : "",
         repoRoot,
       });
+  // ADR 0208: a PR whose cap round is fixed never runs draft_gate again; fail closed when the evidence is unreadable.
+  // A ready PR keeps the proof whatever its head (later commits belong to pre_approval_gate); a draft PR needs the cleared delta at the current head.
+  let draftCapRoundFailure = null;
+  const draftCapRoundFixed = await (runtime.resolveCapRoundFixed ?? resolveCapRoundFixed)({ repo: context.repo, pr: context.pr, headSha: context.currentHeadSha, baseRefName: prBaseRefName, anyHead: context.prData?.isDraft !== true }, { repoRoot, onFailure: (condition) => { draftCapRoundFailure = condition; } }).then(Boolean, () => { draftCapRoundFailure = "cap_round_unresolved"; return false; });
+  const draftRoundRefused = context.prData?.isDraft === true && !draftCapRoundFixed
+    && await countCompletedRounds({ repo: context.repo, pr: context.pr, gate: "draft_gate", headSha: context.currentHeadSha }, { repoRoot }).then((round) => isRoundRefused(round, draftGateConfig.maxReviewRounds ?? 0), () => false);
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
     context: evaluatorContext,
     maxCopilotRounds,
@@ -1395,6 +1433,9 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     }),
     designerReviewEvidence,
     earlySurface,
+    draftCapRoundFixed,
+    draftRoundRefused,
+    draftCapRoundFailure,
   }));
   // Copilot review request guard: when Copilot has reviewed the PR but no
   // formal review request was made, block pre-approval gate entry. Only
@@ -1496,12 +1537,14 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   if (TERMINAL_RUNNER_RELEASE_ACTIONS.has(result.nextAction)) {
     const releaseImpl = runtime.releaseAsyncRunnerOwnershipImpl ?? releaseAsyncRunnerOwnership;
     try {
-      await releaseImpl({
+      const released = await releaseImpl({
         repo: options.repo,
         pr: options.pr,
         env: runtime.env ?? process.env,
         cwd: repoRoot,
       });
+      // RUNNER-HANDOFF-TEARDOWN: with no env run id the claim stays; surface the explicit-handoff remedy.
+      if (released?.status === "skipped_no_async_run_id") result.runnerRelease = released;
     } catch {
       // Best-effort: a release failure must never block gate-coordination detection.
     }

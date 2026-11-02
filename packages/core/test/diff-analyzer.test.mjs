@@ -868,6 +868,7 @@ test("analyzeDiff → resolveDynamicAngles: .devloops + .markdown repro classifi
       "link-check",
       "pr-description",
       "scope",
+      "state-concurrency",
     ],
   );
 });

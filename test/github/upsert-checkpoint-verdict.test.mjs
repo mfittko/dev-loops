@@ -24,12 +24,15 @@ import {
   upsertCheckpointVerdict as upsertWithCap,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
+import { detectStaleRunner } from "../../scripts/loop/_stale-runner-detection.mjs";
 import { buildFanoutEnforcement, buildPreMergeGateCheck, deriveEvidenceState, detectCheckpointEvidence, EVIDENCE_STATE, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { buildLogPath, writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { buildGateEmitPlanPath, buildGateFaninLedgerPath } from "../../scripts/github/_gate-artifact-paths.mjs";
 import { buildValidationResultsPath } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
+import { computeSpecDigest, extractSpecFromBody } from "@dev-loops/core/loop/spec-authority";
 
 // The legacy input shapes in this file predate the round cap. A fixture repo root that does not set the cap gets
 // maxReviewRounds: 0 (the cap has its own tests in upsert-checkpoint-verdict-round-cap.test.mjs).
@@ -5402,6 +5405,85 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
   }, { prefix: "dev-loops-upsert-stale-takeover-" });
 });
 
+// #2884 dod:4: a live run R whose claim aged past the max age keeps it through gate upsert-verdict (refresh, never takeover).
+test("upsert-checkpoint-verdict by run R on R's own aged claim succeeds with no takeover history entry", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const claim = await claimRunnerOwnership({
+      repo: "owner/repo",
+      pr: 17,
+      runId: "run-R",
+      cwd: tempDir,
+      now: "2020-01-01T00:00:00.000Z",
+    });
+    const ghEnv = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: [],
+        issueComments: [],
+      }),
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: "[]\n",
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
+        stdout: "src/index.ts\n",
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":301,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-301"}\n',
+      },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+    ], {
+      cwd: tempDir,
+      env: { ...ghEnv, DEVLOOPS_RUN_ID: "run-R" },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const persisted = JSON.parse(await readFile(claim.filePath, "utf8"));
+    assert.equal(persisted.activeRun.runId, "run-R");
+    const types = persisted.history.map((entry) => entry.type);
+    assert.ok(types.includes("heartbeat"), "the same-run stale claim records a heartbeat");
+    assert.ok(!types.includes("refresh"), "the same-run stale claim is not refreshed through a takeover-mode claim");
+    assert.ok(!types.includes("takeover"), "the same-run stale claim is never recorded as a takeover");
+  }, { prefix: "dev-loops-upsert-own-aged-claim-" });
+});
+
+// #2884 ac:2: a heartbeat between the stale read and the locked write keeps the owner (the takeover pins the observed generation).
+test("upsert-checkpoint-verdict stale takeover refuses when the claim changes after the stale read", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const claim = await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-A", cwd: tempDir, now: "2020-01-01T00:00:00.000Z" });
+    let observedStatus = null;
+    const detectStale = async (args) => {
+      const observed = await detectStaleRunner(args);
+      observedStatus = observed.status; // asserted below: the production catch swallows assertions raised here
+      await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-A", cwd: tempDir }); // A heartbeats after the read
+      return observed;
+    };
+    await upsertWithCap({ repo: "owner/repo", pr: 17, gate: "draft_gate" }, {
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "run-B" }),
+      repoRoot: tempDir,
+      detectStale,
+      runChild: async () => { throw new Error("stop after the stale preamble"); },
+    }).catch(() => {});
+    assert.equal(observedStatus, "stale_runner", "the stale preamble ran against a stale claim");
+    const persisted = JSON.parse(await readFile(claim.filePath, "utf8"));
+    assert.equal(persisted.activeRun.runId, "run-A", "A keeps the claim");
+    assert.ok(!persisted.history.some((entry) => entry.type === "takeover"), "no takeover is recorded");
+  }, { prefix: "dev-loops-upsert-stale-race-" });
+});
+
 test("parseUpsertCheckpointVerdictCliArgs defaults executionMode and validates the flag", () => {
   const base = ["--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000", "--verdict", "clean", "--findings-summary", "ok", "--next-action", "go", "--findings-severity-counts", '{"must-fix":0}'];
 
@@ -9814,11 +9896,13 @@ function makeAcRunChild({
   issueComments = [],
   ciSuccess = true,
   prBody = DEFAULT_TEST_PR_BODY,
+  prFiles = [],
   // true fails every body edit; "pr" or "issue" fails only that kind. Mutable
   // through the returned `control` so a second run can succeed.
   failBodyEdit = false,
   // Fail every `gh issue view` after this many successful ones (null: never).
   failIssueViewAfter = null,
+  failIssueViewCount = Infinity,
 } = {}) {
   const calls = [];
   const control = { failBodyEdit };
@@ -9848,7 +9932,12 @@ function makeAcRunChild({
     // gh issue view <n> --json body — the linked-issue spec-of-record fetch.
     if (args[0] === "issue" && args[1] === "view") {
       const issue = args[2];
-      if (failIssueViewAfter !== null && issueViews++ >= failIssueViewAfter) return { code: 1, stdout: "", stderr: "HTTP 502: issue view failed\n" };
+      // A PR is also an issue: the live PR body, after any concurrent edit.
+      if (issue === "17") {
+        if (control.concurrentPrBody !== undefined) currentPrBody = control.concurrentPrBody;
+        return { code: 0, stdout: JSON.stringify({ body: currentPrBody }) + "\n", stderr: "" };
+      }
+      if (failIssueViewAfter !== null && issueViews++ >= failIssueViewAfter && issueViews <= failIssueViewAfter + failIssueViewCount) return { code: 1, stdout: "", stderr: "HTTP 502: issue view failed\n" };
       const body = issueBodies[issue];
       if (body === undefined) return { code: 1, stdout: "", stderr: "not found\n" };
       return { code: 0, stdout: JSON.stringify({ body }) + "\n", stderr: "" };
@@ -9866,7 +9955,7 @@ function makeAcRunChild({
     if (a.includes("graphql")) return { code: 0, stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n', stderr: "" };
     if (a.includes("issues/17/comments")) return { code: 0, stdout: JSON.stringify(issueComments) + "\n", stderr: "" };
     if (a.includes("pulls/17/reviews")) return { code: 0, stdout: JSON.stringify(reviews) + "\n", stderr: "" };
-    if (a.includes("pulls/17/files")) return { code: 0, stdout: "[]\n", stderr: "" };
+    if (a.includes("pulls/17/files")) return { code: 0, stdout: JSON.stringify(prFiles) + "\n", stderr: "" };
     // Dispatch pr view --json <fields> on the exact --json field list, so the
     // full pr view (which lists `files` among many fields) is not mistaken for
     // the dedicated `--json files` files-list call.
@@ -10696,15 +10785,17 @@ const COMPOSITION_UNCHECKED_AC_PR_BODY = [
   "- none", "",
 ].join("\n");
 
-function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKED_AC_ISSUE_BODY, failBodyEdit = false, failIssueViewAfter = null, closingIssues = [900] } = {}) {
+function makeCompositionRunChild(prBody, extraComments = [], { prFiles, issueBody = TICKED_AC_ISSUE_BODY, failBodyEdit = false, failIssueViewAfter = null, failIssueViewCount, closingIssues = [900], extraIssueBodies = {} } = {}) {
   return makeAcRunChild({
     isDraft: false,
     // Only issue 900 has a body; any other linked issue fails every fetch.
     closingIssues: closingIssues.map((number) => ({ number })),
-    issueBodyByNumber: { 900: issueBody },
+    issueBodyByNumber: { 900: issueBody, ...extraIssueBodies },
     prBody,
+    prFiles,
     failBodyEdit,
     failIssueViewAfter,
+    failIssueViewCount,
     reviews: [1, 2, 3, 4, 5].map((i) => ({
       author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
       submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
@@ -10726,14 +10817,14 @@ function makeCompositionRunChild(prBody, extraComments = [], { issueBody = TICKE
 // fresh acceptance-criteria (or pr-checklist) review.
 const TICK_PROVENANCE = { distinctReviewers: 1, perAngle: [{ angle: "acceptance-criteria", reviewer: "reviewer-ac" }] };
 
-async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [], verifiedItems, provenance = verifiedItems === undefined ? undefined : TICK_PROVENANCE, issueBody, failBodyEdit, failIssueViewAfter, closingIssues }, fn) {
+async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [], verifiedItems, provenance = verifiedItems === undefined ? undefined : TICK_PROVENANCE, issueBody, failBodyEdit, failIssueViewAfter, failIssueViewCount, closingIssues, extraIssueBodies, findings, prFiles }, fn) {
   const repoRoot = await stageConfigRepoRoot(requireFanoutEvidence);
   try {
-    const ledgerPath = await writeVerdictLedger(repoRoot, { overallVerdict, gate, verifiedItems, provenance });
+    const ledgerPath = await writeVerdictLedger(repoRoot, { overallVerdict, gate, verifiedItems, provenance, findings });
     const ledgerBefore = await readFile(ledgerPath, "utf8");
     const { runChild, calls, editedBodies, control } = gate === "draft_gate"
       ? makeAcRunChild({ isDraft: true, prBody })
-      : makeCompositionRunChild(prBody, extraComments, { issueBody, failBodyEdit, failIssueViewAfter, closingIssues });
+      : makeCompositionRunChild(prBody, extraComments, { prFiles, issueBody, failBodyEdit, failIssueViewAfter, failIssueViewCount, closingIssues, extraIssueBodies });
     const post = (overrides = {}) => upsertCheckpointVerdict({
       repo: "owner/repo", pr: 17, gate, headSha: GATE_FULL_HEAD,
       findingsSummary: "review round summary",
@@ -11106,8 +11197,8 @@ const TICK_ISSUE_BODY_WITH_UNVERIFIED = [
 const reviewPosted = (calls) => calls.some((c) => c.args.some((x) => x.includes("pulls/17/reviews")) && c.args.includes("POST"));
 
 test("tick: a failed post-tick issue re-fetch cannot drop the unverified issue AC item, so no clean is posted", async () => {
-  // Views 1-3 (coordination load, tick fetch, edit-issue guard body read) succeed; the reload re-fetch fails.
-  const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: TICK_ISSUE_BODY_WITH_UNVERIFIED, failIssueViewAfter: 3 };
+  // Views 1-2 (coordination load, tick fetch) succeed; the dry-run reload re-fetch fails.
+  const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: TICK_ISSUE_BODY_WITH_UNVERIFIED, failIssueViewAfter: 2, failIssueViewCount: 1 };
   await withCompositionRound(round, async ({ post, calls }) => {
     await assert.rejects(
       () => post({ verdict: "clean", findingsSeverityCounts: CLEAN_COUNTS }),
@@ -12318,4 +12409,299 @@ test("deriveEffectiveNextAction derives from the act list on review, draft_gate 
   assert.equal(deriveEffectiveNextAction("findings_present", "pre_approval_gate", act), "rerun gate");
   assert.equal(deriveEffectiveNextAction("clean", "draft_gate", []), null);
   assert.equal(deriveEffectiveNextAction("clean", "pre_approval_gate", []), null);
+});
+
+// ADR 0208: a ready PR whose cap round is proven fixed enters pre_approval_gate without a clean draft_gate comment.
+test("buildCoordinationEvaluatorInput threads draftCapRoundFixed so pre_approval_gate entry is allowed only with the proof", () => {
+  const coordinationContext = {
+    repo: "owner/repo",
+    pr: 2979,
+    currentHeadSha: "29aa40b7deadbeef",
+    prData: { isDraft: false, state: "OPEN" },
+    interpretation: { state: "pr_ready_no_feedback", sameHeadCleanConverged: true },
+    disposition: { loopDisposition: "action_required" },
+    snapshot: { ciStatus: "success", copilotReviewRoundCount: 1, unresolvedThreadCount: 0, copilotReviewOnCurrentHead: true, copilotReviewRequestStatus: "none" },
+    gateEvidence: {
+      draftGate: { visible: false },
+      draftGateMarker: { visible: false },
+      preApprovalGate: { visible: false },
+      preApprovalGateMarker: { visible: false },
+    },
+    refinementArtifact: null,
+    copilotBodyConvergence: { ok: true },
+  };
+  const evaluate = (draftCapRoundFixed) => evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
+    coordinationContext,
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: "internal_only",
+    ...(draftCapRoundFixed === undefined ? {} : { draftCapRoundFixed }),
+  }));
+  assert.ok(evaluate(true).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "cap-round-fixed proof: entry allowed");
+  assert.ok(!evaluate(false).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "no proof: entry refused");
+  assert.ok(!evaluate(undefined).allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), "an unresolved proof (resolver threw) fails closed");
+});
+
+test("tick (#2898): the dry-run artifact keeps a label a reload-only issue carries unticked even when another issue's row is flipped", async () => {
+  const extraIssueBodies = { 901: ["## Acceptance criteria", "", "- [ ] criterion number 1", ""].join("\n") };
+  const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: UNTICKED_TICK_ISSUE_BODY, closingIssues: [900, 901], extraIssueBodies, failIssueViewAfter: 1, failIssueViewCount: 1 };
+  await withCompositionRound(round, async ({ post }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.deepEqual(result.gateBlockers, [{ kind: "unticked spec-of-record Acceptance criteria", item: "criterion number 1" }]);
+  });
+});
+
+const bodyEdits = (calls) => calls.filter((c) => c.args[1] === "edit" && (c.args.includes("--body") || c.args.includes("--body-file")));
+const openAct = (extra) => ({ angle: "acceptance-criteria", severity: "medium", summary: "no evidence for that row", judgeDisposition: "act", ...extra });
+const UNTICKED_TICK_ISSUE_BODY = ["## Acceptance criteria", "", "- [ ] criterion number 1", "- [ ] criterion number 2", ""].join("\n");
+
+test("tick (#2898): a refused verdict post changes no PR body and no issue body", async () => {
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, issueBody: UNTICKED_TICK_ISSUE_BODY, verifiedItems: TICK_ITEMS }, async ({ post, calls, editedBodies }) => {
+    await assert.rejects(() => post({ verdict: "clean", findingsSeverityCounts: CLEAN_COUNTS }), /contradicts the consolidated ledger/);
+    assert.equal(editedBodies.length, 0);
+    assert.equal(bodyEdits(calls).length, 0);
+  });
+});
+
+test("tick (#2898): a refusal raised after the deferred tick point (the desiredBody issue/PR id guard) changes no PR body and no issue body", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, issueBody: UNTICKED_TICK_ISSUE_BODY, verifiedItems: TICK_ITEMS }, async ({ post, calls, editedBodies }) => {
+    await assert.rejects(() => post({ findingsSeverityCounts: CLEAN_COUNTS, findingsSummary: "tracked as 1234 and #1234" }), /comment-id-guard/);
+    assert.equal(editedBodies.length, 0);
+    assert.equal(bodyEdits(calls).length, 0);
+  });
+});
+
+test("tick (#2898): a row an open act item names by label stays unticked; a criterion with a prefix or a surrounding clause names it too", async () => {
+  for (const judgeCriterion of [TICK_ITEMS[12], `DoD: ${TICK_ITEMS[12]}`, `the row ${TICK_ITEMS[12]} has no evidence`]) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
+      await post();
+      assert.equal(editedBodies.length, 1);
+      assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${TICK_ITEMS[12]}$`, "m"));
+      assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[1]}$`, "m"));
+      // "criterion number 1" is a prefix of the named "criterion number 13" but names a different row.
+      assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[0]}$`, "m"));
+    });
+  }
+  // Accepted forms: case, internal whitespace and dropped backticks still name the row; a quoted label followed by a period too.
+  const tickedRow = "The `edit-pr.mjs` USAGE text documents `--allow-untick`.";
+  const rowBody = ["## Acceptance criteria", "", `- [ ] ${tickedRow}`, "- [ ] Tests pass", "", "## Definition of done", "", "- [x] done", ""].join("\n");
+  for (const judgeCriterion of ["the EDIT-PR.MJS usage text   documents --allow-untick", "The edit-pr.mjs USAGE text documents --allow-untick", `"${tickedRow}"`]) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: rowBody, verifiedItems: [tickedRow, "Tests pass"], findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
+      await post();
+      assert.match(editedBodies[0].body, /^- \[ \] The `edit-pr\.mjs` USAGE/m);
+      assert.match(editedBodies[0].body, /^- \[x\] Tests pass$/m);
+    });
+  }
+  // Rejected forms: a label only inside a longer word, and a criterion naming a different row, name nothing.
+  for (const judgeCriterion of ["Tests passed", "an unrelated row"]) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: rowBody, verifiedItems: ["Tests pass"], findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
+      await post();
+      assert.match(editedBodies[0].body, /^- \[x\] Tests pass$/m);
+    });
+  }
+  // A criterion that does not contain the label names nothing: every verified row is ticked.
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion: "an unrelated clause" })] }, async ({ post, editedBodies }) => {
+    await post();
+    assert.doesNotMatch(editedBodies[0].body, /- \[ \]/);
+  });
+});
+
+// A --spec-authority file pinning `specDigest`, in a scratch dir the OS cleans up.
+async function writeTickPin(name, specDigest) {
+  const file = path.join(await mkdtemp(path.join(os.tmpdir(), "dev-loops-tick-pin-")), name);
+  await writeFile(file, JSON.stringify({ specDigest, headSha: "b".repeat(40), contentDigest: `sha256:${"c".repeat(64)}`, checkedCriteria: [] }));
+  return file;
+}
+
+test("tick (#2898): a spec id (dod:<n> / ac:<n>) resolves against the pinned spec and skips only its row, whatever order the PR body lists them", async () => {
+  const unticked = (body, item) => assert.match(body, new RegExp(`^- \\[ \\] ${item}$`, "m"));
+  const ticked = (body, item) => assert.match(body, new RegExp(`^- \\[x\\] ${item}$`, "m"));
+  const pin = await writeTickPin("pinned.json", computeSpecDigest(extractSpecFromBody(TICK_PR_BODY)));
+  // The pinned spec is not the PR body's spec (the linked issue): the id resolves nothing, so every DoD row stays unticked.
+  // With no pin at all the same category skip applies.
+  for (const specAuthority of [await writeTickPin("other.json", `sha256:${"d".repeat(64)}`), undefined]) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion: "dod:1" })] }, async ({ post, editedBodies }) => {
+      await post({ specAuthority });
+      for (const item of TICK_ITEMS) (TICK_ITEMS.slice(12).includes(item) ? unticked : ticked)(editedBodies[0].body, item);
+    });
+  }
+  // DoD row 1 is "criterion number 14": only that row stays unticked.
+  for (const judgeCriterion of ["dod:1", "(dod:1)", "dod:1 The tick never flips a row that an open act item names."]) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
+      await post({ specAuthority: pin });
+      unticked(editedBodies[0].body, TICK_ITEMS[13]);
+      for (const item of TICK_ITEMS.filter((_, i) => i !== 13)) ticked(editedBodies[0].body, item);
+    });
+  }
+  // An evidence_only act item holds its row too.
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion: "dod:1", remedyKind: "evidence_only" })] }, async ({ post, editedBodies }) => {
+    await post({ specAuthority: pin });
+    unticked(editedBodies[0].body, TICK_ITEMS[13]);
+    for (const item of TICK_ITEMS.filter((_, i) => i !== 13)) ticked(editedBodies[0].body, item);
+  });
+  // AC row 0 is "criterion number 1".
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion: "ac:0" })] }, async ({ post, editedBodies }) => {
+    await post({ specAuthority: pin });
+    unticked(editedBodies[0].body, TICK_ITEMS[0]);
+    for (const item of TICK_ITEMS.slice(1)) ticked(editedBodies[0].body, item);
+  });
+  // Two ids across categories skip their two rows.
+  for (const judgeCriterion of ["ac:0/dod:1", "ac:0,dod:1", "(ac:0) (dod:1)"]) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
+      await post({ specAuthority: pin });
+      unticked(editedBodies[0].body, TICK_ITEMS[0]);
+      unticked(editedBodies[0].body, TICK_ITEMS[13]);
+      for (const item of TICK_ITEMS.filter((_, i) => i !== 0 && i !== 13)) ticked(editedBodies[0].body, item);
+    });
+  }
+  // An id the pinned spec cannot resolve (no such row) skips every PR row of its category.
+  for (const [judgeCriterion, skipped] of [["dod:99", TICK_ITEMS.slice(12)], ["ac:99", TICK_ITEMS.slice(0, 12)]]) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
+      await post({ specAuthority: pin });
+      for (const item of TICK_ITEMS) (skipped.includes(item) ? unticked : ticked)(editedBodies[0].body, item);
+    });
+  }
+  // The pinned spec resolves the id, but no unchecked PR row carries that text (the row is already checked): the whole category is skipped.
+  const preChecked = TICK_PR_BODY.replace(`- [ ] ${TICK_ITEMS[12]}`, `- [x] ${TICK_ITEMS[12]}`);
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: preChecked, verifiedItems: TICK_ITEMS.slice(13), findings: [openAct({ judgeCriterion: "dod:0" })] }, async ({ post, editedBodies, calls }) => {
+    await post({ specAuthority: pin });
+    assert.equal(editedBodies.length, 0);
+    assert.equal(bodyEdits(calls).length, 0);
+  });
+});
+
+test("tick (#2898): a pinned spec and a PR body without an AC checklist still tick the verified issue rows", async () => {
+  const issueBody = ["## Acceptance criteria", "", "- [ ] criterion number 1", "- [ ] criterion number 2", ""].join("\n");
+  const pin = await writeTickPin("pinned.json", `sha256:${"d".repeat(64)}`);
+  await withCompositionRound({ overallVerdict: "clean", prBody: "## Scope\n\nNo checklist here.\n", verifiedItems: TICK_ITEMS, issueBody }, async ({ post, editedBodies }) => {
+    await post({ specAuthority: pin, findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(editedBodies.length, 1);
+    assert.match(editedBodies[0].body, /^- \[x\] criterion number 1$/m);
+    assert.match(editedBodies[0].body, /^- \[x\] criterion number 2$/m);
+  });
+});
+
+test("tick (#2898): a review-gate rerun is refused with the already-submitted refusal message", async () => {
+  await withTempDir(async (tempDir) => {
+    const { body } = await createReviewGateAndCaptureBody(tempDir, { nextAction: "none — informational review, no re-gate required" });
+    const submitted = seededSubmittedReview({ id: 982, body });
+    const ledgerPath = await writeReviewGateLedger(tempDir, [LOCATABLE_FINDING], { overallVerdict: "findings_present", verifiedItems: TICK_ITEMS });
+    const { runChild, calls } = makeGhMock(
+      reviewGateFindingSurfaceEntries({
+        files: [{ filename: "src/db.mjs", patch: SINGLE_SURFACE_PATCH }],
+        pendingReviews: [submitted],
+        reviews: [submitted],
+        submittedReviews: [submitted],
+      }),
+    );
+    await assert.rejects(
+      upsertCheckpointVerdict({
+        repo: "owner/repo", pr: 17, gate: "review", headSha: SINGLE_SURFACE_HEAD, verdict: "findings_present",
+        findingsSummary: "one locatable finding", nextAction: "stay draft and fix",
+        findingsLedger: ledgerPath, judgeSpecSource: "none", executionMode: "fanout_fanin", submit: "comment",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }),
+      /already-submitted review 982/,
+    );
+    assert.equal(bodyEdits(calls).length, 0);
+  }, { prefix: "dev-loops-upsert-review-refused-no-tick-" });
+});
+
+test("tick (#2898): an issue id in a locatable finding summary is refused before any PR or issue body edit", async () => {
+  const finding = { angle: "correctness", severity: "medium", summary: "see 1234 and #1234", files: ["src/db.mjs"], line: 2, recommendation: "fix it" };
+  await withCompositionRound({
+    overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [finding],
+    prFiles: [{ filename: "src/db.mjs", patch: SINGLE_SURFACE_PATCH }],
+  }, async ({ post, calls }) => {
+    await assert.rejects(post({ verdict: "findings_present" }), /issue\/PR|#1234/i);
+    assert.equal(bodyEdits(calls).length, 0);
+  });
+});
+
+test("tick (#2898): an open act item carrying checkedCriteria and no judgeCriterion keeps the named category unticked", async () => {
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, findings: [openAct({ checkedCriteria: ["dod:1"] })] }, async ({ post, editedBodies }) => {
+    await post({ specAuthority: await writeTickPin("pinned.json", computeSpecDigest(extractSpecFromBody(TICK_PR_BODY))) });
+    assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${TICK_ITEMS[13]}$`, "m"));
+    assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[0]}$`, "m"));
+    assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[12]}$`, "m"));
+  });
+});
+
+test("tick (#2898): the deferred write re-applies the tick to the live body and keeps a concurrent edit", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS }, async ({ post, editedBodies, control }) => {
+    control.concurrentPrBody = `${TICK_PR_BODY}\nConcurrent note added during the round.\n`;
+    await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.equal(editedBodies.length, 1);
+    assert.match(editedBodies[0].body, /^Concurrent note added during the round\.$/m);
+    for (const item of TICK_ITEMS) assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${item}$`, "m"));
+  });
+});
+
+test("tick (#2898): a concurrent unchecked row added to the live checklist refuses before any body write", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS }, async ({ post, editedBodies, control }) => {
+    control.concurrentPrBody = TICK_PR_BODY.replace("## Definition of done\n", "## Definition of done\n\n- [ ] a row added concurrently\n");
+    await assert.rejects(() => post({ findingsSeverityCounts: CLEAN_COUNTS }), /checklist of PR 17 changed after the gate read it/);
+    assert.equal(editedBodies.length, 0);
+  });
+});
+
+test("tick (#2898): an ac id skips only the AC row of a label the DoD repeats; the DoD row still ticks", async () => {
+  const body = ["## Acceptance criteria", "", "- [ ] Shared label", "", "## Definition of done", "", "- [ ] Shared label", ""].join("\n");
+  const pin = await writeTickPin("pinned.json", computeSpecDigest(extractSpecFromBody(body)));
+  for (const [judgeCriterion, acTicked, dodTicked] of [["ac:0", false, true], ["dod:0", true, false]]) {
+    await withCompositionRound({ overallVerdict: "findings_present", prBody: body, verifiedItems: ["Shared label"], findings: [openAct({ judgeCriterion })] }, async ({ post, editedBodies }) => {
+      await post({ specAuthority: pin });
+      const [acPart, dodPart] = editedBodies[0].body.split("## Definition of done");
+      assert.equal(/- \[x\] Shared label/.test(acPart), acTicked, `${judgeCriterion} AC`);
+      assert.equal(/- \[x\] Shared label/.test(dodPart), dodTicked, `${judgeCriterion} DoD`);
+    });
+  }
+  // An unresolved id (no pin) skips only its own category too.
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: body, verifiedItems: ["Shared label"], findings: [openAct({ judgeCriterion: "ac:0" })] }, async ({ post, editedBodies }) => {
+    await post();
+    const [acPart, dodPart] = editedBodies[0].body.split("## Definition of done");
+    assert.doesNotMatch(acPart, /- \[x\]/);
+    assert.match(dodPart, /- \[x\] Shared label/);
+  });
+});
+
+test("tick (#2898): an open dod id keeps a Definition of done nested under Acceptance criteria unticked", async () => {
+  const body = ["## Acceptance criteria", "", "- [ ] Shared label", "", "### Definition of done", "", "- [ ] Shared label", ""].join("\n");
+  const pin = await writeTickPin("pinned.json", computeSpecDigest(extractSpecFromBody(body)));
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: body, verifiedItems: ["Shared label"], findings: [openAct({ judgeCriterion: "dod:0" })] }, async ({ post, editedBodies }) => {
+    await post({ specAuthority: pin });
+    const [acPart, dodPart] = editedBodies[0].body.split("### Definition of done");
+    assert.match(acPart, /- \[x\] Shared label/);
+    assert.doesNotMatch(dodPart, /- \[x\]/);
+  });
+});
+
+test("tick (#2898): a concurrent heading edit that moves a row into the AC scope refuses before any body write", async () => {
+  const withValidation = (heading) => TICK_PR_BODY.replace("## Definition of done\n", `${heading}\n\n- [ ] an unverified row\n\n## Definition of done\n`);
+  await withCompositionRound({ overallVerdict: "clean", prBody: withValidation("## Validation"), verifiedItems: TICK_ITEMS }, async ({ post, editedBodies, control }) => {
+    control.concurrentPrBody = withValidation("### Validation");
+    await assert.rejects(() => post({ findingsSeverityCounts: CLEAN_COUNTS }), /checklist of PR 17 changed after the gate read it/);
+    assert.equal(editedBodies.length, 0);
+  });
+});
+
+test("tick (#2898): a criterion supplied only through --findings-json keeps its row unticked next to a trusted ledger", async () => {
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS }, async ({ post, editedBodies }) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-tick-findings-"));
+    const findingsJson = path.join(dir, "findings.json");
+    await writeFile(findingsJson, JSON.stringify([openAct({ judgeCriterion: TICK_ITEMS[12] })]));
+    await post({ findingsJson });
+    assert.match(editedBodies[0].body, new RegExp(`^- \\[ \\] ${TICK_ITEMS[12]}$`, "m"));
+    assert.match(editedBodies[0].body, new RegExp(`^- \\[x\\] ${TICK_ITEMS[1]}$`, "m"));
+  });
+});
+
+test("tick (#2898): the dry-run artifact keeps an issue's unticked AC row that only the reload reads", async () => {
+  const extraIssueBodies = { 901: ["## Acceptance criteria", "", "- [ ] only the reload sees this row", ""].join("\n") };
+  // View 1 (coordination load of issue 901) fails once; the tick fetch and the reload then read issue 900 and 901.
+  const round = { overallVerdict: "clean", prBody: TICK_PR_BODY, verifiedItems: TICK_ITEMS, issueBody: UNTICKED_TICK_ISSUE_BODY, closingIssues: [900, 901], extraIssueBodies, failIssueViewAfter: 1, failIssueViewCount: 1 };
+  await withCompositionRound(round, async ({ post }) => {
+    const result = await post({ findingsSeverityCounts: CLEAN_COUNTS });
+    assert.deepEqual(result.gateBlockers, [{ kind: "unticked spec-of-record Acceptance criteria", item: "only the reload sees this row" }]);
+  });
 });

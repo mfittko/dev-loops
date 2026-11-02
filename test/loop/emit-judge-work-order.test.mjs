@@ -12,6 +12,7 @@ import { emitJudgeWorkOrder, main } from "../../scripts/loop/emit-judge-work-ord
 import { writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { withTempDir } from "../_helpers.mjs";
 import { seedJudgeSources } from "./_judge-delivery-fixture.mjs";
+import { SPEC_AUTHORITY_OUTCOME_VALUES, SPEC_AUTHORITY_VERDICT_SCHEMA, validateSpecAuthorityVerdict } from "../../packages/core/src/loop/spec-authority.mjs";
 
 const HEAD = "d".repeat(40);
 const withDir = (fn) => withTempDir(async (dir) => fn(await realpath(dir)), { prefix: "dev-loops-judge-wo-" });
@@ -600,5 +601,48 @@ test("an empty or whitespace-only --pr-body-file is a usage error (exit 2)", asy
       assert.equal(code, 2);
       assert.match(stderr, /--pr-body-file requires a non-empty path/);
     }
+  });
+});
+
+test("2678: the work order carries outputSchemas and a verdict built from them validates", async () => {
+  await withDir(async (root) => {
+    const plan = await emitJudgeWorkOrder(await seed(root));
+    const { outputSchemas, outputRefs, authority } = plan.workOrder;
+    for (const ref of outputRefs) assert.ok(outputSchemas[path.basename(ref)], path.basename(ref));
+    const schema = outputSchemas["spec-authority-verdict.json"];
+    assert.deepEqual(schema, SPEC_AUTHORITY_VERDICT_SCHEMA);
+    const result = pull(plan, root);
+    assert.equal(result.status, 0, result.stderr);
+    const names = [...Object.keys(schema.topLevel.required), ...Object.keys(schema.decision.required)];
+    for (const name of names) assert.ok(result.stdout.includes(`"${name}"`), name);
+    for (const outcome of SPEC_AUTHORITY_OUTCOME_VALUES) assert.ok(result.stdout.includes(outcome), outcome);
+    // Build the verdict only from the rendered field names.
+    const values = { specDigest: authority.specDigest, headSha: HEAD, contentDigest: authority.contentDigest, checkedCriteria: authority.checkedCriteria, index: 0, outcome: "finding_conflicts", rationale: "r", conflictingCriteria: [authority.checkedCriteria[0]] };
+    const decision = Object.fromEntries(Object.keys(schema.decision.required).map((k) => [k, values[k]]));
+    decision.conflictingCriteria = values.conflictingCriteria;
+    const verdict = Object.fromEntries(Object.keys(schema.topLevel.required).map((k) => [k, k === "decisions" ? [decision] : values[k]]));
+    const checked = validateSpecAuthorityVerdict(verdict, { findingsCount: 1, criterionIds: authority.checkedCriteria });
+    assert.equal(checked.decisions.length, 1);
+    // valid_compliant: the conditional keys come from the schema, with string values.
+    const compliant = Object.fromEntries(Object.keys(schema.decision.required).map((k) => [k, values[k]]));
+    compliant.outcome = "valid_compliant";
+    for (const k of ["authorizedRemediation", "defectClass", "siteQuery"]) {
+      assert.ok(schema.decision.conditional[k], k);
+      compliant[k] = "fnA fnB";
+    }
+    const okVerdict = { ...verdict, decisions: [compliant] };
+    assert.equal(validateSpecAuthorityVerdict(okVerdict, { findingsCount: 1, criterionIds: authority.checkedCriteria }).decisions.length, 1);
+    assert.throws(() => validateSpecAuthorityVerdict({ ...verdict, decisions: [{ ...compliant, siteQuery: ["fnA", "fnB"] }] }, { findingsCount: 1, criterionIds: authority.checkedCriteria }), /siteQuery/);
+  });
+});
+
+test("2678: the Judgment section leaves the digest check to the pull", async () => {
+  await withDir(async (root) => {
+    const plan = await emitJudgeWorkOrder(await seed(root));
+    const result = pull(plan, root);
+    const judgment = result.stdout.slice(result.stdout.indexOf("## Judgment"), result.stdout.indexOf("## Required reads"));
+    assert.doesNotMatch(judgment, /sha256 differs/);
+    assert.match(judgment, /pull refusal, so Pi and Claude judges compute no digest of a required read/);
+    assert.match(judgment, /the Codex after-pull setup above still governs Codex/);
   });
 });

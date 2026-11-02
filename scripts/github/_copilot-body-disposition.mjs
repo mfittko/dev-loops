@@ -109,7 +109,7 @@ async function isFixAfterReviewAndInHead({ repo, fixSha, reviewCommitSha, headSh
  *
  * @returns {Promise<{ cleared: boolean, disposition: object|null, reason: string, reasonCode?: string }>}
  */
-export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewId, reviewCommitSha }, runtime = {}) {
+export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewId, reviewCommitSha, preferOperator = false }, runtime = {}) {
   const notCleared = (reason) => ({ cleared: false, disposition: null, reason });
   if (typeof headSha !== "string" || headSha.trim().length === 0 || reviewId === null || reviewId === undefined) {
     return notCleared("no head or source review to disposition");
@@ -120,6 +120,13 @@ export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewI
     markers = await fetchCopilotBodyDispositionMarkers({ repo, pr }, runtime);
   } catch (error) {
     return notCleared(`disposition records unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (preferOperator) {
+    // An operator record for this review and head wins over an earlier fix record.
+    const operatorMarker = markers.find((m) => m.operator && m.headSha === normalizedHead && m.reviewId === String(reviewId));
+    if (operatorMarker) {
+      return { cleared: true, disposition: operatorMarker, reason: `operator disposition recorded for review ${operatorMarker.reviewId} at head ${normalizedHead}` };
+    }
   }
   let numericIdMarker = null;
   for (const marker of markers) {

@@ -183,7 +183,7 @@ export function matchesGlob(filePath, pattern) {
 // Dev-loop config sources: reviewer pool/prompts and shipped defaults. A change
 // there rewrites the review system itself, so no repository rule may
 // reclassify them.
-const DEV_LOOP_CONFIG_SOURCE_RE = /(^|\/)(\.devloops(\.(ya?ml|json))?|\.pi\/dev-loop\/(settings|defaults)\.[^/]+|packages\/core\/src\/config\/extension-defaults\.yaml)$/;
+const DEV_LOOP_CONFIG_SOURCE_RE = /(^|\/)(\.devloops(\.(ya?ml|json))?|\.pi\/dev-loop\/(settings|defaults)(\.[^/]+)?|packages\/core\/src\/config\/extension-defaults\.yaml)$/;
 
 /**
  * Whether a path is a dev-loop config source. Separators are normalized so

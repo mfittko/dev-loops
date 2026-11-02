@@ -142,7 +142,7 @@ judgment cannot substitute. The
 rejects `--ready`. Agents MUST NOT create ready PRs. The two sanctioned draft exits are
 `ready-for-review.mjs` (`gh pr ready`) for a normal ready flip, and `restore-ready.mjs`
 only to restore a PR that `convert-to-draft.mjs` made a transient draft while CI is
-blocking. Both run through `readyForReview()` and require clean current-head `draft_gate` evidence.
+blocking. Both run through `readyForReview()` and require clean current-head `draft_gate` evidence, with one exception owned by `GATE-EXEC-ROUND-CAP` (ADR 0208): `ready-for-review.mjs` accepts the cap-round-fixed proof in place of that verdict. `restore-ready.mjs` never accepts it, because the proof was never CI-checked at the current head. It refuses a cap-fixed PR whose only evidence is that proof, and the remedy is `ready-for-review.mjs` once CI is green.
 [TRACKER-PROJECTION-REQUIRED-METADATA](./tracker-first-loop-state.md#31-required-pr-metadata)
 owns the corresponding tracker metadata requirement.
 
@@ -217,6 +217,11 @@ or local notes to determine "where we left off."
 ## Hard rule: no agent-authored shell polling
 
 Helper-owned sleep inside `run-watch-cycle.mjs`, `probe-copilot-review.mjs`, or `watch-initial-copilot-pr.mjs` is allowed and is not a blocker. Agent-authored shell polling (`sleep`, `for`, `while`, `timeout` wrappers around tool invocations) is a contract breach. This rule applies to ALL repos using the dev-loop workflow.
+
+## Runner handoff teardown
+
+<!-- rule: RUNNER-HANDOFF-TEARDOWN -->
+`RUNNER-HANDOFF-TEARDOWN`: A coordinator that owns a PR runner claim MUST release it at hand-back with `pr-runner-coordination.mjs handoff --repo <owner/name> --pr <number> --run-id <the id used at claim>`. When a verified runtime run id exists, `handoff` uses it and a mismatching `--run-id` is `ownership_lost`. When none exists (for example on Claude Code), the explicit `--run-id` is accepted as the identity and the handoff succeeds only when it equals the active owner; any other owner gives `ownership_lost`. On native Codex the verified thread identity is still required, and an explicit `--run-id` alone is refused with `run_id_required`. With neither id, `handoff` refuses with `run_id_required` and a message that names the remedy. The automatic release at a terminal stop (`loop handoff`, `loop gate-coordination`) reads the run id from the environment only, so a coordinator that claimed the PR MUST prefix those calls with `DEVLOOPS_RUN_ID=<the id used at claim>`. When the result carries `runnerRelease.status: skipped_no_async_run_id` (its `remedy` names the command), a coordinator that claimed the PR MUST run the explicit `handoff --run-id` before its hand-back. Without a claim the handoff writes nothing: `handoff_noop` when no owner exists, `ownership_lost` (exit 1) when another run holds the claim. `takeover` succeeds only once `status` reports `stale: true` (exit signal or max age); otherwise it refuses with `active_run_exists`, and a missing run id is `run_id_required`. `status` reports `stale` and `staleReason`, and `takeover` refuses a live non-stale owner.
 
 ## Hard rule: no inline interpreters
 

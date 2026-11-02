@@ -464,9 +464,10 @@ export function computeSizeBudget({
  * scripts/github/write-gate-context.mjs) so the byte-for-byte diff/LOC counts
  * a run produces don't depend on the operator's local git config.
  */
-function captureSizeBudgetDiff({ base, head = "HEAD", repoRoot = process.cwd(), maxBuffer = 64 * 1024 * 1024 }) {
+function captureSizeBudgetDiff({ base, head = "HEAD", workingTree = false, repoRoot = process.cwd(), maxBuffer = 64 * 1024 * 1024 }) {
   base = anchorBaseRef(base, { repoRoot });
-  const range = `${base}...${head}`;
+  // workingTree diffs `base` against the working tree (committed plus uncommitted).
+  const range = workingTree ? base : `${base}...${head}`;
   // Shared byte-identical flag set (see captureDiffFromBase in
   // scripts/github/write-gate-context.mjs); this path keeps its own runGit stdio
   // and three captured views below.
@@ -515,6 +516,16 @@ export async function evaluatePrSizeBudget({
   const sizeConfig = config?.gates?.size ?? {};
   const { nameStatusOutput, diffOutput, numstatOutput } = captureSizeBudgetDiff({ base, head, repoRoot });
   return computeSizeBudget({ nameStatusOutput, diffOutput, numstatOutput, sizeConfig, configErrors, waived, approvedBy, rules: resolveClassifyRules(config) });
+}
+
+/**
+ * Synchronous size outcome for `base` against the working tree (committed plus
+ * uncommitted), from an already-loaded config. Used by lightweight startup
+ * eligibility; evaluatePrSizeBudget stays the three-dot PR reader.
+ */
+export function evaluateWorkingTreeSizeBudget({ config, base, repoRoot = process.cwd() }) {
+  const { nameStatusOutput, diffOutput, numstatOutput } = captureSizeBudgetDiff({ base, workingTree: true, repoRoot });
+  return computeSizeBudget({ nameStatusOutput, diffOutput, numstatOutput, sizeConfig: config?.gates?.size ?? {}, rules: resolveClassifyRules(config) });
 }
 
 function assertPlausibleRef(ref, label, onError) {

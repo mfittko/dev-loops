@@ -4,6 +4,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
+import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkFanoutAngleCoverage, freshAngleNames, composeReviewVerdict, isFullyJudged, isOpenActItem, isPastRoundCap, JUDGE_DISPOSITIONS, listOpenActItems, normalizeSeverity, normalizeSeverityCounts, pastCapBlockers, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { composeConvergedDraftGate, convergedActItemKey } from "@dev-loops/core/loop/pre-push-delta-review";
 import { parseArgs } from "node:util";
@@ -14,7 +15,7 @@ import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/
 import { minimizeSupersededGateReviews } from "./_minimize-superseded-verdicts.mjs";
 import { loadPrGateCoordinationContext, loadRefinementArtifact } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
-import { checklistSectionLineIndices, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { checklistLineScopes, checklistSectionLineIndices, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { applyTick } from "./tick-verified-checkboxes.mjs";
 import { editPr } from "./edit-pr.mjs";
 import { editIssue } from "./edit-issue.mjs";
@@ -22,7 +23,7 @@ import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "./detect-check
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
-import { claimRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
+import { assertRunnerOwnership, claimRunnerOwnership, pinObservedClaim } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { FULL_HEAD_SHA_ERROR, normalizeFullHeadSha } from "../lib/head-sha.mjs";
@@ -54,12 +55,12 @@ import {
 } from "./_gate-finding-surface.mjs";
 import { fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { mergeSameDefectFindings, normalizeFindingSummary } from "./_gate-finding-text.mjs";
-import { stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
+import { computeSpecDigest, extractSpecFromBody, normalizeCriterionText, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { resolveLedgerCheckouts } from "../loop/_repo-root-resolver.mjs";
-import { buildValidationResultsPath, closureFromHeadOf, countCompletedRounds, readClosedPriorRoundLogs } from "./write-gate-context.mjs";
+import { buildValidationResultsPath, countCompletedRounds, resolveCapRoundFixed } from "./write-gate-context.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -142,8 +143,10 @@ function ledgerTmpRoot(ledgerPath) {
   return parts.length > 4 && parts.at(-4) === "gate-findings" && /^pr-\d+$/.test(parts.at(-2)) ? parts.slice(0, -4).join(path.sep) || path.sep : undefined;
 }
 
+const roundCapReachedError = (round, cap) => new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs and no fixer follows. After the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`; pre_approval_gate judges what remains.`);
+
 const USAGE = `Usage: upsert-checkpoint-verdict.mjs --repo <owner/name> --pr <number> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings-summary <text> | --findings-file <path> | --findings-json <path>; a draft_gate post requires --findings-ledger carrying overallVerdict while gates.draft.maxReviewRounds > 0) [--next-action <text> (required except on --gate review)] [--gate <draft_gate|pre_approval_gate|review>] [--findings-ledger <path>]
-The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin, except on --gate draft_gate while gates.draft.maxReviewRounds > 0 (GATE-EXEC-ROUND-CAP): there --findings-ledger carrying overallVerdict is the only accepted input, and --findings-json and --findings-file posts are refused (an inline clean with only --findings-summary stays accepted, as reconcile-draft-gate posts it).
+The --findings-json structured per-angle path is preferred for --execution-mode fanout_fanin, except on --gate draft_gate while gates.draft.maxReviewRounds > 0 (GATE-EXEC-ROUND-CAP): there --findings-ledger carrying overallVerdict is the only accepted input, and --findings-json and --findings-file posts are refused (an inline clean with only --findings-summary stays accepted, as reconcile-draft-gate posts it, except at round N+1, where every post but --converged-json is refused with round_cap_reached, ADR 0208).
 Post the gate round's SINGLE visible surface: one PR review of type COMMENT whose
 body carries the checkpoint verdict fields and, with --findings-ledger, the
 round's body-filed findings, while every locatable finding becomes one of that
@@ -2028,6 +2031,7 @@ export function buildCoordinationEvaluatorInput({
   draftGateConfig,
   preApprovalGateConfig,
   reviewMode,
+  draftCapRoundFixed = false,
 }) {
   return {
     repo: coordinationContext.repo,
@@ -2069,6 +2073,7 @@ export function buildCoordinationEvaluatorInput({
     preApprovalGate: coordinationContext.gateEvidence.preApprovalGate,
     preApprovalGateMarker: coordinationContext.gateEvidence.preApprovalGateMarker,
     ...(reviewMode ? { reviewMode } : {}),
+    draftCapRoundFixed,
   };
 }
 
@@ -2322,7 +2327,8 @@ function anglesPassCoverage(entries, config, gate) {
 
 // ACCEPT-CRITERIA-VERIFY-AND-REFLECT automatic tick (pre_approval_gate with a
 // trusted --findings-ledger only): tick the ledger's reviewer-verified labels
-// in the PR body's AC/DoD boxes and, for each linked issue whose unticked AC
+// in the PR body's AC/DoD boxes (dry run first; writes are deferred until after
+// every refusal) and, for each linked issue whose unticked AC
 // items the coordination load read, in that issue body. A label outside those
 // unchecked lists is dropped; an issue whose body the coordination load could
 // not fetch is skipped (it stays spec-of-record unavailable). Exact-label
@@ -2332,7 +2338,57 @@ function anglesPassCoverage(entries, config, gate) {
 // labels no reviewer verified stay unchecked in it and still block. Only lines
 // inside the AC/DoD sections (the AC section for an issue body) are flipped, so
 // the same label under another heading stays unchecked.
-async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordinationContext }, { env, ghCommand, runChild }) {
+// The tick computes the ticked artifact without editing and queues each edit in
+// pendingWrites; each queued write re-fetches the live body and re-applies the
+// tick to it, so a concurrent body edit is kept and the edit guards compare
+// against the live body. namedCriteria (open act item criterion texts) are never
+// ticked: a verified label that a criterion contains is skipped, and an `ac:<n>` /
+// `dod:<n>` id skips the PR-body row whose label equals that criterion in the pinned
+// spec, resolved only when the PR body's spec digest equals the pinned specDigest.
+// Only an id the pinned spec cannot resolve (no pin, a different pinned spec, no such
+// row), or whose text matches no unchecked PR row, skips every PR-body row of its category.
+async function tickReviewerVerifiedItems({ repo, pr, verifiedItems: allVerified, coordinationContext, pendingWrites, namedCriteria = [], pinnedSpecDigest }, { env, ghCommand, runChild }) {
+  // A label is skipped when a normalized criterion equals it or contains it bounded by non-word characters or the string edge.
+  const flat = (t) => normalizeCriterionText(String(t).replaceAll("`", "")).toLowerCase().replace(/\.+$/u, "");
+  const normalizedCriteria = namedCriteria.map(flat);
+  const verifiedItems = allVerified.filter((label) => {
+    const text = flat(label);
+    if (!text) return true;
+    const bounded = new RegExp(`(?<![\\p{L}\\p{N}_])${text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}(?![\\p{L}\\p{N}_])`, "u");
+    return !normalizedCriteria.some((c) => bounded.test(c));
+  });
+  const inSections = (body, options) => {
+    const indices = checklistSectionLineIndices(body, options);
+    if (!options?.byCategory) return (index) => indices.has(index);
+    // Per-category labels: an AC row ticks only for an AC label, a DoD row only for a DoD label, so a duplicate label in the other category is unaffected.
+    // The nearest-heading scope puts a DoD section nested under Acceptance criteria in the DoD category.
+    const scopes = checklistLineScopes(body);
+    return (index, label) => indices.has(index) && options.byCategory[scopes[index]]?.has(label) === true;
+  };
+  const tick = async (body, labels, write, liveIssue, options) => {
+    const result = await applyTick(body, labels, true, write, inSections(body, options));
+    if (result.flipped.length > 0) {
+      // preview=true re-reads the live body and refuses when its ticked checkbox rows differ from the dry-run's (a concurrent row change the clean guards never saw); it writes nothing.
+      // Each row carries its checklist scope, so a concurrent heading edit that moves rows into or out of AC/DoD also refuses.
+      const checkboxRows = (b) => {
+        const scopes = checklistLineScopes(b);
+        return b.split(/\r?\n/u).flatMap((l, i) => /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s/u.test(l) ? [`${scopes[i]}\u0000${l.trim()}`] : []);
+      };
+      const dryRows = checkboxRows(result.body);
+      pendingWrites.push(async (preview = false) => {
+        const live = await fetchIssueBody({ repo, issue: liveIssue }, { env, ghCommand, runChild });
+        if (preview) {
+          const liveRows = checkboxRows((await applyTick(live, labels, true, write, inSections(live, options))).body);
+          if (liveRows.length !== dryRows.length || liveRows.some((row, i) => row !== dryRows[i])) {
+            throw new Error(`The checklist of ${liveIssue === pr ? `PR ${pr}` : `issue ${liveIssue}`} changed after the gate read it; no verdict is posted and nothing was ticked. Re-run the gate against the current body.`);
+          }
+          return undefined;
+        }
+        return applyTick(live, labels, false, write, inSections(live, options));
+      });
+    }
+    return result;
+  };
   const prData = coordinationContext.prData;
   if (typeof prData?.body !== "string") {
     throw new Error(`Cannot tick reviewer-verified items on PR ${pr}: the PR body is not a string.`);
@@ -2342,21 +2398,44 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordination
     const allowed = new Set(Array.isArray(list) ? list : []);
     return verifiedItems.filter((label) => allowed.has(String(label).trim()));
   };
-  const inSections = (body, options) => {
-    const indices = checklistSectionLineIndices(body, options);
-    return (index) => indices.has(index);
+  // The PR body's spec stands in for the pinned spec only when its digest equals the pinned specDigest; otherwise (no pin, or the pin is another body such as the linked issue) no id resolves and the category skip applies.
+  const bodySpec = extractSpecFromBody(prData.body);
+  // computeSpecDigest throws on a body with no acceptance criteria; that body cannot match the pin.
+  const bodyDigest = pinnedSpecDigest === undefined ? undefined : (() => { try { return computeSpecDigest(bodySpec); } catch { return undefined; } })();
+  const pinnedSpec = pinnedSpecDigest !== undefined && bodyDigest === pinnedSpecDigest
+    ? bodySpec
+    : { acceptanceCriteria: [], definitionOfDone: [] };
+  const categories = {
+    ac: { spec: pinnedSpec.acceptanceCriteria, unchecked: artifact?.prBodyUncheckedAcItems ?? [] },
+    dod: { spec: pinnedSpec.definitionOfDone, unchecked: artifact?.prBodyUncheckedDodItems ?? [] },
   };
-  const prTick = await applyTick(prData.body, inList([...(artifact?.prBodyUncheckedAcItems ?? []), ...(artifact?.prBodyUncheckedDodItems ?? [])]), false, (bodyFile) =>
-    editPr({ repo, pr, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild, currentBody: prData.body }),
-  inSections(prData.body));
+  // Skips are scoped to the criterion's category: an AC id never suppresses a same-text DoD row.
+  const prSkipped = { ac: new Set(), dod: new Set() };
+  for (const c of namedCriteria) {
+    for (const [, kind, index] of c.matchAll(/\b(ac|dod):(\d+)\b/giu)) {
+      const { spec, unchecked } = categories[kind.toLowerCase()];
+      const text = spec[Number(index)] === undefined ? "" : normalizeCriterionText(spec[Number(index)]);
+      const row = unchecked.find((label) => normalizeCriterionText(label) === text);
+      for (const label of text && row !== undefined ? [row] : unchecked) prSkipped[kind.toLowerCase()].add(String(label).trim());
+    }
+  }
+  const byCategory = {
+    ac: new Set(inList(artifact?.prBodyUncheckedAcItems).map((l) => String(l).trim()).filter((l) => !prSkipped.ac.has(l))),
+    dod: new Set(inList(artifact?.prBodyUncheckedDodItems).map((l) => String(l).trim()).filter((l) => !prSkipped.dod.has(l))),
+  };
+  const prTick = await tick(prData.body, [...byCategory.ac, ...byCategory.dod], (bodyFile) =>
+    editPr({ repo, pr, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
+  pr, { byCategory });
   const issueLabels = inList(artifact?.uncheckedAcItems);
   const tickedIssueBodies = [];
+  const flippedIssueLabels = new Set();
   if (Array.isArray(artifact?.uncheckedAcItems) && artifact.uncheckedAcItems.length > 0) {
     for (const issue of artifact.uncheckedAcIssues ?? []) {
       const issueBody = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
-      const issueTick = await applyTick(issueBody, issueLabels, false, (bodyFile) =>
+      const issueTick = await tick(issueBody, issueLabels, (bodyFile) =>
         editIssue({ repo, issue, bodyFile, addAssignees: [], removeAssignees: [] }, { env, ghCommand, run: runChild }),
-      inSections(issueBody, { acOnly: true }));
+      issue, { acOnly: true });
+      issueTick.flipped.forEach((label) => flippedIssueLabels.add(String(label).trim()));
       tickedIssueBodies.push(issueTick.body);
     }
   }
@@ -2371,7 +2450,19 @@ async function tickReviewerVerifiedItems({ repo, pr, verifiedItems, coordination
   // drop them and let an unverified issue AC item pass the clean guard.
   // Union with the reload's list so the result is never smaller than either source.
   const local = tickedIssueBodies.flatMap((body) => detectIssueRefinementArtifact({ body }).uncheckedAcItems);
-  const uncheckedAcItems = [...new Set([...(reloaded.uncheckedAcItems ?? []), ...local])];
+  // A dry run edited nothing, so the reload's issue rows still carry the labels this tick would flip: drop those, keep the rest.
+  // A linked issue only the reload read keeps its own unticked rows, even when they share a label this tick flips elsewhere.
+  const reloadOnlyLabels = new Set();
+  const fetchedIssues = new Set(artifact.uncheckedAcIssues ?? []);
+  for (const issue of (reloaded.uncheckedAcIssues ?? []).filter((n) => !fetchedIssues.has(n))) {
+    const body = await fetchIssueBody({ repo, issue }, { env, ghCommand, runChild });
+    detectIssueRefinementArtifact({ body }).uncheckedAcItems.forEach((label) => reloadOnlyLabels.add(String(label).trim()));
+  }
+  const reloadedItems = (reloaded.uncheckedAcItems ?? []).filter((label) => {
+    const text = String(label).trim();
+    return !(flippedIssueLabels.has(text) && !reloadOnlyLabels.has(text));
+  });
+  const uncheckedAcItems = [...new Set([...reloadedItems, ...local])];
   return { ...reloaded, uncheckedAcItems };
 }
 
@@ -2542,7 +2633,7 @@ export async function assertGateValidationArtifact({ repo, pr, gate, headSha, re
   );
 }
 
-export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget } = {}) {
+export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, detectStale = detectStaleRunner } = {}) {
   const gh = { env, ghCommand, repoRoot, runChild };
   // Optional --spec-authority stamps the RETURNED result (this script's
   // durable verdict record — it posts no file of its own) with the pinned
@@ -2573,9 +2664,21 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const envRunId = resolveRunId(env) ?? "";
   if (envRunId) {
     try {
-      const staleCheck = await detectStaleRunner({ repo: options.repo, pr: options.pr, cwd: repoRoot });
+      const staleCheck = await detectStale({ repo: options.repo, pr: options.pr, cwd: repoRoot });
       if (staleCheck.status === "stale_runner") {
-        await claimRunnerOwnership({ repo: options.repo, pr: options.pr, runId: envRunId, cwd: repoRoot, mode: "takeover" });
+        // Pin the generation the stale read observed so a heartbeat before the locked write is not displaced.
+        const observed = staleCheck.activeRun;
+        if (observed?.runId === envRunId) {
+          // The owner refreshes its own aged claim with a heartbeat, never a takeover.
+          await assertRunnerOwnership({ repo: options.repo, pr: options.pr, runId: envRunId, cwd: repoRoot, requireExisting: true });
+        } else await claimRunnerOwnership({
+          repo: options.repo,
+          pr: options.pr,
+          runId: envRunId,
+          cwd: repoRoot,
+          mode: "takeover",
+          ...pinObservedClaim(observed),
+        });
       }
     } catch {
       // Non-fatal: stale-runner takeover is best-effort. If it fails, the subsequent
@@ -2690,7 +2793,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // Non-fatal: internal-only detection failure is best-effort.
       // Proceed with the default (external Copilot review) mode.
     }
+    // ADR 0208: the same cap-round-fixed proof the detector resolves, so a ready cap-fixed PR can enter pre_approval_gate; fail closed on error.
+    const prBaseRefName = typeof coordinationContext.prData?.baseRefName === "string" ? coordinationContext.prData.baseRefName.trim() : "";
+    const draftCapRoundFixed = await resolveCapRoundFixed({ repo: options.repo, pr: options.pr, headSha: coordinationContext.currentHeadSha, baseRefName: prBaseRefName, anyHead: coordinationContext.prData?.isDraft !== true }, { repoRoot }).then(Boolean, () => false);
     coordination = evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
+      draftCapRoundFixed,
       coordinationContext,
       maxCopilotRounds,
       draftGateConfig,
@@ -2788,7 +2895,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         `\`dev-loops pr reconcile-draft --repo ${options.repo} --pr ${options.pr}\`.`,
       );
     }
-    if (gateActionForbidden) {
+    // A --converged-json update only amends the existing draft_gate comment, so the cap-fixed RUN_DRAFT_GATE ban does not apply to it; its own validation still runs.
+    // The waiver holds only when the cap-fixed proof is the sole reason: without it, coordination would not forbid the action.
+    const forbidOnlyByCapFixed = options.convergedJson && draftCapRoundFixed && requestedGateAction === PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE
+      && !evaluatePrGateCoordination(buildCoordinationEvaluatorInput({
+        draftCapRoundFixed: false, coordinationContext, maxCopilotRounds, draftGateConfig, preApprovalGateConfig, reviewMode,
+      })).forbiddenActions.includes(requestedGateAction);
+    if (gateActionForbidden && !forbidOnlyByCapFixed) {
       throw new Error(buildGateEntryRefusalError({ options, coordination }));
     }
     // Post-time fan-out evidence enforcement: refuse an under-qualified inline
@@ -2804,6 +2917,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // refuses every other shape before any cap logic runs. The one exception is an inline clean without findings content (--findings-summary text only, as reconcile-draft-gate posts):
     // it holds no finding, so the cap has nothing to count or block.
     if (options.gate === "draft_gate" && draftGateConfig.maxReviewRounds > 0) {
+      // ADR 0208: round N+1 never runs, whatever the post shape (the inline exception below included); a converged post is the one carve-out.
+      const roundNo = options.convergedJson ? 0 : await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: options.findingsLedger ? ledgerTmpRoot(options.findingsLedger) : undefined }, { repoRoot });
+      if (isRoundRefused(roundNo, draftGateConfig.maxReviewRounds)) throw roundCapReachedError(roundNo, draftGateConfig.maxReviewRounds);
       const inlineVerdictOnlyClean = !options.findingsJson && !options.findingsLedger && !options.findingsFile && options.verdict === "clean"
         && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "inline_single_agent";
       const refused = inlineVerdictOnlyClean ? null : options.findingsJson ? "--findings-json"
@@ -2971,6 +3087,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       summary: (typeof f?.summary === "string" && f.summary.trim()) || "(unparseable)",
       judgeDisposition: typeof f?.judgeDisposition === "string" ? f.judgeDisposition.trim() : f?.judgeDisposition,
       ...(f?.remedyKind ? { remedyKind: f.remedyKind } : {}),
+      // Criterion references survive so the tick exclusion (namedCriteria) sees a reference supplied only in --findings-json.
+      ...(typeof f?.defectKey === "string" ? { defectKey: f.defectKey } : {}),
+      ...(typeof f?.judgeCriterion === "string" ? { judgeCriterion: f.judgeCriterion } : {}),
+      ...(Array.isArray(f?.checkedCriteria) ? { checkedCriteria: f.checkedCriteria } : {}),
       // Cluster and location survive the projection so the next-action count and fingerprints match the ledger's.
       ...(Number.isInteger(f?.clusterId) ? { clusterId: f.clusterId } : {}),
       ...(resolveFindingFile(f) ? { files: [resolveFindingFile(f)] } : {}),
@@ -3006,22 +3126,33 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
     }
   }
-  // Tick the reviewer-verified AC/DoD labels BEFORE composing, then read the
+  // Dry-run the reviewer-verified AC/DoD ticks before composing (writes are queued and applied after the last refusal), then read the
   // reloaded artifact everywhere below (blocker collection and the clean guards).
   // Only a ledger whose provenance records a fresh acceptance-criteria or
   // pr-checklist review is trusted to tick. In fanout_fanin mode the ledger
   // must also pass the angle-coverage checks, and so must --findings-json when
   // present: its throwing coverage check runs later, so an input it refuses
   // must tick nothing.
+  const pendingTickWrites = [];
   const tickCoverageOk = (options.executionMode ?? DEFAULT_EXECUTION_MODE) !== "fanout_fanin"
     || (ledgerPassesAngleCoverage(preloadedFindingsLedger, config, options.gate)
       && (!structuredFindings || (anglesPassCoverage(rawFindingsInput, config, options.gate) && anglesPassCoverage(structuredFindings, config, options.gate))));
   if (options.gate === "pre_approval_gate" && preloadedFindingsLedger?.verifiedItems?.length > 0 && ledgerVerifiesChecklist(preloadedFindingsLedger) && tickCoverageOk) {
+    // Dry run: the composition and clean guards read the would-be ticked artifact; the edits run after the last refusal (pendingTickWrites).
+    // An open act item names a row by its label text or by a spec id (`ac:<n>` / `dod:<n>`); see tickReviewerVerifiedItems.
+    // An evidence_only act item also holds its row: its remedy is evidence, but the judge still says the row is unproven.
+    const namedCriteria = [...(preloadedFindingsLedger.findings ?? []), ...enrichedActItems, ...jsonUnactedFindings]
+      .filter((f) => f?.judgeDisposition === "act")
+      .flatMap((f) => [f.defectKey, f.judgeCriterion, ...(Array.isArray(f.checkedCriteria) ? f.checkedCriteria : [])])
+      .filter((c) => typeof c === "string").map((c) => c.trim()).filter(Boolean);
     coordinationContext.refinementArtifact = await tickReviewerVerifiedItems({
       repo: options.repo,
       pr: options.pr,
       verifiedItems: preloadedFindingsLedger.verifiedItems,
       coordinationContext,
+      pendingWrites: pendingTickWrites,
+      namedCriteria,
+      pinnedSpecDigest: specAuthorityIdentity?.specDigest,
     }, gh);
   }
   // Set only when the posted checkpoint verdict differs from the ledger's review
@@ -3031,8 +3162,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const roundFindings = [...(preloadedFindingsLedger?.findings ?? []), ...enrichedActItems, ...jsonUnactedFindings];
   const judgedRound = isFullyJudged(roundFindings);
   let checkpointComposition = null;
-  // GATE-EXEC-ROUND-CAP: the closure round (count cap+1) states where its diff starts.
-  let closureFromHead = null;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     // ADR 0089: a non-empty judge act list keeps the review verdict from clean.
     // Judged non-act findings stay in the list so a judged round with an empty act list composes clean; the converged guard replaces only the act items.
@@ -3043,13 +3172,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       : composeReviewVerdict(preloadedFindingsLedger.overallVerdict, [...roundFindings.filter((f) => !isOpenActItem(f)), ...guardedRoundActs]);
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
-    // Past the round cap a new act item blocks (round_cap_reached) and no fixer runs; an all-low/nit act list converges by the 0168 rule.
+    // ADR 0208: round N+1 (count cap+1) never runs; every post but --converged-json is refused with round_cap_reached, and the cap round's fixer pass leads to ready.
     const cap = draftGateConfig?.maxReviewRounds ?? 0;
     const completedRound = options.gate === "draft_gate" && !convergedInput && cap > 0
       ? await countCompletedRounds({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot })
       : 0;
-    if (completedRound > 0 && completedRound === cap + 1) {
-      closureFromHead = closureFromHeadOf(await readClosedPriorRoundLogs({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: canonicalHeadSha, tmpRoot: ledgerTmpRoot(options.findingsLedger) }, { repoRoot }));
+    // ADR 0208: round N+1 never runs; the cap round's fixer pass is the last draft step and the PR goes ready.
+    if (isRoundRefused(completedRound, cap)) {
+      throw roundCapReachedError(completedRound, cap);
     }
     const gateBlockers = [
       ...collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact),
@@ -3518,7 +3648,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
     ...(checkpointComposition ? { reviewVerdict: checkpointComposition.reviewVerdict, gateBlockers: checkpointComposition.blockers } : {}),
-    closureFromHead,
     ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable, locatableFindings: findingSurface.locatable, foldedFindings: findingSurface.folded } : {}),
   });
   // ISSUE/PR-ID GUARD: the rendered gate verdict body must never emit a
@@ -3527,6 +3656,40 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // gate review) and the legacy issue-comment surface (updateComment below) are
   // covered, in addition to the low-level guards in the write helpers.
   guardCommentBodyNoIssuePrIds(desiredBody, { ref: "gate verdict comment body", allowedRefs: options.allowedRefs });
+  // SUBMITTED-REVIEW RESOLUTION (review gate): a same-head own SUBMITTED review
+  // is this round's existing surface. Without this, a same-head rerun POSTs a
+  // duplicate submitted review (findOwnPendingReview above only sees the
+  // author-only PENDING draft, never a submitted one). --new-round is the
+  // deliberate escape hatch that bypasses this dedup to force a fresh review.
+  // Runs AFTER resolveFindingSurface so findingSurface.locatable already tells
+  // us whether a correction needs a new inline comment GitHub cannot add to an
+  // already-submitted review. The lookup and its refusal run before the queued ticks.
+  const ownSubmitted = isReviewGate && !options.newRound
+    ? await findOwnSubmittedReview(
+      { repo: options.repo, pr: options.pr, headSha: canonicalHeadSha },
+      gh,
+    )
+    : null;
+  // A still-unposted locatable finding would need an inline comment, and
+  // GitHub exposes no endpoint to add one to an already-submitted review.
+  // Fail closed rather than silently drop it to body text; --new-round
+  // posts a fresh review that CAN carry the inline comment.
+  if (ownSubmitted && findingSurface && findingSurface.locatable.length > 0) {
+    throw new Error(
+      `Cannot correct the already-submitted review ${ownSubmitted.id} on ${options.repo}#${options.pr}: `
+      + `this round adds ${findingSurface.locatable.length} inline finding(s), and GitHub has no endpoint to add inline `
+      + `comments to a submitted review. Re-run with --new-round to post a fresh review round that carries the new inline comment(s).`,
+    );
+  }
+  // createGateReview refuses an inline finding comment that carries a raw issue/PR id; run that guard here so the refusal precedes the ticks.
+  for (const finding of findingSurface ? mergeSameDefectFindings(findingSurface.locatable) : []) {
+    guardCommentBodyNoIssuePrIds(renderInlineCommentBody(finding, { round: findingSurface.round }), { ref: "gate review inline finding comment", allowedRefs: options.allowedRefs });
+  }
+  // The last refusal has passed: apply the queued reviewer-verified ticks now, before the first review or comment write, so a refused post leaves no ticked box.
+  // A failed write throws before any post. A failed post (HTTP error) after the write keeps the ticks; a rerun is idempotent and re-ticks only the rows still unticked.
+  // Validate every live checklist against its dry-run first, so a concurrent row change refuses before any body write.
+  for (const write of pendingTickWrites) await write(true);
+  for (const write of pendingTickWrites) await write();
   const findingSurfaceFields = findingSurface
     ? {
         round: findingSurface.round,
@@ -3536,20 +3699,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         suppressed: findingSurface.suppressedCount,
       }
     : {};
-  // SUBMITTED-REVIEW RESOLUTION (review gate): a same-head own SUBMITTED review
-  // is this round's existing surface. Without this, a same-head rerun POSTs a
-  // duplicate submitted review (findOwnPendingReview above only sees the
-  // author-only PENDING draft, never a submitted one). --new-round is the
-  // deliberate escape hatch that bypasses this dedup to force a fresh review.
-  // Runs AFTER resolveFindingSurface so findingSurface.locatable already tells
-  // us whether a correction needs a new inline comment GitHub cannot add to an
-  // already-submitted review.
-  if (isReviewGate && !options.newRound) {
-    const ownSubmitted = await findOwnSubmittedReview(
-      { repo: options.repo, pr: options.pr, headSha: canonicalHeadSha },
-      gh,
-    );
-    if (ownSubmitted) {
+  if (ownSubmitted) {
       const reviewBaseResult = {
         ok: true,
         repo: options.repo,
@@ -3565,17 +3715,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
         ...(specAuthority ? { specAuthority } : {}),
       };
-      // A still-unposted locatable finding would need an inline comment, and
-      // GitHub exposes no endpoint to add one to an already-submitted review.
-      // Fail closed rather than silently drop it to body text; --new-round
-      // posts a fresh review that CAN carry the inline comment.
-      if (findingSurface && findingSurface.locatable.length > 0) {
-        throw new Error(
-          `Cannot correct the already-submitted review ${ownSubmitted.id} on ${options.repo}#${options.pr}: `
-          + `this round adds ${findingSurface.locatable.length} inline finding(s), and GitHub has no endpoint to add inline `
-          + `comments to a submitted review. Re-run with --new-round to post a fresh review round that carries the new inline comment(s).`,
-        );
-      }
       // Byte-identical body: nothing to correct, suppress the duplicate repost.
       if (desiredBody === ownSubmitted.body) {
         return {
@@ -3613,7 +3752,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         ...((updatedReview.reviewUrl ?? ownSubmitted.commentUrl) ? { commentUrl: updatedReview.reviewUrl ?? ownSubmitted.commentUrl } : {}),
         ...(verificationWarning ? { verificationWarning } : {}),
       };
-    }
   }
   const desiredExecutionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
   const compositionResultFields = checkpointComposition

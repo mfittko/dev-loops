@@ -288,6 +288,8 @@ export const SUBCOMMAND_ROUTES = {
     "reply-resolve":      "scripts/github/reply-resolve-review-threads.mjs",
     "offer-human-handoff": "scripts/github/offer-human-handoff.mjs",
     "size-budget":        "scripts/loop/check-size-budget.mjs",
+    "close-sequence":     "scripts/loop/close-gate-sequence.mjs",
+    "extend-cap-round-chain": "scripts/loop/extend-cap-round-chain.mjs",
     "resolve-role":       "scripts/loop/resolve-reviewer-role.mjs",
     "resolve-validation": "scripts/loop/resolve-validation.mjs",
     "wait-for-units":     "scripts/loop/wait-for-gate-units.mjs",
@@ -409,9 +411,11 @@ const SUBCOMMAND_DESCRIPTIONS = {
     "reply-resolve": "Reply and resolve review threads",
     "offer-human-handoff": "Offer to assign PR to a human reviewer/assignee",
     "size-budget": "Compute PR size/tier budget outcome (pass/escalate/block; pure computation, no enforcement)",
-    "resolve-role": "Resolve a review angle's role or Codex conductor native settings",
+    "close-sequence": "Close an abandoned gate fix sequence marker with a recorded abandonment proof (refuses a live sequence)",
+    "extend-cap-round-chain": "Extend the sealed cap-round clearing chain over later docs-only or tests-only commits (refuses any logic commit)",
+    "resolve-role": "Resolve a review angle's role or Codex conductor/role native settings",
     "resolve-validation": "Resolve gate validation at an exact head (ci-only CI evidence, declared full command, or the pinned-Bun verify script)",
-    "wait-for-units": "Block until a gate round's dispatched reviewer or judge units are done (read-only)",
+    "wait-for-units": "Block until a gate round's dispatched reviewer or judge units are done, or (--artifact, requires --after <reference file>) a single child's hand-back file is final: it parses with its terminal field (outcome) or stays unchanged for 10 seconds (read-only)",
   },
   loop: {
     startup: "Resolve dev-loop startup bundle",
@@ -713,8 +717,73 @@ function parseTopLevelCommand(argv) {
   return { kind: "malformed", message: `Unrecognized command: ${cmd}.` };
 }
 
+// CLI-CHECKOUT-DELEGATION: an installed CLI runs the source checkout's CLI for these categories.
+const CHECKOUT_DELEGATED_CATEGORIES = new Set(["gate", "loop", "pr"]);
+
+export function findSkewedCheckout(cwd) {
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    let pkg = null;
+    try { pkg = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")); } catch { /* no package.json here */ }
+    if (pkg?.name === "dev-loops" && typeof pkg.version === "string") {
+      const version = pkg.version;
+      try {
+        realpathSync(path.join(dir, "cli/index.mjs"));
+        const root = realpathSync(dir);
+        return root === realpathSync(REPO_ROOT) ? null : { root, version };
+      } catch { /* no CLI entry: keep walking */ }
+    }
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+
+// Interactive routes (loop claude-launch) need the real TTY; injected streams get the piped path.
+export function delegationStdio(stdout, stderr) {
+  return stdout === process.stdout && stderr === process.stderr ? "inherit" : ["ignore", "pipe", "pipe"];
+}
+
+// Ctrl-C reaches the whole foreground group; an inherited-stdio child owns the terminal, so this wrapper must stay alive.
+export function withSigintGuard(stdio, fn) {
+  if (stdio !== "inherit") return fn();
+  const ignoreSigint = () => {};
+  process.on("SIGINT", ignoreSigint);
+  try { return fn(); } finally { process.off("SIGINT", ignoreSigint); }
+}
+
+async function delegateToCheckout({ argv, cwd, env, stdout, stderr, spawnMaxBuffer, execPath, alreadyDelegated }) {
+  if (alreadyDelegated || !CHECKOUT_DELEGATED_CATEGORIES.has(argv[0])) return null;
+  const checkout = findSkewedCheckout(cwd);
+  if (checkout === null) return null;
+  const installed = readOwnVersion() ?? "unknown";
+  const entry = path.join(checkout.root, "cli/index.mjs");
+  if (installed !== checkout.version) {
+    writeLines(stderr, [`[dev-loops] version skew: installed ${installed}, checkout ${checkout.version}; running ${entry} (CLI-CHECKOUT-DELEGATION).`]);
+  }
+  const stdio = delegationStdio(stdout, stderr);
+  const result = withSigintGuard(stdio, () => spawnSync(execPath, [entry, ...argv], {
+    cwd,
+    encoding: "utf8",
+    stdio,
+    maxBuffer: spawnMaxBuffer,
+    env: { ...env, DEVLOOPS_CHECKOUT_DELEGATED: "1" },
+  }));
+  if (result.error?.code === "ENOBUFS") {
+    writeLines(stderr, [`child_output_too_large: the checkout CLI output exceeded the ${spawnMaxBuffer}-byte wrapper buffer.`]);
+    return 1;
+  }
+  if (result.error) {
+    // Lazy: the refusal module loads only on this error path and has no @dev-loops/core dependency.
+    const { checkoutDelegationRefusal } = await import("../scripts/lib/checkout-delegation-refusal.mjs");
+    writeLines(stderr, [checkoutDelegationRefusal({ installed, checkoutVersion: checkout.version, root: checkout.root, code: result.error.code ?? result.error.message, argv })]);
+    return 1;
+  }
+  if (result.stdout) stdout.write(result.stdout);
+  if (result.stderr) stderr.write(result.stderr);
+  return result.status ?? 1;
+}
+
 export async function runCli({
   argv = process.argv.slice(2),
+  env = process.env,
   stdout = process.stdout,
   stderr = process.stderr,
   runtime,
@@ -724,7 +793,14 @@ export async function runCli({
   fetchLatestVersion,
   // Child-output buffer for routed subcommands.
   spawnMaxBuffer = SPAWN_MAX_BUFFER,
+  // Test-only seam: a nonexistent path forces a checkout start failure.
+  execPath = process.execPath,
 } = {}) {
+  // The guard must not reach grandchildren: read it, then drop it from the process env.
+  const alreadyDelegated = Boolean(env.DEVLOOPS_CHECKOUT_DELEGATED);
+  if (env === process.env) delete process.env.DEVLOOPS_CHECKOUT_DELEGATED;
+  const delegated = await delegateToCheckout({ argv, cwd, env, stdout, stderr, spawnMaxBuffer, execPath, alreadyDelegated });
+  if (delegated !== null) return delegated;
   const fromTop = parseTopLevelCommand(argv);
 
   switch (fromTop.kind) {

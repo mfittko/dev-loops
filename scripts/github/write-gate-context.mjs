@@ -32,7 +32,7 @@ import { OUT_OF_BAND_WRITE, readSealed } from "./_gate-artifact-seal.mjs";
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfigStrict, resolveGateConfig, resolveClassifyRules, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { baseAngleName, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
+import { baseAngleName, isOpenActItem, isPastRoundCap, listOpenActItems, orderAnglesByCatalog, resolveFindingFile, resolveGateAngleCatalogKey, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { anchorBaseRef, normalizeBaseBranch } from "../lib/anchor-base-ref.mjs";
 import { checkBaseFreshness as checkBaseFreshnessDefault } from "../loop/pre-write-remote-freshness-guard.mjs";
 import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
@@ -50,7 +50,7 @@ import { parseNonNegativeInteger, parsePrNumber, requireTokenValue, runChild } f
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { viewPr } from "./view-pr.mjs";
 import { viewIssue } from "./view-issue.mjs";
-import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
+import { buildAdjacentBundle, decodeGitDiffPathToken, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
@@ -58,7 +58,11 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { buildGateArtifactPath, buildGateContextPath, buildGateEmitPlanPath, buildGateFaninLedgerPath, buildGateReviewsDir, buildLogPath, repoSlugFor, validatePathSegments } from "./_gate-artifact-paths.mjs";
 import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
-import { captureMainRelativeChangedFilesSince } from "../lib/git-delta.mjs";
+import { clusterFindings, clustersFromStampedIds, dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
+import { isRoundRefused } from "@dev-loops/core/loop/review-round-cap";
+import { DELTA_CLEARING_NEXT_STEPS, listGateDeltaRecords, readGateDeltaRecord, readSealedGateDeltaRecord } from "../loop/_gate-delta-record.mjs";
+import { captureMainRelativeChangedFilesSince, isBaseOnlyMergeSince, runGitCommand } from "../lib/git-delta.mjs";
+import { existsSync } from "node:fs";
 
 /**
  * Up-front gate-ORDERING tripwire (pure). Given the target gate and the raw
@@ -845,43 +849,6 @@ function hasNonTrivialFileHeader(header) {
 }
 
 /**
- * Decode a path token straight out of a unified diff header line. Git quotes a
- * path (wraps it in `"..."`) whenever it carries a `"`, a `\`, a control
- * character, or (under the default `core.quotePath`) a non-ASCII byte, and
- * C-escapes the quoted content: `\"`, `\\`, `\t`, `\n`, and `\ooo` octal
- * per raw byte. A raw string-slice of a quoted token (e.g. `"b/a b.txt"`
- * sliced at a fixed offset) still carries the quotes and escapes verbatim,
- * so a downstream consumer that classifies or displays that string sees the
- * wrong path. Unquoted tokens (the common case) pass through unchanged.
- * @param {string} raw
- * @returns {string}
- */
-function decodeGitDiffPathToken(raw) {
-  const trimmed = typeof raw === "string" ? raw.trim() : "";
-  if (trimmed.length < 2 || !trimmed.startsWith('"') || !trimmed.endsWith('"')) return trimmed;
-  const inner = trimmed.slice(1, -1);
-  const bytes = [];
-  for (let i = 0; i < inner.length; i++) {
-    const ch = inner[i];
-    if (ch !== "\\") {
-      const code = ch.codePointAt(0);
-      if (code > 255) bytes.push(...Buffer.from(ch, "utf8"));
-      else bytes.push(code);
-      continue;
-    }
-    const next = inner[i + 1];
-    if (next === "n") { bytes.push(10); i++; continue; }
-    if (next === "t") { bytes.push(9); i++; continue; }
-    if (next === '"') { bytes.push(34); i++; continue; }
-    if (next === "\\") { bytes.push(92); i++; continue; }
-    const octal = inner.slice(i + 1, i + 4);
-    if (/^[0-7]{3}$/.test(octal)) { bytes.push(parseInt(octal, 8)); i += 3; continue; }
-    bytes.push(ch.charCodeAt(0)); // unrecognized escape — keep the backslash's own byte, fail open
-  }
-  return Buffer.from(bytes).toString("utf8");
-}
-
-/**
  * Split a unified diff into per-file blocks: `{ path, header, hunks }`, where
  * `header` is the file's own preamble (`diff --git`/`index`/`---`/`+++`, and
  * any rename/mode/binary lines) verbatim, and `hunks` is each `@@ ... @@`
@@ -1220,9 +1187,34 @@ function renderTokenDisciplineSection(contextPath) {
     "",
     "- Never `cat`/`head` dev-loops tool or artifact JSON: a dev-loops CLI takes its own `--jq`/`--silent` flags; an on-disk artifact file is read with plain `jq '<filter>' <path>`.",
     `- Read the gate-context artifact that way, e.g. \`jq '{resolvedAngles, scope}' "${contextPathDisplay}"\`.`,
-    "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior you already read there.",
+    "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — never re-read a hunk interior you already read there. Open a source file to widen past a hunk's edges only when your angle needs it, except the files the context artifact's `.adjacentCode.expansion.files` lists (importers and sibling functions of a changed exported function, state writer or guard): reading those files is expected, and the evidence file names any the cap dropped.",
     "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
     "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
+  ].join("\n");
+}
+
+/** Push the expansion's kept and dropped file lines (with sibling names) onto the briefing lines. */
+function pushExpansionLines(lines, expansion) {
+  if (!expansion || (expansion.files.length === 0 && expansion.dropped.length === 0)) return;
+  lines.push(`Expansion files (${expansion.files.length}; cap ${expansion.maxFiles} files, ${expansion.maxBytes} bytes):`);
+  pushPathListLines(lines, expansion.files.map((f) => ({ path: f.path, label: `${f.path} (${f.kind}${f.names ? `: ${f.names.join(", ")}` : ""})` })));
+  if (expansion.dropped.length > 0) {
+    lines.push(`Dropped by the expansion cap (${expansion.dropped.length}):`);
+    pushPathListLines(lines, expansion.dropped.map((f) => ({ path: f.path, label: `${f.path} (${f.kind}${f.names ? `: ${f.names.join(", ")}` : ""})` })));
+  }
+}
+
+/**
+ * Render the "## Reviewer sibling sweep" section: the one sibling-defect
+ * clause owned by GATE-REVIEW-SIBLING-SWEEP in the gate-review sub-loop
+ * contract. Shared by the full prefix and every scoped variant so both emit it
+ * byte-identically.
+ */
+function renderSiblingSweepSection() {
+  return [
+    "## Reviewer sibling sweep",
+    "",
+    "After a finding in a function, check the opposite direction, concurrent invocation and alternate input forms for that function, and check that a fix covers every call site. Rule `GATE-REVIEW-SIBLING-SWEEP` in skills/docs/gate-review-sub-loop-contract.md.",
   ].join("\n");
 }
 
@@ -1329,6 +1321,8 @@ export function renderBriefingPrefix({
   lines.push("");
   lines.push(renderTokenDisciplineSection(contextPath));
   lines.push("");
+  lines.push(renderSiblingSweepSection());
+  lines.push("");
   lines.push(renderRequiredReadsSection(requiredReads, worktreeRoot));
   return { text: lines.join("\n") + "\n" };
 }
@@ -1369,6 +1363,21 @@ function pushExcludedFilesLines(lines, excludedFiles) {
 }
 
 /**
+ * Lines of the `## Cap-round residue` section; none when the residue is empty.
+ * ADR 0208: what the draft cap round left open or closed by the cap, which this round judges. One line per item, whitespace collapsed so a title cannot forge a line. The full and the scoped evidence variants share it, so every reviewer sees the same section.
+ * @param {object[]|null} residue
+ * @returns {string[]}
+ */
+function renderCapRoundResidueLines(residue) {
+  if (!Array.isArray(residue) || residue.length === 0) return [];
+  const oneLine = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const lines = ["## Cap-round residue", "", `The draft_gate cap round left these unresolved; judge them this round: ${residue.length} items.`];
+  for (const item of residue) lines.push(`- ${oneLine(item.fingerprint)} | ${oneLine(item.disposition)} | ${oneLine(item.file ?? "(no file)")}${Number.isInteger(item.line) ? `:${item.line}` : ""} | ${oneLine(item.title)}`);
+  lines.push("");
+  return lines;
+}
+
+/**
  * Render the referenced evidence file: PR body, linked-issue body (when
  * present), a pointer to the filtered diff at the reviewed head (`diffPath`,
  * the required `diff` read; the diff bytes are never repeated here), a
@@ -1406,6 +1415,10 @@ function pushExcludedFilesLines(lines, excludedFiles) {
  *   run-gate-validation.mjs artifact for this head SHA (GATE-EXEC-VALIDATION-RESOLUTION).
  *   When non-empty, ONE additional `## Validation results at this head` section is
  *   appended LAST. Omitted entirely when absent.
+ * @param {object[]|null} [input.capRoundResidue] — pre_approval_gate only: the
+ *   draft cap round's unresolved items. When non-empty, a `## Cap-round residue`
+ *   section lists them before the diff section, in the evidence file reviewers
+ *   and the judge both read.
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES
  * @returns {{ text: string, prefixMode: "inline"|"pointer", diffBytes: number }}
  */
@@ -1414,6 +1427,7 @@ export function renderBriefingEvidence({
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null, changedFiles = [], excludedFiles = [], adjacentCode = null,
   validationResultsPath = null,
+  capRoundResidue = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
   const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
@@ -1478,6 +1492,7 @@ export function renderBriefingEvidence({
     lines.push(issueBodyFence);
     lines.push("");
   }
+  lines.push(...renderCapRoundResidueLines(capRoundResidue));
   lines.push(`## Diff at reviewed head (${headSha})`);
   lines.push("");
   const filteredBytes = hasDiffText ? persistedDiffBytes(diffOutput) : 0;
@@ -1498,6 +1513,7 @@ export function renderBriefingEvidence({
     lines.push(
       `Stripped: ${adjacentCode.stripped?.length ?? 0}, Truncated: ${adjacentCode.truncated?.length ?? 0}, Missing: ${adjacentCode.missing?.length ?? 0}`,
     );
+    pushExpansionLines(lines, adjacentCode.expansion);
   } else {
     lines.push("Adjacent files (0): (no adjacent-code bundle for this briefing)");
   }
@@ -1546,6 +1562,7 @@ export function renderBriefingEvidence({
  * @param {{path: string, reason: "default"|"configured"}[]} [input.excludedFiles] — filterDiffForInline
  *   excludedFiles; rendered as `Excluded from the filtered diff (n):` after the diff pointers, only when non-empty.
  * @param {string|null} [input.validationResultsPath]
+ * @param {object|null} [input.adjacentCode] — buildAdjacentBundle output; its `expansion` files and dropped files are listed
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES; sizes the pointer's disclosure
  * @returns {{ text: string }}
  */
@@ -1554,9 +1571,10 @@ export function renderScopedBriefingVariant(scope, {
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null,
   filteredDiffPath = null, excludedFiles = [],
-  validationResultsPath = null,
+  validationResultsPath = null, adjacentCode = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
   rules = null,
+  capRoundResidue = null,
 }) {
   if (!GATE_ANGLE_SCOPES.includes(scope) || scope === "full") {
     throw new Error(`renderScopedBriefingVariant: scope must be a non-"full" GATE_ANGLE_SCOPES value, got ${JSON.stringify(scope)}`);
@@ -1579,12 +1597,15 @@ export function renderScopedBriefingVariant(scope, {
   lines.push(`Full diff (byte-exact): ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
   lines.push(`Context artifact: ${contextPath ?? "(context artifact path unavailable)"}`);
   pushExcludedFilesLines(lines, excludedFiles);
+  pushExpansionLines(lines, adjacentCode?.expansion);
   lines.push("");
   if (worktreeRoot) {
     lines.push(renderSourceReadInvariantSection(worktreeRoot));
     lines.push("");
   }
   lines.push(renderTokenDisciplineSection(contextPath));
+  lines.push("");
+  lines.push(renderSiblingSweepSection());
   lines.push("");
   lines.push("## PR body");
   lines.push("");
@@ -1627,6 +1648,7 @@ export function renderScopedBriefingVariant(scope, {
     lines.push("");
   }
 
+  lines.push(...renderCapRoundResidueLines(capRoundResidue));
   // The filtered diff is the unit's required `diff` read, so every variant
   // points at it like the full evidence file does.
   const hasDiffText = typeof diffOutput === "string" && diffOutput.length > 0;
@@ -1741,6 +1763,7 @@ export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPost
   }
   if (knownFindingsRead) {
     lines.push(`Known findings (do not re-raise what an open or resolved thread already covers): ${knownFindingsRead.entries} threads with full bodies, listed in this required read. Read it IN FULL with \`jq\` before judgment; the mandatory sentinel verifies its sha256.`);
+    if (gate === "pre_approval_gate") lines.push("If any listed thread is unresolved, assess it in this full round at the live head instead of excluding or duplicating it; a resolved thread needs no reassessment. No live-baseline delta or carried gate verdict is required for this input.");
     lines.push(renderRequiredReadLine(knownFindingsRead, worktreeRoot));
     lines.push("");
   }
@@ -1969,6 +1992,216 @@ export async function resolveClosureRound(options, { repoRoot, cap }) {
   if (await countCompletedRounds(options, { repoRoot }) !== cap + 1) return null;
   const closed = await readClosedPriorRoundLogs(options, { repoRoot });
   return { fromHead: closureFromHeadOf(closed), priorActItems: await listPriorActItems(options, { repoRoot }) };
+}
+
+/**
+ * The delta refs of a ledger's open act items, as the fixer act list yields them: clusters reduce as judge-pass.mjs does (the stamped grouping only when
+ * every finding is stamped, else clusterFindings), dedupeActListByCluster keeps one finding per cluster, and toDeltaActItems suffixes a repeated
+ * fingerprint (fp, fp#2, ...). Returns a Map from each open act finding (every cluster member) to its cluster's ref.
+ */
+function capRoundActRefs(findings, headSha) {
+  const all = Array.isArray(findings) ? findings : [];
+  const clusters = all.every((f) => Number.isInteger(f?.clusterId)) ? clustersFromStampedIds(all) : clusterFindings(all, { headSha }).clusters;
+  const act = all.filter(isOpenActItem);
+  const kept = dedupeActListByCluster(act, clusters, all);
+  const counts = new Map();
+  const refs = kept.map((f) => { const fp = fingerprintFinding(f), n = (counts.get(fp) ?? 0) + 1; counts.set(fp, n); return n > 1 ? `${fp}#${n}` : fp; });
+  // kept follows first appearance of each cluster in act order; unresolvable membership stays one entry per finding.
+  const clusterOf = new Map();
+  clusters.forEach((c, ci) => c.memberIndices?.forEach((m) => clusterOf.set(all[m], ci)));
+  const slotOfCluster = new Map();
+  const out = new Map();
+  let slot = 0;
+  for (const f of act) {
+    const ci = clusterOf.get(f);
+    if (ci === undefined) { out.set(f, refs[slot++]); continue; }
+    if (!slotOfCluster.has(ci)) slotOfCluster.set(ci, slot++);
+    out.set(f, refs[slotOfCluster.get(ci)]);
+  }
+  return out;
+}
+
+/**
+ * The cap round of a draft_gate (ADR 0208): the last closed ledger when the completed rounds (the head being posted excluded) reached the cap and
+ * that ledger is `findings_present`. Returns `{ log, residue }` or null. `residue` is the cap round's act items and `capClosed` items as
+ * `{ fingerprint, file, line, title, disposition }`, the input `pre_approval_gate` receives.
+ */
+export async function resolveCapRound(options, { repoRoot }) {
+  const { config } = await loadDevLoopConfigStrict({ repoRoot: resolveRepoRoot(repoRoot) });
+  const cap = resolveGateConfig(config, "draft").maxReviewRounds ?? 0;
+  const draft = { ...options, gate: "draft_gate" };
+  // The findings ledger is main-anchored: never read it from a relocated --tmp-root.
+  const ledger = { ...draft, tmpRoot: undefined };
+  if (!(cap > 0) || await countCompletedRounds(ledger, { repoRoot }) - 1 < cap) return null;
+  // An unreadable ledger counts toward the cap but readClosedPriorRoundLogs drops it, so the cap-round authority could be an earlier round: fail closed.
+  let unreadable = 0;
+  const log = (await readClosedPriorRoundLogs(ledger, { repoRoot, onUnreadable: () => { unreadable += 1; } })).at(-1);
+  // The persisted severity verdict can read `clean` for judge-act mediums whose posted review composes findings_present: an open act item makes the round a cap round too.
+  if (unreadable > 0 || !log || (log.verdict !== "findings_present" && listOpenActItems(log.findings).length === 0)) return null;
+  // An act item the sealed cap-round delta record marks resolved is fixed, not residue; with no verifiable record every act item stays.
+  let items = [];
+  try { items = readSealedGateDeltaRecord(resolveGateArtifactTmpRoot(repoRoot), log.headSha)?.items ?? []; } catch { /* unverifiable: keep every item */ }
+  // Each acted cluster has one delta ref (fp, fp#2, ...): a finding is fixed only when its cluster's ref exists and is resolved.
+  const refOf = capRoundActRefs(log.findings, log.headSha);
+  const isFixed = (f) => { const ref = refOf.get(f); return ref !== undefined && items.some((i) => i?.ref === ref && i.status === "resolved"); };
+  const residue = (Array.isArray(log.findings) ? log.findings : []).filter((f) => (isOpenActItem(f) && !isFixed(f)) || f?.capClosed).map((f) => ({
+    fingerprint: fingerprintFinding(f), file: resolveFindingFile(f) ?? null, line: Number.isInteger(f.line) ? f.line : null, title: f.judgeTitle ?? f.summary, disposition: isOpenActItem(f) ? "act" : "cap_closed",
+  }));
+  return { log, residue };
+}
+
+// A head is a path segment of the record lookup: only a 40 or 64 character hex SHA (after trim and lowercase) is looked up or compared.
+const normalizeSha = (value) => { const sha = String(value ?? "").trim().toLowerCase(); return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha) ? sha : null; };
+const clearingDeltaRecord = (tmpRoot, headSha) => { const sha = normalizeSha(headSha); if (!sha) return null; try { const r = readSealedGateDeltaRecord(tmpRoot, sha); return r && DELTA_CLEARING_NEXT_STEPS.includes(r.nextStep) ? r : null; } catch { return null; } };
+
+// A record that exists but is not a verifiable sealed record (no seal, a seal mismatch, or a throwing seal check) is the unsealed_record condition.
+const isUnsealedDeltaRecord = (tmpRoot, head) => {
+  const sha = normalizeSha(head);
+  if (!sha) return false;
+  try { if (readGateDeltaRecord(tmpRoot, sha) === null) return false; } catch { /* the record exists but is not JSON: the sealed probe below decides */ }
+  try { return readSealedGateDeltaRecord(tmpRoot, sha) === null; } catch { return true; }
+};
+
+/** The last candidate head of the sealed clearing chain that begins at `start`. */
+function clearingChainEnd(tmpRoot, start, visited, { allowUnsealedEnd = false } = {}) {
+  const seen = new Set();
+  let last;
+  for (let record = start; record;) {
+    const next = normalizeSha(record.candidateHead);
+    // A cycle or an invalid candidate has no valid end: the chain never reaches a head.
+    if (!next || seen.has(next)) return undefined;
+    seen.add(next);
+    last = next;
+    visited?.add(next);
+    record = clearingDeltaRecord(tmpRoot, next);
+    // A record at the candidate that exists but is not verifiably sealed (corrupt or seal removed) breaks the chain: its end is not trusted.
+    if (!record && isUnsealedDeltaRecord(tmpRoot, next)) { return allowUnsealedEnd ? last : undefined; } // allowUnsealedEnd: extend-cap-round-chain needs the end of the sealed prefix to refuse record_not_clearing
+  }
+  return last;
+}
+
+/**
+ * The clearing chain starts of a cap round (ADR 0218): the clearing record bound to the cap-round head, plus the record of every ledgerless base-only merge of it
+ * (needs `baseRefName`). The same seeding repeats from the end E of each chain, so the record of a fixer pass at a base-only merge of E (a cap-round order the emitter admits) starts a chain too.
+ * Shared by resolveCapRoundFixed and the fixer emitter so the two seams cannot disagree on a chain start.
+ * `baseOnlyUnsealed` is set when such a merge carries an unsealed record.
+ */
+async function capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge }) {
+  const direct = clearingDeltaRecord(tmpRoot, capHead);
+  const starts = direct ? [direct] : [];
+  const seedHeads = new Set();
+  let baseOnlyUnsealed = false;
+  if (typeof baseRefName !== "string" || !baseRefName) return { starts, baseOnlyUnsealed, seedHeads };
+  const records = listGateDeltaRecords(tmpRoot).sort((a, b) => (String(a.reviewBaselineHead) < String(b.reviewBaselineHead) ? -1 : 1));
+  const seeded = new Set(direct ? [capHead] : []);
+  const fromHeads = [capHead];
+  // Sorted, and every candidate tried: the proof never depends on directory enumeration order.
+  for (let i = 0; i < fromHeads.length; i += 1) {
+    const fromHead = fromHeads[i];
+    // A direct record at the cap-round head already makes it a start; base-only seeding of the cap-round head applies only without one.
+    if (i === 0 && direct) { const end = clearingChainEnd(tmpRoot, direct, seedHeads); if (end && !fromHeads.includes(end)) fromHeads.push(end); continue; }
+    for (const { reviewBaselineHead: raw } of records) {
+      const merged = normalizeSha(raw);
+      if (!merged || merged === fromHead || seeded.has(merged) || existsSync(buildLogPath({ repo, pr, gate: "draft_gate", headSha: merged, tmpRoot }))) continue;
+      const isBaseOnly = () => baseOnlyMerge({ fromHead, head: merged, mainRef: `origin/${baseRefName}`, repoRoot }).catch(() => false);
+      const candidate = clearingDeltaRecord(tmpRoot, merged);
+      if (!candidate) { if (isUnsealedDeltaRecord(tmpRoot, merged) && await isBaseOnly()) baseOnlyUnsealed = true; continue; }
+      if (!await isBaseOnly()) continue;
+      seeded.add(merged);
+      seedHeads.add(merged);
+      starts.push(candidate);
+      const end = clearingChainEnd(tmpRoot, candidate, seedHeads);
+      if (end && !fromHeads.includes(end)) fromHeads.push(end);
+    }
+  }
+  return { starts, baseOnlyUnsealed, seedHeads };
+}
+
+/**
+ * The last candidate head of every sealed clearing chain of the cap round `capHead` (ADR 0218), seeded as resolveCapRoundFixed seeds them; empty when no chain starts.
+ * The emitter seam skips the `covers` filter on purpose: it must admit a base-only merge M of a chain end before the fixer's record for M exists.
+ */
+export async function clearingChainLastCandidates({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true, allowUnsealedEnd = false }) {
+  return (await clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge, covering, allowUnsealedEnd })).ends;
+}
+
+/** The chain ends and every head the sealed clearing chains of the cap round `capHead` visit after it (each seeded merge, each record candidate head and each chain end), from one walk: each start's end is collected in the same loop that fills the heads, so a record rewrite cannot split them. */
+export async function clearingChainWalk({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, covering = () => true, allowUnsealedEnd = false }) {
+  const { starts, seedHeads } = await capRoundChainStarts({ tmpRoot, capHead, repo, pr, baseRefName, repoRoot, baseOnlyMerge });
+  const ends = [];
+  // The heads the seed proof visited stay in the set even if a concurrent rewrite changes a record before the traversal below.
+  const heads = new Set(seedHeads);
+  // `covering` drops a start that does not name every act item of the cap round (the emitter seam passes none).
+  for (const start of starts.filter(covering)) {
+    const seededFrom = normalizeSha(start.reviewBaselineHead);
+    if (seededFrom && seededFrom !== normalizeSha(capHead)) heads.add(seededFrom);
+    // The end and the visited heads come from one read of each record, in the shared clearingChainEnd.
+    const last = clearingChainEnd(tmpRoot, start, heads, { allowUnsealedEnd });
+    if (last) ends.push(last);
+  }
+  return { ends, heads: [...heads] };
+}
+
+/**
+ * The `covers` check of resolveCapRoundFixed, shared with the chain-extension tool so the two cannot disagree:
+ * the first clearing record must name every act item of the cap round. Pass it as `covering` to clearingChainLastCandidates.
+ */
+export const capRoundCovers = (capRound) => (record) => {
+  const refs = new Set((Array.isArray(record.items) ? record.items : []).map((i) => String(i?.ref)));
+  return [...new Set(capRoundActRefs(capRound.log.findings, capRound.log.headSha).values())].every((r) => refs.has(r));
+};
+
+/**
+ * "Cap round fixed" (ADR 0208): the cap round exists, and a sealed pre-push delta record bound to the cap-round head cleared (or bounded out) the current head.
+ * No full draft_gate round runs after it. Fails closed on an unreadable, unsealed or hand-edited delta record.
+ * The proof is a chain of sealed clearing records: the record bound to the cap-round head names a candidate head, and a later push on the still-draft PR is covered by the record bound to that candidate, until the chain reaches the current head.
+ * When the cap-round head has no record, a base-only merge of it (a ledgerless head whose own record exists, with `options.baseRefName` set) starts the chain, as the fixer emitter does.
+ * `options.anyHead` (a ready PR, where later commits belong to pre_approval_gate) accepts the first record whatever its candidate head.
+ */
+export async function resolveCapRoundFixed(options, { repoRoot, baseOnlyMerge = isBaseOnlyMergeSince, onFailure = () => {} }) {
+  const capRound = await resolveCapRound(options, { repoRoot });
+  if (!capRound) { onFailure("cap_round_unresolved"); return null; }
+  // The delta record is main-anchored like the findings ledger: never read it from a relocated --tmp-root.
+  const tmpRoot = resolveGateArtifactTmpRoot(repoRoot);
+  const clearing = (headSha) => clearingDeltaRecord(tmpRoot, headSha);
+  const capHead = capRound.log.headSha;
+  const head = normalizeSha(options.headSha);
+  // The chain ends at the last clearing record's candidate B; a head that is a base-only merge since B (ADR 0218) is still covered by the chain.
+  const reaches = async (start) => {
+    const seen = new Set();
+    for (let record = start; record;) {
+      const next = normalizeSha(record.candidateHead);
+      if (!next) return false;
+      if (options.anyHead || next === head) return true;
+      if (seen.has(next)) return false;
+      seen.add(next);
+      const following = clearing(next);
+      if (!following) return !isUnsealedDeltaRecord(tmpRoot, next) && Boolean(head && typeof options.baseRefName === "string" && options.baseRefName && await baseOnlyMerge({ fromHead: next, head, mainRef: `origin/${options.baseRefName}`, repoRoot }).catch(() => false));
+      record = following;
+    }
+    return false;
+  };
+  // The first clearing record must name every act item of the cap round: a delta record keyed on the same baseline for another route (a thread review) proves nothing about them.
+  // With no open act item the check is vacuously true: any clearing record then binds, and the cap round rests on the baseline match alone.
+  const covers = capRoundCovers(capRound);
+  // The direct chain is tried first: merge-seeded starts (a directory scan and Git probes) are discovered only when it does not prove the round fixed.
+  const chainArgs = { tmpRoot, capHead, repo: options.repo, pr: options.pr, repoRoot, baseOnlyMerge };
+  const directStarts = (await capRoundChainStarts({ ...chainArgs, baseRefName: undefined })).starts;
+  for (const start of directStarts.filter(covers)) if (await reaches(start)) return capRound;
+  const { starts, baseOnlyUnsealed } = await capRoundChainStarts({ ...chainArgs, baseRefName: options.baseRefName });
+  const covering = starts.filter(covers);
+  for (const start of covering) if (await reaches(start)) return capRound;
+  // ADR 0218: report the one condition that failed, so the refusal names its own remedy.
+  const unsealed = starts.length === 0 && (isUnsealedDeltaRecord(tmpRoot, capHead) || baseOnlyUnsealed);
+  // A rebase orphans the baseline: with the cap-round head no longer an ancestor of the head, no clearing record can ever be rebound, so name the restart.
+  // Only merge-base exit 1 with both commits present locally proves it: a commit this clone never fetched (exit 128) is not a rebase, and the probe then keeps the pre-existing condition.
+  const gitProbe = (args) => runGitCommand([...DIFF_ISOLATION_FLAGS, ...args], { repoRoot }).catch(() => ({ code: 128 }));
+  const probeCapHead = normalizeSha(capHead);
+  const mergeBase = Boolean(probeCapHead && head) ? await gitProbe(["merge-base", "--is-ancestor", probeCapHead, head]) : null;
+  const orphaned = mergeBase?.code === 1 && !mergeBase.signal
+    && (await gitProbe(["cat-file", "-e", `${probeCapHead}^{commit}`])).code === 0 && (await gitProbe(["cat-file", "-e", `${head}^{commit}`])).code === 0;
+  onFailure(orphaned ? "baseline_orphaned" : starts.length === 0 ? (unsealed ?"unsealed_record" : "no_clearing_record") : covering.length === 0 ? "items_do_not_cover" : "chain_does_not_reach_head");
+  return null;
 }
 
 /**
@@ -2310,6 +2543,7 @@ export function buildGateContextArtifact(options) {
   if (typeof options.diffSource === "string" && options.diffSource.length > 0) {
     artifact.scope.diffSource = options.diffSource;
   }
+  if (Array.isArray(options.capRoundResidue) && options.capRoundResidue.length > 0) artifact.scope.capRoundResidue = options.capRoundResidue;
   if (options.closureRound && typeof options.closureRound === "object") {
     artifact.scope.closureRound = options.closureRound;
   }
@@ -2362,7 +2596,7 @@ export function buildGateContextArtifact(options) {
  * @param {{ repoRoot: string }} opts
  * @returns {Promise<{ diffPath: string|null, diffToWrite: object|null, changedFiles: string[], adjacentCode: object|null, diffOutput: string|null }>}
  */
-async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFileBytes }, { repoRoot }) {
+async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFileBytes, expansion }, { repoRoot }) {
   const diffOutput = diff?.diffOutput;
   let diffPath = null;
   const changedFiles = parseChangedFiles(diff?.nameStatusOutput);
@@ -2384,6 +2618,8 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
         changedFiles,
         repoRoot,
         maxFileBytes: typeof maxFileBytes === "number" && maxFileBytes > 0 ? maxFileBytes : DEFAULT_MAX_FILE_BYTES,
+        diffText: typeof diffOutput === "string" ? diffOutput : "",
+        expansion,
       });
     } catch (err) {
       process.stderr.write(`[gate-context] adjacent-code bundle failed (continuing without adjacentCode): ${err?.message ?? err}\n`);
@@ -2622,6 +2858,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // before.
   let prefixBytes;
   let prefixMode;
+  // ADR 0208: pre_approval_gate receives the cap round's residue as round input, in the artifact and in the evidence file its reviewers and judge read.
+  const capRoundResidue = options.gate === "pre_approval_gate" ? (await resolveCapRound(options, { repoRoot }))?.residue : undefined;
   let pendingEvidence = null;
   let pendingFilteredDiff = null;
   let requiredReads = null;
@@ -2690,6 +2928,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       excludedFiles: diffFilter?.excludedFiles ?? [],
       adjacentCode: options.adjacentCode ?? null,
       validationResultsPath: options.validationResultsPath ?? null,
+      capRoundResidue,
     });
     prefixMode = evidence.prefixMode;
     pendingEvidence = { path: evidencePath, text: evidence.text };
@@ -2765,7 +3004,9 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           filteredDiffPath: pendingFilteredDiff?.path ?? null,
           excludedFiles: diffFilter?.excludedFiles ?? [],
           validationResultsPath: options.validationResultsPath ?? null,
+          adjacentCode: options.adjacentCode ?? null,
           rules: resolveClassifyRules(options.config),
+          capRoundResidue,
         });
         pendingVariants.set(scope, { path: scopePath, text: variant.text });
         briefingVariants[scope] = scopePath;
@@ -3025,7 +3266,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     knownFindingsRead,
     worktreeRoot: path.resolve(repoRoot),
   });
-  const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants }), ...(requiredReads ? { requiredReads } : {}), loggedAt };
+  const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants, capRoundResidue }), ...(requiredReads ? { requiredReads } : {}), loggedAt };
   // Keep the marker available only when prefix AND referenced stable files
   // are unchanged on disk (the prefix hash-binds the evidence and full diff).
   let markerUnchanged = existingBytes !== null && existingBytes.equals(prefixBytes);
@@ -3231,7 +3472,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
   // scope.changedFiles, and the neutral adjacentCode bundle, all built ONCE by
   // the shared resolveDiffScope helper (also used by the CLI --base path).
   const { diffPath, diffToWrite, changedFiles, adjacentCode, diffOutput } = await resolveDiffScope(
-    { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, maxFileBytes: input.maxFileBytes },
+    { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, maxFileBytes: input.maxFileBytes, expansion: input.config?.gates?.contextExpansion },
     { repoRoot },
   );
 
@@ -3610,12 +3851,15 @@ export async function main(
         // draftGateAlreadySatisfied no-op; pre_approval keeps the folded fact.
         const isDraftGate = options.gate === "draft_gate";
         const draftVerdict = coordination.gateEvidence?.draftGate;
+        // A ready PR whose cap round is fixed holds no clean draft verdict: the sealed proof stands in for it, so pre_approval_gate can build its context.
+        const capFixedPreApproval = !isDraftGate && coordination.prData?.isDraft === false && coordination.gateEvidence?.draftGateSatisfied !== true && coordination.unresolvedGateThreadCount === 0
+          && Boolean(await resolveCapRoundFixed({ repo: options.repo, pr: options.pr, headSha: coordination.currentHeadSha, baseRefName: typeof coordination.prData?.baseRefName === "string" ? coordination.prData.baseRefName.trim() : "", anyHead: true }, { repoRoot }).catch(() => null));
         const refusal = prematureGateOrderingRefusal({
           gate: options.gate,
           isDraft: isDraftGate ? coordination.prData?.isDraft : Boolean(coordination.prData?.isDraft),
           draftGateSatisfied: isDraftGate
             ? draftVerdict?.verdict === "clean" && typeof draftVerdict?.headSha === "string"
-            : coordination.gateEvidence?.draftGateSatisfied === true,
+            : capFixedPreApproval || coordination.gateEvidence?.draftGateSatisfied === true,
           repo: options.repo,
           pr: options.pr,
         });
@@ -3651,13 +3895,11 @@ export async function main(
     // never fall back to defaults.
     const { config } = await loadDevLoopConfigStrict({ repoRoot });
     options.config = config;
-    // GATE-EXEC-ROUND-CAP (ADR 0191): the one closure round diffs from the cap round's head.
-    // The findings ledger is main-anchored: read it from its own root, not the (possibly relocated) context --tmp-root.
-    const closureRound = await resolveClosureRound({ ...options, tmpRoot: undefined }, { repoRoot, cap: resolveGateConfig(config, "draft").maxReviewRounds ?? 0 });
-    if (closureRound) {
-      // The closure round diffs from fromHead whatever --base the caller passes (coordinators pass origin/main) and records the ignored --base.
-      options.closureRound = { ...closureRound, ignoredBase: options.base ?? null };
-      options.base = closureRound.fromHead;
+    // GATE-EXEC-ROUND-CAP (ADR 0208): round N+1 never runs; refuse its context. The findings ledger is main-anchored: read it from its own root, not the (possibly relocated) context --tmp-root.
+    const cap = resolveGateConfig(config, "draft").maxReviewRounds ?? 0;
+    if (options.gate === "draft_gate") {
+      const round = await countCompletedRounds({ ...options, tmpRoot: undefined }, { repoRoot });
+      if (isRoundRefused(round, cap)) throw new Error(`round_cap_reached: this would be draft_gate round ${round} and the cap is ${cap} (GATE-EXEC-ROUND-CAP, ADR 0208). Round N+1 never runs; after the cap round's fixer pass lands and its pre-push delta clears, run \`pr ready-for-review\`.`);
     }
     // AC6 (issue 2885): every dispatch runs the freshness check against the PR's own base branch (baseRefName),
     // whatever --base is (absent, SHA, revision, remote ref). draft_gate and pre_approval_gate refuse (no artifact) on anything but base_current; the review gate records the status and continues; base_unresolved refuses on every gate.
@@ -3708,7 +3950,7 @@ export async function main(
       }
       diff = captureDiffFromBase(options.base, { repoRoot, paths: closurePaths });
       const scope = await resolveDiffScope(
-        { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" },
+        { diff, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", expansion: options.config?.gates?.contextExpansion },
         { repoRoot },
       );
       // A --base build that resolves an EMPTY change set is degenerate: the

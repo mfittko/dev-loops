@@ -406,7 +406,7 @@ Implementation tasks MUST be dispatched to dedicated specialist agents per this 
 | Review-comment follow-up, PR fix commits | `fixer` |
 
 For each delegated task:
-- a `fixer` dispatch is never a prose brief: emit its work order with `scripts/loop/emit-fixer-work-order.mjs --repo <owner/name> --pr <n> --head-sha <headRefOid> --phase commit_only (--threads-file <list-review-threads.mjs --unresolved-only output> | --act-list-file <judge-pass --out> --gate <gate>) [--delta-result <path>] --harness <claude|pi|codex>` and dispatch the printed `dispatchPayload` unchanged (ADR 0106, 0107); the later `--phase full` emission follows [delta mode](../docs/pre-pr-review-contract.md#delta-mode); the rules below apply to the other roles
+- a `fixer` dispatch is never a prose brief: emit its work order with `scripts/loop/emit-fixer-work-order.mjs --repo <owner/name> --pr <n> --head-sha <headRefOid> --phase commit_only (--threads-file <list-review-threads.mjs --unresolved-only output> | --act-list-file <judge-pass --out> --gate <gate>) [--delta-result <path>] --harness <claude|pi|codex>` and dispatch the printed `dispatchPayload` unchanged (ADR 0106, 0107); on Claude Code join the fixer with `node <dev-loops-package-root>/cli/index.mjs gate wait-for-units --artifact <hand-back path> --after <emitted planPath> [--timeout <seconds>]` on the work order's `joinRef` (the single-child join in [gate sub-loop contract](../docs/gate-review-sub-loop-contract.md)); the later `--phase full` emission follows [delta mode](../docs/pre-pr-review-contract.md#delta-mode); the rules below apply to the other roles
 - give the subagent one focused task with exact success criteria
 - include only the minimum relevant files, plans, and repo context
 - tell the subagent whether it should implement, verify, or review
@@ -418,6 +418,12 @@ For each delegated task:
 <!-- /pi-only -->
 
 ### Status monitoring
+
+On Codex, ordinary worker dispatch follows [Generic Codex dispatch](../docs/main-agent-contract.md#generic-codex-dispatch):
+run `gate resolve-role --role <name> --harness codex` from the target repo,
+forward `nativeOverrides` unchanged with `fork_turns: "none"`, and stop on
+config or native rejection without fallback. This includes artifact-only
+refiners; fixer work orders keep their immutable emitted payloads.
 
 Track each dispatched task:
 - at minimum record agent name, task summary, status (`queued`, `running`, `done`, `failed`),

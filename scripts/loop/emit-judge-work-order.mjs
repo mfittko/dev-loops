@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { loadDevLoopConfigStrict, resolveGateConfig } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY } from "@dev-loops/core/loop/gate-fanin";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
-import { computeSpecDigest, specCriterionIds, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
+import { SPEC_AUTHORITY_VERDICT_SCHEMA, computeSpecDigest, specCriterionIds, stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
@@ -81,12 +81,16 @@ export function renderWorkOrder(workOrder) {
 Codex only: before ANY contract/input read, use bounded direct cat/sed/rg for reads and qualify the digest tool with \`command -v shasum\`; stop if unavailable. Use direct \`shasum -a 256\` to authenticate every pinned contract/source. Derive the emitting toolchain root by removing \`agents/judge.agent.md\` from the absolute \`executionRules.contract\` below; resolve relative \`contracts[].path\` only against that root, never cwd or a searched fallback. Read those authenticated contracts in full before judging. These instructions precede their first read; do not wait for a setup message.
 This permits only pinned reads and concrete dependency widening already authorized below. Codex has no native Claude/Pi role or hook grant. No inline Python or Node, generated scripts, tests/builds, source writes, external posting or permission/settings changes. A permission/classifier denial stops this actor immediately: report it without another command or alternate attempt. Missing/unreadable or hash-mismatched inputs stop without verdicts. Recover truncated reads in bounded ranges; never judge from partial input. Write only the two existing verdict outputRefs and run only the existing pull/checker besides these reads/hashes. Pi and Claude retain native read tools and their existing shell restrictions.
 
+## Output schemas
+
+The \`outputSchemas\` map in the work order JSON gives the field shape of each verdict by file name. Build the spec-authority verdict from its entry; no source search is needed.
+
 ## Judgment
 
 Adjudicate every finding in the \`findings\` read per agents/judge.agent.md, against the COMPLETE spec in the \`spec\` read.
 Dispose each cluster once, never each raw finding: \`dispositions[].index\` is the cluster's \`clusterId\`, and one \`act\`, \`defer\` or \`reject\` with one rationale applies to every member. Severity, the \`round\` and the \`mediumFixWindow\` in the work order are inputs to your decision. No rule defers a finding from severity or round alone, so decide \`act\`, \`defer\` or \`reject\` for every cluster in every round. One exception holds: a cluster that contains a \`high\` or a \`question\`, and an all-\`nit\` cluster, is never deferred, so only \`act\` or \`reject\` is valid for it and a \`defer\` fails the judge pass closed.
 Each disposition carries \`title\` (the one-line defect), \`detail\` (the concrete path through the code and why it breaks), \`fix\` (the remedy and the test to add) and, for \`defer\` and \`reject\`, \`reason\` (one sentence). A disposition missing any required field fails closed. When a cluster repeats an entry of \`priorActItems\` (another instance at the same file and guard counts), set \`resurfaces\` on its disposition to that entry's \`fingerprint\`. Write plain sentences with no em dashes and no arrows.
-${workOrder.requiredReads.some((read) => read.kind === "copilot-body-feedback") ? "A `copilot-body-feedback` read holds a Copilot review body that raised a finding with no inline thread (GATE-EXEC-COPILOT-BODY-TO-JUDGE). Adjudicate it like an inline finding. Cite it in the rationale of a cluster that covers the same defect, otherwise note it in the scopeDrift rationale; its own ledger disposition lands with S3b (issue 2937 AC18). It never blocks by itself, and an operator marker overrides it.\n" : ""}Read every \`required\` entry below IN FULL before any judgment. If one is missing, unreadable, or its sha256 differs, stop and report which read failed; never write a verdict.
+${workOrder.requiredReads.some((read) => read.kind === "copilot-body-feedback") ? "A `copilot-body-feedback` read holds a Copilot review body that raised a finding with no inline thread (GATE-EXEC-COPILOT-BODY-TO-JUDGE). Adjudicate it like an inline finding. Cite it in the rationale of a cluster that covers the same defect, otherwise note it in the scopeDrift rationale; its own ledger disposition lands with S3b (issue 2937 AC18). It never blocks by itself, and an operator marker overrides it.\n" : ""}Read every \`required\` entry below IN FULL before any judgment. The pull already verified the sha256 of every required read, and a changed read arrives as a pull refusal, so Pi and Claude judges compute no digest of a required read and run no digest tool for it; the Codex after-pull setup above still governs Codex. If a read is missing or unreadable, stop and report which one; never write a verdict.
 Write exactly two artifacts: the relevance verdict to \`${verdictPath}\` and the spec-authority verdict to \`${specVerdictPath}\`.
 Widening: ${JUDGE_WIDENING_RULE}.
 
@@ -190,6 +194,10 @@ export async function emitJudgeWorkOrder({ repo, pr, gate, headSha, findingsFile
     requiredReads: [findings.read, spec.read, identitySource.read, evidence.read, ...priors.map((prior) => prior.read), ...(prBody ? [prBody.read] : []), ...(copilotBody ? [copilotBody.read] : [])],
     // Per-round paths: a superseded round's late verdict never lands where this round's is read.
     outputRefs: [path.join(dir, roundId, "judge-verdict.json"), path.join(dir, roundId, "spec-authority-verdict.json")],
+    outputSchemas: {
+      "spec-authority-verdict.json": SPEC_AUTHORITY_VERDICT_SCHEMA,
+      "judge-verdict.json": "the relevance verdict shape in agents/judge.agent.md",
+    },
     executionRules: { widening: JUDGE_WIDENING_RULE, contract: fileURLToPath(new URL("agents/judge.agent.md", PACKAGE_ROOT)) },
   };
   const identityTriple = {

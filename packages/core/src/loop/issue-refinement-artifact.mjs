@@ -1437,6 +1437,42 @@ export function checklistSectionLineIndices(body, { acOnly = false } = {}) {
 }
 
 /**
+ * Per-line checklist scope of a body, indexed like `body.split(/\r?\n/)`:
+ * "ac" or "dod" for a line under an Acceptance criteria / Definition of done
+ * section (nearest matching ancestor wins, so a `### Definition of done`
+ * nested under `## Acceptance criteria` is "dod"), null for any other line,
+ * undefined for a line inside fenced code. One scope model for every
+ * tick-integrity consumer (CHECKLIST-SCOPE-ONE-MODEL).
+ *
+ * @param {string} body
+ * @returns {Array<"ac"|"dod"|null|undefined>}
+ */
+export function checklistLineScopes(body) {
+  const lines = typeof body === "string" ? body.split(/\r?\n/u) : [];
+  const scopes = new Array(lines.length).fill(undefined);
+  const sections = parseMarkdownSections(body);
+  const mark = (from, texts, scope) => {
+    let fence = null;
+    texts.forEach((text, k) => {
+      const step = stepFence(fence, text);
+      fence = step.fence;
+      if (!step.insideFence) scopes[from + k] = scope;
+    });
+  };
+  mark(0, lines.slice(0, sections[0]?.line ?? lines.length), null);
+  const stack = [];
+  for (const section of sections) {
+    while (stack.length > 0 && stack.at(-1).level >= section.level) stack.pop();
+    const own = ACCEPTANCE_SECTION_PATTERNS.some((p) => p.test(section.name))
+      ? "ac"
+      : DOD_SECTION_PATTERNS.some((p) => p.test(section.name)) ? "dod" : (stack.at(-1)?.scope ?? null);
+    stack.push({ level: section.level, scope: own });
+    mark(section.line + 1, section.bodyLines, own);
+  }
+  return scopes;
+}
+
+/**
  * Decide what an enqueue caller should do with a refinement-artifact result,
  * so an un-refined item never lands in the Next Up pickup column in the first
  * place. The draft gate remains the backstop for whatever slips through.

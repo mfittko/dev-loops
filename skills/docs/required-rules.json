@@ -81,6 +81,14 @@
       "enforcementNote": "Path assumptions are agent behavior."
     },
     {
+      "id": "CHECKLIST-SCOPE-ONE-MODEL",
+      "enforcement": "runtime"
+    },
+    {
+      "id": "CLI-CHECKOUT-DELEGATION",
+      "enforcement": "runtime"
+    },
+    {
       "id": "CLOSING-REF-BRANCH-MISMATCH",
       "enforcement": "runtime"
     },
@@ -93,9 +101,22 @@
       "enforcementNote": "Seeking explicit confirmation is agent judgment; no script can require it."
     },
     {
+      "id": "COORDINATOR-CONTINUITY-SOFT-CAP",
+      "enforcement": "agent",
+      "enforcementNote": "Whether a coordinator continues past a report point or the 150K advisory diagnostic is coordinator judgment; no script classifies it."
+    },
+    {
       "id": "COORDINATOR-HANDBACK-ONE-REPORT",
       "enforcement": "agent",
       "enforcementNote": "Whether a turn end is a pause is coordinator judgment; no hook classifies it."
+    },
+    {
+      "id": "COORDINATOR-SINGLE-CHILD-JOIN",
+      "enforcement": "doc"
+    },
+    {
+      "id": "COORDINATOR-SINGLE-CHILD-JOIN-NOTIFICATION-FALLBACK",
+      "enforcement": "doc"
     },
     {
       "id": "COORDINATOR-VERIFY-BOUNDARY",
@@ -150,6 +171,10 @@
     },
     {
       "id": "COPILOT-STATE-CARRIED-CONVERGENCE",
+      "enforcement": "runtime"
+    },
+    {
+      "id": "COPILOT-STATE-CONVERGED-BELOW-CAP",
       "enforcement": "runtime"
     },
     {
@@ -495,7 +520,22 @@
     {
       "id": "GATE-EXEC-ROUND-CAP",
       "enforcement": "runtime",
-      "enforcementNote": "Enforced by upsert-checkpoint-verdict.mjs (choke point, count, past-cap composition via pastCapBlockers in packages/core/src/loop/gate-fanin.mjs) and countCompletedRounds and resolveClosureRound in write-gate-context.mjs, and capClosedFor at write-gate-findings-log.mjs, and emit-fixer-work-order.mjs (refuses round_cap_reached after the cap round and at a blocked cap round); the rule body in gate-review-sub-loop-contract.md owns the clauses"
+      "enforcementNote": "Enforced by upsert-checkpoint-verdict.mjs (choke point, count, past-cap composition via pastCapBlockers in packages/core/src/loop/gate-fanin.mjs) and countCompletedRounds and resolveCapRoundFixed in write-gate-context.mjs (the cap-round-fixed ready transition, also read by ready-for-review.mjs and detect-pr-gate-coordination-state.mjs), and capClosedFor at write-gate-findings-log.mjs, and emit-fixer-work-order.mjs (refuses round_cap_reached after the cap round and at a blocked cap round); the rule body in gate-review-sub-loop-contract.md owns the clauses"
+    },
+    {
+      "id": "GATE-EXEC-ROUND-CAP-WAIVER-PROOF",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by waive-adr-tripwire.mjs, which calls resolveCapRoundFixed from write-gate-context.mjs as ready-for-review.mjs does; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+    },
+    {
+      "id": "GATE-EXEC-ROUND-CAP-CHAIN-EXTEND",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by extend-cap-round-chain.mjs, which refuses any commit after the chain end that is not docs or tests and verifies the extension with resolveCapRoundFixed; the rule body in gate-review-sub-loop-contract.md owns the clauses"
+    },
+    {
+      "id": "GATE-EXEC-ROUND-CAP-THREAD-ROUTE",
+      "enforcement": "runtime",
+      "enforcementNote": "Enforced by pr-gate-coordination.mjs in packages/core/src/loop and resolveCapRoundFixed in write-gate-context.mjs (the baseline_orphaned condition); the rule body in gate-review-sub-loop-contract.md owns the clauses"
     },
     {
       "id": "GATE-EXEC-ROUND-RETIREMENT",
@@ -515,6 +555,11 @@
     {
       "id": "GATE-EXEC-VALIDATION-RESOLUTION",
       "enforcement": "runtime"
+    },
+    {
+      "id": "GATE-REVIEW-SIBLING-SWEEP",
+      "enforcement": "doc",
+      "enforcementNote": "write-gate-context.mjs emits the clause as the Reviewer sibling sweep section of the full prefix and every scoped variant; a test pins the byte-identical text"
     },
     {
       "id": "GATE-SELF-HOST-EXPAND-CONTRACT",
@@ -574,6 +619,10 @@
     },
     {
       "id": "INTAKE-TIMEOUT-SURFACE-BUDGET-EXHAUSTED"
+    },
+    {
+      "id": "JUDGE-OUTPUT-SCHEMA-IN-WORK-ORDER",
+      "enforcement": "doc"
     },
     {
       "id": "BASE-JQ-OUTPUT-GUARANTEE",
@@ -698,6 +747,9 @@
       "id": "OPS-NO-INLINE-INTERPRETER"
     },
     {
+      "id": "RUNNER-HANDOFF-TEARDOWN"
+    },
+    {
       "id": "OPS-CODEX-RUNTIME-SETUP",
       "enforcement": "doc"
     },
@@ -755,6 +807,10 @@
     },
     {
       "id": "PRE-PUSH-DELTA-INPUT",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PUSH-DELTA-INPUT-CAP-CHAIN",
       "enforcement": "doc"
     },
     {

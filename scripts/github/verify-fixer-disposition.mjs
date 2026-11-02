@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { link, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -17,7 +17,7 @@ import { assertTmpRootOutsideLinkedWorktree, resolveGateArtifactTmpRoot } from "
 import { captureParsedReviewThreads, findDeltaBlockedFixedReply, replyAndMaybeResolve, resolveThread } from "./_review-thread-mutations.mjs";
 import { planBatchReplyTargets } from "./reply-resolve-review-threads.mjs";
 import { buildContainmentMap, isCommitContainedByHead } from "./_commit-containment.mjs";
-import { EXECUTION_IDENTITY_RE, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
+import { EXECUTION_IDENTITY_RE, fixerReportPath, verifyPulledResult, workOrderDigest } from "./_work-order-protocol.mjs";
 import {
   evaluateFixerDisposition,
   FIXER_DISPOSITION_FAILED_STEP,
@@ -63,8 +63,10 @@ Required:
                         fingerprint?, validation? }; threadId, fixingCommitSha
                         and disposition are required on every entry.
                         The handoff counts only with a matching fixer pull receipt,
-                        when written at or after that pull, and when its headSha is
-                        the observed --head-sha.
+                        when written at or after that pull. Its candidate head X
+                        may precede live --head-sha H only after containment and
+                        per-commit historical thread-site checks; uncertainty
+                        names the thread for pre_approval_gate --known-findings.
 Optional:
   --construct                 Construct the full worker's canonical report (ACT: from
                                authenticated completion input; THREAD: from the threads
@@ -84,6 +86,14 @@ Optional:
                                ok:false (residual_reply_failed, complete:false).
   --check                     Read-only delivery and live-state check; never
                                write a checkpoint or reply/resolve a thread.
+  --report-path <path>         Absolute path of the join report. Valid only with --check
+                               (refused otherwise, and when it equals the
+                               plan's outputRef). The verifier publishes its final result
+                               there once per successful run, last and atomically (temp file, then hard link; an existing report is never
+                               replaced and a later run with the same path refuses): the result with outcome
+                               "complete" or "incomplete", or on a refusal
+                               { ok: false, outcome: "refused", error }. A full-phase order
+                               derives it as <outputRef>.report (joinRef).
   --tmp-root <path>            Root tmp directory for the checkpoint and the pull
                                receipts (default: the main git worktree's tmp/, so
                                a prune of a linked worktree never takes the
@@ -126,6 +136,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
       "head-sha": { type: "string" },
       "fixer-plan": { type: "string" },
       "tmp-root": { type: "string" },
+      "report-path": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -141,6 +152,7 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
     headSha: undefined,
     fixerPlan: undefined,
     tmpRoot: undefined,
+    reportPath: undefined,
   };
   for (const token of tokens) {
     if (token.kind === "positional") {
@@ -183,11 +195,17 @@ export function parseVerifyFixerDispositionCliArgs(argv) {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
     }
+    if (token.name === "report-path") {
+      options.reportPath = requireTokenValue(token, parseError).trim();
+      if (!path.isAbsolute(options.reportPath)) throw parseError("--report-path must be an absolute path; pass <outputRef>.report from the emitted fixer plan (joinRef)");
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   const missing = ["repo", "pr", "headSha", "fixerPlan"].filter((k) => options[k] === undefined);
   if (options.check && options.construct) throw parseError("--construct and --check are mutually exclusive");
+  if (options.reportPath !== undefined && !options.check) throw parseError(REPORT_PATH_NEEDS_CHECK_ERROR);
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
   }
@@ -324,11 +342,13 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       || sha256Hex(completion).slice(7) !== order.authority.completionInputDigest) {
       throw new Error("completion input differs from its semantic or exact-byte authority");
     }
-    if (!completion || completion.headSha !== options.headSha || !normalizeFullHeadSha(completion.headSha)
+    if (!completion || !normalizeFullHeadSha(completion.headSha)
       || normalizeFullHeadSha(completion.fixingCommitSha) !== completion.fixingCommitSha
       || !Array.isArray(completion.siteCoverage) || !Array.isArray(completion.threadBindings)) {
       throw new Error("completion input requires the actual full candidate/fixing heads, coverage and thread bindings");
     }
+    const decision = readGateDeltaRecord(receiptTmpRoot, baselineAuthority?.reviewBaselineHead ?? order.headSha);
+    if (decision && decision.candidateHead !== completion.headSha) throw new Error("completion input requires the actual full candidate/fixing heads from its clearing decision");
     const subject = receipt.receipt.subject;
     if (!/^f\d+-[a-f0-9]{8}$/.test(plan.executionIdentity) || plan.workOrderRef !== `fixer:${options.repo}#${options.pr}:${order.headSha}:${plan.executionIdentity}`
       || subject.repo !== options.repo || subject.pr !== options.pr || subject.headSha !== order.headSha
@@ -337,7 +357,20 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     }
   }
   if (options.construct && !completion && order.source !== "threads") throw new Error("--construct requires authenticated ACT completion input or a THREAD plan");
-  let raw = options.construct ? { headSha: options.headSha, dispositions: [], ...(completion ? { siteCoverage: completion.siteCoverage } : {}) } : null;
+  const observedHead = options.headSha;
+  let threadDelta;
+  if (order.source === "threads") {
+    const read = order.requiredReads.find((read) => read.kind === "delta-result");
+    if (read) {
+      const bytes = await readFile(read.path).catch(() => { throw new Error("THREAD needs a clearing delta record matching its authenticated emission"); });
+      threadDelta = JSON.parse(bytes);
+      if (createHash("sha256").update(bytes).digest("hex") !== read.sha256
+        || sha256Hex(threadDelta).slice(7) !== order.authority.deltaResultDigest) throw new Error("THREAD needs a clearing delta record matching its authenticated emission");
+    }
+  }
+  const constructionHead = completion?.headSha ?? (order.source === "threads" && !complete
+    ? threadDelta?.candidateHead ?? observedHead : observedHead);
+  let raw = options.construct ? { headSha: constructionHead, dispositions: [], ...(completion ? { siteCoverage: completion.siteCoverage } : {}) } : null;
   try {
     if (!options.construct) {
       const text = await readFile(handoffPath, "utf8");
@@ -351,9 +384,12 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
     if (error.handWritten) throw error;
     throw new Error(`Fixer disposition handoff ${handoffPath} is not valid JSON`);
   }
-  if (raw?.headSha !== options.headSha) {
+  if (raw?.headSha !== observedHead && (!order.source || !normalizeFullHeadSha(raw?.headSha))) {
     throw new Error(`Fixer disposition handoff claims head ${raw?.headSha}, not the observed head ${options.headSha}; refresh the PR state before verifying`);
   }
+  // Keep every existing report/Delta authority at X; only live observation and delivery run at H.
+  options = { ...options, headSha: raw.headSha };
+  if (completion && completion.headSha !== options.headSha) throw new Error("completion input candidate differs from the constructed report");
   if (order.headSha !== options.headSha) {
     const contained = await isCommitContainedByHead({ repo: options.repo, commitSha: order.headSha, headSha: options.headSha }, runtime);
     if (!contained.contained) throw new Error(`the work order head ${order.headSha} is not contained by the observed head ${options.headSha}: ${contained.reason}`);
@@ -373,7 +409,7 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       throw new Error(`the work order's threads ${threadsRead.path} have invalid thread IDs`);
     }
   }
-  if (options.construct && !completion) {
+  if (!completion && order.source === "threads" && (options.construct || options.headSha !== observedHead)) {
     // THREAD route: the clearing delta record bound to the pushed head decides each thread. An ordinary order's head is
     // the review baseline; a complete order's head is the pushed candidate, so its record is found by candidateHead.
     // A record decides only when it clears the pushed head and its items cover the pinned thread IDs: an ACT-route or
@@ -394,7 +430,10 @@ async function loadDeliveredHandoff(options, { repoRoot, receiptTmpRoot, runtime
       throw new Error(`--construct needs a clearing delta record ${complete ? "" : `for baseline ${order.headSha} `}whose candidateHead is the pushed head ${options.headSha} and whose items cover the pinned threads; push the reviewed candidate first`);
     }
     const resolved = new Set((record.items ?? []).filter((item) => item?.status === "resolved").map((item) => item.ref));
-    raw.dispositions = source.threads.map(({ threadId }) => ({ threadId, fixingCommitSha: options.headSha, disposition: resolved.has(threadId) ? "tackled" : "deferred" }));
+    const dispositions = source.threads.map(({ threadId }) => ({ threadId, fixingCommitSha: options.headSha, disposition: resolved.has(threadId) ? "tackled" : "deferred" }));
+    if (options.construct) raw.dispositions = dispositions;
+    else if (raw.dispositions.length !== dispositions.length || dispositions.some((expected) => !raw.dispositions.some((entry) => entry.threadId === expected.threadId
+      && entry.fixingCommitSha === expected.fixingCommitSha && entry.disposition === expected.disposition))) throw new Error("THREAD report differs from the clearing candidate dispositions");
   }
   let handoff = normalizeFixerDispositionHandoff(raw, { ruleIds: loadKnownRuleIds() });
   if (threadsRead) {
@@ -605,7 +644,107 @@ function assertActItemThreadsDisposed(actList, handoff, parsed, gateLogin, delta
   }
 }
 
-export async function verifyFixerDisposition(
+// Historical coordinates belong to the authenticated root, never the live (possibly shifted) line.
+export async function assertDescendantThreadSites({ repo, pr, candidateHead, headSha, handoff, parsed, repoRoot }, { env, ghCommand, runChild }) {
+  const gitEnv = { ...env };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_DIFF_OPTS"]) delete gitEnv[key];
+  for (const entry of handoff.dispositions.filter((entry) => entry.disposition === "tackled")) {
+    const refuse = (reason, changed = false) => { throw new Error(`thread_site_${changed ? "changed" : "unverifiable"}: ${entry.threadId} (${candidateHead} -> ${headSha}): ${reason}; run pre_approval_gate with this open thread in --known-findings`); };
+    const git = async (...args) => {
+      const result = await runChild("git", ["-C", repoRoot, "--literal-pathspecs", ...args], gitEnv).catch(() => refuse("history unavailable"));
+      if (result.code !== 0) refuse("history unavailable");
+      return result.stdout.trim();
+    };
+    const root = parsed.comments.filter((comment) => comment.threadId === entry.threadId)
+      .sort((a, b) => Number(a.databaseId) - Number(b.databaseId))[0];
+    if (!root || !/^\d+$/.test(String(root.databaseId))) refuse("root identity unavailable");
+    const response = await runChild(ghCommand, ["api", `repos/${repo}/pulls/comments/${root.databaseId}`], env).catch(() => refuse("historical root unreadable"));
+    let site;
+    try { site = JSON.parse(response.stdout); } catch { refuse("historical root unreadable"); }
+    if (response.code !== 0 || !site || String(site.id) !== String(root.databaseId) || site.node_id !== root.id || site.in_reply_to_id
+      || site.pull_request_url !== `https://api.github.com/repos/${repo}/pulls/${pr}`) refuse("historical root identity mismatch");
+    let start = site.original_start_line ?? site.original_line, end = site.original_line;
+    if (site.side !== "RIGHT" || site.original_start_line != null && site.start_side !== "RIGHT"
+      || !Number.isSafeInteger(start) || start < 1 || !Number.isSafeInteger(end) || end < start
+      || !normalizeFullHeadSha(site.original_commit_id) || typeof site.path !== "string" || !site.path
+      || path.isAbsolute(site.path) || site.path.split("/").includes("..")) refuse("unsupported historical coordinates");
+    const walk = async (from, to, rejectOverlap) => {
+      if (from === to) return;
+      await git("merge-base", "--is-ancestor", from, to);
+      const commits = (await git("rev-list", "--reverse", "--ancestry-path", `${from}..${to}`)).split("\n").filter(Boolean);
+      let parent = from;
+      for (const commit of commits) {
+        const parents = (await git("rev-list", "--parents", "-n", "1", commit)).split(" ");
+        if (parents.length !== 2 || parents[1] !== parent) refuse("nonlinear history");
+        const patch = await git("diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=0", "--inter-hunk-context=0", parent, commit, "--", site.path);
+        if (/^(?:Binary files |GIT binary patch$|(?:deleted file mode|new file mode|old mode|new mode) \d+$)/m.test(patch)) refuse("site file replaced, deleted or binary");
+        let offset = 0;
+        for (const hunk of patch.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) {
+          const oldStart = Number(hunk[1]) + offset, oldCount = Number(hunk[2] ?? 1), newCount = Number(hunk[4] ?? 1);
+          const delta = newCount - oldCount;
+          const overlap = oldCount ? oldStart <= end && oldStart + oldCount - 1 >= start : oldStart >= start && oldStart < end;
+          if (overlap) {
+            if (rejectOverlap) refuse("later commit overlaps the thread range", true);
+            if (!newCount) refuse("fix removed the historical range");
+            start = Math.min(start, Number(hunk[3]));
+            end = Math.max(Number(hunk[3]) + newCount - 1, end + delta);
+          } else if (oldStart < start) { start += delta; end += delta; }
+          offset += delta;
+        }
+        parent = commit;
+      }
+      if (parent !== to) refuse("incomplete history");
+    };
+    await git("cat-file", "-e", `${site.original_commit_id}:${site.path}`);
+    await walk(site.original_commit_id, candidateHead, false);
+    await walk(candidateHead, headSha, true);
+  }
+}
+
+const REPORT_PATH_NEEDS_CHECK_ERROR = "--report-path is valid only with --check; pass --check, or drop --report-path";
+
+// Final-on-write join report (ADR 0223): published once per successful step-6 run, last and atomically, so a file at reportPath is always final.
+export async function publishReport(reportPath, report) {
+  const temporary = `${reportPath}.tmp-${process.pid}-${randomUUID()}`;
+  await mkdir(path.dirname(reportPath), { recursive: true });
+  try {
+    await writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    // First write wins: link refuses on EEXIST, so a later --check run cannot replace a report that a join may already have consumed.
+    await link(temporary, reportPath).catch((error) => {
+      if (error?.code === "EEXIST") throw new Error(`--report-path ${reportPath} already holds the final report of an earlier run and is never replaced; the join already consumed it. Read that report, or re-emit the work order for a new joinRef`);
+      throw error;
+    });
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+export async function verifyFixerDisposition(options, deps = {}) {
+  if (options.reportPath === undefined) return verifyFixerDispositionCore(options, deps);
+  if (!options.check) throw new Error(REPORT_PATH_NEEDS_CHECK_ERROR);
+  const planPath = path.resolve(deps.repoRoot ?? process.cwd(), options.fixerPlan);
+  const outputRef = await readFile(planPath, "utf8").then((text) => JSON.parse(text)?.workOrder?.outputRefs?.[0]).catch(() => undefined);
+  if (typeof outputRef !== "string" || outputRef === "") throw new Error(`--report-path needs the emitted fixer plan ${planPath} to be readable JSON with a string workOrder.outputRefs[0]; pass --fixer-plan <the emitted fixer plan> and --report-path <outputRef>.report`);
+  if (!path.isAbsolute(options.reportPath)) throw new Error("--report-path must be an absolute path; pass <outputRef>.report from the emitted fixer plan (joinRef)");
+  // Compare through the real parent directory so a symlinked alias (macOS /tmp vs /private/tmp) cannot name a protected file.
+  const canonical = (file) => path.join(realpathNearestExisting(path.dirname(file)), path.basename(file));
+  const protectedFiles = [planPath, ...(typeof outputRef === "string" ? [outputRef, `${outputRef}.constructed`] : [])];
+  if (protectedFiles.some((file) => canonical(file) === canonical(options.reportPath))) {
+    throw new Error(`--report-path ${options.reportPath} equals the fixer plan or its outputRef, which --construct writes early; pass ${typeof outputRef === "string" ? fixerReportPath(outputRef) : "<outputRef>.report"} (the emitted joinRef)`);
+  }
+  let result;
+  try {
+    result = await verifyFixerDispositionCore(options, deps);
+  } catch (error) {
+    // The original refusal always propagates; a failed publish must not replace it.
+    await publishReport(options.reportPath, { ok: false, outcome: "refused", error: error instanceof Error ? error.message : String(error) }).catch(() => {});
+    throw error;
+  }
+  await publishReport(options.reportPath, { ...result, outcome: result.complete ? "complete" : "incomplete" });
+  return result;
+}
+
+async function verifyFixerDispositionCore(
   options,
   { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot = process.cwd() } = {},
 ) {
@@ -632,6 +771,15 @@ export async function verifyFixerDisposition(
   if (Array.isArray(actList)) {
     gateLogin = await resolveAuthenticatedLogin({ env, ghCommand, runChild });
     assertActItemThreadsDisposed(actList, handoff, initialSnapshot, gateLogin, deltaStatuses, completion);
+  }
+  if (handoff.headSha !== options.headSha) {
+    if (source === "act-list" && !completion) throw new Error("thread_site_unverifiable: descendant ACT delivery needs authenticated completion input; run pre_approval_gate with the open threads in --known-findings");
+    const contained = await isCommitContainedByHead({ repo: options.repo, commitSha: handoff.headSha, headSha: options.headSha }, runtime);
+    if (!contained.contained) throw new Error(`candidate is not contained by the observed head: ${contained.reason}; run a full gate round`);
+    await assertDescendantThreadSites({ ...options, candidateHead: handoff.headSha, handoff, parsed: initialSnapshot, repoRoot }, runtime);
+    // Catch movement during the historical proof before construction, checkpoints or GitHub writes.
+    const current = await runChild(ghCommand, ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefOid"], env);
+    if (current.code !== 0 || JSON.parse(current.stdout).headRefOid !== options.headSha) throw new Error("live head changed during thread-site proof; refresh and run a full gate round");
   }
   if (options.construct) {
     await mkdir(path.dirname(handoffPath), { recursive: true });
@@ -691,7 +839,7 @@ export async function verifyFixerDisposition(
   }
   if (!options.check) {
     await mkdir(path.dirname(fullPath), { recursive: true });
-    await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery }, null, 2)}\n`, "utf8");
+    await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery, headSha: options.headSha }, null, 2)}\n`, "utf8");
   }
 
   const tackledShas = [...new Set(
@@ -833,6 +981,9 @@ export async function verifyFixerDisposition(
     ? { ...entry, failedStep: FIXER_DISPOSITION_FAILED_STEP.DELTA_BLOCKED, deltaStatus: deltaBlocked.get(entry.threadId).status, deltaRecord: deltaBlocked.get(entry.threadId).recordPath }
     : entry));
   const activeFixer = evaluation.ok ? undefined : await bindActiveFixer(false);
+  if (!options.check && evaluation.ok && residualFailures.length === 0) {
+    await writeFile(fullPath, `${JSON.stringify({ ...handoff, ...delivery, headSha: options.headSha, complete: true }, null, 2)}\n`, "utf8");
+  }
   return {
     // A failed residual-status reply is not delivered: nonzero exit naming the thread.
     ok: residualFailures.length === 0,
@@ -880,6 +1031,8 @@ async function main() {
     process.exitCode = 1;
   }
 }
+export { loadDeliveredHandoff };
+
 if (isDirectCliRun(import.meta.url)) {
   await main();
 }

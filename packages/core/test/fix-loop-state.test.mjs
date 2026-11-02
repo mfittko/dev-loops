@@ -44,6 +44,16 @@ test("a descendant carry after head_moved is disposition_complete", () => {
   assert.equal(out.reason, "descendant_carry");
 });
 
+for (const [from, snapshot] of CASES.filter(([state]) => [S.PUSHED, S.CI_RED, S.CI_GREEN, S.DELIVERY_INCOMPLETE, S.DISPOSITION_COMPLETE].includes(state))) {
+  test(`post-push ${from} routes a later commit through head_moved to the full gate`, () => {
+    assert.equal(interpretFixLoopState(snapshot).state, from);
+    assert.ok(FIX_LOOP_TRANSITIONS[from].includes(S.HEAD_MOVED));
+    const moved = { ...snapshot, headMoved: true };
+    assert.equal(interpretFixLoopState(moved).state, S.HEAD_MOVED);
+    assert.equal(interpretFixLoopState({ ...moved, sequenceClosed: true }).state, S.FULL_GATE_ROUND);
+  });
+}
+
 test("delta residue re-enters commit_only", () => {
   const out = interpretFixLoopState({ candidateCommitted: true, deltaReviewStarted: true, deltaVerdict: "residue" });
   assert.equal(out.state, S.COMMIT_ONLY_EMITTED);

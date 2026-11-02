@@ -2556,7 +2556,7 @@ function initTempGitRepo(tempDir) {
 // real PR-first shape): initial commit on main, then a feature branch.
 async function initFeatureBranchRepo(tempDir) {
   initTempGitRepo(tempDir);
-  await writeFile(path.join(tempDir, "a.txt"), "line1\n", "utf8");
+  await writeFile(path.join(tempDir, "a.mjs"), "line1\n", "utf8");
   execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
   execFileSync("git", ["commit", "-m", "initial"], { cwd: tempDir, stdio: "ignore" });
   execFileSync("git", ["branch", "-M", "main"], { cwd: tempDir, stdio: "ignore" });
@@ -2598,11 +2598,11 @@ test("runCli --lightweight ALONE (no --issue): MULTI-COMMIT above-threshold bran
       "utf8",
     );
     // Commit 1 on the branch is already over the 3-line threshold.
-    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\nline3\nline4\nline5\n", "utf8");
+    await writeFile(path.join(tempDir, "a.mjs"), "line1\nline2\nline3\nline4\nline5\n", "utf8");
     execFileSync("git", ["commit", "-am", "big change"], { cwd: tempDir, stdio: "ignore" });
     // Commit 2 (the HEAD~1..HEAD diff) is a single line — a HEAD~1-only scope
     // measure would fail OPEN here; the merge-base measure must not.
-    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\nline3\nline4\nline5\nline6\n", "utf8");
+    await writeFile(path.join(tempDir, "a.mjs"), "line1\nline2\nline3\nline4\nline5\nline6\n", "utf8");
     execFileSync("git", ["commit", "-am", "tiny follow-up"], { cwd: tempDir, stdio: "ignore" });
     const result = await runNode(["--lightweight"], { cwd: tempDir });
     assert.notEqual(result.code, 0);
@@ -2619,10 +2619,10 @@ test("runCli --lightweight ALONE (no --issue): DIRTY-TREE above-threshold change
       "utf8",
     );
     // One tiny committed change (under threshold on its own)...
-    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\n", "utf8");
+    await writeFile(path.join(tempDir, "a.mjs"), "line1\nline2\n", "utf8");
     execFileSync("git", ["commit", "-am", "small committed change"], { cwd: tempDir, stdio: "ignore" });
     // ...plus a large UNCOMMITTED change: the working tree is part of the scope.
-    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\nline3\nline4\nline5\nline6\nline7\n", "utf8");
+    await writeFile(path.join(tempDir, "a.mjs"), "line1\nline2\nline3\nline4\nline5\nline6\nline7\n", "utf8");
     const result = await runNode(["--lightweight"], { cwd: tempDir });
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /stay within the light-mode threshold/);
@@ -2680,7 +2680,7 @@ test("runCli --lightweight ALONE (no --issue): under-threshold change resolves i
       "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 200\n",
       "utf8",
     );
-    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\n", "utf8");
+    await writeFile(path.join(tempDir, "a.mjs"), "line1\nline2\n", "utf8");
     execFileSync("git", ["commit", "-am", "small change"], { cwd: tempDir, stdio: "ignore" });
     const result = await runNode(["--lightweight"], { cwd: tempDir });
     assert.equal(result.code, 0, result.stderr);
@@ -2700,7 +2700,7 @@ test("runCli --lightweight ALONE: issueless.enabled allows an OVER-threshold cha
       "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 3\n  issueless: true\n",
       "utf8",
     );
-    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\nline3\nline4\nline5\nline6\n", "utf8");
+    await writeFile(path.join(tempDir, "a.mjs"), "line1\nline2\nline3\nline4\nline5\nline6\n", "utf8");
     execFileSync("git", ["commit", "-am", "big change"], { cwd: tempDir, stdio: "ignore" });
     const result = await runNode(["--lightweight"], { cwd: tempDir });
     assert.equal(result.code, 0, result.stderr);
@@ -2719,7 +2719,7 @@ test("runCli --lightweight ALONE: issueless.enabled allows startup even with lig
       "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: false\n    maxFiles: 3\n    maxLines: 200\n  issueless: true\n",
       "utf8",
     );
-    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\n", "utf8");
+    await writeFile(path.join(tempDir, "a.mjs"), "line1\nline2\n", "utf8");
     execFileSync("git", ["commit", "-am", "small change"], { cwd: tempDir, stdio: "ignore" });
     const result = await runNode(["--lightweight"], { cwd: tempDir });
     assert.equal(result.code, 0, result.stderr);
@@ -2736,7 +2736,7 @@ test("runCli --lightweight ALONE: issueless.enabled=false keeps the over-thresho
       "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 3\n  issueless: false\n",
       "utf8",
     );
-    await writeFile(path.join(tempDir, "a.txt"), "line1\nline2\nline3\nline4\nline5\nline6\n", "utf8");
+    await writeFile(path.join(tempDir, "a.mjs"), "line1\nline2\nline3\nline4\nline5\nline6\n", "utf8");
     execFileSync("git", ["commit", "-am", "big change"], { cwd: tempDir, stdio: "ignore" });
     const result = await runNode(["--lightweight"], { cwd: tempDir });
     assert.notEqual(result.code, 0);
@@ -2754,7 +2754,7 @@ test("resolveIssuelessLightweightEligibility scopes git merge-base/diff to the g
   const originalCwd = process.cwd();
   try {
     await initFeatureBranchRepo(innerRepoDir);
-    await writeFile(path.join(innerRepoDir, "a.txt"), "line1\nline2\n", "utf8");
+    await writeFile(path.join(innerRepoDir, "a.mjs"), "line1\nline2\n", "utf8");
     execFileSync("git", ["commit", "-am", "small change"], { cwd: innerRepoDir, stdio: "ignore" });
     const config = {
       version: 1,
@@ -2790,7 +2790,7 @@ async function initDivergedBaseBranchRepo(tempDir) {
   execFileSync("git", ["branch", "-M", "main"], { cwd: tempDir, stdio: "ignore" });
   execFileSync("git", ["checkout", "-b", "integration"], { cwd: tempDir, stdio: "ignore" });
   const bigLines = Array.from({ length: 10 }, (_, i) => `big-line-${i}\n`).join("");
-  await writeFile(path.join(tempDir, "big.txt"), bigLines, "utf8");
+  await writeFile(path.join(tempDir, "big.mjs"), bigLines, "utf8");
   execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
   execFileSync("git", ["commit", "-m", "big integration change"], { cwd: tempDir, stdio: "ignore" });
   execFileSync("git", ["checkout", "-b", "feature"], { cwd: tempDir, stdio: "ignore" });
@@ -2799,7 +2799,7 @@ async function initDivergedBaseBranchRepo(tempDir) {
 test("resolveIssuelessLightweightEligibility: unset workflow.baseBranch measures scope against the default-branch candidates (main) — over threshold", async () => {
   await withTempDir(async (tempDir) => {
     await initDivergedBaseBranchRepo(tempDir);
-    await writeFile(path.join(tempDir, "small.txt"), "line1\n", "utf8");
+    await writeFile(path.join(tempDir, "small.mjs"), "line1\n", "utf8");
     execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
     execFileSync("git", ["commit", "-m", "small feature change"], { cwd: tempDir, stdio: "ignore" });
     const config = {
@@ -2817,7 +2817,7 @@ test("resolveIssuelessLightweightEligibility: unset workflow.baseBranch measures
 test("resolveIssuelessLightweightEligibility: configured workflow.baseBranch overrides the candidate list, flipping eligibility", async () => {
   await withTempDir(async (tempDir) => {
     await initDivergedBaseBranchRepo(tempDir);
-    await writeFile(path.join(tempDir, "small.txt"), "line1\n", "utf8");
+    await writeFile(path.join(tempDir, "small.mjs"), "line1\n", "utf8");
     execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
     execFileSync("git", ["commit", "-m", "small feature change"], { cwd: tempDir, stdio: "ignore" });
     const config = {
@@ -3923,4 +3923,69 @@ test("inspectNewerMergeSinceCheckpoint: names the oldest newer merge, in git rev
     rmSync(tempDir, { recursive: true, force: true });
     rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
+});
+
+// Startup eligibility and gate dispatch share one cap predicate (weighted logic LOC and non-doc files).
+test("resolveIssuelessLightweightEligibility and resolveGateDispatchMode agree on the same diffs; config-source edits fail closed", async () => {
+  const { resolveGateDispatchMode } = await import("@dev-loops/core/config");
+  const { evaluateWorkingTreeSizeBudget } = await import("../../scripts/loop/check-size-budget.mjs");
+  const cases = [
+    // Small code change plus a large doc: weighted LOC stays under the cap.
+    { name: "small", files: { "a.mjs": "const a = 1;\nconst b = 2;\n", "note.md": "doc\n".repeat(50) }, eligible: true, reason: "under_threshold" },
+    { name: "big", files: { "a.mjs": "const a = 1;\n".repeat(30) }, eligible: false, reason: "over_threshold" },
+    // File-count half of the predicate: raw count over maxFiles is refused; docs do not count.
+    { name: "many-files", files: { "a.mjs": "const a = 1;\n", "b.mjs": "const b = 1;\n", "c.mjs": "const c = 1;\n", "d.mjs": "const d = 1;\n" }, eligible: false, reason: "over_threshold" },
+    { name: "docs-not-counted", files: { "a.mjs": "const a = 1;\n", "b.mjs": "const b = 1;\n", "c.mjs": "const c = 1;\n", "x.md": "doc\n", "y.md": "doc\n" }, eligible: true, reason: "under_threshold" },
+    // Unclassified source reads 0 logic LOC but the size outcome is block: both callers refuse.
+    { name: "unclassified", files: { "big.xyz": "line\n".repeat(400) }, eligible: false, reason: "size_outcome_unavailable", dispatchReason: "size_outcome_block" },
+  ];
+  const config = { version: 1, localImplementation: { lightMode: { enabled: true, maxFiles: 3, maxLines: 10 } } };
+  for (const c of cases) {
+    await withTempDir(async (tempDir) => {
+      await initFeatureBranchRepo(tempDir);
+      for (const [name, body] of Object.entries(c.files)) await writeFile(path.join(tempDir, name), body, "utf8");
+      execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "change"], { cwd: tempDir, stdio: "ignore" });
+      const eligibility = resolveIssuelessLightweightEligibility(config, tempDir);
+      assert.equal(eligibility.eligible, c.eligible, `${c.name}: ${JSON.stringify(eligibility)}`);
+      const base = execFileSync("git", ["rev-parse", "main"], { cwd: tempDir, encoding: "utf8" }).trim();
+      const sizeOutcome = evaluateWorkingTreeSizeBudget({ config, base, repoRoot: tempDir });
+      const dispatch = resolveGateDispatchMode(config, "preApproval", { changedFiles: Object.keys(c.files), sizeOutcome });
+      assert.equal(dispatch.mode === "inline", c.eligible, `${c.name}: ${JSON.stringify(dispatch)}`);
+      if (!c.eligible) assert.equal(dispatch.reason, c.dispatchReason ?? eligibility.reason);
+      assert.equal(eligibility.reason ?? "under_threshold", c.eligible ? "under_threshold" : c.reason);
+    }, { prefix: `resolve-dev-loop-shared-cap-${c.name}-` });
+  }
+  await withTempDir(async (tempDir) => {
+    await initFeatureBranchRepo(tempDir);
+    await writeFile(path.join(tempDir, ".devloops"), "{}\n", "utf8");
+    execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "config"], { cwd: tempDir, stdio: "ignore" });
+    const result = resolveIssuelessLightweightEligibility(config, tempDir);
+    assert.deepEqual([result.eligible, result.reason], [false, "config_source_touch"]);
+  }, { prefix: "resolve-dev-loop-shared-cap-config-" });
+});
+
+test("resolveIssuelessLightweightEligibility: missing size evidence fails closed as size_outcome_unavailable; config-source touch is its own reason", async () => {
+  const config = { version: 1, localImplementation: { lightMode: { enabled: true, maxFiles: 3, maxLines: 10 } } };
+  await withTempDir(async (tempDir) => {
+    await initFeatureBranchRepo(tempDir);
+    await writeFile(path.join(tempDir, "a.mjs"), "const a = 1;\n", "utf8");
+    execFileSync("git", ["add", "."], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "change"], { cwd: tempDir, stdio: "ignore" });
+    const reason = (deps) => resolveIssuelessLightweightEligibility(config, tempDir, deps).reason;
+    assert.equal(reason({ evaluateSize: () => ({ wholeLogicLoc: Number.NaN }) }), "size_outcome_unavailable");
+    assert.equal(reason({ evaluateSize: () => { throw new Error("boom"); } }), "size_outcome_unavailable");
+    assert.equal(reason({ detectChangedFiles: () => ({ ok: false, files: null, error: "boom" }), evaluateSize: () => ({ wholeLogicLoc: 1 }) }), "size_outcome_unavailable");
+    assert.equal(reason({ evaluateSize: () => ({ outcome: "block", wholeLogicLoc: 0 }) }), "size_outcome_unavailable");
+    assert.equal(reason({ evaluateSize: () => ({ outcome: "block", wholeLogicLoc: 5 }) }), "size_outcome_unavailable");
+    assert.equal(reason({ evaluateSize: () => null }), "size_outcome_unavailable");
+    assert.equal(reason({ evaluateSize: () => ({ wholeLogicLoc: -1 }) }), "size_outcome_unavailable");
+    for (const outcome of ["pass", "escalate"]) {
+      assert.equal(resolveIssuelessLightweightEligibility(config, tempDir, { evaluateSize: () => ({ outcome, wholeLogicLoc: 1 }) }).eligible, true, outcome);
+    }
+    assert.equal(reason({ detectChangedFiles: () => ({ ok: true, files: [".devloops"] }), evaluateSize: () => ({ wholeLogicLoc: 1 }) }), "config_source_touch");
+    const over = resolveIssuelessLightweightEligibility(config, tempDir, { detectChangedFiles: () => ({ ok: true, files: ["a.mjs"] }), evaluateSize: () => ({ wholeLogicLoc: 99 }) });
+    assert.deepEqual([over.reason, over.fileCount, over.wholeLogicLoc], ["over_threshold", 1, 99]);
+  }, { prefix: "resolve-dev-loop-eligibility-seams-" });
 });
