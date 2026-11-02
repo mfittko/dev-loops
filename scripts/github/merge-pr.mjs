@@ -73,8 +73,9 @@ Optional:
                                merges, comments or writes, and prints JSON with
                                mergeClass (drain|escalated|null), approvalPath
                                (standing_authorization | human_review |
-                               comment_marker; null with mergeClass null when size
-                               facts are missing), approveMergeLine (the exact
+                               comment_marker; null with mergeClass null when the
+                               evidence is for another head or lacks the size
+                               outcome or the T1 fact),approveMergeLine (the exact
                                "approve merge <headSha>" line for comment_marker),
                                sizeClass, and EVERY failing precondition. Exit 0
                                whenever the preconditions could be evaluated
@@ -847,8 +848,8 @@ export async function mergePr(options, runtime = {}) {
   // Unreadable evidence, or evidence for another head, has no size outcome for this head: sizeClass is unknown, and so is mergeClass unless a stable release forces escalated.
   const approval = {
     ...describeApproval({ verdict, headSha: currentHeadSha, sizeClass: evidence.sizeOutcome }),
-    // Missing size facts also leave the class unknown, and the approval path with it: nothing is confirmed as standing_authorization or drain.
-    ...(evidenceHeadMismatch || !evidence.sizeOutcome
+    // A missing size outcome or a missing T1 fact also leaves the class unknown, and the approval path with it: nothing is confirmed as standing_authorization or drain.
+    ...(evidenceHeadMismatch || !evidence.sizeOutcome || typeof evidence.touchesT1 !== "boolean"
       ? { sizeClass: null, ...(options.stableRelease === true ? {} : { mergeClass: null, approvalPath: null, approveMergeLine: null }) }
       : {}),
   };

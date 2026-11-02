@@ -1621,6 +1621,17 @@ test("--check fails closed on missing size facts: no confirmed class and no stan
   assert.equal(result.approveMergeLine, null);
 });
 
+test("--check reports no class or path when the marker has a size outcome but no boolean T1 fact", async () => {
+  for (const touchesT1 of [undefined, null]) {
+    const { runtime } = makeRuntime({ evidence: { ok: true, sizeOutcome: "pass", touchesT1, failures: [] } });
+    const result = await mergePr(baseOptions({ check: true, humanApprovedBy: "mfittko", standingAuthorization: true }), runtime);
+    assert.equal(result.mergeClass, null);
+    assert.equal(result.approvalPath, null);
+    assert.equal(result.approveMergeLine, null);
+    assert.ok(result.failures.some((f) => f.precondition === "size_budget_human_approval"));
+  }
+});
+
 test("the default merge record comment kills a hung gh child at the timeout bound", async () => {
   // A stub gh that hangs; the bound must kill it rather than leave it referenced.
   const dir = mkdtempSync(join(tmpdir(), "merge-pr-hung-gh-"));
