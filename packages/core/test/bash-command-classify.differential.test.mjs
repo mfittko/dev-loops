@@ -86,22 +86,28 @@ const HEREDOC_BODY_WRAPPERS = [
 
 /** Quote-pairing hazards the old regex mispaired; the head must not allow any of them where the frozen copy denies. */
 const HAZARD_LOOP = "while true; do gh pr view 5; sleep 5; done";
+const LOOP_PREDICATES = ["commandContainsDetachedWaitTool", "commandIsSleepPollLoop"];
+/** Each shape lists the only predicates whose frozen-allow/head-deny flip it may exempt. */
 const HAZARD_SHAPES = [
-  (f) => `# it's\necho '${f}'`,
-  (f) => `echo "a \\" ; ${f}"`,
-  (f) => `echo $'a\\' ; ${f} '`,
-  (f) => `cat <<'EOF'\nit's\nEOF\necho '${f}'`,
-  (f) => `echo it\\'s; echo '${f}'`,
-  () => 'while [ ! -f tmp/d ]; do echo "a \\"; sleep 2"; done',
-  () => "gh api repos/mfittko/dev-loops/pulls/5 -f body=x it\\'s -X GET 'y'",
-  () => "gh pr edit 5 --title it\\'s --repo other/x 'y' --body z",
+  [(f) => `# it's\necho '${f}'`, LOOP_PREDICATES],
+  [(f) => `echo "a \\" ; ${f}"`, LOOP_PREDICATES],
+  [(f) => `echo $'a\\' ; ${f} '`, LOOP_PREDICATES],
+  [(f) => `cat <<'EOF'\nit's\nEOF\necho '${f}'`, LOOP_PREDICATES],
+  [(f) => `echo it\\'s; echo '${f}'`, LOOP_PREDICATES],
+  [() => "while :; do `true '`; 'sleep' 5; gh pr view 5; done", LOOP_PREDICATES],
+  [() => 'while [ ! -f tmp/d ]; do echo "a \\"; sleep 2"; done', ["commandContainsDetachedWaitTool", "commandIsFileMarkerPollLoop"]],
+  [() => "gh api repos/mfittko/dev-loops/pulls/5 -f body=x it\\'s -X GET 'y'", []],
+  [() => "gh pr edit 5 --title it\\'s --repo other/x 'y' --body z", ["commandContainsRawPrBodyEdit"]],
 ];
-const HAZARD_ROWS = [];
-for (const shape of HAZARD_SHAPES) {
-  HAZARD_ROWS.push(shape(HAZARD_LOOP));
-  for (const wrap of [...LIVE_WRAPPERS, ...QUOTED_WRAPPERS]) HAZARD_ROWS.push(wrap(shape(HAZARD_LOOP)));
+/** row -> predicates its shape may flip */
+const HAZARD_TARGETS = new Map();
+const hazardRowsOf = (shape) => [shape(HAZARD_LOOP), ...[...LIVE_WRAPPERS, ...QUOTED_WRAPPERS].map((wrap) => wrap(shape(HAZARD_LOOP)))];
+for (const [shape, targets] of HAZARD_SHAPES) {
+  for (const row of hazardRowsOf(shape)) {
+    HAZARD_TARGETS.set(row, new Set([...(HAZARD_TARGETS.get(row) ?? []), ...targets]));
+  }
 }
-const HAZARD_SET = new Set(HAZARD_ROWS);
+const HAZARD_ROWS = [...HAZARD_TARGETS.keys()];
 /** The four shapes the closed PR #2741 head allowed and origin/main denies. */
 const RESIDUE_SHAPES = [
   `bash <<< "a b"'; node -e y'`,
@@ -133,6 +139,8 @@ const SALVAGED_DENY_ROWS = [
   "tee tmp/x <<-EOF\n$(while true; do gh pr view 5; sleep 5; done)\nEOF",
 ];
 
+/** Hook-verdict row from test/loop/check-retro-tooling.test.mjs: `EOF)` is not a delimiter line, so origin/main allowed it and the head denies it. */
+const EOF_PAREN_ROW = "gh pr comment 1 --body \"$(cat <<'EOF'\nuse `node -e 1` here\nEOF)\"";
 const rowKey = (name, cmd) => `${name}: ${JSON.stringify(cmd)}`;
 /**
  * Rows the frozen copy allows and the head denies on purpose (fail-closed, slice 1). Key: `<predicate>: <JSON command>`.
@@ -146,9 +154,11 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
   const R_UNCLOSED = "unterminated $( substitution: incomplete, so commandContainsInlineInterpreter fails closed";
   const R_COMMENT = "apostrophe in a # comment: the regex paired it across lines and blanked the loop; the tokenizer skips the comment";
   const R_ESCAPE = 'escaped \\" inside a double-quoted word: the regex paired the quotes wrongly and blanked the loop; the tokenizer keeps the loop visible';
-  const R_NESTED = 'quoted "$(...)" inside a $(...) heredoc body: the regex blanked the inner quotes; the tokenizer keeps the whole substitution';
+  const R_EOFPAREN = "heredoc closed by `EOF)` instead of a delimiter line: the tokenizer never sees the delimiter, so the input is incomplete and the hook denies a command origin/main allowed";
+  const R_NESTED ='quoted "$(...)" inside a $(...) heredoc body: the regex blanked the inner quotes; the tokenizer keeps the whole substitution';
   flip("commandContainsRawPrBodyEdit", "trailing # comment with an apostrophe is a quote-pairing hazard: the stripper blanks nothing, so the flag-looking text in the quoted title stays visible", "gh pr edit 5 --title 'a --body b' # it's");
   flip("commandContainsInlineInterpreter", R_UNCLOSED, 'echo "$(gh pr view 5');
+  flip("commandContainsInlineInterpreter", R_EOFPAREN, EOF_PAREN_ROW);
   for (const sep of SEPARATORS) {
     for (const f of ["cat > src/a.mjs <<'EOF'", "cat > tmp/r.mjs <<'EOF' && node tmp/r.mjs"]) flip("commandContainsInlineInterpreter", R_HEREDOC, `${sep}${f}\necho done`);
   }
@@ -166,7 +176,7 @@ const SLICE1_FAIL_CLOSED_FLIPS = new Map();
 const INTENDED_REMOVALS = new Set();
 
 function buildCorpus() {
-  const corpus = new Set([...RESIDUE_SHAPES, ...SALVAGED_DENY_ROWS, ...HAZARD_ROWS]);
+  const corpus = new Set([...RESIDUE_SHAPES, ...SALVAGED_DENY_ROWS, ...HAZARD_ROWS, EOF_PAREN_ROW]);
   const forms = [...INLINE_FORMS, ...WAIT_FORMS, ...PR_BODY_FORMS];
   for (const f of forms) {
     for (const sep of SEPARATORS) for (const suf of SUFFIXES) corpus.add(`${sep}${f}${suf}`);
@@ -205,21 +215,27 @@ test("differential: no row origin/main denies is allowed by the head (empty inte
   assert.deepEqual(regressions, []);
 });
 
-test("differential: a frozen-allow/head-deny row is listed in SLICE1_FAIL_CLOSED_FLIPS, and every listed flip is real", () => {
+test("differential: a frozen-allow/head-deny row is listed in SLICE1_FAIL_CLOSED_FLIPS or is a quote-pairing hazard row flipped only on its targeted predicates, and every exemption is real", () => {
   const corpus = buildCorpus();
   const seen = new Set();
+  const flipped = new Set();
   const unlisted = [];
   for (const [name, mainFn, headFn] of PREDICATES) {
     for (const cmd of corpus) {
       if (!mainFn(cmd) && headFn(cmd)) {
         const key = rowKey(name, cmd);
         seen.add(key);
-        // a quote-pairing hazard row is denied by design in slice 1 (the regex mispaired it; slice 2 makes the removal intended)
-        if (!SLICE1_FAIL_CLOSED_FLIPS.has(key) && !HAZARD_SET.has(cmd)) unlisted.push(key);
+        if (SLICE1_FAIL_CLOSED_FLIPS.has(key)) continue;
+        // a quote-pairing hazard row is denied by design in slice 1 on the predicates its shape targets (the regex mispaired it; slice 2 makes the removal intended)
+        if (HAZARD_TARGETS.get(cmd)?.has(name)) flipped.add(key);
+        else unlisted.push(key);
       }
     }
   }
   assert.deepEqual(unlisted, []);
+  for (const [shape, targets] of HAZARD_SHAPES) {
+    for (const name of targets) assert.ok(hazardRowsOf(shape).some((cmd) => flipped.has(rowKey(name, cmd))), `hazard shape exempts ${name} but flips no row: ${JSON.stringify(shape(HAZARD_LOOP))}`);
+  }
   assert.deepEqual([...SLICE1_FAIL_CLOSED_FLIPS.keys()].filter((k) => !seen.has(k)), []);
   for (const reason of SLICE1_FAIL_CLOSED_FLIPS.values()) assert.ok(reason.length > 0);
 });

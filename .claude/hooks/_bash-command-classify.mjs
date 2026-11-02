@@ -985,11 +985,11 @@ function stripQuotedLiterals(command) {
  * The stripper stays strictly fail-closed against the frozen differential oracle: where the old regex mispaired
  * quotes, `stripQuotedLiterals` blanks nothing, and a caller that would read the unblanked text as more permissive
  * (a foreign `--repo`, an explicit `-X GET`) must not.
- * ponytail: coarse text hazards (an escaped quote anywhere, a `#` comment with a quote, a quoted heredoc body).
+ * ponytail: coarse text hazards (an escaped quote anywhere, a `#` comment with a quote, a quoted heredoc body, an unmatched quote inside a backtick span).
  * @param {string} command @returns {boolean}
  */
 function hasQuotePairingHazard(command) {
-  return /\\['"]/.test(command) || /(?:^|[\s;&|(])#[^\n]*['"]/.test(command) || segmentsHaveQuotedHeredoc(tokenizeShellCommand(command).segments);
+  return /\\['"]/.test(command) || [...command.matchAll(/`[^`]*`/g)].some(([span]) => [`'`, `"`].some((q) => span.split(q).length % 2 === 0)) || /(?:^|[\s;&|(])#[^\n]*['"]/.test(command) || segmentsHaveQuotedHeredoc(tokenizeShellCommand(command).segments);
 }
 
 /** Whether any heredoc body (including inside `$(...)`) contains a quote character. */
@@ -1422,7 +1422,7 @@ export function commandContainsInlineInterpreter(command) {
   return tokenizeShellCommand(command).incomplete || scanInlineInterpreter(command);
 }
 
-function scanInlineInterpreter(command) {
+export function scanInlineInterpreter(command) {
   // Token-level, not a shell parser: text after each `$(` and inside backtick pairs is checked as a command too.
   // Literal text is blanked for this scan only (the per-segment check below keeps the raw text): quoted-delimiter heredoc bodies, single-quoted spans outside double quotes, and backslash-escaped characters.
   // ponytail: ceiling: nested quote context inside `$(...)`, process substitution `<(...)` and subshell `(...)` are not covered; wrapper options (`sudo -u x`, `nice -n 5`, `xargs -I{}`) are not skipped by stripLeadingWrappers (pre-existing).

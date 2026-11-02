@@ -1576,3 +1576,11 @@ test("stripQuotedLiterals blanks nothing near quote-pairing hazards, slice 1 sta
     `echo it\\'s; echo '${LOOP}'`,
   ]) assert.equal(commandIsSleepPollLoop(c), true, c);
 });
+
+test("an unmatched quote inside an unquoted backtick span is a quote-pairing hazard; balanced spans still blank (#2442)", () => {
+  // accepted: the old regex paired the quote inside the backticks with the quote before sleep
+  assert.equal(commandIsSleepPollLoop("while :; do `true '`; 'sleep' 5; gh pr view 5; done"), true);
+  // rejected: a quote-free backtick span is no hazard, so a quoted loop still blanks
+  assert.equal(commandIsSleepPollLoop("echo 'while :; do gh pr view 5; sleep 5; done' `b`"), false);
+  assert.equal(commandIsSleepPollLoop("while :; do `true`; sleep 5; gh pr view 5; done"), true);
+});

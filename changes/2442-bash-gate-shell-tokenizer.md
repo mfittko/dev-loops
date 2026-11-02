@@ -1,3 +1,3 @@
 ### Changed
 
-- Back the Bash gate quote stripper with a hand-written shell-word tokenizer and pin it against a frozen copy of the previous classifier; no decision moves toward allow (#2442)
+- The Bash gate now fails closed on unterminated quotes, `$(` and heredocs and on quote-pairing hazards; a shell-word tokenizer backs it (#2442)

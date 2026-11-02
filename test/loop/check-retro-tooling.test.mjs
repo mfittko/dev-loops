@@ -291,3 +291,10 @@ test("the retro violation label names the matched form, not a python mention els
   assert.match(analyzeTranscript("X=$(python -c x)").violations[0], /^python:/);
   assert.match(analyzeTranscript("X=/opt/python/bin python3 -c x").violations[0], /^python3\b/);
 });
+
+test("retro classification keeps origin/main verdicts for a line with an unterminated quote and for an escaped backtick before a separator (#2442)", () => {
+  // the hook denies incomplete input as a whole command; a per-line transcript entry is never a whole command
+  assert.equal(analyzeTranscript("don't merge yet").violations.length, 0);
+  assert.equal(analyzeTranscript("git commit -m \"$(cat <<'EOF' fix: don't retry EOF )\"").violations.length, 0);
+  assert.match(analyzeTranscript("echo \\` ; python3 x.py").violations[0], /^python3\b/);
+});
