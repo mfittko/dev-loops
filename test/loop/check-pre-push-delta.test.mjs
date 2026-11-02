@@ -199,6 +199,8 @@ test("input.patchPath is the gate-delta patch holding the diffPatch bytes", asyn
   assert.equal(out.input.patchPath, deltaPatchPath(seam.tmpRoot, A, B));
   assert.equal(fs.readFileSync(out.input.patchPath, "utf8"), "diff --git a/x b/x\n");
   assert.equal(out.input.evidenceRule, DELTA_EVIDENCE_RULE);
+  assert.match(out.input.sealCommand, /seal-evidence\.mjs --kind delta --file <result path>/);
+  assert.match(out.input.sealCommand, new RegExp(`--tmp-root ${seam.tmpRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), "a non-default tmp root is carried");
 });
 
 test("the real patch file holds the cumulative baseline..candidate git diff", async () => {
@@ -449,6 +451,7 @@ test("a --handback run writes no patch and prints no patchPath or evidenceRule",
   const out = await runCli(["--act-list", actList, "--baseline", A, "--spec-identity", "spec@1", "--handback", "--site-coverage", coverage], seam);
   assert.equal(out.input.patchPath, undefined);
   assert.equal(out.input.evidenceRule, undefined);
+  assert.equal(out.input.sealCommand, undefined);
   assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta")), false);
 });
 

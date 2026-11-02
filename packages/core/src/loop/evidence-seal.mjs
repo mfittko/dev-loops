@@ -4,7 +4,7 @@
  * the reviewer seals its file there (sha256 of the exact bytes); a consumer verifies before use.
  */
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 export class EvidenceSealError extends Error {
@@ -21,8 +21,10 @@ export const deltaEvidenceKey = (reviewBaselineHead, candidateHead) => `delta-${
 
 export function createEvidenceRun(tmpRoot, key, expected) {
   const file = evidenceRunRecordPath(tmpRoot, key);
+  // A sealed record stays intact: a re-run of the producer never reopens a seal.
+  if (existsSync(file) && JSON.parse(readFileSync(file, "utf8")).sealed) return;
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify({ key, expected, sealed: null })}\n`);
+  writeFileSync(file,`${JSON.stringify({ key, expected, sealed: null })}\n`);
 }
 
 function readRun(tmpRoot, key) {
@@ -45,6 +47,7 @@ const digestOf = (filePath) => createHash("sha256").update(readFileSync(filePath
 export function sealEvidence(tmpRoot, key, filePath, parsed) {
   const record = readRun(tmpRoot, key);
   assertSameRun(record, parsed, key);
+  if (record.sealed) throw new EvidenceSealError("evidence_foreign_run", `run ${key} is already sealed and a seal is final; re-run the producer for a new run`);
   const resolved = path.resolve(filePath);
   record.sealed = { path: resolved, sha256: digestOf(resolved) };
   writeFileSync(evidenceRunRecordPath(tmpRoot, key), `${JSON.stringify(record)}\n`);
@@ -55,7 +58,8 @@ export function verifyEvidence(tmpRoot, key, filePath, parsed) {
   const record = readRun(tmpRoot, key);
   assertSameRun(record, parsed, key);
   if (!record.sealed) throw new EvidenceSealError("evidence_unsealed", `${filePath} was never sealed for ${key}; seal it with seal-evidence.mjs or re-run the producer`);
-  if (record.sealed.path !== path.resolve(filePath) || record.sealed.sha256 !== digestOf(filePath)) {
+  if (record.sealed.path !== path.resolve(filePath)) throw new EvidenceSealError("evidence_foreign_run", `${filePath} is not the file sealed for ${key} (${record.sealed.path}); re-run the producer`);
+  if (record.sealed.sha256 !== digestOf(filePath)) {
     throw new EvidenceSealError("evidence_digest_mismatch", `${filePath} differs from the sealed bytes of ${key}; re-run the producer, never repair by hand`);
   }
 }
