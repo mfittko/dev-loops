@@ -372,6 +372,42 @@ test("withSequenceLock refuses SEQUENCE_LOCK_BUSY within waitMs when the steal d
   });
 });
 
+test("withSequenceLock does not delete a fresh steal directory that replaced a stale one between the read and the rename", async () => {
+  await withTempDir(async (tmpRoot) => {
+    plantLock(tmpRoot, "dead", 120_000);
+    const steal = plantSteal(tmpRoot, 120_000);
+    // The other stealer reclaims the stale steal directory and takes a fresh one.
+    const beforeStealLockRename = () => { rmSync(steal, { recursive: true, force: true }); mkdirSync(steal); writeFileSync(path.join(steal, "owner"), "other-stealer"); };
+    await assert.rejects(withSequenceLock(tmpRoot, [HEAD], () => { throw new Error("must not run"); }, { waitMs: 150, beforeStealLockRename }), (error) => error.code === "SEQUENCE_LOCK_BUSY");
+    assert.equal(readFileSync(path.join(steal, "owner"), "utf8"), "other-stealer");
+  });
+});
+
+test("withSequenceLock does not delete a fresh no-owner lock that replaced a stale no-owner lock before the rename", async () => {
+  await withTempDir(async (tmpRoot) => {
+    const lock = plantLock(tmpRoot, "dead", 120_000);
+    rmSync(path.join(lock, "owner"));
+    const when = new Date(Date.now() - 120_000);
+    utimesSync(lock, when, when);
+    // A fresh contender took the path and has not written its owner file yet.
+    const beforeStealRename = () => { rmSync(lock, { recursive: true, force: true }); mkdirSync(lock); };
+    await assert.rejects(withSequenceLock(tmpRoot, [HEAD], () => { throw new Error("must not run"); }, { waitMs: 150, beforeStealRename }), (error) => error.code === "SEQUENCE_LOCK_BUSY");
+    assert.equal(existsSync(lock), true);
+  });
+});
+
+test("withSequenceLock sleeps between retries when the lock cannot be stat-ed", async () => {
+  await withTempDir(async (tmpRoot) => {
+    mkdirSync(path.join(tmpRoot, "gate-delta"), { recursive: true });
+    symlinkSync(path.join(tmpRoot, "nowhere"), path.join(tmpRoot, "gate-delta", `${HEAD}.sequence-lock`));
+    let clock = 1_000_000;
+    const sleeps = [];
+    const sleep = async (ms) => { sleeps.push(ms); clock += ms; };
+    await assert.rejects(withSequenceLock(tmpRoot, [HEAD], () => { throw new Error("must not run"); }, { waitMs: 100, sleep, now: () => clock }), (error) => error.code === "SEQUENCE_LOCK_BUSY");
+    assert.deepEqual(sleeps, [25, 25, 25, 25]);
+  });
+});
+
 test("branchReflogMs reads the reflog mtime of a branch committed in a temp repository, and null for an absent branch", async () => {
   await withTempDir(async (dir) => {
     const git = (...args) => assert.equal(spawnSync("git", ["-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: dir }).status, 0, args.join(" "));

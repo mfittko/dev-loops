@@ -19,68 +19,62 @@ export const sequenceClosurePath = (tmpRoot, baselineHead, executionIdentity) =>
 /**
  * Runs `fn` holding a lock per baseline head (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC), taken sorted and released in reverse.
  * The suffix must not end with `.sequence`: listBaselines reads that suffix as a marker.
- * ponytail: a mkdir lock with an owner token file; release removes only a lock whose token still matches. A stale lock is stolen under a separate `.steal` mkdir lock: re-check the age, read the owner token, rename the lock to a unique name, and remove it only when its token is the stale token; a fresh lock caught by the rename is renamed back and never removed.
- * Ceilings: a holder that stalls past `staleMs` and runs on can still overlap a stealer; a holder that dies blocks for at most `staleMs`; a fresh holder that acquires between the stealer's token read and its rename loses the path until the rename-back, and if a contender took the path in that window the two overlap (the stolen lock is left on disk, never deleted); a stealer that dies holding the `.steal` lock blocks stealing for at most `staleMs`, after which the next contender removes that directory by age.
+ * ponytail: a mkdir lock with an owner token file; every removal is a compare-and-delete on that token (release, and the `.steal` lock's release with its own token). A stale lock is stolen under a separate `.steal` mkdir lock: re-check the age, read the owner token, rename the lock to a unique name, and delete the renamed directory only when its mtime is still older than `staleMs` and its token equals the one read (a missing owner file equals only a missing owner file and still needs the stale mtime); otherwise it is renamed back. A stale `.steal` directory is reclaimed by the same rename-and-verify step. Every retry sleeps 25 ms after the deadline check.
+ * Ceilings: a holder that stalls past `staleMs` while a live contender exists can still overlap a stealer; a holder that dies blocks for at most `staleMs`; a fresh holder that acquires between the stealer's read and its rename loses the path until the rename-back, and if a contender took the path in that window the two overlap (the renamed directory is left on disk, never deleted); a stealer that dies holding the `.steal` lock blocks stealing for at most `staleMs`, after which the next contender reclaims that directory.
  */
-export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 60000, waitMs = 10000, beforeStealRename, afterStealLock } = {}) {
+export async function withSequenceLock(tmpRoot, baselineHeads, fn, { staleMs = 60000, waitMs = 10000, beforeStealRename, afterStealLock, beforeStealLockRename, sleep: sleepFn = sleep, now = () => Date.now() } = {}) {
   const held = [];
+  const readOwner = (dir) => { try { return readFileSync(path.join(dir, "owner"), "utf8"); } catch { return null; } };
+  const removeIfOwned = (dir, token) => { if (readOwner(dir) === token) rmSync(dir, { recursive: true, force: true }); };
+  // Reclaims a directory that looked stale: read its owner, rename it away, then delete only when the renamed directory is still stale and carries the same owner (a missing owner is equal only to a missing owner AND needs a stale mtime). Otherwise rename it back.
+  const reclaim = async (dir, beforeRename) => {
+    let ownerBefore;
+    try { if (now() - statSync(dir).mtimeMs <= staleMs) return; ownerBefore = readOwner(dir); } catch { return; } // released meanwhile
+    await beforeRename?.(dir);
+    const moved = `${dir}.stale-${randomUUID()}`;
+    try { renameSync(dir, moved); } catch { return; } // released or replaced: the caller retries
+    let unchanged = false;
+    try { unchanged = now() - statSync(moved).mtimeMs > staleMs && readOwner(moved) === ownerBefore; } catch { /* vanished: nothing to delete */ }
+    if (unchanged) rmSync(moved, { recursive: true, force: true });
+    else { try { renameSync(moved, dir); } catch { /* ponytail: a contender took the path meanwhile; the renamed fresh directory stays on disk and its holder's token check still protects release */ } }
+  };
   try {
     for (const head of [...new Set(baselineHeads)].sort()) {
       const lock = path.join(tmpRoot, "gate-delta", `${head}.sequence-lock`);
       mkdirSync(path.dirname(lock), { recursive: true });
-      for (const deadline = Date.now() + waitMs; ;) {
-        // Every immediate retry passes the deadline check, so a persistent stat, mkdir or rename failure refuses SEQUENCE_LOCK_BUSY instead of spinning.
-        const busy = () => { if (Date.now() >= deadline) throw Object.assign(new Error(`the sequence lock ${lock} is held by a concurrent close or pull; rerun once it finishes (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC)`), { code: "SEQUENCE_LOCK_BUSY" }); };
+      for (const deadline = now() + waitMs; ;) {
+        // Every retry goes through backoff (deadline check, then a 25 ms sleep), so a persistent stat, mkdir or rename failure refuses SEQUENCE_LOCK_BUSY instead of spinning.
+        const backoff = async () => {
+          if (now() >= deadline) throw Object.assign(new Error(`the sequence lock ${lock} is held by a concurrent close or pull; rerun once it finishes (PRE-PUSH-DELTA-CLOSE-ADMISSION-ATOMIC)`), { code: "SEQUENCE_LOCK_BUSY" });
+          await sleepFn(25);
+        };
         try { mkdirSync(lock); const token = randomUUID(); writeFileSync(path.join(lock, "owner"), token); held.push({ lock, token }); break; } catch (error) {
           if (error?.code !== "EEXIST") throw error;
           let age = 0;
-          try { age = Date.now() - statSync(lock).mtimeMs; } catch { busy(); continue; } // released meanwhile: retry
+          try { age = now() - statSync(lock).mtimeMs; } catch { await backoff(); continue; } // released meanwhile: retry
           if (age > staleMs) {
-            // Stealers serialize on a steal lock; the stolen directory is removed only when its owner token is the stale token read before the rename. A fresh lock is never removed.
+            // Stealers serialize on a steal lock with its own owner token; a stale steal lock is reclaimed by the same rename-and-verify step as a stale lock.
             const stealLock = `${lock}.steal`;
+            const stealToken = randomUUID();
             let stealing = false;
             try { mkdirSync(stealLock); stealing = true; } catch (mkdirError) {
-              // A steal lock older than staleMs was left by a stealer that died inside the steal (a window of milliseconds): remove it and retry.
-              // Only an existing steal lock (EEXIST) is inspected; any other mkdir error (EACCES, EROFS, ENOSPC) and any stat error other than a vanished lock (ENOENT) fall through to the deadline check so the loop stays bounded.
-              if (mkdirError?.code === "EEXIST") {
-                try { if (Date.now() - statSync(stealLock).mtimeMs > staleMs) { rmSync(stealLock, { recursive: true, force: true }); busy(); continue; } } catch (stealError) { if (stealError?.code === "ENOENT") { busy(); continue; } if (stealError?.code === "SEQUENCE_LOCK_BUSY") throw stealError; }
-              }
+              if (mkdirError?.code === "EEXIST") await reclaim(stealLock, beforeStealLockRename);
             }
             if (stealing) {
               try {
-                const readOwner = (dir) => { try { return readFileSync(path.join(dir, "owner"), "utf8"); } catch { return ""; } };
+                writeFileSync(path.join(stealLock, "owner"), stealToken);
                 await afterStealLock?.(lock);
-                // Re-check the age under the steal lock: the stat above may predate a release and a fresh acquisition.
-                let stillStale = false;
-                try { stillStale = Date.now() - statSync(lock).mtimeMs > staleMs; } catch { /* released meanwhile: retry */ }
-                if (stillStale) {
-                const staleToken = readOwner(lock);
-                await beforeStealRename?.(lock);
-                const stolen = `${lock}.stale-${randomUUID()}`;
-                let renamed = false;
-                try { renameSync(lock, stolen); renamed = true; } catch { /* the holder released or a fresh holder replaced it: retry */ }
-                if (renamed) {
-                  if (readOwner(stolen) === staleToken) rmSync(stolen, { recursive: true, force: true });
-                  else { try { renameSync(stolen, lock); } catch { /* ponytail: a contender took the path meanwhile; the stolen fresh lock stays on disk and its holder's token check still protects release */ } }
-                }
-                }
-              } finally { rmSync(stealLock, { recursive: true, force: true }); }
-              busy();
-              continue;
+                await reclaim(lock, beforeStealRename);
+              } finally { removeIfOwned(stealLock, stealToken); }
             }
           }
-          busy();
-          await sleep(25);
+          await backoff();
         }
       }
     }
     return await fn();
   } finally {
-    for (const { lock, token } of held.reverse()) {
-      let owner = null;
-      try { owner = readFileSync(path.join(lock, "owner"), "utf8"); } catch { /* stolen or released: not ours */ }
-      if (owner === token) rmSync(lock, { recursive: true, force: true });
-    }
+    for (const { lock, token } of held.reverse()) removeIfOwned(lock, token);
   }
 }
 
