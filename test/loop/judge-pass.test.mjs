@@ -17,7 +17,7 @@ import { hasReopenLine, rejectClosingRefRemoval, sliceLinkageIssues } from "../.
 import { readSealed, writeSealed } from "../../scripts/github/_gate-artifact-seal.mjs";
 import { resolveDraftRoundCap } from "../../scripts/github/write-gate-context.mjs";
 import { dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
-import { pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
+import { executionIndexPath, pullWorkOrder } from "../../scripts/github/_work-order-protocol.mjs";
 import { emitJudgeWorkOrder } from "../../scripts/loop/emit-judge-work-order.mjs";
 import { bindEvidenceToPrBody, deliverJudge, seedJudgeSources, writeVerdictAfterPull } from "./_judge-delivery-fixture.mjs";
 
@@ -1735,6 +1735,21 @@ test("judge-pass J5: a plan with forged authority or a saved copy of a supersede
   await writeVerdictAfterPull(roundA.workOrder.outputRefs[0], JSON.stringify(verdict()));
   await assert.rejects(runPass({ judgePlan: "./saved-plan-a.json" }), /is not the current emission.*superseded/);
   assert.equal(existsSync(path.join(root, "act.json")), false);
+});
+
+test("judge-pass J5: a plan that does not reproduce across two code trees names the skew (#2662 AC6)", async () => {
+  const { root, plan, runPass } = await deliveryCase();
+  const forged = { ...plan, workOrder: { ...plan.workOrder, authority: { ...plan.workOrder.authority, findingsDigest: "0".repeat(64) } } };
+  await writeFile(path.join(root, "forged-plan.json"), JSON.stringify(forged));
+  await assert.rejects(runPass({ judgePlan: "./forged-plan.json" }), (err) => !/code-tree skew/.test(err.message));
+  const emitter = await mkdtemp(path.join(os.tmpdir(), "judge-pass-emitter-"));
+  await writeFile(path.join(emitter, "package.json"), JSON.stringify({ name: "dev-loops", version: "9.9.9" }));
+  const indexFile = executionIndexPath(path.join(root, "tmp"), plan.executionIdentity);
+  await writeFile(indexFile, JSON.stringify({ ...JSON.parse(await readFile(indexFile, "utf8")), emitterRoot: emitter }));
+  await assert.rejects(runPass({ judgePlan: "./forged-plan.json" }), (err) => {
+    for (const part of [emitter, "dev-loops 9.9.9", `dev-loops-run --repo-root ${emitter} scripts/loop/judge-pass.mjs`]) assert.ok(err.message.includes(part), part);
+    return /does not reproduce the work order/.test(err.message);
+  });
 });
 
 test("judge-pass J5: a non-ledger required read changed after the pull refuses at acceptance", async () => {

@@ -38,7 +38,7 @@ import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { buildLogPath } from "../github/_gate-artifact-paths.mjs";
 import { OUT_OF_BAND_WRITE, readSealed, writeSealed } from "../github/_gate-artifact-seal.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
-import { materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
+import { codeTreeSkewNote, materializationHash, verifyPulledResult, workOrderDigest } from "../github/_work-order-protocol.mjs";
 import { findRetirementAfter } from "../github/pull-work-order.mjs";
 import { sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { rejectClosingRefRemoval } from "./_slice-linkage.mjs";
@@ -902,7 +902,7 @@ async function verifyJudgeDelivery(options, resolvedRoot, receiptTmpRoot) {
   }
   // The plan's work order must be exactly what the judge pulled: its digest and its rendered bytes.
   if (workOrderDigest(order) !== plan.workOrderDigest || materializationHash(renderWorkOrder(order)) !== receipt.materializationHash) {
-    throw new Error(`--judge-plan ${options.judgePlan} does not reproduce the work order execution ${plan.executionIdentity} pulled; pass the plan emit-judge-work-order.mjs wrote`);
+    throw new Error(`--judge-plan ${options.judgePlan} does not reproduce the work order execution ${plan.executionIdentity} pulled; pass the plan emit-judge-work-order.mjs wrote${await codeTreeSkewNote({ execution: plan.executionIdentity, tmpRoots: [planTmpRoot, path.resolve(receiptTmpRoot)], rerun: "scripts/loop/judge-pass.mjs <the same arguments>" })}`);
   }
   const ledger = await readJsonArtifact(resolve(options.findingsFile), "--findings-file", parseError);
   if (sha256Hex(ledger) !== order.authority?.findingsDigest) {

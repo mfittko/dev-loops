@@ -1169,6 +1169,10 @@
       "id": "VALIDATE-TARGETED-FIRST"
     },
     {
+      "id": "WORK-ORDER-CODE-TREE-SKEW",
+      "enforcement": "runtime"
+    },
+    {
       "id": "WORKFLOW-DOCS-NO-REDEFINE-HELPER",
       "enforcement": "agent",
       "enforcementNote": "Doc-authoring discipline, agent-enforced."
