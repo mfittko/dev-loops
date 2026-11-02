@@ -1379,7 +1379,6 @@ test("parse: --check makes --human-approved-by optional", () => {
 test("--check on the PR 2630 shape (escalated, no approval comment) reports every failure and never writes", async () => {
   const { runtime, calls } = makeRuntime({ evidence: ESCALATED_EVIDENCE, prView: { title: "wip: x" } });
   runtime.isAncestor = () => false;
-  runtime.waiveAdrTripwire = async () => { throw new Error("check must not write"); };
   const result = await mergePr(baseOptions({ check: true, humanApprovedBy: "mfittko", standingAuthorization: false }), runtime);
   assert.equal(result.check, true);
   assert.equal(result.ok, false);
@@ -1489,4 +1488,71 @@ test("a non-zero default record comment logs one stderr line and never changes o
   assert.equal(result.merged, true);
   assert.equal(stderr.get().split("\n").filter((l) => l.includes("merge record comment failed")).length, 1);
   assert.match(stderr.get(), /merge record comment failed: HTTP 403/);
+});
+
+test("--check under humanMergeOnly reports a human_merge_only failure with the class and writes nothing; a non-check run still refuses", async () => {
+  const { runtime, calls } = makeRuntime({ humanMergeOnly: true, evidence: ESCALATED_EVIDENCE });
+  const result = await mergePr(baseOptions({ check: true, standingAuthorization: false }), runtime);
+  assert.equal(result.ok, false);
+  assert.equal(result.humanMergeOnly, true);
+  assert.equal(result.mergeClass, "escalated");
+  assert.equal(result.approvalPath, "comment_marker");
+  assert.ok(result.failures.some((f) => f.precondition === "human_merge_only"));
+  assert.equal(calls.runChild.length, 0, "no merge or write under --check");
+  assert.equal(calls.comments.length, 0);
+  const refused = makeRuntime({ humanMergeOnly: true });
+  const threw = await mergePr(baseOptions(), refused.runtime).catch((e) => e);
+  assert.equal(threw.mergePrFailure.humanMergeOnly, true);
+});
+
+test("--check --stable-release with unreadable gate evidence keeps mergeClass escalated and nulls sizeClass", async () => {
+  const { runtime } = makeRuntime({ evidence: { ok: false, sizeOutcome: null, touchesT1: false, failures: ["gate evidence unreadable"] } });
+  const result = await mergePr(baseOptions({ check: true, stableRelease: true }), runtime);
+  assert.equal(result.mergeClass, "escalated");
+  assert.equal(result.sizeClass, null);
+});
+
+test("--check nulls mergeClass and sizeClass when the evidence belongs to another head", async () => {
+  const { runtime } = makeRuntime({ evidence: ESCALATED_EVIDENCE, evidenceHead: "b".repeat(40) });
+  const result = await mergePr(baseOptions({ check: true }), runtime);
+  assert.equal(result.mergeClass, null);
+  assert.equal(result.sizeClass, null);
+  assert.ok(result.failures.some((f) => f.precondition === "gate_evidence"));
+});
+
+test("--check with a stale standing ADR waiver reports adr_tripwire check_read_only and writes nothing", async () => {
+  const { runtime, calls } = makeRuntime({ prView: { baseRefName: "main", body: "old" } });
+  runtime.evaluateAdrTripwire = async () => STALE_BLOCK;
+  let waived = false;
+  runtime.waiveAdrTripwire = async () => { waived = true; return { ok: true, action: "waiver_written" }; };
+  const result = await mergePr(baseOptions({ check: true }), runtime);
+  const failure = result.failures.find((f) => f.precondition === "adr_tripwire");
+  assert.ok(failure, JSON.stringify(result.failures));
+  assert.match(failure.reason, /check_read_only/);
+  assert.equal(waived, false);
+  assert.equal(calls.runChild.length, 0, "no pr edit or merge");
+});
+
+test("--check reports a base fetch failure as one base_not_integrated failure instead of throwing", async () => {
+  const { runtime } = makeRuntime({ prView: { baseRefName: "main", body: "b" } });
+  runtime.fetchPrHead = () => { throw new Error("network down"); };
+  const result = await mergePr(baseOptions({ check: true }), runtime);
+  assert.equal(result.ok, false);
+  assert.equal(result.failures.filter((f) => f.precondition === "base_not_integrated").length, 1);
+});
+
+test("a non-check mergePr without humanApprovedBy refuses on human_approver", async () => {
+  const { runtime, calls } = makeRuntime();
+  const threw = await mergePr(baseOptions({ humanApprovedBy: undefined }), runtime).catch((e) => e);
+  assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "human_approver"));
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test("--check without an approver does not match an approval by a real account named like the old placeholder", async () => {
+  const { runtime } = makeRuntime({ evidence: ESCALATED_EVIDENCE, comments: [{ user: { login: "check-without-approver" }, body: `approve merge ${HEAD}` }] });
+  const result = await mergePr(baseOptions({ check: true, humanApprovedBy: undefined, standingAuthorization: false }), runtime);
+  assert.equal(result.ok, false);
+  assert.equal(result.approverAssumed, true);
+  assert.equal(result.approvalPath, "comment_marker");
+  assert.ok(result.failures.some((f) => f.precondition === "merge_approval"));
 });

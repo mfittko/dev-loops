@@ -51,7 +51,7 @@ function flagValueTrue(token) {
   return !/^(?:false|0|no)$/i.test(String(token.value).trim());
 }
 
-const USAGE = `Usage: merge-pr.mjs --repo <owner/name> --pr <number> --human-approved-by <github-login>
+const USAGE = `Usage: merge-pr.mjs --repo <owner/name> --pr <number> [--human-approved-by <github-login>]
                    [--method squash|merge|rebase] [--stable-release] [--lightweight] [--check]
 
 Sanctioned dev-loops merge wrapper (issue #1939). Runs the FULL merge-precondition
@@ -66,21 +66,26 @@ Required:
   --human-approved-by <login>  The human approver's GitHub login. Validated as a
                                real login (not a boolean or free text). Stamped on
                                the machine-readable result and audit trail.
+                               Required unless --check is given.
 
 Optional:
   --check                      Read-only mode. Runs the full precondition set, never
                                merges, comments or writes, and prints JSON with
-                               mergeClass (drain|escalated), approvalPath
+                               mergeClass (drain|escalated|null), approvalPath
                                (standing_authorization | human_review |
                                comment_marker), approveMergeLine (the exact
                                "approve merge <headSha>" line for comment_marker),
                                sizeClass, and EVERY failing precondition. Exit 0
                                whenever the preconditions could be evaluated
-                               (ok:false carries the failures). --human-approved-by
+                               (ok:false carries the failures; under
+                               autonomy.humanMergeOnly it carries a
+                               human_merge_only failure). A config load error
+                               still refuses with a nonzero exit and the stderr
+                               refusal JSON. --human-approved-by
                                is optional with --check. Any actor may run it.
                                Without --human-approved-by the approval path assumes
                                no approval exists (approverAssumed: true).
-  --method <m>                Merge method: squash (default) | merge | rebase
+  --method <m>                 Merge method: squash (default) | merge | rebase
   --stable-release             Mark this as a stable-release merge, forcing the
                                escalated approval class (a standing authorization
                                never satisfies it). Does NOT tag or publish.
@@ -634,6 +639,9 @@ async function runPostMergeSteps(context, injected = {}) {
 
 // The approval the merge needs or used: a standing authorization, a human APPROVED review, or the
 // head-pinned comment marker (the path to name when nothing satisfied the gate yet).
+// --check without --human-approved-by: not a valid GitHub login, so no review or comment can match it.
+const CHECK_NO_APPROVER = "(no approver)";
+
 function describeApproval({ verdict, headSha, sizeClass }) {
   const viaPath = { standing_authorization: "standing_authorization", approved_review: "human_review", comment_marker: "comment_marker" };
   const approvalPath = viaPath[verdict.approvalVia] ?? "comment_marker";
@@ -723,7 +731,9 @@ export async function mergePr(options, runtime = {}) {
   // Under autonomy.humanMergeOnly, merge is a fixed human-only action: the agent
   // must hand off and NOT run even this wrapper (merge-preconditions.md, the
   // humanMergeOnly section). Fail closed before any precondition/merge work.
-  if (resolveHumanMergeOnly(configLoad?.config)) {
+  // --check is read-only, so it reports this as a failure instead of refusing.
+  const humanMergeOnly = resolveHumanMergeOnly(configLoad?.config);
+  if (humanMergeOnly && !options.check) {
     const error = new Error("merge refused: autonomy.humanMergeOnly is set — merge is a human-only action and the agent must hand off, not run the merge wrapper");
     error.mergePrFailure = { ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy, humanMergeOnly: true };
     throw error;
@@ -785,9 +795,10 @@ export async function mergePr(options, runtime = {}) {
     { env, ghCommand, runChild, ghJson },
   ).catch((error) => `could not check ADR numbers: ${error instanceof Error ? error.message : String(error)}`);
 
+  const approverAssumed = options.check === true && options.humanApprovedBy === undefined;
   const verdict = evaluateMergePreconditions({
-    // ponytail: --check without an approver evaluates against a login no review or comment can match, so the report names the approval still needed.
-    humanApprovedBy: options.humanApprovedBy ?? "check-without-approver",
+    // --check without an approver passes a sentinel isValidGithubLogin rejects, so no account can match it and the report names the approval still needed.
+    humanApprovedBy: approverAssumed ? CHECK_NO_APPROVER : options.humanApprovedBy,
     mergeable: typeof prView?.mergeable === "string" ? prView.mergeable : null,
     mergeStateStatus: typeof prView?.mergeStateStatus === "string" ? prView.mergeStateStatus : null,
     ciGreen: resolveCiGreenFromRollup(prView?.statusCheckRollup),
@@ -834,7 +845,9 @@ export async function mergePr(options, runtime = {}) {
   if (options.check) {
     // Read-only: the same remaining steps run, but the ADR waiver re-issue (a PR body write) is refused,
     // and every failure is collected instead of stopping at the first.
-    const checkFailures = [...failures];
+    // The sentinel approver is not a failure: the report names the approval path instead.
+    const checkFailures = failures.filter((f) => !(f.precondition === "human_approver" && approverAssumed));
+    if (humanMergeOnly) checkFailures.push({ precondition: "human_merge_only", reason: "autonomy.humanMergeOnly is set — merge is a human-only action; the agent hands off and does not run the merge" });
     if (fetchReason !== null) {
       checkFailures.push({ precondition: "base_not_integrated", reason: fetchReason });
     } else {
@@ -856,8 +869,11 @@ export async function mergePr(options, runtime = {}) {
       headSha: currentHeadSha,
       approvedBy: options.humanApprovedBy ?? null,
       ...approval,
-      // Unreadable gate evidence has no size outcome: the class is unknown, not drain.
-      ...(evidence.ok !== true && !evidence.sizeOutcome ? { mergeClass: null, sizeClass: null } : {}),
+      // Unreadable evidence, or evidence for another head, has no size outcome for this head: sizeClass is unknown, and so is mergeClass unless a stable release forces escalated.
+      ...(evidenceHeadMismatch || (evidence.ok !== true && !evidence.sizeOutcome)
+        ? { sizeClass: null, ...(options.stableRelease === true ? {} : { mergeClass: null }) }
+        : {}),
+      ...(humanMergeOnly ? { humanMergeOnly: true } : {}),
       approverAssumed: options.humanApprovedBy === undefined || options.humanApprovedBy === null,
       approvalVia: verdict.approvalVia,
       failures: checkFailures,
