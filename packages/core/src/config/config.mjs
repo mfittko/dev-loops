@@ -9,6 +9,7 @@ import { z } from "zod";
 import { classifyFile, compileClassifyRules, isDevLoopConfigSourcePath } from "../analysis/diff-analyzer.mjs";
 import { ChangeCategory, resolveDynamicAngles } from "../analysis/change-classifier.mjs";
 import { isClaudeHarness } from "../loop/run-context.mjs";
+import { CONFIG_FILE_VARIANTS } from "../loop/bash-command-classify.mjs";
 import { trimmedOrNull } from "../loop/normalize.mjs";
 import { matchesDiffExcludeGlob } from "../loop/review-dispatch-plan.mjs";
 
@@ -1702,12 +1703,14 @@ async function readConfigFile(filePath) {
 
 /**
  * The filename variants this loader probes for EVERY config base, in probe order: the bare path
- * first, then YAML (`.yaml`, then `.yml`) before JSON. Exported as the one canonical list so a
- * consumer that must see the same set of config source files (the Pi fact cache signature in
- * `extension/bash-gate-facts.ts`) derives from it instead of hand-copying it: a variant added here
- * is then probed by the loader AND noticed by every derived consumer, with no second edit.
+ * first, then YAML (`.yaml`, then `.yml`) before JSON. Defined once in
+ * `packages/core/src/loop/bash-command-classify.mjs` and re-exported here under the loader's own
+ * name, so the loader, the Pi managed-context probe and fact-cache signature
+ * (`extension/post-merge-update.ts`, `extension/bash-gate-facts.ts`) and the self-contained Claude
+ * Bash hook bundle all read the SAME list: a variant added there is probed by the loader, makes a
+ * repo managed for both harnesses and invalidates the Pi cache, with no second edit.
  */
-export const CONFIG_FILE_VARIANTS = Object.freeze(["", ".yaml", ".yml", ".json"]);
+export { CONFIG_FILE_VARIANTS };
 
 /**
  * Find a config file by trying one or more base names in order.

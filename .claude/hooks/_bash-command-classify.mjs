@@ -21,10 +21,31 @@
  */
 export const TARGET_REPO_SLUG = "mfittko/dev-loops";
 
-/** `.devloops` config file extensions checked (in order) to decide whether a repo root is
- * dev-loops-managed. Shared by every harness that resolves `inManagedContext` from the
- * filesystem (`fs.existsSync(path.join(repoRoot, \`.devloops${ext}\`))`). */
-export const DEVLOOPS_CONFIG_VARIANTS = ["", ".yaml", ".yml", ".json"];
+/**
+ * The config filename variants probed for EVERY config base (`.devloops` and the
+ * `.pi/dev-loop/defaults` layer), in probe order: the bare path first, then YAML (`.yaml`, then
+ * `.yml`) before JSON. This is the ONE canonical list, and it lives in this pure, dependency-free
+ * module so every consumer can reach the same instance: the config loader re-exports it as
+ * `CONFIG_FILE_VARIANTS` (`packages/core/src/config/config.mjs`), the Pi managed-context probe
+ * (`extension/post-merge-update.ts`) and fact-cache signature (`extension/bash-gate-facts.ts`)
+ * consume it, and the Claude Bash hook consumes the vendored copy in the self-contained
+ * `.claude/hooks/` bundle (which cannot import `@dev-loops/core`). A variant added here is
+ * therefore probed by the loader, makes a repo dev-loops-managed for both harnesses, and
+ * invalidates the Pi fact cache — one edit, no second list to keep in sync.
+ */
+export const CONFIG_FILE_VARIANTS = Object.freeze(["", ".yaml", ".yml", ".json"]);
+
+/**
+ * The ONE normalization rule for a resolved repo-slug fact (the managed repo's identity and the cwd
+ * repo's): trimmed, lowercased, `null` when nothing resolves. Every comparison that must agree on
+ * the same identity uses it — `deriveInManagedRepo` and `explicitRepoProvenForeign` here, and
+ * `decideBashGateDeny` / `prReadySegmentsProvenForeign` in `bash-gate-decisions.mjs` — so a caller
+ * that hands over the fact it just resolved cannot drift from the decision that reads it.
+ * @param {string|null|undefined} value @returns {string|null}
+ */
+export function normalizeSlugFact(value) {
+  return (value ?? "").trim().toLowerCase() || null;
+}
 
 /**
  * Whether the current repo counts as "managed" for guard-gating purposes: inside a
@@ -39,8 +60,8 @@ export const DEVLOOPS_CONFIG_VARIANTS = ["", ".yaml", ".yml", ".json"];
  * @returns {boolean}
  */
 export function deriveInManagedRepo({ inManagedContext = false, managedRepoSlug = null, repoSlug = null } = {}) {
-  const managedSlug = (managedRepoSlug ?? "").trim().toLowerCase() || null;
-  const cwdSlug = (repoSlug ?? "").trim().toLowerCase() || null;
+  const managedSlug = normalizeSlugFact(managedRepoSlug);
+  const cwdSlug = normalizeSlugFact(repoSlug);
   return Boolean(inManagedContext) && (managedSlug === null || cwdSlug === managedSlug);
 }
 
@@ -53,8 +74,8 @@ export function deriveInManagedRepo({ inManagedContext = false, managedRepoSlug 
  * @returns {boolean}
  */
 export function explicitRepoProvenForeign(explicitRepo, managedRepoSlug) {
-  const managedSlug = (managedRepoSlug ?? "").trim().toLowerCase() || null;
-  const explicit = (explicitRepo ?? "").trim().toLowerCase() || null;
+  const managedSlug = normalizeSlugFact(managedRepoSlug);
+  const explicit = normalizeSlugFact(explicitRepo);
   if (managedSlug === null || explicit === null) {
     return false;
   }

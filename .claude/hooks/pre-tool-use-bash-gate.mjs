@@ -38,6 +38,7 @@ import { fileURLToPath } from "node:url";
 import { JUDGE_AGENT_TYPE, decideBashGate, FIXER_AGENT_TYPE, isFixerPullAttempt, isUnresolveInvocation, normalizeAgentType, parseSanctionedPullLine } from "./_hook-decisions.mjs";
 import { listCheckouts, parseFixerPullCommand, recordFixerAgentBinding } from "./_fixer-grants.mjs";
 import {
+  CONFIG_FILE_VARIANTS,
   commandContainsGhPrReady,
   commandContainsGhPrMerge,
   commandContainsGhPrCreate,
@@ -92,14 +93,13 @@ try {
 // A repo is dev-loops-managed when a `.devloops` config exists at its root (the dev-loops-driven
 // context) — replaces the old hardcoded-slug (`repoSlug === TARGET_REPO_SLUG`) comparison so the
 // guard suite applies in any managed consumer repo, not only mfittko/dev-loops. The config loader
-// (packages/core/src/config/config.mjs) accepts a bare `.devloops` file OR any of the
-// `.yaml`/`.yml`/`.json` extensions; this hook is self-contained (cannot import @dev-loops/core),
-// so the same small variant list is replicated inline rather than hardcoding the bare filename —
-// a consumer configured via `.devloops.yaml` alone must still be recognized as managed, or every
-// guard below fails open for it.
-const DEVLOOPS_CONFIG_VARIANTS = ["", ".yaml", ".yml", ".json"];
+// accepts a bare `.devloops` file OR any of the `.yaml`/`.yml`/`.json` extensions, and this hook is
+// self-contained (it cannot import @dev-loops/core), so the variants come from the vendored
+// `_bash-command-classify.mjs` copy of the loader's ONE canonical `CONFIG_FILE_VARIANTS` list rather
+// than from a second hand-kept list here — a list that could drift would leave a consumer configured
+// via `.devloops.yaml` alone unrecognized as managed, and every guard below fails open for it.
 const inManagedContext =
-  repoRoot != null && DEVLOOPS_CONFIG_VARIANTS.some((ext) => fs.existsSync(path.join(repoRoot, `.devloops${ext}`)));
+  repoRoot != null && CONFIG_FILE_VARIANTS.some((ext) => fs.existsSync(path.join(repoRoot, `.devloops${ext}`)));
 const managedRepoSlug = inManagedContext ? repoSlug : null;
 
 // The quick pre-check booleans below must be computed AFTER managedRepoSlug resolves: the three

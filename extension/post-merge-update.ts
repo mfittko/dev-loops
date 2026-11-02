@@ -14,8 +14,8 @@ import {
   deriveInManagedRepo,
   explicitRepoProvenForeign,
   isCleanRepoSlug,
-  DEVLOOPS_CONFIG_VARIANTS,
 } from '@dev-loops/core/loop/bash-command-classify';
+import { CONFIG_FILE_VARIANTS } from '@dev-loops/core/config';
 import { parseMainWorktreePath } from '@dev-loops/core/loop/worktree-guard';
 import {
   buildWorktreeCleanupCommand,
@@ -128,6 +128,11 @@ function notify(ctx: Pick<HarnessContext, 'hasUI' | 'ui'>, message: string, leve
  * dev-loops-managed when any `.devloops` config variant exists at its root; the slug is null when
  * the remote cannot be resolved (fail closed for callers that gate on it).
  *
+ * The probe reads the loader's own `CONFIG_FILE_VARIANTS` list — the same single list the fact-cache
+ * signature in `extension/bash-gate-facts.ts` digests — so a variant the loader starts probing can
+ * neither leave this probe reporting `inManagedContext: false` (every managed-repo deny switched
+ * off) nor leave the signature blind to the file that made the repo managed.
+ *
  * Shared with the Pi Bash-gate facts resolver (`extension/bash-gate-facts.ts`), which needs the
  * same three fields the post-merge hooks use.
  */
@@ -145,7 +150,7 @@ export async function defaultResolveRepoContext(exec: ExtensionHarnessAdapter['e
     return { repoRoot: null, repoSlug: null, inManagedContext: false };
   }
 
-  const inManagedContext = DEVLOOPS_CONFIG_VARIANTS.some((ext) => fs.existsSync(path.join(repoRoot, `.devloops${ext}`)));
+  const inManagedContext = CONFIG_FILE_VARIANTS.some((ext) => fs.existsSync(path.join(repoRoot, `.devloops${ext}`)));
 
   // A thrown/rejected `exec` here (timeout, spawn failure) must not bubble past this
   // function: `repoRoot`/`inManagedContext` are already known-good, and losing them

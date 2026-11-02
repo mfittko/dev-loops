@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { decideBashGate } from "@dev-loops/core/claude/hook-decisions";
-import { BASH_GATE_RULES, decideBashGateDeny } from "@dev-loops/core/loop/bash-gate-decisions";
+import { BASH_GATE_RULES, decideBashGateDeny, prReadySegmentsProvenForeign } from "@dev-loops/core/loop/bash-gate-decisions";
 import { decidePiToolCall } from "../../extension/readonly-role-gate.ts";
 
 // Issue #2965 AC2/AC3. One shared deny decision (loop/bash-gate-decisions.mjs) backs both the
@@ -184,6 +184,43 @@ test("every rule ID the shared decider returns is a listed rule with a stated Pi
     [...returned].sort(),
     BASH_GATE_RULES.map((rule) => rule.id).sort(),
     "a deny rule returned by packages/core/src/loop/bash-gate-decisions.mjs must be added to BASH_GATE_RULES and state its Pi verdict in the cross-harness contract matrix (skills/docs/cross-harness-regression-contract.md)",
+  );
+});
+
+// `prReadySegmentsProvenForeign` is the escape the Pi adapter consults BEFORE it spends the
+// draft-gate probe, so it must answer exactly what the decider decides for the same facts. The
+// normalization rule (trim, lowercase, `null` when empty) lives inside the escape: a caller that
+// hands over the fact it just resolved — an empty slug, or a padded one — used to get the OPPOSITE of
+// the decider's proven-foreign reading, and the adapter would then skip a probe the decider denies on
+// (or spend the full probe timeout on a command the decider allows).
+test("the adapter's proven-foreign escape normalizes the managed slug exactly as the decider does", () => {
+  const facts = { ...MANAGED, role: null, repoSlug: "acme/widgets", managedRepoSlug: "acme/widgets" };
+  const cases = [
+    { managedSlug: " ACME/Widgets ", command: "gh pr ready --repo acme/widgets 7" }, // padded, same identity: NOT foreign
+    { managedSlug: "", command: "gh pr ready --repo other/repo 7" }, // empty: unresolvable, never foreign
+    { managedSlug: " ACME/Widgets ", command: "gh pr ready --repo other/repo 7" }, // genuinely foreign
+    { managedSlug: "acme/widgets", command: "gh pr ready 7" }, // no explicit repo
+  ];
+  for (const { managedSlug, command } of cases) {
+    const provenForeign = prReadySegmentsProvenForeign(command, managedSlug);
+    // With `readyGate: null` ("not probed") the decider denies a non-foreign ready and passes a
+    // proven-foreign one, so its verdict IS the escape's answer.
+    const denied = decideBashGateDeny({ ...facts, managedRepoSlug: managedSlug, command, readyGate: null }) !== null;
+    assert.equal(
+      provenForeign,
+      !denied,
+      `${command} with managed slug ${JSON.stringify(managedSlug)}: the escape (${provenForeign}) must agree with the decision (denied: ${denied})`,
+    );
+  }
+  assert.equal(
+    prReadySegmentsProvenForeign("gh pr ready --repo other/repo 7", ""),
+    false,
+    "an empty slug is unresolvable and proves nothing foreign, exactly as the decider normalizes it",
+  );
+  assert.equal(
+    prReadySegmentsProvenForeign("gh pr ready --repo acme/widgets 7", " ACME/Widgets "),
+    false,
+    "a padded slug names the same identity as the explicit repo, so the escape does not apply",
   );
 });
 

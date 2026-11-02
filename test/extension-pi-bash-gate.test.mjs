@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { CONFIG_FILE_VARIANTS } from "@dev-loops/core/config";
 import extension from "../extension/index.ts";
@@ -14,6 +15,8 @@ import { withTempDir } from "./_helpers.mjs";
 // (`git`/`.devloops` reads go through the Pi `exec` double), never by calling the gate directly.
 
 const SLUG = "acme/widgets";
+/** The repository root, for the source-level derivation assertions (the loader's one variant list). */
+const SOURCE_ROOT = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 
 let repoSeq = 0;
 /** A `.devloops` repo root under the test's temp dir, i.e. a dev-loops-managed repo root. */
@@ -192,6 +195,30 @@ tempTest("Pi tool_call reports \"could not run\" for a probe timeout and a node 
   assert.match(notRun.reason, /could not run scripts\/loop\/pre-pr-ready-gate\.mjs/);
 });
 
+tempTest("Pi tool_call denies an unscopable gh pr ready instead of probing with a junk scope", async (tmp) => {
+  clearCoordinatorFlag();
+  // The fail-closed half of the probe: with no PR number, or with a remote whose slug is not a clean
+  // owner/name identity, the guard cannot scope `pre-pr-ready-gate.mjs`. Deny with the decider's own
+  // message — never spawn the probe with a bogus `--repo`/`--pr`, and never skip the guard.
+  const noNumber = register({ repoRoot: managedRepoRoot(tmp) });
+  const bare = await callAs(noNumber, undefined, "gh pr ready");
+  assert.equal(bare.block, true, "a ready verb carrying no PR number must be denied");
+  assert.match(bare.reason, /could not determine the PR number/);
+
+  const hostileSlug = register({ repoRoot: managedRepoRoot(tmp), slug: "acme/widgets;id" });
+  const hostile = await callAs(hostileSlug, undefined, "gh pr ready 7");
+  assert.equal(hostile.block, true, "a remote whose slug fails isCleanRepoSlug must be denied");
+  assert.match(hostile.reason, /no visible clean draft_gate/);
+
+  for (const [label, gate] of [["no PR number", noNumber], ["hostile slug", hostileSlug]]) {
+    assert.equal(
+      gate.execCalls.some((call) => call.command.includes("pre-pr-ready-gate.mjs")),
+      false,
+      `${label}: the unscopable ready must not spawn the draft-gate probe`,
+    );
+  }
+});
+
 tempTest("Pi tool_call probes with the dev-loops package's own script, not the consumer repo's", async (tmp) => {
   clearCoordinatorFlag();
   const root = managedRepoRoot(tmp);
@@ -338,8 +365,10 @@ tempTest("Pi tool_call skips the draft-gate probe for a gh pr ready that is prov
 
 tempTest("Pi tool_call revalidates the cached facts when any .devloops variant in the core list appears", async (tmp) => {
   clearCoordinatorFlag();
-  // The signature derives from the config loader's own `CONFIG_FILE_VARIANTS` list, not a local copy
-  // of it: a variant added there (or a config file appearing mid-session) must invalidate the cache.
+  // BOTH halves read the config loader's own `CONFIG_FILE_VARIANTS` list, not a local copy of it: the
+  // deny below needs the presence probe to see `.devloops<variant>` (else `inManagedContext` stays
+  // false) AND the signature to invalidate the cached pre-file facts (else the permissive entry is
+  // served). A variant added to the canonical list must therefore satisfy both with no second edit.
   for (const ext of CONFIG_FILE_VARIANTS) {
     const root = path.join(tmp, `variant${ext ? `-${ext.slice(1)}` : ""}-${(repoSeq += 1)}`);
     fs.mkdirSync(root);
@@ -353,6 +382,49 @@ tempTest("Pi tool_call revalidates the cached facts when any .devloops variant i
       `variant ${ext || "(bare)"} must invalidate the cached facts`,
     );
   }
+});
+
+tempTest("Pi facts read the loader's ONE canonical variant list, for the probe and the signature alike", async (tmp) => {
+  clearCoordinatorFlag();
+  // Two hand-kept variant lists split the halves of one fact set: a variant added to the loader's
+  // `CONFIG_FILE_VARIANTS` alone left the presence probe reporting `inManagedContext: false` (every
+  // managed-repo deny off) while the cache signature tracked it. Pin the single derivation: both
+  // halves read the loader's exported list, and neither keeps a second copy of it.
+  const sources = {
+    "extension/post-merge-update.ts": fs.readFileSync(path.join(SOURCE_ROOT, "extension/post-merge-update.ts"), "utf8"),
+    "extension/bash-gate-facts.ts": fs.readFileSync(path.join(SOURCE_ROOT, "extension/bash-gate-facts.ts"), "utf8"),
+  };
+  for (const [file, source] of Object.entries(sources)) {
+    assert.match(source, /CONFIG_FILE_VARIANTS/, `${file} must derive from the loader's canonical list`);
+    assert.equal(
+      /\[\s*""\s*,\s*"\.yaml"\s*,\s*"\.yml"\s*,\s*"\.json"\s*\]/.test(source),
+      false,
+      `${file} must not keep a second, hand-kept copy of the variant list`,
+    );
+  }
+  assert.match(
+    sources["extension/post-merge-update.ts"],
+    /CONFIG_FILE_VARIANTS\.some\(\(ext\) => fs\.existsSync\(path\.join\(repoRoot, `\.devloops\$\{ext\}`\)\)\)/,
+    "the managed-context presence probe must iterate the canonical list",
+  );
+  assert.match(
+    sources["extension/bash-gate-facts.ts"],
+    /\.\.\.CONFIG_FILE_VARIANTS\.map\(/,
+    "the fact-cache signature must be built from the canonical list",
+  );
+  // The same list decides what BOTH halves ignore: a config file whose variant the canonical list
+  // does not carry is seen by neither, so the cwd keeps its cached verdict instead of becoming
+  // managed off-list.
+  const root = path.join(tmp, `off-list-${(repoSeq += 1)}`);
+  fs.mkdirSync(root);
+  const gate = register({ repoRoot: root });
+  assert.deepEqual(await callAs(gate, "developer", MERGE), { block: false });
+  fs.writeFileSync(path.join(root, ".devloops.toml"), "version: 1\nautonomy:\n  humanMergeOnly: true\n", "utf8");
+  assert.deepEqual(
+    await callAs(gate, "developer", MERGE),
+    { block: false },
+    "a variant outside the canonical list is seen by neither the probe nor the signature",
+  );
 });
 
 /**

@@ -173,10 +173,10 @@ async function resolveReadyGate(
   if (!commandContainsGhPrReady(command)) return null;
   // The shared decider allows a ready verb whose EVERY segment is PROVEN foreign (an explicit repo
   // differing from the managed slug) BEFORE it consults `readyGate`, so probing there would spend up
-  // to PR_READY_GATE_TIMEOUT_MS on a command that runs anyway. Same normalized slug the decider
-  // compares against, from the same shared escape.
-  const managedSlug = (facts.managedRepoSlug ?? '').trim().toLowerCase() || null;
-  if (prReadySegmentsProvenForeign(command, managedSlug)) return null;
+  // to PR_READY_GATE_TIMEOUT_MS on a command that runs anyway. The escape normalizes the slug itself,
+  // so the resolved fact is handed over unchanged: the rule has one home, not a copy here that could
+  // stop agreeing with the decision it predicts.
+  if (prReadySegmentsProvenForeign(command, facts.managedRepoSlug)) return null;
   const prNumber = extractPrNumberFromGhPrReadyAnywhere(command);
   // No PR number or no clean slug to probe: deny fail-closed with the decider's own message.
   if (prNumber === null || !facts.repoSlug || !isCleanRepoSlug(facts.repoSlug)) return NO_READY_GATE;

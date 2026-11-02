@@ -31,6 +31,7 @@
 
 import {
   deriveInManagedRepo,
+  normalizeSlugFact,
   commandContainsGhPrReady,
   commandContainsGhPrMerge,
   commandContainsGhPrCreate,
@@ -166,13 +167,15 @@ const ADAPTER_FACTS = Object.freeze([
 
 /**
  * The `gh pr ready` half of the proven-foreign escape, for an adapter that decides whether to probe
- * at all. `managedSlug` must already be normalized the way this module normalizes it (trimmed,
- * lowercased, `null` when unresolvable) so the adapter and the decision agree.
+ * at all. The slug is normalized HERE, with the same rule `decideBashGateDeny` applies to the same
+ * fact, so a caller that hands over the fact it just resolved cannot diverge from the decision it is
+ * trying to predict (an empty or padded slug once made this return the opposite of the decider's
+ * proven-foreign reading).
  * @param {string} command @param {string|null} [managedSlug]
  * @returns {boolean}
  */
 export function prReadySegmentsProvenForeign(command, managedSlug = null) {
-  return segmentsProvenForeign(extractRepoFlagsFromGhPrReadySegments(command), managedSlug ?? null);
+  return segmentsProvenForeign(extractRepoFlagsFromGhPrReadySegments(command), normalizeSlugFact(managedSlug));
 }
 
 /**
@@ -261,7 +264,7 @@ export function decideBashGateDeny(facts = {}) {
   // unresolvable (null). FAIL CLOSED: inside a managed context whose identity can't be resolved,
   // every guard below still applies (inManagedRepo stays true) rather than silently allowing
   // everything — an unresolvable identity must never disable the guard suite.
-  const managedSlug = (managedRepoSlug ?? "").trim().toLowerCase() || null;
+  const managedSlug = normalizeSlugFact(managedRepoSlug);
   const inManagedRepo = deriveInManagedRepo({ inManagedContext, managedRepoSlug, repoSlug });
 
   // OPS-NO-INLINE-INTERPRETER: inline interpreters (`node -e`/`--eval`/`-p`, `python3 -c`,
