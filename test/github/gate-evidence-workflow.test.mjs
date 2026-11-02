@@ -425,7 +425,7 @@ test("head-declared-keys is the only job that checks out a PR head, with no perm
   assert.ok(checkouts(keysJob).some((s) => s.with.ref === "${{ github.event.pull_request.head.sha }}"), "the keys job checks out the event head SHA, the same SHA its artifact is named for");
   assert.ok(!JSON.stringify(keysJob).includes("refs/pull/"), "no moving PR ref in the keys job");
   const report = keysJob.steps.find((s) => s.id === "report");
-  assert.ok(/if \[ "\$ok" = true \]; then\n\s+mkdir -p "\$RUNNER_TEMP\/keys"/u.test(report.run), "the artifact file is written only after a successful report step");
+  assert.ok(/if \[ "\$ok" = true \]; then\n\s+mkdir -p "\$RUNNER_TEMP\/keys"/u.test(report.run), "the artifact file is written only when the declared set is non-empty");
   assert.ok(report.run.includes(`jq -e '.declaredKeys | length > 0'`), "the success signal is a non-empty declared set, not non-empty stdout");
   for (const s of checkouts(keysJob)) assert.equal(s.with["persist-credentials"], false);
   for (const job of [runnerJob, reporterJob]) {
