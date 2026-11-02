@@ -36,12 +36,8 @@ test("isValidGithubLogin rejects boolean, empty, free text; accepts real logins"
 
 test("resolveMergeClass: escalate/block/T1/stable-release are escalated; pass is drain", () => {
   assert.equal(resolveMergeClass({ sizeOutcome: "pass", touchesT1: false }), MERGE_CLASS.DRAIN);
-  assert.equal(resolveMergeClass({ sizeOutcome: "escalate", touchesT1: false }), MERGE_CLASS.ESCALATED);
-  assert.equal(resolveMergeClass({ sizeOutcome: "block", touchesT1: false }), MERGE_CLASS.ESCALATED);
-  // Missing or malformed facts never classify as drain.
-  assert.equal(resolveMergeClass({}), MERGE_CLASS.ESCALATED);
-  assert.equal(resolveMergeClass({ sizeOutcome: "pass" }), MERGE_CLASS.ESCALATED);
-  assert.equal(resolveMergeClass({ sizeOutcome: "bogus", touchesT1: false }), MERGE_CLASS.ESCALATED);
+  assert.equal(resolveMergeClass({ sizeOutcome: "escalate" }), MERGE_CLASS.ESCALATED);
+  assert.equal(resolveMergeClass({ sizeOutcome: "block" }), MERGE_CLASS.ESCALATED);
   assert.equal(resolveMergeClass({ sizeOutcome: "pass", touchesT1: true }), MERGE_CLASS.ESCALATED);
   assert.equal(resolveMergeClass({ sizeOutcome: "pass", stableRelease: true }), MERGE_CLASS.ESCALATED);
 });

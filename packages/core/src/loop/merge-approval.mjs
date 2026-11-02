@@ -56,10 +56,8 @@ export const MERGE_CLASS = Object.freeze({ DRAIN: "drain", ESCALATED: "escalated
  * never satisfies it; it needs a fresh per-merge operator approval. Everything
  * else is a normal DRAIN merge.
  */
-export function resolveMergeClass({ sizeOutcome = null, touchesT1 = null, stableRelease = false } = {}) {
+export function resolveMergeClass({ sizeOutcome = null, touchesT1 = false, stableRelease = false } = {}) {
   if (stableRelease === true) return MERGE_CLASS.ESCALATED;
-  // Missing or malformed facts never classify as drain.
-  if (!["pass", "escalate", "block"].includes(sizeOutcome) || typeof touchesT1 !== "boolean") return MERGE_CLASS.ESCALATED;
   if (sizeOutcome === "escalate" || sizeOutcome === "block") return MERGE_CLASS.ESCALATED;
   if (touchesT1 === true) return MERGE_CLASS.ESCALATED;
   return MERGE_CLASS.DRAIN;

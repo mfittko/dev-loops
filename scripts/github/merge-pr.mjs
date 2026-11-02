@@ -700,7 +700,7 @@ export async function mergePr(options, runtime = {}) {
 
   const baseRefName = typeof prView?.baseRefName === "string" ? prView.baseRefName.trim() : "";
   const repoRoot = resolveRepoRoot(cwd);
-  const refuseBaseNotIntegrated = (reason, mergeClass, classFields = { mergeClass }) => {
+  const refuseBaseNotIntegrated = (reason, classFields) => {
     const error = new Error(`Merge preconditions not satisfied: base_not_integrated (${reason})`);
     error.mergePrFailure = {
       ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy,
@@ -854,7 +854,7 @@ export async function mergePr(options, runtime = {}) {
   };
   // Escalated with no head-pinned approval: name the class, the exact approval line and the size class.
   const refusalClassFields = verdict.mergeClass === MERGE_CLASS.ESCALATED ? approval : { mergeClass: approval.mergeClass };
-  if (fetchReason !== null && !options.check) refuseBaseNotIntegrated(fetchReason, null, refusalClassFields);
+  if (fetchReason !== null && !options.check) refuseBaseNotIntegrated(fetchReason, refusalClassFields);
 
   if (options.check) {
     // Read-only: the same remaining steps run, but the ADR waiver re-issue (a PR body write) is refused,
@@ -933,7 +933,7 @@ export async function mergePr(options, runtime = {}) {
 
   // The one ancestry check runs after the ADR step (the waiver writer refreshes the base too), with no refetch.
   const ancestryReason = resolveBaseNotIntegratedRefusal({ baseRefName, headSha: currentHeadSha, repoRoot, isAncestor });
-  if (ancestryReason !== null) refuseBaseNotIntegrated(ancestryReason, verdict.mergeClass);
+  if (ancestryReason !== null) refuseBaseNotIntegrated(ancestryReason, { mergeClass: verdict.mergeClass });
 
   // All preconditions satisfied — perform the merge. NEVER a tag or publish.
   // runChild resolves for ANY exit code (it only rejects on a spawn error), so a
