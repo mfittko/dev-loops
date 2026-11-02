@@ -48,14 +48,25 @@ import type { PiBashGateFacts } from './readonly-role-gate.ts';
  * `.pi/dev-loop/defaults` variants (a content digest of each file that exists), so an edit to one of
  * those files is never served from the cache — not even a same-size rewrite inside one filesystem
  * timestamp tick (a stale `humanMergeOnly: false` would fail OPEN on STOP-HUMAN-MERGE-001, the rule
- * this module exists to enforce). That signature does not cover the packaged extension-defaults layer
+ * this module exists to enforce). That signature brackets the read instead of trailing it: it is
+ * taken before the facts, and a read whose own presence bit or signature disagrees with the sources
+ * is repeated (`resolveRepoFacts`), so a `.devloops` created while the probe's remote-URL lookup
+ * awaits — visible to the signature, invisible to the probe's earlier presence check — can never be
+ * cached next to the `inManagedContext: false` that was read before it existed. That signature does
+ * not cover the packaged extension-defaults layer
  * the loader always merges, nor the git remote the slug derives from; an unresolved (non-repo) cwd is
  * not cached at all, so a directory that becomes a repo later is re-probed on the next call.
  */
 
 type RepoFacts = Pick<PiBashGateFacts, 'inManagedContext' | 'managedRepoSlug' | 'repoSlug' | 'humanMergeOnly'>;
-/** Repo facts plus the root they were resolved from, and whether the git probe itself answered. */
-type ResolvedRepoFacts = RepoFacts & { repoRoot: string | null; probed: boolean };
+/**
+ * Repo facts plus the root they were resolved from, whether the git probe itself answered, and the
+ * config-source signature the facts were read against. The signature is observed BEFORE those facts
+ * (`readRepoFacts`) and is what the per-cwd cache stores, so a source that changes afterwards
+ * invalidates the entry rather than being served next to facts read before it existed. `null` marks
+ * an answer that must not be cached at all.
+ */
+type ResolvedRepoFacts = RepoFacts & { repoRoot: string | null; probed: boolean; configSignature: string | null };
 
 const EMPTY_REPO_FACTS: RepoFacts = Object.freeze({
   inManagedContext: false,
@@ -122,7 +133,8 @@ const CONFIG_SOURCE_FILES = Object.freeze([
  * each present file contributes a digest of its bytes. A `stat`-only signature (`mtimeMs`, `size`,
  * `ino`) cannot see a same-size rewrite inside one filesystem timestamp tick, which would serve a
  * stale `humanMergeOnly`. Every file that exists is small, so the digest costs one read per present
- * source (usually one) and no spawn.
+ * source (usually one) and no spawn. It is read BEFORE the facts it vouches for, so a source created
+ * after the read invalidates the entry instead of being cached beside facts that never saw it.
  */
 function configSourceSignature(repoRoot: string): string {
   const parts: string[] = [];
@@ -136,7 +148,26 @@ function configSourceSignature(repoRoot: string): string {
   return parts.join('|');
 }
 
-type CachedRepoFacts = { facts: ResolvedRepoFacts & { repoRoot: string }; configSignature: string };
+/**
+ * Whether a `.devloops` variant — the marker the identity probe reports as `inManagedContext` — is
+ * present at `repoRoot`, read from the ONE canonical variant list the signature is built from. The
+ * probe reads that presence itself, before its remote-URL lookup, so a file created while the lookup
+ * awaits is visible here and invisible there; comparing the two is what makes that disagreement
+ * detectable, and retried, instead of cacheable.
+ */
+function devloopsLayerPresent(repoRoot: string): boolean {
+  return CONFIG_FILE_VARIANTS.some((ext) => fs.existsSync(path.join(repoRoot, `${DEVLOOPS_CONFIG_BASE}${ext}`)));
+}
+
+/**
+ * How many times one fact read is attempted while a config source moves under it (see
+ * `resolveRepoFacts`). Each attempt costs one identity probe, and a source that never settles is not
+ * worth pinning: the exhausted path denies fail-closed and caches nothing, so the next call re-reads.
+ */
+const CONFIG_READ_ATTEMPTS = 3;
+
+/** A cacheable fact set: probe-backed, with its root and the signature read before those facts. */
+type CachedRepoFacts = ResolvedRepoFacts & { repoRoot: string; configSignature: string };
 
 /**
  * The nearest directory at `cwd` or above it that carries a repo-local config layer (`.devloops`),
@@ -158,7 +189,12 @@ function managedCheckoutRoot(cwd: string): string | null {
   }
 }
 
-async function resolveRepoFacts(
+/**
+ * ONE read of the repo facts. The signature is observed as early as the root is known — before the
+ * config load — so the returned facts and that signature describe the same sources; its caller
+ * (`resolveRepoFacts`) re-observes the sources afterwards to prove nothing moved in between.
+ */
+async function readRepoFacts(
   probeRepoContext: (cwd: string) => Promise<RepoContext>,
   cwd: string,
 ): Promise<ResolvedRepoFacts> {
@@ -181,9 +217,13 @@ async function resolveRepoFacts(
   // layer fail-closed.
   const unknown = !probed && repo?.identityProbe !== 'not-a-repo';
   const repoRoot = probed ? repo!.repoRoot : unknown ? managedCheckoutRoot(cwd) : null;
-  if (!repoRoot) return { ...EMPTY_REPO_FACTS, repoRoot: null, probed: false };
+  if (!repoRoot) return { ...EMPTY_REPO_FACTS, repoRoot: null, probed: false, configSignature: null };
   const inManagedContext = probed ? repo!.inManagedContext : true;
   const repoSlug = probed ? repo!.repoSlug : null;
+  // Observed here, before the config load below awaits: a source that appears during that load would
+  // otherwise be hashed into the entry the cache writes afterwards, vouching for facts read before
+  // it existed. `resolveRepoFacts` re-observes the sources before this answer may be cached.
+  const configSignature = configSourceSignature(repoRoot);
   // Resolve the invariant from the merged config exactly as the Claude edge's
   // `scripts/loop/resolve-human-merge-only.mjs` does — it ignores `errors` too. A schema-rejected
   // `.devloops` drops only its own layer; every layer merged underneath it (including the packaged
@@ -208,6 +248,53 @@ async function resolveRepoFacts(
     humanMergeOnly,
     repoRoot,
     probed,
+    configSignature,
+  };
+}
+
+/**
+ * Resolve the cwd's repo facts, repeating the read while a config source moves under it.
+ *
+ * One read straddles two config-observing steps a writer can race: the probe reports
+ * `inManagedContext` from a `.devloops` presence check that runs BEFORE its remote-URL lookup, and
+ * `humanMergeOnly` comes from a config load afterwards. Caching the facts beside a signature taken
+ * only after both (the shape this replaced) let a `.devloops` created inside that window be hashed
+ * as present while the facts still recorded the checkout as unmanaged: every later call matched the
+ * fresh digest and kept serving `inManagedContext: false`, so STOP-HUMAN-MERGE-001 and the other
+ * managed-repo denies stayed switched off for the rest of the session in a now-managed checkout. A
+ * read must therefore agree with the sources on BOTH counts — the presence bit it reports, and its
+ * own signature re-observed after the load — and an answer that disagrees is repeated, never cached.
+ * A source that moves AFTER the read needs no retry: the cached signature is the pre-read one, so
+ * the next call sees the change and re-reads.
+ *
+ * A read that never settles denies fail-closed for that call (managed context, identity unresolved —
+ * the shape `resolveBashGateFacts` also uses for a cwd it cannot probe) and caches nothing, so a
+ * churning repo costs a re-read instead of serving a stale permissive answer.
+ */
+async function resolveRepoFacts(
+  probeRepoContext: (cwd: string) => Promise<RepoContext>,
+  cwd: string,
+): Promise<ResolvedRepoFacts> {
+  for (let attempt = 0; attempt < CONFIG_READ_ATTEMPTS; attempt += 1) {
+    const facts = await readRepoFacts(probeRepoContext, cwd);
+    // A rootless answer (git's definitive not-a-repo, or no config layer at or above the cwd) has no
+    // sources to agree with and is never cached, so there is nothing to stabilize.
+    if (!facts.repoRoot) return facts;
+    if (
+      facts.configSignature === configSourceSignature(facts.repoRoot)
+      && facts.inManagedContext === devloopsLayerPresent(facts.repoRoot)
+    ) {
+      return facts;
+    }
+  }
+  return {
+    inManagedContext: true,
+    managedRepoSlug: null,
+    repoSlug: null,
+    humanMergeOnly: true,
+    repoRoot: null,
+    probed: false,
+    configSignature: null,
   };
 }
 
@@ -282,13 +369,14 @@ export function createPiBashGateFactsResolver({
     // `.devloops` than the one the cached facts were resolved from (a branch switch, a config edit
     // in a live session). An unresolved cwd has no config source to compare and is NOT cached, so a
     // directory that becomes a repo later is re-probed instead of serving permissive facts forever.
-    if (cached && cached.configSignature === configSourceSignature(cached.facts.repoRoot)) {
-      return cached.facts;
-    }
+    if (cached && cached.configSignature === configSourceSignature(cached.repoRoot)) return cached;
     const facts = await resolveRepoFacts(probeRepoContext, cwd);
     // Only a probe-backed entry is cached: a degraded (unresolved-identity) or rootless answer is
-    // re-probed on the next call, so a transient probe failure never pins the session.
-    if (facts.probed && facts.repoRoot) cache.set(cwd, { facts, configSignature: configSourceSignature(facts.repoRoot) });
+    // re-probed on the next call, so a transient probe failure never pins the session. The entry
+    // keeps the PRE-read signature the fact read returned, never a fresh one taken here: a source
+    // created between that read and this write must invalidate the entry on the next call instead of
+    // being hashed beside facts that never saw it.
+    if (facts.probed && facts.repoRoot && facts.configSignature !== null) cache.set(cwd, facts);
     return facts;
   }
   return async function resolveBashGateFacts({ cwd, command }) {

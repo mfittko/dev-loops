@@ -70,6 +70,12 @@ function register({
   probeThrows = false,
   probeKilled = false,
   /*
+   * Runs INSIDE the remote-URL lookup, i.e. after the probe's own `.devloops` presence read and
+   * before that lookup returns. It models a writer that creates a config file in exactly the window
+   * the probe's `inManagedContext` cannot see and a signature read afterwards can.
+   */
+  remoteLookup = null,
+  /*
    * An NLS git built with gettext prints git's "not a git repository" sentence TRANSLATED under a
    * non-English locale. `'host'` models that host: the German line for the UNPINNED probe form, so a
    * fixture asserting the permissive `not-a-repo` facts passes only while the probe pins its locale.
@@ -95,6 +101,7 @@ function register({
       return { code: 0, stdout: `${repoRoot}\n`, stderr: "" };
     }
     if (command === "git config --get remote.origin.url") {
+      if (remoteLookup) remoteLookup();
       return { code: 0, stdout: `https://github.com/${slug}.git\n`, stderr: "" };
     }
     if (command.includes("pre-pr-ready-gate.mjs")) {
@@ -431,6 +438,31 @@ tempTest("Pi tool_call revalidates the cached repo facts when the repo config ch
   // the gate fails OPEN on exactly the rule this module closes.
   fs.writeFileSync(path.join(root, ".devloops"), "version: 1\nautonomy:\n  humanMergeOnly: true\n", "utf8");
   assert.match((await callAs(gate, "developer", MERGE)).reason, /STOP-HUMAN-MERGE-001/);
+});
+
+tempTest("Pi tool_call re-reads the facts when a config file appears during the identity lookup (no fail-open cache entry)", async (tmp) => {
+  clearCoordinatorFlag();
+  // The probe reads `.devloops` presence itself, BEFORE its remote-URL lookup, while the cache
+  // signature used to be taken only after every read. A `.devloops` created in between was therefore
+  // hashed into the entry as PRESENT while the facts still said `inManagedContext: false`, and that
+  // fresh digest vouched for the permissive answer on every later call: raw merges and body writes
+  // stayed allowed in a now-managed checkout until a config source changed again.
+  const root = path.join(tmp, `lookup-race-${(repoSeq += 1)}`);
+  fs.mkdirSync(root);
+  const gate = register({
+    repoRoot: root,
+    remoteLookup: () => fs.writeFileSync(path.join(root, ".devloops"), "version: 1\nautonomy:\n  humanMergeOnly: true\n", "utf8"),
+  });
+  assert.match(
+    (await callAs(gate, "developer", MERGE)).reason,
+    /STOP-HUMAN-MERGE-001/,
+    "the read must settle on the managed answer the sources now report, not the stale unmanaged one",
+  );
+  // And the settled answer is pinned, not re-read: the retry must not cost a probe per tool call.
+  const probes = () => gate.execCalls.filter((call) => call.command === PROBE_COMMAND).length;
+  const before = probes();
+  assert.match((await callAs(gate, "developer", MERGE)).reason, /STOP-HUMAN-MERGE-001/, "the settled answer must be served next call");
+  assert.equal(probes(), before, "the settled answer must be cached, not re-probed");
 });
 
 tempTest("Pi tool_call blocks the coordinator's inline verification under DEVLOOPS_COORDINATOR_READONLY=1", async (tmp) => {
