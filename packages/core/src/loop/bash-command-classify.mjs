@@ -970,7 +970,7 @@ function blankQuotedForFlags(command) {
  * text as more permissive (a foreign `--repo`, an explicit `-X GET`) must not. `precise` (wait and poll predicates) trusts the
  * tokenizer instead of that coarse guard, which removes the hazard false positives. It also blanks the bodies that
  * `blankDataHeredocs` finds to be data, treats a single-quoted or ANSI-C `$(`/backtick as inert, and keeps every
- * quoted span inside a payload word (`payloadWordRanges`: after `-c`/`--command`/`eval`, or a `<<<` here-string). Text from an
+ * quoted span inside a payload word (`isPayloadWord`: after `-c`/`--command`/`eval`, or a `<<<` here-string). Text from an
  * unterminated quote, `$(` or heredoc onward is left as raw executable text in both modes (deny direction). Accepted ceiling: a
  * deliberately quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is
  * blanked like any other quoted literal and can therefore evade the ban.
@@ -980,8 +980,8 @@ function stripQuotedLiterals(command, precise = false) {
   const tok = tokenizeShellCommand(command);
   if (!precise && hasQuotePairingHazard(command)) return command;
   const text = precise ? blankDataHeredocs(command, tok) : command;
-  const payloads = precise ? payloadWordRanges(tok.segments) : [];
-  const wholeWords = precise ? allWords(tok.segments) : [];
+  const all = precise ? allWords(tok.segments) : [];
+  const payloads = all.filter(({ words, k }) => isPayloadWord(words, k)).map(({ w }) => w);
   const limit = tok.incompleteAt < 0 ? text.length : tok.incompleteAt;
   let out = "";
   let pos = 0;
@@ -989,7 +989,7 @@ function stripQuotedLiterals(command, precise = false) {
     if (start < pos || start >= limit) continue; // nested in a span already handled, or in the unterminated tail (kept as a guard: a backtick span can start past the opener without a quote)
     const kept = precise
       ? (kind === "double" && /\$\(|`/.test(text.slice(start + 1, end - 1))) || payloads.some((w) => w.start <= start && end <= w.end) ||
-        (STRUCTURAL_WORD_RE.test(text.slice(start + 1, end - 1)) && wholeWords.some((w) => w.end === end && w.raw.length <= end - start + 1)) // a quoted structural keyword that is a whole word (`'sleep' 5`) still runs: keep it visible
+        (STRUCTURAL_WORD_RE.test(text.slice(start + 1, end - 1)) && all.some(({ w }) => w.end === end && w.raw.length <= end - start + 1)) // a quoted structural keyword that is a whole word (`'sleep' 5`) still runs: keep it visible
       : /\$\(|`/.test(text.slice(start + 1, end - 1)) || // executable code in quotes: preserve (fail-closed)
         /(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(text.slice(0, start)); // -c/eval payload: real shell syntax
     out += text.slice(pos, start) + (kept ? text.slice(start, end) : " ");
@@ -999,8 +999,9 @@ function stripQuotedLiterals(command, precise = false) {
 }
 
 const STRUCTURAL_WORD_RE = /^(?:while|until|for|do|done|sleep|gh|loop-state|test|\[\[?)$/;
+/** @returns {{w: object, words: object[], k: number}[]} every word in SEGMENTS with its segment's words and index, nested substitutions included. */
 function allWords(segments, out = []) {
-  for (const seg of segments) for (const w of seg.words) { out.push(w); for (const sub of w.subs) allWords(sub.segments, out); }
+  for (const { words } of segments) words.forEach((w, k) => { out.push({ w, words, k }); for (const sub of w.subs) allWords(sub.segments, out); });
   return out;
 }
 const EXEC_FLAG_RE = /^(?:-[a-z]*c[a-z]*|--command)$/i;
@@ -1010,8 +1011,7 @@ const GIT_EXEC_WORD = { rebase: /^(?:--exec|-[A-Za-z]*x)/, "filter-branch": /^--
 const payloadFrom = (words) => {
   const hi = words.findIndex((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op);
   const base = words[hi]?.value.split("/").pop();
-  const wrapped = /^(?:sudo|timeout|nice|nohup|env|exec|command)$/.test(base);
-  const run = words.findIndex((w, i) => i >= hi && (i === hi || wrapped) && /^(?:watch|trap)$/.test(w.value.split("/").pop()));
+  const run = words.findIndex((w, i) => i >= hi && (i === hi || /^(?:sudo|timeout|nice|nohup|env|exec|command)$/.test(base)) && /^(?:watch|trap)$/.test(w.value.split("/").pop()));
   if (run >= 0) return run + 1; // every argument of `watch`/`trap` (also behind a wrapper) is command text the shell runs
   const gitSub = base === "git" && words.map((w) => w.value).find((v) => Object.hasOwn(GIT_EXEC_WORD, v));
   const at = words.findIndex((w) => !w.op && (w.value === "eval" || EXEC_FLAG_RE.test(w.value) || (gitSub && GIT_EXEC_WORD[gitSub].test(w.value))));
@@ -1019,16 +1019,6 @@ const payloadFrom = (words) => {
 };
 /** Words that the shell executes as command text: after `-c`/`--command`/`eval`, or the target of a `<<<` here-string. */
 const isPayloadWord = (words, k) => k >= payloadFrom(words) || words[k - 1]?.op === "<<<";
-/** @returns {{start:number,end:number}[]} every payload word in SEGMENTS, nested substitutions included. */
-function payloadWordRanges(segments, out = []) {
-  for (const seg of segments) {
-    seg.words.forEach((w, k) => {
-      if (isPayloadWord(seg.words, k)) out.push(w);
-      for (const sub of w.subs) payloadWordRanges(sub.segments, out);
-    });
-  }
-  return out;
-}
 
 const rawHead = (seg) => seg.words.find((w) => !ENV_ASSIGNMENT_WORD_RE.test(w.raw) && !w.op)?.value ?? "";
 const segmentHead = (seg) => rawHead(seg).split("/").pop();
@@ -1054,8 +1044,7 @@ const isTextHost = (seg) => {
 /** Whether the substitution in word K of SEG (a `isTextHost` segment) is inert text: the value of a text flag, never an env-assignment word. */
 function substitutionIsInert(seg, k) {
   const w = seg.words[k];
-  if (ENV_ASSIGNMENT_WORD_RE.test(w.raw)) return false;
-  if (overridesConfig(seg) || !isTextHost(seg)) return false;
+  if (ENV_ASSIGNMENT_WORD_RE.test(w.raw) || overridesConfig(seg) || !isTextHost(seg)) return false;
   const attached = TEXT_FLAG_ATTACHED_RE.exec(w.raw);
   const raw = attached ? w.raw.slice(attached[0].length) : w.raw;
   return /^(?:\$\(.*\)|"\$\(.*\)")$/s.test(raw) && (attached !== null || TEXT_FLAG_RE.test(seg.words[k - 1]?.value ?? ""));
@@ -1083,24 +1072,21 @@ function readsTextFromStdin(seg, head) {
 function dataHeredocs(segments) {
   if (segments.length !== 1) return []; // multi-segment: a later segment may run what the heredoc writes
   const seg = segments[0];
-  const head = segmentHead(seg);
-  const dataBody = (s, h) => { // closed, not piped onward, no process-substitution word (`>(sh)`, a `(`-target)
-    if (s.pipedOut || (h !== "cat" && h !== "tee" && !readsTextFromStdin(s, h))) return [];
-    if (s.words.some((w) => /[<>]\(/.test(w.raw) || /[<>]\(/.test(w.value))) return [];
-    if (h === "cat" || h === "tee") {
-      const bare = rawHead(s);
-      if (!/^(?:\/bin\/|\/usr\/bin\/)?(?:cat|tee)$/.test(bare) || s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return []; // a path-prefixed or PATH-overridden `cat` is an unknown program
-    }
+  const dataBody = (s) => { // closed, not piped onward, no process-substitution word (`>(sh)`, a `(`-target)
+    const h = segmentHead(s);
+    const isCatTee = h === "cat" || h === "tee";
+    if (s.pipedOut || (!isCatTee && !readsTextFromStdin(s, h)) || s.words.some((w) => /[<>]\(/.test(w.raw) || /[<>]\(/.test(w.value))) return [];
+    if (isCatTee && (!/^(?:\/bin\/|\/usr\/bin\/)?(?:cat|tee)$/.test(rawHead(s)) || s.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw)))) return []; // a path-prefixed or PATH-overridden `cat` is an unknown program
     return s.heredocs.filter((x) => x.closed && (x.quoted || !/\$\(|`/.test(x.body)));
   };
   const subs = seg.words.flatMap((w, k) => w.subs.map((sub) => ({ sub, k })));
-  if (subs.length === 0) return dataBody(seg, head);
+  if (subs.length === 0) return dataBody(seg);
   // exactly one inert git commit / gh text-flag substitution holding exactly one substitution-free, file-writing-free cat segment
   if (subs.length !== 1 || !isTextHost(seg) || seg.pipedOut || writeTargets(seg).length !== 0 || seg.words.some((w) => ENV_ASSIGNMENT_WORD_RE.test(w.raw))) return [];
   const { sub, k } = subs[0];
   if (isPayloadWord(seg.words, k) || !substitutionIsInert(seg, k) || sub.segments.length !== 1) return [];
   const inner = sub.segments[0];
-  return segmentHead(inner) === "cat" && writeTargets(inner).length === 0 && inner.words.every((w) => w.subs.length === 0) ? dataBody(inner, "cat") : [];
+  return segmentHead(inner) === "cat" && writeTargets(inner).length === 0 && inner.words.every((w) => w.subs.length === 0) ? dataBody(inner) : [];
 }
 
 /** COMMAND with the data heredoc bodies blanked to same-length whitespace (newlines kept), so offsets still index the input. Incomplete input is returned unchanged. */
@@ -1595,7 +1581,7 @@ export function commandContainsInlineInterpreter(command) {
 function interpreterScanParts(command) {
   const tok = tokenizeShellCommand(command);
   if (tok.incomplete) return { segments: shellSegments(command), nested: [] };
-  const segments = [];
+  const segments = tok.segments.filter((s) => s.words.length).map((s) => command.slice(s.words[0].start, s.words.at(-1).end));
   const nested = [];
   const bodies = (segs) => { // the substitution slices cut quoted-delimiter bodies out, so read every heredoc body from the token tree
     for (const seg of segs) {
@@ -1604,10 +1590,7 @@ function interpreterScanParts(command) {
     }
   };
   bodies(tok.segments);
-  for (const seg of tok.segments) {
-    if (seg.words.length) segments.push(command.slice(seg.words[0].start, seg.words.at(-1).end));
-    seg.words.forEach((w, k) => { if (isPayloadWord(seg.words, k)) nested.push(w.value); });
-  }
+  for (const { words } of tok.segments) words.forEach((w, k) => { if (isPayloadWord(words, k)) nested.push(w.value); });
   return { segments, nested };
 }
 

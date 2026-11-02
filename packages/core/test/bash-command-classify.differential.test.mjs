@@ -3,6 +3,7 @@ import { test } from "bun:test";
 
 import * as head from "../src/loop/bash-command-classify.mjs";
 import * as main from "../../../test/fixtures/bash-command-classify.origin-main.mjs";
+import { INLINE_DENY_ROWS } from "../../../test/fixtures/bash-command-classify.inline-deny-rows.mjs";
 
 /**
  * Differential fail-open guard (#2442).
@@ -128,6 +129,7 @@ const RESIDUE_SHAPES = [
 ];
 /** Deny rows from the closed branch (draft_gate rounds 5 to 7, delta reviews): every deny row of commits 1c48f4f46..5c68e78be. */
 const SALVAGED_DENY_ROWS = [
+  ...INLINE_DENY_ROWS,
   // shared fixture table rows (test/fixtures/inline-interpreter-forms.mjs)
   "bash <<< 'x; node -e y'",
   "sh <<< 'x; node -e y'",
@@ -191,77 +193,23 @@ const SALVAGED_DENY_ROWS = [
   "tee tmp/x <<-EOF\n$(while true; do gh pr view 5; sleep 5; done)\nEOF",
   // write-then-run guard and inert-host rows (draft_gate round 3029): runner payloads, globs, aliases, host redirects, git/env hosts
   "cat > tmp/l.sh <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash -c 'bash tmp/l.sh'",
-  "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\neval \"sh tmp/l.sh\"",
-  "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash <<'X'\nbash tmp/l.sh\nX",
-  "cat > tmp/r.sh <<'EOF'\nnode -e 'x'\nEOF\nbash tmp/r.s?",
-  "echo \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" > tmp/r.sh\nbash tmp/r.sh",
-  "echo \"$(cat <<EOF\nnode -e 1\nEOF\n)\" > tmp/l.sh; bash tmp/l.sh",
-  "printf -v x \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"; eval \"$x\"",
   "cat &> tmp/l.sh <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash tmp/l.sh",
-  "cat &>> tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
-  "cat > $F <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
-  "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash tmp/*.sh",
   // draft_gate round 4: process substitution mid-word, path-prefixed or env-overridden cat, a file-writing inner cat, gh hosts, unlisted executor arguments
-  "tee />(sh) <<'EOF'\nnode -e x\nEOF",
-  "cat <<'EOF' >/>(bash)\nnode -e x\nEOF",
-  "tee $NOPE>(sh) <<'EOF'\nnode -e 'x'\nEOF",
   "tee ${NOPE}>(bash) <<'EOF'\nnode -e 'x'\nEOF",
   "cat <<'EOF' >$NOPE>(sh)\nnode -e 'x'\nEOF",
   "tee />(sh) <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF",
-  "tmp/cat <<'EOF'\nnode -e 'x'\nEOF",
-  "PATH=tmp:$PATH cat <<'EOF'\nnode -e 'x'\nEOF",
-  "git commit -m \"$(cat > .git/hooks/pre-commit <<'EOF'\nnode -e 'x'\nEOF\n)\"",
-  "git commit -m \"$(cat >> .git/config <<'EOF'\nnode -e 'x'\nEOF\n)\"",
   "git commit -m \"$(cat > .git/hooks/pre-commit <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\n)\"",
-  "gh r --body \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
-  "git rebase -x 'true; node -e y' HEAD~1",
-  "git rebase --exec 'true; node -e y' HEAD~1",
-  "watch 'true; node -e y'",
-  "trap 'true; node -e y' EXIT",
-  "git rebase -x \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" HEAD~1",
-  "git rebase -m -x\"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" HEAD~1",
-  "git rebase --exec=\"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" HEAD~1",
-  "git -c Alias.x='!f(){ eval \"$2\"; }; f' commit -m \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
-  "GIT_SSH_COMMAND=\"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" git fetch",
-  "git -c alias.r='!sh' r <<'EOF'\nnode -e x\nEOF",
-  "echo \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\" | bash",
-  "cat <<'EOF' |& sh\nnode -e 'x'\nEOF",
-  "printf -vx \"$(cat <<'EOF'\nnode -e 1\nEOF\n)\"; eval \"$x\"",
-  "cat > tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nfind tmp -name 'l*' -exec sh {} \\;",
-  "cat > Makefile <<'EOF'\nall:\n\tnode -e 1\nEOF\nmake",
-  "cat >& tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
-  "cat >&tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
-  "cat 1<>tmp/l.sh <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
-  "exec >tmp/l.sh; cat <<'EOF'\nnode -e 1\nEOF\nbash tmp/l.sh",
   "exec>l.sh\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
   ">l.sh exec\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
   "command exec >l.sh\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
   "builtin exec >l.sh\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
   // hidden exec redirect: a payload word, here-string, variable head or quoted keyword; the multi-segment command keeps every heredoc body visible
-  "eval 'exec >l.sh'\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
-  "eval \"exec >l.sh\"\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
-  ". /dev/stdin <<< 'exec >l.sh'\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
-  "source /dev/stdin <<< 'exec >l.sh'\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
-  "x='exec >l.sh'; $x\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
-  "bash -c 'exec >l.sh'\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
-  "e'x'ec \">\"l.sh\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
-  "x='exec >l.sh'; eval \"$x\"\ncat <<'EOF'\nnode -e 'x'\nEOF\nbash l.sh",
-  "exec >l.sh; echo \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"; bash l.sh",
   "eval 'exec >l.sh'\ncat <<'EOF'\nwhile true; do gh pr view 5; sleep 5; done\nEOF\nbash l.sh",
   // two substitutions in one root segment: the first writes l.sh, the second runs it
-  "echo \"$(cat > l.sh <<'EOF'\nnode -e 'x'\nEOF\n)$(bash l.sh)\"",
-  "echo \"$(cat > l.sh <<'EOF'\nnode -e 'x'\nEOF\n)\" \"$(bash l.sh)\"",
-  "git commit -m \"$(cat > l.sh <<'EOF'\nnode -e 'x'\nEOF\n)\" -m \"$(bash l.sh)\"",
   // env-assignment prefix on the git host: GIT_EDITOR runs the message, a mixed-case alias key defines a shell alias
-  "GIT_EDITOR=sh git commit --allow-empty -e -m \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
-  "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=Alias.x GIT_CONFIG_VALUE_0='!f(){ eval \"$2\"; }; f' git x -m \"$(cat <<'EOF'\nnode -e 'x'\nEOF\n)\"",
   "for i in 1; do>&2\ncat <<'EOF'\nnode -e 'x'\nEOF\ndone>l.sh\nbash l.sh",
   "if true; then>&2\ncat <<'EOF'\nnode -e 'x'\nEOF\nfi>l.sh\nbash l.sh",
   "for i in 1; do&>/dev/null\ncat <<'EOF'\nnode -e 'x'\nEOF\ndone>l.sh\nbash l.sh",
-  "echo \"$(cat <<'EOF'\nnode -e 1\nEOF\n)\" >& tmp/l.sh; bash tmp/l.sh",
-  "cat >> .git/config <<'EOF'\n[alias]\n\tr = !f\nnode -e 1\nEOF\ngit r",
-  "cat >> .git/hooks/pre-commit <<'EOF'\nnode -e 1\nEOF\ngit commit -m x",
-  "git -c alias.x='!f(){ eval \"$2\"; }; f' x -m \"$(cat <<'EOF'\nnode -e 1\nEOF\n)\"",
   // grouping fail-open (draft_gate round 3029 r2): a group closer pipes or redirects a cat heredoc written on its own line
   ...["node -e 'x'", "while true; do gh pr view 5; sleep 5; done", "node scripts/loop/probe-copilot-review.mjs --pr 5 &"].flatMap((body) => [
     `{\ncat <<'EOF'\n${body}\nEOF\n} | sh`,
