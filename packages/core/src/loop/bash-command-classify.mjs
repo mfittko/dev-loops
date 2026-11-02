@@ -1037,7 +1037,7 @@ function writeTargets(seg) {
 }
 
 /**
- * Heredocs whose body is data (issue 2442 item 8): a `cat` or `tee` heredoc that is closed, whose delimiter is quoted
+ * Heredocs whose body is data (issue 2442 item 8): a `cat`, `tee`, `git`, `gh`, `echo` or `printf` heredoc that is closed, whose delimiter is quoted
  * or whose body has no `$(`/backtick, whose segment is not piped onward, that sits in no `-c`/`eval`/here-string payload, and
  * whose written target is not run by a later `sh`/`bash`/interpreter segment. Every other body executes and stays visible.
  * @returns {object[]}
@@ -1047,7 +1047,7 @@ function dataHeredocs(segments, inPayload = false, out = [], root = segments, in
     const head = segmentHead(seg);
     const inert = inertParent && !seg.pipedOut && INERT_SUBSTITUTION_HOSTS.has(head);
     seg.words.forEach((w, k) => w.subs.forEach((sub) => dataHeredocs(sub.segments, inPayload || isPayloadWord(seg.words, k), out, root, inert)));
-    if (!inertParent || inPayload || seg.pipedOut || (head !== "cat" && head !== "tee")) return;
+    if (!inertParent || inPayload || seg.pipedOut || (head !== "cat" && head !== "tee" && !INERT_SUBSTITUTION_HOSTS.has(head))) return; // gh/git/echo/printf read the body as text (`gh pr comment --body-file -`)
     if (seg.words.some((w) => /^\d*[<>]*\(/.test(w.value))) return; // process substitution `>(sh)` or a `(`-target: the body is piped to a command
     const targets = writeTargets(seg);
     const own = new Set(seg.words);
