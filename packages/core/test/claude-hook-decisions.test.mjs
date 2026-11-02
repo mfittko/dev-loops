@@ -955,6 +955,10 @@ test("decideBashGate names incomplete tokenization in the OPS-NO-INLINE-INTERPRE
   const d = decideBashGate({ command: 'echo "$(gh pr view 5', ...ctx });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /incomplete tokenization/);
+  const dTick = decideBashGate({ command: "echo `gh pr view 5", ...ctx });
+  assert.equal(dTick.decision, "deny");
+  assert.match(dTick.reason, /incomplete tokenization/);
+  assert.match(dTick.reason, /backtick/);
   assert.doesNotMatch(decideBashGate({ command: 'node -e "x"', ...ctx }).reason, /incomplete tokenization/);
 });
 

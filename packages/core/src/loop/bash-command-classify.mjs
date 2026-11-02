@@ -1457,7 +1457,7 @@ export function commandContainsInlineInterpreter(command) {
 /** Sentence (with a leading space) for the deny reason when the cause is malformed input, else "": it names the class so the agent can fix the quoting. */
 export function inlineInterpreterDenyDetail(command) {
   return tokenizeShellCommand(command).incomplete
-    ? " The command has an unterminated quote, $( substitution or heredoc (incomplete tokenization), so the gate cannot tell data from code. Close the construct or write the file with the editor tool."
+    ? " The command has an unterminated quote, $( or backtick substitution, heredoc, or substitution nesting that is too deep (incomplete tokenization), so the gate cannot tell data from code. Close the construct or write the file with the editor tool."
     : "";
 }
 
