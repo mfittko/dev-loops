@@ -97,12 +97,19 @@ const ALLOWED_WRITE_OPS = Object.freeze([
   /^gh\s+pr\s+ready\b/,
 ]);
 
-/** Split a command line into top-level segments on &&, ||, |, ;. */
+/** Split a command line into top-level segments on &&, ||, |, ;. A separator inside a quoted literal, `$(...)` or backticks does not split, so no segment is cut mid-construct. */
 function splitSegments(line) {
-  return line
-    .split(/&&|\|\||\||;/g)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  const segments = [""];
+  let depth = 0;
+  let ticks = false;
+  for (const token of line.match(/"(?:\\.|[^"\\])*"|'[^']*'|\$\(|[)`]|&&|\|\||\||;|[^"'&|;$)`]+|["'&$]/g) ?? []) {
+    if (token === "$(") depth++;
+    else if (token === ")" && depth > 0) depth--;
+    else if (token === "`") ticks = !ticks;
+    if (depth === 0 && !ticks && (token === "&&" || token === "||" || token === "|" || token === ";")) segments.push("");
+    else segments[segments.length - 1] += token;
+  }
+  return segments.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 /**
