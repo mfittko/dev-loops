@@ -621,6 +621,10 @@
       "id": "INTAKE-TIMEOUT-SURFACE-BUDGET-EXHAUSTED"
     },
     {
+      "id": "JUDGE-OUTPUT-SCHEMA-IN-WORK-ORDER",
+      "enforcement": "doc"
+    },
+    {
       "id": "BASE-JQ-OUTPUT-GUARANTEE",
       "enforcement": "runtime"
     },

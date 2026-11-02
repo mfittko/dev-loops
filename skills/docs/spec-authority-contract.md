@@ -54,6 +54,9 @@ The judge-pass bridge (`judge-pass.mjs`, engaged by `--spec-file`) ENFORCES the 
 <!-- rule: SPEC-AUTHORITY-STALE-REVISION-FAIL-CLOSED -->
 `SPEC-AUTHORITY-STALE-REVISION-FAIL-CLOSED`: a decision pins its own `specDigest`, `headSha`, and `contentDigest`; any that is stale or mismatched against the run's current identities fails closed. A decision made against a superseded revision never authorizes a fix or a gate transition at the current one.
 
+<!-- rule: JUDGE-OUTPUT-SCHEMA-IN-WORK-ORDER -->
+`JUDGE-OUTPUT-SCHEMA-IN-WORK-ORDER`: the judge work order carries `outputSchemas`, keyed by verdict file name, and the spec-authority entry is `SPEC_AUTHORITY_VERDICT_SCHEMA` from `packages/core/src/loop/spec-authority.mjs`, whose value sets derive from the validator constants and whose field list is maintained beside the validators. The pull owns the required-read digest check, so a Pi or Claude judge computes no digest for its required reads. The Codex after-pull setup still governs a Codex judge. The judge denial names only `Read` as always available.
+
 ## Last-resort human escalation
 
 <!-- rule: SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT -->
