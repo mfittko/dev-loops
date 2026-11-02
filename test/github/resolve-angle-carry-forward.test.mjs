@@ -59,6 +59,19 @@ test("async Git runner preserves UTF-8 split across stream chunks", async () => 
   assert.equal((await result).stdout, "M\tdocs/café.md\n");
 });
 
+test("async Git runner surfaces the close signal and keeps a null exit code as 1", async () => {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+  const result = runGitCommand(["merge-base"], { repoRoot: process.cwd(), spawnImpl: () => child });
+  child.emit("close", null, "SIGTERM");
+  const { code, signal } = await result;
+  assert.equal(code, 1);
+  assert.equal(signal, "SIGTERM");
+  const clean = runGitCommand(["merge-base"], { repoRoot: process.cwd(), spawnImpl: () => child });
+  child.emit("close", 1, null);
+  assert.equal((await clean).signal, null);
+});
+
 // Run the CLI main() against a repoRoot and return the parsed JSON result it
 // writes to stdout (default emitResult mode).
 async function runMain(argv, { repoRoot }) {

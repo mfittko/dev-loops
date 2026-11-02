@@ -65,7 +65,7 @@ export const CATEGORY_ANGLE_MAP = {
   // input-validation is included (#1336): it was pool-only and never auto-
   // recommended, so entrypoint/input drift went unreviewed unless hand-picked.
   [ChangeCategory.LOGIC_CHANGE]: [
-    "scope", "correctness", "coverage", "determinism", "contract-surface", "input-validation",
+    "scope", "correctness", "coverage", "determinism", "state-concurrency", "contract-surface", "input-validation",
   ],
   // #1336: security-sensitive seam → up-front adversarial threat-model, plus
   // input-validation and the core correctness/scope lenses. threat-model is

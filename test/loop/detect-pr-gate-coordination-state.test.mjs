@@ -2410,6 +2410,45 @@ test("detect-pr-gate-coordination-state auto-releases the runner-coordination lo
     assert.equal(releaseCalls[0].repo, "owner/repo");
     assert.equal(releaseCalls[0].pr, 10);
     assert.equal(releaseCalls[0].env.DEVLOOPS_RUN_ID, "");
+    assert.equal(result.runnerRelease, undefined, "a successful release is not surfaced");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("detect-pr-gate-coordination-state carries the skipped release at a terminal stop (#2884)", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "gate-coord-runner-release-skipped-"));
+  try {
+    const body = `${buildPlanFilePromotionMarker("docs/phases/phase-9.md")}\n\nNo AC/DoD sections at all.\n`;
+    const env = await writeGhStub(tmp, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: "abc1234567",
+          mergeStateStatus: "CLEAN",
+          body,
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: "abc1234567" }) },
+      { stdout: jsonLine([[]]) },
+      { stdout: "[]\n" },
+    ]);
+    const skipped = { ok: true, status: "skipped_no_async_run_id", remedy: "run handoff" };
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      buildMockRuntime(env, { releaseAsyncRunnerOwnershipImpl: async () => skipped }),
+    );
+
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    assert.deepEqual(result.runnerRelease, skipped);
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
@@ -4299,6 +4338,23 @@ for (const { name, isDraft, seal, expected } of [
   });
 }
 
+// ADR 0218: a rejecting resolveCapRoundFixed (injected through the runtime) reaches the detector rejection handler, which reports cap_round_unresolved.
+test("detect-pr-gate-coordination-state (ADR 0218): a rejecting resolveCapRoundFixed reports cap_round_unresolved", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-throws-"));
+  try {
+    const headSha = "abc1234567".repeat(4);
+    await seedCapFixedRepo(tempDir, { headSha, seal: true });
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE, resolveCapRoundFixed: async () => { throw new Error("resolver failed"); } }));
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+    assert.ok(result.reason.includes("Condition cap_round_unresolved:"), result.reason);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 for (const { name, chained, expected } of [
   { name: "a draft PR whose later push is covered by a chain of sealed cap-round delta records goes mark_ready_for_review", chained: true, expected: PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW },
   { name: "a draft PR whose later push has no record in the chain reports blocked", chained: false, expected: PR_CHECKPOINT_ACTION.REPORT_BLOCKED },
@@ -4325,3 +4381,22 @@ for (const { name, chained, expected } of [
     }
   });
 }
+
+// ADR 0218: an unreadable in-range cap-round ledger still counts toward the cap, so the refusal stands, but it names cap_round_unresolved and not a clearing record that was never evaluated.
+test("detect-pr-gate-coordination-state (ADR 0218): an unreadable cap-round ledger reports cap_round_unresolved, not no_clearing_record", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-unresolved-"));
+  try {
+    const headSha = "abc1234567".repeat(4);
+    await seedCapFixedRepo(tempDir, { headSha, seal: true });
+    await writeFile(path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-10", `draft_gate-${"c".repeat(40)}.json`), "not json", "utf8");
+    const body = renderGateReviewCommentBody({ gate: "draft_gate", headSha, verdict: "blocked", findingsSummary: "round_cap_reached", nextAction: "stop" });
+    const env = await capFixedDetectorEnv(tempDir, { isDraft: true, headSha, draftGateBody: body });
+    const result = await detectPrGateCoordinationState({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env, { repoRoot: tempDir, evaluateEarlySurface: PASS_EARLY_SURFACE }));
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED, result.reason);
+    assert.ok(result.reason.includes("Condition cap_round_unresolved:"), result.reason);
+    assert.ok(!result.reason.includes("no_clearing_record"), result.reason);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

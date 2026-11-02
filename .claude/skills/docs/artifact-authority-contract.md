@@ -129,6 +129,7 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/loop/judge-pass.mjs` | Fail closed: throws |
 | `scripts/loop/spec-lint.mjs` | Fail closed: throws, so a broken `.devloops` cannot relax the size forecast bound |
 | `scripts/loop/check-pre-push-delta.mjs` | Fail closed: the earlier-head findings log is refused |
+| `scripts/loop/extend-cap-round-chain.mjs` | Fail closed: throws |
 | `scripts/loop/consolidate-fanin.mjs` | Fail closed: throws with `--gate` |
 | `scripts/github/upsert-checkpoint-verdict.mjs` | Fail closed: throws |
 | `scripts/github/merge-pr.mjs` | Fail closed: refuses with `configError` |
@@ -166,6 +167,11 @@ The shipped default posture is therefore local-planning (epic #947, decision #7)
 | `scripts/loop/ui-review-teardown.mjs` | Not a gate decision: UI review recipe |
 | `scripts/loop/visual-grill-capture.mjs` | Not a gate decision: capture recipe |
 | `scripts/refine/promote-plan.mjs` | Not a gate decision: base branch |
+
+### CLI checkout delegation
+
+<!-- rule: CLI-CHECKOUT-DELEGATION -->
+`CLI-CHECKOUT-DELEGATION`: An installed `dev-loops` CLI MUST run the source checkout's CLI for the `gate`, `loop` and `pr` categories, so an older installed CLI cannot drop a newer `.devloops` key or decide a gate with stale code. `cli/index.mjs` walks up from the working directory to the nearest directory whose `package.json` is named `dev-loops` and that has `cli/index.mjs`. When that directory is not the running CLI's root, the CLI spawns `<root>/cli/index.mjs` with the same argv and working directory, sets `DEVLOOPS_CHECKOUT_DELEGATED=1`, forwards stdout and stderr, and returns the child exit status. A non-empty `DEVLOOPS_CHECKOUT_DELEGATED` disables delegation, so the checkout CLI never delegates again. A `gate`, `loop` or `pr` command inside a tree whose `package.json` declares the name `dev-loops` executes that tree's `cli/index.mjs` with the caller's environment, so the operator treats that tree as trusted code, the same trust `dev-loops-run` applies. The `dev-loops-run` launcher selects the nearest `dev-loops` checkout by its own entry criterion (a sibling `scripts/` directory, real path), so the two resolvers can pick different roots. The guard is removed from the process environment at CLI start, so grandchildren never inherit it. Other categories never delegate. When the installed and checkout versions differ, the CLI writes `[dev-loops] version skew: installed X, checkout Y; running <root>/cli/index.mjs (CLI-CHECKOUT-DELEGATION).` to stderr. When the checkout CLI does not start, the CLI writes `cli_version_skew: installed X, checkout Y; the checkout CLI did not start (<code>). CLI-CHECKOUT-DELEGATION refused to continue. Rerun: dev-loops-run --repo-root <root> cli/index.mjs <argv>` and exits 1. The `cli_version_skew` token names a start failure of the checkout CLI. It also appears when the installed and checkout versions are equal and only the roots differ. When the piped child output exceeds the wrapper buffer, the CLI writes `child_output_too_large` and exits 1.
 
 ## Local-first plan-file flow end to end
 
@@ -207,6 +213,9 @@ The shipped extension layer pairs local-first with a low-noise posture, in `pack
 | `gates.postFindingsComments` | `false` | Gate findings already live on the PR as the round's verdict review; a second consolidated comment would only duplicate them |
 
 `BUILT_IN_DEFAULTS` keeps the tracker-first values (`humanMergeOnly: false`, `maxAutoFiledIssues: 10`); the extension layer sets the local-first values above. A repo `.devloops` can override any of them.
+
+<!-- rule: SPEC-SLICE-PR-KEEPS-CLOSING-REF -->
+`SPEC-SLICE-PR-KEEPS-CLOSING-REF`: Interim rule, valid until Refs-only `pr_body` authority ships in a later slice of issue 2883. Until then a slice PR MUST keep its closing reference (`Closes #N`) and carry a Non-goals line that reopens the issue after the merge. Changing `Closes` to `Refs` is never an act remedy for a slice PR, because a `Refs`-only slice PR has no spec authority today. The `Refs` plus verbatim slice body shape (issue 2883 dod:3) stays open for that later slice. The spec context states this rule (`sliceLinkage`) when the extracted spec Non-goals hold a reopen line. The judge work order reads the PR body from the pinned gate-context evidence. It carries `sliceLinkage` and `sliceLinkageIssues` in its pinned work order only when that PR body holds exactly one closing reference, to an issue in this repository, and its number is named by a reopen line in the body or `--spec-file` Non-goals. `judge-pass.mjs` arms its coercion from the pinned `sliceLinkageIssues` alone: it coerces an `act` disposition whose `judgeFix` removes the PR's only closing reference to the issue a Non-goals reopen line names (a removal naming another issue number stays act) to `reject` and names this rule ID in `judgeReason`.
 
 ## dev-loops own mode
 

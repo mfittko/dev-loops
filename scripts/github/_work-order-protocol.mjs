@@ -20,6 +20,9 @@ export { DISPATCH_POINTER_MAX_BYTES, EXECUTION_IDENTITY_RE, canonicalizeWorkOrde
 
 export const materializationHash = sha256Hex;
 
+/** The full-phase fixer join report (ADR 0223): published once per successful step-6 run, last, by verify-fixer-disposition --report-path. */
+export const fixerReportPath = (outputRef) => `${outputRef}.report`;
+
 // The compact dispatch envelope, the ONLY text relayed to a worker: a self-describing pull instruction
 // (a lagging agent definition still pulls), never task prose. Values go unquoted, so each is one shell-inert word.
 // Step 1 of ADR 0115 keeps this 3-flag form; issue 2560 switches it to the execution identity alone.

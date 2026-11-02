@@ -18,15 +18,15 @@ import { findRetirementAfter } from "@dev-loops/core/loop/gate-round-retirement"
 import { assertFixerReviewBaseline } from "@dev-loops/core/loop/work-order-digest";
 import { deltaCoverageBinding, startDeltaSequence, toDeltaActItems, validateDeltaResult } from "@dev-loops/core/loop/pre-push-delta-review";
 import { normalizeFixerDispositionHandoff } from "@dev-loops/core/loop/fixer-disposition";
-import { writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
+import { sequenceClosurePath, writeSequenceMarker } from "@dev-loops/core/loop/fix-push-authority";
 import { formatCliError, isDirectCliRun, readJsonIfExists as readJson } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
-import { WorkOrderRefusal, buildDispatchPointer, materializationHash, registerWorkOrderRole, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
+import { WorkOrderRefusal, buildDispatchPointer, fixerReportPath, materializationHash, registerWorkOrderRole, verifyPulledResult, workOrderDigest, writeExecutionIndex } from "../github/_work-order-protocol.mjs";
 import { OperatorFocusRefusal, bindOperatorFocusItems, operatorFocusDigestEntry, readOperatorFocusFile, renderOperatorFocusSection } from "./_operator-focus.mjs";
 import { buildLogPath, repoSlugFor } from "../github/_gate-artifact-paths.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { fingerprintFinding, readGateFindingsLedger } from "../github/_gate-finding-surface.mjs";
-import { closureFromHeadOf, readClosedPriorRoundLogs, renderRequiredReadLine, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
+import { closureFromHeadOf, clearingChainLastCandidates, readClosedPriorRoundLogs, renderRequiredReadLine, resolveDraftRoundCap } from "../github/write-gate-context.mjs";
 import { isBaseOnlyMergeSince } from "../lib/git-delta.mjs";
 import { DELTA_CLEARING_NEXT_STEPS, gateDeltaRecordPath, readGateDeltaRecord } from "./_gate-delta-record.mjs";
 import { assertTmpRootOutsideLinkedWorktree, gitEnvNoDirOverrides, listWorktreeEntries, resolveGateArtifactTmpRoot, resolveRepoRoot } from "./_repo-root-resolver.mjs";
@@ -51,7 +51,8 @@ the PR's own head branch (gh pr view headRefName) and the --allowed-path selecto
 An --act-list-file source also refuses with verdict_not_posted until the --gate verdict review for --head-sha is posted on the PR (GATE-EXEC-POST-BEFORE-FIX; post it with dev-loops gate upsert-verdict --findings-ledger).
 It writes the immutable work order under <tmp-root>/gate-fixer/<repo-slug>/pr-<N>/
 (default: the main checkout's tmp/; an explicit --tmp-root inside a linked worktree is refused) and prints
-{ ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath }.
+{ ok, workOrderRef, workOrderDigest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef }.
+joinRef is the path for gate wait-for-units --artifact (with --after <planPath>): a full-phase fixer's final-on-write report (<outputRef>.report), else the outputRef.
 Each run supersedes the previous emission for this PR. Dispatch the printed
 dispatchPayload (the --harness adapter call carrying only dispatchPrompt) unchanged; an
 unsupported harness refuses. The only operator input is --operator-focus-file, a JSON file { round?: string, items?: [{ fingerprint, decision }] }
@@ -157,7 +158,7 @@ function fullPhaseSteps(workOrder, verifier, { push }) {
 3. Run \`${wait}\` once. If it exits 2 (not settled), run it exactly once more. If CI is red (\`failure\`), resolve no thread, run no verifier step, and hand back \`ci_failed\` with the failing check names. If it is still not settled, reports \`stuck\` or \`changed\`, or exits 1 with an error, resolve no thread, run no verifier step, and hand back \`ci_pending\` (\`ci_unknown\` when the checks cannot be read).
 4. Run \`${verifier} --construct\`. If it fails because the output exists, go to step 5. If step 5 refuses the report as hand-written, rm only this execution's refused outputRef and its corresponding stale \`<outputRef>.constructed\` marker, then re-run step 4. Preserve accepted construction evidence and unrelated files.
 5. Run \`${verifier}\`.
-6. Run \`${verifier} --check\`.
+6. Run \`${verifier} --check --report-path ${shellQuote(fixerReportPath(workOrder.outputRefs[0]))}\`. It publishes the final join report there, last; no earlier step writes it.
 ${EDIT_RULE}`;
 }
 
@@ -315,7 +316,16 @@ export async function emitFixerWorkOrder({
         // An unreadable ledger counts toward the cap but is dropped above, so the cap-round authority could be an earlier round: fail closed.
         if (unreadable > 0) throw new Error("unreadable prior ledger");
         const baseRefName = (await fetchPr({ repo, pr }))?.baseRefName;
-        if (typeof baseRefName === "string" && baseRefName && await isBaseOnlyMergeSince({ fromHead, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd })) {
+        // ADR 0218: the chain's last clearing candidate (the fixer commit that followed the cap round) counts as a base of the merge as well.
+        let baseOnly = false;
+        if (typeof baseRefName === "string" && baseRefName) {
+          const ends = await clearingChainLastCandidates({ tmpRoot: resolveGateArtifactTmpRoot(cwd), capHead: fromHead, repo, pr, baseRefName, repoRoot: cwd });
+          for (const from of [...ends, fromHead]) {
+            if (!from || from === headSha) continue; // a chain end equal to the head is no merge base: it would read as a base-only merge and fail open
+            if (await isBaseOnlyMergeSince({ fromHead: from, head: headSha, mainRef: `origin/${baseRefName}`, repoRoot: cwd })) { baseOnly = true; break; }
+          }
+        }
+        if (baseOnly) {
           round = cap;
           lowFixCapped = isPastRoundCap(round, cap);
           capRoundHead = fromHead;
@@ -489,8 +499,9 @@ export async function emitFixerWorkOrder({
   await rename(tempPath, planPath);
   // PRE-PUSH-DELTA-PUSH-AUTHORITY: written last so a refused emit never grants the push; only a full work order grants the fixer.
   // Always under the canonical gate-artifact root (the location the push-authority check reads), whatever --tmp-root says.
-  writeSequenceMarker({ tmpRoot: resolveGateArtifactTmpRoot(cwd), baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName });
-  return { ...plan, planPath };
+  writeSequenceMarker({ tmpRoot: resolveGateArtifactTmpRoot(cwd), baselineHead: headSha, fullGranted: phase === "full", branch: prState.headRefName, execution: { executionIdentity, workOrderRef: identityTriple.workOrderRef, outputRef } });
+  // The coordinator's gate wait-for-units --artifact path: a full-phase fixer's final-on-write report (ADR 0223), else the hand-back itself.
+  return { ...plan, planPath, joinRef: phase === "full" ? fixerReportPath(outputRef) : outputRef };
   } finally { await capture.release(); }
 }
 
@@ -632,7 +643,16 @@ export async function locateFixerUnit({ ref, cwd, tmpRoots, closureOnly = false 
     execFileSync("git", ["merge-base", "--is-ancestor", headSha, `refs/heads/${branch}`], { cwd, stdio: "ignore", env: gitEnvNoDirOverrides() });
     contained = true;
   } catch { /* missing branch or head, or a reset/rewritten branch: stale authority */ }
-  const stale = (changed.length > 0 && `required fixer source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`)
+  // A sequence closed as abandoned retires its execution: a late pull of its work order is refused.
+  // The record sits at the marker baseline, which is the ref head or the review baseline head; only ENOENT means not closed.
+  let sequenceClosed = false;
+  if (!closureOnly) {
+    for (const head of new Set([headSha, ...(baseline ? [baseline.reviewBaselineHead] : [])])) {
+      sequenceClosed ||= await readFile(sequenceClosurePath(resolveGateArtifactTmpRoot(cwd), head, executionIdentity)).then(() => true, (error) => error?.code !== "ENOENT");
+    }
+  }
+  const stale = (sequenceClosed && `fixer execution ${executionIdentity} belongs to a gate fix sequence that was closed as abandoned`)
+    || (changed.length > 0 && `required fixer source(s) ${changed.join(", ")} changed or vanished since emission; re-emit against current authority`)
     || (retired && `fixer execution ${executionIdentity} belongs to a ${order.gate} round at ${headSha} retired as ${retired}`)
     || (!contained && !closureOnly && `authority branch ${branch} no longer contains head ${headSha}; refresh the PR state and re-emit`);
   // The integrity hash is recomputed from the order, never the plan's copied field (as the judge adapter does).
@@ -695,9 +715,9 @@ export async function main(argv = process.argv.slice(2), { cwd = process.cwd(), 
       ...(values["tmp-root"] ? { tmpRoot: path.resolve(cwd, values["tmp-root"]) } : {}),
       ...(fetchPr ? { fetchPr } : {}),
     });
-    const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath } = plan;
+    const { workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, planPath, joinRef } = plan;
     const dispatchPayload = buildFixerDispatchPayload({ harness: values.harness, plan, cwd });
-    return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, dispatchPayload, planPath });
+    return emit({ ok: true, workOrderRef, workOrderDigest: digest, executionIdentity, dispatchPrompt, dispatchPayload, planPath, joinRef });
   } catch (err) {
     if (!(err instanceof Refusal || err instanceof WorkOrderRefusal || err instanceof OperatorFocusRefusal)) throw err;
     return emit({ ok: false, ...(err.refusal ? { refusal: err.refusal } : {}), error: err.message });

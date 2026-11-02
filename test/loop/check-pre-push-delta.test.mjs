@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +11,7 @@ import { startDeltaSequence } from "@dev-loops/core/loop/pre-push-delta-review";
 
 import { DELTA_EVIDENCE_RULE, deltaPatchPath, parseCheckPrePushDeltaArgs, runCli as runDeltaCli } from "../../scripts/loop/check-pre-push-delta.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
-import { A, B, boundArgs, coverageRepo } from "./_delta-coverage-fixture.mjs";
+import { A, B, C, M, boundArgs, coverageRepo } from "./_delta-coverage-fixture.mjs";
 import { initGitFixture, runGitFixture } from "../_helpers.mjs";
 import { resolveGateArtifactTmpRoot } from "../../scripts/loop/_repo-root-resolver.mjs";
 import { decidePiToolCall } from "../../extension/readonly-role-gate.ts";
@@ -337,7 +338,7 @@ test("baseline equality refuses invocations that cannot authenticate input-only 
   for (const extra of [[], ["--fixer-plan", "missing.json"], ["--fixer-plan", "missing.json", "--site-coverage", "missing.json", "--result", result, "--invocation", "1"]]) {
     const seam = headAt(A);
     const marker = writeSequenceMarker({ tmpRoot: seam.tmpRoot, baselineHead: A, branch: "issue-1" });
-    await assert.rejects(runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", A, "--spec-identity", "s", ...extra], seam), /equals the baseline/);
+    await assert.rejects(runDeltaCli(["--threads-file", threadsFile, "--repo", "o/r", "--pr", "7", "--baseline", A, "--spec-identity", "s", ...extra], seam), /no delta review applies \(worktree HEAD \w+, baseline \w+, \d+ item\(s\)\)/);
     assert.equal(fs.existsSync(marker), true);
     assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}.json`)), false);
     assert.equal(fs.existsSync(path.join(seam.tmpRoot, "gate-delta", `${A}-${A}.patch`)), false);
@@ -705,4 +706,113 @@ test("input mode still rejects an earlier-head findings log after a PR-own chang
   for (const baseOnlyMerge of [async () => false, async () => { throw new Error("git failed"); }]) {
     await assert.rejects(runCli(["--act-list", actList, "--baseline", B, "--spec-identity", "s", "--findings-log", logFor(A)], { ...headAt("c".repeat(40)), baseOnlyMerge }), /not the baseline/);
   }
+});
+
+// The cap-round chain (PRE-PUSH-DELTA-INPUT-CAP-CHAIN): the log at cap round A, a sealed clearing record A -> B, then a base-only merge M of B.
+const chainLog = (head, extra = { repo: "o/r", pr: 7 }) => {
+  const text = JSON.stringify({ headSha: head, ...extra, provenance: { perAngle: [{ angle: "correctness" }] } });
+  const p = path.join(LOG_DIR, `chain-${head}-${createHash("sha256").update(text).digest("hex").slice(0, 16)}.json`);
+  fs.writeFileSync(p, text);
+  return p;
+};
+const sealRecord = (tmpRoot, from, to, { seal = true } = {}) => {
+  const dir = path.join(tmpRoot, "gate-delta");
+  fs.mkdirSync(dir, { recursive: true });
+  const text = JSON.stringify({ reviewBaselineHead: from, candidateHead: to, nextStep: "push_to_gate", outcome: "locally_clear", items: [] });
+  fs.writeFileSync(path.join(dir, `${from}.json`), text);
+  if (seal) fs.writeFileSync(path.join(dir, `${from}.json.seal`), `${createHash("sha256").update(text).digest("hex")}\n`);
+};
+// `sealed` lists extra sealed records [from, to]; `ledgerAt` is one head or a list of heads that carry a draft_gate findings log.
+const chainRun = (baseline, log, { seal = true, mergeFrom = B, to = B, merge = true, calls = [], seedTo, ledgerAt, sealed = [], between = [] } = {}) => {
+  const { actList } = fixture();
+  const seam = { ...headAt("c".repeat(40)), revList: () => between, baseOnlyMerge: async ({ fromHead, head }) => { calls.push(fromHead); return merge && fromHead === mergeFrom && head === (seedTo ? M : baseline); } };
+  if (!seedTo) sealRecord(seam.tmpRoot, A, to, { seal });
+  if (seedTo) sealRecord(seam.tmpRoot, M, seedTo);
+  for (const [from, next] of sealed) sealRecord(seam.tmpRoot, from, next);
+  for (const head of [ledgerAt].flat().filter(Boolean)) {
+    const p = path.join(seam.tmpRoot, "gate-findings", "o-r", "pr-7", `draft_gate-${head}.json`);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, "{}");
+  }
+  return runCli(["--act-list", actList, "--baseline", baseline, "--spec-identity", "s", "--findings-log", log], seam);
+};
+
+test("input mode accepts the cap-round log across the sealed fixer chain plus a base-only merge", async () => {
+  const out = await chainRun(M, chainLog(A));
+  assert.deepEqual(out.input.surfaceHints, ["correctness"]);
+});
+
+test("input mode accepts the cap-round log when the baseline is the chain end", async () => {
+  const out = await chainRun(B, chainLog(A), { merge: false });
+  assert.deepEqual(out.input.surfaceHints, ["correctness"]);
+});
+
+test("input mode accepts a chain seeded by a ledgerless base-only merge of the log head", async () => {
+  // M is a ledgerless base-only merge of the log head A and M -> B is sealed: the baseline B is the end of the seeded chain.
+  const out = await chainRun(B, chainLog(A), { seedTo: B, mergeFrom: A });
+  assert.deepEqual(out.input.surfaceHints, ["correctness"]);
+});
+
+test("input mode accepts a chain seeded by a ledgerless base-only merge of a chain end", async () => {
+  // A -> B is sealed, M is a ledgerless base-only merge of the chain end B and M -> C is sealed: the baseline C is the end of the seeded chain.
+  const out = await chainRun(C, chainLog(A), { seedTo: C, mergeFrom: B, sealed: [[A, B]] });
+  assert.deepEqual(out.input.surfaceHints, ["correctness"]);
+});
+
+test("input mode accepts a chain through an intermediate head that wrote no findings log", async () => {
+  const out = await chainRun(C, chainLog(A), { merge: false, sealed: [[B, C]] });
+  assert.deepEqual(out.input.surfaceHints, ["correctness"]);
+});
+
+test("input mode refuses the chain log when a later full round ran at an intermediate head or chain end", async () => {
+  // log at B, sealed B -> C, baseline C
+  await assert.rejects(chainRun(C, chainLog(A), { merge: false, sealed: [[B, C]], ledgerAt: B }), /sealed clearing chain/);
+  // log at B, baseline M a base-only merge of B (no log at M)
+  await assert.rejects(chainRun(M, chainLog(A), { ledgerAt: B }), /sealed clearing chain/);
+});
+
+test("input mode refuses the chain log when a draft_gate round ran at an intermediate merge between the chain end and the baseline", async () => {
+  const M1 = "1".repeat(40);
+  await assert.rejects(chainRun(M, chainLog(A), { between: [M, M1], ledgerAt: M1 }), /sealed clearing chain/);
+  const out = await chainRun(M, chainLog(A), { between: [M, M1] }); // no log at M1: accepted
+  assert.deepEqual(out.input.surfaceHints, ["correctness"]);
+  await assert.rejects(chainRun(M, chainLog(A), { between: null }), /sealed clearing chain/); // rev-list failure fails closed
+});
+
+test("input mode refuses a chain log whose repo or pr differs from the authenticated plan target", async () => {
+  await chainRun(M, chainLog(A)); // equal to the plan target o/r#7: accepted
+  await assert.rejects(chainRun(M, chainLog(A, { repo: "o/r", pr: 999 })), /sealed clearing chain/);
+  await assert.rejects(chainRun(M, chainLog(A, { repo: "x/y", pr: 7 })), /sealed clearing chain/);
+});
+
+test("input mode refuses the chain log when a later round wrote its own findings log at the baseline", async () => {
+  await assert.rejects(chainRun(B, chainLog(A), { merge: false, ledgerAt: B }), /sealed clearing chain/);
+  await assert.rejects(chainRun(M, chainLog(A), { ledgerAt: M }), /sealed clearing chain/);
+});
+
+test("input mode accepts a base-only merge of the log head even when the ledger already holds the baseline (ADR 0225 item 4)", async () => {
+  const out = await chainRun(M, chainLog(A), { mergeFrom: A, ledgerAt: M });
+  assert.deepEqual(out.input.surfaceHints, ["correctness"]);
+});
+
+test("a --handback run with --repo and --pr but no authenticated plan refuses the chain path", async () => {
+  const { dir, actList } = fixture();
+  const coverage = path.join(dir, "coverage.json");
+  const head = "c".repeat(40);
+  fs.writeFileSync(coverage, JSON.stringify({ headSha: head, siteCoverage: [] }));
+  const seam = { ...headAt(head), baseOnlyMerge: async ({ fromHead, head: to }) => fromHead === B && to === M };
+  sealRecord(seam.tmpRoot, A, B);
+  await assert.rejects(runCli(["--act-list", actList, "--baseline", M, "--spec-identity", "s", "--handback", "--site-coverage", coverage, "--findings-log", chainLog(A), "--repo", "o/r", "--pr", "7"], seam), /sealed clearing chain/);
+});
+
+test("input mode refuses the chain log for each failing chain condition", async () => {
+  const run = async (opts, log = chainLog(A)) => {
+    const calls = [];
+    await assert.rejects(chainRun(M, log, { ...opts, calls }), /sealed clearing chain/);
+    return calls;
+  };
+  assert.deepEqual(await run({ seal: false }), [A]); // unsealed: no chain end, only the log-head merge check ran
+  assert.deepEqual(await run({}, chainLog(A, {})), [A]); // no repo/pr on the chain path: no chain walk
+  assert.ok((await run({ to: "e".repeat(40) })).includes("e".repeat(40))); // chain ends elsewhere: its end is tried and fails
+  assert.ok((await run({ merge: false })).includes(B)); // chain reaches B, the merge of B is not base-only
 });

@@ -183,42 +183,55 @@ queues completion with `trigger_turn: false`; the corresponding
 requires `trigger_turn` or durable sleep to schedule pending work. This is source evidence, not proof
 of the installed binary. No watchdog, harness patch or durable-sleep experiment is authorized here.
 
-## Unit coordinator boundaries (issue 2532)
+## Unit coordinator boundaries (issue 2532, amended by issue 2955)
 
-The orchestrator dispatches one **fresh unit coordinator per phase**, never one coordinator for the
-whole cycle. The boundary list is tooling-emitted: the handoff envelope carries `unitBoundaries`
-(`handBackAfter` + `resume`, derived from the target and route; see
-[Workflow Handoff Contract](workflow-handoff-contract.md#envelope-schema)). The unit hands back at
-the **first** boundary that field names: `handBackAfter` is an ordered, first-match list, so a unit
-carrying both stops when it opens its draft PR and leaves the verdict boundary to its successor.
+One coordinator may run a whole cycle. The boundary list is tooling-emitted: the handoff envelope
+carries `unitBoundaries` (`reportAfter` + `resume`, derived from the target and route; see
+[Workflow Handoff Contract](workflow-handoff-contract.md#envelope-schema)). `reportAfter` is an
+ordered list of **report points**. At each listed report point it reaches, in order, the coordinator
+records status through existing evidence (PR comment or gate ledger), re-resolves authoritative
+state with `unitBoundaries.resume` and **continues**. Re-resolving is a read of current state through
+the resume identity. A pull-dispatched coordinator keeps the pulled work order as its digest-pinned
+authority and builds no new envelope. After draft PR creation or a verdict, it adopts the new PR
+identity for state reads and gate calls under the same assigned task. A report point never forces a successor.
 
-On hand-back the orchestrator dispatches the successor by emitting the work order with
+The following is the one canonical list of run-ending cases (the "run-ending cases"). The coordinator hands
+back only at `final_approval_ready`, a stop that needs a decision, the route's own terminal
+completion, a changed route, a lockout, genuine recovery, an unavailable actor, a runtime
+constraint, or explicit operator direction. The issue-to-PR re-target caused by the unit's own draft PR is a continuation, not a changed route. When the orchestrator dispatches a replacement for one of those
+reasons, it emits the work order with
 `scripts/loop/emit-coordinator-work-order.mjs --input <startup-output path> --harness <claude|pi|codex> --entry <queue|direct>`
-and dispatching the printed `dispatchPayload` unchanged. The input is the startup-output path a
+and dispatches the printed `dispatchPayload` unchanged. The input is the startup-output path a
 coordinator named in its hand-back; the orchestrator still
-never runs `loop startup` itself. The successor re-resolves `unitBoundaries.resume`, so its envelope
+never runs `loop startup` itself. The replacement re-resolves `unitBoundaries.resume`, so its envelope
 is resolver output for the current target — **the previous coordinator never writes or summarizes the
-next brief**, and no successor field derives from predecessor conversation. Gate state survives
-through authoritative state, not through the relay: the successor recovers round count, verdict
+next brief**, and no replacement field derives from predecessor conversation. Gate state survives
+through authoritative state, not through the relay: the replacement recovers round count, verdict
 evidence and open findings by re-running the detectors at resume.
 
 A child hand-back is a **compact relay packet** only: unit identity, status, `nextAction`, evidence
-links (including the startup-output path that unit ran), and an open question if one is needed. On Claude Code the packet also carries the consumed relayed message under `COORDINATOR-HANDBACK-ONE-REPORT`. On Pi a hand-back sent with a child in flight also carries the child list under `GATE-EXEC-HARNESS-JOIN` in [Gate review sub-loop contract](./gate-review-sub-loop-contract.md). No
-transcript, tool output or review text. A relay is the dispatch trigger, never the successor's
+links (including the startup-output path that unit ran), and an open question if one is needed. The packet `status` names the run-ending case from the canonical list in Unit coordinator boundaries, so it is the replacement reason. On Claude Code the packet also carries the consumed relayed message under `COORDINATOR-HANDBACK-ONE-REPORT`. On Pi a hand-back sent with a child in flight also carries the child list under `GATE-EXEC-HARNESS-JOIN` in [Gate review sub-loop contract](./gate-review-sub-loop-contract.md). No
+transcript, tool output or review text. A relay is the dispatch trigger, never the replacement's
 context.
 
-Budget per unit coordinator: peak context at or below the existing **150K-token cap** (largest
-single-response input count, not cumulative traffic); on a Codex root at most 10% empty wakeups,
-measured against root turns rather than wait duration. A missing or ambiguous native measurement is
-reported as unavailable, never zero. The rule binds the unit coordinator on every harness, so it
-stays outside the sections harness-specific mirrors drop.
+<!-- rule: COORDINATOR-CONTINUITY-SOFT-CAP -->
+`COORDINATOR-CONTINUITY-SOFT-CAP`: 150K peak input (largest single-response input count, not cumulative traffic) is an advisory retrospective diagnostic.
+
+- Crossing 150K never stops, relaunches or blocks a coordinator, a gate, completion or merge.
+- Staying below 150K is not an acceptance prerequisite.
+- To reduce traffic, use smaller reads, concise tool output and evidence reuse. Delegate heavy reading to narrow subagents.
+- Fresh dispatch stays for reviewer and judge isolation, genuine recovery, an unavailable actor, a runtime constraint and explicit operator direction.
+- On a Codex root, allow at most 10% empty wakeups, measured against root turns rather than wait duration.
+- A missing or ambiguous native measurement is reported as unknown, never zero.
+
+The rule binds the coordinator on every harness, so it stays outside the sections harness-specific mirrors drop.
 
 <!-- rule: COORDINATOR-HANDBACK-ONE-REPORT -->
 `COORDINATOR-HANDBACK-ONE-REPORT`: Claude Code only. A pause is a turn end while the dev-loop coordinator's run is not finished, for example while a child it dispatched runs.
 
 - A pause ends the turn with plain text and never calls `SubagentHandback`. The harness "report has not been delivered" prompt after a pause is answered in plain text too.
 - An answer to a question typed into the dev-loop coordinator's thread, and a duplicate child wake, are pauses when a child is in flight and the run state did not change (no dispatch, push, gate result or new stop). With no child in flight, the dev-loop coordinator answers and continues its runnable next step in the same turn.
-- The one `SubagentHandback` call of a run carries its final report: the hand-back at the first `unitBoundaries.handBackAfter` boundary, `final_approval_ready`, a stop that needs a caller decision, or the route's own terminal completion (for example a headless standalone `review` that has posted its review).
+- The one `SubagentHandback` call of a run carries its final report at one of the run-ending cases in the Unit coordinator boundaries section, the one canonical list.
 - The dev-loop coordinator never calls `SubagentHandback` while a child is in flight. Every report with a child in flight is a plain-text pause.
 - A turn end with no child in flight is never a pause. The dev-loop coordinator never ends silently while its next step is runnable.
 - After a refused `SubagentHandback`, the dev-loop coordinator makes no further call in that run and ends the turn with the full report as plain text.

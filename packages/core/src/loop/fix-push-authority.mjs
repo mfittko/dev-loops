@@ -11,11 +11,14 @@ import path from "node:path";
 
 export const sequenceMarkerPath = (tmpRoot, baselineHead) => path.join(tmpRoot, "gate-delta", `${baselineHead}.sequence`);
 
+/** The closure record of a sequence closed by close-gate-sequence; keyed by execution so a second close with another execution on one head keeps the first. An execution-less close writes `.none.json` and overwrites a prior execution-less record on the same head. */
+export const sequenceClosurePath = (tmpRoot, baselineHead, executionIdentity) => path.join(tmpRoot, "gate-delta", `${baselineHead}.sequence-closed.${executionIdentity ?? "none"}.json`);
+
 /** Record that a fix sequence is active for a baseline head; a `commit_only` emit writes it ungranted, a `full` emit granted. */
-export function writeSequenceMarker({ tmpRoot, baselineHead, fullGranted = false, branch }) {
+export function writeSequenceMarker({ tmpRoot, baselineHead, fullGranted = false, branch, execution }) {
   const file = sequenceMarkerPath(tmpRoot, baselineHead);
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify({ baselineHead, fullGranted, ...(typeof branch === "string" && branch ? { branch } : {}) })}\n`);
+  writeFileSync(file, `${JSON.stringify({ baselineHead, fullGranted, ...(typeof branch === "string" && branch ? { branch } : {}), ...(execution ? { execution } : {}) })}\n`);
   return file;
 }
 
@@ -24,8 +27,15 @@ export function clearSequenceMarker(tmpRoot, baselineHead) {
   rmSync(sequenceMarkerPath(tmpRoot, baselineHead), { force: true });
 }
 
-/** The recovery pointer the refusal reason carries. `--phase full` works only after a clearing delta record, so deleting the marker is the general recovery. */
-export const recoveryHint = (markerPath) => markerPath ? ` To recover an abandoned sequence, delete the marker ${markerPath} (emit-fixer-work-order.mjs --phase full grants the push only after a clearing delta record).` : "";
+/**
+ * The recovery pointer the refusal reason carries (ADR 0218): the sanctioned no-commit close of the sequence. A `commit_only` fixer that handed back with no commit closes with the authenticated
+ * `check-pre-push-delta.mjs` input-only run (`--fixer-plan` and `--site-coverage`, outcome `no_commit`; the marker records no route, so the hint names both the `--act-list` and the `--threads-file` form), which removes the marker. A fix commit keeps the marker and takes the normal delta review.
+ * A marker that names no branch (unreadable or malformed) cannot be authenticated by that close, which requires the matching branch marker, so its hint names no close command and no deletion and points to the PRE-PUSH-DELTA-PUSH-AUTHORITY rule, which owns that recovery.
+ */
+const noCommitHint = (baselineHead, markerPath, branch) => !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(baselineHead) ? ` The sequence marker is ${markerPath}. The marker names a baseline head that is not a full lowercase hex SHA, so no close command is rendered; the PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery.` : !branch ? ` The sequence marker is ${markerPath}. The marker is unreadable or names no branch, so the no-commit close cannot authenticate it; the PRE-PUSH-DELTA-PUSH-AUTHORITY rule owns its recovery.` : ` The sequence marker is ${markerPath}. To close a commit_only sequence whose fixer made no commit, run \`check-pre-push-delta.mjs (--act-list <act-list> --findings-log <findings-log> | --threads-file <threads-file> --repo <owner/name> --pr <n>) --baseline ${baselineHead} --spec-identity <id> --fixer-plan <fixer-plan> --site-coverage <handback> --worktree <dir>\` (outcome no_commit); a fix commit takes the delta review and the full-phase push.`;
+
+/** Adds the close-sequence recovery for an abandoned sequence (the PR head moved, or no fixer ever pulled the work order); a live sequence stays uncloseable (#2999). */
+export const recoveryHint = (baselineHead, markerPath, branch) => noCommitHint(baselineHead, markerPath, branch) + (markerPath ? ` To close an abandoned sequence instead, run dev-loops-run scripts/loop/close-gate-sequence.mjs --head <baseline sha> --repo <owner/name> --pr <number>; it refuses a live sequence.` : "");
 
 /** Approximates git check-ref-format for a branch name; an invalid name reads as no branch (fail closed). */
 const isValidBranchName = (b) =>
@@ -33,6 +43,12 @@ const isValidBranchName = (b) =>
   !/[\x00-\x20\x7f~^:?*[\\]/.test(b) &&
   !b.includes("..") && !b.includes("@{") && !b.includes("//") &&
   !/^[/.-]|[/.]$|\.lock(\/|$)|(^|\/)\./.test(b);
+
+const EXECUTION_IDENTITY = /^f[0-9]+-[0-9a-f]{8}$/u;
+const isNonEmptyString = (v) => typeof v === "string" && v !== "";
+
+/** The marker's fixer execution only when well formed (identity of the emitter's shape, non-empty refs); else undefined, so it proves nothing and names no path. */
+const validExecution = (e) => e && typeof e === "object" && typeof e.executionIdentity === "string" && EXECUTION_IDENTITY.test(e.executionIdentity) && isNonEmptyString(e.workOrderRef) && isNonEmptyString(e.outputRef) ? e : undefined;
 
 /** The marker for a baseline head, or null when none exists (ENOENT only). A malformed or unreadable marker reads as active, not granted (fail closed). */
 export function readSequenceMarker(tmpRoot, baselineHead) {
@@ -44,7 +60,7 @@ export function readSequenceMarker(tmpRoot, baselineHead) {
   }
   try {
     const marker = JSON.parse(text);
-    if (marker?.baselineHead === baselineHead) return { baselineHead, fullGranted: marker.fullGranted === true, branch: isValidBranchName(marker.branch) ? marker.branch : undefined };
+    if (marker?.baselineHead === baselineHead) return { baselineHead, fullGranted: marker.fullGranted === true, branch: isValidBranchName(marker.branch) ? marker.branch : undefined, execution: validExecution(marker.execution) };
   } catch {
     // Falls through to the fail-closed reading.
   }

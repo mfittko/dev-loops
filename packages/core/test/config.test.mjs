@@ -4001,6 +4001,9 @@ describe("shipped defaults docs and deep angle wiring", () => {
       assert.match(roles["input-validation"].prompt, /repo slug, issue number, host, SHA, whitespace, and sentinel normalization/i);
       assert.match(roles["packaging-runtime"].prompt, /installed packages, extensions, or runtime bundles/i);
       assert.match(roles["state-concurrency"].prompt, /state-file read\/modify\/write paths/i);
+      assert.match(roles["state-concurrency"].prompt, /destructive write[^.]*precondition a concurrent change could have invalidated/i);
+      assert.match(roles["state-concurrency"].prompt, /bound to the owning repo, PR or execution/i);
+      assert.match(roles["state-concurrency"].prompt, /Flag code that treats elapsed time as proof that a process stopped/i);
       assert.match(roles["renderer-security"].prompt, /HTML text escaping, URL encoding, attribute encoding/i);
       assert.match(roles.determinism.prompt, /ordering, tie-breakers, localeCompare use/i);
     } finally {
@@ -5704,6 +5707,37 @@ describe("gates.reviewDiff.excludeGlobs", () => {
   test("an empty-string entry yields a validation error", async () => {
     const result = await loadWith({ reviewDiff: { excludeGlobs: ["  "] } });
     assert.ok(result.errors.length > 0, "empty-string entry should error");
+  });
+});
+
+describe("gates.contextExpansion", () => {
+  async function loadWith(gates) {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-context-expansion-"));
+    try {
+      await writeFile(path.join(tmpDir, ".devloops"), JSON.stringify({ version: 1, gates }));
+      return await loadDevLoopConfig({ repoRoot: tmpDir });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  test("ships maxFiles 6 and maxBytes 98304 by default", async () => {
+    const result = await loadWith({});
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.config.gates.contextExpansion.maxFiles, 6);
+    assert.equal(result.config.gates.contextExpansion.maxBytes, 98304);
+  });
+
+  test("a repo overrides the caps", async () => {
+    const result = await loadWith({ contextExpansion: { maxFiles: 2, maxBytes: 4096 } });
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.config.gates.contextExpansion.maxFiles, 2);
+    assert.equal(result.config.gates.contextExpansion.maxBytes, 4096);
+  });
+
+  test("a negative or non-integer cap yields a validation error", async () => {
+    assert.ok((await loadWith({ contextExpansion: { maxFiles: -1 } })).errors.length > 0);
+    assert.ok((await loadWith({ contextExpansion: { maxBytes: 1.5 } })).errors.length > 0);
   });
 });
 
