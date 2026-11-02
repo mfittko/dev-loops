@@ -564,6 +564,16 @@ test("2678: the work order carries outputSchemas and a verdict built from them v
     const verdict = Object.fromEntries(Object.keys(schema.topLevel.required).map((k) => [k, k === "decisions" ? [decision] : values[k]]));
     const checked = validateSpecAuthorityVerdict(verdict, { findingsCount: 1, criterionIds: authority.checkedCriteria });
     assert.equal(checked.decisions.length, 1);
+    // valid_compliant: the conditional keys come from the schema, with string values.
+    const compliant = Object.fromEntries(Object.keys(schema.decision.required).map((k) => [k, values[k]]));
+    compliant.outcome = "valid_compliant";
+    for (const k of ["authorizedRemediation", "defectClass", "siteQuery"]) {
+      assert.ok(schema.decision.conditional[k], k);
+      compliant[k] = "fnA fnB";
+    }
+    const okVerdict = { ...verdict, decisions: [compliant] };
+    assert.equal(validateSpecAuthorityVerdict(okVerdict, { findingsCount: 1, criterionIds: authority.checkedCriteria }).decisions.length, 1);
+    assert.throws(() => validateSpecAuthorityVerdict({ ...verdict, decisions: [{ ...compliant, siteQuery: ["fnA", "fnB"] }] }, { findingsCount: 1, criterionIds: authority.checkedCriteria }), /siteQuery/);
   });
 });
 

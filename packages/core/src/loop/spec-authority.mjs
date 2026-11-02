@@ -311,7 +311,8 @@ const DEFECT_KINDS = Object.freeze(["matcher", "doc_lag", "other"]);
 
 /**
  * SPEC-AUTHORITY-VERDICT-SCHEMA: the field list a judge writes into
- * spec-authority-verdict.json, derived from the constants the validators use.
+ * spec-authority-verdict.json. The value sets derive from the constants the
+ * validators use; the field list and shape rules are maintained beside the validators.
  * The judge work order carries it as outputSchemas so no source search is needed.
  * Mirrors validateSpecAuthorityVerdict, validateSpecAuthorityDecision and validateRemediationScope.
  */
@@ -321,7 +322,7 @@ export const SPEC_AUTHORITY_VERDICT_SCHEMA = Object.freeze({
       specDigest: `string matching ${DIGEST_RE.source}; the authority specDigest of the work order`,
       headSha: `string matching ${HEAD_SHA_RE.source}; the reviewed head`,
       contentDigest: `string matching ${DIGEST_RE.source}; the authority contentDigest of the work order`,
-      decisions: "array with exactly one decision per finding, each index disposed once",
+      decisions: "array with one decision per finding index, each index disposed once; a decision at a cluster's clusterId covers its members, and decisions within one cluster share one outcome",
     }),
   }),
   decision: Object.freeze({
@@ -338,7 +339,7 @@ export const SPEC_AUTHORITY_VERDICT_SCHEMA = Object.freeze({
       conflictingCriteria: `non-empty array of criterion ids when outcome is one of ${SPEC_AUTHORITY_CONFLICT_OUTCOMES.join(", ")}; absent otherwise`,
       authorizedRemediation: `non-empty string when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT}`,
       defectClass: `non-empty string when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only)`,
-      siteQuery: `non-empty git grep pattern or symbol list when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only)`,
+      siteQuery: `non-empty string (a git grep pattern or a space-separated symbol list, never an array) when outcome is ${SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT} (unless remedyKind is evidence_only)`,
       remedyKind: "evidence_only when the remedy changes no file; then defectClass and siteQuery are not needed",
       defectKind: `one of: ${DEFECT_KINDS.join(", ")} (default other); matcher also needs acceptedForms[] and rejectedForms[], doc_lag needs statedSurfaces[]`,
     }),
@@ -358,7 +359,8 @@ function inputFormList(value) {
 
 /**
  * A valid_compliant remediation names the defect class and a site query the
- * fixer runs at the head: a `git grep` pattern or symbol list. A matcher or
+ * fixer runs at the head: a string, either a `git grep` pattern or a
+ * space-separated symbol list. A matcher or
  * guard defect also lists its accepted and rejected input forms. Doc, comment
  * or fragment lag lists every stated surface of the changed rule.
  */
@@ -373,7 +375,7 @@ function validateRemediationScope(d) {
     throw missing("defectClass", "the class of defect the remediation closes; set remedyKind \"evidence_only\" when the remedy changes no file");
   }
   if (typeof d.siteQuery !== "string" || d.siteQuery.trim().length === 0) {
-    throw missing("siteQuery", "a git grep pattern or symbol list the fixer runs at the head");
+    throw missing("siteQuery", "a string: a git grep pattern or a space-separated symbol list the fixer runs at the head");
   }
   const defectKind = d.defectKind === undefined ? "other" : d.defectKind;
   if (!DEFECT_KINDS.includes(defectKind)) {

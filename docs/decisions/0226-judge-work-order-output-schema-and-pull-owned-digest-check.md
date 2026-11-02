@@ -12,7 +12,7 @@ A judge searched the source tree to learn the spec-authority verdict shape, trie
 
 ## Decision
 
-1. `SPEC_AUTHORITY_VERDICT_SCHEMA` in `packages/core/src/loop/spec-authority.mjs` lists the required and conditional verdict fields. Its descriptions derive from the validator constants (`DIGEST_RE`, `HEAD_SHA_RE`, `SPEC_AUTHORITY_OUTCOME_VALUES`, `SPEC_AUTHORITY_CONFLICT_OUTCOMES`, `DEFECT_KINDS`) and are never restated.
+1. `SPEC_AUTHORITY_VERDICT_SCHEMA` in `packages/core/src/loop/spec-authority.mjs` lists the required and conditional verdict fields. Its value sets derive from the validator constants (`DIGEST_RE`, `HEAD_SHA_RE`, `SPEC_AUTHORITY_OUTCOME_VALUES`, `SPEC_AUTHORITY_CONFLICT_OUTCOMES`, `DEFECT_KINDS`). The field list and shape rules are maintained beside the validators.
 2. The judge work order carries `outputSchemas`, keyed by the file name of each `outputRefs` path.
 3. The pull owns the digest check. A changed read arrives as a pull refusal. The judge computes no digest and stops only when a read is missing or unreadable.
 4. The judge denial names `Read` as the always-available file tool, and Grep and Glob only when available.
@@ -20,4 +20,4 @@ A judge searched the source tree to learn the spec-authority verdict shape, trie
 
 ## Consequences
 
-A judge builds a valid verdict from the work order alone. A schema change in the validators changes the work order digest, so a stale dispatch refuses.
+A judge builds a valid verdict from the work order alone. The schema is pinned into the work order at emission. A validator change reaches a judge through a re-emitted work order.
