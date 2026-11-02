@@ -49,7 +49,7 @@ read live from the PR and pinned as review-body.json; it refuses a bot other tha
 and takes no --gate or --delta-result. A review-body source has no delta-review route: it
 takes only --phase full, needs no delta decision, ignores any delta record for the head, and
 refuses --phase commit_only. --ci-file <path> takes the wait-pr-checks.mjs JSON of a red head (status and ciStatus
-"failure", headSha equal to --head-sha, non-empty failedChecks[].name) as a ci-failure source with the same shape:
+"failure", headSha equal to --head-sha, non-blank failedChecks[].name, at most 50 entries, names at most 200 characters) as a ci-failure source with the same shape:
 --phase full only, no delta record, no --gate or --delta-result; its handoff is { headSha } and joinRef is the outputRef.
 On the threads source a commit_only emission carries the delta record's findings[] as deltaFindings act items.
 For the other sources --phase full needs a clearing
@@ -378,7 +378,7 @@ export async function emitFixerWorkOrder({
     const ci = source.parsed, next = "run scripts/github/wait-pr-checks.mjs on the PR head and pass its JSON";
     if (ci?.ok !== true || ci.status !== "failure" || ci.ciStatus !== "failure") throw new Refusal(`ci file ${ciFile} is not a red wait-pr-checks result (status ${JSON.stringify(ci?.status)}, ciStatus ${JSON.stringify(ci?.ciStatus)}); a green, pending or failed read has nothing to fix; ${next}`);
     if (ci.headSha !== headSha) throw new Refusal(`ci file ${ciFile} is for headSha ${JSON.stringify(ci.headSha)}, not --head-sha ${headSha}; ${next}`);
-    if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`);
+    if (!Array.isArray(ci.failedChecks) || ci.failedChecks.length === 0 || !ci.failedChecks.every((check) => typeof check?.name === "string" && check.name.trim() !== "")) throw new Refusal(`ci file ${ciFile} has no non-empty failedChecks[].name; ${next}`);
     if (ci.failedChecks.length > 50 || ci.failedChecks.some((check) => check.name.length > 200)) throw new Refusal(`ci file ${ciFile} holds failedChecks of at most 50 entries with names of at most 200 characters; ${next}`);
   }
   const isActItem = (f) => f?.judgeDisposition === "act" && VALID_SEVERITIES.has(f.severity) && typeof f.summary === "string" && f.summary.trim() !== "";

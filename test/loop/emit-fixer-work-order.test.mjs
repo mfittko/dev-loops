@@ -3024,7 +3024,7 @@ test("issue 2787 C11: a ci-failure file that is missing, green, pending, for ano
       await assert.rejects(emitCi(fx, {}, ciFailureFor(head, bad)), /wait-pr-checks.*nothing to fix|red head/);
     }
     await assert.rejects(emitCi(fx, {}, ciFailureFor("d".repeat(40))), /headSha.*not --head-sha.*wait-pr-checks/);
-    for (const failedChecks of [undefined, [], [{ name: "" }], [{ name: 7 }], [{ name: "ok" }, {}]]) {
+    for (const failedChecks of [undefined, [], [{ name: "" }], [{ name: " " }], [{ name: "   " }], [{ name: 7 }], [{ name: "ok" }, {}]]) {
       await assert.rejects(emitCi(fx, {}, ciFailureFor(head, { failedChecks })), /non-empty failedChecks/);
     }
   });
