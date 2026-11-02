@@ -2798,7 +2798,7 @@ async function withFixerHandoff(fn, { checkpoint = false, active, receiptMtime }
     initGitFixture(repoRoot);
     const fixerDir = path.join(repoRoot, "tmp", "gate-fixer", "owner-repo", "pr-17");
     await mkdir(path.join(fixerDir, "f1-0000abcd"), { recursive: true });
-    const handoff = { headSha: FIXER_HEAD, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543", disposition: "tackled" }] };
+    const handoff = { headSha: FIXER_HEAD, dispositions: [{ threadId: "PRRT_T1", fixingCommitSha: "fed9876543fed9876543fed9876543fed9876543", disposition: "tackled" }] };
     await writeFile(path.join(fixerDir, "f1-0000abcd", "fixer-disposition.json"), JSON.stringify(handoff));
     if (active) {
       const head = "a".repeat(40);
@@ -2865,11 +2865,11 @@ for (const [active, failure, opts] of [["missing", /result_missing/], ["empty", 
 for (const [step, compare, reply] of [["commit_not_contained", "diverged", false], ["reply_missing", "ahead", false], ["not_resolved", "ahead", true]]) {
   test(`request-copilot-review proceeds with a ${step} warning for a tackled checkpoint`, async () => {
     await withFixerHandoff(async (repoRoot) => {
-      const comments = reply ? [{ id: "c1", databaseId: 1, body: "Fixed in commit fed9876543", author: { login: "bot", __typename: "User" } }] : [];
+      const comments = reply ? [{ id: "c1", databaseId: 1, body: "Fixed in commit fed9876543fed9876543fed9876543fed9876543", author: { login: "bot", __typename: "User" } }] : [];
       const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
         FIXER_REQUESTED,
         FIXER_PR_VIEW,
-        { assertArgs: ["api", `repos/owner/repo/compare/fed9876543...${FIXER_HEAD}`], stdout: JSON.stringify({ status: compare }) },
+        { assertArgs: ["api", `repos/owner/repo/compare/fed9876543fed9876543fed9876543fed9876543...${FIXER_HEAD}`], stdout: JSON.stringify({ status: compare }) },
         { assertArgs: GRAPHQL_ARGS, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_T1", isResolved: false, comments: { nodes: comments } }] } } } } }) },
         ...PROCEED(FIXER_HEAD),
       ], { repoRoot });
