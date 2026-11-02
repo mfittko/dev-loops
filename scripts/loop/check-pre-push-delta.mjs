@@ -34,7 +34,7 @@ import path from "node:path";
 import { parseArgs, promisify } from "node:util";
 
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
-import { createEvidenceRun, deltaEvidenceKey, mintEvidenceRunId, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
+import { createEvidenceRun, deltaEvidenceKey, deltaResultKey, mintEvidenceRunId, verifyEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { clearSequenceMarker, readSequenceMarker, withSequenceLock } from "@dev-loops/core/loop/fix-push-authority";
 import {
   DELTA_MAX_INVOCATIONS,
@@ -397,12 +397,9 @@ export async function runCli(
   // One read: the same bytes are parsed and digested for the seal check (GATE-EXEC-EVIDENCE-SEALED).
   const resultBytes = options.result ? readFileSync(options.result) : null;
   const result = resultBytes ? JSON.parse(resultBytes.toString("utf8")) : null;
-  if (result) {
-    // The seal check comes first: nothing reads an unverified result (GATE-EXEC-EVIDENCE-SEALED).
-    for (const field of ["reviewBaselineHead", "candidateHead"]) {
-      if (typeof result?.[field] !== "string" || !result[field]) throw new Error(`delta result ${options.result} is malformed: ${field} must be a non-empty string`);
-    }
-    verifyEvidence(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(result.reviewBaselineHead, result.candidateHead, result.runId), options.result, result, createHash("sha256").update(resultBytes).digest("hex"));
+  if (options.result) {
+    // The seal check comes first: nothing reads an unverified result, a falsy JSON one included (GATE-EXEC-EVIDENCE-SEALED).
+    verifyEvidence(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaResultKey(result), options.result, result, createHash("sha256").update(resultBytes).digest("hex"));
   }
   if (options.threadsFile && deltaCoverageBinding(result)) throw new Error("THREAD cannot opt into ACT coverage binding");
   let siteCoverage = [], validationCoverage = [], coverageBinding, authenticatedTarget;
@@ -479,18 +476,19 @@ export async function runCli(
     payload = { ok: true, ...decision };
   } else {
     const patchPath = deltaPatchPath(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), sequence.reviewBaselineHead, currentHead);
-    let runId;
+    // Validate the input first: a failed input run must not open a record or move the current-run pointer (GATE-EXEC-EVIDENCE-SEALED).
+    const target = authenticatedTarget;
+    const roundAngles = await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target });
+    const runId = options.handback ? undefined : mintEvidenceRunId();
     if (!options.handback && !options.resultPath) throw parseError("--result-path <path> is required on the reviewer-input run: the run record binds the briefed result path and seal-evidence refuses any other path (GATE-EXEC-EVIDENCE-SEALED)");
     if (!options.handback) { // the fixer handbackCheck stays write-free
       mkdirSync(path.dirname(patchPath), { recursive: true });
       writeFileSync(patchPath, diffPatch(options.worktree, sequence.reviewBaselineHead, currentHead));
-      // Every input run opens its own unsealed record, so a re-run of the producer at the same heads can seal again.
-      runId = mintEvidenceRunId();
-      createEvidenceRun(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(sequence.reviewBaselineHead, currentHead, runId), { reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead, actSetId: sequence.actSetId, runId }, path.resolve(options.worktree, options.resultPath));
     }
     // The target authenticateCoverage verified binds the log's repo and pr; without an authenticated plan the chain path refuses.
-    const target = authenticatedTarget;
-    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), resolveGateArtifactTmpRoot(options.worktree)) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, runId, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles: await roundAnglesOf(options.findingsLog, sequence.reviewBaselineHead, { worktree: options.worktree, baseOnlyMerge, revList, tmpRoot: tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), target }), staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
+    payload = { ok: true, input: { ...(options.handback ? {} : { patchPath, evidenceRule: DELTA_EVIDENCE_RULE, sealCommand: deltaSealCommand(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), resolveGateArtifactTmpRoot(options.worktree)) }), ...buildDeltaInput({ sequence, candidateHead: currentHead, runId, specIdentity: options.specIdentity, siteCoverage, coverageBinding, roundAngles, staleSurfaceHits, staleSurfaceTruncated, truncatedNeedles }) } };
+    // Every input run opens its own unsealed record, so a re-run of the producer at the same heads can seal again. Last step: only a successful input run moves the pointer.
+    if (!options.handback) createEvidenceRun(tmpRoot ?? resolveGateArtifactTmpRoot(options.worktree), deltaEvidenceKey(sequence.reviewBaselineHead, currentHead, runId), { reviewBaselineHead: sequence.reviewBaselineHead, candidateHead: currentHead, actSetId: sequence.actSetId, runId }, path.resolve(options.worktree, options.resultPath));
   }
   process.exitCode = emitResult(payload, { jq: options.jq, silent: options.silent, fields: options.fields, stdout });
   return payload;

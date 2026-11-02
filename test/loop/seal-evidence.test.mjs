@@ -207,8 +207,46 @@ test("check-pre-push-delta --result on an unsealed run gives evidence_unsealed",
   await assert.rejects(runDeltaCli(bound.args, { ...bound.seam, ...quiet }), /evidence_unsealed/);
 });
 
-test("a malformed result reports the head schema error, not evidence_run_missing", async () => {
-  await assert.rejects(withCli((file) => edit(file, { reviewBaselineHead: "" })), (error) => /reviewBaselineHead must be a non-empty string/.test(error.message) && !/evidence_run_missing/.test(error.message));
+test("a malformed result gives the typed evidence_malformed, not evidence_run_missing", async () => {
+  await assert.rejects(withCli((file) => edit(file, { reviewBaselineHead: "" })), (error) => /evidence_malformed/.test(error.message) && !/evidence_run_missing/.test(error.message));
+});
+
+test("--result refuses every falsy or non-object JSON result with evidence_malformed and writes no gate-delta record", async () => {
+  for (const body of ["null", "false", "0", '""', "[]"]) {
+    await assert.rejects(withCli((file) => fs.writeFileSync(file, body)), /evidence_malformed/, body);
+  }
+});
+
+test("a failed input run leaves the current-run pointer on the earlier run", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-evidence-input-"));
+  const actList = path.join(dir, "act-list.json");
+  fs.writeFileSync(actList, JSON.stringify(ACT_LIST));
+  const log = path.join(dir, "log.json");
+  fs.writeFileSync(log, JSON.stringify({ headSha: A, executionMode: "inline_single_agent", findings: [{ angle: "correctness" }] }));
+  const args = ["--act-list", actList, "--baseline", A, "--spec-identity", "s"];
+  const first = await boundArgs([...args, "--findings-log", log]);
+  const tmpRoot = first.seam.tmpRoot ?? resolveGateArtifactTmpRoot(first.args[first.args.indexOf("--worktree") + 1]);
+  const pointer = path.join(tmpRoot, "evidence-runs", `current-delta-${A}-${B}.txt`);
+  const { input } = await runDeltaCli(first.args, { ...first.seam, ...quiet });
+  assert.equal(fs.readFileSync(pointer, "utf8").trim(), input.resultShape.runId);
+  const second = await boundArgs([...args, "--findings-log", path.join(dir, "missing-log.json")]);
+  await assert.rejects(runDeltaCli(second.args, { ...second.seam, ...quiet }));
+  assert.equal(fs.readFileSync(pointer, "utf8").trim(), input.resultShape.runId);
+});
+
+test("emit-fixer-work-order refuses a null --delta-result with evidence_malformed", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-evidence-emit-null-"));
+  const actList = path.join(dir, "act-list.json");
+  const deltaResult = path.join(dir, "result.json");
+  fs.writeFileSync(actList, JSON.stringify(ACT_LIST));
+  fs.writeFileSync(deltaResult, "null");
+  await assert.rejects(emitFixerWorkOrder({ repo: "o/r", pr: 7, headSha: A, phase: "full", actListFile: actList, gate: "draft_gate", deltaResult, cwd: dir, tmpRoot: dir }), /GATE-EXEC-EVIDENCE-SEALED.*evidence_malformed/);
+});
+
+test("seal-evidence --help prints usage and exits cleanly", () => {
+  let out = "";
+  sealCli(["--help"], { stdout: { write: (s) => { out += s; } } });
+  assert.match(out, /Usage: seal-evidence\.mjs/);
 });
 
 test("deltaEvidenceKey accepts canonical full SHAs and rejects every other head form", () => {
@@ -222,16 +260,18 @@ test("deltaEvidenceKey accepts canonical full SHAs and rejects every other head 
   for (const id of [undefined, "", "../../x", "ABCDEF0123456789", "0123"]) assert.equal(reason(() => deltaEvidenceKey(sha1, sha1, id)), "evidence_malformed", `run id ${JSON.stringify(id)}`);
 });
 
-test("the seal CLI refuses a result without heads, a null result, a traversal head, a missing --file and a wrong --kind, writing nothing outside evidence-runs", () => {
+test("the seal CLI refuses a result without heads, a null result, a traversal head, a missing --file and a wrong --kind, writing no run record", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-evidence-bad-"));
   const write = (body) => { const file = path.join(dir, "r.json"); fs.writeFileSync(file, typeof body === "string" ? body : JSON.stringify(body)); return file; };
   const seal = (file) => sealCli(["--kind", "delta", "--file", file, "--tmp-root", dir], { ...quiet, cwd: dir });
   assert.throws(() => seal(write({ outcome: "locally_clear" })), /evidence_malformed/);
-  assert.throws(() => seal(write("null")), /must hold a JSON object/);
+  assert.throws(() => seal(write("null")), /evidence_malformed/);
   assert.throws(() => seal(write(result({ candidateHead: "x/../../../other" }))), /evidence_malformed/);
   assert.throws(() => sealCli(["--kind", "delta", "--tmp-root", dir], { ...quiet, cwd: dir }), /--kind delta and --file are required/);
   assert.throws(() => sealCli(["--kind", "other", "--file", write(result()), "--tmp-root", dir], { ...quiet, cwd: dir }), /--kind delta and --file are required/);
-  assert.equal(fs.existsSync(path.join(dir, "other.json")), false);
+  assert.equal(fs.existsSync(path.join(dir, "evidence-runs")), false);
+  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith("other")), []);
+  assert.deepEqual(fs.readdirSync(path.dirname(dir)).filter((name) => name.startsWith("other-")), []);
 });
 
 test("a run record without expected identity is a typed refusal, not a TypeError", () => {

@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { deltaEvidenceKey, sealEvidence } from "@dev-loops/core/loop/evidence-seal";
+import { deltaResultKey, sealEvidence } from "@dev-loops/core/loop/evidence-seal";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { resolveGateArtifactTmpRoot } from "./_repo-root-resolver.mjs";
@@ -21,13 +21,13 @@ ${JQ_OUTPUT_USAGE}
 Exit codes: 0 sealed, 2 refused (typed reason: evidence_run_missing, evidence_foreign_run, evidence_malformed) or bad input.`;
 
 export function runCli(argv = process.argv.slice(2), { stdout = process.stdout, cwd = process.cwd() } = {}) {
-  const { values } = parseArgs({ args: argv, options: { kind: { type: "string" }, file: { type: "string" }, "tmp-root": { type: "string" }, ...JQ_OUTPUT_PARSE_OPTIONS }, strict: true });
+  const { values } = parseArgs({ args: argv, options: { kind: { type: "string" }, file: { type: "string" }, "tmp-root": { type: "string" }, help: { type: "boolean", short: "h" }, ...JQ_OUTPUT_PARSE_OPTIONS }, strict: true });
+  if (values.help) { stdout.write(`${USAGE}\n`); return; }
   if (values.kind !== "delta" || !values.file) throw new Error("--kind delta and --file are required");
   const file = path.resolve(cwd, values.file);
   const parsed = JSON.parse(readFileSync(file, "utf8"));
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${values.file} must hold a JSON object (a DeltaPrePushReviewResult)`);
   const tmpRoot = values["tmp-root"] ? path.resolve(cwd, values["tmp-root"]) : resolveGateArtifactTmpRoot(cwd);
-  const sealed = sealEvidence(tmpRoot, deltaEvidenceKey(parsed.reviewBaselineHead, parsed.candidateHead, parsed.runId), file, parsed);
+  const sealed = sealEvidence(tmpRoot, deltaResultKey(parsed), file, parsed);
   process.exitCode = emitResult({ ok: true, sealed }, { jq: values.jq, silent: values.silent, fields: values.fields, stdout });
 }
 

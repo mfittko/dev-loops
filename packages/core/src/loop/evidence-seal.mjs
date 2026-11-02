@@ -30,6 +30,12 @@ export function deltaEvidenceKey(reviewBaselineHead, candidateHead, runId) {
   return `delta-${reviewBaselineHead}-${candidateHead}-${runId}`;
 }
 
+/** The run key of a parsed delta result. A non-object result (null, array, primitive) is `evidence_malformed`, like a bad head or run id. */
+export function deltaResultKey(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) throw new EvidenceSealError("evidence_malformed", `a delta result must be a JSON object, got ${JSON.stringify(result)}; re-run the producer`);
+  return deltaEvidenceKey(result.reviewBaselineHead, result.candidateHead, result.runId);
+}
+
 // The real path of a file, or of its directory plus name when the file is not written yet (the directory must exist).
 function canonicalPath(filePath) {
   const resolved = path.resolve(filePath);
